@@ -361,7 +361,7 @@ class Ui_MainWindow(object):
 
     def create_toolbars(self, MainWindow):
         big_toolbar_buttons = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
-        icon_size_val = 50 if big_toolbar_buttons else 35
+        icon_size_val = 40 if big_toolbar_buttons else 35
 
         MainWindow.play_button = QPushButton(QIcon("assets/b_test.png"), "Play", MainWindow)
         MainWindow.play_button.setIconSize(QSize(icon_size_val, icon_size_val))
@@ -401,7 +401,7 @@ class Ui_MainWindow(object):
         MainWindow.addToolBar(Qt.TopToolBarArea, tool_toolbar)
 
         big = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
-        icon_size_val = 50 if big else 35
+        icon_size_val = 40 if big else 35
 
         def make_btn(icon, tip, on_click=None, checkable=False, checked=False,
                      shortcut=None, styled=False, bottom_color=None):
@@ -480,19 +480,19 @@ class Ui_MainWindow(object):
             return _on_toggle
 
         MainWindow.vertex_mode_btn = make_btn(
-            "assets/select.png",
+            "assets/comp_vertex.png",
             "Vertex mode (Shift+V)\n"
             "Drag a corner of the selected brush",
             on_click=component_mode_toggle('vertex'),
             checkable=True, bottom_color=group_1_color)
         MainWindow.edge_mode_btn = make_btn(
-            "assets/select.png",
+            "assets/comp_edge.png",
             "Edge mode (Shift+E)\n"
             "Drag an edge of the selected brush",
             on_click=component_mode_toggle('edge'),
             checkable=True, bottom_color=group_1_color)
         MainWindow.face_mode_btn = make_btn(
-            "assets/box.png",
+            "assets/comp_face.png",
             "Face mode (Shift+F)\n"
             "Drag a face to move its plane; Ctrl-drag shears it",
             on_click=component_mode_toggle('face'),
@@ -511,8 +511,11 @@ class Ui_MainWindow(object):
 
         MainWindow.rotate_btn = make_btn(
             "assets/rotate.png",
-            "Rotate 15°",
-            on_click=MainWindow.rotate_selected_15,
+            "Rotate tool (Shift+R)\n"
+            "Hold and drag in a 2D view to spin the selection\n"
+            "Grid snap on = 15° steps, off = free",
+            on_click=MainWindow.toggle_rotate_mode,
+            checkable=True, shortcut="Shift+R",
             bottom_color=group_2_color)
 
         make_btn("assets/subtract.png", "Subtract",

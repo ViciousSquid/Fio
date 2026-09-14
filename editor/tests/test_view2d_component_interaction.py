@@ -87,6 +87,9 @@ class FakeEditorWindow(QWidget):
     finish_clone_placement = MainWindow.finish_clone_placement
     cancel_clone_placement = MainWindow.cancel_clone_placement
     _translate_object = staticmethod(MainWindow._translate_object)
+    selection_centre = MainWindow.selection_centre
+    selected_objects_list = MainWindow.selected_objects_list
+    apply_rotation_to_selection = MainWindow.apply_rotation_to_selection
 
     def __init__(self):
         super().__init__()
@@ -698,3 +701,147 @@ def test_shift_clicking_a_selected_component_deselects_without_dragging(editor):
     press(view, (32, 32), modifiers=Qt.ShiftModifier)
     assert host.components.selection == []
     assert host.components.drag is None
+
+
+# ---------------------------------------------------------------------------
+# Free rotate: hold and drag, Radiant style
+# ---------------------------------------------------------------------------
+
+def enter_rotate(host, view):
+    host.rotate_mode = True
+    view.rotate_snap_deg = 15.0
+
+
+def test_rotate_drag_spins_the_selection(editor):
+    host, view = editor
+    brush = select_box(host)
+    enter_rotate(host, view)
+
+    press(view, (64, 0))                   # grab at 0 degrees from the centre
+    assert view.rotate_dragging
+    move(view, (0, 64))                    # swing round to 90
+    release(view, (0, 64))
+
+    assert not view.rotate_dragging
+    assert bg.brush_has_geometry(brush)     # a rotated brush carries planes
+
+
+def test_rotate_needs_no_drag_to_be_a_no_op(editor):
+    host, view = editor
+    brush = select_box(host)
+    enter_rotate(host, view)
+    before = undo_depth(host)
+
+    press(view, (64, 0))
+    release(view, (64, 0))
+
+    assert undo_depth(host) == before       # no empty step in the history
+    assert brush['size'] == [64, 64, 64]
+
+
+def test_a_whole_rotate_drag_is_one_undo_step(editor):
+    host, view = editor
+    select_box(host)
+    enter_rotate(host, view)
+    before = undo_depth(host)
+
+    press(view, (64, 0))
+    for point in ((60, 20), (45, 45), (20, 60), (0, 64)):
+        move(view, point)
+    release(view, (0, 64))
+
+    assert undo_depth(host) == before + 1
+
+
+def test_rotate_snaps_to_fifteen_degree_steps_with_the_grid_on(editor):
+    host, view = editor
+    select_box(host)
+    view.snap_to_grid_enabled = True
+    enter_rotate(host, view)
+
+    press(view, (64, 0))
+    move(view, (62, 8))                     # roughly 7 degrees round
+    assert view.rotate_applied % 15.0 == pytest.approx(0.0)
+    release(view, (62, 8))
+
+
+def test_rotate_is_free_with_the_grid_off(editor):
+    host, view = editor
+    select_box(host)
+    view.snap_to_grid_enabled = False
+    enter_rotate(host, view)
+
+    press(view, (64, 0))
+    move(view, (55, 32))
+    assert view.rotate_applied % 15.0 != pytest.approx(0.0)
+    release(view, (55, 32))
+
+
+def test_rotate_spins_a_multi_selection_about_one_pivot(editor):
+    """Two brushes turn as one body: they swap places, not spin on the spot."""
+    host, view = editor
+    left = make_box(pos=(-128, 0, 0))
+    right = make_box(pos=(128, 0, 0))
+    host.state.brushes.extend([left, right])
+    host.set_selected_objects([left, right])
+    enter_rotate(host, view)
+
+    press(view, (256, 0))                   # 0 degrees about the shared centre
+    move(view, (0, 256))                    # swing to 90
+    release(view, (0, 256))
+
+    # The pair has rotated about the origin, so they now straddle the z axis.
+    assert abs(left['pos'][0]) < 1.0
+    assert abs(right['pos'][0]) < 1.0
+    assert left['pos'][2] == pytest.approx(-right['pos'][2], abs=1.0)
+
+
+def test_rotate_carries_entities_round_with_the_brushes(editor):
+    """An entity in the selection orbits the pivot instead of being left behind."""
+    host, view = editor
+    from editor.things import Light
+    brush = make_box(pos=(-128, 0, 0))
+    light = Light(pos=[128, 0, 0])
+    host.state.brushes.append(brush)
+    host.state.things.append(light)
+    host.set_selected_objects([brush, light])
+    enter_rotate(host, view)
+
+    pivot = host.selection_centre()
+    reach = abs(float(light.pos[0]) - pivot[0])
+
+    press(view, (pivot[0] + 256, pivot[2]))
+    move(view, (pivot[0], pivot[2] + 256))          # a quarter turn
+    release(view, (pivot[0], pivot[2] + 256))
+
+    # A quarter turn takes the light's offset from along x to along z, at the
+    # same distance from the pivot it started at.
+    assert float(light.pos[0]) == pytest.approx(pivot[0], abs=1.0)
+    assert abs(float(light.pos[2]) - pivot[2]) == pytest.approx(reach, abs=1.0)
+
+
+def test_escape_cancels_a_rotate_and_puts_the_angle_back(editor):
+    host, view = editor
+    brush = select_box(host)
+    enter_rotate(host, view)
+    before = undo_depth(host)
+
+    press(view, (64, 0))
+    move(view, (0, 64))
+    view.cancel_rotate()
+
+    assert not view.rotate_dragging
+    assert undo_depth(host) == before
+    lo, hi = ce.object_bounds(brush)
+    assert (hi - lo)[0] == pytest.approx(64.0, abs=1e-3)
+    assert (hi - lo)[2] == pytest.approx(64.0, abs=1e-3)
+
+
+def test_rotate_with_nothing_selected_says_so(editor):
+    host, view = editor
+    host.set_selected_object(None)
+    enter_rotate(host, view)
+
+    press(view, (64, 0))
+    assert not view.rotate_dragging
+    assert any('select something' in t.lower() for t in host.toasts)

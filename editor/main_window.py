@@ -181,9 +181,9 @@ class MainWindow(QMainWindow):
         # Both the 2D views and the 3D viewport drive this one controller, so
         # "click geometry, drag geometry" means the same thing in either view.
         self.components = ComponentController()
-        # Clone-and-place: after Space the duplicate follows the cursor until a
-        # click drops it (Radiant-style).  Holds the objects being placed and
-        # the view-plane point they were grabbed at.
+        # Clone-and-place: after Shift+Space the duplicate follows the cursor
+        # until a click drops it (Radiant-style).  Holds the objects being
+        # placed and the view-plane point they were grabbed at.
         self.clone_placement = None
         # Wall thickness the Hollow tool offers next time, so repeated hollows
         # are a dialog keypress apart rather than a re-typed number.
@@ -245,7 +245,7 @@ class MainWindow(QMainWindow):
             "Right-click + WASD: Move camera",
             "Mouse wheel: Zoom in/out",
             "Ctrl+Tab: Cycle 2D views",
-            "Space: Clone selected brush/object",
+            "Shift+Space: Clone, then click to place it",
             "H: Hide selected, Shift+H: Unhide all",
             "Delete: Remove selected brush/object",
             "Add Player Start before Play Mode",
@@ -973,7 +973,8 @@ class MainWindow(QMainWindow):
     def clone_selected_object(self):
         """Clone the selection and hand it to the cursor to place.
 
-        Radiant's clone workflow is ``select -> Space -> move -> click``: the
+        Radiant's clone workflow is ``select -> Shift+Space -> move -> click``:
+        the
         duplicate appears immediately and follows the cursor until a click drops
         it, so a row of pillars is a sequence of taps rather than a clone
         followed by a separate drag.  The initial grid offset is kept so an
@@ -988,11 +989,11 @@ class MainWindow(QMainWindow):
             return
 
         # A clone while one is still being placed drops the pending one first,
-        # so Space-Space-Space never strands half-placed duplicates.
+        # so repeated Shift+Space never strands half-placed duplicates.
         self.finish_clone_placement()
         self.save_state()
 
-        # Offset based on current 2D view (uses grid size like Space key)
+        # Offset based on the current 2D view, in grid-size steps
         current_view = self.right_tabs.currentWidget()
         axis_map = {'top': ('x', 'z'), 'side': ('y', 'z'), 'front': ('x', 'y')}
         pos_map = {'x': 0, 'y': 1, 'z': 2}
@@ -2913,34 +2914,6 @@ class MainWindow(QMainWindow):
         light_count = num_lights_x * num_lights_z
         self.show_toast(f"Created room with {thickness} unit walls and {light_count} light(s)")
 
-    def rotate_selected_15(self):
-        """Rotate the current selection by 15 degrees around the active 2D view axis."""
-        current_view = self.right_tabs.currentWidget()
-
-        if not isinstance(current_view, View2D):
-            self.show_toast("Select a 2D view first", is_error=True)
-            return
-
-        selected = getattr(self.state, 'selected_objects', []) or []
-        if self.state.selected_object is not None and self.state.selected_object not in selected:
-            selected.append(self.state.selected_object)
-
-        if not selected:
-            self.show_toast("Select a brush first", is_error=True)
-            return
-
-        axis = current_view._rotate_axis_vec()
-        if axis is None:
-            return
-
-        self.save_state()
-
-        if self.apply_rotation_to_selection(15.0, axis, undoable=False):
-            self.unsaved_changes = True
-            self.state.mark_lighting_dirty()
-            self.update_all_ui()
-            self.show_toast("Rotated +15°")
-
     def rotate_selected_brush(self):
         if not isinstance(self.state.selected_object, dict):
             QMessageBox.warning(self, "Invalid Selection", "Please select a brush to rotate.")
@@ -3204,8 +3177,10 @@ class MainWindow(QMainWindow):
                 self.hide_selected_brush()
             return
 
-        # Space: clone
-        if self.state.selected_object and event.key() == Qt.Key_Space:
+        # Shift+Space: clone the selection and hand it to the cursor to place.
+        # Plain Space is deliberately left free.
+        if (self.state.selected_object and event.key() == Qt.Key_Space and
+                event.modifiers() == Qt.ShiftModifier):
             self.clone_selected_object()
             return
 
@@ -3574,30 +3549,67 @@ class MainWindow(QMainWindow):
             view.cancel_rotate()
             view.setCursor(Qt.OpenHandCursor if active else Qt.ArrowCursor)
         if active:
-            self.show_toast("Rotate tool ON — drag in a 2D view to spin "
-                            "(snap toggles free/stepped, Esc exits)")
+            self.show_toast("Rotate tool ON — hold and drag in a 2D view to spin "
+                            "(grid snap on = 15° steps, off = free; Esc exits)")
         else:
             self.show_toast("Rotate tool OFF")
 
-    def apply_rotation_to_selection(self, angle_deg, axis, undoable=True):
-        """Rotate every selected brush by ``angle_deg`` about ``axis`` (each
-        around its own centre).  Returns the number of brushes rotated.
+    def selection_centre(self):
+        """Centre of the whole selection's combined bounds, or ``None``.
 
-        ``undoable`` pushes a single undo checkpoint; the live drag passes
-        ``False`` for the incremental steps and checkpoints once at the start.
+        The pivot a free rotation spins about: one point for the selection as a
+        whole, so several brushes turn as one rigid body instead of each
+        spinning on the spot.
         """
-        from engine.brush_geometry import rotate_brush as _rotate
+        selected = self.selected_objects_list()
+        if not selected:
+            return None
+        lo = np.array([float('inf')] * 3)
+        hi = np.array([float('-inf')] * 3)
+        for obj in selected:
+            o_lo, o_hi = component_edit.object_bounds(obj)
+            lo = np.minimum(lo, o_lo)
+            hi = np.maximum(hi, o_hi)
+        return ((lo + hi) * 0.5).tolist()
+
+    def selected_objects_list(self):
+        """The current selection as a plain list (brushes and entities)."""
         selected = list(getattr(self.state, 'selected_objects', []) or [])
-        if self.state.selected_object and self.state.selected_object not in selected:
+        if self.state.selected_object is not None and \
+                self.state.selected_object not in selected:
             selected.append(self.state.selected_object)
+        return selected
+
+    def apply_rotation_to_selection(self, angle_deg, axis, undoable=True,
+                                    pivot=None):
+        """Rotate the selection by ``angle_deg`` about ``axis``.
+
+        With no ``pivot`` each brush turns about its own centre (the old
+        per-brush behaviour).  Given one, every brush *and* entity orbits that
+        single point, so a multi-object selection keeps its layout while it
+        spins — which is what a drag-rotate should feel like.
+
+        Returns the number of objects moved.  ``undoable`` pushes a single undo
+        checkpoint; the live drag passes ``False`` for the incremental steps
+        and checkpoints once at the start.
+        """
+        selected = self.selected_objects_list()
         brushes = [b for b in selected if isinstance(b, dict)]
-        if not brushes:
+        things = [t for t in selected if not isinstance(t, dict)]
+        if not brushes and not (things and pivot is not None):
             return 0
         if undoable:
             self.save_state()
         count = 0
         for brush in brushes:
-            if _rotate(brush, angle_deg, axis):
+            if brush_geometry.rotate_brush(brush, angle_deg, axis, pivot=pivot):
+                count += 1
+        if pivot is not None:
+            # Entities have no geometry to turn, but their positions must orbit
+            # the pivot or they would be left behind by the brushes.
+            for thing in things:
+                thing.pos = brush_geometry.rotate_point(
+                    list(thing.pos), angle_deg, axis, pivot)
                 count += 1
         return count
 

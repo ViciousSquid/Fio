@@ -256,3 +256,44 @@ def test_plane_face_vertex_indices_returns_a_ring():
     ring = bg.plane_face_vertex_indices(brush, 0)
     assert len(ring) == 4
     assert len(set(ring)) == 4
+
+
+# ---------------------------------------------------------------------------
+# rotate_point  (entities orbiting a free-rotate pivot)
+# ---------------------------------------------------------------------------
+
+def test_rotate_point_turns_about_the_pivot():
+    out = bg.rotate_point([64.0, 0.0, 0.0], 90.0, [0.0, 1.0, 0.0], [0.0, 0.0, 0.0])
+    assert out[0] == pytest.approx(0.0, abs=1e-9)
+    assert out[1] == pytest.approx(0.0, abs=1e-9)
+    assert abs(out[2]) == pytest.approx(64.0)
+
+
+def test_rotate_point_leaves_the_pivot_itself_alone():
+    pivot = [17.0, -3.0, 42.0]
+    out = bg.rotate_point(pivot, 37.0, [0.0, 1.0, 0.0], pivot)
+    assert out == pytest.approx(pivot)
+
+
+def test_rotate_point_matches_how_a_brush_rotates():
+    """A point and a brush corner at the same place must end up together.
+
+    This is what keeps a mixed brush/entity selection rigid while it spins.
+    """
+    pivot = [0.0, 0.0, 0.0]
+    axis = [0.0, 1.0, 0.0]
+    brush = make_box(pos=(128, 0, 0))
+    corner = bg.brush_points(brush)[0].tolist()
+    assert bg.rotate_brush(brush, 33.0, axis, pivot=pivot)
+    moved_corner = bg.rotate_point(corner, 33.0, axis, pivot)
+    assert any(np.allclose(p, moved_corner, atol=1e-6)
+               for p in bg.brush_points(brush))
+
+
+def test_rotate_point_is_reversible():
+    start = [12.0, 5.0, -30.0]
+    pivot = [1.0, 2.0, 3.0]
+    axis = [0.2, 1.0, -0.4]
+    there = bg.rotate_point(start, 41.0, axis, pivot)
+    back = bg.rotate_point(there, -41.0, axis, pivot)
+    assert back == pytest.approx(start, abs=1e-9)

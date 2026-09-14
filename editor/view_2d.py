@@ -152,6 +152,7 @@ class View2D(QWidget):
         # the delta (rotations compose exactly about a fixed pivot/axis).
         self.rotate_dragging = False
         self.rotate_pivot = None       # QPointF pivot in this view's 2D world coords
+        self.rotate_pivot3 = None      # the same pivot in world space, held fixed
         self.rotate_start_ang = 0.0    # cursor angle (radians) at drag start
         self.rotate_applied = 0.0      # net snapped degrees applied so far
         self.rotate_snap_deg = 15.0    # step size while grid snap is enabled
@@ -204,6 +205,7 @@ class View2D(QWidget):
         self.clip_hover = None
         self.rotate_dragging = False
         self.rotate_pivot = None
+        self.rotate_pivot3 = None
         # Select-tool / group-manipulation transient state.
         self.is_marquee_select = False
         self.marquee_hits = []
@@ -469,7 +471,7 @@ class View2D(QWidget):
             self.update()
 
     # ------------------------------------------------------------------
-    # Clone-and-place  (select -> Space -> move -> click)
+    # Clone-and-place  (select -> Shift+Space -> move -> click)
     # ------------------------------------------------------------------
     def _track_clone_placement(self, world_pos):
         """Keep the copies being placed under the cursor as it moves."""
@@ -776,15 +778,22 @@ class View2D(QWidget):
             self.main_window.show_toast(f"Rotated group {applied:+.0f}°")
 
     def begin_rotate(self, world_pos):
-        """Start a free-rotate drag around the selected brush's centre."""
-        brush = self._selected_brush()
+        """Start a free-rotate drag around the centre of the whole selection.
+
+        Press and hold anywhere in the view and the selection follows the
+        cursor's angle about that centre — the Radiant gesture.  The pivot is
+        fixed for the duration of the drag so the geometry cannot wander as it
+        turns, and the whole spin is one undo step.
+        """
         idx = self._axis_indices()
-        if brush is None or idx is None:
-            self.main_window.show_toast("Rotate: select a brush first", is_error=True)
+        centre = self.main_window.selection_centre()
+        if idx is None or centre is None:
+            self.main_window.show_toast("Rotate: select something first",
+                                        is_error=True)
             return False
         a1, a2, _ = idx
-        pos = brush.get('pos', [0, 0, 0])
-        self.rotate_pivot = QPointF(float(pos[a1]), float(pos[a2]))
+        self.rotate_pivot = QPointF(float(centre[a1]), float(centre[a2]))
+        self.rotate_pivot3 = list(centre)
         self.rotate_start_ang = math.atan2(world_pos.y() - self.rotate_pivot.y(),
                                            world_pos.x() - self.rotate_pivot.x())
         self.rotate_applied = 0.0
@@ -808,7 +817,8 @@ class View2D(QWidget):
         delta = total_deg - self.rotate_applied
         if abs(delta) < 1e-6:
             return
-        if self.main_window.apply_rotation_to_selection(delta, axis, undoable=False):
+        if self.main_window.apply_rotation_to_selection(
+                delta, axis, undoable=False, pivot=self.rotate_pivot3):
             self.rotate_applied = total_deg
             self.editor.update_views()
             sel = self._selected_brush()
@@ -838,12 +848,16 @@ class View2D(QWidget):
             return
         axis = self._rotate_axis_vec()
         if axis is not None and abs(self.rotate_applied) > 1e-6:
-            self.main_window.apply_rotation_to_selection(-self.rotate_applied, axis,
-                                                         undoable=False)
+            # Unwind about the same pivot the drag used, or the selection would
+            # come back rotated correctly but sitting somewhere else.
+            self.main_window.apply_rotation_to_selection(
+                -self.rotate_applied, axis, undoable=False,
+                pivot=self.rotate_pivot3)
         if getattr(self.editor.state, 'undo_stack', None):
             self.editor.state.undo_stack.pop()
         self.rotate_dragging = False
         self.rotate_pivot = None
+        self.rotate_pivot3 = None
         self.rotate_applied = 0.0
         self.editor.update_views()
 

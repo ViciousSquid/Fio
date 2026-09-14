@@ -655,6 +655,20 @@ def rotate_planes(planes, angle_deg, axis, pivot):
     return rotated
 
 
+def rotate_point(point, angle_deg, axis, pivot):
+    """Rotate a single world point about ``pivot`` around ``axis``.
+
+    Shares :func:`rotate_planes`' matrix and sign convention, so an entity
+    rotated with this stays exactly where it sat relative to a brush rotated
+    with that — which is what makes a mixed selection spin as one rigid body
+    rather than drifting apart.
+    """
+    R = _rotation_matrix(_normalize(axis), math.radians(angle_deg))
+    pivot = _v(pivot)
+    out = R @ (_v(point) - pivot) + pivot
+    return [float(out[0]), float(out[1]), float(out[2])]
+
+
 def _rotation_matrix(axis, theta):
     x, y, z = axis
     c, s = math.cos(theta), math.sin(theta)
