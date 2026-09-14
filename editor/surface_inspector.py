@@ -20,8 +20,9 @@ coalescing the 2D views use for arrow-key nudges.
 import os
 
 from PyQt5.QtWidgets import (
-    QDialog, QGridLayout, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QDoubleSpinBox, QFrame, QSizePolicy, QRadioButton, QButtonGroup, QWidget,
+    QComboBox, QDialog, QGridLayout, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QDoubleSpinBox, QFrame, QSizePolicy, QRadioButton,
+    QButtonGroup, QWidget,
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QImageReader
@@ -44,6 +45,38 @@ FACE_BUTTON_STYLE = """
     QPushButton:hover { background-color: #8E24AA; }
     QPushButton:pressed { background-color: #4A148C; }
     QPushButton:checked { background-color: #D500F9; border: 1px solid white; }
+    QPushButton:disabled { background-color: #444; color: #888; border: 1px solid #555; }
+"""
+
+# Fio's accent orange, as the Settings window and the Asset Browser use it.
+ACCENT_BUTTON_STYLE = """
+    QPushButton {
+        background-color: #F08000;
+        color: white;
+        font: 9pt;
+        font-weight: bold;
+        padding: 6px 12px;
+        border: 1px solid #B35F00;
+        border-radius: 5px;
+    }
+    QPushButton:hover { background-color: #FF8C00; }
+    QPushButton:pressed { background-color: #B35F00; }
+    QPushButton:disabled { background-color: #444; color: #888; border: 1px solid #555; }
+"""
+
+# The Asset Browser's green, for the button that puts a texture on a face.
+APPLY_BUTTON_STYLE = """
+    QPushButton {
+        background-color: #2E7D32;
+        color: white;
+        font: 9pt;
+        font-weight: bold;
+        padding: 6px 12px;
+        border: 1px solid #1B5E20;
+        border-radius: 5px;
+    }
+    QPushButton:hover { background-color: #388E3C; }
+    QPushButton:pressed { background-color: #1B5E20; }
     QPushButton:disabled { background-color: #444; color: #888; border: 1px solid #555; }
 """
 
@@ -106,15 +139,25 @@ class SurfaceInspector(QDialog):
         self.tex_label.setStyleSheet("font-weight: bold;")
         self.tex_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         head.addWidget(self.tex_label, 0, 1)
-        self.apply_tex_btn = QPushButton("Apply selected")
+        self.apply_tex_btn = QPushButton("Apply")
+        self.apply_tex_btn.setStyleSheet(APPLY_BUTTON_STYLE)
         self.apply_tex_btn.setToolTip(
             "Put the texture selected in the Asset Browser on the target")
         self.apply_tex_btn.clicked.connect(self._apply_selected_texture)
         head.addWidget(self.apply_tex_btn, 0, 2)
 
+        # The face being edited, as a picker: every face keeps its own
+        # projection, so getting from one to the next has to be quicker than
+        # going back to the 3D view and clicking it.
         head.addWidget(QLabel("Face"), 1, 0)
-        self.face_label = QLabel("(none)")
-        head.addWidget(self.face_label, 1, 1)
+        self.face_combo = QComboBox()
+        self.face_combo.setToolTip(
+            "The face these controls edit.\n"
+            "Each face keeps its own projection, so one side can be Natural "
+            "while another is Fit.")
+        self.face_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.face_combo.currentIndexChanged.connect(self._on_face_picked)
+        head.addWidget(self.face_combo, 1, 1)
         self.size_label = QLabel("")
         self.size_label.setStyleSheet("color: #888;")
         head.addWidget(self.size_label, 1, 2)
@@ -182,6 +225,7 @@ class SurfaceInspector(QDialog):
         fit_row.addWidget(QLabel("H"))
         fit_row.addWidget(self.fit_h)
         self.fit_btn = QPushButton("Fit")
+        self.fit_btn.setStyleSheet(ACCENT_BUTTON_STYLE)
         self.fit_btn.setToolTip("Stretch the texture to span the face exactly")
         self.fit_btn.clicked.connect(self._apply_fit)
         fit_row.addWidget(self.fit_btn)
@@ -226,12 +270,6 @@ class SurfaceInspector(QDialog):
         flip_row.addStretch(1)
         outer.addLayout(flip_row)
 
-        hint = QLabel("T reopens this panel · Page Up/Down rotates the "
-                      "hovered face")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: #888;")
-        outer.addWidget(hint)
-
     @staticmethod
     def _dim(widget):
         widget.setStyleSheet("color: #888;")
@@ -274,10 +312,68 @@ class SurfaceInspector(QDialog):
     def set_target(self, brush, face_key):
         """Bind the inspector to a face and show it."""
         self.target = (brush, face_key)
+        self._fill_face_combo()
         self.refresh_from_face()
         self.show()
         self.raise_()
         self.activateWindow()
+
+    @staticmethod
+    def face_display_name(face_key):
+        """What a face is called in the picker."""
+        if face_key.startswith('#'):
+            return 'cut face %s' % face_key[1:]
+        return face_key
+
+    def _fill_face_combo(self):
+        """List the target brush's faces, with the bound one selected."""
+        brush, face_key = self.target
+        keys = ft.face_keys(brush)
+        if face_key not in keys:        # a face the brush no longer has
+            keys = list(keys) + [face_key]
+
+        current = [self.face_combo.itemData(i)
+                   for i in range(self.face_combo.count())]
+        self.face_combo.blockSignals(True)
+        try:
+            if current != list(keys):
+                self.face_combo.clear()
+                for key in keys:
+                    self.face_combo.addItem(self.face_display_name(key), key)
+            index = self.face_combo.findData(face_key)
+            if index >= 0:
+                self.face_combo.setCurrentIndex(index)
+        finally:
+            self.face_combo.blockSignals(False)
+
+    def _on_face_picked(self, index):
+        """Re-bind to the face chosen in the picker, same brush."""
+        if self._loading or index < 0 or not self.target:
+            return
+        key = self.face_combo.itemData(index)
+        if key is None:
+            return
+        brush, current = self.target
+        if key == current:
+            return
+        self.target = (brush, key)
+        self.refresh_from_face()
+        self._remember_target()
+
+    def _remember_target(self):
+        """Make the picked face the editor's current one.
+
+        ``face_texture_target`` is what Page Up / Page Down rotates when no
+        face is hovered, and what reopening the panel binds to.  Picking a
+        face here is choosing what to work on, so it should move that too --
+        the viewport's own hover state is left alone, being the mouse's to
+        set.
+
+        Set unconditionally: the editor creates the attribute on demand and
+        reads it back through getattr, so guarding on hasattr would skip the
+        very first pick.
+        """
+        self.editor.face_texture_target = self.target
 
     def target_faces(self):
         """The (brush, face key) pairs the current controls apply to.
@@ -313,9 +409,7 @@ class SurfaceInspector(QDialog):
         self._loading = True
         try:
             self.tex_label.setText(transform['texture'] or '(none)')
-            self.face_label.setText(
-                face_key if not face_key.startswith('#')
-                else 'cut face %s' % face_key[1:])
+            self._fill_face_combo()
             width, height = ft.face_extent(brush, face_key)
             self.size_label.setText("%.0f x %.0f" % (width, height))
             self.hshift.setValue(transform['shift'][0])

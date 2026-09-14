@@ -90,7 +90,8 @@ def inspector(qt_app):
 
 def test_it_shows_the_bound_face(inspector):
     _, panel, _ = inspector
-    assert panel.face_label.text() == 'north'
+    assert panel.face_combo.currentData() == 'north'
+    assert panel.face_combo.currentText() == 'north'
     assert panel.tex_label.text() == 'tex_north.png'
     assert panel.size_label.text() == '512 x 128'
 
@@ -102,7 +103,8 @@ def test_it_labels_a_cut_face_as_one(qt_app):
     assert bg.clip_brush(brush, [1.0, 1.0, 0.0], 0.0)
     key = next(k for k in ft.face_keys(brush) if k.startswith('#'))
     panel.set_target(brush, key)
-    assert 'cut face' in panel.face_label.text()
+    assert panel.face_combo.currentData() == key
+    assert 'cut face' in panel.face_combo.currentText()
 
 
 def test_it_reloads_the_values_of_whatever_face_it_is_pointed_at(inspector):
@@ -561,3 +563,197 @@ def test_other_keys_still_reach_the_dialog(inspector):
     host.handle_escape = lambda: pytest.fail("Tab must not be routed to escape")
 
     panel.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Tab, Qt.NoModifier))
+
+
+# ────────────────────────────
+# The face picker
+# ────────────────────────────
+
+def test_the_picker_lists_every_face_of_the_brush(inspector):
+    host, panel, brush = inspector
+
+    listed = [panel.face_combo.itemData(i)
+              for i in range(panel.face_combo.count())]
+
+    assert listed == list(ft.face_keys(brush))
+
+
+def test_picking_a_face_rebinds_the_controls(inspector):
+    """Choosing a face here must work like clicking it in the 3D view."""
+    host, panel, brush = inspector
+    ft.set_transform(brush, 'east', scale=(3.0, 4.0), angle=90.0)
+
+    panel.face_combo.setCurrentIndex(panel.face_combo.findData('east'))
+
+    assert panel.target == (brush, 'east')
+    assert panel.hstretch.value() == pytest.approx(3.0)
+    assert panel.vstretch.value() == pytest.approx(4.0)
+    assert panel.rotate.value() == pytest.approx(90.0)
+
+
+def test_picking_a_face_makes_it_the_editor_s_current_one(inspector):
+    """Page Up/Down and a reopened panel should follow the picker."""
+    host, panel, brush = inspector
+    assert not hasattr(host, 'face_texture_target')
+
+    panel.face_combo.setCurrentIndex(panel.face_combo.findData('top'))
+
+    assert host.face_texture_target == (brush, 'top')
+
+
+def test_picking_a_face_edits_nothing(inspector):
+    """Switching faces is navigation, so it must not push an undo state."""
+    host, panel, brush = inspector
+    before = dict(brush)
+    saves = host.saves
+
+    panel.face_combo.setCurrentIndex(panel.face_combo.findData('west'))
+
+    assert host.saves == saves
+    assert brush == before
+
+
+def test_the_picker_follows_a_target_set_from_the_3d_view(inspector):
+    host, panel, brush = inspector
+
+    panel.set_target(brush, 'down')
+
+    assert panel.face_combo.currentData() == 'down'
+
+
+def test_the_picker_relists_when_the_brush_changes(qt_app):
+    """A clipped brush grows a cut face; the picker has to pick it up."""
+    host = FakeHost()
+    panel = SurfaceInspector(host)
+    brush = make_box(size=(128, 128, 128))
+    panel.set_target(brush, 'north')
+    before = panel.face_combo.count()
+
+    assert bg.clip_brush(brush, [1.0, 1.0, 0.0], 0.0)
+    key = next(k for k in ft.face_keys(brush) if k.startswith('#'))
+    panel.set_target(brush, key)
+
+    listed = [panel.face_combo.itemData(i)
+              for i in range(panel.face_combo.count())]
+    assert key in listed
+    assert panel.face_combo.count() != before or listed == list(ft.face_keys(brush))
+
+
+def test_a_face_the_brush_no_longer_has_is_still_shown(qt_app):
+    """Never silently retarget: an orphaned face stays selected, and visible."""
+    host = FakeHost()
+    panel = SurfaceInspector(host)
+    brush = make_box()
+    panel.set_target(brush, '#99')          # a cut face this brush lacks
+
+    assert panel.face_combo.currentData() == '#99'
+    assert panel.target == (brush, '#99')
+
+
+# ────────────────────────────
+# Faces are independent
+# ────────────────────────────
+
+def test_one_face_can_be_natural_while_another_is_fit(inspector):
+    """The whole point of the picker: per-face projections."""
+    host, panel, brush = inspector
+
+    panel.face_combo.setCurrentIndex(panel.face_combo.findData('north'))
+    panel.natural_btn.setChecked(True)
+    panel._toggle_natural()
+
+    panel.face_combo.setCurrentIndex(panel.face_combo.findData('south'))
+    panel._apply_fit()
+
+    assert ft.is_natural(brush, 'north')
+    assert not ft.is_natural(brush, 'south')
+
+
+def test_the_natural_button_reflects_the_face_that_is_picked(inspector):
+    """Switching faces must not leave the button showing the last one's mode."""
+    host, panel, brush = inspector
+
+    panel.face_combo.setCurrentIndex(panel.face_combo.findData('north'))
+    panel.natural_btn.setChecked(True)
+    panel._toggle_natural()
+    assert panel.natural_btn.isChecked()
+
+    panel.face_combo.setCurrentIndex(panel.face_combo.findData('south'))
+    assert not panel.natural_btn.isChecked()
+
+    panel.face_combo.setCurrentIndex(panel.face_combo.findData('north'))
+    assert panel.natural_btn.isChecked()
+
+
+def test_natural_on_one_face_survives_a_resize_while_fit_stretches(inspector):
+    """The difference the two projections exist for, side by side."""
+    host, panel, brush = inspector
+    size = (512, 512)
+
+    ft.apply_natural(brush, 'north', size)
+    ft.apply_fit(brush, 'south', (1.0, 1.0))
+    brush['size'][0] *= 2
+
+    natural = ft.get_transform(brush, 'north', texture_size=size)['scale']
+    fitted = ft.get_transform(brush, 'south', texture_size=size)['scale']
+
+    assert natural[0] == pytest.approx(brush['size'][0] / size[0])
+    assert fitted == pytest.approx((1.0, 1.0))
+
+
+# ────────────────────────────
+# Chrome
+# ────────────────────────────
+
+def test_fit_wears_the_fio_accent(inspector):
+    from editor.surface_inspector import ACCENT_BUTTON_STYLE
+
+    host, panel, brush = inspector
+
+    assert panel.fit_btn.styleSheet() == ACCENT_BUTTON_STYLE
+    assert '#F08000' in ACCENT_BUTTON_STYLE
+
+
+def test_apply_is_short_and_green(inspector):
+    """The old "Apply selected" overran its column."""
+    from editor.surface_inspector import APPLY_BUTTON_STYLE
+
+    host, panel, brush = inspector
+
+    assert panel.apply_tex_btn.text() == 'Apply'
+    assert panel.apply_tex_btn.styleSheet() == APPLY_BUTTON_STYLE
+    assert '#2E7D32' in APPLY_BUTTON_STYLE
+
+
+def test_the_apply_button_still_applies(inspector):
+    """Renaming it must not have cost it its job."""
+    host, panel, brush = inspector
+    host.asset_browser.path = os.path.join('assets', 'textures', 'brick.png')
+
+    panel.apply_tex_btn.click()
+
+    assert ft.get_transform(brush, 'north')['texture'] == 'brick.png'
+
+
+def test_the_panel_carries_no_shortcut_blurb(inspector):
+    from PyQt5.QtWidgets import QLabel
+
+    host, panel, brush = inspector
+    texts = [w.text() for w in panel.findChildren(QLabel)]
+
+    assert not any('reopens this panel' in t for t in texts)
+
+
+def test_fit_writes_a_scale_so_it_beats_the_legacy_tiling_flag(inspector):
+    """Old maps can carry a brush-wide ``texture_tiling``.
+
+    Both renderers check the face's own ``uv_scale`` before falling back to
+    that flag, so Fit only stays per-face as long as it writes one.
+    """
+    host, panel, brush = inspector
+    brush['texture_tiling'] = True          # as a legacy map would have it
+
+    ft.apply_fit(brush, 'north', (1.0, 1.0))
+
+    assert brush.get('uv_scale', {}).get('north') is not None
+    assert not ft.is_natural(brush, 'north')
