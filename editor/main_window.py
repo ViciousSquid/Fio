@@ -2310,11 +2310,29 @@ class MainWindow(QMainWindow):
         Undo rebuilds the brush dicts from JSON, so any component reference
         held from before now points at an object that is no longer in the
         scene.  Dropping those keeps the handles honest instead of drawing
-        them for geometry that has gone.
+        them for geometry that has gone.  The property editor's cached pages
+        and the I/O system's reverse index are stale for the same reason.
         """
         self.components.cancel_drag()
         self.components.prune(self.state.brushes)
         self.components.invalidate()
+        self.invalidate_entity_caches()
+
+    def invalidate_entity_caches(self):
+        """Drop caches keyed on the scene's objects.
+
+        For the wholesale swaps — an undo, a map load — where the objects
+        themselves are replaced rather than edited, so nothing watching for
+        changes *within* an object can notice.
+        """
+        editor_panel = getattr(self, 'property_editor', None)
+        if editor_panel is not None:
+            editor_panel.invalidate_cache()
+        try:
+            from editor import io_system
+            io_system.bump_io_revision()
+        except ImportError:
+            pass
 
     def set_render_mode(self, mode):
         self.view_3d.render_mode = mode

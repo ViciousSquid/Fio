@@ -22,9 +22,11 @@ except Exception:  # pragma: no cover - console unavailable (headless/import cyc
 try:
     from editor.io_editor_widget import IOEditorWidget, IOInputsWidget
     from editor.io_system import get_entity_type_for_io, IO_REGISTRY
+    from editor import io_system as _io_system
     IO_AVAILABLE = True
 except ImportError:
     IO_AVAILABLE = False
+    _io_system = None
 
 
 # ────────────────────────────
@@ -236,6 +238,27 @@ class PropertyEditor(QWidget):
         self._linked_door_brush = None
         self.tab_widget = None
 
+        # --- Rebuild avoidance -------------------------------------------
+        # Building a panel means constructing several tabs' worth of widgets,
+        # which is milliseconds of work.  set_object() is called after every
+        # editor operation — including once per mouse-move during a rotate
+        # drag — so most of those builds produce a panel identical to the one
+        # already on screen.  _signature() captures everything the panel reads
+        # from an object; an unchanged signature means there is nothing to
+        # rebuild, and a page built earlier for another object can be put back
+        # as it was instead of being built again.
+        self._signature = None
+        self._page = None                 # the QScrollArea currently shown
+        self._page_cache = []             # [(obj, signature, page, state)], LRU
+
+        # Parked pages live in here rather than being reparented to nothing.
+        # A widget with no parent is a top-level window, and Qt walks every
+        # top-level window when it propagates style/font/palette changes — so
+        # parking pages that way made building the *next* page measurably
+        # slower, in proportion to how many were parked.
+        self._parking = QWidget(self)
+        self._parking.setVisible(False)
+
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(5, 5, 5, 5)
         self.main_layout.setSpacing(2)
@@ -253,46 +276,186 @@ class PropertyEditor(QWidget):
         (identity-addressed) OR its target_name equals target_name (legacy /
         name-addressed). This keeps the "Targeted by" list correct even when
         the target has been renamed.
+
+        Backed by the I/O system's reverse index rather than a scan of every
+        brush and entity: this runs on each panel build, and on a large map the
+        scan was the build's dominant cost.  The index is shared and rebuilt
+        only when connections change.
         """
         if not target_name and not target_id:
             return []
-        sources = []
-
-        def _conn_matches(conn):
-            cid = getattr(conn, 'target_id', None)
-            if cid is None and isinstance(conn, dict):
-                cid = conn.get('target_id')
-            if target_id and cid and cid == target_id:
-                return True
-            t = getattr(conn, 'target_name', None) or (conn.get('target') if isinstance(conn, dict) else None)
-            return bool(target_name) and t == target_name
-
-        for brush in self.editor.state.brushes:
-            if target_name and brush.get('target') == target_name:
-                src_type = 'trigger' if brush.get('is_trigger') else 'mover' if brush.get('is_mover') else None
-                if src_type:
-                    sources.append((brush.get('name', 'unnamed'), src_type))
-            for conn in brush.get('_io_connections', []):
-                o = getattr(conn, 'output_name', None) or (conn.get('output', '?') if isinstance(conn, dict) else '?')
-                if _conn_matches(conn):
-                    sources.append((brush.get('name', 'unnamed'), f"I/O: {o}"))
-        for thing in self.editor.state.things:
-            for conn in thing.properties.get('_io_connections', []):
-                o = getattr(conn, 'output_name', None) or (conn.get('output', '?') if isinstance(conn, dict) else '?')
-                if _conn_matches(conn):
-                    sources.append((thing.properties.get('name', 'unnamed'), f"I/O: {o}"))
-        return sources
+        if _io_system is None:
+            return []
+        return _io_system.find_targeting_sources(
+            self.editor.state.brushes, self.editor.state.things,
+            target_name, target_id)
 
     def _check_target_exists(self, target_name: str) -> bool:
-        if not target_name:
+        """Whether anything in the scene answers to ``target_name``.
+
+        Nothing in the editor calls this today; it is kept as the counterpart
+        to :meth:`_find_targeting_sources` and now shares that lookup's index
+        instead of scanning the scene.
+        """
+        if not target_name or _io_system is None:
             return False
-        for brush in self.editor.state.brushes:
-            if brush.get('name') == target_name:
-                return True
-        for thing in self.editor.state.things:
-            if (getattr(thing, 'name', '') or thing.properties.get('name', '')) == target_name:
-                return True
-        return False
+        return target_name in _io_system.entity_names(
+            self.editor.state.brushes, self.editor.state.things)
+
+    # ────────────────────────────
+    # Rebuild avoidance
+    # ────────────────────────────
+
+    #: How many built pages to keep around.  Enough to cover flicking between
+    #: a handful of entities; small enough that the widgets they hold onto are
+    #: never a meaningful amount of memory.
+    PAGE_CACHE_SIZE = 6
+
+    #: Keys a panel never reads, so a change to one cannot alter what is
+    #: displayed.  Geometry and position are the important ones: they change on
+    #: every frame of a drag or rotate, and rebuilding the panel for them was
+    #: pure waste.
+    _SIGNATURE_IGNORED = frozenset({
+        'pos', 'size', 'geometry', '_flash_until', 'original_pos',
+    })
+
+    #: Attributes that belong to the editor itself rather than to whichever
+    #: page is on screen; everything else is part of a page's state.
+    _PERSISTENT_ATTRS = frozenset({
+        'editor', 'current_object', 'main_layout', '_populating',
+        '_signature', '_page', '_page_cache', '_parking',
+    })
+
+    @staticmethod
+    def _hashable(value):
+        """A comparable stand-in for a property value.
+
+        Property values include lists (colours, directions) and dicts (per-face
+        textures), so they cannot go into a tuple key as they are.
+        """
+        if isinstance(value, (str, int, float, bool, type(None))):
+            return value
+        if isinstance(value, (list, tuple)):
+            return tuple(PropertyEditor._hashable(v) for v in value)
+        if isinstance(value, dict):
+            return tuple(sorted((k, PropertyEditor._hashable(v))
+                                for k, v in value.items()))
+        return repr(value)
+
+    def _connection_signature(self, connections):
+        """What the I/O tab shows about a set of connections."""
+        out = []
+        for conn in connections or ():
+            if isinstance(conn, dict):
+                out.append(tuple(sorted((k, self._hashable(v))
+                                        for k, v in conn.items())))
+            else:
+                out.append(tuple(
+                    (k, self._hashable(getattr(conn, k, None)))
+                    for k in ('output_name', 'target_name', 'target_id',
+                              'input_name', 'parameter', 'delay', 'fire_once')))
+        return tuple(out)
+
+    def _object_signature(self, obj):
+        """Everything the panel would read to build itself for ``obj``.
+
+        Two calls returning the same value mean the panel that is already on
+        screen is exactly the panel a rebuild would produce.  The I/O
+        revision is folded in because the "Targeted by" line depends on other
+        entities' connections, not on this object at all.
+        """
+        if obj is None:
+            return ('none',)
+
+        revision = _io_system.io_revision() if _io_system is not None else 0
+        if isinstance(obj, dict):
+            source = obj
+            kind = 'brush'
+        else:
+            source = obj.properties
+            kind = type(obj).__name__
+
+        fields = []
+        for key, value in source.items():
+            if key in self._SIGNATURE_IGNORED or key.startswith('_geo_cache') \
+                    or key.startswith('_box_shape') or key.startswith('_mesh_') \
+                    or key.startswith('_mat_') or key.startswith('_nmat_') \
+                    or key.startswith('_render_') or key.startswith('_aabb'):
+                continue
+            if key == '_io_connections':
+                fields.append((key, self._connection_signature(value)))
+            else:
+                fields.append((key, self._hashable(value)))
+        fields.sort()
+        return (kind, id(obj), revision, tuple(fields))
+
+    def _capture_page_state(self):
+        """The instance attributes the page on screen owns.
+
+        Captured wholesale rather than by name: the builders set a couple of
+        dozen attributes between them (tab indices, per-widget handles, linked
+        objects), and a page restored without one of them would leave a
+        callback poking at the previous page's widgets.
+        """
+        return {k: v for k, v in self.__dict__.items()
+                if k not in self._PERSISTENT_ATTRS}
+
+    def _restore_page_state(self, state):
+        """Put back the attributes captured by :meth:`_capture_page_state`."""
+        for key in list(self.__dict__):
+            if key not in self._PERSISTENT_ATTRS:
+                del self.__dict__[key]
+        self.__dict__.update(state)
+
+    def _detach_page(self):
+        """Take the current page out of the layout without destroying it."""
+        page = self._page
+        if page is not None:
+            self.main_layout.removeWidget(page)
+            page.setParent(self._parking)
+            page.setVisible(False)
+        self._page = None
+        return page
+
+    def _cache_current_page(self):
+        """Park the page on screen so selecting its object again is instant."""
+        page = self._detach_page()
+        if page is None or self.current_object is None or self._signature is None:
+            if page is not None:
+                page.deleteLater()
+            return
+        self._page_cache = [e for e in self._page_cache
+                            if e[0] is not self.current_object]
+        self._page_cache.append((self.current_object, self._signature, page,
+                                 self._capture_page_state()))
+        while len(self._page_cache) > self.PAGE_CACHE_SIZE:
+            _, _, stale, _ = self._page_cache.pop(0)
+            stale.deleteLater()
+
+    def _take_cached_page(self, obj, signature):
+        """A previously built page for ``obj``, if it is still accurate."""
+        for i, (cached_obj, cached_sig, page, state) in enumerate(self._page_cache):
+            if cached_obj is not obj:
+                continue
+            del self._page_cache[i]
+            if cached_sig == signature:
+                return page, state
+            # The object changed while the page sat in the cache; the widgets
+            # would show stale values, so throw it away and build again.
+            page.deleteLater()
+            return None, None
+        return None, None
+
+    def invalidate_cache(self):
+        """Drop every cached page.
+
+        For changes no signature can see — a scene load or an undo, which
+        replace the objects themselves.
+        """
+        for _, _, page, _ in self._page_cache:
+            page.deleteLater()
+        self._page_cache = []
+        self._signature = None
 
     def clear_layout(self):
         while self.main_layout.count():
@@ -304,19 +467,40 @@ class PropertyEditor(QWidget):
                     item = child.layout().takeAt(0)
                     if item.widget():
                         item.widget().deleteLater()
-        self._widgets.clear()
+        # Rebind rather than clear: a page parked in the cache captured this
+        # dict, and emptying it in place would strip the widget handles its
+        # callbacks look themselves up in.
+        self._widgets = {}
         self.tab_widget = None
+        self._page = None
 
-    def set_object(self, obj):
+    def set_object(self, obj, force=False):
+        """Show ``obj``'s properties, rebuilding the panel only if it must.
+
+        Three paths, cheapest first:
+
+        * the panel already shows exactly this — nothing to do at all, and the
+          tab and scroll position are preserved because they were never
+          disturbed;
+        * a page built for this object earlier is still accurate — put it back
+          with the state its callbacks expect;
+        * otherwise build a fresh page.
+
+        ``force`` skips straight to a rebuild, for the handful of callers that
+        change something a signature cannot see and then ask for a refresh.
+        """
+        signature = self._object_signature(obj)
+
+        if not force and obj is self.current_object and self._signature == signature \
+                and (self._page is not None or obj is None):
+            return
+
         saved_tab_index = None
         saved_scroll_pos = 0
         if self.current_object is obj and self.tab_widget is not None:
             saved_tab_index = self.tab_widget.currentIndex()
-            for i in range(self.main_layout.count()):
-                w = self.main_layout.itemAt(i).widget()
-                if isinstance(w, QScrollArea):
-                    saved_scroll_pos = w.verticalScrollBar().value()
-                    break
+            if self._page is not None:
+                saved_scroll_pos = self._page.verticalScrollBar().value()
 
         if obj is None and self.current_object is not None:
             if hasattr(self.editor, 'properties_tab_widget'):
@@ -325,7 +509,6 @@ class PropertyEditor(QWidget):
                     self.editor.properties_tab_widget.setCurrentIndex(prev)
 
         self._populating = True
-        self.current_object = obj
 
         # Tearing down and rebuilding the whole panel triggers a relayout/repaint
         # for every widget removed and added; freezing updates across the rebuild
@@ -333,13 +516,29 @@ class PropertyEditor(QWidget):
         # per-selection cost on entities with many fields/tabs.
         self.setUpdatesEnabled(False)
         try:
-            self.clear_layout()
+            cached_page, cached_state = (None, None)
+            if not force and obj is not None and obj is not self.current_object:
+                cached_page, cached_state = self._take_cached_page(obj, signature)
 
-            if obj is None:
+            # Park the outgoing page (or drop it, if this is a forced rebuild
+            # whose widgets are about to be out of date).
+            if force and obj is self.current_object:
+                self.clear_layout()
+            else:
+                self._cache_current_page()
+                self.clear_layout()
+
+            self.current_object = obj
+            self._signature = signature
+
+            if cached_page is not None:
+                self._restore_page_state(cached_state)
+                self.main_layout.addWidget(cached_page)
+                cached_page.setVisible(True)
+                self._page = cached_page
+            elif obj is None:
                 self.main_layout.addWidget(QLabel("Nothing selected."))
-                return
-
-            if isinstance(obj, dict):
+            elif isinstance(obj, dict):
                 self.populate_for_brush(obj)
             elif isinstance(obj, Thing):
                 self.populate_for_thing(obj)
@@ -352,12 +551,10 @@ class PropertyEditor(QWidget):
             if saved_tab_index < self.tab_widget.count():
                 self.tab_widget.setCurrentIndex(saved_tab_index)
 
-        if saved_scroll_pos > 0:
-            for i in range(self.main_layout.count()):
-                w = self.main_layout.itemAt(i).widget()
-                if isinstance(w, QScrollArea):
-                    QTimer.singleShot(0, lambda w=w, p=saved_scroll_pos: w.verticalScrollBar().setValue(p))
-                    break
+        if saved_scroll_pos > 0 and self._page is not None:
+            page = self._page
+            QTimer.singleShot(
+                0, lambda w=page, p=saved_scroll_pos: w.verticalScrollBar().setValue(p))
 
         self._populating = False
 
@@ -458,6 +655,31 @@ class PropertyEditor(QWidget):
         layout.addStretch()
         scroll.setWidget(content)
         self.main_layout.addWidget(scroll)
+        self._page = scroll
+
+    def _defer_io_tab(self, builder):
+        """Add the I/O tab now, but build its contents the first time it is shown.
+
+        ``IOEditorWidget`` is a table plus a row of controls and is about a
+        fifth of the cost of building a page, yet the I/O tab is never the one
+        selected when a page appears.  The tab is added empty so the tab bar
+        looks the same, and ``builder`` runs once, on the first switch to it.
+        """
+        placeholder = QWidget()
+        QVBoxLayout(placeholder).setContentsMargins(0, 0, 0, 0)
+        index = self.tab_widget.addTab(placeholder, "\u26a1 I/O")
+        tabs = self.tab_widget
+
+        def fill(current, _tabs=tabs, _index=index, _holder=placeholder):
+            if current != _index or _holder.property('io_built'):
+                return
+            _holder.setProperty('io_built', True)
+            _holder.layout().addWidget(builder())
+
+        tabs.currentChanged.connect(fill)
+        if tabs.currentIndex() == index:
+            fill(index)
+        return index
 
     def _create_io_tab_for_brush(self, brush):
         tab = QWidget()
@@ -481,8 +703,10 @@ class PropertyEditor(QWidget):
             return
         if not any(self.current_object.get(k) for k in ('is_trigger', 'is_mover', 'is_door')):
             return
-        self.io_tab = self._create_io_tab_for_brush(self.current_object)
-        self.io_tab_index = self.tab_widget.addTab(self.io_tab, "⚡ I/O")
+        brush = self.current_object
+        self.io_tab_index = self._defer_io_tab(
+            lambda b=brush: self._create_io_tab_for_brush(b))
+        self.io_tab = self.tab_widget.widget(self.io_tab_index)
 
     def _remove_io_tab(self):
         if hasattr(self, 'io_tab_index') and self.io_tab_index is not None:
@@ -1068,12 +1292,13 @@ class PropertyEditor(QWidget):
         if IO_AVAILABLE:
             etype = get_entity_type_for_io(thing)
             if etype and etype in IO_REGISTRY:
-                self.tab_widget.addTab(self._create_io_tab_for_thing(thing), "⚡ I/O")
+                self._defer_io_tab(lambda t=thing: self._create_io_tab_for_thing(t))
 
         layout.addWidget(self.tab_widget)
         layout.addStretch()
         scroll.setWidget(content)
         self.main_layout.addWidget(scroll)
+        self._page = scroll
 
     def _create_thing_properties_tab(self, thing) -> QWidget:
         w = QWidget()
@@ -1178,25 +1403,46 @@ class PropertyEditor(QWidget):
         form.addRow("", cb)
 
         combo = ClickableComboBox()
-        combo.addItem("(none)")
-        for brush in self.editor.state.brushes:
-            if brush.get('is_mover'):
-                mname = brush.get('name', '')
-                if mname:
-                    combo.addItem(mname)
-        if current:
-            idx = combo.findText(current)
-            if idx >= 0:
-                combo.setCurrentIndex(idx)
-            else:
-                combo.addItem(current + " (missing)")
-                combo.setCurrentIndex(combo.count() - 1)
+        filled = []
+
+        def fill_movers():
+            """List the map's movers.
+
+            Deferred because the list is a scan of every brush in the map and
+            the combo is hidden unless the light is actually attached, which
+            most are not.  Building it at the moment it is shown also means it
+            cannot go stale between a mover being renamed and the box opening.
+            """
+            if filled:
+                return
+            filled.append(True)
+            combo.blockSignals(True)
+            combo.addItem("(none)")
+            for brush in self.editor.state.brushes:
+                if brush.get('is_mover'):
+                    mname = brush.get('name', '')
+                    if mname:
+                        combo.addItem(mname)
+            chosen = thing.properties.get('parent_mover', '')
+            if chosen:
+                idx = combo.findText(chosen)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+                else:
+                    combo.addItem(chosen + " (missing)")
+                    combo.setCurrentIndex(combo.count() - 1)
+            combo.blockSignals(False)
+
+        if is_attached:
+            fill_movers()
 
         lbl = QLabel("Parent Mover:")
         lbl.setVisible(is_attached)
         combo.setVisible(is_attached)
 
         def on_toggle(checked):
+            if checked:
+                fill_movers()
             lbl.setVisible(checked)
             combo.setVisible(checked)
             if not checked:
@@ -1431,7 +1677,7 @@ class PropertyEditor(QWidget):
             for k in ('projectile_sprite_label', 'projectile_sprite_path'):
                 if k in self._widgets:
                     self._widgets[k].setVisible(is_flying)
-            self.set_object(thing)
+            self.set_object(thing, force=True)
 
         combo.currentTextChanged.connect(on_type_changed)
         variant_combo.currentTextChanged.connect(on_variant)
@@ -2005,7 +2251,7 @@ class PropertyEditor(QWidget):
 
     def _refresh_keyvalue_group(self, thing):
         """Refresh the keyvalue display by rebuilding the property editor."""
-        self.set_object(thing)
+        self.set_object(thing, force=True)
 
     def _build_monster_groups(self, tab_layout, thing):
         for k, v in (('sight', 512), ('triggered', False), ('wake_on_sight', True),
@@ -2228,7 +2474,7 @@ class PropertyEditor(QWidget):
             from editor.monster_customise_dialog import MonsterCustomiseDialog
             dlg = MonsterCustomiseDialog(thing, self)
             if dlg.exec_() == MonsterCustomiseDialog.Accepted:
-                self.set_object(thing)
+                self.set_object(thing, force=True)
                 try:
                     self.editor.view_3d.update()
                 except Exception:
@@ -2418,7 +2664,7 @@ class PropertyEditor(QWidget):
         """Refresh property editor and jump to shader tab after shader change."""
         if self.current_object is None:
             return
-        self.set_object(self.current_object)
+        self.set_object(self.current_object, force=True)
         if hasattr(self, 'shader_tab_index') and self.shader_tab_index is not None:
             shader = self.current_object.get('shader', '<None>')
             if shader not in ('<<None>', None, ''):
