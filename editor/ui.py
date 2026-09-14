@@ -62,6 +62,13 @@ class GenerateTilemapDialog(QDialog):
     def save_png_checked(self):
         return self.save_png_checkbox.isChecked()
 
+#: Bumped whenever the default dock arrangement changes.  A layout saved by
+#: an older version is dropped once, so a new default actually reaches an
+#: install that has been opened before -- settings.ini stores the layout on
+#: every close, and restoreState() would otherwise win forever.
+LAYOUT_VERSION = 2
+
+
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         MainWindow.setObjectName("MainWindow")
@@ -131,7 +138,10 @@ class Ui_MainWindow(object):
         MainWindow.splitDockWidget(MainWindow.view_3d_dock, MainWindow.right_dock, Qt.Horizontal)
         MainWindow.splitDockWidget(MainWindow.right_dock, MainWindow.properties_dock, Qt.Vertical)
 
-        MainWindow.resizeDocks([MainWindow.view_3d_dock, MainWindow.right_dock], [800, 600], Qt.Horizontal)
+        # 3D view 40%, 2D views 60%.  resizeDocks reads these as proportions
+        # rather than pixels, so the split holds at any window size.
+        MainWindow.resizeDocks([MainWindow.view_3d_dock, MainWindow.right_dock],
+                               [40, 60], Qt.Horizontal)
         MainWindow.resizeDocks([MainWindow.right_dock, MainWindow.properties_dock], [600, 300], Qt.Vertical)
 
         # Tab Styling

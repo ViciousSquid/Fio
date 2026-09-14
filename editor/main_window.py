@@ -24,7 +24,7 @@ from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor, QIcon
 
 from editor.things import Light, PlayerStart, Model, update_all_counters_from_entities
 from editor.SettingsWindow import SettingsWindow
-from editor.ui import Ui_MainWindow
+from editor.ui import LAYOUT_VERSION, Ui_MainWindow
 from editor.tooltips import set_tooltips_enabled
 from engine.constants import TILE_SIZE, WALL_TILE, FLOOR_TILE
 from engine import brush_geometry
@@ -3910,6 +3910,7 @@ class MainWindow(QMainWindow):
             self.config.add_section('Layout')
         self.config['Layout']['geometry'] = self.saveGeometry().toHex().data().decode()
         self.config['Layout']['state'] = self.saveState().toHex().data().decode()
+        self.config['Layout']['version'] = str(LAYOUT_VERSION)
         self.save_config()
         self.statusBar().showMessage("Layout saved.", 2000)
 
@@ -3939,10 +3940,35 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
 
     def load_layout(self):
-        if self.config.has_section('Layout') and self.config.has_option('Layout', 'geometry'):
-            self.restoreGeometry(QByteArray.fromHex(self.config['Layout']['geometry'].encode()))
-        if self.config.has_section('Layout') and self.config.has_option('Layout', 'state'):
-            self.restoreState(QByteArray.fromHex(self.config['Layout']['state'].encode()))
+        """Restore the saved window layout, unless the default has moved on.
+
+        The layout is saved on every close, so restoreState() would otherwise
+        pin an install to the arrangement it first booted with and no change
+        to the default would ever be seen.  A saved layout from an older
+        LAYOUT_VERSION is dropped once; the window geometry (where it sits on
+        screen, and how big) is kept either way, being the user's own doing
+        rather than the default's.
+        """
+        if not self.config.has_section('Layout'):
+            return
+
+        if self.config.has_option('Layout', 'geometry'):
+            self.restoreGeometry(
+                QByteArray.fromHex(self.config['Layout']['geometry'].encode()))
+
+        saved_version = self.config.getint('Layout', 'version', fallback=1)
+        if saved_version != LAYOUT_VERSION:
+            if self.config.has_option('Layout', 'state'):
+                self.config.remove_option('Layout', 'state')
+                # Deferred: this runs from __init__, before the window is up,
+                # and a toast shown then is never seen.
+                QTimer.singleShot(0, lambda: self.show_toast(
+                    "Dock layout reset to the new default", duration=4000))
+            return
+
+        if self.config.has_option('Layout', 'state'):
+            self.restoreState(
+                QByteArray.fromHex(self.config['Layout']['state'].encode()))
 
     def reset_layout(self):
         """Reset layout to default by deleting Layout section from settings.ini and restarting."""
