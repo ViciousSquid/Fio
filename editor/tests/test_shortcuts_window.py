@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 pytest.importorskip("PyQt5", reason="Qt is not available in this environment")
 
-from PyQt5.QtGui import QKeySequence  # noqa: E402
+from PyQt5.QtGui import QFont, QKeySequence  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
     QAction, QApplication, QMainWindow, QPushButton, QShortcut,
 )
@@ -297,7 +297,7 @@ def test_filtering_hides_the_categories_it_empties(window, qt_app):
 
     groups = [panel.tree.topLevelItem(i)
               for i in range(panel.tree.topLevelItemCount())]
-    assert [g.text(0) for g in groups if not g.isHidden()] == ['File']
+    assert [g.text(0) for g in groups if not g.isHidden()] == ['FILE']
 
 
 def test_clearing_the_filter_brings_everything_back(window, qt_app):
@@ -387,12 +387,14 @@ def test_the_editor_has_the_handler_the_menu_calls(qt_app):
 
 
 def test_the_help_menu_offers_keys(qt_app):
-    """The action ui.py builds, checked without standing up the whole editor."""
-    import inspect
+    """The action ui.py builds, checked without standing up the whole editor.
 
-    from editor.ui import Ui_MainWindow
+    Read from the file rather than through inspect.getsource: a plugin wraps
+    create_menu_bar at import time, and inspect would hand back the wrapper.
+    """
+    import editor.ui
 
-    source = inspect.getsource(Ui_MainWindow.create_menu_bar)
+    source = open(editor.ui.__file__, encoding='utf-8').read()
 
     assert "'Keys...'" in source
     assert 'show_shortcuts_window' in source
@@ -442,3 +444,43 @@ def test_the_window_lists_the_editor_that_opened_it(qt_app):
     host.show_shortcuts_window()
 
     assert _find(host.shortcuts_window._grouped, 'Ctrl+N') is not None
+
+
+# ────────────────────────────
+# It has to match the dark theme
+# ────────────────────────────
+
+def test_the_tree_carries_its_own_dark_styling(window, qt_app):
+    """main.dark_stylesheet styles QWidget but never item views.
+
+    Left to itself a QTreeWidget paints Qt's light defaults -- a white
+    header and near-white alternating rows -- straight through the dark
+    editor around it.
+    """
+    from editor import shortcuts_window as sw
+
+    panel = ShortcutsWindow(window)
+    sheet = panel.tree.styleSheet()
+
+    assert sw._BG in sheet
+    assert 'alternate-background-color' in sheet
+    assert 'QHeaderView::section' in sheet
+
+
+def test_category_rows_are_headings_not_entries(window, qt_app):
+    """They must not be selectable, or filtering picks them as results."""
+    from PyQt5.QtCore import Qt
+
+    panel = ShortcutsWindow(window)
+    group = panel.tree.topLevelItem(0)
+
+    assert not group.flags() & Qt.ItemIsSelectable
+    assert group.font(0).bold()
+
+
+def test_keys_are_set_in_a_fixed_pitch_face(window, qt_app):
+    """So modifiers line up down the column instead of ragging."""
+    panel = ShortcutsWindow(window)
+    row = panel.tree.topLevelItem(0).child(0)
+
+    assert row.font(0).styleHint() == QFont.Monospace
