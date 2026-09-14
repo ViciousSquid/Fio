@@ -3231,6 +3231,26 @@ class BaseRenderer:
         for mesh in self._geo_mesh_cache.values():
             self._delete_geo_mesh(mesh)
         self._geo_mesh_cache.clear()
+        # Shadow resources. These are owned by this renderer alone and nothing
+        # outside it holds their names, so they have to be released here or a
+        # renderer rebuild (a render-mode or shadow-quality change) strands the
+        # whole cube-map pool -- MAX_SHADOW_LIGHTS cube-maps at shadow_map_size,
+        # tens of megabytes of VRAM, every time.
+        if self._shadow_cubemaps:
+            try:
+                gl.glDeleteTextures(self._shadow_cubemaps)
+            except Exception:
+                pass
+            self._shadow_cubemaps = []
+        if self._shadow_fbo:
+            try:
+                gl.glDeleteFramebuffers(1, [self._shadow_fbo])
+            except Exception:
+                pass
+            self._shadow_fbo = None
+        self._shadow_slot_owner = [None] * self.MAX_SHADOW_LIGHTS
+        self._shadow_slot_sig = [None] * self.MAX_SHADOW_LIGHTS
+        self._light_shadow_index = {}
         if self._cube_vbo:
             gl.glDeleteBuffers(1, [self._cube_vbo])
         if self._sprite_vbo:

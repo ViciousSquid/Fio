@@ -624,20 +624,25 @@ class EditorState:
     def undo(self):
         """Step back one operation, making the current scene redoable.
 
-        What goes on the redo stack is a snapshot of the scene **as it is now**,
-        not the checkpoint being popped.  The two are not the same thing: tools
-        checkpoint at the *start* of a gesture (mouse-down), so the top of the
-        undo stack is the state before the operation, and the operation's actual
-        result only ever exists in the live scene.  Pushing the popped entry
-        instead meant redo re-applied the state the undo had just restored —
-        i.e. redo did nothing at all, and the work the user undid was gone for
-        good.
+        Two things about this are easy to get wrong, and both have been.
+
+        What goes on the **redo** stack is a snapshot of the scene *as it is
+        now*, not the checkpoint being popped.  The two are not the same thing:
+        tools checkpoint at the *start* of a gesture (mouse-down), so the top of
+        the undo stack is the state before the operation, and the operation's
+        actual result only ever exists in the live scene.  Pushing the popped
+        entry instead meant redo re-applied the state the undo had just
+        restored — i.e. redo did nothing at all.
+
+        What gets **restored** is the entry just popped, not the one under it.
+        The popped entry *is* the state before the operation being undone;
+        restoring its predecessor instead stepped back two gestures at a time,
+        so a mapper who made three edits and pressed undo once lost two of them.
         """
         if len(self.undo_stack) <= 1:
             return False
         self.redo_stack.append(self.snapshot())
-        self.undo_stack.pop()
-        self.restore_state(self.undo_stack[-1])
+        self.restore_state(self.undo_stack.pop())
         return True
 
     def redo(self):

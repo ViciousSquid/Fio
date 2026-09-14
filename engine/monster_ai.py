@@ -10,7 +10,15 @@ import time
 import glm
 import math
 from typing import Dict, List, Any, Optional, Tuple
-from editor.debug_console import debug_log
+# The debug console is a Qt widget and lives in the editor package; the AI only
+# wants somewhere to write a line.  Guarded exactly like the rest of the engine
+# (see logic_thread) so the AI still runs - and is still testable - in the
+# head-less player, where neither the editor package nor PyQt5 exists.
+try:
+    from editor.debug_console import debug_log
+except ImportError:  # pragma: no cover - exercised by the head-less player
+    def debug_log(category, message):
+        print(f"[{category}] {message}")
 from .constants import is_water_brush
 from .monster_constants import (
     MONSTER_SIGHT_RANGE,
@@ -35,6 +43,28 @@ try:
 except ImportError:
     PathNode = None
     MonsterThing = None
+
+
+def _flatten_to_ground(direction):
+    """A unit *horizontal* direction from a 3D one, or ``None`` when there is none.
+
+    Ground monsters walk in XZ only, so their movement direction is the 3D
+    direction with Y dropped and renormalised.  When the target is directly
+    above or below - a flying player over a grunt's head, a monster standing on
+    the player's own column - that leaves the zero vector, and ``glm.normalize``
+    of the zero vector is NaN, not an error.  The NaN then flows into the
+    monster's position and out into ``SpatialGrid.overlaps_wall``, which raises
+    ``ValueError: cannot convert float NaN to integer`` on the AI thread and
+    stops every monster in the level.
+
+    Returning ``None`` for that case lets the caller simply not move this tick,
+    which is the right answer: there is no horizontal direction to move in.
+    """
+    flat = glm.vec3(direction.x, 0.0, direction.z)
+    length = glm.length(flat)
+    if length < 1e-6:
+        return None
+    return flat / length
 
 
 class MonsterAI:
@@ -323,7 +353,8 @@ class MonsterAI:
                     if dir_len > 0.001:
                         direction = direction / dir_len
                         if mtype != 'flying':
-                            direction = glm.normalize(glm.vec3(direction.x, 0.0, direction.z))
+                            direction = _flatten_to_ground(direction)
+                    if dir_len > 0.001 and direction is not None:
                         step = direction * MONSTER_MOVE_SPEED * delta
                         new_pos = thing_pos + step
 
@@ -737,7 +768,8 @@ class MonsterAI:
         if dir_len > 0.001:
             direction = direction / dir_len
             if mtype != 'flying':
-                direction = glm.normalize(glm.vec3(direction.x, 0.0, direction.z))
+                direction = _flatten_to_ground(direction)
+        if dir_len > 0.001 and direction is not None:
             step = direction * MONSTER_MOVE_SPEED * delta
             new_pos = thing_pos + step
 
@@ -956,7 +988,9 @@ class MonsterAI:
             return
         direction = to_node / dir_len
         if mtype != 'flying':
-            direction = glm.normalize(glm.vec3(direction.x, 0.0, direction.z))
+            direction = _flatten_to_ground(direction)
+            if direction is None:
+                return      # the node is directly overhead; no way to walk to it
 
         step = direction * MONSTER_MOVE_SPEED * speed_mult * delta
         new_pos = m_pos + step
@@ -987,20 +1021,23 @@ class MonsterAI:
                         debug_log("Pathfinding", f"'{mname}' DETOUR: blocked at '{current_node_name}', switching to '{detour}'")
 
     def _advance_patrol_index(self, monster, state: Dict, chain: List[str], patrol_mode: str, mname: str):
-        """Advance patrol index and fire OnMonsterLeft on the node we leave."""
+        """Advance the patrol index, firing OnMonsterLeft on the node left behind.
+
+        The next index is worked out *before* anything is announced, because
+        two cases advance to nowhere and must not announce a departure:
+
+        * a ``once`` patrol that has reached the end holds at its final node;
+        * a one-node chain advances back onto the node it is already standing
+          on.  Announcing that would emit an OnMonsterLeft/OnMonsterArrived
+          pair on every tick for the rest of the level - a logic counter wired
+          to the node would count 30 arrivals a second.
+        """
         if not chain:
             return
 
         old_idx = state.get('patrol_chain_idx', 0)
         old_name = chain[old_idx] if old_idx < len(chain) else ''
         direction = state.get('patrol_chain_dir', 1)
-
-        if old_name:
-            old_node = self._find_path_node_by_name(old_name)
-            if old_node is not None and self.lt.io_manager:
-                self.lt.io_manager.fire_output(old_node, 'OnMonsterLeft')
-        state['patrol_at_target'] = False
-        state['patrol_walking_to'] = ''
 
         new_idx = old_idx + direction
 
@@ -1030,6 +1067,16 @@ class MonsterAI:
                 state['patrol_finished'] = True
                 debug_log("Pathfinding", f"'{mname}' completed 'once' patrol – holding at '{old_name}'")
                 return
+
+        if new_idx == old_idx:
+            return      # nowhere to advance to; the monster has not left
+
+        if old_name:
+            old_node = self._find_path_node_by_name(old_name)
+            if old_node is not None and self.lt.io_manager:
+                self.lt.io_manager.fire_output(old_node, 'OnMonsterLeft')
+        state['patrol_at_target'] = False
+        state['patrol_walking_to'] = ''
 
         state['patrol_chain_idx'] = new_idx
         next_name = chain[new_idx] if new_idx < len(chain) else ''

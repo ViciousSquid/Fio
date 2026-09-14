@@ -26,7 +26,12 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# NB: this module deliberately does *not* set QT_QPA_PLATFORM for the whole
+# session - that would pick the platform plugin for every other test too,
+# and the offscreen plugin cannot create an OpenGL context, which silently
+# disables the visual tier.  The subprocesses below get it in their own env
+# (see run_isolated), and the suite-wide default lives in the root
+# conftest, where it is applied only when there is no display.
 
 
 def run_isolated(body):
