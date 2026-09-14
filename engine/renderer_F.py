@@ -10,7 +10,8 @@ import math
 import os
 
 from .renderer_core import BaseRenderer, normalize_color
-from engine.brush_geometry import brush_has_geometry, geometry_signature
+from engine.brush_geometry import (brush_has_geometry, face_uses_natural_scale,
+                                   geometry_signature, natural_repeats)
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.things import Thing, Light, PathNode, Portal, Pickup, Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger
 
@@ -331,25 +332,30 @@ class Renderer_F(BaseRenderer):
                     gl.glUniform2f(tex_shift_loc, shift[0], shift[1])
                 if tex_scale_loc != -1:
                     size = brush.get('size', [64, 64, 64])
-                    # --- PRIORITY 1: Use pre-computed uv_scale from editor ---
                     uv_scale = brush.get('uv_scale', {}).get(face_key)
-                    if uv_scale is not None:
-                        scale_x, scale_y = uv_scale[0], uv_scale[1]
-                    # --- PRIORITY 2: Fallback to texture_tiling with actual dimensions ---
-                    elif brush.get('texture_tiling', False):
+                    # --- PRIORITY 1: Natural, a live mode ---
+                    # Recomputed from the brush's current size every frame, so
+                    # resizing reveals more texture at a constant texel size
+                    # instead of stretching what is there.  A brush-wide
+                    # texture_tiling flag means the same thing for every face.
+                    natural = face_uses_natural_scale(brush, face_key) \
+                        or (uv_scale is None and brush.get('texture_tiling', False))
+                    if natural:
                         tex_name = brush.get('textures', {}).get(face_key, 'default.png')
-                        tex_cache_name = self._tex_cache_path(tex_name)
-                        tex_w, tex_h = getattr(self, '_texture_dimensions', {}).get(tex_cache_name, (128, 128))
-                        tex_w = max(tex_w, 1)
-                        tex_h = max(tex_h, 1)
-
+                        tex_w, tex_h = getattr(self, '_texture_dimensions', {}).get(
+                            self._tex_cache_path(tex_name), (128, 128))
                         fi = face_idx
                         if fi == 0 or fi == 1:   # south, north
-                            scale_x, scale_y = size[0] / tex_w, size[1] / tex_h
+                            extent = (size[0], size[1])
                         elif fi == 2 or fi == 3:  # west, east
-                            scale_x, scale_y = size[2] / tex_w, size[1] / tex_h
+                            extent = (size[2], size[1])
                         else:                      # down, top
-                            scale_x, scale_y = size[0] / tex_w, size[2] / tex_h
+                            extent = (size[0], size[2])
+                        scale_x, scale_y = natural_repeats(
+                            extent[0], extent[1], (tex_w, tex_h))
+                    # --- PRIORITY 2: an explicit scale set in the editor ---
+                    elif uv_scale is not None:
+                        scale_x, scale_y = uv_scale[0], uv_scale[1]
                     # --- PRIORITY 3: FIT mode (stretch 0→1) ---
                     else:
                         scale_x, scale_y = 1.0, 1.0
@@ -358,10 +364,8 @@ class Renderer_F(BaseRenderer):
                 self.render_stats.draw_calls += 1
 
         # ---- Angled brushes: one draw per convex face --------------------
-        if tex_angle_loc != -1:
-            gl.glUniform1f(tex_angle_loc, 0.0)  # angled faces use raw UVs; reset
-        if tex_shift_loc != -1:
-            gl.glUniform2f(tex_shift_loc, 0.0, 0.0)
+        # Angled faces carry the same per-face rotation and shift box faces do;
+        # they are set per run below rather than forced to zero here.
         # Convex-geometry meshes wind the opposite way to the cube (GL_BACK).
         self._portal_set_cull(is_geo=True)
         for brush in geo_brushes:
@@ -388,6 +392,12 @@ class Renderer_F(BaseRenderer):
                 if tex_scale_loc != -1:
                     su, sv = self._geo_run_tex_scale(brush, run, tex_name)
                     gl.glUniform2f(tex_scale_loc, su, sv)
+                if tex_angle_loc != -1 or tex_shift_loc != -1:
+                    angle, shift_u, shift_v = self._geo_run_tex_transform(brush, run)
+                    if tex_angle_loc != -1:
+                        gl.glUniform1f(tex_angle_loc, angle)
+                    if tex_shift_loc != -1:
+                        gl.glUniform2f(tex_shift_loc, shift_u, shift_v)
                 gl.glDrawArrays(gl.GL_TRIANGLES, run['first'], run['count'])
                 self.render_stats.visible_tris += run['count'] // 3
                 self.render_stats.draw_calls += 1
@@ -495,7 +505,9 @@ class Renderer_F(BaseRenderer):
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
         elif current_mode == RENDER_MODE_VERTEX:
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_POINT)
-            gl.glPointSize(4.0)
+            # Clamped: a point size the driver does not support is a GL error,
+            # not a silent clamp, and would take the whole frame with it.
+            self._set_point_size(4.0)
         else:
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         self.draw_grid(projection, view, self.grid_indices_count,

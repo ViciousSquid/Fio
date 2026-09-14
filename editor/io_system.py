@@ -845,6 +845,143 @@ def register_default_io():
 
 
 # =============================================================================
+# REVERSE LOOKUP: who targets whom
+# =============================================================================
+#
+# Answering "what points at this entity?" by walking every brush and entity is
+# fine once, but the Property Editor asks it every time a panel is built, which
+# on a large map is a scan of the whole scene per selection.  The index below
+# answers it from a dict instead, and is rebuilt only when connections actually
+# change — tracked by a revision counter every mutator here bumps.
+
+_io_revision = 0
+_target_index_cache = None          # (revision, scene key) -> index
+_target_index_key = None
+
+
+def io_revision() -> int:
+    """Counter that changes whenever any connection is added or removed.
+
+    Callers cache derived data against it; comparing two integers is cheap
+    enough to do on every panel build.
+    """
+    return _io_revision
+
+
+def bump_io_revision():
+    """Mark every cached connection lookup stale.
+
+    Call after mutating connections through anything other than the helpers
+    below — loading a map, an undo, or editing ``_io_connections`` directly.
+    """
+    global _io_revision
+    _io_revision += 1
+
+
+def _connection_target(conn):
+    """``(target_id, target_name)`` of a connection, object or dict alike."""
+    if isinstance(conn, dict):
+        return conn.get('target_id'), (conn.get('target_name') or conn.get('target'))
+    return getattr(conn, 'target_id', None), getattr(conn, 'target_name', None)
+
+
+def _connection_output(conn):
+    if isinstance(conn, dict):
+        return conn.get('output') or conn.get('output_name') or '?'
+    return getattr(conn, 'output_name', None) or '?'
+
+
+def _entity_name(entity):
+    if isinstance(entity, dict):
+        return entity.get('name', 'unnamed')
+    return entity.properties.get('name', 'unnamed')
+
+
+def build_target_index(brushes, things):
+    """Map every targeted name and id to the sources pointing at it.
+
+    Returns ``{key: [(source name, label), ...]}`` where ``key`` is either a
+    target name or a target id — a connection is filed under both, so a lookup
+    finds it whether the entity is addressed by identity or by name.  Also
+    files the legacy ``brush['target']`` property that predates connections.
+    """
+    index = {}
+
+    def _add(key, value):
+        if key:
+            index.setdefault(key, []).append(value)
+
+    for brush in brushes:
+        name = brush.get('name', 'unnamed')
+        legacy = brush.get('target')
+        if legacy:
+            src_type = ('trigger' if brush.get('is_trigger')
+                        else 'mover' if brush.get('is_mover') else None)
+            if src_type:
+                _add(legacy, (name, src_type))
+        for conn in brush.get('_io_connections', []) or []:
+            tid, tname = _connection_target(conn)
+            entry = (name, "I/O: %s" % _connection_output(conn))
+            _add(tid, entry)
+            if tname and tname != tid:
+                _add(tname, entry)
+
+    for thing in things:
+        name = thing.properties.get('name', 'unnamed')
+        for conn in thing.properties.get('_io_connections', []) or []:
+            tid, tname = _connection_target(conn)
+            entry = (name, "I/O: %s" % _connection_output(conn))
+            _add(tid, entry)
+            if tname and tname != tid:
+                _add(tname, entry)
+
+    return index
+
+
+def target_index(brushes, things):
+    """Cached :func:`build_target_index`, rebuilt when connections change.
+
+    The cache key is the revision counter plus the scene's object counts, so a
+    map load or an undo that swaps the lists wholesale is picked up even though
+    it never went through the mutators.
+    """
+    global _target_index_cache, _target_index_key
+    key = (_io_revision, len(brushes), len(things), id(brushes), id(things))
+    if _target_index_cache is not None and _target_index_key == key:
+        return _target_index_cache
+    _target_index_cache = build_target_index(brushes, things)
+    _target_index_key = key
+    return _target_index_cache
+
+
+def find_targeting_sources(brushes, things, target_name="", target_id=""):
+    """Sources pointing at one entity, as ``[(source name, label), ...]``.
+
+    Deduplicated, because a connection addressed by both id and name is filed
+    under each and would otherwise be reported twice.
+    """
+    if not target_name and not target_id:
+        return []
+    index = target_index(brushes, things)
+    out = []
+    seen = set()
+    for key in (target_id, target_name):
+        for entry in index.get(key, ()) if key else ():
+            if entry not in seen:
+                seen.add(entry)
+                out.append(entry)
+    return out
+
+
+def entity_names(brushes, things):
+    """Every name in the scene, for existence checks without a scan."""
+    names = {b.get('name') for b in brushes if b.get('name')}
+    names.update(t.properties.get('name') for t in things
+                 if t.properties.get('name'))
+    return names
+
+
+# =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
@@ -858,6 +995,7 @@ def add_connection(entity, connection: OutputConnection):
         if '_io_connections' not in entity.properties:
             entity.properties['_io_connections'] = []
         entity.properties['_io_connections'].append(connection)
+    bump_io_revision()
 
 
 def remove_connection(entity, connection: OutputConnection):
@@ -865,6 +1003,7 @@ def remove_connection(entity, connection: OutputConnection):
     connections = get_connections(entity)
     if connection in connections:
         connections.remove(connection)
+        bump_io_revision()
 
 
 def get_connections(entity) -> List[OutputConnection]:
@@ -882,6 +1021,7 @@ def set_connections(entity, connections: List[OutputConnection]):
         entity['_io_connections'] = connections
     elif hasattr(entity, 'properties'):
         entity.properties['_io_connections'] = connections
+    bump_io_revision()
 
 
 def clear_connections(entity):

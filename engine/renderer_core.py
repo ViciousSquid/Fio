@@ -312,6 +312,18 @@ class BaseRenderer:
         self._conn_line_vbo = None
         self.face_highlight_vao = None
         self.face_highlight_vbo = None
+        # Component-edit handle overlay (editor only).  The buffer is refilled
+        # only when the editor's overlay version changes, never per frame.
+        self._component_overlay_vao = None
+        self._component_overlay_vbo = None
+        self._component_overlay_data = None
+        self._component_overlay_counts = None
+        self._component_overlay_version = None
+        self._component_overlay_dirty = False
+        # Driver limits for wide lines / big points, queried once on first use
+        # (they need a live context, and glGetFloatv stalls the pipeline).
+        self._line_width_range = None
+        self._point_size_range = None
         self._cube_vbo = None
         self._sprite_vbo = None
         self._grid_vbo = None
@@ -1734,6 +1746,62 @@ class BaseRenderer:
     # --------------------------------------------------------------------------
     # Editor helpers (outlines, gizmo, etc.)
     # --------------------------------------------------------------------------
+    def _set_line_width(self, width):
+        """Set the line width, clamped to what this driver actually supports.
+
+        A core profile only has to support a width of 1.0, and plenty of
+        hardware reports exactly ``[1, 1]`` for ``GL_ALIASED_LINE_WIDTH_RANGE``
+        — asking for 2.0 there raises ``GL_INVALID_VALUE`` and takes the frame
+        with it.  The range is queried once and cached, since ``glGetFloatv``
+        stalls the pipeline and the limit never changes for a context.
+
+        Returns the width actually set, so callers can tell when they did not
+        get the emphasis they asked for.
+        """
+        if self._line_width_range is None:
+            try:
+                values = (gl.GLfloat * 2)()
+                gl.glGetFloatv(gl.GL_ALIASED_LINE_WIDTH_RANGE, values)
+                low, high = float(values[0]), float(values[1])
+                if not (high >= low > 0.0):
+                    low = high = 1.0
+            except Exception:
+                low = high = 1.0
+            self._line_width_range = (low, high)
+        low, high = self._line_width_range
+        clamped = max(low, min(high, float(width)))
+        try:
+            gl.glLineWidth(clamped)
+        except Exception:
+            # A driver that refuses even the clamped value: keep drawing at
+            # whatever width it is already using rather than losing the frame.
+            return 1.0
+        return clamped
+
+    def _set_point_size(self, size):
+        """Set the point size, clamped to the driver's supported range.
+
+        Same story as :meth:`_set_line_width`: the guaranteed range is narrow
+        and an out-of-range value is a GL error, not a silent clamp.
+        """
+        if self._point_size_range is None:
+            try:
+                values = (gl.GLfloat * 2)()
+                gl.glGetFloatv(gl.GL_ALIASED_POINT_SIZE_RANGE, values)
+                low, high = float(values[0]), float(values[1])
+                if not (high >= low > 0.0):
+                    low = high = 1.0
+            except Exception:
+                low = high = 1.0
+            self._point_size_range = (low, high)
+        low, high = self._point_size_range
+        clamped = max(low, min(high, float(size)))
+        try:
+            gl.glPointSize(clamped)
+        except Exception:
+            return 1.0
+        return clamped
+
     def draw_selected_brush_outline(self, projection, view, brush):
         if 'simple' not in self.shaders:
             return
@@ -1885,6 +1953,107 @@ class BaseRenderer:
         gl.glDrawArrays(gl.GL_TRIANGLES, 0, n)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glBindVertexArray(0)
+
+    def draw_component_overlay(self, projection, view, overlay, version=None):
+        """Draw vertex/edge/face handles for the brushes being component-edited.
+
+        ``overlay`` is the dict the editor's ComponentController hands over:
+        ``points`` / ``hot_points`` (N, 3) and ``lines`` / ``hot_lines``
+        (M, 2, 3), already ``float32``.  Nothing is computed here — the arrays
+        are built by the editor when the selection or geometry changes and are
+        uploaded again only when ``version`` moves, so hovering costs one
+        integer comparison and a draw call rather than a geometry rebuild.
+        """
+        if 'simple' not in self.shaders or not overlay:
+            return
+        points = overlay.get('points')
+        hot_points = overlay.get('hot_points')
+        lines = overlay.get('lines')
+        hot_lines = overlay.get('hot_lines')
+        if not (len(points) or len(hot_points) or len(lines) or len(hot_lines)):
+            return
+
+        if version is None or self._component_overlay_version != version:
+            # One interleaved buffer for the whole overlay: four contiguous
+            # runs (cold lines, hot lines, cold points, hot points) so the
+            # draw below is four glDrawArrays with no per-handle work.
+            def _flat(arr):
+                return (np.asarray(arr, dtype=np.float32).reshape(-1)
+                        if len(arr) else np.zeros(0, dtype=np.float32))
+            cold_l, hot_l = _flat(lines), _flat(hot_lines)
+            cold_p, hot_p = _flat(points), _flat(hot_points)
+            data = np.concatenate((cold_l, hot_l, cold_p, hot_p)) \
+                if (len(cold_l) or len(hot_l) or len(cold_p) or len(hot_p)) \
+                else np.zeros(0, dtype=np.float32)
+            self._component_overlay_data = data
+            self._component_overlay_counts = (
+                len(cold_l) // 3, len(hot_l) // 3,
+                len(cold_p) // 3, len(hot_p) // 3)
+            self._component_overlay_version = version
+            self._component_overlay_dirty = True
+
+        counts = self._component_overlay_counts
+        if not counts or not any(counts):
+            return
+
+        shader, uniforms = self.shaders['simple'], self.uniforms['simple']
+        gl.glUseProgram(shader)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
+        gl.glUniform1f(uniforms['alpha'], 1.0)
+
+        if self._component_overlay_vao is None:
+            self._component_overlay_vao = gl.glGenVertexArrays(1)
+            self._component_overlay_vbo = gl.glGenBuffers(1)
+            gl.glBindVertexArray(self._component_overlay_vao)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._component_overlay_vbo)
+            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+            gl.glEnableVertexAttribArray(0)
+            gl.glBindVertexArray(0)
+
+        gl.glBindVertexArray(self._component_overlay_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._component_overlay_vbo)
+        if self._component_overlay_dirty:
+            data = self._component_overlay_data
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, data.nbytes, data,
+                            gl.GL_DYNAMIC_DRAW)
+            self._component_overlay_dirty = False
+
+        cold_lines, hot_lines_n, cold_points, hot_points_n = counts
+        # Handles are editor furniture: they must stay visible through the
+        # geometry they belong to, so the depth test is off for this pass.
+        depth_was_on = gl.glIsEnabled(gl.GL_DEPTH_TEST)
+        gl.glDisable(gl.GL_DEPTH_TEST)
+        offset = 0
+        if cold_lines:
+            gl.glUniform3f(uniforms['color'], 0.45, 0.78, 1.0)
+            self._set_line_width(1.0)
+            gl.glDrawArrays(gl.GL_LINES, offset, cold_lines)
+        offset += cold_lines
+        if hot_lines_n:
+            gl.glUniform3f(uniforms['color'], 1.0, 0.66, 0.16)
+            # Hardware that cannot draw a wide line reports a range of [1, 1],
+            # and the highlight then reads by colour alone — which is why the
+            # hot and cold colours are far apart rather than two shades of one.
+            self._set_line_width(2.0)
+            gl.glDrawArrays(gl.GL_LINES, offset, hot_lines_n)
+        offset += hot_lines_n
+        if cold_points:
+            gl.glUniform3f(uniforms['color'], 0.45, 0.78, 1.0)
+            self._set_point_size(6.0)
+            gl.glDrawArrays(gl.GL_POINTS, offset, cold_points)
+        offset += cold_points
+        if hot_points_n:
+            gl.glUniform3f(uniforms['color'], 1.0, 0.66, 0.16)
+            self._set_point_size(9.0)
+            gl.glDrawArrays(gl.GL_POINTS, offset, hot_points_n)
+        self._set_line_width(1.0)
+        self._set_point_size(1.0)
+        if depth_was_on:
+            gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glBindVertexArray(0)
+        gl.glUseProgram(0)
 
     def draw_path_node_cubes(self, projection, view, things):
         if 'simple' not in self.shaders:
@@ -2044,14 +2213,10 @@ class BaseRenderer:
         gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
         gl.glUniform1f(uniforms['alpha'], 1.0)
         
-        # Query and clamp line width to supported range
-        # glLineWidth > 1.0 is deprecated in core profile
-        widths = (gl.GLfloat * 2)()
-        gl.glGetFloatv(gl.GL_ALIASED_LINE_WIDTH_RANGE, widths)
-        min_width, max_width = float(widths[0]), float(widths[1])
-        desired_width = 2.0
-        clamped_width = max(min_width, min(max_width, desired_width))
-        gl.glLineWidth(clamped_width)
+        # Clamp the line width to what the driver supports (a core profile is
+        # only required to offer 1.0).  The helper caches the queried range,
+        # so this no longer stalls the pipeline with a glGetFloatv per call.
+        self._set_line_width(2.0)
         
         for brush in brushes:
             if not brush.get('_model_collision'):
@@ -2670,13 +2835,13 @@ class BaseRenderer:
     @staticmethod
     def _geo_uv_axes(n):
         """World axes a face's planar UVs project onto, by dominant normal
-        axis.  Matches the cube VAO's orientation (v runs up walls)."""
-        ax, ay, az = abs(n[0]), abs(n[1]), abs(n[2])
-        if ay >= ax and ay >= az:                        # floor / ceiling
-            return (1.0, 0.0, 0.0), (0.0, 0.0, -1.0)
-        if ax >= az:                                     # X-facing wall
-            return (0.0, 0.0, 1.0), (0.0, 1.0, 0.0)
-        return (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)          # Z-facing wall
+        axis.  Matches the cube VAO's orientation (v runs up walls).
+
+        The rule itself lives in brush_geometry so the geometry layer can
+        materialise the same basis when it locks a face's texture to a
+        rotation; this stays as the renderer's name for it.
+        """
+        return brush_geometry.render_uv_axes(n)
 
     def _build_geo_mesh(self, brush, convex, key):
         pos = brush.get('pos', [0, 0, 0])
@@ -2711,11 +2876,11 @@ class BaseRenderer:
             ln = n * scale
             ll = math.sqrt(float(ln @ ln))
             ln = ln / ll if ll > 1e-9 else n
-            ua, va = self._geo_uv_axes(n)
-            us = ring_w @ np.array(ua)
-            vs = ring_w @ np.array(va)
-            u0, eu = float(us.min()), max(float(us.max() - us.min()), 1e-6)
-            v0, ev = float(vs.min()), max(float(vs.max() - vs.min()), 1e-6)
+            # Projection along the face's own texture basis when it has one
+            # (a rotated face carries a basis that turned with the brush), and
+            # along world axes when it does not — exactly as before.
+            us, vs, (u0, eu), (v0, ev) = brush_geometry.face_uv_projection(
+                ring_w, face)
             first = vert_count
             for k in range(1, len(idx) - 1):
                 for j in (0, k, k + 1):
@@ -2821,28 +2986,62 @@ class BaseRenderer:
                     break
         return tex or 'default.png'
 
+    def _geo_run_tex_transform(self, brush, run):
+        """``(angle_radians, shift_u, shift_v)`` for one angled-brush face.
+
+        Same precedence as :meth:`_geo_run_tex_scale`: a tagged side reads the
+        brush's per-tag dicts, a cut face reads its own plane live so Surface
+        Inspector edits show up without rebuilding the mesh.  Angled faces used
+        to have both of these forced to zero, which is why rotating or shifting
+        a texture did nothing once a brush stopped being a box.
+        """
+        tag = run['face']
+        if tag:
+            angle = brush.get('uv_angle', {}).get(tag, 0.0)
+            shift = brush.get('uv_shift', {}).get(tag, (0.0, 0.0))
+        else:
+            plane = BaseRenderer._geo_run_plane(brush, run)
+            if plane is None:
+                return 0.0, 0.0, 0.0
+            angle = plane.get('uv_angle', 0.0)
+            shift = plane.get('uv_shift', (0.0, 0.0))
+        return math.radians(float(angle)), float(shift[0]), float(shift[1])
+
     def _geo_run_tex_scale(self, brush, run, tex_name):
         """UV repeat factors for one face, mirroring the box-face priorities:
         live per-face uv_scale, then the plane's stored uv_scale, then
         texture_tiling (1px = 1 world unit over the face's extent), then FIT."""
         tag = run['face']
+        plane = None if tag else BaseRenderer._geo_run_plane(brush, run)
+
+        # Natural is a live mode: the repeats come from the face's *current*
+        # extent every frame, so resizing the brush shows more of the texture
+        # at the same texel size rather than stretching it.  It therefore wins
+        # over any stored uv_scale (which is only kept as a fallback).
+        if brush_geometry.face_uses_natural_scale(brush, tag, plane):
+            return brush_geometry.natural_repeats(
+                run['extent'][0], run['extent'][1],
+                self._texture_pixel_size(tex_name))
+
         uv = brush.get('uv_scale', {}).get(tag) if tag else None
-        if uv is None and not tag:
+        if uv is None and plane is not None:
             # Cut face: read its plane's uv_scale live so Surface Inspector
             # edits apply without a mesh rebuild.
-            plane = BaseRenderer._geo_run_plane(brush, run)
-            if plane is not None:
-                uv = plane.get('uv_scale')
+            uv = plane.get('uv_scale')
         if uv is None:
             uv = run['uv_scale']
         if uv is not None:
             return float(uv[0]), float(uv[1])
         if brush.get('texture_tiling', False):
-            tex_cache_name = os.path.join('textures', tex_name)
-            tex_w, tex_h = getattr(self, '_texture_dimensions', {}).get(tex_cache_name, (128, 128))
             eu, ev = run['extent']
-            return eu / max(tex_w, 1), ev / max(tex_h, 1)
+            return brush_geometry.natural_repeats(
+                eu, ev, self._texture_pixel_size(tex_name))
         return 1.0, 1.0
+
+    def _texture_pixel_size(self, tex_name):
+        """Pixel dimensions of a loaded texture, with the usual 128 fallback."""
+        cache_name = os.path.join('textures', tex_name)
+        return getattr(self, '_texture_dimensions', {}).get(cache_name, (128, 128))
 
     # --------------------------------------------------------------------------
     # VAO creation

@@ -167,8 +167,24 @@ class EditorState:
         """Sets the currently selected object."""
         self.selected_object = obj
 
+    def _invalidate_entity_caches(self):
+        """Tell anything caching per-object data that the objects are changing.
+
+        Undo, redo and loading a map all replace the brush dicts and Thing
+        instances rather than editing them, so a cache keyed on an object's
+        identity or contents cannot see it happen and would go on showing the
+        entities that used to be there.
+        """
+        if IO_AVAILABLE:
+            try:
+                from .io_system import bump_io_revision
+                bump_io_revision()
+            except ImportError:      # pragma: no cover - I/O system optional
+                pass
+
     def clear_scene(self):
         """Resets the scene to an empty state."""
+        self._invalidate_entity_caches()
         self.brushes.clear()
         self.things.clear()
         self.selected_object = None
@@ -281,6 +297,7 @@ class EditorState:
 
     def load_from_data(self, level_data):
         """Populates the scene from a dictionary."""
+        self._invalidate_entity_caches()
 
         # Handle both old and new format
         version = level_data.get('version', 1)
@@ -438,13 +455,14 @@ class EditorState:
         """Serialize brushes for undo stack (deep copy with I/O)."""
         result = []
         for brush in self.brushes:
-            brush_copy = copy.deepcopy(brush)
-
-            # Strip renderer-internal cache keys.  These hold GLM matrix
-            # objects (mat4x4 / mat3x3) that are not JSON-serialisable and
-            # have no meaning outside the renderer's own lifetime.
-            for k in _RENDERER_PRIVATE_KEYS:
-                brush_copy.pop(k, None)
+            # Strip renderer-internal cache keys *before* the deep copy.  They
+            # hold GLM matrices and cached convex geometry that are neither
+            # JSON-serialisable nor meaningful outside the renderer's lifetime,
+            # and deep-copying them first only to throw them away made every
+            # undo checkpoint pay for geometry it discards.
+            shallow = {k: v for k, v in brush.items()
+                       if k not in _RENDERER_PRIVATE_KEYS}
+            brush_copy = copy.deepcopy(shallow)
 
             # Convert OutputConnection objects to dicts for JSON
             if '_io_connections' in brush_copy:
@@ -462,6 +480,7 @@ class EditorState:
 
     def restore_state(self, state_json):
         """Restores the scene from a JSON state string."""
+        self._invalidate_entity_caches()
         state = json.loads(state_json)
 
         # Restore brushes with I/O connections
