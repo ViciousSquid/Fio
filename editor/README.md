@@ -84,8 +84,5 @@ Showing and hiding a panel's tooltips (Settings > Editor > Tooltips). Qt keeps a
 ### `ui.py`
 Shared UI helper widgets and utilities used across the editor (common dialogs, styled components, layout helpers).
 
-### `version.txt`
-Editor version string (currently `version 2.4.0`).
-
 ### `view_2d.py`
 Orthographic 2D top-down, front and side editor views. Provides brush drawing, selection, moving, resizing, entity placement, grid snapping, multi-select and marquee selection, free rotation, clone-and-place, and the clip tool's cut line. In component mode the same press-and-drag gesture grabs a face, edge or vertex, and in object mode dragging near a brush side stretches it directly — both through the shared `component_edit` model, so this file owns only the screen-to-world mapping, the cursor and the undo checkpoint.
