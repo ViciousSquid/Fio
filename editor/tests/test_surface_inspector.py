@@ -318,9 +318,20 @@ def test_flip_buttons_mirror_the_texture(inspector):
 
 def test_match_grid_snaps_to_the_step_fields(inspector):
     _, panel, brush = inspector
-    panel.rotate.setValue(43.0)
-    panel.rotate_step.setValue(45.0)
+    panel.hshift.setValue(0.31)
+    panel.hshift_step.setValue(0.125)
     panel._match_grid()
+    assert ft.get_transform(brush, 'north')['shift'][0] == pytest.approx(0.25)
+
+
+def test_match_grid_snaps_the_rotation_to_its_own_step(inspector):
+    """Rotate has no Step field; the spin box's own increment stands in."""
+    _, panel, brush = inspector
+    assert panel.rotate.singleStep() == pytest.approx(panel.ROTATE_STEP)
+
+    panel.rotate.setValue(43.0)
+    panel._match_grid()
+
     assert ft.get_transform(brush, 'north')['angle'] == pytest.approx(45.0)
 
 
@@ -757,3 +768,77 @@ def test_fit_writes_a_scale_so_it_beats_the_legacy_tiling_flag(inspector):
 
     assert brush.get('uv_scale', {}).get('north') is not None
     assert not ft.is_natural(brush, 'north')
+
+
+# ────────────────────────────
+# Rotation is one field
+# ────────────────────────────
+
+def test_rotate_has_no_step_field(inspector):
+    host, panel, brush = inspector
+
+    assert not hasattr(panel, 'rotate_step')
+    assert panel.rotate.suffix() == '°'
+
+
+def test_the_rotate_field_spans_the_step_column(inspector):
+    """A single control, not a value sitting beside an empty cell."""
+    from PyQt5.QtWidgets import QGridLayout
+
+    host, panel, brush = inspector
+    grid = next(g for g in panel.findChildren(QGridLayout)
+                if g.indexOf(panel.rotate) != -1)
+    _, _, row_span, col_span = grid.getItemPosition(grid.indexOf(panel.rotate))
+
+    assert (row_span, col_span) == (1, 3)
+    # The rows that kept their Step still occupy one column.
+    _, _, _, shift_span = grid.getItemPosition(grid.indexOf(panel.hshift))
+    assert shift_span == 1
+
+
+def test_rotation_applies_to_one_face_in_this_face_scope(inspector):
+    host, panel, brush = inspector
+    panel.scope_face.setChecked(True)
+
+    panel.rotate.setValue(90.0)
+
+    assert ft.get_transform(brush, 'north')['angle'] == pytest.approx(90.0)
+    assert ft.get_transform(brush, 'south')['angle'] == pytest.approx(0.0)
+
+
+def test_rotation_applies_to_every_face_in_whole_brush_scope(inspector):
+    host, panel, brush = inspector
+    panel.scope_brush.setChecked(True)
+
+    panel.rotate.setValue(90.0)
+
+    for key in ft.face_keys(brush):
+        assert ft.get_transform(brush, key)['angle'] == pytest.approx(90.0)
+
+
+def test_the_rotate_field_shows_the_picked_face_s_rotation(inspector):
+    host, panel, brush = inspector
+    ft.set_transform(brush, 'east', angle=30.0)
+
+    panel.face_combo.setCurrentIndex(panel.face_combo.findData('east'))
+
+    assert panel.rotate.value() == pytest.approx(30.0)
+
+
+def test_rotating_does_not_drop_natural(inspector):
+    """Rotation is not a scale, so it must not switch the mode off."""
+    host, panel, brush = inspector
+    ft.apply_natural(brush, 'north', (512, 512))
+    panel.refresh_from_face()
+
+    panel.rotate.setValue(45.0)
+
+    assert ft.is_natural(brush, 'north')
+    assert ft.get_transform(brush, 'north')['angle'] == pytest.approx(45.0)
+
+
+def test_the_rotate_field_wraps(inspector):
+    """Past 360 it comes round rather than sticking at the end."""
+    host, panel, brush = inspector
+
+    assert panel.rotate.wrapping()

@@ -87,6 +87,10 @@ class SurfaceInspector(QDialog):
     #: ms of inactivity that closes an undo burst
     UNDO_IDLE_MS = 600
 
+    #: degrees the Rotate arrows move by, and what Match Grid snaps the
+    #: rotation to.  It has no Step field of its own.
+    ROTATE_STEP = 45.0
+
     def __init__(self, editor, parent=None):
         super().__init__(parent)
         self.editor = editor
@@ -194,16 +198,17 @@ class SurfaceInspector(QDialog):
             grid, 3, "Horizontal scale", -64.0, 64.0, 3, 1.0, 0.5, 'scale')
         self.vstretch, self.vstretch_step = self._add_row(
             grid, 4, "Vertical scale", -64.0, 64.0, 3, 1.0, 0.5, 'scale')
-        self.rotate, self.rotate_step = self._add_row(
-            grid, 5, "Rotate", -360.0, 360.0, 2, 0.0, 45.0, 'angle')
-
-        self._rows = (
-            (self.hshift, self.hshift_step),
-            (self.vshift, self.vshift_step),
-            (self.hstretch, self.hstretch_step),
-            (self.vstretch, self.vstretch_step),
-            (self.rotate, self.rotate_step),
-        )
+        # One field, no Step of its own: a texture has a rotation, not a
+        # rotation and an increment to nudge it by.  The arrows still move in
+        # ROTATE_STEP degrees, and that is what Match Grid snaps to.
+        self.rotate = self._add_row(
+            grid, 5, "Rotate", -360.0, 360.0, 2, 0.0, self.ROTATE_STEP, 'angle',
+            step=False)
+        self.rotate.setSuffix("\u00b0")
+        self.rotate.setToolTip(
+            "Rotation of the texture on the target, in degrees.\n"
+            "Applies to this face or every face of the brush, as the "
+            "Apply to setting says.")
 
         outer.addWidget(self._separator())
 
@@ -283,7 +288,12 @@ class SurfaceInspector(QDialog):
         return line
 
     def _add_row(self, grid, row, label, vmin, vmax, decimals, default,
-                 default_step, field):
+                 default_step, field, step=True):
+        """One labelled value, with an editable Step beside it unless ``step``.
+
+        A stepless row spans the Step column instead of leaving it empty, so
+        the field reads as the single control it is.
+        """
         grid.addWidget(QLabel(label), row, 0)
 
         value = QDoubleSpinBox()
@@ -294,6 +304,9 @@ class SurfaceInspector(QDialog):
         if label == "Rotate":
             value.setWrapping(True)
         value.valueChanged.connect(lambda _v, f=field: self._on_value_changed(f))
+        if not step:
+            grid.addWidget(value, row, 1, 1, 3)
+            return value
         grid.addWidget(value, row, 1)
 
         step = QDoubleSpinBox()
@@ -610,7 +623,7 @@ class SurfaceInspector(QDialog):
         steps = {
             'shift': (self.hshift_step.value(), self.vshift_step.value()),
             'scale': (self.hstretch_step.value(), self.vstretch_step.value()),
-            'angle': self.rotate_step.value(),
+            'angle': self.rotate.singleStep(),
         }
         self._begin_undo_burst()
         for brush, face_key in self.target_faces():
