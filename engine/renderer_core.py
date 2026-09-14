@@ -30,6 +30,7 @@ from OpenGL.GL.shaders import compileProgram, compileShader
 
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX, is_water_brush
 from engine import brush_geometry
+from engine import shaders
 from engine.shaders import DEFAULT_SHADERS
 from engine.terrain import TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER
 from editor.things import (
@@ -200,9 +201,22 @@ def normalize_color(rgb, default=None):
     return [c / 255.0 if c > 1.0 else c for c in rgb[:3]]
 
 
+#: Light-array capacity of each lighting shader, so the renderer can never set
+#: ``active_lights`` higher than the shader has room for.  Anything absent from
+#: this map holds the full ``BaseRenderer.MAX_LIGHTS``.
+_SHADER_LIGHT_CAPS = {
+    'water': shaders.MAX_LIGHTS_WATER,
+    'terrain': shaders.MAX_LIGHTS_TERRAIN,
+}
+
+
 # ---------- Base Renderer ----------
 class BaseRenderer:
-    MAX_LIGHTS = 32
+    # The dynamic-light budget, taken from the shaders rather than written down
+    # again here: the renderer must never tell a shader about more lights than
+    # that shader declared room for.  Per-shader caps below cover the ones that
+    # are deliberately smaller (water, terrain, the ARM variants).
+    MAX_LIGHTS = shaders.MAX_LIGHTS
     MAX_PORTALS = 4      # maximum portal apertures rendered per frame
 
     # How many times a portal may be seen recursively through another portal.
@@ -232,18 +246,26 @@ class BaseRenderer:
         self.render_stats = RenderStats()
         self.lod_manager = LODManager()
 
-        # Performance flags
-        is_arm = self._detect_arm_platform()
+        # Performance flags.  `lowpower_mode` picks the cheaper lighting shaders, and
+        # it defaults from the hardware rather than being pinned on: it used to
+        # default to True everywhere, so an x86-64 desktop ran the low-power
+        # shaders (and their smaller light budget) for no reason.  settings.ini
+        # still overrides the guess either way.
+        is_low_power, _ = shaders.detect_low_power_arm()
         if config is not None:
-            self.arm_mode = config.getboolean('Renderer', 'arm_mode', fallback=True)
-            self.shadows_enabled = config.getboolean('Renderer', 'shadows_enabled', fallback=not is_arm)
+            # `arm_mode` is the setting's old name; an existing settings.ini
+            # keeps whatever its owner chose.
+            legacy = config.getboolean('Renderer', 'arm_mode', fallback=is_low_power)
+            self.lowpower_mode = config.getboolean('Renderer', 'lowpower_mode',
+                                                   fallback=legacy)
+            self.shadows_enabled = config.getboolean('Renderer', 'shadows_enabled', fallback=not is_low_power)
             try:
                 shadow_size = config.getint('Renderer', 'shadow_map_size', fallback=self.SHADOW_MAP_SIZE)
             except Exception:
                 shadow_size = self.SHADOW_MAP_SIZE
         else:
-            self.arm_mode = True
-            self.shadows_enabled = not is_arm
+            self.lowpower_mode = is_low_power
+            self.shadows_enabled = not is_low_power
             shadow_size = self.SHADOW_MAP_SIZE
         # Clamp to a sane, power-of-two-ish range. Lower = faster, blockier.
         self.shadow_map_size = max(256, min(2048, int(shadow_size)))
@@ -390,21 +412,15 @@ class BaseRenderer:
     # --------------------------------------------------------------------------
     # Platform detection
     # --------------------------------------------------------------------------
-    def _detect_arm_platform(self):
-        import platform
-        import sys
-        machine = platform.machine().lower()
-        if 'arm' in machine or 'aarch' in machine:
-            return True
-        if sys.platform == 'win32':
-            if os.environ.get('PROCESSOR_ARCHITECTURE', '').upper() == 'ARM64':
-                return True
-            if os.environ.get('PROCESSOR_ARCHITEW6432', '').upper() == 'ARM64':
-                return True
-            proc_id = os.environ.get('PROCESSOR_IDENTIFIER', '').lower()
-            if 'qualcomm' in proc_id or 'snapdragon' in proc_id or 'arm' in proc_id:
-                return True
-        return False
+    @staticmethod
+    def _detect_lowpower_platform():
+        """Whether this machine wants the low-power lighting shaders.
+
+        Delegates to :func:`engine.shaders.detect_low_power_arm`, which is where
+        the rule lives now — the renderer and the Settings window used to detect
+        this separately and could reach different answers about one machine.
+        """
+        return shaders.detect_low_power_arm()[0]
 
     # --------------------------------------------------------------------------
     # Shader compilation helpers
@@ -480,7 +496,7 @@ class BaseRenderer:
                 self.shaders['terrain'] = None
 
             # lit and textured shaders (needed for forward fallback in Deferred)
-            if self.arm_mode:
+            if self.lowpower_mode:
                 self._compile_arm_shaders()
             else:
                 self._compile_standard_shaders()
@@ -1381,17 +1397,32 @@ class BaseRenderer:
             return (pos1[0]-pos2.x)**2 + (pos1[1]-pos2.y)**2 + (pos1[2]-pos2.z)**2
         return (pos1.x-pos2.x)**2 + (pos1.y-pos2.y)**2 + (pos1.z-pos2.z)**2
 
+    def _shader_light_cap(self, shader_name):
+        """How many lights ``shader_name``'s ``lights[]`` array actually holds.
+
+        The shader loops to ``active_lights``, so uploading a larger count than
+        the array can hold used to make it index past the end — undefined
+        behaviour, and the surplus lights never worked anyway.  Water and
+        terrain are sized smaller on purpose; the ARM variants trade array size
+        for uniform storage.
+        """
+        cap = _SHADER_LIGHT_CAPS.get(shader_name, self.MAX_LIGHTS)
+        if self.lowpower_mode and shader_name in ('lit', 'textured'):
+            cap = min(cap, shaders.MAX_LIGHTS_ARM)
+        return cap
+
     def _upload_lights_once(self, shader_name, lights):
         if shader_name not in self.uniforms:
             return
+        cap = self._shader_light_cap(shader_name)
         # Skip if this shader already received this exact light list this
         # frame (portal passes may use a different list, so key on ids).
-        key = tuple(map(id, lights[:self.MAX_LIGHTS]))
+        key = tuple(map(id, lights[:cap]))
         if self._frame_lights_uploaded.get(shader_name) == key:
             return
         self._frame_lights_uploaded[shader_name] = key
         uniforms = self.uniforms[shader_name]
-        num_lights = min(len(lights), self.MAX_LIGHTS)
+        num_lights = min(len(lights), cap)
         gl.glUniform1i(uniforms['active_lights'], num_lights)
         shadow_index_map = self._light_shadow_index
         light_names = self._light_uniform_names

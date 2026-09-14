@@ -8,6 +8,8 @@ from PyQt5.QtGui import QKeySequence
 import sys
 import os
 
+from engine import shaders
+
 class SettingsWindow(QDialog):
     """
     A dialog window for editing application settings, built with PyQt5.
@@ -213,17 +215,19 @@ class SettingsWindow(QDialog):
         renderer_group = QGroupBox("Renderer Performance")
         renderer_layout = QVBoxLayout()
         
-        self.arm_detected_label = QLabel()
-        self._update_arm_detection_label()
-        renderer_layout.addWidget(self.arm_detected_label)
+        self.lowpower_detected_label = QLabel()
+        self._update_lowpower_detection_label()
+        renderer_layout.addWidget(self.lowpower_detected_label)
         
-        self.arm_mode_checkbox = QCheckBox("ARM Optimized Shaders")
-        self.arm_mode_checkbox.setToolTip(
-            "Use optimized shaders that pre-compute normal matrices on CPU.\n"
-            "Recommended for ARM devices (Surface Pro X/9, Apple Silicon) and\n"
-            "x64 emulation. Safe to enable on all devices - no quality loss."
+        self.lowpower_mode_checkbox = QCheckBox("Low-power Mode (reduced shaders)")
+        self.lowpower_mode_checkbox.setToolTip(
+            "Use the low-power lighting shaders: cheaper per fragment, and a\n"
+            "smaller dynamic-light budget (%d lights instead of %d).\n"
+            "Recommended for low-power ARM devices (Surface Pro X/9, handhelds)\n"
+            "and x64 emulation. Leave off on desktops and Apple Silicon."
+            % (shaders.MAX_LIGHTS_ARM, shaders.MAX_LIGHTS)
         )
-        renderer_layout.addWidget(self.arm_mode_checkbox)
+        renderer_layout.addWidget(self.lowpower_mode_checkbox)
         
         self.shadows_enabled_checkbox = QCheckBox("Enable Dynamic Shadows")
         self.shadows_enabled_checkbox.setToolTip(
@@ -242,58 +246,49 @@ class SettingsWindow(QDialog):
         layout.addStretch()
         self.tabs.addTab(tab, "Display")
     
-    def _detect_arm_platform(self):
-        import platform
-        machine = platform.machine().lower()
-        
-        if 'arm' in machine or 'aarch' in machine:
-            return True, "ARM processor detected"
-        
-        if sys.platform == 'win32':
-            if os.environ.get('PROCESSOR_ARCHITECTURE', '').upper() == 'ARM64':
-                return True, "Windows ARM64 detected"
-            if os.environ.get('PROCESSOR_ARCHITEW6432', '').upper() == 'ARM64':
-                return True, "Running under x64 emulation on ARM64"
-            
-            proc_id = os.environ.get('PROCESSOR_IDENTIFIER', '').lower()
-            if 'qualcomm' in proc_id or 'snapdragon' in proc_id or 'arm' in proc_id:
-                return True, "Qualcomm/ARM processor detected"
-        
-        return False, "x64/x86 processor detected"
+    def _detect_lowpower_platform(self):
+        """``(wants_low_power_shaders, reason)`` for this machine.
+
+        The rule lives in :mod:`engine.shaders`, alongside the shader variants
+        it chooses between — this window and the renderer used to detect it
+        separately and could disagree about the same machine.
+        """
+        from engine.shaders import detect_low_power_arm
+        return detect_low_power_arm()
     
-    def _update_arm_detection_label(self):
-        is_arm, reason = self._detect_arm_platform()
-        if is_arm:
-            self.arm_detected_label.setText(f"⚠️ {reason} - optimizations recommended")
-            self.arm_detected_label.setStyleSheet("color: #FFA500;")
+    def _update_lowpower_detection_label(self):
+        is_low_power, reason = self._detect_lowpower_platform()
+        if is_low_power:
+            self.lowpower_detected_label.setText(f"⚠️ {reason} - optimizations recommended")
+            self.lowpower_detected_label.setStyleSheet("color: #FFA500;")
         else:
-            self.arm_detected_label.setText(f"✓ {reason}")
-            self.arm_detected_label.setStyleSheet("color: #90EE90;")
+            self.lowpower_detected_label.setText(f"✓ {reason}")
+            self.lowpower_detected_label.setStyleSheet("color: #90EE90;")
     
     def _auto_detect_renderer_settings(self):
-        is_arm, reason = self._detect_arm_platform()
+        is_low_power, reason = self._detect_lowpower_platform()
         
-        if is_arm:
-            self.arm_mode_checkbox.setChecked(True)
+        if is_low_power:
+            self.lowpower_mode_checkbox.setChecked(True)
             self.shadows_enabled_checkbox.setChecked(False)
             QMessageBox.information(
                 self,
                 "Auto-Detect Complete",
                 f"Detected: {reason}\n\n"
-                "Applied ARM-optimized settings:\n"
-                "• ARM Optimized Shaders: ON\n"
+                "Applied low-power settings:\n"
+                "• Low-power Mode: ON\n"
                 "• Dynamic Shadows: OFF\n\n"
-                "These settings improve performance on ARM devices."
+                "These settings improve performance on low-power hardware."
             )
         else:
-            self.arm_mode_checkbox.setChecked(True)
+            self.lowpower_mode_checkbox.setChecked(False)
             self.shadows_enabled_checkbox.setChecked(True)
             QMessageBox.information(
                 self,
                 "Auto-Detect Complete", 
                 f"Detected: {reason}\n\n"
                 "Applied standard settings:\n"
-                "• ARM Optimized Shaders: ON (no quality loss)\n"
+                "• Low-power Mode: OFF (full light budget)\n"
                 "• Dynamic Shadows: ON\n\n"
                 "Full quality rendering enabled."
             )
@@ -588,10 +583,16 @@ class SettingsWindow(QDialog):
         self.big_toolbar_buttons_checkbox.setChecked(self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False))
         self.animate_connections_checkbox.setChecked(self.config.getboolean('Display', 'animate_connections', fallback=False))
         
-        is_arm, _ = self._detect_arm_platform()
-        default_arm_mode = True
-        default_shadows = not is_arm
-        self.arm_mode_checkbox.setChecked(self.config.getboolean('Renderer', 'arm_mode', fallback=default_arm_mode))
+        is_low_power, _ = self._detect_lowpower_platform()
+        # Defaults follow the hardware. The setting used to default to True on
+        # every machine, which put desktops on the low-power shaders.
+        default_lowpower_mode = is_low_power
+        default_shadows = not is_low_power
+        # `arm_mode` is the setting's old name; read it as the fallback so an
+        # existing settings.ini keeps the choice its owner made.
+        default_lowpower_mode = self.config.getboolean(
+            'Renderer', 'arm_mode', fallback=default_lowpower_mode)
+        self.lowpower_mode_checkbox.setChecked(self.config.getboolean('Renderer', 'lowpower_mode', fallback=default_lowpower_mode))
         self.shadows_enabled_checkbox.setChecked(self.config.getboolean('Renderer', 'shadows_enabled', fallback=default_shadows))
 
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
@@ -706,7 +707,7 @@ class SettingsWindow(QDialog):
 
         if not self.config.has_section('Renderer'): 
             self.config.add_section('Renderer')
-        self.config.set('Renderer', 'arm_mode', str(self.arm_mode_checkbox.isChecked()))
+        self.config.set('Renderer', 'lowpower_mode', str(self.lowpower_mode_checkbox.isChecked()))
         self.config.set('Renderer', 'shadows_enabled', str(self.shadows_enabled_checkbox.isChecked()))
         
         self.config.set('Display', 'show_hud', str(self.show_hud_checkbox.isChecked()))

@@ -835,7 +835,7 @@ class ConsoleCommandHandler:
         add_line("Glass Shader", "ON" if getattr(renderer, 'glass_enabled', True) else "OFF")
         add_line("Real-time Lighting", "ON" if getattr(renderer, 'lighting_enabled', True) else "OFF")
         add_line("Deferred Rendering", "ON" if getattr(renderer, 'use_deferred', False) else "OFF")
-        add_line("ARM Mode", "ON" if getattr(renderer, 'arm_mode', True) else "OFF")
+        add_line("Low-power Mode", "ON" if getattr(renderer, "lowpower_mode", False) else "OFF")
 
         # Clear color
         cc = getattr(renderer, 'clear_color', [0.02, 0.02, 0.05])

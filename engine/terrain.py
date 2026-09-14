@@ -1049,13 +1049,14 @@ class Terrain:
         use_tex = 0 if self.flat_mode or not textures_loaded else (1 if getattr(self, 'use_textures', True) else 0)
         gl.glUniform1i(self.uniforms['use_textures'], use_tex)
         
-        # The terrain fragment shader declares `uniform Light lights[8]`, while
-        # the main renderer's MAX_LIGHTS is larger. Without this clamp a scene
-        # with more than 8 lights indexes uniforms that were never declared, so
-        # the surplus writes are silently dropped (or KeyError on the lookup).
-        # Send the 8 nearest the camera instead, which is what the terrain
-        # actually needs -- distant lights contribute nothing at this range.
-        MAX_TERRAIN_LIGHTS = 8
+        # The terrain fragment shader holds fewer lights than the main renderer's
+        # budget. Without this clamp a scene with more lights than that indexes
+        # uniforms that were never declared, so the surplus writes are silently
+        # dropped (or KeyError on the lookup). Send the nearest few to the camera
+        # instead, which is what the terrain actually needs -- distant lights
+        # contribute nothing at this range. The number is the shader's own, so
+        # resizing the array cannot leave this clamp behind.
+        from engine.shaders import MAX_LIGHTS_TERRAIN as MAX_TERRAIN_LIGHTS
         if active_lights_count > MAX_TERRAIN_LIGHTS:
             cx, cy, cz = float(camera_pos[0]), float(camera_pos[1]), float(camera_pos[2])
             lights = sorted(

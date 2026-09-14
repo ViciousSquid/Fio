@@ -351,26 +351,20 @@ class View2D(QWidget):
         return self.grid_size if self.snap_to_grid_enabled else 0
 
     def begin_component_drag(self, ref, world_pos, shear=False, additive=False):
-        """Start dragging a picked component.  One undo checkpoint, at mouse-down."""
+        """Start dragging a picked component.  One undo checkpoint, at mouse-down.
+
+        What the press selects and which drag it builds is the controller's to
+        decide (:meth:`ComponentController.press`), shared with the 3D viewport.
+        What is left here is this view's alone: the world position the drag is
+        measured from, and the undo checkpoint.
+        """
         controller = self._components()
-        if additive:
-            controller.toggle(ref)
-            if ref not in controller.selection:
-                return False        # shift-click removed it: a deselect, not a drag
-            refs = list(controller.selection)
-        else:
-            if ref not in controller.selection:
-                controller.set_selection([ref])
-            refs = list(controller.selection)
-        if not refs:
-            return False
-        drag = ce.begin_component_drag(refs, shear=shear)
-        if drag is None or drag.is_empty():
+        drag = controller.press(ref, shear=shear, additive=additive)
+        if drag is None:
             return False
         # Matches every other drag tool in Fio (rotate, group resize): the
         # checkpoint is pushed once here and the moves that follow add none.
         self.main_window.save_state()
-        controller.begin_drag(drag)
         self.component_drag_start = QPointF(world_pos)
         self.component_drag_anchor = np.array(ref.position, dtype=np.float64)
         self.component_drag_kind = ref.kind
@@ -449,9 +443,9 @@ class View2D(QWidget):
                     "%s — stopped at the last valid shape" % label.capitalize())
         else:
             # Nothing moved: undo the checkpoint we pushed at mouse-down so the
-            # user's undo history has no empty step in it.
-            if getattr(self.editor.state, 'undo_stack', None):
-                self.editor.state.undo_stack.pop()
+            # user's undo history has no empty step in it (and gets the redo
+            # branch that checkpoint cleared back).
+            self.editor.state.discard_last_checkpoint()
         self.main_window.property_editor.set_object(
             self.editor.state.selected_object)
         self.main_window.refresh_views()
@@ -463,8 +457,7 @@ class View2D(QWidget):
         if controller.drag is None:
             return False
         controller.cancel_drag()
-        if getattr(self.editor.state, 'undo_stack', None):
-            self.editor.state.undo_stack.pop()
+        self.editor.state.discard_last_checkpoint()
         self.component_drag_start = None
         self.component_drag_anchor = None
         self.component_drag_kind = None
@@ -779,8 +772,7 @@ class View2D(QWidget):
         applied = self.group_rotate_applied
         self.is_group_rotating = False
         if abs(applied) < 1e-6:
-            if getattr(self.editor.state, 'undo_stack', None):
-                self.editor.state.undo_stack.pop()
+            self.editor.state.discard_last_checkpoint()
         else:
             self.main_window.unsaved_changes = True
             self.main_window.state.mark_lighting_dirty()
@@ -845,8 +837,7 @@ class View2D(QWidget):
         self.rotate_dragging = False
         if abs(applied) < 1e-6:
             # Nothing actually rotated — drop the checkpoint we pushed.
-            if getattr(self.editor.state, 'undo_stack', None):
-                self.editor.state.undo_stack.pop()
+            self.editor.state.discard_last_checkpoint()
         else:
             self.main_window.unsaved_changes = True
             self.main_window.state.mark_lighting_dirty()
@@ -865,8 +856,7 @@ class View2D(QWidget):
             self.main_window.apply_rotation_to_selection(
                 -self.rotate_applied, axis, undoable=False,
                 pivot=self.rotate_pivot3)
-        if getattr(self.editor.state, 'undo_stack', None):
-            self.editor.state.undo_stack.pop()
+        self.editor.state.discard_last_checkpoint()
         self.rotate_dragging = False
         self.rotate_pivot = None
         self.rotate_pivot3 = None

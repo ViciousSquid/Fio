@@ -45,8 +45,13 @@ from .persistence import (build_cell_delta_registry, flatten_cell_delta_registry
 
 # Marker keys the session writes onto objects it parks, so it can restore the
 # exact prior value and never clobber a user's own hidden/disabled state.
-_HID_MARK = "_bw_parked_hidden"      # present ⇒ BW set `hidden`; value = prior
-_DIS_MARK = "_bw_parked_disabled"    # present ⇒ BW set `disabled`; value = prior
+#
+# They are the engine's names, not this plugin's: anything that builds a durable
+# structure out of `hidden` (the collision grid, above all) has to be able to
+# tell "the mapper hid this" from "Big World parked it a moment ago", and the
+# engine is where that question is answered — see `engine.spatial.authored_hidden`.
+from engine.spatial import (PARKED_DISABLED_KEY as _DIS_MARK,
+                            PARKED_HIDDEN_KEY as _HID_MARK)
 
 
 def _xz(pos):

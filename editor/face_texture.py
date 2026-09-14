@@ -141,6 +141,10 @@ def set_transform(brush, face_key, shift=None, scale=None, angle=None,
                 plane['uv_natural'] = True
             else:
                 plane.pop('uv_natural', None)
+        # A face winding carries its own texture, UV scale and texture basis, so
+        # editing the plane's mapping makes the cached geometry — and the GPU
+        # mesh the renderer built from it — as stale as moving the plane would.
+        bg.invalidate_geometry_cache(brush)
         return
 
     if shift is not None:
@@ -152,9 +156,11 @@ def set_transform(brush, face_key, shift=None, scale=None, angle=None,
     if texture is not None:
         brush.setdefault('textures', {})[face_key] = texture
         # A tagged face of an angled brush is drawn from its plane, so the
-        # plane has to learn about the new texture as well.
+        # plane has to learn about the new texture as well — and the derived
+        # winding that copied the old one has to be dropped.
         if plane is not None:
             plane['texture'] = texture
+            bg.invalidate_geometry_cache(brush)
     if natural is not None:
         if natural:
             brush.setdefault('uv_natural', {})[face_key] = True

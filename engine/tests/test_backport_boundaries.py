@@ -203,9 +203,22 @@ def test_io_widget_rewrite_survives():
 
 
 def test_renderer_light_capacities_untouched():
+    """The renderer's light budget must come from the shaders, and match them.
+
+    It used to be written down twice — 32 in the renderer, 8 in lit.frag — which
+    meant a scene with more than eight lights made the shader index past the end
+    of its array. The budget is now the shader's own number, so the guard checks
+    that relationship rather than a literal.
+    """
     src = _read("engine/renderer_core.py")
-    assert "MAX_LIGHTS = 32" in src
+    assert "MAX_LIGHTS = shaders.MAX_LIGHTS" in src
     assert "MAX_SHADOW_LIGHTS = 8" in src
+
+    from engine import shaders as shader_module
+    for name in ("lit.frag", "textured.frag"):
+        source = shader_module.DEFAULT_SHADERS[name]
+        assert "lights[%d]" % shader_module.MAX_LIGHTS in source, name
+        assert "i < %d" % shader_module.MAX_LIGHTS in source, name
 
 
 def test_thing_counter_regression_not_imported():

@@ -1124,8 +1124,7 @@ class MainWindow(QMainWindow):
         self.clone_placement = None
         self.set_selected_object(None)
         # The clone pushed an undo checkpoint it no longer needs.
-        if self.state.undo_stack:
-            self.state.undo_stack.pop()
+        self.state.discard_last_checkpoint()
         self.show_toast("Clone cancelled")
         self.update_all_ui()
         return True
@@ -2300,18 +2299,61 @@ class MainWindow(QMainWindow):
             self.update_all_ui()
 
     def _resync_components_after_history(self):
-        """Re-point the component selection after an undo/redo.
+        """Re-point everything holding an object reference after an undo/redo.
 
-        Undo rebuilds the brush dicts from JSON, so any component reference
-        held from before now points at an object that is no longer in the
-        scene.  Dropping those keeps the handles honest instead of drawing
-        them for geometry that has gone.  The property editor's cached pages
-        and the I/O system's reverse index are stale for the same reason.
+        Undo rebuilds the brush dicts and Things from JSON, so *every* reference
+        held from before now points at an object that is no longer in the scene.
+        ``EditorState`` has already re-pointed the selection itself by stable
+        id; the rest of the editor's references have to follow:
+
+        * component handles, dropped or re-resolved against the new geometry;
+        * the Surface Inspector and the "face last worked on", both of which
+          hold a brush directly and would otherwise edit a detached dict;
+        * the property editor's cached pages and the I/O reverse index, which
+          are keyed on objects that no longer exist.
         """
         self.components.cancel_drag()
         self.components.prune(self.state.brushes)
         self.components.invalidate()
+        self._rebind_face_targets()
         self.invalidate_entity_caches()
+
+    def _rebind_face_targets(self):
+        """Re-point the face-texturing targets at the live scene.
+
+        Both the Surface Inspector's bound face and ``face_texture_target``
+        hold ``(brush, face key)``.  After a history step that brush is a
+        detached copy, so the panel would go on editing something nothing draws.
+        Each is moved to the brush with the same stable id, or dropped.
+        """
+        live = {}
+        for brush in self.state.brushes:
+            brush_id = brush.get('id')
+            if brush_id:
+                live[brush_id] = brush
+
+        def _rebind(target):
+            if not target or target[0] is None:
+                return target
+            brush, key = target
+            if any(brush is b for b in self.state.brushes):
+                return target
+            replacement = live.get(brush.get('id')) if isinstance(brush, dict) else None
+            return (replacement, key) if replacement is not None else None
+
+        current = getattr(self, 'face_texture_target', None)
+        if current is not None:
+            self.face_texture_target = _rebind(current)
+
+        inspector = getattr(self, 'surface_inspector', None)
+        if inspector is not None and inspector.target is not None:
+            rebound = _rebind(inspector.target)
+            if rebound is None:
+                inspector.set_target(None, None, raise_window=False)
+            elif rebound is not inspector.target:
+                inspector.set_target(rebound[0], rebound[1], raise_window=False)
+            else:
+                inspector.refresh_from_face()
 
     def invalidate_entity_caches(self):
         """Drop caches keyed on the scene's objects.
@@ -3328,6 +3370,21 @@ class MainWindow(QMainWindow):
         for view in [self.view_top, self.view_side, self.view_front]:
             view.snap_to_grid_enabled = enabled
 
+    def snap_to_grid_enabled(self):
+        """Whether editor drags snap to the grid.
+
+        The setting is held per 2D view (each one reads it on every drag), so
+        the top view is the one asked — they are always set together.  Exposed
+        here so the 3D viewport can honour the same switch rather than guessing
+        from whether its own grid happens to be drawn.
+        """
+        view = getattr(self, 'view_top', None)
+        return bool(getattr(view, 'snap_to_grid_enabled', True))
+
+    def component_grid_step(self, grid_size):
+        """``grid_size`` when snapping is on, 0 when it is off."""
+        return grid_size if self.snap_to_grid_enabled() else 0
+
     def toggle_grid(self, visible):
         """Toggle grid visibility in 3D view only."""
         self.grid_visible = visible
@@ -3746,8 +3803,7 @@ class MainWindow(QMainWindow):
                 self.property_editor.set_object(self.state.selected_object)
         else:
             # Nothing changed — drop the checkpoint we just pushed.
-            if self.state.undo_stack:
-                self.state.undo_stack.pop()
+            self.state.discard_last_checkpoint()
         return count
 
     def save_level_as(self):

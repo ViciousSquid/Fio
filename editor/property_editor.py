@@ -10,6 +10,7 @@ from PyQt5.QtGui import QColor, QIcon, QFont
 from editor.things import (Thing, Light, Pickup, Monster, Model, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
                            LogicKeyValueStore)
+from engine.brush_geometry import GEO_RUNTIME_KEYS
 from engine.monster_constants import MONSTER_VARIANTS
 from editor.tooltips import set_tooltips_enabled
 
@@ -323,7 +324,12 @@ class PropertyEditor(QWidget):
     #: pure waste.
     _SIGNATURE_IGNORED = frozenset({
         'pos', 'size', 'geometry', '_flash_until', 'original_pos',
-    })
+    # Derived-geometry bookkeeping the geometry layer writes onto brushes. None
+    # of it is displayed, and it changes on every drag, rotate and clip, so a
+    # panel that folded it in would rebuild itself for edits it does not show.
+    # Taken from the geometry module's own list rather than spelled out again,
+    # so a key added there can never quietly start costing a rebuild here.
+    }) | frozenset(GEO_RUNTIME_KEYS)
 
     #: Attributes that belong to the editor itself rather than to whichever
     #: page is on screen; everything else is part of a page's state.
@@ -3141,6 +3147,15 @@ class PropertyEditor(QWidget):
                     except (ValueError, TypeError):
                         value = 0.0
             self.current_object.properties[key] = value
+
+        if key == 'name' and _io_system is not None:
+            # A name is read by every *other* entity's panel — the "Targeted by"
+            # list quotes it, and name-addressed connections resolve through it —
+            # so a rename changes what those panels should show while changing
+            # nothing they could notice on their own object.  The I/O revision
+            # is the shared "something addressable moved" signal they already
+            # fold into their cache key.
+            _io_system.bump_io_revision()
 
         if isinstance(self.current_object, Portal) and key == 'angle':
             rot = self.current_object.properties.get('rotation', [0.0, 0.0, 0.0])
