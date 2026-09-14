@@ -35,6 +35,16 @@ def qt_app():
     yield app
 
 
+class _FakeView:
+    """Stands in for a viewport; only ever asked to repaint."""
+
+    def __init__(self):
+        self.updates = 0
+
+    def update(self):
+        self.updates += 1
+
+
 class FakeHost(QWidget):
     """The slice of MainWindow the property editor talks to."""
 
@@ -45,6 +55,10 @@ class FakeHost(QWidget):
         self.config = configparser.ConfigParser()
         self.grid_size = 16
         self.saves = 0
+        # update_object_prop() repaints the viewports after a value changes.
+        # PyQt aborts the process on an unhandled exception inside a slot, so
+        # a missing view here is a hard crash rather than a failed assert.
+        self.view_3d = _FakeView()
 
     def save_state(self):
         self.saves += 1
@@ -642,3 +656,67 @@ def test_mover_list_is_filled_only_once(panel):
     checkbox.setChecked(True)
 
     assert [combo.itemText(i) for i in range(combo.count())] == ['(none)', 'lift']
+
+
+# ────────────────────────────
+# The Light "Show Radius" row
+# ────────────────────────────
+
+def _row_label_for(editor, checkbox):
+    """The text of the form-layout label sitting beside ``checkbox``."""
+    from PyQt5.QtWidgets import QFormLayout
+    for form in editor._page.findChildren(QFormLayout):
+        for row in range(form.rowCount()):
+            field = form.itemAt(row, QFormLayout.FieldRole)
+            if field is not None and field.widget() is checkbox:
+                label = form.itemAt(row, QFormLayout.LabelRole)
+                if label is None or label.widget() is None:
+                    return ""
+                return label.widget().text()
+    return None
+
+
+def test_light_show_radius_row_labels_itself(panel):
+    """The row used to borrow the previous property's label, or NameError.
+
+    ``label_text`` is not assigned until after this branch, so the row showed
+    whatever the last property was called -- and raised NameError outright
+    when show_radius was the first property listed.
+    """
+    host, editor = panel
+    light = Light(pos=[0, 0, 0])
+    light.properties['show_radius'] = True
+    host.state.things = [light]
+
+    editor.set_object(light)
+
+    cb = editor._widgets.get('light_show_radius_cb')
+    assert cb is not None, "the Show Radius checkbox was not built"
+    assert cb.text() == "Show Radius"
+    assert cb.isChecked()
+    assert _row_label_for(editor, cb) == ""
+
+
+def test_light_show_radius_accepts_a_string_value(panel):
+    """Maps saved with "True"/"False" strings still tick the box."""
+    host, editor = panel
+    light = Light(pos=[0, 0, 0])
+    light.properties['show_radius'] = "True"
+    host.state.things = [light]
+
+    editor.set_object(light)
+
+    cb = editor._widgets['light_show_radius_cb']
+    assert cb.isChecked()
+
+
+def test_light_show_radius_writes_back(panel):
+    host, editor = panel
+    light = Light(pos=[0, 0, 0])
+    light.properties['show_radius'] = False
+    host.state.things = [light]
+
+    editor.set_object(light)
+    editor._widgets['light_show_radius_cb'].setChecked(True)
+
+    assert light.properties['show_radius'] is True

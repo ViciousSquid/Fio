@@ -3801,6 +3801,9 @@ class View2D(QWidget):
         menu.addSeparator()
         
         # Advanced / Import
+        # OBJ import is off; the handler below stays, guarded, so re-enabling
+        # it is a matter of uncommenting this line.
+        add_model_action = None
         # add_model_action = menu.addAction("Model...")
         
         # Logic Menu Sub-section
@@ -3915,7 +3918,7 @@ class View2D(QWidget):
             new_thing = pa
         
         # Model
-        elif action == add_model_action:
+        elif add_model_action and action == add_model_action:
             filepath, _ = QFileDialog.getOpenFileName(self, "Select OBJ Model", "assets/models", "OBJ Files (*.obj)")
             if filepath:
                 try:

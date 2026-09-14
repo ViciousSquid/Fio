@@ -1556,7 +1556,12 @@ class PropertyEditor(QWidget):
                 cb = _make_checkbox("Show Radius", bool_val,
                                     lambda c, k=key: self.update_object_prop(k, c),
                                     _Style.CHECKBOX)
-                form.addRow(label_text, cb)
+                # The checkbox carries its own text, so the row label is empty
+                # — as for every other self-labelling checkbox here.  It used
+                # to pass label_text, which is not assigned until below: a
+                # NameError when show_radius was the first property shown, and
+                # the *previous* property's label on any later pass.
+                form.addRow("", cb)
                 self._widgets['light_show_radius_cb'] = cb
                 continue
 
