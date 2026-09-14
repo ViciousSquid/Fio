@@ -25,6 +25,7 @@ from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor, QIcon
 from editor.things import Light, PlayerStart, Model, update_all_counters_from_entities
 from editor.SettingsWindow import SettingsWindow
 from editor.ui import Ui_MainWindow
+from editor.tooltips import set_tooltips_enabled
 from engine.constants import TILE_SIZE, WALL_TILE, FLOOR_TILE
 from engine import brush_geometry
 from editor.view_2d import View2D
@@ -210,6 +211,7 @@ class MainWindow(QMainWindow):
         self.tex_rot_ccw_shortcut.activated.connect(lambda: self.rotate_textures(-1))
         self.setFocus()
         self.update_global_font()
+        self.apply_tooltip_settings()
         self.load_layout()
         
         self.terrain = None
@@ -1735,6 +1737,7 @@ class MainWindow(QMainWindow):
         if dialog.exec_():
             self.save_config()
             self.update_shortcuts()
+            self.apply_tooltip_settings()
             
             # Update Autosave if changed
             new_autosave = self.config.getboolean('Editor', 'autosave_enabled', fallback=True)
@@ -1779,6 +1782,26 @@ class MainWindow(QMainWindow):
         for face in ['north','south','east','west','top','down']:
             self.state.selected_object['textures'][face] = 'caulk.jpg'
         self.update_views()
+
+    def apply_tooltip_settings(self):
+        """Settings > Editor > Tooltips: show or hide each area's tooltips.
+
+        Split by area because they are read differently -- toolbar tooltips
+        are how the icons are learned and stop being wanted long before the
+        Property Editor's do.
+        """
+        panel = getattr(self, 'property_editor', None)
+        if panel is not None and hasattr(panel, 'set_tooltips_enabled'):
+            panel.set_tooltips_enabled(
+                self.config.getboolean('Editor', 'property_editor_tooltips',
+                                       fallback=True))
+
+        toolbar = getattr(self, 'tool_toolbar', None)
+        if toolbar is not None:
+            set_tooltips_enabled(
+                toolbar,
+                self.config.getboolean('Editor', 'toolbar_tooltips',
+                                       fallback=True))
 
     def handle_escape(self):
         """Back out of whatever is in progress, innermost first.

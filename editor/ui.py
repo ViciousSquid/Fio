@@ -410,6 +410,8 @@ class Ui_MainWindow(object):
         tool_toolbar.setMovable(True)
         tool_toolbar.setAllowedAreas(Qt.TopToolBarArea | Qt.BottomToolBarArea)
         MainWindow.addToolBar(Qt.TopToolBarArea, tool_toolbar)
+        # Kept so Settings > Editor > Tooltips can reach its buttons.
+        MainWindow.tool_toolbar = tool_toolbar
 
         big = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
         icon_size_val = 45 if big else 35

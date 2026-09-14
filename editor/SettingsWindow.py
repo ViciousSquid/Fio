@@ -149,7 +149,23 @@ class SettingsWindow(QDialog):
         
         view_2d_group.setLayout(view_2d_layout)
         layout.addWidget(view_2d_group)
-        
+
+        tooltips_group = QGroupBox("Tooltips")
+        tooltips_layout = QVBoxLayout()
+
+        self.property_editor_tooltips_checkbox = QCheckBox("Property Editor")
+        self.property_editor_tooltips_checkbox.setToolTip(
+            "Show tooltips on the Property Editor's fields and buttons")
+        tooltips_layout.addWidget(self.property_editor_tooltips_checkbox)
+
+        self.toolbar_tooltips_checkbox = QCheckBox("Toolbar")
+        self.toolbar_tooltips_checkbox.setToolTip(
+            "Show tooltips on the editor toolbar's buttons")
+        tooltips_layout.addWidget(self.toolbar_tooltips_checkbox)
+
+        tooltips_group.setLayout(tooltips_layout)
+        layout.addWidget(tooltips_group)
+
         layout.addStretch()
 
     def _create_display_tab(self):
@@ -557,6 +573,11 @@ class SettingsWindow(QDialog):
         self.glow_arrow_scale_slider.setValue(glow_arrow_scale)
         self.glow_arrow_scale_label.setText(f"{glow_arrow_scale}%")
         
+        self.property_editor_tooltips_checkbox.setChecked(
+            self.config.getboolean('Editor', 'property_editor_tooltips', fallback=True))
+        self.toolbar_tooltips_checkbox.setChecked(
+            self.config.getboolean('Editor', 'toolbar_tooltips', fallback=True))
+
         self.show_fps_checkbox.setChecked(self.config.getboolean('Display', 'show_fps', fallback=True))
         self.always_show_sysmon_checkbox.setChecked(self.config.getboolean('Display', 'always_show_sysmon', fallback=False))
         self.always_show_io_debug_checkbox.setChecked(self.config.getboolean('Display', 'always_show_io_debug', fallback=True))
@@ -676,6 +697,13 @@ class SettingsWindow(QDialog):
         self.config.set('Display', 'big_toolbar_buttons', str(self.big_toolbar_buttons_checkbox.isChecked()))
         self.config.set('Display', 'animate_connections', str(self.animate_connections_checkbox.isChecked()))
         
+        if not self.config.has_section('Editor'):
+            self.config.add_section('Editor')
+        self.config.set('Editor', 'property_editor_tooltips',
+                        str(self.property_editor_tooltips_checkbox.isChecked()))
+        self.config.set('Editor', 'toolbar_tooltips',
+                        str(self.toolbar_tooltips_checkbox.isChecked()))
+
         if not self.config.has_section('Renderer'): 
             self.config.add_section('Renderer')
         self.config.set('Renderer', 'arm_mode', str(self.arm_mode_checkbox.isChecked()))

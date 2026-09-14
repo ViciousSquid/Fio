@@ -11,6 +11,7 @@ from editor.things import (Thing, Light, Pickup, Monster, Model, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
                            LogicKeyValueStore)
 from engine.monster_constants import MONSTER_VARIANTS
+from editor.tooltips import set_tooltips_enabled
 
 try:
     from editor.debug_console import debug_log
@@ -259,6 +260,11 @@ class PropertyEditor(QWidget):
         self._parking = QWidget(self)
         self._parking.setVisible(False)
 
+        # Settings > Editor > Tooltips.  Held here rather than read from the
+        # config on every build: a page is rebuilt often enough that this sits
+        # on the hot path.
+        self._tooltips_enabled = True
+
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(5, 5, 5, 5)
         self.main_layout.setSpacing(2)
@@ -324,6 +330,7 @@ class PropertyEditor(QWidget):
     _PERSISTENT_ATTRS = frozenset({
         'editor', 'current_object', 'main_layout', '_populating',
         '_signature', '_page', '_page_cache', '_parking',
+        '_tooltips_enabled',
     })
 
     @staticmethod
@@ -446,6 +453,29 @@ class PropertyEditor(QWidget):
             return None, None
         return None, None
 
+    def _strip_tooltips(self):
+        """Take the tooltips off a page that has just been built.
+
+        Only on the build path, and only when they are switched off: a page
+        restored from the cache was stripped when it was built, and when
+        tooltips are on there is nothing to do at all -- so the common case
+        costs one attribute read rather than a walk of the widget tree.
+        """
+        if not self._tooltips_enabled:
+            set_tooltips_enabled(self, False)
+
+    def set_tooltips_enabled(self, enabled):
+        """Settings > Editor > Tooltips > Property Editor.
+
+        Applies to the page on screen and every page parked in the cache, so
+        the setting does not reappear to change back when an older selection
+        is returned to.
+        """
+        self._tooltips_enabled = bool(enabled)
+        set_tooltips_enabled(self, self._tooltips_enabled)
+        for _, _, page, _ in self._page_cache:
+            set_tooltips_enabled(page, self._tooltips_enabled)
+
     def invalidate_cache(self):
         """Drop every cached page.
 
@@ -538,10 +568,13 @@ class PropertyEditor(QWidget):
                 self._page = cached_page
             elif obj is None:
                 self.main_layout.addWidget(QLabel("Nothing selected."))
+                self._strip_tooltips()
             elif isinstance(obj, dict):
                 self.populate_for_brush(obj)
+                self._strip_tooltips()
             elif isinstance(obj, Thing):
                 self.populate_for_thing(obj)
+                self._strip_tooltips()
         finally:
             self.setUpdatesEnabled(True)
             if obj is None:
