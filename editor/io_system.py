@@ -900,10 +900,17 @@ def _entity_name(entity):
 def build_target_index(brushes, things):
     """Map every targeted name and id to the sources pointing at it.
 
-    Returns ``{key: [(source name, label), ...]}`` where ``key`` is either a
+    Returns ``{key: [(source entity, label), ...]}`` where ``key`` is either a
     target name or a target id — a connection is filed under both, so a lookup
     finds it whether the entity is addressed by identity or by name.  Also
     files the legacy ``brush['target']`` property that predates connections.
+
+    The *entity* is filed, never its name.  An index that stored the name would
+    stop being an index and start being a stale copy of one: renaming a source
+    changes nothing about the connections, so nothing invalidates the index, and
+    the Property Editor's "Targeted by" list would go on quoting a name no
+    entity in the scene answers to.  :func:`find_targeting_sources` reads the
+    name off the live object at lookup time instead, which cannot go stale.
     """
     index = {}
 
@@ -912,25 +919,23 @@ def build_target_index(brushes, things):
             index.setdefault(key, []).append(value)
 
     for brush in brushes:
-        name = brush.get('name', 'unnamed')
         legacy = brush.get('target')
         if legacy:
             src_type = ('trigger' if brush.get('is_trigger')
                         else 'mover' if brush.get('is_mover') else None)
             if src_type:
-                _add(legacy, (name, src_type))
+                _add(legacy, (brush, src_type))
         for conn in brush.get('_io_connections', []) or []:
             tid, tname = _connection_target(conn)
-            entry = (name, "I/O: %s" % _connection_output(conn))
+            entry = (brush, "I/O: %s" % _connection_output(conn))
             _add(tid, entry)
             if tname and tname != tid:
                 _add(tname, entry)
 
     for thing in things:
-        name = thing.properties.get('name', 'unnamed')
         for conn in thing.properties.get('_io_connections', []) or []:
             tid, tname = _connection_target(conn)
-            entry = (name, "I/O: %s" % _connection_output(conn))
+            entry = (thing, "I/O: %s" % _connection_output(conn))
             _add(tid, entry)
             if tname and tname != tid:
                 _add(tname, entry)
@@ -943,7 +948,9 @@ def target_index(brushes, things):
 
     The cache key is the revision counter plus the scene's object counts, so a
     map load or an undo that swaps the lists wholesale is picked up even though
-    it never went through the mutators.
+    it never went through the mutators — those bump the revision as well (see
+    ``EditorState._invalidate_entity_caches``), which is what makes the key
+    safe: object counts and list identities can repeat, revisions cannot.
     """
     global _target_index_cache, _target_index_key
     key = (_io_revision, len(brushes), len(things), id(brushes), id(things))
@@ -957,6 +964,10 @@ def target_index(brushes, things):
 def find_targeting_sources(brushes, things, target_name="", target_id=""):
     """Sources pointing at one entity, as ``[(source name, label), ...]``.
 
+    Names are read off the live source entities here rather than out of the
+    index, so a rename shows up immediately without the index having to be
+    rebuilt for something that did not change any connection.
+
     Deduplicated, because a connection addressed by both id and name is filed
     under each and would otherwise be reported twice.
     """
@@ -966,10 +977,12 @@ def find_targeting_sources(brushes, things, target_name="", target_id=""):
     out = []
     seen = set()
     for key in (target_id, target_name):
-        for entry in index.get(key, ()) if key else ():
-            if entry not in seen:
-                seen.add(entry)
-                out.append(entry)
+        for entity, label in index.get(key, ()) if key else ():
+            ident = (id(entity), label)
+            if ident in seen:
+                continue
+            seen.add(ident)
+            out.append((_entity_name(entity), label))
     return out
 
 

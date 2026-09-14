@@ -36,6 +36,7 @@ so it can be unit-tested head-less and called from any thread, including the
 logic thread that builds collision meshes with no GL context current.
 """
 
+import itertools
 import math
 import numpy as np
 
@@ -623,18 +624,49 @@ def clip_planes(planes, clip_normal, clip_d, keep_positive=False, texture=None,
     ``clip_normal``.  ``keep_positive`` keeps the other half instead.  The new
     cut face inherits ``texture`` / ``uv_scale`` (or a sensible default picked
     from the existing faces).
+
+    A cut plane the set already contains is not appended: two coincident planes
+    describe the same half-space but each still produces a winding, so the solid
+    would grow a duplicate surface — doubled collision triangles, doubled
+    render geometry and z-fighting between two copies of one face.  The result
+    is then the input plane set unchanged, which is how :func:`clip_brush` knows
+    nothing happened.
     """
     n = _normalize(clip_normal)
     d = float(clip_d)
     if keep_positive:
         n = -n
         d = -d
+    kept = [dict(p) for p in planes]
+    if _plane_in_set(kept, n, d):
+        return kept
     if texture is None:
         texture = _dominant_texture(planes)
     if uv_scale is None:
         uv_scale = _dominant_uv_scale(planes)
     cut = make_plane(n, n * d, texture=texture, uv_scale=uv_scale, face=face)
-    return [dict(p) for p in planes] + [cut]
+    return kept + [cut]
+
+
+# How nearly two normals must agree to count as *the same plane* (as opposed to
+# the same box side, which _FACE_MATCH_DOT judges far more loosely).  1 - 1e-9
+# is about 0.0025 degrees: coincident to within the arithmetic, not merely
+# similar.
+_PLANE_SAME_DOT = 1.0 - 1e-9
+
+
+def _plane_in_set(planes, n, d, eps=EPS):
+    """Whether ``(n, d)`` is already one of ``planes`` (the same half-space)."""
+    if not planes:
+        return False
+    normals, offsets = _plane_arrays(planes)
+    lengths = np.sqrt(np.einsum('ij,ij->i', normals, normals))
+    lengths[lengths < 1e-12] = 1.0
+    same_facing = (normals @ n) / lengths >= _PLANE_SAME_DOT
+    if not np.any(same_facing):
+        return False
+    return bool(np.any(np.abs(offsets[same_facing] / lengths[same_facing] - d)
+                       <= eps))
 
 
 def clip_by_points(planes, p1, p2, p3, keep_positive=False, **kw):
@@ -817,15 +849,31 @@ def brush_has_geometry(brush):
 
 
 def geometry_signature(brush):
-    """Cheap hashable signature of a brush's geometry, for cache invalidation."""
+    """Cheap hashable signature of a brush's derived surface, for cache keys.
+
+    The plane set alone is not enough.  A face's winding carries its texture,
+    UV scale and texture basis as well as its shape, so a Surface Inspector edit
+    changes what every consumer of the derived geometry should be showing while
+    leaving ``n``/``d`` untouched — and rounding means a sub-thousandth plane
+    nudge does not move the plane part either.  The brush's *epoch* closes both:
+    it is a process-wide monotonic number handed out on first sight and bumped
+    by every invalidation (:func:`_invalidate`), so the signature moves whenever
+    anything that touches the brush says the derived data is stale.
+
+    It is also what keeps a cache keyed by ``id(brush)`` honest.  Undo replaces
+    brush dicts wholesale, and CPython happily hands a fresh dict the address a
+    freed one had; a new brush's epoch is one nobody has used, so it can never
+    inherit the cached GPU mesh or texture batch of the brush that used to live
+    at that address.
+    """
     geo = brush.get('geometry')
     if not geo:
         return None
-    return tuple(
+    return (_brush_epoch(brush), tuple(
         (round(p['n'][0], 6), round(p['n'][1], 6), round(p['n'][2], 6),
          round(p['d'], 4))
         for p in geo.get('planes', [])
-    )
+    ))
 
 
 def get_convex(brush):
@@ -888,18 +936,33 @@ def clip_brush(brush, clip_normal, clip_d, keep_positive=False, texture=None,
                uv_scale=None):
     """Clip ``brush`` in place with a plane, making it an angled brush.
 
-    Converts a box brush to geometry first.  Returns ``True`` on success; leaves
-    the brush untouched and returns ``False`` if the cut would empty the brush.
+    Converts a box brush to geometry first.  Returns ``True`` when the plane
+    actually cut the brush.  A cut that would empty it, or that passes outside
+    it and so removes nothing, leaves the brush exactly as it was and returns
+    ``False``.
+
+    That second case matters.  A plane the brush does not reach is
+    *over-constraining*: it bounds nothing, contributes no surface, and Radiant
+    frees such a face outright (``Brush_RemoveEmptyFaces``).  Keeping it would
+    grow the plane set on every missed clip — and every rebuild of the windings
+    is O(planes²), so a brush that has been clipped at a few times and missed
+    would carry that cost for the rest of its life — while telling the clip tool
+    it had cut a brush it had not touched.
     """
     box_to_geometry(brush)
+    existing = [_plane_from_json(p) for p in brush['geometry']['planes']]
     new_planes = clip_planes(
-        [_plane_from_json(p) for p in brush['geometry']['planes']],
-        clip_normal, clip_d, keep_positive=keep_positive,
+        existing, clip_normal, clip_d, keep_positive=keep_positive,
         texture=texture, uv_scale=uv_scale,
     )
+    if len(new_planes) == len(existing):
+        return False        # the cut plane is one the brush already has
     trial = ConvexGeometry(new_planes)
     if not trial.is_valid:
         return False
+    cut_index = len(new_planes) - 1
+    if not any(face['plane'] == cut_index for face in trial.faces):
+        return False        # bounds nothing: the plane missed the brush
     brush['geometry'] = {'planes': [_plane_to_json(p) for p in new_planes]}
     _invalidate(brush)
     brush['_geo_cache'] = trial
@@ -1228,6 +1291,7 @@ def invalidate_geometry_cache(brush):
 
 
 def _invalidate(brush):
+    brush['_geo_epoch'] = next(_epoch_counter)
     brush.pop('_geo_cache', None)
     brush.pop('_geo_cache_sig', None)
     # The box-derived shape used by component picking is keyed off pos/size and
@@ -1236,10 +1300,25 @@ def _invalidate(brush):
     brush.pop('_box_shape_sig', None)
 
 
+# Process-wide monotonic counter behind every brush's geometry epoch.  A number
+# is never reused, so two brush dicts can never share one — which is what makes
+# it safe for a cache keyed on ``id(brush)`` to trust (see geometry_signature).
+_epoch_counter = itertools.count(1)
+
+
+def _brush_epoch(brush):
+    """This brush's geometry epoch, assigning one the first time it is asked."""
+    epoch = brush.get('_geo_epoch')
+    if epoch is None:
+        epoch = next(_epoch_counter)
+        brush['_geo_epoch'] = epoch
+    return epoch
+
+
 # Runtime-only keys written onto brush dicts by this module.  editor_state must
 # strip these before serialisation / undo / deepcopy-for-JSON.
 GEO_RUNTIME_KEYS = frozenset({
-    '_geo_cache', '_geo_cache_sig',
+    '_geo_cache', '_geo_cache_sig', '_geo_epoch',
     '_collision_mode', '_mesh_triangles', '_mesh_bounds', '_mesh_planes',
 })
 

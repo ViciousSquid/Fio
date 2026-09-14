@@ -2265,26 +2265,20 @@ class QtGameView(QOpenGLWidget):
         return out
 
     def _begin_component_drag(self, ref, press_pos, shear=False, additive=False):
-        """Start a component drag from this viewport.  One undo step per drag."""
+        """Start a component drag from this viewport.  One undo step per drag.
+
+        The selection policy and the drag itself come from the shared
+        controller (:meth:`ComponentController.press`), so a press means exactly
+        what it means in a 2D view.  This viewport contributes only what it
+        alone knows: the screen-to-world mapping for the drag.
+        """
         controller = self._components()
-        if controller is None or ref is None:
+        if controller is None:
             return False
-        if additive:
-            controller.toggle(ref)
-            if ref not in controller.selection:
-                return False        # shift-click removed it: a deselect, not a drag
-            refs = list(controller.selection)
-        else:
-            if ref not in controller.selection:
-                controller.set_selection([ref])
-            refs = list(controller.selection)
-        if not refs:
-            return False
-        drag = component_edit.begin_component_drag(refs, shear=shear)
-        if drag is None or drag.is_empty():
+        drag = controller.press(ref, shear=shear, additive=additive)
+        if drag is None:
             return False
         self.editor.save_state()      # checkpoint at mouse-down, like 2D
-        controller.begin_drag(drag)
         self.component_drag_origin = QPoint(press_pos)
         self.component_drag_anchor = np.array(ref.position, dtype=np.float64)
         self.component_drag_kind = ref.kind
@@ -2302,6 +2296,20 @@ class QtGameView(QOpenGLWidget):
         self.setCursor(Qt.SizeAllCursor)
         self.update()
         return True
+
+    def _component_snap_grid(self):
+        """Grid step a component drag in this viewport snaps to, or 0.
+
+        Deliberately the editor's *snap* setting, not this viewport's grid
+        *visibility*: a drag used to snap here whenever the 3D grid happened to
+        be drawn, so turning "snap to grid" off left the 3D viewport still
+        snapping and hiding the grid silently stopped it — the same gesture
+        behaving differently depending on which view it started in.
+        """
+        getter = getattr(self.editor, 'component_grid_step', None)
+        if getter is not None:
+            return getter(self.grid_size)
+        return self.grid_size
 
     def _camera_position(self):
         if self.use_threading and self.logic_thread:
@@ -2322,7 +2330,7 @@ class QtGameView(QOpenGLWidget):
         axis_x, axis_y = self.component_drag_axes
         delta = (axis_x * (dx * self.component_drag_scale) +
                  axis_y * (-dy * self.component_drag_scale))
-        grid = self.grid_size if getattr(self.editor, 'grid_visible', True) else 0
+        grid = self._component_snap_grid()
         if self.component_drag_kind in (component_edit.MODE_VERTEX,
                                         component_edit.MODE_EDGE) and \
                 self.component_drag_anchor is not None:
@@ -2349,8 +2357,8 @@ class QtGameView(QOpenGLWidget):
         if changed:
             self.editor.unsaved_changes = True
             self.editor.state.mark_lighting_dirty()
-        elif getattr(self.editor.state, 'undo_stack', None):
-            self.editor.state.undo_stack.pop()
+        else:
+            self.editor.state.discard_last_checkpoint()
         self.editor.refresh_views()
         return changed
 
@@ -2359,8 +2367,7 @@ class QtGameView(QOpenGLWidget):
         if controller is None or controller.drag is None:
             return False
         controller.cancel_drag()
-        if getattr(self.editor.state, 'undo_stack', None):
-            self.editor.state.undo_stack.pop()
+        self.editor.state.discard_last_checkpoint()
         self.component_drag_origin = None
         self.component_drag_axes = None
         self.component_drag_anchor = None

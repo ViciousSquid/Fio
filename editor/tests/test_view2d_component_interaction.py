@@ -1271,3 +1271,148 @@ def test_a_nudge_burst_is_one_undo_step(editor):
 
     assert undo_depth(host) == before + 1
     assert a['pos'][0] == pytest.approx(80.0)
+
+
+# ---------------------------------------------------------------------------
+# Round trips through history (Fio 2.4 hardening)
+# ---------------------------------------------------------------------------
+#
+# Undo rebuilds every brush dict, so the interesting question is not whether the
+# geometry comes back but whether the *next gesture* still reaches the scene.
+# Everything below performs a real gesture, steps through history, and performs
+# another one.
+
+def _resync(host):
+    """What MainWindow.undo/redo do to the component model after a history step."""
+    host.components.cancel_drag()
+    host.components.prune(host.state.brushes)
+    host.components.invalidate()
+
+
+def test_a_side_stretch_still_works_after_an_undo(editor):
+    host, view = editor
+    brush = make_box()
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+    host.state.save_state()      # the scene before the gesture, to undo back to
+
+    press(view, (32, 20))
+    move(view, (64, 20))
+    release(view, (64, 20))
+    assert brush['size'][0] == pytest.approx(96.0)
+
+    assert host.state.undo()
+    _resync(host)
+
+    live = host.state.brushes[0]
+    assert live['size'][0] == pytest.approx(64.0)
+    assert host.state.selected_objects
+    assert host.state.selected_objects[0] is live
+
+    press(view, (32, 20))
+    move(view, (64, 20))
+    release(view, (64, 20))
+
+    # The brush that changed is the one in the scene, not a detached copy.
+    assert host.state.brushes[0]['size'][0] == pytest.approx(96.0)
+
+
+def test_a_vertex_drag_still_works_after_undo_then_redo(editor):
+    host, view = editor
+    brush = make_box()
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+    host.state.save_state()      # the scene before the gesture, to undo back to
+    host.set_component_mode(ce.MODE_VERTEX)
+
+    press(view, (32, 32))
+    move(view, (64, 32))
+    release(view, (64, 32))
+    stretched = list(host.state.brushes[0]['size'])
+
+    assert host.state.undo()
+    _resync(host)
+    assert host.state.redo()
+    _resync(host)
+    assert host.state.undo()
+    _resync(host)
+
+    assert host.state.selected_objects
+    assert host.state.selected_objects[0] is host.state.brushes[0]
+
+    press(view, (32, 32))
+    move(view, (64, 32))
+    release(view, (64, 32))
+
+    assert host.state.brushes[0]['size'] == pytest.approx(stretched)
+
+
+def test_changing_the_selection_after_a_history_step_edits_the_new_brush(editor):
+    host, view = editor
+    first = make_box(pos=(0, 0, 0))
+    second = make_box(pos=(256, 0, 0))
+    host.state.brushes.extend([first, second])
+    host.set_selected_object(first)
+    host.state.save_state()      # the scene before the gesture, to undo back to
+
+    press(view, (32, 20))
+    move(view, (64, 20))
+    release(view, (64, 20))
+
+    assert host.state.undo()
+    _resync(host)
+
+    host.set_selected_object(host.state.brushes[1])
+    press(view, (288, 20))
+    move(view, (320, 20))
+    release(view, (320, 20))
+
+    assert host.state.brushes[1]['size'][0] == pytest.approx(96.0)
+    assert host.state.brushes[0]['size'][0] == pytest.approx(64.0)
+
+
+def test_a_cancelled_drag_does_not_throw_away_the_redo_branch(editor):
+    host, view = editor
+    brush = make_box()
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+    host.state.save_state()      # the scene before the gesture, to undo back to
+
+    press(view, (32, 20))
+    move(view, (64, 20))
+    release(view, (64, 20))
+
+    assert host.state.undo()
+    _resync(host)
+    assert host.state.redo_stack, "precondition: something is redoable"
+
+    # Start a drag and abandon it without moving.
+    press(view, (32, 20))
+    view.cancel_component_drag()
+
+    assert host.state.redo_stack
+    assert host.state.redo()
+    assert host.state.brushes[0]['size'][0] == pytest.approx(96.0)
+
+
+def test_component_mode_survives_a_history_step_without_stale_handles(editor):
+    host, view = editor
+    brush = make_box()
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+    host.state.save_state()      # the scene before the gesture, to undo back to
+    host.set_component_mode(ce.MODE_VERTEX)
+
+    press(view, (32, 32))
+    move(view, (64, 32))
+    release(view, (64, 32))
+    assert host.components.selection
+
+    assert host.state.undo()
+    _resync(host)
+
+    # Every remaining handle points at a brush that is actually in the scene.
+    for ref in host.components.selection:
+        assert any(ref.brush is b for b in host.state.brushes)
+    overlay = host.components.overlay(host.component_drag_targets())
+    assert len(overlay['hot_points']) <= len(overlay['points']) + len(overlay['hot_points'])

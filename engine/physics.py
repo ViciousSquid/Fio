@@ -2,6 +2,7 @@ import math
 import glm
 
 from .constants import is_water_brush, brush_aabb_bounds
+from .spatial import CELL_SIZE, CellIndex, authored_hidden
 
 class SpatialGrid:
     """
@@ -11,10 +12,18 @@ class SpatialGrid:
     Used by:
       - Player physics  (get_potential_colliders)
       - MonsterAI       (get_nearby_brushes, raycast_down, overlaps_wall, line_of_sight)
+
+    The cell convention itself (512-unit integer columns, ``floor(coord/size)``,
+    an object referenced from every cell it spans) lives in
+    :mod:`engine.spatial` so this grid and Big World's streaming lifecycle agree
+    about which cell a brush is in by construction rather than by coincidence.
+    ``self.cells`` is that index's bucket dict, read directly by the query
+    methods below — no wrapper sits on the collision hot path.
     """
-    def __init__(self, cell_size=512.0):
+    def __init__(self, cell_size=CELL_SIZE):
         self.cell_size = cell_size
-        self.cells = {}
+        self._index = CellIndex(cell_size)
+        self.cells = self._index.cells
         self._all_solid = []          # flat list kept for ray queries that span many cells
         self.water_brushes = []       # non-solid water volumes, for swim physics queries
 
@@ -32,7 +41,12 @@ class SpatialGrid:
         and again whenever the static brush list changes (rare)."""
         self.clear()
         for brush in brushes:
-            if brush.get('hidden') or brush.get('is_fog'):
+            # `authored_hidden` rather than `hidden`: a cell-streaming layer
+            # parks out-of-range brushes by hiding them, and this grid outlives
+            # that — rebuilding it mid-play (a model-collision toggle) would
+            # otherwise drop every parked brush from collision for good, even
+            # after its cell came back.
+            if authored_hidden(brush) or brush.get('is_fog'):
                 continue
             if is_water_brush(brush):
                 self.water_brushes.append(brush)
@@ -55,17 +69,9 @@ class SpatialGrid:
                     pos = [(min_b[i] + max_b[i]) / 2.0 for i in range(3)]
                     size = [max_b[i] - min_b[i] for i in range(3)]
 
-            min_x = int(math.floor((pos[0] - size[0] * 0.5) / self.cell_size))
-            max_x = int(math.floor((pos[0] + size[0] * 0.5) / self.cell_size))
-            min_z = int(math.floor((pos[2] - size[2] * 0.5) / self.cell_size))
-            max_z = int(math.floor((pos[2] + size[2] * 0.5) / self.cell_size))
-
-            for x in range(min_x, max_x + 1):
-                for z in range(min_z, max_z + 1):
-                    cell = (x, z)
-                    if cell not in self.cells:
-                        self.cells[cell] = []
-                    self.cells[cell].append(brush)
+            self._index.insert(brush,
+                               pos[0] - size[0] * 0.5, pos[2] - size[2] * 0.5,
+                               pos[0] + size[0] * 0.5, pos[2] + size[2] * 0.5)
 
     # ------------------------------------------------------------------
     # Player queries  (unchanged API)

@@ -1,6 +1,116 @@
 import os
+import platform
+import sys
 
 SHADER_DIR = os.path.join(os.path.dirname(__file__), 'shaders')
+
+
+# ==============================================================================
+# PLATFORM: which lighting shader variant this machine should run
+# ------------------------------------------------------------------------------
+# The ``*_arm`` variants trade light capacity and per-fragment precision for a
+# smaller uniform footprint and less shader work. That is the right trade on
+# low-power hardware and the wrong one everywhere else, so what this answers is
+# "is this a low-power part?" — *not* "is this ARM?". The two are not the same
+# question and never were: a Surface Pro X's SQ3 (a Snapdragon 8cx) wants the
+# cheap shaders, while Apple Silicon and a Snapdragon X Elite have desktop-class
+# GPUs and want the full ones, and all three are aarch64.
+#
+# The rule is therefore "ARM, minus the parts known to be fast". A new fast ARM
+# part that is not yet listed gets the conservative treatment rather than a
+# broken one, and anybody can override the guess outright in settings.ini.
+#
+# One implementation, used by both the renderer and the Settings window — they
+# used to detect this separately and could disagree about the same machine.
+# ==============================================================================
+
+#: Substrings of a CPU's model name that mark it as *not* low-power, matched
+#: case-insensitively. Snapdragon X Elite/Plus report as "Snapdragon(R) X Elite
+#: - X1E..." / "X Plus - X1P..."; Oryon is their core. Ampere/Graviton/Neoverse
+#: are server parts that turn up in CI and remote desktops.
+_FAST_ARM_MARKERS = (
+    'x elite', 'x1e', 'x plus', 'x1p', 'oryon',
+    'ampere', 'graviton', 'neoverse',
+)
+
+
+def _arm_cpu_name():
+    """The CPU's model name, as specifically as this OS will give it.
+
+    Windows on ARM reports a useless generic string in ``PROCESSOR_IDENTIFIER``
+    ("ARMv8 (64-bit) Family 8 Model 1..."), so the friendly name is read from
+    the registry where the part is actually identified. Best-effort throughout:
+    an empty string just means the caller falls back to the conservative guess.
+    """
+    if sys.platform == 'win32':
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+            try:
+                name, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+            finally:
+                winreg.CloseKey(key)
+            if name:
+                return str(name)
+        except Exception:
+            pass
+        return os.environ.get('PROCESSOR_IDENTIFIER', '')
+
+    if sys.platform.startswith('linux'):
+        try:
+            with open('/proc/cpuinfo', 'r') as handle:
+                fields = []
+                for line in handle:
+                    label = line.split(':', 1)
+                    if len(label) == 2 and label[0].strip().lower() in (
+                            'model name', 'hardware', 'cpu part', 'cpu implementer'):
+                        fields.append(label[1].strip())
+            if fields:
+                return ' '.join(fields)
+        except OSError:
+            pass
+
+    try:
+        return platform.processor() or ''
+    except Exception:
+        return ''
+
+
+def detect_low_power_arm():
+    """``(is_low_power, reason)`` for this machine.
+
+    ``reason`` is a short human-readable phrase the Settings window shows.
+    """
+    override = os.environ.get('FIO_ARM_MODE', '').strip().lower()
+    if override in ('1', 'true', 'yes', 'on'):
+        return True, "forced by FIO_ARM_MODE"
+    if override in ('0', 'false', 'no', 'off'):
+        return False, "disabled by FIO_ARM_MODE"
+
+    machine = platform.machine().lower()
+    is_arm_cpu = 'arm' in machine or 'aarch' in machine
+    if not is_arm_cpu and sys.platform == 'win32':
+        # Windows lies about the architecture to an emulated x64 process.
+        is_arm_cpu = (
+            os.environ.get('PROCESSOR_ARCHITECTURE', '').upper() == 'ARM64'
+            or os.environ.get('PROCESSOR_ARCHITEW6432', '').upper() == 'ARM64'
+        )
+
+    if not is_arm_cpu:
+        return False, "x64/x86 processor detected"
+
+    if sys.platform == 'darwin':
+        return False, "Apple Silicon detected - desktop-class GPU"
+
+    name = _arm_cpu_name().lower()
+    for marker in _FAST_ARM_MARKERS:
+        if marker in name:
+            return False, "high-performance ARM detected - desktop-class GPU"
+
+    return True, "low-power ARM detected"
+
 
 # ==============================================================================
 # SHADOW MAPPING (depth cube-map, omnidirectional point-light shadows)
@@ -16,6 +126,35 @@ SHADER_DIR = os.path.join(os.path.dirname(__file__), 'shaders')
 # indices constant makes the shaders portable across desktop GL 3.3 drivers.
 # ==============================================================================
 MAX_SHADOW_LIGHTS = 4
+
+# ==============================================================================
+# DYNAMIC LIGHT CAPACITY
+# ------------------------------------------------------------------------------
+# How many point lights a lighting shader can hold. This is the *only* place the
+# number is written down: the shader sources below are built from it and
+# `BaseRenderer.MAX_LIGHTS` reads it, because the renderer's budget and the
+# shader's array have to be the same number.
+#
+# They used not to be. The renderer uploaded up to 32 lights and set
+# `active_lights` to that count, while `lit.frag` and `textured.frag` declared
+# `lights[8]` and looped to `active_lights` with no bound — so any scene with
+# more than eight lights had the shader read past the end of the array, which is
+# undefined behaviour, and 24 of the "32" lights never worked in the first
+# place. Every loop over `active_lights` is now clamped to its own array as
+# well, so a mismatch can never be more than lights quietly not contributing.
+MAX_LIGHTS = 64
+
+# The ARM/low-power variants keep a smaller array deliberately. Uniform storage
+# is the scarce resource on those GPUs, and the per-fragment loop runs
+# `active_lights` times either way, so a lower cap costs a dense scene some of
+# its lights and costs an ordinary one nothing at all.
+MAX_LIGHTS_ARM = 16
+
+# Water and terrain light themselves from a handful of the nearest lights rather
+# than the whole set; their shaders are sized for that on purpose and the
+# renderer clamps `active_lights` to match (see BaseRenderer._shader_light_cap).
+MAX_LIGHTS_WATER = 8
+MAX_LIGHTS_TERRAIN = 8
 
 SHADOW_GLSL = """
 #define MAX_SHADOW_LIGHTS 4
@@ -110,12 +249,12 @@ in vec3 Normal;
 uniform vec3 object_color;
 uniform float alpha;
 struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; int shadowIndex; };
-uniform Light lights[8];
+uniform Light lights[""" + str(MAX_LIGHTS) + """];
 uniform int active_lights;""" + SHADOW_GLSL + """
 void main() {
     vec3 norm = normalize(Normal);
     vec3 result = vec3(0.1) * object_color;
-    for(int i = 0; i < active_lights; i++) {
+    for(int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS) + """; i++) {
         highp vec3  toLight  = lights[i].position - FragPos;
         highp float distSq   = dot(toLight, toLight);
         highp float radiusSq = lights[i].radius * lights[i].radius;
@@ -172,7 +311,7 @@ in highp vec2 TexCoords;
 
 uniform sampler2D texture_diffuse;
 struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; int shadowIndex; };
-uniform Light lights[8];
+uniform Light lights[""" + str(MAX_LIGHTS) + """];
 uniform int active_lights;""" + SHADOW_GLSL + """
 void main() {
     vec4 texColor = texture(texture_diffuse, TexCoords);
@@ -181,7 +320,7 @@ void main() {
     vec3 norm = normalize(Normal);
     vec3 result = vec3(0.1) * texColor.rgb;
 
-    for(int i = 0; i < active_lights; i++) {
+    for(int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS) + """; i++) {
         highp vec3  toLight  = lights[i].position - FragPos;
         highp float distSq   = dot(toLight, toLight);
         highp float radiusSq = lights[i].radius * lights[i].radius;
@@ -388,7 +527,7 @@ struct Light {
     highp float radius;
 };
 
-#define MAX_LIGHTS 8
+#define MAX_LIGHTS """ + str(MAX_LIGHTS_WATER) + """
 uniform Light lights[MAX_LIGHTS];
 uniform int active_lights;
 uniform highp vec3 viewPos;
@@ -497,7 +636,7 @@ void main()
     // ---- Dynamic point lights: wide diffuse + tight Blinn specular ----
     vec3 diffuseAcc = vec3(0.0);
     vec3 specAcc = vec3(0.0);
-    for (int i = 0; i < active_lights; i++) {
+    for (int i = 0; i < active_lights && i < MAX_LIGHTS; i++) {
         highp vec3 toL = lights[i].position - FragPos;
         highp float dist = length(toL);
         if (dist < lights[i].radius) {
@@ -755,7 +894,7 @@ struct Light {
     int shadowIndex;
 };
 
-uniform Light lights[8];
+uniform Light lights[""" + str(MAX_LIGHTS_TERRAIN) + """];
 uniform int active_lights;
 """ + SHADOW_GLSL + """
 highp float hash(highp vec2 p) {
@@ -826,7 +965,7 @@ void main() {
     float fillDiff = max(dot(norm, fillDir), 0.0) * 0.2;
     result += fillDiff * skyColor * texColor;
     
-    for (int i = 0; i < active_lights; i++) {
+    for (int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS_TERRAIN) + """; i++) {
         highp vec3  toLight  = lights[i].position - FragPos;
         highp float distance = length(toLight);
         if (distance < lights[i].radius) {
@@ -846,7 +985,7 @@ void main() {
 }"""
 }
 
-# ----- ARM‑optimised shaders (used by BaseRenderer when arm_mode is True) -----
+# ----- Low-power shaders (used by BaseRenderer when lowpower_mode is True) ----
 DEFAULT_SHADERS['lit_arm.vert'] = """#version 330 core
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -869,12 +1008,12 @@ in vec3 Normal;
 uniform vec3 object_color;
 uniform float alpha;
 struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; };
-uniform Light lights[16];
+uniform Light lights[""" + str(MAX_LIGHTS_ARM) + """];
 uniform int active_lights;""" + SHADOW_GLSL + """
 void main() {
     vec3 norm = normalize(Normal);
     vec3 result = vec3(0.12) * object_color;
-    for(int i = 0; i < active_lights && i < 16; i++) {
+    for(int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS_ARM) + """; i++) {
         vec3 toLight = lights[i].position - FragPos;
         float distSq = dot(toLight, toLight);
         float radiusSq = lights[i].radius * lights[i].radius;
@@ -925,14 +1064,14 @@ in vec3 Normal;
 in vec2 TexCoords;
 uniform sampler2D texture_diffuse;
 struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; };
-uniform Light lights[16];
+uniform Light lights[""" + str(MAX_LIGHTS_ARM) + """];
 uniform int active_lights;""" + SHADOW_GLSL + """
 void main() {
     vec4 texColor = texture(texture_diffuse, TexCoords);
     if(texColor.a < 0.1) discard;
     vec3 norm = normalize(Normal);
     vec3 result = vec3(0.12) * texColor.rgb;
-    for(int i = 0; i < active_lights && i < 16; i++) {
+    for(int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS_ARM) + """; i++) {
         vec3 toLight = lights[i].position - FragPos;
         float distSq = dot(toLight, toLight);
         float radiusSq = lights[i].radius * lights[i].radius;

@@ -62,10 +62,17 @@ class EditorState:
         self.brushes = []
         self.things = []
         self.selected_object = None
+        # The multi-selection lives here rather than being bolted on by the
+        # main window, so undo/redo and scene loads can keep it pointing at
+        # objects that are actually in the scene.
+        self.selected_objects = []
         self.terrain_data = None
         self._logic_graph_positions = {}  # Persisted node positions for the logic graph
         self.undo_stack = deque(maxlen=50)
         self.redo_stack = []
+        # The redo branch the most recent save_state() cleared, so a checkpoint
+        # that guarded no change can be discarded without losing it.
+        self._discarded_redo = None
 
         # Lightmap bake state — always present, even if baking is unavailable
         self.bake_state = BakeState() if LIGHTMAP_AVAILABLE else None
@@ -128,8 +135,7 @@ class EditorState:
             self.mark_lighting_dirty()
             return True
         # Nothing changed -> discard the undo snapshot we just pushed.
-        if self.undo_stack:
-            self.undo_stack.pop()
+        self.discard_last_checkpoint()
         return False
 
     def rotate_brush(self, brush: dict, angle_deg, axis, pivot=None) -> bool:
@@ -138,8 +144,7 @@ class EditorState:
         if _geo_rotate_brush(brush, angle_deg, axis, pivot=pivot):
             self.mark_lighting_dirty()
             return True
-        if self.undo_stack:
-            self.undo_stack.pop()
+        self.discard_last_checkpoint()
         return False
 
     def reset_brush_to_box(self, brush: dict) -> None:
@@ -166,6 +171,7 @@ class EditorState:
     def set_selected_object(self, obj):
         """Sets the currently selected object."""
         self.selected_object = obj
+        self.selected_objects = [] if obj is None else [obj]
 
     def _invalidate_entity_caches(self):
         """Tell anything caching per-object data that the objects are changing.
@@ -188,6 +194,7 @@ class EditorState:
         self.brushes.clear()
         self.things.clear()
         self.selected_object = None
+        self.selected_objects = []
         self.terrain_data = None
         self.undo_stack.clear()
         self.redo_stack.clear()
@@ -345,6 +352,7 @@ class EditorState:
         update_all_counters_from_entities(self.brushes + self.things)
 
         self.selected_object = None
+        self.selected_objects = []
         self.undo_stack.clear()
         self.redo_stack.clear()
 
@@ -411,45 +419,132 @@ class EditorState:
             input_name='Toggle'
         )
 
-    def _get_selected_object_identifier(self):
-        """Gets a stable identifier for the selected object for state restoration."""
-        if not self.selected_object:
-            return None, -1
-        try:
-            if isinstance(self.selected_object, dict):
-                return 'brush', self.brushes.index(self.selected_object)
-            else:
-                return 'thing', self.things.index(self.selected_object)
-        except ValueError:
-            return None, -1
+    def _selection_identifiers(self):
+        """Stable identifiers for the whole selection, for state restoration.
 
-    def _restore_selection_from_identifier(self, selected_type, selected_index):
-        """Restores the selected object using its identifier."""
-        if selected_type and selected_index != -1:
-            if selected_type == 'brush' and selected_index < len(self.brushes):
-                self.selected_object = self.brushes[selected_index]
-            elif selected_type == 'thing' and selected_index < len(self.things):
-                self.selected_object = self.things[selected_index]
+        Every selected object is recorded, not just ``selected_object``: the
+        editor acts on ``selected_objects`` (component picking, the clip tool,
+        the Surface Inspector's "whole brush" scope, group transforms, delete),
+        so a restore that put back only the primary would leave the rest of the
+        selection pointing at objects that are no longer in the scene.
+
+        An object is identified by its position in its list *and* by its stable
+        id, and :meth:`_restore_selection` prefers the id — indices shift when a
+        state with a different object count is restored, ids do not.
+        """
+        selection = self._selection_list()
+        if not selection:
+            return []
+        # One pass to build the position lookups rather than a list.index() per
+        # selected object: save_state runs on every operation, and a big
+        # selection on a big map would otherwise make it quadratic. Keyed by
+        # identity, because two brushes can compare equal without being the
+        # same brush.
+        brush_at = {id(b): i for i, b in enumerate(self.brushes)}
+        thing_at = {id(t): i for i, t in enumerate(self.things)}
+
+        out = []
+        for obj in selection:
+            if isinstance(obj, dict):
+                index = brush_at.get(id(obj))
+                if index is not None:
+                    out.append(['brush', index, obj.get('id', '')])
             else:
-                self.selected_object = None
-        else:
+                index = thing_at.get(id(obj))
+                if index is not None:
+                    out.append(['thing', index, obj.properties.get('id', '')])
+        return out
+
+    def _selection_list(self):
+        """The current selection, primary object first, with no duplicates."""
+        selection = []
+        if self.selected_object is not None:
+            selection.append(self.selected_object)
+        for obj in getattr(self, 'selected_objects', None) or ():
+            if not any(obj is existing for existing in selection):
+                selection.append(obj)
+        return selection
+
+    def _restore_selection(self, identifiers):
+        """Re-point the selection at the objects the restore just rebuilt.
+
+        Undo and redo replace every brush dict and Thing rather than editing
+        them, so a selection held across one is a set of references to objects
+        that are no longer in the scene.  Anything that goes on using them edits
+        detached copies: the change appears to do nothing, and the detached
+        objects stay alive in whatever widget or cache is holding them.
+        """
+        if not identifiers:
+            self.selected_objects = []
             self.selected_object = None
+            return
+        # Same reasoning as _selection_identifiers: one pass to build the id
+        # lookups instead of scanning the scene once per selected object.
+        by_id = {'brush': {}, 'thing': {}}
+        for brush in self.brushes:
+            brush_id = brush.get('id')
+            if brush_id:
+                by_id['brush'].setdefault(brush_id, brush)
+        for thing in self.things:
+            thing_id = thing.properties.get('id')
+            if thing_id:
+                by_id['thing'].setdefault(thing_id, thing)
+
+        restored = []
+        seen = set()
+        for entry in identifiers:
+            kind, index, obj_id = (list(entry) + ['', -1, ''])[:3]
+            pool = self.brushes if kind == 'brush' else self.things
+            match = by_id.get(kind, {}).get(obj_id) if obj_id else None
+            if match is None and isinstance(index, int) and 0 <= index < len(pool):
+                match = pool[index]
+            if match is not None and id(match) not in seen:
+                seen.add(id(match))
+                restored.append(match)
+        self.selected_objects = restored
+        self.selected_object = restored[0] if restored else None
+
+    def snapshot(self):
+        """The scene as it stands right now, as a JSON checkpoint string."""
+        return json.dumps({
+            'brushes': self._serialize_brushes_for_undo(),
+            'things': [t.to_dict() for t in self.things],
+            'selection': self._selection_identifiers(),
+        })
 
     def save_state(self):
-        """Saves the current state of brushes and things to the undo stack."""
-        selected_type, selected_index = self._get_selected_object_identifier()
+        """Checkpoint the scene *before* an operation changes it.
 
-        # Serialize brushes with I/O connections
-        serialized_brushes = self._serialize_brushes_for_undo()
-
-        state = {
-            'brushes': serialized_brushes,
-            'things': [t.to_dict() for t in self.things],
-            'selected_type': selected_type,
-            'selected_index': selected_index,
-        }
-        self.undo_stack.append(json.dumps(state))
+        Every tool in Fio calls this at the start of a gesture, not the end, so
+        an entry on the undo stack is the state to go back *to* rather than a
+        record of what the scene now looks like.  :meth:`undo` therefore has to
+        capture the live scene itself — see the note there.
+        """
+        # Keep the redo branch we are about to drop, so an operation that turns
+        # out to change nothing can put it back (see discard_last_checkpoint).
+        self._discarded_redo = list(self.redo_stack)
+        self.undo_stack.append(self.snapshot())
         self.redo_stack.clear()
+
+    def discard_last_checkpoint(self):
+        """Undo a :meth:`save_state` that turned out to guard no change.
+
+        Several tools push a checkpoint optimistically at the start of a gesture
+        — a component drag at mouse-down, the clip tool before it knows whether
+        the plane cut anything — and drop it again when nothing moved, so the
+        user's history has no empty step in it.  Popping the undo entry is only
+        half of that: ``save_state`` also cleared the redo branch, and a
+        cancelled drag that silently threw away everything the user could have
+        redone is its own surprise.  Both are restored here.
+        """
+        if not self.undo_stack:
+            return False
+        self.undo_stack.pop()
+        redo = getattr(self, '_discarded_redo', None)
+        if redo is not None:
+            self.redo_stack = redo
+            self._discarded_redo = None
+        return True
 
     def _serialize_brushes_for_undo(self):
         """Serialize brushes for undo stack (deep copy with I/O)."""
@@ -460,6 +555,12 @@ class EditorState:
             # JSON-serialisable nor meaningful outside the renderer's lifetime,
             # and deep-copying them first only to throw them away made every
             # undo checkpoint pay for geometry it discards.
+            # Give every brush a stable id before it is checkpointed. Undo
+            # rebuilds brush dicts from JSON, so the id is what lets the
+            # selection (and anything else holding a reference) be re-pointed at
+            # the brush that replaced it; a brush drawn in a view and not saved
+            # since would otherwise have nothing to be recognised by.
+            brush.setdefault('id', str(uuid.uuid4()))
             shallow = {k: v for k, v in brush.items()
                        if k not in _RENDERER_PRIVATE_KEYS}
             brush_copy = copy.deepcopy(shallow)
@@ -512,27 +613,43 @@ class EditorState:
                     new_things.append(thing)
         self.things = new_things
 
-        self._restore_selection_from_identifier(
-            state.get('selected_type'), state.get('selected_index', -1)
-        )
+        if 'selection' in state:
+            self._restore_selection(state['selection'])
+        else:
+            # A checkpoint written before the whole selection was recorded.
+            kind = state.get('selected_type')
+            index = state.get('selected_index', -1)
+            self._restore_selection([[kind, index, '']] if kind else [])
 
     def undo(self):
-        """Reverts to the previous state in the undo stack."""
-        if len(self.undo_stack) > 1:
-            current_state_json = self.undo_stack.pop()
-            self.redo_stack.append(current_state_json)
-            self.restore_state(self.undo_stack[-1])
-            return True
-        return False
+        """Step back one operation, making the current scene redoable.
+
+        What goes on the redo stack is a snapshot of the scene **as it is now**,
+        not the checkpoint being popped.  The two are not the same thing: tools
+        checkpoint at the *start* of a gesture (mouse-down), so the top of the
+        undo stack is the state before the operation, and the operation's actual
+        result only ever exists in the live scene.  Pushing the popped entry
+        instead meant redo re-applied the state the undo had just restored —
+        i.e. redo did nothing at all, and the work the user undid was gone for
+        good.
+        """
+        if len(self.undo_stack) <= 1:
+            return False
+        self.redo_stack.append(self.snapshot())
+        self.undo_stack.pop()
+        self.restore_state(self.undo_stack[-1])
+        return True
 
     def redo(self):
-        """Re-applies a state from the redo stack."""
-        if self.redo_stack:
-            state_json = self.redo_stack.pop()
-            self.undo_stack.append(state_json)
-            self.restore_state(state_json)
-            return True
-        return False
+        """Re-apply the operation the last :meth:`undo` stepped back over."""
+        if not self.redo_stack:
+            return False
+        state_json = self.redo_stack.pop()
+        # Symmetrically: what makes the redo undoable again is the scene as it
+        # is before the redo lands, which is exactly what undo restored.
+        self.undo_stack.append(self.snapshot())
+        self.restore_state(state_json)
+        return True
 
     # =========================================================================
     # I/O HELPER METHODS

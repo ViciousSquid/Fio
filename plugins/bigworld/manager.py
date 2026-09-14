@@ -8,8 +8,13 @@ moves: *which cells are active, and what just entered or left the active set?*
 
 Design constraints honoured here
 --------------------------------
-* **Reuse, don't replace.** Cell coordinates and the multi-cell spanning rule
-  are the spatial grid's, imported from :mod:`.cell`. No BVH / octree / BSP.
+* **Reuse, don't replace.** Cell coordinates, the multi-cell spanning rule and
+  the radius query are the engine's, imported from :mod:`engine.spatial` — the
+  same module :class:`engine.physics.SpatialGrid` buckets collision brushes
+  with. There is no second grid here: the cell buckets below *are* an engine
+  :class:`~engine.spatial.CellIndex`, and this class adds only the streaming
+  lifecycle (state, activation, reference counting) on top of it. No BVH /
+  octree / BSP.
 * **Identity is the UUID, cells are metadata.** Every object is keyed by its
   stable UUID (``brush['id']`` / ``thing.properties['id']``). Streaming a cell
   in or out never changes an object's UUID, and a brush that spans several cells
@@ -27,12 +32,11 @@ Design constraints honoured here
 
 from __future__ import annotations
 
-import math
 from collections import Counter
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from .cell import (CELL_SIZE, BigWorldCell, CellCoord, CellState,
-                   cell_distance_sq, cell_of_point, cells_for_aabb)
+                   cell_of_point, cells_for_aabb, cells_within)
 
 #: Default radius (world units) of the player's active region.
 DEFAULT_ACTIVATION_RADIUS = 2048.0
@@ -137,16 +141,30 @@ class BigWorldManager:
 
     @staticmethod
     def brush_uuid(brush: dict) -> str:
-        """The persistent UUID of a brush (``brush['id']``)."""
-        return str(brush.get("id", ""))
+        """The identity a brush is streamed under.
+
+        Normally its persistent UUID (``brush['id']``). A brush that has not been
+        given one yet — a box drawn in the editor and not saved since — falls
+        back to a key derived from the live object, valid for this session only.
+        That is deliberate: :meth:`BigWorldSession.start` parks *every* brush, so
+        a brush this index refused to file could never be activated again and
+        would simply vanish from play. Streaming an unsaved brush under a
+        session-local key is right; losing it is not.
+        """
+        uuid = brush.get("id")
+        if uuid:
+            return str(uuid)
+        return "#%d" % id(brush)
 
     @staticmethod
     def thing_uuid(thing) -> str:
-        """The persistent UUID of an entity (``thing.properties['id']``)."""
+        """The identity an entity is streamed under (see :meth:`brush_uuid`)."""
         props = getattr(thing, "properties", None)
         if isinstance(props, dict):
-            return str(props.get("id", ""))
-        return ""
+            uuid = props.get("id")
+            if uuid:
+                return str(uuid)
+        return "#%d" % id(thing)
 
     def _is_light(self, thing) -> bool:
         return _normalise_type(getattr(thing, "properties", {}).get("type")) == "light"
@@ -199,8 +217,6 @@ class BigWorldManager:
     def add_brush(self, brush: dict) -> None:
         """Index one brush into every cell its XZ footprint overlaps."""
         uuid = self.brush_uuid(brush)
-        if not uuid:
-            return  # untracked; the editor backfills IDs, so this is rare
         self._brush_by_id[uuid] = brush
         pos = brush.get("pos", (0.0, 0.0, 0.0))
         size = brush.get("size", (0.0, 0.0, 0.0))
@@ -231,16 +247,14 @@ class BigWorldManager:
             return
 
         if self._is_light(thing):
-            if uuid:
-                self._light_by_id[uuid] = thing
+            self._light_by_id[uuid] = thing
             radius = float(getattr(thing, "properties", {}).get("radius", self.cell_size))
             min_x, max_x = pos[0] - radius, pos[0] + radius
             min_z, max_z = pos[2] - radius, pos[2] + radius
             for coord in cells_for_aabb(min_x, min_z, max_x, max_z, self.cell_size):
                 self._cell(coord).lights.append(thing)
         else:
-            if uuid:
-                self._thing_by_id[uuid] = thing
+            self._thing_by_id[uuid] = thing
             self._cell(cell_of_point(pos[0], pos[2], self.cell_size)).things.append(thing)
 
     # ------------------------------------------------------------------
@@ -359,22 +373,7 @@ class BigWorldManager:
         """
         r = self.activation_radius if radius is None else float(radius)
         px, pz = float(player_pos[0]), float(player_pos[2])
-        return self._cells_within(px, pz, r)
-
-    def _cells_within(self, px: float, pz: float, radius: float) -> Set[CellCoord]:
-        r2 = radius * radius
-        # Candidate square: every cell the bounding box of the circle touches.
-        reach = int(math.ceil(radius / self.cell_size)) + 1
-        base = cell_of_point(px, pz, self.cell_size)
-        out: Set[CellCoord] = set()
-        for dx in range(-reach, reach + 1):
-            for dz in range(-reach, reach + 1):
-                coord = (base[0] + dx, base[1] + dz)
-                if coord not in self.cells:
-                    continue  # empty cells never need activating
-                if cell_distance_sq(coord[0], coord[1], px, pz, self.cell_size) <= r2:
-                    out.add(coord)
-        return out
+        return cells_within(self.cells, px, pz, r, self.cell_size)
 
     def update(self, player_pos, force: bool = False) -> ActivationDelta:
         """Recompute the active set for the player's position; stream the diff.
@@ -419,28 +418,20 @@ class BigWorldManager:
     def _compute_active_with_hysteresis(self, px: float, pz: float) -> Set[CellCoord]:
         """Cells that should be active given the current active set (hysteresis).
 
-        Within one pass over the deactivation-radius candidate square: a cell
-        already active is retained while it stays inside the *deactivation*
-        radius; a currently-inactive cell is added only once inside the tighter
-        *activation* radius.
+        Two radius queries against the engine's grid helper: everything inside
+        the tighter *activation* radius joins the active set, and a cell that is
+        already active is retained while it stays inside the wider
+        *deactivation* radius. The gap between them is what stops a player
+        loitering on a boundary from thrashing cells on and off.
+
+        Only ever reached on a cell crossing, never per frame, so the two walks
+        cost nothing worth having a second hand-rolled grid traversal for.
         """
-        act_r2 = self.activation_radius * self.activation_radius
-        deact_r2 = self.deactivation_radius * self.deactivation_radius
-        reach = int(math.ceil(self.deactivation_radius / self.cell_size)) + 1
-        base = cell_of_point(px, pz, self.cell_size)
-        out: Set[CellCoord] = set()
-        for dx in range(-reach, reach + 1):
-            for dz in range(-reach, reach + 1):
-                coord = (base[0] + dx, base[1] + dz)
-                if coord not in self.cells:
-                    continue
-                d2 = cell_distance_sq(coord[0], coord[1], px, pz, self.cell_size)
-                if coord in self.active_cells:
-                    if d2 <= deact_r2:
-                        out.add(coord)
-                elif d2 <= act_r2:
-                    out.add(coord)
-        return out
+        entering = cells_within(self.cells, px, pz, self.activation_radius,
+                                self.cell_size)
+        retained = cells_within(self.cells, px, pz, self.deactivation_radius,
+                                self.cell_size) & self.active_cells
+        return entering | retained
 
     # ------------------------------------------------------------------
     # Queries the runtime / renderer consume

@@ -116,7 +116,21 @@ class ComponentRef:
         return not self.__eq__(other)
 
     def __hash__(self):
-        return hash((id(self.brush), self.kind, self.key))
+        return hash(self.identity)
+
+    @property
+    def identity(self):
+        """What makes this component *this* one: its brush as well as its key.
+
+        The key alone is not an identity.  A face keys off its plane index, so
+        ``('face', 0)`` names the first plane of every brush in the scene; a
+        vertex keys off its quantised position, so two brushes meeting at a
+        corner share it.  Anything matching components across more than one
+        brush — the overlay's highlight test, most obviously — has to compare
+        this, or picking one brush's face lights the same-numbered face on all
+        of them.
+        """
+        return (id(self.brush), self.kind, self.key)
 
 
 def _quantise(point, scale=8.0):
@@ -173,25 +187,56 @@ def components(brush, mode):
     return []
 
 
-def resolve_ref(brush, ref):
+# How far a vertex/edge reference may be re-pointed when its exact position key
+# no longer matches.  A drag moves a component and the selection should follow
+# it, but only to the component that *is* the one that moved: past this the
+# nearest corner is a different piece of geometry, and silently selecting it
+# means the user's next drag moves something they never picked.  Scaled with the
+# brush so a large brush's corners are still tracked; a component that has been
+# merged away resolves to nothing, which is the honest answer.
+RESOLVE_SNAP_FRACTION = 0.25
+RESOLVE_SNAP_MIN = 8.0
+
+
+def resolve_ref(brush, ref, shift=None):
     """Re-derive ``ref``'s corner indices against the brush's current geometry.
 
     Returns a fresh :class:`ComponentRef` or ``None`` when the component no
     longer exists (a vertex merged away by an edit, say).  Used to keep a
     component selection meaningful after the geometry it points into changed.
+
+    ``shift`` is the world-space distance the component is *known* to have
+    moved — a finished drag passes its own delta, so the selection follows the
+    corner it moved exactly rather than guessing at the nearest one.
     """
     if ref is None:
         return None
-    for candidate in components(brush, ref.kind):
-        if candidate.key == ref.key:
+    candidates = components(brush, ref.kind)
+    position = ref.position
+    key = ref.key
+    if shift is not None and ref.kind != MODE_FACE:
+        position = position + _v3(shift)
+        key = (ref.kind,) + _quantise(position)
+    for candidate in candidates:
+        if candidate.key == key:
             return candidate
     if ref.kind == MODE_FACE:
         return None
-    # Vertices/edges are keyed by position; after a drag the moved component
-    # sits somewhere new, so fall back to the nearest one within a grid step.
-    best, best_d = None, float('inf')
-    for candidate in components(brush, ref.kind):
-        d = float(np.linalg.norm(candidate.position - ref.position))
+    # Vertices/edges are keyed by position, and rounding (or a neighbour welding
+    # into the dragged corner) can put the result a hair off the expected key,
+    # so fall back to the nearest candidate — but only within a radius that
+    # could plausibly still be this component.  Beyond it the component is gone
+    # and ``None`` is the honest answer: re-pointing a selection at whatever
+    # corner happened to be closest means the user's next drag silently moves
+    # geometry they never picked.
+    shape = brush_shape(brush)
+    reach = RESOLVE_SNAP_MIN
+    if shape is not None:
+        reach = max(reach,
+                    float(np.max(shape.extents())) * RESOLVE_SNAP_FRACTION)
+    best, best_d = None, reach
+    for candidate in candidates:
+        d = float(np.linalg.norm(candidate.position - position))
         if d < best_d:
             best, best_d = candidate, d
     return best
@@ -479,6 +524,12 @@ class _DragBase:
         self.entries = []
         self.changed = False
         self.rejected = False
+        # Total world delta of the last applied update.  A drag recomputes from
+        # its mouse-down snapshot for the *total* delta every time, so this is
+        # exactly how far the dragged components have moved since the press —
+        # which is what lets the selection be re-pointed at them afterwards
+        # instead of guessing (see resolve_ref / component_shift).
+        self.delta = np.zeros(3)
 
     def _snapshot(self, brush):
         geo = brush.get('geometry')
@@ -509,6 +560,16 @@ class _DragBase:
 
     def update(self, delta):
         raise NotImplementedError
+
+    def component_shift(self):
+        """How far this drag moved the components it was built from.
+
+        ``None`` when the question does not apply: a plane drag slides whole
+        faces, whose corners travel along their adjacent edges rather than with
+        the cursor — and a face reference is keyed by plane index, so it
+        re-resolves exactly without needing a position at all.
+        """
+        return None
 
     def cancel(self):
         """Put every affected brush back exactly as it was at mouse-down."""
@@ -566,6 +627,7 @@ class PlaneDrag(_DragBase):
 
     def update(self, delta):
         delta = _v3(delta)
+        self.delta = delta
         changed = False
         for entry in self.entries:
             offsets = {i: d0 + float(n @ delta)
@@ -606,8 +668,12 @@ class PointDrag(_DragBase):
             entry['indices'] = np.array(indices, dtype=np.intp)
             self.entries.append(entry)
 
+    def component_shift(self):
+        return self.delta
+
     def update(self, delta):
         delta = _v3(delta)
+        self.delta = delta
         changed = False
         for entry in self.entries:
             points = entry['points'].copy()
@@ -924,6 +990,38 @@ class ComponentController:
             self.invalidate()
 
     # -- drags -------------------------------------------------------------
+    def press(self, ref, shear=False, additive=False):
+        """Resolve what a press on ``ref`` selects, and build its drag.
+
+        This is the policy both viewports were writing out for themselves: a
+        plain press drags the component under the cursor (selecting it first if
+        it was not already in the selection), a shift-press toggles it and drags
+        whatever the selection then is, and a shift-press that *removed* the
+        component is a deselect rather than the start of a drag.  It lives here
+        so "click a vertex and drag it" cannot come to mean two slightly
+        different things depending on which view the click landed in.
+
+        Returns the started drag, or ``None`` when the press begins no drag.
+        The caller keeps what is genuinely its own: the screen-to-world mapping,
+        the cursor, and pushing the undo checkpoint.
+        """
+        if ref is None:
+            return None
+        if additive:
+            self.toggle(ref)
+            if ref not in self.selection:
+                return None         # shift-click removed it: a deselect
+        elif ref not in self.selection:
+            self.set_selection([ref])
+        refs = list(self.selection)
+        if not refs:
+            return None
+        drag = begin_component_drag(refs, shear=shear)
+        if drag is None or drag.is_empty():
+            return None
+        self.begin_drag(drag)
+        return drag
+
     def begin_drag(self, drag):
         self.drag = drag
         return drag is not None and not drag.is_empty()
@@ -942,9 +1040,11 @@ class ComponentController:
             return False
         changed = self.drag.commit()
         brushes = self.drag.brushes
+        shift = self.drag.component_shift()
         self.drag = None
         self.selection = [r for r in
-                          (resolve_ref(ref.brush, ref) for ref in self.selection)
+                          (resolve_ref(ref.brush, ref, shift=shift)
+                           for ref in self.selection)
                           if r is not None]
         self.hover = None
         self.invalidate()
@@ -977,8 +1077,9 @@ class ComponentController:
         lines = []
         hot_points = []
         hot_lines = []
-        selected_keys = {r.key for r in self.selection}
-        hover_key = self.hover.key if self.hover is not None else None
+        # Match on the full identity, not the key: see ComponentRef.identity.
+        selected = {r.identity for r in self.selection}
+        hover = self.hover.identity if self.hover is not None else None
 
         if self.is_component_mode():
             for brush in brushes:
@@ -987,7 +1088,8 @@ class ComponentController:
                     continue
                 verts = shape.verts
                 for ref in components(brush, self.mode):
-                    hot = (ref.key in selected_keys or ref.key == hover_key)
+                    identity = ref.identity
+                    hot = (identity in selected or identity == hover)
                     if self.mode == MODE_VERTEX:
                         (hot_points if hot else points).append(ref.position)
                     elif self.mode == MODE_EDGE:
