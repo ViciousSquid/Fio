@@ -22,7 +22,7 @@ import os
 from PyQt5.QtWidgets import (
     QComboBox, QDialog, QGridLayout, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QDoubleSpinBox, QFrame, QSizePolicy, QRadioButton,
-    QButtonGroup, QWidget,
+    QButtonGroup,
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QImageReader
