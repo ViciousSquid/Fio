@@ -235,12 +235,9 @@ def test_a_layout_saved_now_is_restored_next_time(qt_app):
 # What was really squeezing the 3D view
 # ────────────────────────────
 
-#: Parked rather than left to the garbage collector.  editor.debug_console
-#: keeps two module-level singletons -- the console and the logger it
-#: connects to -- and collecting the objects underneath them deletes the C++
-#: side while the Python references live on, which strands whichever test
-#: builds a console next.  Holding them keeps this file independent of what
-#: ran before it.
+#: Parked so the widgets under test are not collected mid-assertion.  The
+#: module's singletons rebuild themselves when their C++ side goes, so this
+#: no longer has to paper over what ran before it.
 _KEEP_ALIVE = []
 
 
@@ -254,15 +251,6 @@ def _debug_console(qt_app):
             super().__init__()
             self.state = EditorState()
             self.config = configparser.ConfigParser()
-
-    # DebugLogger is a singleton twice over -- a module global and a
-    # cls._instance that __new__ hands back -- so calling DebugLogger()
-    # returns the same object even when its C++ side has been deleted, and
-    # __init__ early-returns without reviving it.  Both have to be cleared
-    # to get a logger the console can actually connect to.
-    dc.DebugLogger._instance = None
-    dc._debug_logger = dc.DebugLogger()
-    _KEEP_ALIVE.append(dc._debug_logger)
 
     host = Host()
     console = dc.DebugConsole(host)
@@ -300,3 +288,89 @@ def test_the_console_toolbar_scrolls_sideways_only(qt_app):
 
     assert scroll.verticalScrollBarPolicy() == _Qt.ScrollBarAlwaysOff
     assert scroll.horizontalScrollBarPolicy() == _Qt.ScrollBarAsNeeded
+
+
+def test_the_toolbar_is_not_covered_by_its_own_scroll_bar(qt_app):
+    """The bar sits inside the scroll area, over the row it scrolls.
+
+    Without room made for it, it hid most of the Filter row.
+    """
+    from PyQt5.QtWidgets import QMainWindow as _QMainWindow, QVBoxLayout
+
+    console = _debug_console(qt_app)
+    window = _QMainWindow()
+    holder = QWidget()
+    QVBoxLayout(holder).addWidget(console)
+    window.setCentralWidget(holder)
+    window.show()
+    _KEEP_ALIVE.append(window)
+
+    scroll = console._toolbar_scroll
+    row_height = console._toolbar_row.sizeHint().height()
+
+    window.resize(600, 500)                     # too narrow: the bar appears
+    QApplication.instance().processEvents()
+    QApplication.instance().processEvents()
+    assert scroll.horizontalScrollBar().maximum() > 0
+    assert scroll.height() > row_height
+
+    window.resize(1400, 500)                    # room for it all: no bar
+    QApplication.instance().processEvents()
+    QApplication.instance().processEvents()
+    assert scroll.horizontalScrollBar().maximum() == 0
+    assert scroll.height() - row_height <= 4    # and so no gap either
+
+
+# ────────────────────────────
+# The console's singletons survive their widgets
+# ────────────────────────────
+
+def test_a_destroyed_logger_is_rebuilt(qt_app):
+    """It is a singleton twice over, and used to hand back the corpse.
+
+    Once the C++ object went, every later connect() raised and the Debug
+    Console could never be built again for the life of the process.
+    """
+    from PyQt5 import sip
+
+    import editor.debug_console as dc
+
+    logger = dc.get_debug_logger()
+    logger.deleteLater()
+    sip.delete(logger)
+    assert sip.isdeleted(logger)
+
+    rebuilt = dc.get_debug_logger()
+
+    assert not sip.isdeleted(rebuilt)
+    assert rebuilt is not logger
+
+
+def test_a_destroyed_console_is_rebuilt(qt_app):
+    from PyQt5 import sip
+
+    import editor.debug_console as dc
+    from editor.editor_state import EditorState
+
+    class Host(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.state = EditorState()
+            self.config = configparser.ConfigParser()
+
+    host = Host()
+    _KEEP_ALIVE.append(host)
+    console = dc.DebugConsole.get_instance(host)
+    sip.delete(console)
+
+    rebuilt = dc.DebugConsole.get_instance(host)
+
+    assert not sip.isdeleted(rebuilt)
+    _KEEP_ALIVE.append(rebuilt)
+
+
+def test_a_live_logger_is_not_replaced(qt_app):
+    """The recovery must not hand out a new logger on every call."""
+    import editor.debug_console as dc
+
+    assert dc.get_debug_logger() is dc.get_debug_logger()
