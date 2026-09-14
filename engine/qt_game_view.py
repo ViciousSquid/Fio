@@ -1957,14 +1957,32 @@ class QtGameView(QOpenGLWidget):
         return glm.vec3(self.editor.state.selected_object.pos)
 
     def set_selected_object_pos(self, new_pos_vec):
-        if not self.editor.state.selected_object:
+        """Move the whole selection so the grabbed object lands on ``new_pos_vec``.
+
+        The gizmo drags one object, but everything selected travels with it by
+        the same snapped delta — snapping each object to the grid separately
+        would pull them onto a common grid line and destroy the arrangement.
+        The move goes through the editor's translate helper so an angled
+        brush's plane set comes along instead of being left behind by a bare
+        write to ``pos``.
+        """
+        primary = self.editor.state.selected_object
+        if not primary:
             return
         grid = self.editor.grid_size_spinbox.value()
         snapped = [round(c / grid) * grid for c in new_pos_vec]
-        if isinstance(self.editor.state.selected_object, dict):
-            self.editor.state.selected_object['pos'] = snapped
-        else:
-            self.editor.state.selected_object.pos = snapped
+        current = primary['pos'] if isinstance(primary, dict) else primary.pos
+        delta = [snapped[i] - current[i] for i in range(3)]
+        if not any(delta):
+            return
+
+        group = [o for o in self.editor.selected_objects_list()
+                 if not (o.get('lock', False) if isinstance(o, dict)
+                         else o.properties.get('lock', False))]
+        if primary not in group:
+            group = [primary]
+        for obj in group:
+            self.editor._translate_object(obj, delta)
         self.update()
 
     def set_terrain_sculpt_active(self, active: bool):

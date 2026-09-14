@@ -1152,3 +1152,122 @@ def test_nothing_selected_leaves_the_undo_history_alone(editor):
     assert host.apply_clip_to_selection([1.0, 0.0, 0.0], 0.0, False,
                                         split=True) == 0
     assert undo_depth(host) == before
+
+
+# ---------------------------------------------------------------------------
+# Multi-selection movement
+# ---------------------------------------------------------------------------
+
+def arrow(view, code, modifiers=Qt.NoModifier):
+    from PyQt5.QtGui import QKeyEvent
+    view.keyPressEvent(QKeyEvent(QEvent.KeyPress, code, modifiers))
+
+
+def test_dragging_moves_every_selected_brush(editor):
+    host, view = editor
+    a = make_box(pos=(0, 0, 0))
+    b = make_box(pos=(256, 0, 0))
+    host.state.brushes.extend([a, b])
+    host.set_selected_objects([a, b])
+
+    press(view, (0, 0))                     # grab one of them
+    move(view, (64, 0))
+    release(view, (64, 0))
+
+    assert a['pos'][0] == pytest.approx(64.0)
+    assert b['pos'][0] == pytest.approx(320.0)     # travelled the same distance
+
+
+def test_nudging_moves_every_selected_brush(editor):
+    host, view = editor
+    a = make_box(pos=(0, 0, 0))
+    b = make_box(pos=(256, 0, 0))
+    host.state.brushes.extend([a, b])
+    host.set_selected_objects([a, b])
+
+    arrow(view, Qt.Key_Right)
+
+    assert a['pos'][0] == pytest.approx(16.0)
+    assert b['pos'][0] == pytest.approx(272.0)
+
+
+def test_nudging_keeps_the_selection_s_relative_layout(editor):
+    """Off-grid spacing survives: one delta for all, not a snap each."""
+    host, view = editor
+    a = make_box(pos=(0, 0, 0))
+    b = make_box(pos=(100, 0, 0))           # deliberately off the 16 grid
+    host.state.brushes.extend([a, b])
+    host.set_selected_objects([a, b])
+
+    arrow(view, Qt.Key_Right)
+
+    assert b['pos'][0] - a['pos'][0] == pytest.approx(100.0)
+
+
+def test_nudging_moves_entities_with_the_brushes(editor):
+    host, view = editor
+    from editor.things import Light
+    brush = make_box(pos=(0, 0, 0))
+    light = Light(pos=[256, 0, 0])
+    host.state.brushes.append(brush)
+    host.state.things.append(light)
+    host.set_selected_objects([brush, light])
+
+    arrow(view, Qt.Key_Right)
+
+    assert brush['pos'][0] == pytest.approx(16.0)
+    assert float(light.pos[0]) == pytest.approx(272.0)
+
+
+def test_nudging_carries_an_angled_brush_geometry_along(editor):
+    host, view = editor
+    brush = make_box(pos=(0, 0, 0))
+    assert bg.clip_brush(brush, [1.0, 1.0, 0.0], 0.0)
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+    before = bg.get_convex(brush).center().copy()
+
+    arrow(view, Qt.Key_Right)
+
+    after = bg.get_convex(brush).center()
+    assert after[0] - before[0] == pytest.approx(16.0)
+
+
+def test_nudging_only_moves_along_the_view_axes(editor):
+    """A left/right nudge must not quietly snap the depth axis as well."""
+    host, view = editor
+    brush = make_box(pos=(0, 5, 3))         # off-grid on both other axes
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+
+    arrow(view, Qt.Key_Right)               # top view: x and z are on screen
+
+    assert brush['pos'][1] == pytest.approx(5.0)    # depth untouched
+
+
+def test_nudging_skips_locked_members_of_the_selection(editor):
+    host, view = editor
+    free = make_box(pos=(0, 0, 0))
+    locked = make_box(pos=(256, 0, 0), lock=True)
+    host.state.brushes.extend([free, locked])
+    host.set_selected_objects([free, locked])
+
+    arrow(view, Qt.Key_Right)
+
+    assert free['pos'][0] == pytest.approx(16.0)
+    assert locked['pos'][0] == pytest.approx(256.0)
+
+
+def test_a_nudge_burst_is_one_undo_step(editor):
+    host, view = editor
+    a = make_box(pos=(0, 0, 0))
+    b = make_box(pos=(256, 0, 0))
+    host.state.brushes.extend([a, b])
+    host.set_selected_objects([a, b])
+    before = undo_depth(host)
+
+    for _ in range(5):
+        arrow(view, Qt.Key_Right)
+
+    assert undo_depth(host) == before + 1
+    assert a['pos'][0] == pytest.approx(80.0)

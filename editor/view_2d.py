@@ -1204,35 +1204,28 @@ class View2D(QWidget):
                     # burst; the idle timer below closes the burst after a pause.
                     self._begin_nudge_burst()
 
-                    # Apply to selected object
-                    if isinstance(selected, dict):
-                        # It's a brush
-                        pos = selected['pos']
-                        new_pos = [pos[0] + delta_x, pos[1] + delta_y, pos[2] + delta_z]
-                        # Snap to grid if grid is visible
-                        if self.grid_visible:
-                            grid = self.grid_size
-                            new_pos = [round(v / grid) * grid for v in new_pos]
+                    # One delta for the whole selection, snapped from the
+                    # object that was clicked.  Snapping each object's own
+                    # destination instead would drag them onto a common grid
+                    # line and destroy the layout the user arranged; this is
+                    # the same rule a mouse drag follows.
+                    group = [o for o in self._selected_list()
+                             if not (o.get('lock', False) if isinstance(o, dict)
+                                     else o.properties.get('lock', False))]
+                    if not group:
+                        return
+                    primary = selected if selected in group else group[0]
+                    p_ref = primary['pos'] if isinstance(primary, dict) else primary.pos
 
-                        # Angled brushes must move their geometry too, not just pos.
-                        if bg.brush_has_geometry(selected):
-                            bg.translate_brush(selected, [new_pos[0] - pos[0],
-                                                          new_pos[1] - pos[1],
-                                                          new_pos[2] - pos[2]])
-                        else:
-                            pos[0], pos[1], pos[2] = new_pos
-                    else:
-                        # It's a Thing
-                        selected.pos[0] += delta_x
-                        selected.pos[1] += delta_y
-                        selected.pos[2] += delta_z
+                    raw = (delta_x, delta_y, delta_z)
+                    d1, d2 = raw[a1_idx], raw[a2_idx]
+                    if self.grid_visible:
+                        grid = self.grid_size
+                        d1 = round((p_ref[a1_idx] + d1) / grid) * grid - p_ref[a1_idx]
+                        d2 = round((p_ref[a2_idx] + d2) / grid) * grid - p_ref[a2_idx]
 
-                        # Snap to grid if grid is visible
-                        if self.grid_visible:
-                            grid = self.grid_size
-                            selected.pos[0] = round(selected.pos[0] / grid) * grid
-                            selected.pos[1] = round(selected.pos[1] / grid) * grid
-                            selected.pos[2] = round(selected.pos[2] / grid) * grid
+                    for obj in group:
+                        self._translate_object_2d(obj, d1, d2, a1_idx, a2_idx)
 
                     # Update views
                     self.update()
