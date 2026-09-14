@@ -10,7 +10,8 @@ import math
 import os
 
 from .renderer_core import BaseRenderer, normalize_color
-from engine.brush_geometry import brush_has_geometry, geometry_signature
+from engine.brush_geometry import (brush_has_geometry, face_uses_natural_scale,
+                                   geometry_signature, natural_repeats)
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.things import Thing, Light, PathNode, Portal, Pickup, Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger
 
@@ -337,7 +338,7 @@ class Renderer_F(BaseRenderer):
                     # resizing reveals more texture at a constant texel size
                     # instead of stretching what is there.  A brush-wide
                     # texture_tiling flag means the same thing for every face.
-                    natural = brush_geometry.face_uses_natural_scale(brush, face_key) \
+                    natural = face_uses_natural_scale(brush, face_key) \
                         or (uv_scale is None and brush.get('texture_tiling', False))
                     if natural:
                         tex_name = brush.get('textures', {}).get(face_key, 'default.png')
@@ -350,7 +351,7 @@ class Renderer_F(BaseRenderer):
                             extent = (size[2], size[1])
                         else:                      # down, top
                             extent = (size[0], size[2])
-                        scale_x, scale_y = brush_geometry.natural_repeats(
+                        scale_x, scale_y = natural_repeats(
                             extent[0], extent[1], (tex_w, tex_h))
                     # --- PRIORITY 2: an explicit scale set in the editor ---
                     elif uv_scale is not None:
