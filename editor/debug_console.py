@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextBrowser, QPushButton, 
-    QLabel, QCheckBox, QComboBox, QFrame, QLineEdit, QSplitter
+    QLabel, QCheckBox, QComboBox, QFrame, QLineEdit, QSplitter, QScrollArea
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QUrl
 from PyQt5.QtGui import QFont, QTextCursor, QColor, QDesktopServices, QPainter, QPixmap
@@ -373,7 +373,26 @@ class DebugConsole(QWidget):
         """)
         toolbar.addWidget(self._filter_btn)
 
-        layout.addLayout(toolbar)
+        # The toolbar is a dozen controls on one row, and their minimums add
+        # up to something wider than the console has any need to be.  Left as
+        # a plain layout that sum becomes the console's minimum width, and
+        # since the console is tabbed into the dock column beneath the 2D
+        # views, it set the width of that whole column -- squeezing the 3D
+        # view to a slot no dock ratio could widen.  In a scroller the row
+        # keeps its natural size and scrolls when there is no room for it.
+        toolbar_row = QWidget()
+        toolbar_row.setLayout(toolbar)
+        toolbar_scroll = QScrollArea()
+        toolbar_scroll.setWidget(toolbar_row)
+        toolbar_scroll.setWidgetResizable(True)
+        toolbar_scroll.setFrameShape(QFrame.NoFrame)
+        toolbar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        toolbar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        toolbar_scroll.setFixedHeight(toolbar_row.sizeHint().height() + 2)
+        toolbar_scroll.setMinimumWidth(0)
+        toolbar_scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        self._toolbar_scroll = toolbar_scroll
+        layout.addWidget(toolbar_scroll)
 
         # --- Middle area: console + right-side filter column (resizable) ---
         splitter = QSplitter(Qt.Horizontal)

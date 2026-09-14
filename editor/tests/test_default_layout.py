@@ -229,3 +229,74 @@ def test_a_layout_saved_now_is_restored_next_time(qt_app):
 
     assert reopened.restored
     assert reopened.toasts == []
+
+
+# ────────────────────────────
+# What was really squeezing the 3D view
+# ────────────────────────────
+
+#: Parked rather than left to the garbage collector.  editor.debug_console
+#: keeps two module-level singletons -- the console and the logger it
+#: connects to -- and collecting the objects underneath them deletes the C++
+#: side while the Python references live on, which strands whichever test
+#: builds a console next.  Holding them keeps this file independent of what
+#: ran before it.
+_KEEP_ALIVE = []
+
+
+def _debug_console(qt_app):
+    """A DebugConsole built directly, around the module's two singletons."""
+    import editor.debug_console as dc
+    from editor.editor_state import EditorState
+
+    class Host(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.state = EditorState()
+            self.config = configparser.ConfigParser()
+
+    # DebugLogger is a singleton twice over -- a module global and a
+    # cls._instance that __new__ hands back -- so calling DebugLogger()
+    # returns the same object even when its C++ side has been deleted, and
+    # __init__ early-returns without reviving it.  Both have to be cleared
+    # to get a logger the console can actually connect to.
+    dc.DebugLogger._instance = None
+    dc._debug_logger = dc.DebugLogger()
+    _KEEP_ALIVE.append(dc._debug_logger)
+
+    host = Host()
+    console = dc.DebugConsole(host)
+    _KEEP_ALIVE.extend((host, console))
+    return console
+
+
+def test_the_debug_console_does_not_dictate_the_dock_width(qt_app):
+    """This, not the ratio, is what pinned the 3D view to a slot.
+
+    The console is tabbed into the dock column beneath the 2D views, so its
+    minimum width is the whole column's.  Its toolbar is a dozen controls on
+    one row whose minimums add up past 900px, which no resizeDocks ratio can
+    argue with -- the 3D view got whatever was left, about 215px.
+    """
+    console = _debug_console(qt_app)
+
+    assert console.minimumSizeHint().width() < 200
+
+
+def test_the_console_toolbar_keeps_its_natural_size(qt_app):
+    """It scrolls when there is no room; it does not squash or wrap."""
+    console = _debug_console(qt_app)
+    row = console._toolbar_scroll.widget()
+
+    assert row.sizeHint().width() > 600
+    assert console._toolbar_scroll.minimumWidth() < 200
+
+
+def test_the_console_toolbar_scrolls_sideways_only(qt_app):
+    from PyQt5.QtCore import Qt as _Qt
+
+    console = _debug_console(qt_app)
+    scroll = console._toolbar_scroll
+
+    assert scroll.verticalScrollBarPolicy() == _Qt.ScrollBarAlwaysOff
+    assert scroll.horizontalScrollBarPolicy() == _Qt.ScrollBarAsNeeded
