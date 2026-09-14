@@ -2986,6 +2986,27 @@ class BaseRenderer:
                     break
         return tex or 'default.png'
 
+    def _geo_run_tex_transform(self, brush, run):
+        """``(angle_radians, shift_u, shift_v)`` for one angled-brush face.
+
+        Same precedence as :meth:`_geo_run_tex_scale`: a tagged side reads the
+        brush's per-tag dicts, a cut face reads its own plane live so Surface
+        Inspector edits show up without rebuilding the mesh.  Angled faces used
+        to have both of these forced to zero, which is why rotating or shifting
+        a texture did nothing once a brush stopped being a box.
+        """
+        tag = run['face']
+        if tag:
+            angle = brush.get('uv_angle', {}).get(tag, 0.0)
+            shift = brush.get('uv_shift', {}).get(tag, (0.0, 0.0))
+        else:
+            plane = BaseRenderer._geo_run_plane(brush, run)
+            if plane is None:
+                return 0.0, 0.0, 0.0
+            angle = plane.get('uv_angle', 0.0)
+            shift = plane.get('uv_shift', (0.0, 0.0))
+        return math.radians(float(angle)), float(shift[0]), float(shift[1])
+
     def _geo_run_tex_scale(self, brush, run, tex_name):
         """UV repeat factors for one face, mirroring the box-face priorities:
         live per-face uv_scale, then the plane's stored uv_scale, then

@@ -173,8 +173,14 @@ def test_cut_face_highlight_and_texturing_survive():
     assert "_draw_face_highlight_verts" in core
     assert "_geo_run_plane" in core
 
+    # Addressing a cut face's texture moved out of the Surface Inspector into
+    # a shared, Qt-free layer, so the inspector and anything else reach a cut
+    # face the same way.  The capability is what matters, not where it lives.
+    face_tex = _read("editor/face_texture.py")
+    assert "def face_plane(" in face_tex
+    assert "def is_cut_face(" in face_tex
     inspector = _read("editor/surface_inspector.py")
-    assert "def _cut_plane(" in inspector
+    assert "face_texture" in inspector
 
     mw = _read("editor/main_window.py")
     assert "brush_geometry.face_plane_index(brush, face_name)" in mw

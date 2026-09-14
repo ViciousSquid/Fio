@@ -1180,6 +1180,16 @@ def _plane_from_json(p):
     return dict(p)
 
 
+def invalidate_geometry_cache(brush):
+    """Drop a brush's derived-geometry caches so the next read rebuilds them.
+
+    The public name for the module's own invalidation: editor code that edits a
+    plane in place (the Surface Inspector clearing a texture basis, say) needs
+    to say so without reaching for a private helper.
+    """
+    _invalidate(brush)
+
+
 def _invalidate(brush):
     brush.pop('_geo_cache', None)
     brush.pop('_geo_cache_sig', None)

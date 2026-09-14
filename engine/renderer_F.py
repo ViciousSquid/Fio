@@ -358,10 +358,8 @@ class Renderer_F(BaseRenderer):
                 self.render_stats.draw_calls += 1
 
         # ---- Angled brushes: one draw per convex face --------------------
-        if tex_angle_loc != -1:
-            gl.glUniform1f(tex_angle_loc, 0.0)  # angled faces use raw UVs; reset
-        if tex_shift_loc != -1:
-            gl.glUniform2f(tex_shift_loc, 0.0, 0.0)
+        # Angled faces carry the same per-face rotation and shift box faces do;
+        # they are set per run below rather than forced to zero here.
         # Convex-geometry meshes wind the opposite way to the cube (GL_BACK).
         self._portal_set_cull(is_geo=True)
         for brush in geo_brushes:
@@ -388,6 +386,12 @@ class Renderer_F(BaseRenderer):
                 if tex_scale_loc != -1:
                     su, sv = self._geo_run_tex_scale(brush, run, tex_name)
                     gl.glUniform2f(tex_scale_loc, su, sv)
+                if tex_angle_loc != -1 or tex_shift_loc != -1:
+                    angle, shift_u, shift_v = self._geo_run_tex_transform(brush, run)
+                    if tex_angle_loc != -1:
+                        gl.glUniform1f(tex_angle_loc, angle)
+                    if tex_shift_loc != -1:
+                        gl.glUniform2f(tex_shift_loc, shift_u, shift_v)
                 gl.glDrawArrays(gl.GL_TRIANGLES, run['first'], run['count'])
                 self.render_stats.visible_tris += run['count'] // 3
                 self.render_stats.draw_calls += 1

@@ -30,6 +30,7 @@ from engine import brush_geometry
 from editor.view_2d import View2D
 from editor.editor_state import EditorState
 from editor import component_edit
+from editor import face_texture
 from editor.component_edit import (
     ComponentController, COMPONENT_MODES, MODE_LABELS,
     MODE_OBJECT, MODE_FACE, MODE_EDGE, MODE_VERTEX,
@@ -1892,11 +1893,40 @@ class MainWindow(QMainWindow):
             self.show_toast(f"Brush textures rotated {int(delta):+d}°")
 
     def show_surface_inspector(self, brush, face_name):
-        """Open (or re-target) the Face-mode Surface Inspector for a face."""
+        """Open (or re-target) the Surface Inspector on a face."""
         if self.surface_inspector is None:
             from editor.surface_inspector import SurfaceInspector
             self.surface_inspector = SurfaceInspector(self, self)
         self.surface_inspector.set_target(brush, face_name)
+
+    def toggle_surface_inspector(self):
+        """Shift+S: open the Surface Inspector on whatever is being worked on.
+
+        It targets, in order of preference, the face currently hovered in Face
+        Mode, the face last textured, or the first face of the selected brush —
+        so the shortcut does something useful whether the user is mid-texturing
+        or has just picked a brush.  Pressing it again closes the panel.
+        """
+        inspector = self.surface_inspector
+        if inspector is not None and inspector.isVisible():
+            inspector.hide()
+            return
+
+        target = getattr(self.view_3d, 'hovered_face_info', None) \
+            or getattr(self, 'face_texture_target', None)
+        if target is None:
+            brushes = self._selected_brushes()
+            if not brushes:
+                self.show_toast("Select a brush or a face first", is_error=True)
+                return
+            brush = brushes[0]
+            keys = face_texture.face_keys(brush)
+            if not keys:
+                self.show_toast("That brush has no faces to texture",
+                                is_error=True)
+                return
+            target = (brush, keys[0])
+        self.show_surface_inspector(*target)
 
     def apply_texture_to_brush(self, texture_path, tiled=False):
         """

@@ -256,6 +256,15 @@ class Ui_MainWindow(object):
             MainWindow.component_mode_actions[mode] = action
 
         select_menu.addSeparator()
+        MainWindow.surface_inspector_action = QAction(
+            'Surface Inspector…', MainWindow, shortcut='Shift+S')
+        MainWindow.surface_inspector_action.setToolTip(
+            'Texture the hovered face, or the selected brush (Shift+S)')
+        MainWindow.surface_inspector_action.triggered.connect(
+            MainWindow.toggle_surface_inspector)
+        select_menu.addAction(MainWindow.surface_inspector_action)
+
+        select_menu.addSeparator()
         cycle_action = QAction('Cycle Component Mode', MainWindow, shortcut='Q')
         cycle_action.setToolTip('Step Object -> Vertex -> Edge -> Face')
         cycle_action.triggered.connect(MainWindow.cycle_component_mode)
@@ -454,13 +463,15 @@ class Ui_MainWindow(object):
 
         # --- Base tools: Select + Box (Orange Strip) ---
         group_1_color = "#F08000" 
+        # Shift+S belongs to the Surface Inspector (Radiant's binding, and what
+        # a mapper reaches for far more often); the Select tool takes Shift+A.
         MainWindow.select_tool_btn = make_btn(
             "assets/select.png",
-            "Select tool (Shift+S)\n"
+            "Select tool (Shift+A)\n"
             "Drag a box to marquee-select; click empty space to deselect",
             on_click=lambda: MainWindow.set_tool_mode('select'),
             checkable=True, checked=MainWindow.tool_mode == 'select',
-            shortcut="Shift+S", bottom_color=group_1_color)
+            shortcut="Shift+A", bottom_color=group_1_color)
 
         MainWindow.brush_tool_btn = make_btn(
             "assets/box.png",
