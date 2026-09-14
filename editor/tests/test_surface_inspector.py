@@ -449,11 +449,17 @@ def test_the_inspector_button_needs_no_texture_selected(qt_app, tmp_path):
     assert tab.inspector_btn.isEnabled()
 
 
-def test_the_editor_no_longer_carries_the_duplicate_apply_path(qt_app):
-    """apply_texture_to_brush() was FIT/TILE's implementation, and only theirs."""
+def test_the_editor_no_longer_carries_the_duplicate_apply_paths(qt_app):
+    """The apply-texture entry points the Inspector replaced.
+
+    ``apply_texture_to_brush`` was FIT/TILE's implementation and only theirs.
+    ``apply_texture_to_selected_face`` had already lost its caller before
+    that, and warned through a modal box the Inspector answers inline.
+    """
     from editor.main_window import MainWindow
 
     assert not hasattr(MainWindow, 'apply_texture_to_brush')
+    assert not hasattr(MainWindow, 'apply_texture_to_selected_face')
     # The face-level apply the 3D view uses in Face Mode stays.
     assert hasattr(MainWindow, 'apply_texture_to_specific_face')
 
