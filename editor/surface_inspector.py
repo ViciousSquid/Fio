@@ -340,6 +340,23 @@ class SurfaceInspector(QDialog):
             self.face_btn.setChecked(active)
             self.face_btn.blockSignals(False)
 
+    def hideEvent(self, event):
+        """Closing the panel leaves Face Mode behind with it.
+
+        This panel holds the only FACE toggle, so a Face Mode left running
+        after the window goes away has no visible way back out — the cursor
+        stays a crosshair and clicks keep texturing faces.  Covers closing and
+        hiding alike, since ``hide()`` never raises a close event.
+        """
+        if self.face_btn.isChecked():
+            self.face_btn.blockSignals(True)
+            self.face_btn.setChecked(False)
+            self.face_btn.blockSignals(False)
+            toggle = getattr(self.editor, 'toggle_face_mode', None)
+            if toggle is not None:
+                toggle(False)
+        super().hideEvent(event)
+
     def _sync_natural_button(self):
         """Keep the Natural toggle showing the bound face's actual mode."""
         if not self.target:

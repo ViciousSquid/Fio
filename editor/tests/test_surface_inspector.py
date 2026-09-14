@@ -406,3 +406,41 @@ def test_the_asset_browser_no_longer_owns_a_face_toggle(qt_app, tmp_path):
 
     tab = AssetBrowserTab(str(tmp_path), ['.png'], editor=None)
     assert not hasattr(tab, 'face_btn')
+
+
+def test_closing_the_panel_leaves_face_mode(inspector):
+    """The panel owns the only FACE toggle, so it must not strand the mode."""
+    host, panel, _ = inspector
+    calls = []
+    host.toggle_face_mode = calls.append
+
+    panel.show()
+    panel.face_btn.setChecked(True)
+    panel._on_face_mode_clicked()
+    assert calls == [True]
+
+    panel.close()
+    assert calls == [True, False]
+    assert not panel.face_btn.isChecked()
+
+
+def test_hiding_the_panel_also_leaves_face_mode(inspector):
+    host, panel, _ = inspector
+    calls = []
+    host.toggle_face_mode = calls.append
+
+    panel.show()
+    panel.face_btn.setChecked(True)
+    panel._on_face_mode_clicked()
+    panel.hide()
+
+    assert calls[-1] is False
+
+
+def test_hiding_with_face_mode_off_changes_nothing(inspector):
+    host, panel, _ = inspector
+    calls = []
+    host.toggle_face_mode = calls.append
+    panel.show()
+    panel.hide()
+    assert calls == []
