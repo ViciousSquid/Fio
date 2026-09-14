@@ -429,8 +429,19 @@ class Ui_MainWindow(object):
         big = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
         icon_size_val = 45 if big else 35
 
+        #: The strip under a toggle button when it is off.
+        strip_off_color = "#555"
+
         def make_btn(icon, tip, on_click=None, checkable=False, checked=False,
-                     shortcut=None, styled=False, bottom_color=None):
+                     shortcut=None, styled=False, bottom_color=None,
+                     toggle_strip=False):
+            """One toolbar button.
+
+            ``toggle_strip`` makes the strip underneath the state, rather than
+            an outline around the whole button: grey when off, the group's
+            colour when on.  It suits a standalone switch like the grid, where
+            the outline read as "selected tool" -- which it is not one of.
+            """
             b = QPushButton()
             b.setIcon(QIcon(icon))
             b.setIconSize(QSize(icon_size_val, icon_size_val))
@@ -446,7 +457,28 @@ class Ui_MainWindow(object):
             if shortcut:
                 b.setShortcut(shortcut)
                 
-            if styled or bottom_color:
+            if toggle_strip and bottom_color:
+                b.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: #111111;
+                        border: 1px solid #333;
+                        border-bottom: 3px solid {strip_off_color};
+                        padding: 0px;
+                        padding-bottom: 4px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: #3a3a3a;
+                    }}
+                    QPushButton:checked {{
+                        background-color: #2b2b2b;
+                        border: 1px solid #333;
+                        border-bottom: 3px solid {bottom_color};
+                    }}
+                    QPushButton:checked:hover {{
+                        background-color: #4a4a4a;
+                    }}
+                """)
+            elif styled or bottom_color:
                 border_bottom = f"border-bottom: 3px solid {bottom_color};" if bottom_color else "border-bottom: 1px solid #333;"
                 
                 b.setStyleSheet(f"""
@@ -574,7 +606,8 @@ class Ui_MainWindow(object):
         MainWindow.grid_btn = make_btn(
             "assets/b_grid.png", "Toggle 3D Grid (G)",
             on_click=MainWindow.toggle_grid,
-            checkable=True, checked=True, bottom_color=group_3_color)
+            checkable=True, checked=True, bottom_color=group_3_color,
+            toggle_strip=True)
 
         tool_toolbar.addSeparator()
         tool_toolbar.addWidget(MainWindow.play_button)
