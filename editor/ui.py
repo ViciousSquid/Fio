@@ -368,6 +368,9 @@ class Ui_MainWindow(object):
         modern_action.triggered.connect(lambda: MainWindow.set_render_mode("Modern (Shaders)"))
         immediate_action.triggered.connect(lambda: MainWindow.set_render_mode("Immediate (Legacy)"))
 
+        keys_action = QAction('Keys...', MainWindow, triggered=MainWindow.show_shortcuts_window)
+        keys_action.setToolTip("List every keyboard shortcut, including your own bindings")
+        help_menu.addAction(keys_action)
         help_menu.addAction(QAction('About', MainWindow, triggered=MainWindow.show_about))
 
     def create_toolbars(self, MainWindow):

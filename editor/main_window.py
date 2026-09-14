@@ -200,14 +200,20 @@ class MainWindow(QMainWindow):
         self.setup_package_actions() 
         self.update_title()
         
+        # The object name is the label Help > Keys lists these under; an
+        # unnamed QShortcut cannot describe itself.
         self.ctrl_tab_shortcut = QShortcut(QKeySequence("Ctrl+Tab"), self)
+        self.ctrl_tab_shortcut.setObjectName("Cycle the 2D view")
         self.ctrl_tab_shortcut.activated.connect(self.cycle_2d_view)
 
         # Page Up / Page Down rotate brush-face textures 90 degrees. Window-
         # level shortcuts so they fire no matter which panel has focus.
         self.tex_rot_cw_shortcut = QShortcut(QKeySequence(Qt.Key_PageUp), self)
+        self.tex_rot_cw_shortcut.setObjectName("Rotate the face texture 90 clockwise")
         self.tex_rot_cw_shortcut.activated.connect(lambda: self.rotate_textures(1))
         self.tex_rot_ccw_shortcut = QShortcut(QKeySequence(Qt.Key_PageDown), self)
+        self.tex_rot_ccw_shortcut.setObjectName(
+            "Rotate the face texture 90 anticlockwise")
         self.tex_rot_ccw_shortcut.activated.connect(lambda: self.rotate_textures(-1))
         self.setFocus()
         self.update_global_font()
@@ -217,6 +223,7 @@ class MainWindow(QMainWindow):
         self.terrain = None
         self.terrain_editor_window = None
         self.surface_inspector = None  # lazily created Face-mode Surface Inspector
+        self.shortcuts_window = None   # lazily created Help > Keys window
 
         # debug_console is embedded in the properties tab widget (created in setupUi)
         self.debug_console = DebugConsole.get_instance(self)
@@ -2299,6 +2306,19 @@ class MainWindow(QMainWindow):
     def set_render_mode(self, mode):
         self.view_3d.render_mode = mode
         self.update_views()
+
+    def show_shortcuts_window(self):
+        """Help > Keys: list every shortcut, including the user's own.
+
+        Kept on the window so reopening raises the one already there rather
+        than stacking copies; it re-reads its list each time it is shown.
+        """
+        from editor.shortcuts_window import ShortcutsWindow
+        if getattr(self, 'shortcuts_window', None) is None:
+            self.shortcuts_window = ShortcutsWindow(self, self)
+        self.shortcuts_window.show()
+        self.shortcuts_window.raise_()
+        self.shortcuts_window.activateWindow()
 
     def show_about(self):
         try:
