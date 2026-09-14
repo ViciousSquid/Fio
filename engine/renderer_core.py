@@ -320,6 +320,10 @@ class BaseRenderer:
         self._component_overlay_counts = None
         self._component_overlay_version = None
         self._component_overlay_dirty = False
+        # Driver limits for wide lines / big points, queried once on first use
+        # (they need a live context, and glGetFloatv stalls the pipeline).
+        self._line_width_range = None
+        self._point_size_range = None
         self._cube_vbo = None
         self._sprite_vbo = None
         self._grid_vbo = None
@@ -1742,6 +1746,62 @@ class BaseRenderer:
     # --------------------------------------------------------------------------
     # Editor helpers (outlines, gizmo, etc.)
     # --------------------------------------------------------------------------
+    def _set_line_width(self, width):
+        """Set the line width, clamped to what this driver actually supports.
+
+        A core profile only has to support a width of 1.0, and plenty of
+        hardware reports exactly ``[1, 1]`` for ``GL_ALIASED_LINE_WIDTH_RANGE``
+        — asking for 2.0 there raises ``GL_INVALID_VALUE`` and takes the frame
+        with it.  The range is queried once and cached, since ``glGetFloatv``
+        stalls the pipeline and the limit never changes for a context.
+
+        Returns the width actually set, so callers can tell when they did not
+        get the emphasis they asked for.
+        """
+        if self._line_width_range is None:
+            try:
+                values = (gl.GLfloat * 2)()
+                gl.glGetFloatv(gl.GL_ALIASED_LINE_WIDTH_RANGE, values)
+                low, high = float(values[0]), float(values[1])
+                if not (high >= low > 0.0):
+                    low = high = 1.0
+            except Exception:
+                low = high = 1.0
+            self._line_width_range = (low, high)
+        low, high = self._line_width_range
+        clamped = max(low, min(high, float(width)))
+        try:
+            gl.glLineWidth(clamped)
+        except Exception:
+            # A driver that refuses even the clamped value: keep drawing at
+            # whatever width it is already using rather than losing the frame.
+            return 1.0
+        return clamped
+
+    def _set_point_size(self, size):
+        """Set the point size, clamped to the driver's supported range.
+
+        Same story as :meth:`_set_line_width`: the guaranteed range is narrow
+        and an out-of-range value is a GL error, not a silent clamp.
+        """
+        if self._point_size_range is None:
+            try:
+                values = (gl.GLfloat * 2)()
+                gl.glGetFloatv(gl.GL_ALIASED_POINT_SIZE_RANGE, values)
+                low, high = float(values[0]), float(values[1])
+                if not (high >= low > 0.0):
+                    low = high = 1.0
+            except Exception:
+                low = high = 1.0
+            self._point_size_range = (low, high)
+        low, high = self._point_size_range
+        clamped = max(low, min(high, float(size)))
+        try:
+            gl.glPointSize(clamped)
+        except Exception:
+            return 1.0
+        return clamped
+
     def draw_selected_brush_outline(self, projection, view, brush):
         if 'simple' not in self.shaders:
             return
@@ -1968,25 +2028,28 @@ class BaseRenderer:
         offset = 0
         if cold_lines:
             gl.glUniform3f(uniforms['color'], 0.45, 0.78, 1.0)
-            gl.glLineWidth(1.0)
+            self._set_line_width(1.0)
             gl.glDrawArrays(gl.GL_LINES, offset, cold_lines)
         offset += cold_lines
         if hot_lines_n:
             gl.glUniform3f(uniforms['color'], 1.0, 0.66, 0.16)
-            gl.glLineWidth(2.0)
+            # Hardware that cannot draw a wide line reports a range of [1, 1],
+            # and the highlight then reads by colour alone — which is why the
+            # hot and cold colours are far apart rather than two shades of one.
+            self._set_line_width(2.0)
             gl.glDrawArrays(gl.GL_LINES, offset, hot_lines_n)
         offset += hot_lines_n
         if cold_points:
             gl.glUniform3f(uniforms['color'], 0.45, 0.78, 1.0)
-            gl.glPointSize(6.0)
+            self._set_point_size(6.0)
             gl.glDrawArrays(gl.GL_POINTS, offset, cold_points)
         offset += cold_points
         if hot_points_n:
             gl.glUniform3f(uniforms['color'], 1.0, 0.66, 0.16)
-            gl.glPointSize(9.0)
+            self._set_point_size(9.0)
             gl.glDrawArrays(gl.GL_POINTS, offset, hot_points_n)
-        gl.glLineWidth(1.0)
-        gl.glPointSize(1.0)
+        self._set_line_width(1.0)
+        self._set_point_size(1.0)
         if depth_was_on:
             gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glBindVertexArray(0)
@@ -2150,14 +2213,10 @@ class BaseRenderer:
         gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
         gl.glUniform1f(uniforms['alpha'], 1.0)
         
-        # Query and clamp line width to supported range
-        # glLineWidth > 1.0 is deprecated in core profile
-        widths = (gl.GLfloat * 2)()
-        gl.glGetFloatv(gl.GL_ALIASED_LINE_WIDTH_RANGE, widths)
-        min_width, max_width = float(widths[0]), float(widths[1])
-        desired_width = 2.0
-        clamped_width = max(min_width, min(max_width, desired_width))
-        gl.glLineWidth(clamped_width)
+        # Clamp the line width to what the driver supports (a core profile is
+        # only required to offer 1.0).  The helper caches the queried range,
+        # so this no longer stalls the pipeline with a glGetFloatv per call.
+        self._set_line_width(2.0)
         
         for brush in brushes:
             if not brush.get('_model_collision'):

@@ -495,7 +495,9 @@ class Renderer_F(BaseRenderer):
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
         elif current_mode == RENDER_MODE_VERTEX:
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_POINT)
-            gl.glPointSize(4.0)
+            # Clamped: a point size the driver does not support is a GL error,
+            # not a silent clamp, and would take the whole frame with it.
+            self._set_point_size(4.0)
         else:
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         self.draw_grid(projection, view, self.grid_indices_count,
