@@ -9,6 +9,9 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
 from PyQt5.QtCore import Qt, QSize, QDir, QRect, QPointF, pyqtSignal, QTimer
 from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QIcon, QPen, QPolygonF, QTextCursor, QDesktopServices
 from engine.glb_loader import render_glb_thumbnail
+# The Surface Inspector's FACE toggle sets this colour; the INSPECTOR button
+# that opens that panel borrows it so the two read as a pair.
+from editor.surface_inspector import FACE_BUTTON_STYLE as INSPECTOR_BUTTON_STYLE
 
 
 def render_obj_thumbnail(filepath, width, height):
@@ -325,6 +328,7 @@ class AssetBrowserTab(QWidget):
         self.fit_btn = None
         self.tile_btn = None
         self.add_btn = None
+        self.inspector_btn = None
 
         # Create a container widget for buttons to allow stretching
         button_container = QWidget()
@@ -340,8 +344,19 @@ class AssetBrowserTab(QWidget):
             self.add_btn.clicked.connect(self.on_add_clicked)
             button_layout.addWidget(self.add_btn)
         else:
-            # The FACE toggle now lives in the Surface Inspector (Shift+S),
-            # alongside the controls that act on the face it selects.
+            # The FACE toggle moved into the Surface Inspector, alongside the
+            # controls that act on the face it selects; this opens that panel.
+            # It borrows the toggle's purple so the two still read as a pair.
+            self.inspector_btn = QPushButton("INSPECTOR")
+            self.inspector_btn.setStyleSheet(INSPECTOR_BUTTON_STYLE)
+            self.inspector_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+            self.inspector_btn.setToolTip(
+                "Open the Surface Inspector (T)\n"
+                "Fit / Natural / Axial projections, shift, scale and rotation,\n"
+                "for one face or every face of the selection")
+            self.inspector_btn.clicked.connect(self.on_inspector_clicked)
+            button_layout.addWidget(self.inspector_btn)
+
             self.fit_btn = QPushButton("FIT")
             self.fit_btn.setEnabled(False)
             self.fit_btn.setStyleSheet(button_style)
@@ -566,6 +581,12 @@ class AssetBrowserTab(QWidget):
 
     def on_add_clicked(self):
         self.add_current_model()
+
+    def on_inspector_clicked(self):
+        """Open (or close) the Surface Inspector."""
+        toggle = getattr(self.editor, 'toggle_surface_inspector', None)
+        if toggle is not None:
+            toggle()
 
 
 class MapsBrowserTab(QWidget):

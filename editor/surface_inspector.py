@@ -226,7 +226,7 @@ class SurfaceInspector(QDialog):
         flip_row.addStretch(1)
         outer.addLayout(flip_row)
 
-        hint = QLabel("Shift+S reopens this panel · Page Up/Down rotates the "
+        hint = QLabel("T reopens this panel · Page Up/Down rotates the "
                       "hovered face")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #888;")

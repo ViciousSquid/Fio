@@ -372,3 +372,37 @@ def test_loading_the_panel_does_not_count_as_an_edit(inspector):
     before = host.saves
     panel.set_target(brush, 'east')    # repopulates every spin box
     assert host.saves == before
+
+
+# ---------------------------------------------------------------------------
+# The Asset Browser's route into the panel
+# ---------------------------------------------------------------------------
+
+def test_the_asset_browser_has_an_inspector_button(qt_app, tmp_path):
+    from editor.asset_browser import AssetBrowserTab
+
+    calls = []
+
+    class _Editor:
+        def toggle_surface_inspector(self):
+            calls.append(True)
+
+    tab = AssetBrowserTab(str(tmp_path), ['.png'], editor=_Editor())
+    assert tab.inspector_btn is not None
+    assert tab.inspector_btn.text() == 'INSPECTOR'
+    tab.on_inspector_clicked()
+    assert calls == [True]
+
+
+def test_the_inspector_button_shares_the_face_toggle_colour(qt_app):
+    from editor.asset_browser import INSPECTOR_BUTTON_STYLE
+    from editor.surface_inspector import FACE_BUTTON_STYLE
+
+    assert INSPECTOR_BUTTON_STYLE is FACE_BUTTON_STYLE
+
+
+def test_the_asset_browser_no_longer_owns_a_face_toggle(qt_app, tmp_path):
+    from editor.asset_browser import AssetBrowserTab
+
+    tab = AssetBrowserTab(str(tmp_path), ['.png'], editor=None)
+    assert not hasattr(tab, 'face_btn')

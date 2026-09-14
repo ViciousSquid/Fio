@@ -173,8 +173,7 @@ class Ui_MainWindow(object):
         self.action_asset_browser.setObjectName("action_asset_browser")
         self.action_asset_browser.setIcon(QIcon("assets/browser.png"))
         self.action_asset_browser.setText("Asset Browser")
-        self.action_asset_browser.setToolTip("Toggle Asset Browser (T)")
-        self.action_asset_browser.setShortcut("T")
+        self.action_asset_browser.setToolTip("Toggle Asset Browser")
         
         # --- 6. Menus and Toolbars ---
         self.create_menu_bar(MainWindow)
@@ -257,9 +256,12 @@ class Ui_MainWindow(object):
 
         select_menu.addSeparator()
         MainWindow.surface_inspector_action = QAction(
-            'Surface Inspector…', MainWindow, shortcut='Shift+S')
+            'Surface Inspector…', MainWindow)
+        # T is the primary key; Shift+S is kept as Radiant's own binding.
+        MainWindow.surface_inspector_action.setShortcuts(
+            [QKeySequence('T'), QKeySequence('Shift+S')])
         MainWindow.surface_inspector_action.setToolTip(
-            'Texture the hovered face, or the selected brush (Shift+S)')
+            'Texture the hovered face, or the selected brush (T)')
         MainWindow.surface_inspector_action.triggered.connect(
             MainWindow.toggle_surface_inspector)
         select_menu.addAction(MainWindow.surface_inspector_action)
