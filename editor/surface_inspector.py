@@ -322,14 +322,23 @@ class SurfaceInspector(QDialog):
     # ------------------------------------------------------------------ #
     # Public API                                                          #
     # ------------------------------------------------------------------ #
-    def set_target(self, brush, face_key):
-        """Bind the inspector to a face and show it."""
-        self.target = (brush, face_key)
+    def set_target(self, brush, face_key, raise_window=True):
+        """Bind the inspector to a face, or to nothing, and show it.
+
+        ``brush`` of None leaves the panel open with its controls disabled,
+        which is what opening it before anything is selected looks like.
+
+        ``raise_window`` is False when the editor re-binds the panel behind
+        the user's back -- following a selection change, say -- since taking
+        the focus away from the viewport on every click would be intolerable.
+        """
+        self.target = (brush, face_key) if brush is not None else None
         self._fill_face_combo()
         self.refresh_from_face()
         self.show()
-        self.raise_()
-        self.activateWindow()
+        if raise_window:
+            self.raise_()
+            self.activateWindow()
 
     @staticmethod
     def face_display_name(face_key):
@@ -340,6 +349,11 @@ class SurfaceInspector(QDialog):
 
     def _fill_face_combo(self):
         """List the target brush's faces, with the bound one selected."""
+        if not self.target:
+            self.face_combo.blockSignals(True)
+            self.face_combo.clear()
+            self.face_combo.blockSignals(False)
+            return
         brush, face_key = self.target
         keys = ft.face_keys(brush)
         if face_key not in keys:        # a face the brush no longer has
@@ -411,8 +425,25 @@ class SurfaceInspector(QDialog):
     # Reading                                                             #
     # ------------------------------------------------------------------ #
     def refresh_from_face(self):
-        """Reload every field from the bound face's stored transform."""
+        """Reload every field from the bound face's stored transform.
+
+        With nothing bound -- the panel opened before anything was selected
+        -- the fields go blank and the controls grey out, rather than showing
+        the last face's numbers as though they were still live.
+        """
+        self._set_editable(bool(self.target))
         if not self.target:
+            self._loading = True
+            try:
+                self.tex_label.setText('(none)')
+                self.size_label.setText('')
+                for spin in (self.hshift, self.vshift, self.rotate):
+                    spin.setValue(0.0)
+                for spin in (self.hstretch, self.vstretch):
+                    spin.setValue(1.0)
+                self.natural_btn.setChecked(False)
+            finally:
+                self._loading = False
             return
         brush, face_key = self.target
         transform = ft.get_transform(
@@ -433,6 +464,22 @@ class SurfaceInspector(QDialog):
             self.natural_btn.setChecked(transform['natural'])
         finally:
             self._loading = False
+
+    def _set_editable(self, editable):
+        """Grey out everything that needs a face when there is not one.
+
+        FACE stays live: turning Face Mode on is exactly how a user with
+        nothing selected goes and picks a face to edit.
+        """
+        for widget in (self.apply_tex_btn, self.face_combo,
+                       self.scope_face, self.scope_brush,
+                       self.hshift, self.vshift, self.hstretch, self.vstretch,
+                       self.rotate, self.hshift_step, self.vshift_step,
+                       self.hstretch_step, self.vstretch_step,
+                       self.fit_w, self.fit_h, self.fit_btn,
+                       self.natural_btn, self.axial_btn, self.match_grid_btn,
+                       self.flip_h_btn, self.flip_v_btn):
+            widget.setEnabled(editable)
 
     def _on_face_mode_clicked(self):
         """Hand the toggle straight to the editor's Face Mode."""

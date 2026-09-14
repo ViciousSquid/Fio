@@ -1223,6 +1223,7 @@ class MainWindow(QMainWindow):
     def update_all_ui(self):
         self.property_editor.set_object(self.state.selected_object)
         self.scene_hierarchy.refresh_list()
+        self.sync_surface_inspector()
         self.update_views()
 
     def update_views(self):
@@ -1945,12 +1946,43 @@ class MainWindow(QMainWindow):
             self.update_views()
             self.show_toast(f"Brush textures rotated {int(delta):+d}°")
 
-    def show_surface_inspector(self, brush, face_name):
-        """Open (or re-target) the Surface Inspector on a face."""
+    def show_surface_inspector(self, brush=None, face_name=None,
+                               raise_window=True):
+        """Open (or re-target) the Surface Inspector.
+
+        With no face it opens empty, its controls greyed out until there is
+        something to edit -- the panel is a tool, and a tool should open when
+        it is asked for.
+        """
         if self.surface_inspector is None:
             from editor.surface_inspector import SurfaceInspector
             self.surface_inspector = SurfaceInspector(self, self)
-        self.surface_inspector.set_target(brush, face_name)
+        self.surface_inspector.set_target(brush, face_name,
+                                          raise_window=raise_window)
+
+    def sync_surface_inspector(self):
+        """Point an open Surface Inspector at something worth editing.
+
+        It can be opened with nothing selected, so it binds as soon as there
+        is a brush to bind to.  A panel already pointing into the selection
+        is left alone -- re-binding on every click would undo a face picked
+        from its dropdown -- and so is one whose brush has been deselected,
+        since dropping the target would blank the panel mid-edit.
+        """
+        inspector = getattr(self, 'surface_inspector', None)
+        if inspector is None or not inspector.isVisible():
+            return
+
+        brushes = self._selected_brushes()
+        if not brushes:
+            return
+        target = inspector.target
+        if target is not None and target[0] in brushes:
+            return
+
+        keys = face_texture.face_keys(brushes[0])
+        if keys:
+            self.show_surface_inspector(brushes[0], keys[0], raise_window=False)
 
     def toggle_surface_inspector(self):
         """Shift+S: open the Surface Inspector on whatever is being worked on.
@@ -1969,16 +2001,10 @@ class MainWindow(QMainWindow):
             or getattr(self, 'face_texture_target', None)
         if target is None:
             brushes = self._selected_brushes()
-            if not brushes:
-                self.show_toast("Select a brush or a face first", is_error=True)
-                return
-            brush = brushes[0]
-            keys = face_texture.face_keys(brush)
-            if not keys:
-                self.show_toast("That brush has no faces to texture",
-                                is_error=True)
-                return
-            target = (brush, keys[0])
+            keys = face_texture.face_keys(brushes[0]) if brushes else []
+            # Nothing to bind to is not a reason to refuse: the panel opens
+            # empty and binds itself as soon as a brush is selected.
+            target = (brushes[0], keys[0]) if keys else (None, None)
         self.show_surface_inspector(*target)
 
     def generate_collision_map(self):

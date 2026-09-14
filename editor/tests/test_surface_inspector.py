@@ -6,6 +6,7 @@ things the panel is responsible for rather than the transform maths (which
 edits is one undo step rather than one per click.
 """
 
+import copy
 import os
 import sys
 
@@ -15,7 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 pytest.importorskip("PyQt5", reason="Qt is not available in this environment")
 
-from PyQt5.QtWidgets import QApplication  # noqa: E402
+from PyQt5.QtWidgets import QApplication, QWidget  # noqa: E402
 
 from editor import face_texture as ft  # noqa: E402
 from editor.editor_state import EditorState  # noqa: E402
@@ -842,3 +843,223 @@ def test_the_rotate_field_wraps(inspector):
     host, panel, brush = inspector
 
     assert panel.rotate.wrapping()
+
+
+# ────────────────────────────
+# Opening with nothing selected
+# ────────────────────────────
+
+def test_it_opens_with_no_target_at_all(qt_app):
+    """A tool should open when it is asked for, selection or not."""
+    host = FakeHost()
+    panel = SurfaceInspector(host)
+
+    panel.set_target(None, None)
+
+    assert panel.isVisible()
+    assert panel.target is None
+
+
+def test_an_untargeted_panel_greys_out_what_needs_a_face(qt_app):
+    host = FakeHost()
+    panel = SurfaceInspector(host)
+
+    panel.set_target(None, None)
+
+    for widget in (panel.apply_tex_btn, panel.face_combo, panel.fit_btn,
+                   panel.natural_btn, panel.axial_btn, panel.match_grid_btn,
+                   panel.flip_h_btn, panel.flip_v_btn, panel.hshift,
+                   panel.rotate, panel.scope_face, panel.scope_brush):
+        assert not widget.isEnabled()
+
+
+def test_face_mode_stays_available_with_no_target(qt_app):
+    """Turning Face Mode on is how you go and pick a face to edit."""
+    host = FakeHost()
+    panel = SurfaceInspector(host)
+
+    panel.set_target(None, None)
+
+    assert panel.face_btn.isEnabled()
+
+
+def test_an_untargeted_panel_shows_no_stale_values(inspector):
+    """It must not keep showing the last face's numbers as though live."""
+    host, panel, brush = inspector
+    ft.set_transform(brush, 'north', scale=(7.0, 9.0), angle=30.0)
+    panel.set_target(brush, 'north')
+
+    panel.set_target(None, None)
+
+    assert panel.tex_label.text() == '(none)'
+    assert panel.size_label.text() == ''
+    assert panel.face_combo.count() == 0
+    assert panel.hstretch.value() == pytest.approx(1.0)
+    assert panel.rotate.value() == pytest.approx(0.0)
+
+
+def test_the_controls_do_nothing_with_no_target(inspector):
+    """Every action guards on the target; this proves none slipped through."""
+    host, panel, brush = inspector
+    panel.set_target(None, None)
+    before = copy.deepcopy(brush)
+    saves = host.saves
+
+    panel._apply_fit()
+    panel._apply_axial()
+    panel._toggle_natural()
+    panel._match_grid()
+    panel._flip(horizontal=True)
+    panel._apply_selected_texture()
+    panel._on_value_changed('scale')
+
+    assert brush == before
+    assert host.saves == saves
+
+
+def test_binding_a_face_enables_the_controls_again(inspector):
+    host, panel, brush = inspector
+
+    panel.set_target(None, None)
+    panel.set_target(brush, 'north')
+
+    assert panel.fit_btn.isEnabled()
+    assert panel.face_combo.isEnabled()
+    assert panel.face_combo.currentData() == 'north'
+
+
+def test_re_binding_can_leave_the_focus_alone(inspector):
+    """The editor re-binds on selection changes; it must not grab focus."""
+    host, panel, brush = inspector
+
+    panel.set_target(brush, 'east', raise_window=False)
+
+    assert panel.target == (brush, 'east')
+    assert panel.isVisible()
+
+
+# ────────────────────────────
+# The editor opening and re-binding it
+# ────────────────────────────
+
+class FakeEditorWindow(QWidget):
+    """The slice of MainWindow the two Surface Inspector entry points use."""
+
+    from editor.main_window import MainWindow
+    show_surface_inspector = MainWindow.show_surface_inspector
+    toggle_surface_inspector = MainWindow.toggle_surface_inspector
+    sync_surface_inspector = MainWindow.sync_surface_inspector
+    del MainWindow
+
+    def __init__(self):
+        super().__init__()
+        self.state = EditorState()
+        self.state.selected_objects = []
+        self.surface_inspector = None
+        self.view_3d = _StubView()
+        self.toasts = []
+        self.asset_browser = _StubBrowser()
+        self.root_dir = os.getcwd()
+
+    def save_state(self):
+        pass
+
+    def update_views(self):
+        pass
+
+    def show_toast(self, message, is_error=False, duration=None):
+        self.toasts.append((message, is_error))
+
+    def _selected_brushes(self):
+        return [b for b in self.state.selected_objects if isinstance(b, dict)]
+
+
+class _StubView:
+    hovered_face_info = None
+
+
+def test_the_shortcut_opens_the_panel_with_nothing_selected(qt_app):
+    """It used to refuse with "Select a brush or a face first"."""
+    host = FakeEditorWindow()
+
+    host.toggle_surface_inspector()
+
+    assert host.surface_inspector is not None
+    assert host.surface_inspector.isVisible()
+    assert host.toasts == []
+
+
+def test_opening_it_empty_binds_nothing(qt_app):
+    host = FakeEditorWindow()
+
+    host.toggle_surface_inspector()
+
+    assert host.surface_inspector.target is None
+
+
+def test_the_shortcut_still_closes_it(qt_app):
+    host = FakeEditorWindow()
+    host.toggle_surface_inspector()
+
+    host.toggle_surface_inspector()
+
+    assert not host.surface_inspector.isVisible()
+
+
+def test_an_open_empty_panel_binds_when_a_brush_is_selected(qt_app):
+    """Otherwise opening it first would leave it useless."""
+    host = FakeEditorWindow()
+    host.toggle_surface_inspector()
+    brush = make_box()
+
+    host.state.selected_objects = [brush]
+    host.sync_surface_inspector()
+
+    assert host.surface_inspector.target[0] is brush
+
+
+def test_a_panel_already_in_the_selection_is_left_alone(qt_app):
+    """Re-binding on every click would undo a face picked from the dropdown."""
+    host = FakeEditorWindow()
+    brush = make_box()
+    host.state.selected_objects = [brush]
+    host.toggle_surface_inspector()
+    host.surface_inspector.set_target(brush, 'east')
+
+    host.sync_surface_inspector()
+
+    assert host.surface_inspector.target == (brush, 'east')
+
+
+def test_it_follows_the_selection_to_another_brush(qt_app):
+    host = FakeEditorWindow()
+    one, two = make_box(), make_box(pos=(256, 0, 0))
+    host.state.selected_objects = [one]
+    host.toggle_surface_inspector()
+    assert host.surface_inspector.target[0] is one
+
+    host.state.selected_objects = [two]
+    host.sync_surface_inspector()
+
+    assert host.surface_inspector.target[0] is two
+
+
+def test_deselecting_does_not_blank_a_panel_being_worked_in(qt_app):
+    host = FakeEditorWindow()
+    brush = make_box()
+    host.state.selected_objects = [brush]
+    host.toggle_surface_inspector()
+
+    host.state.selected_objects = []
+    host.sync_surface_inspector()
+
+    assert host.surface_inspector.target[0] is brush
+
+
+def test_a_closed_panel_is_not_woken_by_a_selection(qt_app):
+    host = FakeEditorWindow()
+
+    host.state.selected_objects = [make_box()]
+    host.sync_surface_inspector()
+
+    assert host.surface_inspector is None
