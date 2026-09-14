@@ -11,8 +11,8 @@ the toolbar and the config file live.  Nothing here is written down twice.
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import (
-    QApplication, QDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+    QDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout,
 )
 
 from editor import shortcuts as sc
@@ -115,10 +115,6 @@ class ShortcutsWindow(QDialog):
         outer.addWidget(self.count_label)
 
         buttons = QHBoxLayout()
-        copy_btn = QPushButton("Copy to clipboard")
-        copy_btn.setToolTip("Copy the whole list as plain text")
-        copy_btn.clicked.connect(self._copy)
-        buttons.addWidget(copy_btn)
         buttons.addStretch(1)
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.close)
@@ -178,11 +174,6 @@ class ShortcutsWindow(QDialog):
         self.count_label.setText(
             "%d shortcuts" % total if shown == total
             else "%d of %d shortcuts" % (shown, total))
-
-    def _copy(self):
-        clipboard = QApplication.clipboard()
-        if clipboard is not None:
-            clipboard.setText(sc.as_text(self._grouped))
 
     def showEvent(self, event):
         """Pick up anything rebound since the window was last opened."""

@@ -239,18 +239,6 @@ def test_every_declared_category_is_one_the_window_orders():
     assert {category for category, _, _ in sc.DECLARED} <= set(sc.ORDER)
 
 
-def test_the_text_export_covers_every_entry(window):
-    grouped = sc.collect(window)
-
-    text = sc.as_text(grouped)
-
-    for shortcut in _all(grouped):
-        assert shortcut.keys in text
-        assert shortcut.description in text
-    for category in grouped:
-        assert category in text
-
-
 # ────────────────────────────
 # The window
 # ────────────────────────────
@@ -340,14 +328,6 @@ def test_it_is_a_real_window(window, qt_app):
 
     assert panel.windowTitle() == 'Keyboard Shortcuts'
     assert panel.windowFlags() & Qt.Window
-
-
-def test_copying_puts_the_listing_on_the_clipboard(window, qt_app):
-    panel = ShortcutsWindow(window)
-
-    panel._copy()
-
-    assert QApplication.clipboard().text() == sc.as_text(panel._grouped)
 
 
 def _visible_rows(panel):
@@ -484,3 +464,15 @@ def test_keys_are_set_in_a_fixed_pitch_face(window, qt_app):
     row = panel.tree.topLevelItem(0).child(0)
 
     assert row.font(0).styleHint() == QFont.Monospace
+
+
+def test_there_is_no_copy_button(window, qt_app):
+    """Removed on request; as_text went with it, having no other caller."""
+    from PyQt5.QtWidgets import QPushButton
+
+    panel = ShortcutsWindow(window)
+    labels = [b.text() for b in panel.findChildren(QPushButton)]
+
+    assert 'Close' in labels
+    assert not any('copy' in label.lower() for label in labels)
+    assert not hasattr(sc, 'as_text')

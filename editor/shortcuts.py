@@ -256,16 +256,3 @@ def collect(window, config=None):
             ordered[category] = sorted(grouped[category],
                                        key=lambda s: (s.description.lower(), s.keys))
     return ordered
-
-
-def as_text(grouped):
-    """The same listing as plain text, for copying out of the window."""
-    lines = []
-    for category, shortcuts in grouped.items():
-        lines.append(category)
-        lines.append('-' * len(category))
-        width = max((len(s.keys) for s in shortcuts), default=0)
-        for shortcut in shortcuts:
-            lines.append('  %-*s  %s' % (width, shortcut.keys, shortcut.description))
-        lines.append('')
-    return '\n'.join(lines).rstrip() + '\n'
