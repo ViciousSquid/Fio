@@ -10,6 +10,13 @@ from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Mo
                           LogicCamera, LogicSpawner, Portal, LogicKeyValueStore)
 from editor.scene_hierarchy import SceneHierarchy
 from engine import brush_geometry as bg  # convex/angled-brush geometry
+from editor import component_edit as ce  # shared object/face/edge/vertex model
+
+# How close (in screen pixels) the cursor has to be before a press grabs a
+# component handle or a brush side.  Converted to world units with the view's
+# zoom so the feel is the same at every zoom level.
+COMPONENT_GRAB_PIXELS = 9.0
+SIDE_GRAB_PIXELS = 7.0
 # I/O System imports for drawing connections
 try:
     from editor.io_system import get_connections
@@ -149,6 +156,13 @@ class View2D(QWidget):
         self.rotate_applied = 0.0      # net snapped degrees applied so far
         self.rotate_snap_deg = 15.0    # step size while grid snap is enabled
 
+        # --- Component editing (face / edge / vertex / side stretch) ---
+        # The mode, hover and selection live on the main window's shared
+        # ComponentController; only the per-view drag anchors live here.
+        self.component_drag_start = None    # QPointF, view-plane press point
+        self.component_drag_anchor = None   # world position of the grabbed part
+        self.component_drag_kind = None     # 'vertex' / 'edge' / 'face' / 'side'
+
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.ClickFocus)
         self.setContextMenuPolicy(Qt.NoContextMenu)
@@ -170,6 +184,16 @@ class View2D(QWidget):
                 self.color_pixmaps[color_name] = pixmap.scaled(18, 18, Qt.KeepAspectRatio, Qt.SmoothTransformation) 
 
     def reset_state(self):
+        # A component drag in flight owns the views: update_views() reaches
+        # every 2D view (including this one) while the mouse is still down, and
+        # tearing the drag down here would strand the brush mid-edit.
+        if getattr(self.main_window, 'components', None) is not None and \
+                self.main_window.components.drag is not None:
+            self.update()
+            return
+        self.component_drag_start = None
+        self.component_drag_anchor = None
+        self.component_drag_kind = None
         self.is_dragging_object = False
         self.is_resizing_brush = False
         self.resize_handle_ix = -1
@@ -237,6 +261,246 @@ class View2D(QWidget):
     def _selected_brush(self):
         obj = self.editor.state.selected_object
         return obj if isinstance(obj, dict) else None
+
+    # ======================================================================
+    # Component editing (object / face / edge / vertex) — Radiant-style
+    # ======================================================================
+    #
+    # Everything below is driven by mouse events only.  A pick tests just the
+    # brushes in the current selection, and a drag works from a snapshot taken
+    # at mouse-down, so neither the paint path nor the scene at large is
+    # touched while the user is dragging.
+
+    def _components(self):
+        """The shared component controller living on the main window."""
+        return self.main_window.components
+
+    def _component_mode(self):
+        return self._components().mode
+
+    def _component_targets(self):
+        """Brushes a component pick is allowed to test (the selection)."""
+        return self.main_window.component_drag_targets()
+
+    def _world_per_pixel(self):
+        return 1.0 / max(self.zoom_factor, 1e-6)
+
+    def _view_ray(self, world_pos, depth_reference=None):
+        """A world-space ray through the cursor along this view's depth axis.
+
+        The 2D views are orthographic, so "what is under the cursor" is a line
+        through the view plane rather than a point — the same line the side and
+        face tests want.
+        """
+        idx = self._axis_indices()
+        if idx is None:
+            return None, None
+        a1, a2, depth = idx
+        origin = np.zeros(3)
+        origin[a1] = world_pos.x()
+        origin[a2] = world_pos.y()
+        origin[depth] = 0.0 if depth_reference is None else float(depth_reference)
+        direction = np.zeros(3)
+        direction[depth] = 1.0
+        return origin, direction
+
+    def _pick_component(self, world_pos):
+        """Component under the cursor, or ``None``.  Selection-scoped."""
+        idx = self._axis_indices()
+        mode = self._component_mode()
+        if idx is None or mode == ce.MODE_OBJECT:
+            return None
+        targets = self._component_targets()
+        if not targets:
+            return None
+        a1, a2, _ = idx
+        tol = COMPONENT_GRAB_PIXELS * self._world_per_pixel()
+        return ce.pick_component_2d(targets, mode,
+                                    (world_pos.x(), world_pos.y()),
+                                    a1, a2, tol)
+
+    def _drag_axes(self):
+        """The two world axes a drag in this view may move things along."""
+        idx = self._axis_indices()
+        return None if idx is None else (idx[0], idx[1])
+
+    def _view_plane_delta(self, world_pos):
+        """Raw (unsnapped) world delta from the drag start to ``world_pos``."""
+        idx = self._axis_indices()
+        if idx is None or self.component_drag_start is None:
+            return np.zeros(3)
+        a1, a2, _ = idx
+        delta = np.zeros(3)
+        delta[a1] = world_pos.x() - self.component_drag_start.x()
+        delta[a2] = world_pos.y() - self.component_drag_start.y()
+        return delta
+
+    def _snap_grid(self):
+        """Grid step for component drags, or 0 when snapping is switched off."""
+        return self.grid_size if self.snap_to_grid_enabled else 0
+
+    def begin_component_drag(self, ref, world_pos, shear=False, additive=False):
+        """Start dragging a picked component.  One undo checkpoint, at mouse-down."""
+        controller = self._components()
+        if additive:
+            controller.toggle(ref)
+            if ref not in controller.selection:
+                return False        # shift-click removed it: a deselect, not a drag
+            refs = list(controller.selection)
+        else:
+            if ref not in controller.selection:
+                controller.set_selection([ref])
+            refs = list(controller.selection)
+        if not refs:
+            return False
+        drag = ce.begin_component_drag(refs, shear=shear)
+        if drag is None or drag.is_empty():
+            return False
+        # Matches every other drag tool in Fio (rotate, group resize): the
+        # checkpoint is pushed once here and the moves that follow add none.
+        self.main_window.save_state()
+        controller.begin_drag(drag)
+        self.component_drag_start = QPointF(world_pos)
+        self.component_drag_anchor = np.array(ref.position, dtype=np.float64)
+        self.component_drag_kind = ref.kind
+        self.update()
+        return True
+
+    def begin_side_stretch(self, world_pos):
+        """Grab the brush side under the cursor, Radiant's direct side stretch.
+
+        Returns ``True`` when a side was grabbed.  Clicking near a corner grabs
+        both sides that meet there, so a corner drag resizes in two axes at
+        once without any handle.
+        """
+        targets = self._component_targets()
+        if not targets:
+            return False
+        origin, direction = self._view_ray(world_pos)
+        if origin is None:
+            return False
+        tol = SIDE_GRAB_PIXELS * self._world_per_pixel()
+        drag, picked = ce.begin_side_stretch(targets, origin, direction, tol,
+                                             min_t=-math.inf)
+        if drag is None or drag.is_empty():
+            return False
+        self.main_window.save_state()
+        self._components().begin_drag(drag)
+        self.component_drag_start = QPointF(world_pos)
+        self.component_drag_anchor = None
+        self.component_drag_kind = 'side'
+        self.setCursor(Qt.SizeAllCursor)
+        self.update()
+        return True
+
+    def update_component_drag(self, world_pos):
+        """Apply the drag for the cursor's current position."""
+        controller = self._components()
+        if controller.drag is None or self.component_drag_start is None:
+            return
+        axes = self._drag_axes()
+        delta = self._view_plane_delta(world_pos)
+        grid = self._snap_grid()
+        if self.component_drag_kind in (ce.MODE_VERTEX, ce.MODE_EDGE) and \
+                self.component_drag_anchor is not None:
+            # Grabbing a specific corner: snap where that corner lands, so it
+            # ends up on a grid intersection exactly like a dragged brush edge.
+            delta = ce.snap_component_delta(self.component_drag_anchor, delta,
+                                            grid, axes=axes)
+        else:
+            # Faces and sides move a plane, so snap the movement itself — the
+            # plane keeps whatever sub-grid offset the brush already had.
+            delta = ce.snap_delta(delta, grid, axes=axes)
+        controller.update_drag(delta)
+        current_time = time.time()
+        if current_time - self.last_3d_update_time > 0.016:
+            self.main_window.view_3d.update()
+            self.last_3d_update_time = current_time
+        self.update()
+
+    def end_component_drag(self):
+        """Commit the drag; drop the checkpoint if nothing actually moved."""
+        controller = self._components()
+        if controller.drag is None:
+            return False
+        label = controller.drag.label
+        rejected = controller.drag.rejected
+        changed = controller.commit_drag()
+        self.component_drag_start = None
+        self.component_drag_anchor = None
+        self.component_drag_kind = None
+        self.setCursor(Qt.ArrowCursor)
+        if changed:
+            self.main_window.unsaved_changes = True
+            self.main_window.state.mark_lighting_dirty()
+            if rejected:
+                self.main_window.show_toast(
+                    "%s — stopped at the last valid shape" % label.capitalize())
+        else:
+            # Nothing moved: undo the checkpoint we pushed at mouse-down so the
+            # user's undo history has no empty step in it.
+            if getattr(self.editor.state, 'undo_stack', None):
+                self.editor.state.undo_stack.pop()
+        self.main_window.property_editor.set_object(
+            self.editor.state.selected_object)
+        self.main_window.refresh_component_views()
+        return changed
+
+    def cancel_component_drag(self):
+        """Abort the drag, restoring every affected brush."""
+        controller = self._components()
+        if controller.drag is None:
+            return False
+        controller.cancel_drag()
+        if getattr(self.editor.state, 'undo_stack', None):
+            self.editor.state.undo_stack.pop()
+        self.component_drag_start = None
+        self.component_drag_anchor = None
+        self.component_drag_kind = None
+        self.setCursor(Qt.ArrowCursor)
+        self.main_window.refresh_component_views()
+        return True
+
+    def update_component_hover(self, world_pos):
+        """Refresh the highlighted component; repaint only when it changed."""
+        if self._component_mode() == ce.MODE_OBJECT:
+            return
+        if self._components().set_hover(self._pick_component(world_pos)):
+            self.update()
+
+    # ------------------------------------------------------------------
+    # Clone-and-place  (select -> Space -> move -> click)
+    # ------------------------------------------------------------------
+    def _track_clone_placement(self, world_pos):
+        """Keep the copies being placed under the cursor as it moves."""
+        placement = self.main_window.clone_placement
+        if not placement:
+            return
+        idx = self._axis_indices()
+        if idx is None:
+            return
+        a1, a2, _ = idx
+        snapped = self.snap_to_grid(world_pos)
+        anchor = placement.get('anchor')
+        if anchor is None:
+            # First move after the clone: latch on where the cursor is now, so
+            # the copies keep their initial grid offset instead of jumping.
+            placement['anchor'] = QPointF(snapped)
+            return
+        d1 = snapped.x() - anchor.x()
+        d2 = snapped.y() - anchor.y()
+        if d1 == 0 and d2 == 0:
+            return
+        delta = [0.0, 0.0, 0.0]
+        delta[a1] = d1
+        delta[a2] = d2
+        self.main_window.move_clone_placement(delta)
+        placement['anchor'] = QPointF(snapped)
+        current_time = time.time()
+        if current_time - self.last_3d_update_time > 0.016:
+            self.main_window.view_3d.update()
+            self.last_3d_update_time = current_time
+        self.update()
 
     # ------------------------------------------------------------------
     # Base tool (Select / Brush) + marquee helpers
@@ -773,6 +1037,16 @@ class View2D(QWidget):
         self.update()
 
     def keyPressEvent(self, event):
+        # --- Escape backs out of the innermost thing in progress ---
+        if event.key() == Qt.Key_Escape:
+            if self._components().drag is not None:
+                self.cancel_component_drag()
+                return
+            if self.main_window.clone_placement_active():
+                self.main_window.cancel_clone_placement()
+                self.update()
+                return
+
         # --- Free-rotate tool keys (only while rotate mode is active) ---
         if self._rotate_active():
             if event.key() == Qt.Key_Escape:
@@ -1195,6 +1469,10 @@ class View2D(QWidget):
 
         if self.is_marquee_select:
             self.draw_marquee(painter)
+
+        # Component handles for the selected brushes (vertex/edge/face modes).
+        if self._component_mode() != ce.MODE_OBJECT:
+            self.draw_component_overlay(painter)
 
         # Unified group bounding box + scale/rotate handles for a multi-selection.
         if self._group_manip_active():
@@ -2541,6 +2819,55 @@ class View2D(QWidget):
             handle_rect = QRectF(handle.x() - handle_size/2, handle.y() - handle_size/2, handle_size, handle_size)
             painter.drawRect(handle_rect)
 
+    def draw_component_overlay(self, painter):
+        """Draw the vertex/edge/face handles of the selected brushes.
+
+        Reads the controller's cached overlay arrays (rebuilt only when the
+        selection, hover or geometry actually changed) and projects them here —
+        no geometry is derived during the paint.
+        """
+        controller = self._components()
+        idx = self._axis_indices()
+        if idx is None:
+            return
+        a1, a2, _ = idx
+        targets = self._component_targets()
+        if not targets:
+            return
+        data = controller.overlay(targets)
+
+        def to_screen(p):
+            return self.world_to_screen(QPointF(float(p[a1]), float(p[a2])))
+
+        cold = QColor(120, 200, 255)
+        hot = QColor(255, 170, 40)
+
+        lines = data['lines']
+        if len(lines):
+            painter.setPen(QPen(cold, 1))
+            for seg in lines:
+                painter.drawLine(to_screen(seg[0]), to_screen(seg[1]))
+        hot_lines = data['hot_lines']
+        if len(hot_lines):
+            painter.setPen(QPen(hot, 2))
+            for seg in hot_lines:
+                painter.drawLine(to_screen(seg[0]), to_screen(seg[1]))
+
+        half = 3.0
+        painter.setPen(QPen(cold, 1))
+        painter.setBrush(QBrush(QColor(120, 200, 255, 110)))
+        for p in data['points']:
+            s = to_screen(p)
+            painter.drawRect(QRectF(s.x() - half, s.y() - half,
+                                    half * 2, half * 2))
+        painter.setPen(QPen(hot, 2))
+        painter.setBrush(QBrush(QColor(255, 170, 40, 190)))
+        for p in data['hot_points']:
+            s = to_screen(p)
+            painter.drawRect(QRectF(s.x() - half - 1, s.y() - half - 1,
+                                    half * 2 + 2, half * 2 + 2))
+        painter.setBrush(Qt.NoBrush)
+
     def draw_marquee(self, painter):
         """Draw the live rubber-band box and outline the objects it will catch."""
         idx = self._axis_indices()
@@ -2875,6 +3202,12 @@ class View2D(QWidget):
             return
 
         elif event.button() == Qt.LeftButton:
+            # --- Clone-and-place: the click drops the copies being carried ---
+            if self.main_window.clone_placement_active():
+                self.main_window.finish_clone_placement()
+                self.update()
+                return
+
             # --- Free-rotate tool: left-drag spins the selection ---
             if self._rotate_active():
                 self.begin_rotate(world_pos)
@@ -2921,6 +3254,25 @@ class View2D(QWidget):
                 self.update()
                 return
             
+            # --- Component modes: the press grabs a vertex / edge / face ---
+            # What the drag means is decided here, Radiant-style, from the
+            # current mode, what the cursor hit and the modifier held:
+            #   plain      -> drag that component alone
+            #   Shift      -> add it to the component selection and drag the set
+            #   Ctrl+face  -> shear the face (its neighbours tilt to follow)
+            # A press that misses every component falls through to the normal
+            # object selection below, so the brush being worked on can still be
+            # swapped without leaving the mode.
+            if self._component_mode() != ce.MODE_OBJECT:
+                ref = self._pick_component(world_pos)
+                if ref is not None:
+                    shear = bool(event.modifiers() & Qt.ControlModifier) and \
+                        ref.kind == ce.MODE_FACE
+                    additive = bool(event.modifiers() & Qt.ShiftModifier)
+                    if self.begin_component_drag(ref, world_pos, shear=shear,
+                                                 additive=additive):
+                        return
+
             # Check for CTRL+click to start connection dragging
             if event.modifiers() & Qt.ControlModifier:
                 clicked_object = self.get_object_at(event.pos())
@@ -2964,6 +3316,20 @@ class View2D(QWidget):
                 ).normalized()
                 self.update()
                 return
+
+            # --- Direct side stretching (Radiant's "side stretch") ---
+            # With brushes selected, pressing on or just beside one of their
+            # sides grabs that side instead of the whole brush, so a brush can
+            # be resized by pointing at the geometry rather than hunting for a
+            # handle.  The existing handles are still checked first, and the
+            # grab is banded to a few pixels so an empty-space press still
+            # starts a marquee.
+            if self._select_tool_active() and \
+                    not (event.modifiers() & (Qt.ControlModifier |
+                                              Qt.ShiftModifier |
+                                              Qt.AltModifier)):
+                if self.begin_side_stretch(world_pos):
+                    return
 
             # Alt-click cycles through stacked objects; a plain click takes the top.
             cycle = bool(event.modifiers() & Qt.AltModifier)
@@ -3055,6 +3421,18 @@ class View2D(QWidget):
         world_pos = self.screen_to_world(event.pos())
         middle_click_pan_enabled = self.main_window.config.getboolean('Controls', 'MiddleClickDrag', fallback=False)
 
+        # Component drag in progress: it owns the mouse until the button is up.
+        if self._components().drag is not None:
+            if event.buttons() & Qt.LeftButton:
+                self.update_component_drag(world_pos)
+                return
+            self.end_component_drag()   # button released elsewhere
+
+        # Clone-and-place: the copies ride the cursor until a click drops them.
+        if self.main_window.clone_placement_active():
+            self._track_clone_placement(world_pos)
+            return
+
         # Free-rotate tool: a left-drag updates the spin; otherwise fall through.
         if self.rotate_dragging:
             if event.buttons() & Qt.LeftButton:
@@ -3087,6 +3465,12 @@ class View2D(QWidget):
             return
         
         if not event.buttons():
+            # Hovering in a component mode highlights what a press would grab.
+            # The pick only tests the selected brushes and only repaints when
+            # the highlight actually changes.
+            if self._component_mode() != ce.MODE_OBJECT:
+                self.update_component_hover(world_pos)
+
             g_handle = self._group_handle_at(event.pos())
             single_handle = -1 if self._group_manip_active() else self.get_handle_at(event.pos())
             handle_ix = g_handle if g_handle != -1 else single_handle
@@ -3097,6 +3481,9 @@ class View2D(QWidget):
                 elif handle_ix in [1, 2]: self.setCursor(Qt.SizeBDiagCursor)
                 elif handle_ix in [4, 5]: self.setCursor(Qt.SizeVerCursor)
                 elif handle_ix in [6, 7]: self.setCursor(Qt.SizeHorCursor)
+            elif self._components().hover is not None:
+                # A component is under the cursor and a press would grab it.
+                self.setCursor(Qt.SizeAllCursor)
             else:
                 self.setCursor(Qt.ArrowCursor)
 
@@ -3175,10 +3562,23 @@ class View2D(QWidget):
 
     def mouseReleaseEvent(self, event):
         action_taken = self.is_dragging_object or self.is_resizing_brush
-        
+
+        # A component drag commits on button-up — one drag, one undo step.
+        if event.button() == Qt.LeftButton and self._components().drag is not None:
+            self.end_component_drag()
+            self.update()
+            return
+
         if event.button() == Qt.RightButton and not self.is_panning:
+            # A right-click while carrying clones throws them away rather than
+            # opening a menu on top of geometry that is not placed yet.
+            if self.main_window.clone_placement_active():
+                self.main_window.cancel_clone_placement()
+                self.is_panning = False
+                self.update()
+                return
             self.contextMenuEvent(event)
-        
+
         self.is_panning = False
 
         if event.button() == Qt.LeftButton:
@@ -3855,12 +4255,13 @@ class View2D(QWidget):
             return None
 
         # Alt-click walks through stacked objects at the cursor; a plain click
-        # always takes the topmost so selection stays predictable.
+        # always takes the topmost so selection stays predictable.  The walk
+        # goes through the shared cycling helper (the same one the 3D view
+        # uses) over a list built in scene order, so repeating the click always
+        # visits the same brushes in the same sequence — including ones buried
+        # completely behind others.
         if cycle:
-            current_selection = self.editor.state.selected_object
-            if current_selection in candidates:
-                idx = candidates.index(current_selection)
-                return candidates[(idx + 1) % len(candidates)]
+            return ce.cycle_pick(candidates, self.editor.state.selected_object)
 
         return candidates[0]
 

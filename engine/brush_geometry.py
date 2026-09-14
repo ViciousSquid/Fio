@@ -346,7 +346,7 @@ class ConvexGeometry:
     """Derived, cached surface of a convex brush (built from its plane set)."""
 
     __slots__ = ('planes', 'verts', 'faces', '_bounds',
-                 '_plane_cache', '_coll_cache')
+                 '_plane_cache', '_coll_cache', '_edge_cache')
 
     def __init__(self, planes):
         # Store copies so later mutation of the source list can't corrupt us.
@@ -357,12 +357,35 @@ class ConvexGeometry:
         # set, shared by the point/AABB queries so they never rebuild arrays.
         self._plane_cache = None   # (normals Nx3, offsets N)
         self._coll_cache = None    # (normals Mx3, offsets M) incl. bevels
+        self._edge_cache = None    # [(i, j), ...] unique corner pairs
 
     # -- validity ----------------------------------------------------------
     @property
     def is_valid(self):
         """True when the plane set encloses a real (non-degenerate) volume."""
         return len(self.verts) >= 4 and len(self.faces) >= 4
+
+    # -- components (editor vertex/edge picking) ---------------------------
+    @property
+    def edges(self):
+        """Unique corner-index pairs ``(i, j)`` with ``i < j``, one per edge.
+
+        Derived once from the face rings and cached for this instance, so the
+        editor's edge picking/overlay never walks the windings again while the
+        brush is unchanged.
+        """
+        if self._edge_cache is None:
+            seen = set()
+            for face in self.faces:
+                ring = face['indices']
+                count = len(ring)
+                for k in range(count):
+                    a, b = ring[k], ring[(k + 1) % count]
+                    if a == b:
+                        continue
+                    seen.add((a, b) if a < b else (b, a))
+            self._edge_cache = sorted(seen)
+        return self._edge_cache
 
     # -- bounds ------------------------------------------------------------
     @property
@@ -463,6 +486,14 @@ class ConvexGeometry:
         if self._plane_cache is None:
             self._plane_cache = _plane_arrays(self.planes)
         return self._plane_cache
+
+    def plane_arrays(self):
+        """Public view of the cached ``(normals Nx3, offsets N)`` plane arrays.
+
+        Shared, read-only and built once per geometry — editor component
+        picking uses it so it never rebuilds a NumPy array per query.
+        """
+        return self._plane_arrays_cached()
 
     def contains_point(self, p, eps=EPS):
         p = _v(p)
@@ -1048,6 +1079,10 @@ def _plane_from_json(p):
 def _invalidate(brush):
     brush.pop('_geo_cache', None)
     brush.pop('_geo_cache_sig', None)
+    # The box-derived shape used by component picking is keyed off pos/size and
+    # is meaningless once the brush carries a real plane set.
+    brush.pop('_box_shape', None)
+    brush.pop('_box_shape_sig', None)
 
 
 # Runtime-only keys written onto brush dicts by this module.  editor_state must
@@ -1056,3 +1091,293 @@ GEO_RUNTIME_KEYS = frozenset({
     '_geo_cache', '_geo_cache_sig',
     '_collision_mode', '_mesh_triangles', '_mesh_bounds', '_mesh_planes',
 })
+
+
+# --------------------------------------------------------------------------
+# Component editing (vertex / edge / face drags)
+# --------------------------------------------------------------------------
+#
+# Fio stores a brush as a set of half-space planes.  Component editing has to
+# answer the reverse question: "given the corner points I want, what plane set
+# describes that solid?".  :func:`convex_hull_planes` does exactly that — it
+# returns the supporting planes of the convex hull of a point cloud — so a
+# vertex/edge drag is simply "move these corners, re-derive the planes".  That
+# keeps every edit convex by construction (the hull of any point set is convex)
+# and lets an invalid drag be rejected by testing the rebuilt solid, without
+# introducing a separate winding/BSP representation.
+
+# A brush with more corners than this is refused for hull rebuilds: the
+# candidate-plane enumeration is O(n^3) in the corner count and a real brush
+# never comes close (a box has 8, a heavily clipped brush a couple of dozen).
+# The cap keeps a live drag inside a couple of milliseconds per mouse event
+# even on low-power hardware; past it the edit is rejected rather than stalling
+# the editor.
+MAX_HULL_POINTS = 40
+
+# Largest extent a component edit may leave a brush with.  A drag that would
+# blow a brush up past this has gone wrong (a corner flung across the map, a
+# plane pushed through its opposite), so it is rejected the same way a collapse
+# is and the last valid shape stays on screen.
+MAX_BRUSH_EXTENT = 32768.0
+
+# Two planes count as "the same face" for metadata carry-over when their
+# normals agree to better than this dot product (~8 degrees).
+_FACE_MATCH_DOT = 0.99
+
+
+def _triple_indices(n):
+    """All (i, j, k) index triples with i < j < k, as an (M, 3) int array."""
+    # Built as one small loop over the first index with the remaining (j, k)
+    # pairs vectorised; n is tiny here (see MAX_HULL_POINTS).
+    out = []
+    for a in range(n - 2):
+        jj, kk = np.triu_indices(n - a - 1, k=1)
+        jj = jj + a + 1
+        kk = kk + a + 1
+        if len(jj) == 0:
+            continue
+        block = np.empty((len(jj), 3), dtype=np.intp)
+        block[:, 0] = a
+        block[:, 1] = jj
+        block[:, 2] = kk
+        out.append(block)
+    if not out:
+        return np.zeros((0, 3), dtype=np.intp)
+    return np.concatenate(out)
+
+
+def convex_hull_planes(points, eps=EPS):
+    """Supporting planes of the convex hull of ``points``.
+
+    Returns a list of ``{'n': [...], 'd': ...}`` plane dicts using this
+    module's inside convention (``dot(n, p) <= d``), deduplicated so each
+    distinct hull face appears once.  Returns ``[]`` when the points are
+    degenerate (fewer than four, or all coplanar), which callers treat as
+    "reject this edit".
+
+    The hull is found by testing every candidate plane through three points and
+    keeping the ones with every point on their inside — brute force, but the
+    point counts here are tiny and it is exact, allocation-light and needs no
+    incremental-hull bookkeeping.
+    """
+    pts = np.asarray(points, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        return []
+    pts, _ = _weld(pts, eps)
+    n = len(pts)
+    if n < 4 or n > MAX_HULL_POINTS:
+        return []
+
+    triples = _triple_indices(n)
+    if len(triples) == 0:
+        return []
+
+    a = pts[triples[:, 0]]
+    b = pts[triples[:, 1]]
+    c = pts[triples[:, 2]]
+    normals = np.cross(b - a, c - a)                     # (M, 3)
+    lengths = np.sqrt(np.einsum('ij,ij->i', normals, normals))
+    good = lengths > 1e-9
+    if not np.any(good):
+        return []
+    normals = normals[good] / lengths[good][:, None]
+    offsets = np.einsum('ij,ij->i', normals, a[good])
+
+    # Orient every candidate so the hull's interior (its centroid) is inside.
+    centroid = pts.mean(axis=0)
+    flip = (normals @ centroid - offsets) > 0.0
+    normals[flip] *= -1.0
+    offsets[flip] *= -1.0
+
+    # A candidate is a real hull face when no point lies outside it.
+    outside = pts @ normals.T - offsets                  # (n, M)
+    keep = outside.max(axis=0) <= eps
+    if not np.any(keep):
+        return []
+    normals = normals[keep]
+    offsets = offsets[keep]
+
+    # Snap normals that are a hair off a world axis back onto it.  Hull
+    # arithmetic leaves errors around 1e-16 there, and letting them through
+    # would stop a box-shaped result from being recognised as a box (and so
+    # from dropping back to the compact pos/size form).
+    axis_like = np.abs(np.abs(normals) - 1.0) < 1e-9
+    rows = np.flatnonzero(axis_like.any(axis=1))
+    for r in rows:
+        axis = int(np.argmax(np.abs(normals[r])))
+        sign = math.copysign(1.0, normals[r][axis])
+        normals[r] = 0.0
+        normals[r][axis] = sign
+        offsets[r] = round(float(offsets[r]), 6)
+
+    # Deduplicate coplanar candidates (a face with k corners yields many).
+    planes = []
+    seen = set()
+    for i in range(len(offsets)):
+        nx, ny, nz = normals[i]
+        key = (round(float(nx), 5), round(float(ny), 5), round(float(nz), 5),
+               round(float(offsets[i]), 4))
+        if key in seen:
+            continue
+        seen.add(key)
+        planes.append({'n': [float(nx), float(ny), float(nz)],
+                       'd': float(offsets[i])})
+    if len(planes) < 4:
+        return []
+    return planes
+
+
+def carry_plane_metadata(new_planes, old_planes):
+    """Copy texture/uv/face-tag from ``old_planes`` onto matching new planes.
+
+    A rebuilt plane set has no texture information of its own, so each new
+    plane adopts the old plane whose normal points most nearly the same way.
+    Box-face tags (``top``/``north``/...) are handed out at most once so two
+    rebuilt faces can never claim to be the same box side; a new plane with no
+    close match keeps the brush's dominant texture but stays untagged, exactly
+    like a face produced by the clip tool.
+    """
+    if not old_planes:
+        return new_planes
+    old_n = np.array([p['n'] for p in old_planes], dtype=np.float64)
+    lengths = np.sqrt(np.einsum('ij,ij->i', old_n, old_n))
+    lengths[lengths < 1e-12] = 1.0
+    old_n = old_n / lengths[:, None]
+    fallback_tex = _dominant_texture(old_planes)
+    fallback_uv = _dominant_uv_scale(old_planes)
+    used_tags = set()
+
+    for plane in new_planes:
+        n = np.asarray(plane['n'], dtype=np.float64)
+        dots = old_n @ n
+        best = int(np.argmax(dots))
+        if float(dots[best]) >= _FACE_MATCH_DOT:
+            src = old_planes[best]
+            if src.get('texture') is not None:
+                plane['texture'] = src['texture']
+            if src.get('uv_scale') is not None:
+                plane['uv_scale'] = list(src['uv_scale'])
+            tag = src.get('face')
+            if tag and tag not in used_tags:
+                plane['face'] = tag
+                used_tags.add(tag)
+        else:
+            if fallback_tex is not None:
+                plane['texture'] = fallback_tex
+            if fallback_uv is not None:
+                plane['uv_scale'] = list(fallback_uv)
+    return new_planes
+
+
+def _commit_planes(brush, planes):
+    """Install a validated plane set on ``brush`` and refresh its caches.
+
+    Returns ``True`` when the plane set encloses a real volume, ``False``
+    (leaving the brush untouched) when it does not — the single place every
+    component edit funnels through so an invalid drag can never be committed.
+    """
+    trial = ConvexGeometry(planes)
+    if not trial.is_valid:
+        return False
+    if float(np.max(trial.extents())) > MAX_BRUSH_EXTENT:
+        return False
+    brush['geometry'] = {'planes': [_plane_to_json(p) for p in planes]}
+    _invalidate(brush)
+    brush['_geo_cache'] = trial
+    brush['_geo_cache_sig'] = geometry_signature(brush)
+    sync_brush_bounds(brush)
+    return True
+
+
+def brush_points(brush):
+    """Corner points of ``brush`` as an (N, 3) float64 array (may be empty)."""
+    shape = get_shape(brush)
+    if shape is None or not shape.is_valid:
+        return np.zeros((0, 3))
+    return shape.verts
+
+
+def rebuild_brush_from_points(brush, points):
+    """Replace ``brush``'s geometry with the convex hull of ``points``.
+
+    Texture assignments are carried across from the brush's current planes.
+    Returns ``True`` on success; a degenerate or inside-out point set leaves
+    the brush exactly as it was and returns ``False``.
+    """
+    planes = convex_hull_planes(points)
+    if not planes:
+        return False
+    old = list(brush.get('geometry', {}).get('planes') or [])
+    if not old:
+        # A box brush being edited for the first time: seed the metadata from
+        # its box faces so per-face textures survive the switch to geometry.
+        old = [_plane_to_json(p) for p in box_planes(
+            brush.get('pos', [0, 0, 0]), brush.get('size', [64, 64, 64]),
+            textures=brush.get('textures'), uv_scale=brush.get('uv_scale'))]
+    carry_plane_metadata(planes, old)
+    return _commit_planes(brush, planes)
+
+
+def offset_brush_planes(brush, offsets):
+    """Move whole face planes of ``brush`` along their own normals.
+
+    ``offsets`` maps ``plane index -> new 'd' value``.  Every listed plane is
+    updated in one shot so the rebuilt solid is validated once; an edit that
+    would collapse the brush is rejected and nothing changes.  Returns
+    ``True`` when the brush was modified.
+    """
+    if not offsets:
+        return False
+    box_to_geometry(brush)
+    planes = [dict(p) for p in brush['geometry']['planes']]
+    changed = False
+    for idx, new_d in offsets.items():
+        if 0 <= idx < len(planes):
+            if abs(float(planes[idx]['d']) - float(new_d)) > 1e-9:
+                changed = True
+            planes[idx]['d'] = float(new_d)
+    if not changed:
+        return False
+    return _commit_planes(brush, planes)
+
+
+def plane_face_vertex_indices(brush, plane_index):
+    """Indices (into :func:`brush_points`) of the corners on one face plane."""
+    shape = get_shape(brush)
+    if shape is None or not shape.is_valid:
+        return []
+    for face in shape.faces:
+        if face['plane'] == plane_index:
+            return list(face['indices'])
+    return []
+
+
+def get_shape(brush):
+    """Cached :class:`ConvexGeometry` for *any* brush, angled or box.
+
+    Angled brushes reuse :func:`get_convex`.  A plain box brush has no plane
+    set to read, so one is derived from its ``pos``/``size`` and cached under
+    private keys — the brush itself is left as a box, keeping the renderer's
+    fast axis-aligned path.  Only component picking/editing calls this, so no
+    per-frame work is added for brushes nobody is editing.
+    """
+    if brush_has_geometry(brush):
+        return get_convex(brush)
+    pos = brush.get('pos')
+    size = brush.get('size')
+    if pos is None or size is None:
+        return None
+    sig = (round(float(pos[0]), 4), round(float(pos[1]), 4), round(float(pos[2]), 4),
+           round(float(size[0]), 4), round(float(size[1]), 4), round(float(size[2]), 4))
+    cache = brush.get('_box_shape')
+    if cache is not None and brush.get('_box_shape_sig') == sig:
+        return cache
+    shape = ConvexGeometry(box_planes(pos, size,
+                                      textures=brush.get('textures'),
+                                      uv_scale=brush.get('uv_scale')))
+    brush['_box_shape'] = shape
+    brush['_box_shape_sig'] = sig
+    return shape
+
+
+GEO_RUNTIME_KEYS = GEO_RUNTIME_KEYS | frozenset({'_box_shape', '_box_shape_sig'})

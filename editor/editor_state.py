@@ -438,13 +438,14 @@ class EditorState:
         """Serialize brushes for undo stack (deep copy with I/O)."""
         result = []
         for brush in self.brushes:
-            brush_copy = copy.deepcopy(brush)
-
-            # Strip renderer-internal cache keys.  These hold GLM matrix
-            # objects (mat4x4 / mat3x3) that are not JSON-serialisable and
-            # have no meaning outside the renderer's own lifetime.
-            for k in _RENDERER_PRIVATE_KEYS:
-                brush_copy.pop(k, None)
+            # Strip renderer-internal cache keys *before* the deep copy.  They
+            # hold GLM matrices and cached convex geometry that are neither
+            # JSON-serialisable nor meaningful outside the renderer's lifetime,
+            # and deep-copying them first only to throw them away made every
+            # undo checkpoint pay for geometry it discards.
+            shallow = {k: v for k, v in brush.items()
+                       if k not in _RENDERER_PRIVATE_KEYS}
+            brush_copy = copy.deepcopy(shallow)
 
             # Convert OutputConnection objects to dicts for JSON
             if '_io_connections' in brush_copy:

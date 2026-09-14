@@ -312,6 +312,14 @@ class BaseRenderer:
         self._conn_line_vbo = None
         self.face_highlight_vao = None
         self.face_highlight_vbo = None
+        # Component-edit handle overlay (editor only).  The buffer is refilled
+        # only when the editor's overlay version changes, never per frame.
+        self._component_overlay_vao = None
+        self._component_overlay_vbo = None
+        self._component_overlay_data = None
+        self._component_overlay_counts = None
+        self._component_overlay_version = None
+        self._component_overlay_dirty = False
         self._cube_vbo = None
         self._sprite_vbo = None
         self._grid_vbo = None
@@ -1885,6 +1893,104 @@ class BaseRenderer:
         gl.glDrawArrays(gl.GL_TRIANGLES, 0, n)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glBindVertexArray(0)
+
+    def draw_component_overlay(self, projection, view, overlay, version=None):
+        """Draw vertex/edge/face handles for the brushes being component-edited.
+
+        ``overlay`` is the dict the editor's ComponentController hands over:
+        ``points`` / ``hot_points`` (N, 3) and ``lines`` / ``hot_lines``
+        (M, 2, 3), already ``float32``.  Nothing is computed here — the arrays
+        are built by the editor when the selection or geometry changes and are
+        uploaded again only when ``version`` moves, so hovering costs one
+        integer comparison and a draw call rather than a geometry rebuild.
+        """
+        if 'simple' not in self.shaders or not overlay:
+            return
+        points = overlay.get('points')
+        hot_points = overlay.get('hot_points')
+        lines = overlay.get('lines')
+        hot_lines = overlay.get('hot_lines')
+        if not (len(points) or len(hot_points) or len(lines) or len(hot_lines)):
+            return
+
+        if version is None or self._component_overlay_version != version:
+            # One interleaved buffer for the whole overlay: four contiguous
+            # runs (cold lines, hot lines, cold points, hot points) so the
+            # draw below is four glDrawArrays with no per-handle work.
+            def _flat(arr):
+                return (np.asarray(arr, dtype=np.float32).reshape(-1)
+                        if len(arr) else np.zeros(0, dtype=np.float32))
+            cold_l, hot_l = _flat(lines), _flat(hot_lines)
+            cold_p, hot_p = _flat(points), _flat(hot_points)
+            data = np.concatenate((cold_l, hot_l, cold_p, hot_p)) \
+                if (len(cold_l) or len(hot_l) or len(cold_p) or len(hot_p)) \
+                else np.zeros(0, dtype=np.float32)
+            self._component_overlay_data = data
+            self._component_overlay_counts = (
+                len(cold_l) // 3, len(hot_l) // 3,
+                len(cold_p) // 3, len(hot_p) // 3)
+            self._component_overlay_version = version
+            self._component_overlay_dirty = True
+
+        counts = self._component_overlay_counts
+        if not counts or not any(counts):
+            return
+
+        shader, uniforms = self.shaders['simple'], self.uniforms['simple']
+        gl.glUseProgram(shader)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
+        gl.glUniform1f(uniforms['alpha'], 1.0)
+
+        if self._component_overlay_vao is None:
+            self._component_overlay_vao = gl.glGenVertexArrays(1)
+            self._component_overlay_vbo = gl.glGenBuffers(1)
+            gl.glBindVertexArray(self._component_overlay_vao)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._component_overlay_vbo)
+            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+            gl.glEnableVertexAttribArray(0)
+            gl.glBindVertexArray(0)
+
+        gl.glBindVertexArray(self._component_overlay_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._component_overlay_vbo)
+        if self._component_overlay_dirty:
+            data = self._component_overlay_data
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, data.nbytes, data,
+                            gl.GL_DYNAMIC_DRAW)
+            self._component_overlay_dirty = False
+
+        cold_lines, hot_lines_n, cold_points, hot_points_n = counts
+        # Handles are editor furniture: they must stay visible through the
+        # geometry they belong to, so the depth test is off for this pass.
+        depth_was_on = gl.glIsEnabled(gl.GL_DEPTH_TEST)
+        gl.glDisable(gl.GL_DEPTH_TEST)
+        offset = 0
+        if cold_lines:
+            gl.glUniform3f(uniforms['color'], 0.45, 0.78, 1.0)
+            gl.glLineWidth(1.0)
+            gl.glDrawArrays(gl.GL_LINES, offset, cold_lines)
+        offset += cold_lines
+        if hot_lines_n:
+            gl.glUniform3f(uniforms['color'], 1.0, 0.66, 0.16)
+            gl.glLineWidth(2.0)
+            gl.glDrawArrays(gl.GL_LINES, offset, hot_lines_n)
+        offset += hot_lines_n
+        if cold_points:
+            gl.glUniform3f(uniforms['color'], 0.45, 0.78, 1.0)
+            gl.glPointSize(6.0)
+            gl.glDrawArrays(gl.GL_POINTS, offset, cold_points)
+        offset += cold_points
+        if hot_points_n:
+            gl.glUniform3f(uniforms['color'], 1.0, 0.66, 0.16)
+            gl.glPointSize(9.0)
+            gl.glDrawArrays(gl.GL_POINTS, offset, hot_points_n)
+        gl.glLineWidth(1.0)
+        gl.glPointSize(1.0)
+        if depth_was_on:
+            gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glBindVertexArray(0)
+        gl.glUseProgram(0)
 
     def draw_path_node_cubes(self, projection, view, things):
         if 'simple' not in self.shaders:

@@ -25,8 +25,14 @@ from editor.things import Light, PlayerStart, Model, update_all_counters_from_en
 from editor.SettingsWindow import SettingsWindow
 from editor.ui import Ui_MainWindow
 from engine.constants import TILE_SIZE, WALL_TILE, FLOOR_TILE
+from engine import brush_geometry
 from editor.view_2d import View2D
 from editor.editor_state import EditorState
+from editor import component_edit
+from editor.component_edit import (
+    ComponentController, COMPONENT_MODES, MODE_LABELS,
+    MODE_OBJECT, MODE_FACE, MODE_EDGE, MODE_VERTEX,
+)
 from editor.terrain_editor import TerrainEditorPanel
 from engine.terrain import Terrain
 from editor.debug_console import DebugConsole, CommandInput, debug_log
@@ -171,6 +177,17 @@ class MainWindow(QMainWindow):
         # marquee, 'brush' drags out new box geometry.  Clip/rotate are separate
         # drag tools layered on top and take precedence while active.
         self.tool_mode = 'select'
+        # Shared component-selection model (object / face / edge / vertex).
+        # Both the 2D views and the 3D viewport drive this one controller, so
+        # "click geometry, drag geometry" means the same thing in either view.
+        self.components = ComponentController()
+        # Clone-and-place: after Space the duplicate follows the cursor until a
+        # click drops it (Radiant-style).  Holds the objects being placed and
+        # the view-plane point they were grabbed at.
+        self.clone_placement = None
+        # Wall thickness the Hollow tool offers next time, so repeated hollows
+        # are a dialog keypress apart rather than a re-typed number.
+        self.last_hollow_thickness = 16
         self.preview_timer = QTimer(self)  # OPTIMIZATION: Added parent=self for proper cleanup
         self.preview_timer.timeout.connect(self.update_mover_preview)
         self.preview_data = {} 
@@ -954,53 +971,125 @@ class MainWindow(QMainWindow):
         self.update_all_ui()
 
     def clone_selected_object(self):
-        """Clone the selected object with offset, identical to pressing Space."""
-        if not self.state.selected_object:
+        """Clone the selection and hand it to the cursor to place.
+
+        Radiant's clone workflow is ``select -> Space -> move -> click``: the
+        duplicate appears immediately and follows the cursor until a click drops
+        it, so a row of pillars is a sequence of taps rather than a clone
+        followed by a separate drag.  The initial grid offset is kept so an
+        immediate click still leaves the copy beside the original instead of
+        exactly on top of it, and clipboard copy/paste is untouched.
+        """
+        sources = list(getattr(self.state, 'selected_objects', []) or [])
+        if self.state.selected_object is not None and \
+                self.state.selected_object not in sources:
+            sources.append(self.state.selected_object)
+        if not sources:
             return
-            
+
+        # A clone while one is still being placed drops the pending one first,
+        # so Space-Space-Space never strands half-placed duplicates.
+        self.finish_clone_placement()
         self.save_state()
-        
-        # Clone the object
-        if isinstance(self.state.selected_object, dict):
-            new_obj = copy.deepcopy(self.state.selected_object)
-            self.state.brushes.append(new_obj)
-        else:
-            new_obj = copy.copy(self.state.selected_object)
-            self.state.things.append(new_obj)
-            
+
         # Offset based on current 2D view (uses grid size like Space key)
         current_view = self.right_tabs.currentWidget()
+        axis_map = {'top': ('x', 'z'), 'side': ('y', 'z'), 'front': ('x', 'y')}
+        pos_map = {'x': 0, 'y': 1, 'z': 2}
+        offset = self.grid_size_spinbox.value()
+        delta = [0.0, 0.0, 0.0]
         if isinstance(current_view, View2D):
-            axis_map = {'top': ('x', 'z'), 'side': ('y', 'z'), 'front': ('x', 'y')}
-            pos_map = {'x': 0, 'y': 1, 'z': 2}
             ax1_name, ax2_name = axis_map.get(current_view.view_type, ('x', 'z'))
-            offset = self.grid_size_spinbox.value()
-            from engine.brush_geometry import translate_brush, brush_has_geometry
-            if isinstance(new_obj, dict) and brush_has_geometry(new_obj):
-                # Angled brush: shift its plane set, not just 'pos'.
-                delta = [0.0, 0.0, 0.0]
-                delta[pos_map[ax1_name]] += offset
-                delta[pos_map[ax2_name]] += offset
-                translate_brush(new_obj, delta)
-            else:
-                pos_ref = new_obj['pos'] if isinstance(new_obj, dict) else new_obj.pos
-                pos_ref[pos_map[ax1_name]] += offset
-                pos_ref[pos_map[ax2_name]] += offset
+            delta[pos_map[ax1_name]] = offset
+            delta[pos_map[ax2_name]] = offset
 
-        self.set_selected_object(new_obj)
-        
-        # Show toast notification
-        self.show_toast("Brush cloned")
-        
-        # Add flash effect for brushes (hot pink highlight)
-        if isinstance(new_obj, dict):
-            new_obj['_flash_until'] = time.time() + 0.5  # Flash for 0.5s
-            
-            # Set timer to remove flash and update view
-            QTimer.singleShot(500, lambda: self._clear_flash(new_obj))
-            
-            # Immediate repaint to show flash
-            self.update_all_ui()
+        clones = []
+        for source in sources:
+            if isinstance(source, dict):
+                # Drop the runtime-only geometry caches before copying: the
+                # clone derives its own, and deep-copying them is pure waste.
+                new_obj = copy.deepcopy({
+                    k: v for k, v in source.items()
+                    if k not in brush_geometry.GEO_RUNTIME_KEYS})
+                new_obj.pop('id', None)     # a clone is a new entity
+                self.state.brushes.append(new_obj)
+            else:
+                new_obj = copy.copy(source)
+                self.state.things.append(new_obj)
+            self._translate_object(new_obj, delta)
+            clones.append(new_obj)
+
+        self.set_selected_objects(clones)
+        self.show_toast("Cloned — move the cursor and click to place (Esc cancels)")
+
+        # Hand the copies to the cursor; the 2D views drive the placement.
+        self.clone_placement = {'objects': clones, 'anchor': None}
+
+        for obj in clones:
+            if isinstance(obj, dict):
+                obj['_flash_until'] = time.time() + 0.5  # Flash for 0.5s
+                QTimer.singleShot(500, lambda o=obj: self._clear_flash(o))
+        self.update_all_ui()
+
+    @staticmethod
+    def _translate_object(obj, delta):
+        """Move a brush (plane set included) or entity by a world delta."""
+        if isinstance(obj, dict):
+            if brush_geometry.brush_has_geometry(obj):
+                # An angled brush carries world-space planes: move those too,
+                # or the geometry stays behind while 'pos' walks off.
+                brush_geometry.translate_brush(obj, delta)
+                return
+            pos = obj['pos']
+        else:
+            pos = obj.pos
+            if not isinstance(pos, list):
+                pos = [pos[0], pos[1], pos[2]]
+                obj.pos = pos
+        pos[0] += delta[0]
+        pos[1] += delta[1]
+        pos[2] += delta[2]
+
+    def clone_placement_active(self):
+        return self.clone_placement is not None
+
+    def move_clone_placement(self, delta):
+        """Slide the objects being placed by a world-space delta."""
+        if not self.clone_placement:
+            return
+        for obj in self.clone_placement['objects']:
+            self._translate_object(obj, delta)
+
+    def finish_clone_placement(self):
+        """Drop the copies where they are.  Returns ``True`` if one was pending."""
+        if not self.clone_placement:
+            return False
+        count = len(self.clone_placement['objects'])
+        self.clone_placement = None
+        self.unsaved_changes = True
+        self.state.mark_lighting_dirty()
+        self.show_toast("Placed %d copy(s)" % count)
+        self.update_all_ui()
+        return True
+
+    def cancel_clone_placement(self):
+        """Throw the pending copies away (Esc / right-click)."""
+        if not self.clone_placement:
+            return False
+        for obj in self.clone_placement['objects']:
+            if isinstance(obj, dict):
+                if obj in self.state.brushes:
+                    self.state.brushes.remove(obj)
+            elif obj in self.state.things:
+                self.state.things.remove(obj)
+        self.clone_placement = None
+        self.set_selected_object(None)
+        # The clone pushed an undo checkpoint it no longer needs.
+        if self.state.undo_stack:
+            self.state.undo_stack.pop()
+        self.show_toast("Clone cancelled")
+        self.update_all_ui()
+        return True
 
     def _clear_flash(self, obj):
         """Clear the flash flag from an object and refresh views."""
@@ -1059,6 +1148,10 @@ class MainWindow(QMainWindow):
 
     def set_selected_object(self, obj):
         """Set a single selected object (backwards compatibility)."""
+        # Component handles belong to a selection: drop them and mark the
+        # overlay stale, since the brushes it was drawing handles for changed.
+        self.components.clear()
+        self.components.invalidate()
         if obj is None:
             self.state.selected_objects = []
             self.state.selected_object = None
@@ -1074,6 +1167,10 @@ class MainWindow(QMainWindow):
 
     def set_selected_objects(self, objects):
         """Set multiple selected objects."""
+        # Component handles belong to a selection: drop them and mark the
+        # overlay stale, since the brushes it was drawing handles for changed.
+        self.components.clear()
+        self.components.invalidate()
         self.state.selected_objects = objects if objects else []
         # For backwards compatibility, selected_object is the first one (or None)
         self.state.selected_object = objects[0] if objects else None
@@ -2133,17 +2230,36 @@ class MainWindow(QMainWindow):
 
     def save_state(self):
         self.state.save_state()
+        # Every scene mutation funnels through here, so this is the cheap,
+        # once-per-operation place to tell the component overlay its cached
+        # handle positions may be stale.  It is a single integer bump; the
+        # overlay itself is only rebuilt the next time something draws it.
+        self.components.invalidate()
         self.mark_as_modified() # Mark as dirty when state is saved for undo
 
     def undo(self):
         if self.state.undo():
+            self._resync_components_after_history()
             self.mark_as_modified() # Undo changes state
             self.update_all_ui()
 
     def redo(self):
         if self.state.redo():
+            self._resync_components_after_history()
             self.mark_as_modified() # Redo changes state
             self.update_all_ui()
+
+    def _resync_components_after_history(self):
+        """Re-point the component selection after an undo/redo.
+
+        Undo rebuilds the brush dicts from JSON, so any component reference
+        held from before now points at an object that is no longer in the
+        scene.  Dropping those keeps the handles honest instead of drawing
+        them for geometry that has gone.
+        """
+        self.components.cancel_drag()
+        self.components.prune(self.state.brushes)
+        self.components.invalidate()
 
     def set_render_mode(self, mode):
         self.view_3d.render_mode = mode
@@ -2378,13 +2494,20 @@ class MainWindow(QMainWindow):
         self.update_all_ui()
         self._refresh_logic_graph()
 
-    def perform_subtraction(self):
+    def perform_subtraction(self, push_undo=True):
+        """CSG-subtract the selected brush from everything it intersects.
+
+        ``push_undo`` lets a caller that has already opened an undo checkpoint
+        (Hollow, which runs a subtract as one step of a larger operation) fold
+        this into that single step instead of stacking a second one.
+        """
         if not isinstance(self.state.selected_object, dict):
             QMessageBox.warning(self, "Invalid Selection", "Select a brush for CSG Subtract")
             return
 
-        self.save_state()
-        
+        if push_undo:
+            self.save_state()
+
         self.state.selected_object['operation'] = 'subtract'
         subtract_brush = self.state.selected_object
         
@@ -2614,19 +2737,23 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Brush Locked", "Cannot hollow a locked brush.")
             return
 
-        # Prompt for wall thickness (default 16)
+        # Prompt for wall thickness, defaulting to whatever was used last so a
+        # run of hollows is a keypress each rather than a re-typed number.
         max_thickness = int(min(outer_brush['size']) // 2 - 1)
+        default_thickness = min(max(int(getattr(self, 'last_hollow_thickness', 16)), 8),
+                                max(8, max_thickness))
         thickness, ok = QInputDialog.getInt(
             self,
             "Hollow Brush",
             "Wall thickness (grid units):",
-            value=16,
+            value=default_thickness,
             min=8,  # Changed from 1 to 8
             max=max(8, max_thickness)  # Ensure at least 8
         )
-        
+
         if not ok:
-            return
+            return          # cancelled: nothing has been touched yet
+        self.last_hollow_thickness = thickness
         
         # Check if the brush is large enough to hollow
         min_size = min(outer_brush['size'])
@@ -2667,21 +2794,25 @@ class MainWindow(QMainWindow):
         # Add the inner brush to the scene
         self.state.brushes.append(inner_brush)
         
-        # Now perform the subtraction using the inner brush
-        # Store current selection
-        original_selection = self.state.selected_object
-        
-        # Temporarily select the inner brush and perform subtraction
+        # Now perform the subtraction using the inner brush.  The checkpoint
+        # above already covers the whole operation, so the subtract must not
+        # push a second one — hollow is one undo step, not two.
+        before = set(id(b) for b in self.state.brushes)
         self.state.selected_object = inner_brush
-        self.perform_subtraction()
-        
+        self.perform_subtraction(push_undo=False)
+
         # Remove the inner brush after subtraction (it's no longer needed)
         if inner_brush in self.state.brushes:
             self.state.brushes.remove(inner_brush)
-        
-        # Clear selection since the original brush is now replaced by fragments
-        self.set_selected_object(None)
-        
+
+        # Select the walls the operation just produced, so the next tool acts on
+        # them straight away instead of on an empty selection.
+        walls = [b for b in self.state.brushes if id(b) not in before]
+        if walls:
+            self.set_selected_objects(walls)
+        else:
+            self.set_selected_object(None)
+
         self.show_toast(f"Hollowed with {thickness} unit walls")
 
     def create_room_from_brush(self):
@@ -2744,9 +2875,10 @@ class MainWindow(QMainWindow):
         
         self.state.brushes.append(inner_brush)
         self.state.selected_object = inner_brush
-        self.perform_subtraction()
-        
-        # Remove the inner brush 
+        # One undo step for the whole room: the checkpoint above covers it.
+        self.perform_subtraction(push_undo=False)
+
+        # Remove the inner brush
         if inner_brush in self.state.brushes:
             self.state.brushes.remove(inner_brush)
         
@@ -2836,6 +2968,17 @@ class MainWindow(QMainWindow):
         self.view_3d.show_triggers_as_solid = checked
         self.view_3d.update()
 
+    def _has_user_binding(self, event):
+        """True when the user has bound this exact key combination themselves.
+
+        The editor's own new shortcuts step aside for a user binding from
+        Settings rather than silently shadowing it.
+        """
+        if not getattr(self, 'key_bindings', None):
+            return False
+        key_str = QKeySequence(event.key() | int(event.modifiers())).toString()
+        return key_str in self.key_bindings
+
     def keyPressEvent(self, event):
         # ------------------------------------------------------------------
         # PLAY MODE HANDLING (hardcoded shortcuts first)
@@ -2924,8 +3067,16 @@ class MainWindow(QMainWindow):
             self.toggle_debug_console()
             return
 
-        # ESC: exit face mode or deselect
+        # ESC: back out of whatever is in progress, innermost first
         if event.key() == Qt.Key_Escape:
+            if self.cancel_clone_placement():
+                return
+            if self.components.cancel_drag():
+                self.refresh_component_views()
+                return
+            if self.components.is_component_mode():
+                self.set_component_mode(MODE_OBJECT)
+                return
             if getattr(self.view_3d, 'face_mode_active', False):
                 self.toggle_face_mode(False)
                 return
@@ -2933,10 +3084,47 @@ class MainWindow(QMainWindow):
                 self.set_selected_object(None)
                 return
 
+        # Component modes — Radiant's V / E / F reflexes, spelled with the Shift
+        # modifier Fio already uses for tool switches (Shift+S select, Shift+B
+        # brush) so none of the existing single-key bindings move.  A key the
+        # user has bound to a console command in Settings always wins.
+        user_bound = self._has_user_binding(event)
+
+        if not user_bound and event.modifiers() == Qt.ShiftModifier and \
+                event.key() in (Qt.Key_V, Qt.Key_E, Qt.Key_F):
+            self.set_component_mode({Qt.Key_V: MODE_VERTEX,
+                                     Qt.Key_E: MODE_EDGE,
+                                     Qt.Key_F: MODE_FACE}[event.key()])
+            return
+        if not user_bound and event.key() == Qt.Key_Q and not event.modifiers():
+            self.cycle_component_mode()
+            return
+
+        # Radiant's area selections (Select Touching / Inside / Tall).
+        if not user_bound:
+            ctrl = Qt.ControlModifier
+            ctrl_shift = Qt.ControlModifier | Qt.ShiftModifier
+            area_ops = {
+                (int(ctrl), Qt.Key_T): self.select_touching,
+                (int(ctrl), Qt.Key_I): self.select_inside,
+                (int(ctrl_shift), Qt.Key_T): self.select_partial_tall,
+                (int(ctrl_shift), Qt.Key_I): self.select_complete_tall,
+            }
+            handler = area_ops.get((int(event.modifiers()), event.key()))
+            if handler is not None:
+                handler()
+                return
+
         # Ctrl+C: Copy selected brush/entity
         if event.key() == Qt.Key_C and event.modifiers() == Qt.ControlModifier:
             if self.state.selected_object:
-                self._brush_clipboard = copy.deepcopy(self.state.selected_object)
+                source = self.state.selected_object
+                if isinstance(source, dict):
+                    # Leave the runtime geometry caches behind: the paste
+                    # derives its own, and a stale one would travel with it.
+                    source = {k: v for k, v in source.items()
+                              if k not in brush_geometry.GEO_RUNTIME_KEYS}
+                self._brush_clipboard = copy.deepcopy(source)
                 name = ''
                 if isinstance(self._brush_clipboard, dict):
                     name = self._brush_clipboard.get('name', 'Brush')
@@ -3143,6 +3331,195 @@ class MainWindow(QMainWindow):
         self.show_toast("Select tool — drag a box to select, click empty to deselect"
                         if mode == 'select' else
                         "Brush tool — drag in a 2D view to create geometry")
+
+    # ======================================================================
+    # Component mode: OBJECT / FACE / EDGE / VERTEX
+    # ======================================================================
+
+    def set_component_mode(self, mode):
+        """Switch what a click in a view grabs: whole objects or components.
+
+        Radiant's mapper reflex is to stay on the geometry and change what the
+        mouse means, so this is a mode switch rather than a separate tool: the
+        current object selection is kept, and the same press/drag gesture now
+        grabs a face, an edge or a vertex of the selected brushes.
+        """
+        if mode not in COMPONENT_MODES:
+            return
+        if not self.components.set_mode(mode):
+            return
+        # Component work always happens on the current object selection, so
+        # leaving object mode with nothing selected is a no-op worth saying.
+        if mode != MODE_OBJECT and not self._selected_brushes():
+            self.show_toast("%s mode — select a brush first" % MODE_LABELS[mode],
+                            is_error=True)
+        else:
+            self.show_toast({
+                MODE_OBJECT: "Object mode — drag brushes, drag a side to stretch",
+                MODE_FACE: "Face mode — drag a face to move its plane "
+                           "(Ctrl-drag shears it)",
+                MODE_EDGE: "Edge mode — drag an edge",
+                MODE_VERTEX: "Vertex mode — drag a vertex",
+            }[mode])
+        self._sync_component_buttons()
+        self.refresh_component_views()
+
+    def cycle_component_mode(self):
+        """Step OBJECT -> VERTEX -> EDGE -> FACE -> OBJECT (Radiant's Tab-ish)."""
+        order = (MODE_OBJECT, MODE_VERTEX, MODE_EDGE, MODE_FACE)
+        current = self.components.mode
+        index = order.index(current) if current in order else 0
+        self.set_component_mode(order[(index + 1) % len(order)])
+
+    def _sync_component_buttons(self):
+        """Keep the component-mode toolbar buttons and menu matching the mode."""
+        for mode, name in ((MODE_VERTEX, 'vertex_mode_btn'),
+                           (MODE_EDGE, 'edge_mode_btn'),
+                           (MODE_FACE, 'face_mode_btn')):
+            btn = getattr(self, name, None)
+            if btn is None:
+                continue
+            wanted = self.components.mode == mode
+            if btn.isChecked() != wanted:
+                btn.blockSignals(True)
+                btn.setChecked(wanted)
+                btn.blockSignals(False)
+        for mode, action in getattr(self, 'component_mode_actions', {}).items():
+            wanted = self.components.mode == mode
+            if action.isChecked() != wanted:
+                action.blockSignals(True)
+                action.setChecked(wanted)
+                action.blockSignals(False)
+
+    def refresh_component_views(self):
+        """Repaint the views that draw component handles.
+
+        Deliberately *not* ``update_views()``: that resets every view's
+        transient drag state, which would abort an in-flight component drag.
+        """
+        for view in (self.view_top, self.view_side, self.view_front):
+            view.update()
+        self.view_3d.update()
+
+    def _selected_brushes(self):
+        """Every brush in the current selection (things filtered out)."""
+        objs = list(getattr(self.state, 'selected_objects', []) or [])
+        if self.state.selected_object is not None and \
+                self.state.selected_object not in objs:
+            objs.append(self.state.selected_object)
+        return [o for o in objs if isinstance(o, dict)]
+
+    def component_drag_targets(self):
+        """Brushes a component pick may test — the selection, never the scene.
+
+        Keeping the candidate set to the selection is what makes component
+        picking O(selected) instead of O(scene); it also matches Radiant, where
+        component modes only ever act on what is already selected.
+        """
+        return [b for b in self._selected_brushes()
+                if not b.get('lock', False) and not b.get('hidden', False)]
+
+    # ======================================================================
+    # Radiant-style area selection operations
+    # ======================================================================
+
+    def _active_2d_view(self):
+        """The 2D view the user is working in (falls back to the top view)."""
+        current = self.right_tabs.currentWidget()
+        if isinstance(current, View2D):
+            return current
+        return self.view_top
+
+    def _selection_skips_locked(self):
+        return self.config.getboolean('Display', 'locked_not_selectable_2d',
+                                      fallback=False)
+
+    def _marker_brush(self):
+        """The single selected brush an area-selection operation works from."""
+        brushes = self._selected_brushes()
+        if len(brushes) != 1:
+            self.show_toast("Select exactly one brush to use as the region",
+                            is_error=True)
+            return None
+        return brushes[0]
+
+    def _apply_area_selection(self, hits, marker, consume_marker, label):
+        """Commit an area-selection result through the normal selection path.
+
+        ``consume_marker`` deletes the region brush afterwards, the way
+        Radiant's Inside / Tall selections treat it as a throwaway lasso;
+        Select Touching keeps it, exactly as Radiant does.
+        """
+        if consume_marker:
+            self.save_state()
+            if marker in self.state.brushes:
+                self.state.brushes.remove(marker)
+        if hits:
+            self.set_selected_objects(hits)
+            self.show_toast("%s: %d object(s)" % (label, len(hits)))
+        else:
+            self.set_selected_object(None)
+            self.show_toast("%s: nothing found" % label, is_error=True)
+        self.update_all_ui()
+
+    def _area_selection_objects(self):
+        return list(self.state.brushes) + list(self.state.things)
+
+    def select_touching(self):
+        """Select everything whose bounds touch the selected brush's bounds."""
+        marker = self._marker_brush()
+        if marker is None:
+            return
+        lo, hi = component_edit.object_bounds(marker)
+        hits = component_edit.select_touching(
+            self._area_selection_objects(), lo, hi, exclude=marker,
+            skip_locked=self._selection_skips_locked())
+        # Radiant keeps the region brush selected along with what it caught.
+        self._apply_area_selection([marker] + hits, marker, False,
+                                   "Select Touching")
+
+    def select_inside(self):
+        """Select everything wholly inside the selected brush, then drop it."""
+        marker = self._marker_brush()
+        if marker is None:
+            return
+        lo, hi = component_edit.object_bounds(marker)
+        hits = component_edit.select_inside(
+            self._area_selection_objects(), lo, hi, exclude=marker,
+            skip_locked=self._selection_skips_locked())
+        self._apply_area_selection(hits, marker, True, "Select Inside")
+
+    def select_partial_tall(self):
+        """Select everything crossing the selected brush's column, any depth."""
+        marker = self._marker_brush()
+        if marker is None:
+            return
+        view = self._active_2d_view()
+        axes = view._axis_indices()
+        if axes is None:
+            return
+        i1, i2, _ = axes
+        lo, hi = component_edit.object_bounds(marker)
+        hits = component_edit.select_partial_tall(
+            self._area_selection_objects(), lo, hi, i1, i2, exclude=marker,
+            skip_locked=self._selection_skips_locked())
+        self._apply_area_selection(hits, marker, True, "Select Partial Tall")
+
+    def select_complete_tall(self):
+        """Select everything wholly within the selected brush's column."""
+        marker = self._marker_brush()
+        if marker is None:
+            return
+        view = self._active_2d_view()
+        axes = view._axis_indices()
+        if axes is None:
+            return
+        i1, i2, _ = axes
+        lo, hi = component_edit.object_bounds(marker)
+        hits = component_edit.select_complete_tall(
+            self._area_selection_objects(), lo, hi, i1, i2, exclude=marker,
+            skip_locked=self._selection_skips_locked())
+        self._apply_area_selection(hits, marker, True, "Select Complete Tall")
 
     # ======================================================================
     # Clip / slice tool  (Radiant-style, toggled with X)

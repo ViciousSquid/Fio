@@ -195,6 +195,7 @@ class Ui_MainWindow(object):
         
         MainWindow.file_menu = menubar.addMenu('File')
         edit_menu = menubar.addMenu('Edit')
+        select_menu = menubar.addMenu('Select')
         view_menu = menubar.addMenu('View')
         MainWindow.tools_menu = menubar.addMenu('Tools')
         help_menu = menubar.addMenu('Help')
@@ -235,6 +236,50 @@ class Ui_MainWindow(object):
         grid_colours_action.triggered.connect(MainWindow.open_grid_colours_dialog)
         edit_menu.addAction(grid_colours_action)
         MainWindow.grid_colours_action = grid_colours_action
+
+        # --- Select menu: component modes + Radiant-style area selections ---
+        MainWindow.component_mode_actions = {}
+        component_group = QActionGroup(MainWindow)
+        component_group.setExclusive(True)
+        for mode, label, shortcut in (
+                ('object', 'Object Mode', 'Shift+O'),
+                ('vertex', 'Vertex Mode', 'Shift+V'),
+                ('edge', 'Edge Mode', 'Shift+E'),
+                ('face', 'Face Mode (geometry)', 'Shift+F')):
+            action = QAction(label, MainWindow, checkable=True)
+            action.setChecked(mode == 'object')
+            action.setShortcut(shortcut)
+            action.triggered.connect(
+                lambda _checked, m=mode: MainWindow.set_component_mode(m))
+            component_group.addAction(action)
+            select_menu.addAction(action)
+            MainWindow.component_mode_actions[mode] = action
+
+        select_menu.addSeparator()
+        cycle_action = QAction('Cycle Component Mode', MainWindow, shortcut='Q')
+        cycle_action.setToolTip('Step Object -> Vertex -> Edge -> Face')
+        cycle_action.triggered.connect(MainWindow.cycle_component_mode)
+        select_menu.addAction(cycle_action)
+
+        select_menu.addSeparator()
+        for label, slot, shortcut, tip in (
+                ('Select Touching', MainWindow.select_touching, 'Ctrl+T',
+                 'Select everything whose bounds touch the selected brush'),
+                ('Select Inside', MainWindow.select_inside, 'Ctrl+I',
+                 'Select everything wholly inside the selected brush '
+                 '(the brush is consumed)'),
+                ('Select Partial Tall', MainWindow.select_partial_tall,
+                 'Ctrl+Shift+T',
+                 'Select everything crossing the brush\'s column in the active '
+                 '2D view, at any depth'),
+                ('Select Complete Tall', MainWindow.select_complete_tall,
+                 'Ctrl+Shift+I',
+                 'Select everything wholly within the brush\'s column in the '
+                 'active 2D view')):
+            action = QAction(label, MainWindow, shortcut=shortcut)
+            action.setToolTip(tip)
+            action.triggered.connect(slot)
+            select_menu.addAction(action)
 
         view_menu.addActions([
             MainWindow.scene_hierarchy_dock.toggleViewAction(),
@@ -425,10 +470,38 @@ class Ui_MainWindow(object):
             checkable=True, checked=MainWindow.tool_mode == 'brush',
             shortcut="Shift+B", bottom_color=group_1_color)
 
+        # --- Component modes: drag the brush itself, not just move it ---
+        # Checkable and mutually exclusive with each other; unchecking the
+        # active one drops back to object mode, so the strip reads as
+        # "object / vertex / edge / face" the way Radiant's does.
+        def component_mode_toggle(mode):
+            def _on_toggle(checked):
+                MainWindow.set_component_mode(mode if checked else 'object')
+            return _on_toggle
+
+        MainWindow.vertex_mode_btn = make_btn(
+            "assets/select.png",
+            "Vertex mode (Shift+V)\n"
+            "Drag a corner of the selected brush",
+            on_click=component_mode_toggle('vertex'),
+            checkable=True, bottom_color=group_1_color)
+        MainWindow.edge_mode_btn = make_btn(
+            "assets/select.png",
+            "Edge mode (Shift+E)\n"
+            "Drag an edge of the selected brush",
+            on_click=component_mode_toggle('edge'),
+            checkable=True, bottom_color=group_1_color)
+        MainWindow.face_mode_btn = make_btn(
+            "assets/box.png",
+            "Face mode (Shift+F)\n"
+            "Drag a face to move its plane; Ctrl-drag shears it",
+            on_click=component_mode_toggle('face'),
+            checkable=True, bottom_color=group_1_color)
+
         tool_toolbar.addSeparator()
 
         # --- Editing actions (Green Strip) ---
-        group_2_color = "#22b14c" 
+        group_2_color = "#22b14c"
         make_btn("assets/room.png", "Room (Hollow + Lights)",
                  on_click=MainWindow.create_room_from_brush, bottom_color=group_2_color)
         make_btn("assets/hollow.png", "Hollow",
