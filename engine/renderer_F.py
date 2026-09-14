@@ -331,25 +331,30 @@ class Renderer_F(BaseRenderer):
                     gl.glUniform2f(tex_shift_loc, shift[0], shift[1])
                 if tex_scale_loc != -1:
                     size = brush.get('size', [64, 64, 64])
-                    # --- PRIORITY 1: Use pre-computed uv_scale from editor ---
                     uv_scale = brush.get('uv_scale', {}).get(face_key)
-                    if uv_scale is not None:
-                        scale_x, scale_y = uv_scale[0], uv_scale[1]
-                    # --- PRIORITY 2: Fallback to texture_tiling with actual dimensions ---
-                    elif brush.get('texture_tiling', False):
+                    # --- PRIORITY 1: Natural, a live mode ---
+                    # Recomputed from the brush's current size every frame, so
+                    # resizing reveals more texture at a constant texel size
+                    # instead of stretching what is there.  A brush-wide
+                    # texture_tiling flag means the same thing for every face.
+                    natural = brush_geometry.face_uses_natural_scale(brush, face_key) \
+                        or (uv_scale is None and brush.get('texture_tiling', False))
+                    if natural:
                         tex_name = brush.get('textures', {}).get(face_key, 'default.png')
-                        tex_cache_name = self._tex_cache_path(tex_name)
-                        tex_w, tex_h = getattr(self, '_texture_dimensions', {}).get(tex_cache_name, (128, 128))
-                        tex_w = max(tex_w, 1)
-                        tex_h = max(tex_h, 1)
-
+                        tex_w, tex_h = getattr(self, '_texture_dimensions', {}).get(
+                            self._tex_cache_path(tex_name), (128, 128))
                         fi = face_idx
                         if fi == 0 or fi == 1:   # south, north
-                            scale_x, scale_y = size[0] / tex_w, size[1] / tex_h
+                            extent = (size[0], size[1])
                         elif fi == 2 or fi == 3:  # west, east
-                            scale_x, scale_y = size[2] / tex_w, size[1] / tex_h
+                            extent = (size[2], size[1])
                         else:                      # down, top
-                            scale_x, scale_y = size[0] / tex_w, size[2] / tex_h
+                            extent = (size[0], size[2])
+                        scale_x, scale_y = brush_geometry.natural_repeats(
+                            extent[0], extent[1], (tex_w, tex_h))
+                    # --- PRIORITY 2: an explicit scale set in the editor ---
+                    elif uv_scale is not None:
+                        scale_x, scale_y = uv_scale[0], uv_scale[1]
                     # --- PRIORITY 3: FIT mode (stretch 0→1) ---
                     else:
                         scale_x, scale_y = 1.0, 1.0

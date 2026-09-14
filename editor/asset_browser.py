@@ -322,25 +322,8 @@ class AssetBrowserTab(QWidget):
             QPushButton:pressed { background-color: #1B5E20; }
             QPushButton:disabled { background-color: #444; color: #888; border: 1px solid #555; }
         """
-        face_style = """
-            QPushButton {
-                background-color: #7B1FA2; 
-                color: white; 
-                font: 9pt;
-                font-weight: bold;
-                padding: 6px 12px; 
-                border: 1px solid #4A148C; 
-                border-radius: 5px; 
-            }
-            QPushButton:hover { background-color: #8E24AA; }
-            QPushButton:pressed { background-color: #4A148C; }
-            QPushButton:checked { background-color: #D500F9; border: 1px solid white; }
-            QPushButton:disabled { background-color: #444; color: #888; border: 1px solid #555; }
-        """
-
         self.fit_btn = None
         self.tile_btn = None
-        self.face_btn = None
         self.add_btn = None
 
         # Create a container widget for buttons to allow stretching
@@ -357,16 +340,8 @@ class AssetBrowserTab(QWidget):
             self.add_btn.clicked.connect(self.on_add_clicked)
             button_layout.addWidget(self.add_btn)
         else:
-            self.face_btn = QPushButton("FACE")
-            self.face_btn.setCheckable(True)
-            self.face_btn.setEnabled(True)
-            self.face_btn.setStyleSheet(face_style)
-            self.face_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-            self.face_btn.clicked.connect(self.on_face_mode_clicked)
-            self.face_btn.setToolTip("Toggle Face Selection Mode\n"
-                                     "Page Up / Page Down rotates the highlighted face's texture")
-            button_layout.addWidget(self.face_btn)
-
+            # The FACE toggle now lives in the Surface Inspector (Shift+S),
+            # alongside the controls that act on the face it selects.
             self.fit_btn = QPushButton("FIT")
             self.fit_btn.setEnabled(False)
             self.fit_btn.setStyleSheet(button_style)
@@ -591,10 +566,6 @@ class AssetBrowserTab(QWidget):
 
     def on_add_clicked(self):
         self.add_current_model()
-
-    def on_face_mode_clicked(self):
-        if self.editor and hasattr(self.editor, 'toggle_face_mode'):
-            self.editor.toggle_face_mode(self.face_btn.isChecked())
 
 
 class MapsBrowserTab(QWidget):

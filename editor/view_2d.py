@@ -185,11 +185,11 @@ class View2D(QWidget):
                 self.color_pixmaps[color_name] = pixmap.scaled(18, 18, Qt.KeepAspectRatio, Qt.SmoothTransformation) 
 
     def reset_state(self):
-        # A component drag in flight owns the views: update_views() reaches
-        # every 2D view (including this one) while the mouse is still down, and
-        # tearing the drag down here would strand the brush mid-edit.
-        if getattr(self.main_window, 'components', None) is not None and \
-                self.main_window.components.drag is not None:
+        # A drag in flight owns the views: update_views() reaches every 2D view
+        # (including this one) while the mouse is still down, and tearing the
+        # drag down here would strand the operation half-done — or, for a
+        # rotate, end it after a single step.
+        if self._drag_in_progress():
             self.update()
             return
         self.component_drag_start = None
@@ -214,6 +214,15 @@ class View2D(QWidget):
         self._group_start = None
         self.is_group_rotating = False
         self.update()
+
+    def _drag_in_progress(self):
+        """True while any of this view's drag tools is mid-gesture."""
+        components = getattr(self.main_window, 'components', None)
+        if components is not None and components.drag is not None:
+            return True
+        return bool(self.rotate_dragging or self.is_group_rotating or
+                    self.is_group_resizing or self.is_resizing_brush or
+                    self.is_dragging_object)
 
     # ======================================================================
     # Clip / slice tool
@@ -445,7 +454,7 @@ class View2D(QWidget):
                 self.editor.state.undo_stack.pop()
         self.main_window.property_editor.set_object(
             self.editor.state.selected_object)
-        self.main_window.refresh_component_views()
+        self.main_window.refresh_views()
         return changed
 
     def cancel_component_drag(self):
@@ -460,7 +469,7 @@ class View2D(QWidget):
         self.component_drag_anchor = None
         self.component_drag_kind = None
         self.setCursor(Qt.ArrowCursor)
-        self.main_window.refresh_component_views()
+        self.main_window.refresh_views()
         return True
 
     def update_component_hover(self, world_pos):
@@ -763,8 +772,8 @@ class View2D(QWidget):
                 p[i2] = piv.y() + dx * sin_a + dy * cos_a
                 o.pos = p
         self.group_rotate_applied = total
-        self.editor.update_views()
-        self.main_window.view_3d.update()
+        # As above: a plain update_views() here would abort the drag.
+        self.main_window.refresh_views()
 
     def _end_group_rotate(self):
         applied = self.group_rotate_applied
@@ -820,7 +829,10 @@ class View2D(QWidget):
         if self.main_window.apply_rotation_to_selection(
                 delta, axis, undoable=False, pivot=self.rotate_pivot3):
             self.rotate_applied = total_deg
-            self.editor.update_views()
+            # Repaint without resetting view state: update_views() would call
+            # reset_state() on this very view and end the drag, forcing the
+            # user to release and press again for every single step.
+            self.main_window.refresh_views()
             sel = self._selected_brush()
             if sel is not None and hasattr(self.main_window, 'property_editor'):
                 self.main_window.property_editor.set_object(sel)

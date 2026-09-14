@@ -276,3 +276,110 @@ def test_match_grid_works_on_a_cut_face():
     ft.match_grid(brush, key, {'shift': (0.125, 0.125), 'scale': (0.5, 0.5),
                                'angle': 45.0})
     assert ft.get_transform(brush, key)['scale'] == (2.5, 2.5)
+
+
+# ---------------------------------------------------------------------------
+# Natural as a persistent mode
+# ---------------------------------------------------------------------------
+
+def test_natural_sets_a_mode_not_just_a_scale():
+    brush = make_box()
+    assert not ft.is_natural(brush, 'north')
+    ft.apply_natural(brush, 'north', texture_size=(128, 128))
+    assert ft.is_natural(brush, 'north')
+    assert ft.get_transform(brush, 'north')['natural'] is True
+
+
+def test_a_natural_face_reports_its_live_scale_after_a_resize():
+    """The texel size is constant, so the repeat count tracks the face."""
+    brush = make_box(size=(512, 128, 64))
+    ft.apply_natural(brush, 'north', texture_size=(128, 128))
+    assert ft.get_transform(brush, 'north',
+                            texture_size=(128, 128))['scale'] == (4.0, 1.0)
+
+    brush['size'][0] = 1024.0
+    assert ft.get_transform(brush, 'north',
+                            texture_size=(128, 128))['scale'] == (8.0, 1.0)
+
+
+def test_a_non_natural_face_keeps_its_scale_through_a_resize():
+    brush = make_box(size=(512, 128, 64))
+    ft.set_transform(brush, 'north', scale=(4.0, 1.0))
+    brush['size'][0] = 1024.0
+    assert ft.get_transform(brush, 'north',
+                            texture_size=(128, 128))['scale'] == (4.0, 1.0)
+
+
+def test_setting_a_scale_turns_natural_off():
+    brush = make_box()
+    ft.apply_natural(brush, 'north', texture_size=(128, 128))
+    ft.set_transform(brush, 'north', scale=(2.0, 2.0))
+    assert not ft.is_natural(brush, 'north')
+    assert ft.get_transform(brush, 'north')['scale'] == (2.0, 2.0)
+
+
+def test_setting_a_shift_or_angle_leaves_natural_on():
+    brush = make_box()
+    ft.apply_natural(brush, 'north', texture_size=(128, 128))
+    ft.set_transform(brush, 'north', shift=(0.5, 0.5), angle=45.0)
+    assert ft.is_natural(brush, 'north')
+
+
+def test_fit_turns_natural_off():
+    brush = make_box()
+    ft.apply_natural(brush, 'north', texture_size=(128, 128))
+    ft.apply_fit(brush, 'north', (2.0, 2.0))
+    assert not ft.is_natural(brush, 'north')
+
+
+def test_natural_can_be_switched_back_off_explicitly():
+    brush = make_box()
+    ft.apply_natural(brush, 'north', texture_size=(128, 128))
+    ft.set_transform(brush, 'north', natural=False)
+    assert not ft.is_natural(brush, 'north')
+
+
+def test_natural_on_a_cut_face_lives_on_its_plane():
+    brush = wedge()
+    key = cut_key(brush)
+    ft.apply_natural(brush, key, texture_size=(128, 128))
+    assert ft.face_plane(brush, key)['uv_natural'] is True
+    assert 'uv_natural' not in brush
+    assert ft.is_natural(brush, key)
+
+
+def test_a_natural_cut_face_survives_a_save_and_reload():
+    brush = wedge()
+    key = cut_key(brush)
+    ft.apply_natural(brush, key, texture_size=(128, 128))
+    ft.set_transform(brush, key, shift=(0.25, 0.5), angle=30.0)
+
+    saved = {'pos': brush['pos'], 'size': brush['size'],
+             'geometry': {'planes': [bg._plane_to_json(p)
+                                     for p in brush['geometry']['planes']]}}
+    reloaded_key = next(k for k in ft.face_keys(saved) if k.startswith('#'))
+    transform = ft.get_transform(saved, reloaded_key)
+    assert transform['natural'] is True
+    assert transform['shift'] == (0.25, 0.5)
+    assert transform['angle'] == pytest.approx(30.0)
+
+
+def test_the_renderer_and_the_editor_agree_on_the_natural_flag():
+    """Both sides read the flag through the same helper, box and cut alike."""
+    box = make_box()
+    ft.apply_natural(box, 'north', texture_size=(128, 128))
+    assert bg.face_uses_natural_scale(box, 'north') is True
+    assert bg.face_uses_natural_scale(box, 'east') is False
+
+    brush = wedge()
+    key = cut_key(brush)
+    ft.apply_natural(brush, key, texture_size=(128, 128))
+    assert bg.face_uses_natural_scale(brush, None,
+                                      ft.face_plane(brush, key)) is True
+
+
+def test_natural_repeats_matches_the_editor_side_calculation():
+    brush = make_box(size=(512, 128, 64))
+    width, height = ft.face_extent(brush, 'north')
+    assert bg.natural_repeats(width, height, (128, 128)) == \
+        ft.natural_scale(brush, 'north', (128, 128))

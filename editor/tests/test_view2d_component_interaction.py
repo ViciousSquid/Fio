@@ -137,7 +137,7 @@ class FakeEditorWindow(QWidget):
     def show_toast(self, message, is_error=False, duration=None):
         self.toasts.append(message)
 
-    def refresh_component_views(self):
+    def refresh_views(self):
         pass
 
     def update_all_ui(self):

@@ -2313,7 +2313,7 @@ class QtGameView(QOpenGLWidget):
         else:
             delta = component_edit.snap_delta(delta, grid)
         if controller.update_drag(delta):
-            self.editor.refresh_component_views()
+            self.editor.refresh_views()
         else:
             self.update()
 
@@ -2333,7 +2333,7 @@ class QtGameView(QOpenGLWidget):
             self.editor.state.mark_lighting_dirty()
         elif getattr(self.editor.state, 'undo_stack', None):
             self.editor.state.undo_stack.pop()
-        self.editor.refresh_component_views()
+        self.editor.refresh_views()
         return changed
 
     def cancel_component_drag(self):
@@ -2348,7 +2348,7 @@ class QtGameView(QOpenGLWidget):
         self.component_drag_anchor = None
         self.component_drag_kind = None
         self.setCursor(Qt.ArrowCursor)
-        self.editor.refresh_component_views()
+        self.editor.refresh_views()
         return True
 
     def _begin_face_mode_drag(self, pos):

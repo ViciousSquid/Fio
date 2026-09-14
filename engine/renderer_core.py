@@ -3012,23 +3012,36 @@ class BaseRenderer:
         live per-face uv_scale, then the plane's stored uv_scale, then
         texture_tiling (1px = 1 world unit over the face's extent), then FIT."""
         tag = run['face']
+        plane = None if tag else BaseRenderer._geo_run_plane(brush, run)
+
+        # Natural is a live mode: the repeats come from the face's *current*
+        # extent every frame, so resizing the brush shows more of the texture
+        # at the same texel size rather than stretching it.  It therefore wins
+        # over any stored uv_scale (which is only kept as a fallback).
+        if brush_geometry.face_uses_natural_scale(brush, tag, plane):
+            return brush_geometry.natural_repeats(
+                run['extent'][0], run['extent'][1],
+                self._texture_pixel_size(tex_name))
+
         uv = brush.get('uv_scale', {}).get(tag) if tag else None
-        if uv is None and not tag:
+        if uv is None and plane is not None:
             # Cut face: read its plane's uv_scale live so Surface Inspector
             # edits apply without a mesh rebuild.
-            plane = BaseRenderer._geo_run_plane(brush, run)
-            if plane is not None:
-                uv = plane.get('uv_scale')
+            uv = plane.get('uv_scale')
         if uv is None:
             uv = run['uv_scale']
         if uv is not None:
             return float(uv[0]), float(uv[1])
         if brush.get('texture_tiling', False):
-            tex_cache_name = os.path.join('textures', tex_name)
-            tex_w, tex_h = getattr(self, '_texture_dimensions', {}).get(tex_cache_name, (128, 128))
             eu, ev = run['extent']
-            return eu / max(tex_w, 1), ev / max(tex_h, 1)
+            return brush_geometry.natural_repeats(
+                eu, ev, self._texture_pixel_size(tex_name))
         return 1.0, 1.0
+
+    def _texture_pixel_size(self, tex_name):
+        """Pixel dimensions of a loaded texture, with the usual 128 fallback."""
+        cache_name = os.path.join('textures', tex_name)
+        return getattr(self, '_texture_dimensions', {}).get(cache_name, (128, 128))
 
     # --------------------------------------------------------------------------
     # VAO creation

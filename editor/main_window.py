@@ -1786,15 +1786,11 @@ class MainWindow(QMainWindow):
 
         self.view_3d.face_mode_active = active
 
-        # Sync the FACE button state if triggered via ESC or other means. The
-        # FACE button lives on the textures tab of the asset browser.
-        tex_tab = getattr(getattr(self, 'asset_browser', None), 'tab_textures', None)
-        if tex_tab is not None:
-            face_btn = getattr(tex_tab, 'face_btn', None)
-            if face_btn is not None:
-                face_btn.blockSignals(True)
-                face_btn.setChecked(active)
-                face_btn.blockSignals(False)
+        # Sync the FACE button if Face Mode was toggled some other way (Esc,
+        # a shortcut).  It lives on the Surface Inspector, which is created
+        # lazily — nothing to sync until the panel has been opened once.
+        if self.surface_inspector is not None:
+            self.surface_inspector.sync_face_button(active)
         
         if active:
             self.show_toast("FACE MODE: Select a face to texture (Purple) — Page Up/Down rotates it", duration=3000)
@@ -1806,9 +1802,9 @@ class MainWindow(QMainWindow):
             self.show_toast("FACE MODE: OFF")
             self.view_3d.hovered_face_info = None # Clear highlight
             self.view_3d.setCursor(Qt.ArrowCursor)
-            if self.surface_inspector is not None:
-                self.surface_inspector.hide()
-            
+            # The panel stays open: it owns the FACE toggle now, and hiding it
+            # here would take the button away the moment it was switched off.
+
         self.view_3d.update()
 
     def apply_texture_to_specific_face(self, brush, face_name):
@@ -3103,7 +3099,7 @@ class MainWindow(QMainWindow):
             if self.cancel_clone_placement():
                 return
             if self.components.cancel_drag():
-                self.refresh_component_views()
+                self.refresh_views()
                 return
             if self.components.is_component_mode():
                 self.set_component_mode(MODE_OBJECT)
@@ -3395,7 +3391,7 @@ class MainWindow(QMainWindow):
                 MODE_VERTEX: "Vertex mode — drag a vertex",
             }[mode])
         self._sync_component_buttons()
-        self.refresh_component_views()
+        self.refresh_views()
 
     def cycle_component_mode(self):
         """Step OBJECT -> VERTEX -> EDGE -> FACE -> OBJECT (Radiant's Tab-ish)."""
@@ -3424,11 +3420,12 @@ class MainWindow(QMainWindow):
                 action.setChecked(wanted)
                 action.blockSignals(False)
 
-    def refresh_component_views(self):
-        """Repaint the views that draw component handles.
+    def refresh_views(self):
+        """Repaint every view *without* disturbing what they are doing.
 
-        Deliberately *not* ``update_views()``: that resets every view's
-        transient drag state, which would abort an in-flight component drag.
+        Deliberately not ``update_views()``, which calls ``reset_state()`` on
+        each 2D view and so tears down any drag that is still in progress —
+        fine between operations, fatal in the middle of one.
         """
         for view in (self.view_top, self.view_side, self.view_front):
             view.update()

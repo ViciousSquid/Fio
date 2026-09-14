@@ -65,11 +65,22 @@ def _brush_dict(brush, key):
     return value if isinstance(value, dict) else {}
 
 
-def get_transform(brush, face_key):
-    """The face's mapping as ``{'shift', 'scale', 'angle', 'texture'}``.
+def is_natural(brush, face_key):
+    """True when the face is in Natural mode (constant texel size)."""
+    plane = face_plane(brush, face_key)
+    cut = plane is not None and not plane.get('face')
+    return bg.face_uses_natural_scale(brush, None if cut else face_key, plane)
+
+
+def get_transform(brush, face_key, texture_size=None):
+    """The face's mapping as ``{'shift', 'scale', 'angle', 'texture', 'natural'}``.
 
     Values are plain floats/tuples, defaulted when the face has never been
     touched, so callers never have to know which storage a face uses.
+
+    A face in Natural mode has no fixed scale — the renderer derives it from
+    the face's current size — so pass ``texture_size`` to get the repeats it
+    is *currently* drawing with rather than whatever was last written down.
     """
     plane = face_plane(brush, face_key)
     cut = plane is not None and not plane.get('face')
@@ -89,19 +100,32 @@ def get_transform(brush, face_key):
             # plane (that is where the clip tool puts inherited values).
             scale = plane.get('uv_scale')
 
+    natural = bg.face_uses_natural_scale(brush, None if cut else face_key, plane)
+    scale = tuple(float(v) for v in (scale or DEFAULT_SCALE))
+    if natural and texture_size is not None:
+        scale = natural_scale(brush, face_key, texture_size)
+
     return {
         'texture': texture,
         'shift': tuple(float(v) for v in (shift or DEFAULT_SHIFT)),
-        'scale': tuple(float(v) for v in (scale or DEFAULT_SCALE)),
+        'scale': scale,
         'angle': float(DEFAULT_ANGLE if angle is None else angle),
+        'natural': natural,
     }
 
 
 def set_transform(brush, face_key, shift=None, scale=None, angle=None,
-                  texture=None):
-    """Write any subset of a face's mapping to wherever that face keeps it."""
+                  texture=None, natural=None):
+    """Write any subset of a face's mapping to wherever that face keeps it.
+
+    Setting an explicit ``scale`` turns Natural mode off: the user has just
+    said what the repeats should be, so the face must stop deriving them from
+    its own size.  Pass ``natural`` explicitly to set the mode itself.
+    """
     plane = face_plane(brush, face_key)
     cut = plane is not None and not plane.get('face')
+    if scale is not None and natural is None:
+        natural = False
 
     if cut:
         if shift is not None:
@@ -112,6 +136,11 @@ def set_transform(brush, face_key, shift=None, scale=None, angle=None,
             plane['uv_angle'] = float(angle)
         if texture is not None:
             plane['texture'] = texture
+        if natural is not None:
+            if natural:
+                plane['uv_natural'] = True
+            else:
+                plane.pop('uv_natural', None)
         return
 
     if shift is not None:
@@ -126,6 +155,11 @@ def set_transform(brush, face_key, shift=None, scale=None, angle=None,
         # plane has to learn about the new texture as well.
         if plane is not None:
             plane['texture'] = texture
+    if natural is not None:
+        if natural:
+            brush.setdefault('uv_natural', {})[face_key] = True
+        else:
+            brush.get('uv_natural', {}).pop(face_key, None)
 
 
 def face_keys(brush):
@@ -186,9 +220,16 @@ def apply_fit(brush, face_key, repeat=(1.0, 1.0)):
 
 
 def apply_natural(brush, face_key, texture_size=DEFAULT_TEXTURE_SIZE):
-    """Put the texture back to its natural size, keeping the face's rotation."""
+    """Switch the face to Natural mode: a constant texel size, forever.
+
+    The scale is written too, but only as a fallback for anything that reads
+    the mapping without knowing about the mode; the renderer recomputes it from
+    the face's current size, so resizing the brush reveals more of the texture
+    instead of stretching it.
+    """
     set_transform(brush, face_key, shift=DEFAULT_SHIFT,
-                  scale=natural_scale(brush, face_key, texture_size))
+                  scale=natural_scale(brush, face_key, texture_size),
+                  natural=True)
 
 
 def apply_axial(brush, face_key, texture_size=DEFAULT_TEXTURE_SIZE):

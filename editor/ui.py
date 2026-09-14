@@ -370,7 +370,7 @@ class Ui_MainWindow(object):
 
     def create_toolbars(self, MainWindow):
         big_toolbar_buttons = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
-        icon_size_val = 40 if big_toolbar_buttons else 35
+        icon_size_val = 45 if big_toolbar_buttons else 35
 
         MainWindow.play_button = QPushButton(QIcon("assets/b_test.png"), "Play", MainWindow)
         MainWindow.play_button.setIconSize(QSize(icon_size_val, icon_size_val))
@@ -410,7 +410,7 @@ class Ui_MainWindow(object):
         MainWindow.addToolBar(Qt.TopToolBarArea, tool_toolbar)
 
         big = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
-        icon_size_val = 40 if big else 35
+        icon_size_val = 45 if big else 35
 
         def make_btn(icon, tip, on_click=None, checkable=False, checked=False,
                      shortcut=None, styled=False, bottom_color=None):

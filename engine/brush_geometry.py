@@ -684,6 +684,35 @@ def plane_uv_axes(plane):
     return render_uv_axes(plane['n'])
 
 
+def face_uses_natural_scale(brush, face_tag=None, plane=None):
+    """True when a face's texture should keep a constant texel size.
+
+    "Natural" is a *mode*, not a one-off calculation: the repeat factors have
+    to be derived from the face's current size every time it is drawn, or
+    resizing the brush would stretch the texture instead of revealing more of
+    it.  The flag lives beside the rest of the face's mapping — in the brush's
+    per-tag dict for a box side, on the plane for a cut face — and the renderer
+    checks it before any stored ``uv_scale``.
+
+    Pass ``face_tag`` for a tagged side, ``plane`` for a cut face, or both when
+    the caller does not know which it has.
+    """
+    if face_tag:
+        flags = brush.get('uv_natural')
+        if isinstance(flags, dict) and flags.get(face_tag):
+            return True
+    if plane is not None and plane.get('uv_natural'):
+        return True
+    return False
+
+
+def natural_repeats(extent_u, extent_v, texture_size):
+    """Repeat factors giving one texel per world unit over a face's extent."""
+    tex_w = max(float(texture_size[0]), 1.0)
+    tex_h = max(float(texture_size[1]), 1.0)
+    return float(extent_u) / tex_w, float(extent_v) / tex_h
+
+
 def face_uv_projection(ring_world, face):
     """Planar UVs for one face's corner ring, fitted to the face's extent.
 
@@ -1173,6 +1202,14 @@ def _plane_to_json(p):
         vec = p.get(key)
         if vec is not None:
             out[key] = [float(vec[0]), float(vec[1]), float(vec[2])]
+    # A cut face has no box tag to key the brush's per-face dicts off, so the
+    # rest of its mapping lives here and has to be saved with it.
+    if p.get('uv_shift') is not None:
+        out['uv_shift'] = [float(p['uv_shift'][0]), float(p['uv_shift'][1])]
+    if p.get('uv_angle') is not None:
+        out['uv_angle'] = float(p['uv_angle'])
+    if p.get('uv_natural'):
+        out['uv_natural'] = True
     return out
 
 

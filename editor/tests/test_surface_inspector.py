@@ -171,11 +171,16 @@ def test_fit_button_uses_the_repeat_spinners(inspector):
     assert ft.get_transform(brush, 'north')['scale'] == (4.0, 0.5)
 
 
+def turn_natural_on(panel):
+    panel.natural_btn.setChecked(True)
+    panel._toggle_natural()
+
+
 def test_natural_button_uses_the_real_texture_size(inspector):
     _, panel, brush = inspector
     # default.png ships at 512x512; a 512-wide face therefore repeats once.
     ft.set_transform(brush, 'north', texture='default.png')
-    panel._apply_natural()
+    turn_natural_on(panel)
     scale = ft.get_transform(brush, 'north')['scale']
     assert scale[0] == pytest.approx(1.0)
     assert scale[1] == pytest.approx(0.25)
@@ -184,9 +189,111 @@ def test_natural_button_uses_the_real_texture_size(inspector):
 def test_an_unreadable_texture_falls_back_instead_of_failing(inspector):
     _, panel, brush = inspector
     ft.set_transform(brush, 'north', texture='does_not_exist.png')
-    panel._apply_natural()
+    turn_natural_on(panel)
     expected = 512.0 / ft.DEFAULT_TEXTURE_SIZE[0]
     assert ft.get_transform(brush, 'north')['scale'][0] == pytest.approx(expected)
+
+
+# ---------------------------------------------------------------------------
+# Natural as a mode
+# ---------------------------------------------------------------------------
+
+def test_natural_survives_a_resize_at_a_constant_texel_size(inspector):
+    """The whole point: resizing reveals more texture, it does not stretch it."""
+    _, panel, brush = inspector
+    ft.set_transform(brush, 'north', texture='default.png')
+    turn_natural_on(panel)
+    assert ft.is_natural(brush, 'north')
+
+    brush['size'][0] = 1024.0          # the wall is now twice as wide
+    live = ft.get_transform(brush, 'north', texture_size=(512, 512))
+    assert live['scale'][0] == pytest.approx(2.0)     # twice the repeats
+    assert live['natural'] is True
+
+
+def test_the_button_shows_whether_the_face_is_natural(inspector):
+    _, panel, brush = inspector
+    assert not panel.natural_btn.isChecked()
+    turn_natural_on(panel)
+    panel.refresh_from_face()
+    assert panel.natural_btn.isChecked()
+
+
+def test_turning_natural_off_freezes_the_current_scale(inspector):
+    _, panel, brush = inspector
+    ft.set_transform(brush, 'north', texture='default.png')
+    turn_natural_on(panel)
+    frozen = ft.get_transform(brush, 'north', texture_size=(512, 512))['scale']
+
+    panel.natural_btn.setChecked(False)
+    panel._toggle_natural()
+
+    assert not ft.is_natural(brush, 'north')
+    assert ft.get_transform(brush, 'north')['scale'] == pytest.approx(frozen)
+    # And it now stays put when the brush is resized.
+    brush['size'][0] = 1024.0
+    assert ft.get_transform(brush, 'north')['scale'] == pytest.approx(frozen)
+
+
+def test_setting_a_scale_by_hand_switches_natural_off(inspector):
+    _, panel, brush = inspector
+    turn_natural_on(panel)
+    panel.hstretch.setValue(3.0)
+    assert not ft.is_natural(brush, 'north')
+    assert ft.get_transform(brush, 'north')['scale'][0] == pytest.approx(3.0)
+
+
+def test_nudging_the_shift_leaves_natural_alone(inspector):
+    """A shift edit must not silently drop the mode."""
+    _, panel, brush = inspector
+    turn_natural_on(panel)
+    panel.hshift.setValue(0.25)
+    assert ft.is_natural(brush, 'north')
+    assert ft.get_transform(brush, 'north')['shift'][0] == pytest.approx(0.25)
+
+
+def test_rotating_leaves_natural_alone(inspector):
+    _, panel, brush = inspector
+    turn_natural_on(panel)
+    panel.rotate.setValue(90.0)
+    assert ft.is_natural(brush, 'north')
+    assert ft.get_transform(brush, 'north')['angle'] == pytest.approx(90.0)
+
+
+def test_fit_switches_natural_off(inspector):
+    _, panel, brush = inspector
+    turn_natural_on(panel)
+    panel._apply_fit()
+    assert not ft.is_natural(brush, 'north')
+
+
+# ---------------------------------------------------------------------------
+# Face Mode toggle (moved here from the Asset Browser)
+# ---------------------------------------------------------------------------
+
+def test_the_face_button_drives_face_mode(inspector):
+    host, panel, _ = inspector
+    calls = []
+    host.toggle_face_mode = calls.append
+    panel.face_btn.setChecked(True)
+    panel._on_face_mode_clicked()
+    assert calls == [True]
+
+
+def test_the_face_button_follows_face_mode_toggled_elsewhere(inspector):
+    _, panel, _ = inspector
+    panel.sync_face_button(True)
+    assert panel.face_btn.isChecked()
+    panel.sync_face_button(False)
+    assert not panel.face_btn.isChecked()
+
+
+def test_syncing_the_face_button_does_not_re_enter_face_mode(inspector):
+    host, panel, _ = inspector
+    calls = []
+    host.toggle_face_mode = calls.append
+    panel.sync_face_button(True)
+    assert calls == []          # the signal was blocked
 
 
 def test_axial_button_clears_a_locked_basis(inspector):
