@@ -2,7 +2,7 @@ import numpy as np
 import math
 import time
 import os
-from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog
+from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog, QApplication
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
 from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Monster,
@@ -902,16 +902,28 @@ class View2D(QWidget):
         # Cursor on the +n side -> keep the +n (positive) half.
         self.clip_keep_positive = side > 0
 
-    def apply_clip(self):
-        """Perform the cut on the current selection, keeping the previewed side."""
+    def _split_held(self):
+        """True while Shift is down — the modifier that keeps both halves."""
+        return bool(QApplication.keyboardModifiers() & Qt.ShiftModifier)
+
+    def apply_clip(self, split=False):
+        """Cut the selection with the placed plane.
+
+        Keeps only the previewed side by default; with ``split`` the far side
+        survives as a separate brush, so one gesture cuts a brush in two rather
+        than slicing a piece off it.
+        """
         plane = self._clip_plane()
         if plane is None:
             self.main_window.show_toast("Clip: place two points first", is_error=True)
             return
         normal, offset, keep_positive = plane
-        n = self.main_window.apply_clip_to_selection(normal, offset, keep_positive)
+        n = self.main_window.apply_clip_to_selection(normal, offset, keep_positive,
+                                                     split=split)
         if n:
-            self.main_window.show_toast(f"Clipped {n} brush(es)")
+            self.main_window.show_toast(
+                f"Split {n} brush(es) — both halves kept" if split
+                else f"Clipped {n} brush(es)")
         else:
             self.main_window.show_toast("Clip: select a brush to slice", is_error=True)
         self.clear_clip()
@@ -926,12 +938,17 @@ class View2D(QWidget):
         font.setPointSize(10)
         font.setBold(True)
         painter.setFont(font)
+        splitting = self._split_held()
         if len(self.clip_points) == 0:
             hint = "CLIP MODE — click two points to set the cut  (X to exit)"
         elif len(self.clip_points) == 1:
             hint = "CLIP MODE — click the second point"
+        elif splitting:
+            hint = "SPLIT — Enter cuts the brush in two, keeping BOTH halves"
+            painter.setPen(QColor(80, 200, 255))
         else:
-            hint = "CLIP MODE — move to pick the side to KEEP, Enter to cut  (Esc cancels)"
+            hint = ("CLIP MODE — move to pick the side to KEEP, Enter to cut, "
+                    "Shift+Enter to split  (Esc cancels)")
         painter.drawText(10, 20, hint)
 
         cut_pen = QPen(QColor(255, 210, 0), 1, Qt.DashLine)
@@ -970,16 +987,27 @@ class View2D(QWidget):
             wnx, wny = wdy, -wdx
             wlen = math.hypot(wnx, wny) or 1.0
             wnx, wny = wnx / wlen, wny / wlen
-            sign = 1.0 if self.clip_keep_positive else -1.0
-            keep_world = QPointF(mid.x() + wnx * sign * 32.0 / self.zoom_factor,
-                                 mid.y() + wny * sign * 32.0 / self.zoom_factor)
             s_mid = self.world_to_screen(mid)
-            s_keep = self.world_to_screen(keep_world)
-            painter.setPen(QPen(QColor(60, 220, 90), 2))
-            painter.drawLine(s_mid, s_keep)
-            painter.drawEllipse(s_keep, 5, 5)
-            painter.setPen(QColor(60, 220, 90))
-            painter.drawText(s_keep + QPointF(8, 4), "keep")
+            reach = 32.0 / self.zoom_factor
+
+            def _marker(sign, colour, label):
+                world = QPointF(mid.x() + wnx * sign * reach,
+                                mid.y() + wny * sign * reach)
+                screen = self.world_to_screen(world)
+                painter.setPen(QPen(colour, 2))
+                painter.drawLine(s_mid, screen)
+                painter.drawEllipse(screen, 5, 5)
+                painter.setPen(colour)
+                painter.drawText(screen + QPointF(8, 4), label)
+
+            keep = QColor(60, 220, 90)
+            if splitting:
+                # Both halves survive, so neither side is the "discarded" one.
+                both = QColor(80, 200, 255)
+                _marker(1.0, both, "keep")
+                _marker(-1.0, both, "keep")
+            else:
+                _marker(1.0 if self.clip_keep_positive else -1.0, keep, "keep")
 
         painter.restore()
 
@@ -1073,8 +1101,11 @@ class View2D(QWidget):
         # --- Clip / slice tool keys (only while clip mode is active) ---
         if self._clip_active():
             if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-                self.apply_clip()
+                # Shift keeps the far side too, Radiant's Split.
+                self.apply_clip(split=bool(event.modifiers() & Qt.ShiftModifier))
                 return
+            if event.key() == Qt.Key_Shift:
+                self.update()       # redraw the overlay in split colours
             if event.key() == Qt.Key_Escape:
                 if self.clip_points:
                     self.clear_clip()               # cancel the pending cut
@@ -1224,6 +1255,8 @@ class View2D(QWidget):
         self._nudge_in_progress = False
 
     def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key_Shift and self._clip_active():
+            self.update()           # back to single-side colours
         # A key release alone must not end the nudge burst: Qt auto-repeat fires
         # a release between every repeated press, and tapping an arrow key
         # releases between taps.  Ending the burst here would force a fresh

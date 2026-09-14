@@ -109,6 +109,7 @@ class FakeEditorWindow(QWidget):
     selection_centre = MainWindow.selection_centre
     selected_objects_list = MainWindow.selected_objects_list
     apply_rotation_to_selection = MainWindow.apply_rotation_to_selection
+    apply_clip_to_selection = MainWindow.apply_clip_to_selection
 
     def __init__(self):
         super().__init__()
@@ -983,3 +984,171 @@ def test_cloning_an_unnamed_brush_does_not_invent_a_name(editor):
 
     host.clone_selected_object()
     assert 'name' not in host.state.brushes[1]
+
+
+# ---------------------------------------------------------------------------
+# Clip and split
+# ---------------------------------------------------------------------------
+
+def key(view, code, modifiers=Qt.NoModifier):
+    from PyQt5.QtGui import QKeyEvent
+    view.keyPressEvent(QKeyEvent(QEvent.KeyPress, code, modifiers))
+
+
+def place_cut(view, a, b):
+    """Put the two clip points down, splitting the view along x = a[0]."""
+    view.clip_points = [QPointF(*a), QPointF(*b)]
+    view.clip_hover = QPointF(a[0] + 64, a[1])
+    view._update_clip_keep_side()
+
+
+def test_plain_enter_keeps_one_side(editor):
+    host, view = editor
+    brush = make_box(size=(128, 64, 128))
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+    host.clip_mode = True
+
+    place_cut(view, (0, -128), (0, 128))
+    key(view, Qt.Key_Return)
+
+    assert len(host.state.brushes) == 1
+    assert brush['size'][0] == pytest.approx(64.0)
+
+
+def test_shift_enter_keeps_both_sides(editor):
+    host, view = editor
+    brush = make_box(size=(128, 64, 128))
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+    host.clip_mode = True
+
+    place_cut(view, (0, -128), (0, 128))
+    key(view, Qt.Key_Return, Qt.ShiftModifier)
+
+    assert len(host.state.brushes) == 2
+    halves = host.state.brushes
+    assert all(h['size'][0] == pytest.approx(64.0) for h in halves)
+    # One piece each side of the cut.
+    assert halves[0]['pos'][0] == pytest.approx(-halves[1]['pos'][0])
+
+
+def test_a_split_keeps_both_halves_selected(editor):
+    host, view = editor
+    brush = make_box(size=(128, 64, 128))
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+    host.clip_mode = True
+
+    place_cut(view, (0, -128), (0, 128))
+    key(view, Qt.Key_Return, Qt.ShiftModifier)
+
+    assert len(host.state.selected_objects) == 2
+
+
+def test_a_split_is_one_undo_step(editor):
+    host, view = editor
+    brush = make_box(size=(128, 64, 128))
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+    host.clip_mode = True
+    before = undo_depth(host)
+
+    place_cut(view, (0, -128), (0, 128))
+    key(view, Qt.Key_Return, Qt.ShiftModifier)
+
+    assert undo_depth(host) == before + 1
+
+
+def test_the_new_half_gets_its_own_identity(editor):
+    host, _ = editor
+    brush = make_box(size=(128, 64, 128))
+    brush['name'] = 'pillar'
+    brush['id'] = 'original-id'
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+
+    host.apply_clip_to_selection([1.0, 0.0, 0.0], 0.0, False, split=True)
+
+    other = next(b for b in host.state.brushes if b is not brush)
+    assert other['name'] == 'pillar (copy)'
+    assert other['id'] != 'original-id'
+    assert brush['name'] == 'pillar'          # the original keeps its own
+
+
+def test_a_split_carries_the_brush_properties_to_both_halves(editor):
+    host, _ = editor
+    brush = make_box(size=(128, 64, 128))
+    brush['is_trigger'] = True
+    brush['colour'] = [0.2, 0.4, 0.6]
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+
+    host.apply_clip_to_selection([1.0, 0.0, 0.0], 0.0, False, split=True)
+
+    for piece in host.state.brushes:
+        assert piece['is_trigger'] is True
+        assert piece['colour'] == [0.2, 0.4, 0.6]
+
+
+def test_a_plane_that_misses_the_brush_makes_no_second_half(editor):
+    host, _ = editor
+    brush = make_box(size=(128, 64, 128))
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+
+    host.apply_clip_to_selection([1.0, 0.0, 0.0], 5000.0, False, split=True)
+
+    assert len(host.state.brushes) == 1
+
+
+def test_splitting_a_multi_selection_splits_each_brush(editor):
+    host, _ = editor
+    a = make_box(pos=(0, 0, 0), size=(128, 64, 128))
+    b = make_box(pos=(0, 0, 400), size=(128, 64, 128))
+    host.state.brushes.extend([a, b])
+    host.set_selected_objects([a, b])
+
+    count = host.apply_clip_to_selection([1.0, 0.0, 0.0], 0.0, False, split=True)
+
+    assert count == 2
+    assert len(host.state.brushes) == 4
+
+
+def test_the_new_half_sits_next_to_its_original_in_the_scene(editor):
+    host, _ = editor
+    a = make_box(pos=(0, 0, 0), size=(128, 64, 128))
+    tail = make_box(pos=(0, 0, 900))
+    host.state.brushes.extend([a, tail])
+    host.set_selected_object(a)
+
+    host.apply_clip_to_selection([1.0, 0.0, 0.0], 0.0, False, split=True)
+
+    assert host.state.brushes.index(a) == 0
+    assert host.state.brushes[1] is not tail      # the half, not the far brush
+    assert host.state.brushes[2] is tail
+
+
+def test_split_works_on_an_already_angled_brush(editor):
+    host, _ = editor
+    brush = make_box(size=(128, 128, 128))
+    assert bg.clip_brush(brush, [0.0, 1.0, 1.0], 0.0)     # make it a wedge
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+
+    count = host.apply_clip_to_selection([1.0, 0.0, 0.0], 0.0, False, split=True)
+
+    assert count == 1
+    assert len(host.state.brushes) == 2
+    for piece in host.state.brushes:
+        convex = bg.get_convex(piece)
+        assert convex is not None and convex.is_valid
+
+
+def test_nothing_selected_leaves_the_undo_history_alone(editor):
+    host, _ = editor
+    host.set_selected_object(None)
+    before = undo_depth(host)
+    assert host.apply_clip_to_selection([1.0, 0.0, 0.0], 0.0, False,
+                                        split=True) == 0
+    assert undo_depth(host) == before

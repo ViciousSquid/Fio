@@ -3579,7 +3579,8 @@ class MainWindow(QMainWindow):
             view.clear_clip()
             view.setCursor(Qt.CrossCursor if active else Qt.ArrowCursor)
         if active:
-            self.show_toast("Clip tool ON — click two points, Enter to cut  (X to exit)")
+            self.show_toast("Clip tool ON — click two points, Enter to cut, "
+                            "Shift+Enter to split in two  (X to exit)")
         else:
             self.show_toast("Clip tool OFF")
 
@@ -3671,31 +3672,66 @@ class MainWindow(QMainWindow):
                 count += 1
         return count
 
-    def apply_clip_to_selection(self, normal, offset, keep_positive):
+    def apply_clip_to_selection(self, normal, offset, keep_positive, split=False):
         """Clip every selected brush with the given plane; one coalesced undo.
 
-        Returns the number of brushes actually cut.  Things and non-brush
-        selections are ignored.
+        With ``split``, the discarded half is kept as a second brush instead of
+        being thrown away — Radiant's Split, the difference between slicing a
+        piece off and cutting a brush in two.  Each new piece is a full copy of
+        the original with its own identity, so the two halves cannot be
+        confused with one another by anything that addresses brushes by name.
+
+        Returns the number of brushes the plane actually cut.  Things and
+        non-brush selections are ignored.
         """
-        selected = list(getattr(self.state, 'selected_objects', []) or [])
-        if self.state.selected_object and self.state.selected_object not in selected:
-            selected.append(self.state.selected_object)
-        brushes = [b for b in selected if isinstance(b, dict)]
+        brushes = [b for b in self.selected_objects_list() if isinstance(b, dict)]
         if not brushes:
             return 0
 
-        from engine.brush_geometry import clip_brush as _clip
         self.save_state()  # single undo checkpoint for the whole operation
         count = 0
+        pieces = []
+        taken_names = set(self.state.get_all_entity_names()) if split else set()
+
         for brush in brushes:
+            # The other half has to be copied before the original is cut.
+            other = None
+            if split:
+                other = copy.deepcopy({
+                    k: v for k, v in brush.items()
+                    if k not in brush_geometry.GEO_RUNTIME_KEYS})
+
             # Clip in place without an extra per-brush undo snapshot.
-            if _clip(brush, normal, offset, keep_positive=keep_positive):
+            kept = brush_geometry.clip_brush(brush, normal, offset,
+                                             keep_positive=keep_positive)
+            if kept:
                 count += 1
+                pieces.append(brush)
+
+            if other is None:
+                continue
+            # The far side survives only when the plane really passed through
+            # the brush; a plane that missed leaves one whole brush, not two.
+            other_kept = brush_geometry.clip_brush(other, normal, offset,
+                                                   keep_positive=not keep_positive)
+            if kept and other_kept:
+                other['id'] = str(uuid.uuid4())
+                name = other.get('name', '')
+                if name:
+                    other['name'] = self._copy_name(name, taken_names)
+                self.state.brushes.insert(
+                    self.state.brushes.index(brush) + 1, other)
+                pieces.append(other)
+
         if count:
             self.state.mark_lighting_dirty()
             self.unsaved_changes = True
+            if split and pieces:
+                # Both halves selected, so the next operation acts on the whole
+                # of what used to be one brush.
+                self.set_selected_objects(pieces)
             self.update_views()
-            if self.state.selected_object in brushes:
+            if self.state.selected_object in pieces:
                 self.property_editor.set_object(self.state.selected_object)
         else:
             # Nothing changed — drop the checkpoint we just pushed.

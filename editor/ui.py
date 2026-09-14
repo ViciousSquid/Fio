@@ -534,7 +534,9 @@ class Ui_MainWindow(object):
 
         MainWindow.scissor_btn = make_btn(
             "assets/scissor.png",
-            "Scissor",
+            "Scissor / Clip (X)\n"
+            "Click two points, Enter cuts and keeps one side\n"
+            "Shift+Enter splits the brush in two, keeping both",
             on_click=MainWindow.toggle_clip_mode,
             checkable=True, shortcut="X", bottom_color=group_2_color)
 
