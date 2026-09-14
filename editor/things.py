@@ -4,6 +4,7 @@ Each Thing type has associated I/O definitions (inputs/outputs) for
 the event-driven entity communication system.
 """
 
+import copy
 import os
 import math
 import uuid
@@ -158,6 +159,36 @@ class Thing:
         Override in subclasses for dynamic sprite selection.
         """
         return self.__class__.get_pixmap()
+
+    def duplicate(self, existing_names=()):
+        """An independent copy of this entity, ready to place.
+
+        Everything the entity carries comes across — every property, its I/O
+        connections, its position — but the copy gets its own identity: a fresh
+        UUID and a name with ``(copy)`` appended.  ``existing_names`` is the set
+        of names already in use; a number is added when needed so two clones of
+        the same entity never end up sharing a name, which would otherwise make
+        every name-addressed I/O connection ambiguous between them.
+
+        A plain ``copy.copy`` will not do here: it leaves the copy sharing the
+        original's ``properties`` dict, so editing one silently edits both.
+        """
+        clone = copy.deepcopy(self)
+        # Position is mutated in place by dragging, so it must not be shared
+        # even if a subclass stored something exotic there.
+        clone.pos = [float(self.pos[0]), float(self.pos[1]), float(self.pos[2])]
+        clone.properties['id'] = str(uuid.uuid4())
+
+        base = self.properties.get('name', '')
+        if base:
+            taken = set(existing_names)
+            name = '%s (copy)' % base
+            counter = 2
+            while name in taken:
+                name = '%s (copy %d)' % (base, counter)
+                counter += 1
+            clone.properties['name'] = name
+        return clone
 
     def to_dict(self):
         """Serialize to dictionary for saving."""

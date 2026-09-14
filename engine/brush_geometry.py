@@ -334,6 +334,11 @@ def compute_windings(planes, eps=EPS):
             'texture': p.get('texture'),
             'uv_scale': p.get('uv_scale'),
             'face': p.get('face'),
+            # None unless this face carries its own texture basis; the renderer
+            # falls back to the world-axis projection when it is absent.
+            'uv_axes': (plane_uv_axes(p)
+                        if p.get('uv_u') is not None and p.get('uv_v') is not None
+                        else None),
         })
     return verts, faces
 
@@ -638,9 +643,84 @@ def clip_by_points(planes, p1, p2, p3, keep_positive=False, **kw):
     return clip_planes(planes, cut['n'], cut['d'], keep_positive=keep_positive, **kw)
 
 
+def render_uv_axes(normal):
+    """The two world axes a face's texture projects along, by dominant normal.
+
+    This is the renderer's convention (``v`` runs up walls, matching the cube
+    VAO), kept here so the same rule is available to code that has no business
+    importing the renderer — notably :func:`rotate_planes`, which needs to
+    materialise a face's texture basis exactly as the renderer would have
+    derived it, or locking the texture would shift it at the moment of locking.
+
+    Distinct from the private ``_uv_axes`` above, which serves
+    :meth:`ConvexGeometry.triangulate` and uses its own convention.
+    """
+    ax, ay, az = abs(normal[0]), abs(normal[1]), abs(normal[2])
+    if ay >= ax and ay >= az:                        # floor / ceiling
+        return (1.0, 0.0, 0.0), (0.0, 0.0, -1.0)
+    if ax >= az:                                     # X-facing wall
+        return (0.0, 0.0, 1.0), (0.0, 1.0, 0.0)
+    return (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)          # Z-facing wall
+
+
+def plane_uv_axes(plane):
+    """A plane's texture basis as ``(u, v)`` world vectors.
+
+    A plane that has been rotated carries its own basis under ``uv_u`` /
+    ``uv_v``; anything else falls back to :func:`render_uv_axes`, which is what
+    it has always used, so untouched brushes map exactly as before.
+
+    Note for future work: an operation that changes this basis *without* also
+    changing the plane's normal or offset must bump
+    :func:`geometry_signature`, since that is what the renderer's mesh cache
+    keys on.  Every operation that exists today (rotation, hull rebuilds)
+    changes the plane itself as well, so the basis rides along for free.
+    """
+    u = plane.get('uv_u')
+    v = plane.get('uv_v')
+    if u is not None and v is not None:
+        return (float(u[0]), float(u[1]), float(u[2])), \
+               (float(v[0]), float(v[1]), float(v[2]))
+    return render_uv_axes(plane['n'])
+
+
+def face_uv_projection(ring_world, face):
+    """Planar UVs for one face's corner ring, fitted to the face's extent.
+
+    Returns ``(us, vs, (u0, eu), (v0, ev))`` — the raw projections along the
+    face's texture basis plus the origin and span used to normalise them to
+    0..1.  The renderer bakes ``(us - u0) / eu`` into its vertex buffer and
+    multiplies by the face's repeat factors in the shader.
+
+    Because the fit is measured along whichever basis the face carries, and
+    rotating a brush turns the ring and its basis together, a rotated face
+    projects to exactly the same UVs it had before — which is what keeps a
+    texture stuck to the surface, at its original scale, as the brush turns.
+    """
+    ring = np.asarray(ring_world, dtype=np.float64)
+    uaxis, vaxis = (face.get('uv_axes') or render_uv_axes(face['normal']))
+    us = ring @ np.asarray(uaxis, dtype=np.float64)
+    vs = ring @ np.asarray(vaxis, dtype=np.float64)
+    u0 = float(us.min())
+    v0 = float(vs.min())
+    eu = max(float(us.max()) - u0, 1e-6)
+    ev = max(float(vs.max()) - v0, 1e-6)
+    return us, vs, (u0, eu), (v0, ev)
+
+
 def rotate_planes(planes, angle_deg, axis, pivot):
-    """Rotate every plane about ``pivot`` around ``axis`` by ``angle_deg``."""
-    R = _rotation_matrix(_normalize(axis), math.radians(angle_deg))
+    """Rotate every plane about ``pivot`` around ``axis`` by ``angle_deg``.
+
+    The face's texture basis turns with it, so a rotated brush keeps the
+    texture it had — same orientation relative to the surface, same scale —
+    instead of having a fresh world-axis projection applied to its new normal
+    (which slides the texture as the brush turns, and flips it outright when
+    the normal crosses to a different dominant axis).  A face that has no
+    basis yet gets one materialised from its *current* normal first, so the
+    lock starts from exactly what was on screen.
+    """
+    theta = math.radians(angle_deg)
+    R = _rotation_matrix(_normalize(axis), theta)
     pivot = _v(pivot)
     rotated = []
     for p in planes:
@@ -651,6 +731,10 @@ def rotate_planes(planes, angle_deg, axis, pivot):
         q = dict(p)
         q['n'] = [float(n2[0]), float(n2[1]), float(n2[2])]
         q['d'] = float(n2 @ point2)
+        u, v = plane_uv_axes(p)
+        u2, v2 = R @ _v(u), R @ _v(v)
+        q['uv_u'] = [float(u2[0]), float(u2[1]), float(u2[2])]
+        q['uv_v'] = [float(v2[0]), float(v2[1]), float(v2[2])]
         rotated.append(q)
     return rotated
 
@@ -1083,6 +1167,12 @@ def _plane_to_json(p):
         out['uv_scale'] = [float(p['uv_scale'][0]), float(p['uv_scale'][1])]
     if p.get('face') is not None:
         out['face'] = p['face']
+    # Texture basis, present only on faces that have been rotated (see
+    # plane_uv_axes); everything else re-derives it from the normal.
+    for key in ('uv_u', 'uv_v'):
+        vec = p.get(key)
+        if vec is not None:
+            out[key] = [float(vec[0]), float(vec[1]), float(vec[2])]
     return out
 
 
@@ -1271,6 +1361,12 @@ def carry_plane_metadata(new_planes, old_planes):
                 plane['texture'] = src['texture']
             if src.get('uv_scale') is not None:
                 plane['uv_scale'] = list(src['uv_scale'])
+            # Keep a rotated face's texture basis when a component drag
+            # rebuilds the plane set, or the texture would snap back to the
+            # world-axis projection mid-edit.
+            for key in ('uv_u', 'uv_v'):
+                if src.get(key) is not None:
+                    plane[key] = list(src[key])
             tag = src.get('face')
             if tag and tag not in used_tags:
                 plane['face'] = tag

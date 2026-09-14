@@ -7,6 +7,7 @@ import numpy as np
 import configparser
 import math
 import copy
+import uuid
 import glm
 import time
 from datetime import datetime
@@ -1004,6 +1005,11 @@ class MainWindow(QMainWindow):
             delta[pos_map[ax1_name]] = offset
             delta[pos_map[ax2_name]] = offset
 
+        # Names already in the scene, so each copy can be given one of its own
+        # as it is created (two copies sharing a name would make every
+        # name-addressed I/O connection ambiguous between them).
+        taken_names = set(self.state.get_all_entity_names())
+
         clones = []
         for source in sources:
             if isinstance(source, dict):
@@ -1012,10 +1018,17 @@ class MainWindow(QMainWindow):
                 new_obj = copy.deepcopy({
                     k: v for k, v in source.items()
                     if k not in brush_geometry.GEO_RUNTIME_KEYS})
-                new_obj.pop('id', None)     # a clone is a new entity
+                new_obj['id'] = str(uuid.uuid4())    # a clone is a new entity
+                name = source.get('name', '')
+                if name:
+                    new_obj['name'] = self._copy_name(name, taken_names)
                 self.state.brushes.append(new_obj)
             else:
-                new_obj = copy.copy(source)
+                # Entities carry their whole property set across, with a fresh
+                # UUID and their own name.  (A plain copy.copy would leave the
+                # clone sharing the original's properties dict.)
+                new_obj = source.duplicate(existing_names=taken_names)
+                taken_names.add(new_obj.properties.get('name', ''))
                 self.state.things.append(new_obj)
             self._translate_object(new_obj, delta)
             clones.append(new_obj)
@@ -1031,6 +1044,21 @@ class MainWindow(QMainWindow):
                 obj['_flash_until'] = time.time() + 0.5  # Flash for 0.5s
                 QTimer.singleShot(500, lambda o=obj: self._clear_flash(o))
         self.update_all_ui()
+
+    @staticmethod
+    def _copy_name(base, taken):
+        """``base`` with ``(copy)`` appended, numbered until it is unused.
+
+        ``taken`` is updated in place so a run of clones in one operation each
+        get a distinct name.
+        """
+        name = '%s (copy)' % base
+        counter = 2
+        while name in taken:
+            name = '%s (copy %d)' % (base, counter)
+            counter += 1
+        taken.add(name)
+        return name
 
     @staticmethod
     def _translate_object(obj, delta):

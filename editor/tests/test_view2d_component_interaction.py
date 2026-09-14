@@ -52,6 +52,24 @@ class _Stub3DView:
         pass
 
 
+class _StubTabs:
+    """Stands in for the 2D-view tab widget the clone offset is read from."""
+
+    def __init__(self, view):
+        self._view = view
+
+    def currentWidget(self):
+        return self._view
+
+
+class _StubSpin:
+    def __init__(self, value):
+        self._value = value
+
+    def value(self):
+        return self._value
+
+
 class _StubPropertyEditor:
     def __init__(self):
         self.target = None
@@ -87,6 +105,7 @@ class FakeEditorWindow(QWidget):
     finish_clone_placement = MainWindow.finish_clone_placement
     cancel_clone_placement = MainWindow.cancel_clone_placement
     _translate_object = staticmethod(MainWindow._translate_object)
+    _copy_name = staticmethod(MainWindow._copy_name)
     selection_centre = MainWindow.selection_centre
     selected_objects_list = MainWindow.selected_objects_list
     apply_rotation_to_selection = MainWindow.apply_rotation_to_selection
@@ -845,3 +864,122 @@ def test_rotate_with_nothing_selected_says_so(editor):
     press(view, (64, 0))
     assert not view.rotate_dragging
     assert any('select something' in t.lower() for t in host.toasts)
+
+
+# ---------------------------------------------------------------------------
+# Cloning entities
+# ---------------------------------------------------------------------------
+
+def test_cloning_an_entity_makes_an_independent_copy(editor):
+    host, _ = editor
+    from editor.things import Light
+    light = Light(pos=[64, 32, 0])
+    light.properties['radius'] = 350
+    light.properties['colour'] = [1.0, 0.5, 0.25]
+    host.state.things.append(light)
+
+    clone = light.duplicate()
+
+    assert clone is not light
+    assert clone.properties is not light.properties
+    assert clone.properties['radius'] == 350
+    assert clone.properties['colour'] == [1.0, 0.5, 0.25]
+    # Editing one must not reach the other.
+    clone.properties['radius'] = 99
+    assert light.properties['radius'] == 350
+
+
+def test_a_cloned_entity_gets_its_own_identity(editor):
+    host, _ = editor
+    from editor.things import Light
+    light = Light(pos=[0, 0, 0])
+    light.properties['name'] = 'lamp'
+    clone = light.duplicate()
+
+    assert clone.properties['id'] != light.properties['id']
+    assert clone.properties['name'] == 'lamp (copy)'
+
+
+def test_repeated_clones_do_not_share_a_name(editor):
+    from editor.things import Light
+    light = Light(pos=[0, 0, 0])
+    light.properties['name'] = 'lamp'
+    taken = {'lamp'}
+    names = []
+    for _ in range(3):
+        clone = light.duplicate(existing_names=taken)
+        names.append(clone.properties['name'])
+        taken.add(clone.properties['name'])
+    assert names == ['lamp (copy)', 'lamp (copy 2)', 'lamp (copy 3)']
+    assert len(set(names)) == 3
+
+
+def test_a_cloned_entity_has_its_own_position(editor):
+    from editor.things import Light
+    light = Light(pos=[10, 20, 30])
+    clone = light.duplicate()
+    clone.pos[0] = 999
+    assert light.pos[0] == 10
+
+
+def test_shift_space_clones_entities_as_well_as_brushes(editor):
+    host, _ = editor
+    from editor.things import Light
+    host.clone_selected_object = types.MethodType(
+        MainWindow.clone_selected_object, host)
+    host.right_tabs = _StubTabs(host.view_top)
+    host.grid_size_spinbox = _StubSpin(16)
+
+    light = Light(pos=[0, 0, 0])
+    light.properties['name'] = 'lamp'
+    brush = make_box()
+    host.state.things.append(light)
+    host.state.brushes.append(brush)
+    host.set_selected_objects([brush, light])
+
+    host.clone_selected_object()
+
+    assert len(host.state.things) == 2
+    assert len(host.state.brushes) == 2
+    new_light = host.state.things[1]
+    assert new_light is not light
+    assert new_light.properties['name'] == 'lamp (copy)'
+    assert new_light.properties['id'] != light.properties['id']
+    # Both copies are what is now selected and being placed.
+    assert host.clone_placement_active()
+    assert len(host.clone_placement['objects']) == 2
+
+
+def test_cloning_a_named_brush_gives_the_copy_its_own_name(editor):
+    host, _ = editor
+    host.clone_selected_object = types.MethodType(
+        MainWindow.clone_selected_object, host)
+    host.right_tabs = _StubTabs(host.view_top)
+    host.grid_size_spinbox = _StubSpin(16)
+
+    brush = make_box()
+    brush['name'] = 'pillar'
+    brush['id'] = 'original-id'
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+
+    host.clone_selected_object()
+
+    copy_brush = host.state.brushes[1]
+    assert copy_brush['name'] == 'pillar (copy)'
+    assert copy_brush['id'] != 'original-id'
+
+
+def test_cloning_an_unnamed_brush_does_not_invent_a_name(editor):
+    host, _ = editor
+    host.clone_selected_object = types.MethodType(
+        MainWindow.clone_selected_object, host)
+    host.right_tabs = _StubTabs(host.view_top)
+    host.grid_size_spinbox = _StubSpin(16)
+
+    brush = make_box()
+    host.state.brushes.append(brush)
+    host.set_selected_object(brush)
+
+    host.clone_selected_object()
+    assert 'name' not in host.state.brushes[1]

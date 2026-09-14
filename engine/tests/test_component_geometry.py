@@ -297,3 +297,127 @@ def test_rotate_point_is_reversible():
     there = bg.rotate_point(start, 41.0, axis, pivot)
     back = bg.rotate_point(there, -41.0, axis, pivot)
     assert back == pytest.approx(start, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Texture lock under rotation
+# ---------------------------------------------------------------------------
+
+def face_uvs(brush):
+    """Normalised UVs per face, the way the renderer bakes them."""
+    convex = bg.get_convex(brush)
+    out = {}
+    for face in convex.faces:
+        ring = convex.verts[face['indices']]
+        us, vs, (u0, eu), (v0, ev) = bg.face_uv_projection(ring, face)
+        key = face.get('face') or '#%d' % face['plane']
+        out[key] = np.sort(np.stack(((us - u0) / eu, (vs - v0) / ev), axis=1), axis=0)
+    return out
+
+
+def test_an_untouched_brush_keeps_the_world_axis_projection():
+    """Nothing changes for geometry that has never been rotated."""
+    brush = make_box()
+    bg.box_to_geometry(brush)
+    for face in bg.get_convex(brush).faces:
+        assert face['uv_axes'] is None
+        expected = bg.render_uv_axes(face['normal'])
+        ring = bg.get_convex(brush).verts[face['indices']]
+        us, _, _, _ = bg.face_uv_projection(ring, face)
+        assert np.allclose(us, ring @ np.asarray(expected[0]))
+
+
+def test_rotation_leaves_every_face_uv_untouched():
+    """The texture stays put on the surface: same orientation, same scale."""
+    brush = make_box(pos=(512, 0, 256), size=(128, 64, 96))
+    bg.box_to_geometry(brush)
+    before = face_uvs(brush)
+    assert bg.rotate_brush(brush, 37.0, [0.0, 1.0, 0.0], pivot=[0.0, 0.0, 0.0])
+    after = face_uvs(brush)
+    assert set(before) == set(after)
+    for key in before:
+        assert np.allclose(before[key], after[key], atol=1e-9)
+
+
+def test_texture_lock_survives_compound_rotations():
+    brush = make_box(pos=(512, 0, 256), size=(128, 64, 96))
+    bg.box_to_geometry(brush)
+    before = face_uvs(brush)
+    bg.rotate_brush(brush, 37.0, [0.0, 1.0, 0.0], pivot=[0.0, 0.0, 0.0])
+    bg.rotate_brush(brush, -14.0, [0.0, 0.0, 1.0], pivot=[100.0, 20.0, -5.0])
+    bg.rotate_brush(brush, 61.0, [1.0, 0.0, 0.0], pivot=[-40.0, 8.0, 900.0])
+    after = face_uvs(brush)
+    for key in before:
+        assert np.allclose(before[key], after[key], atol=1e-8)
+
+
+def test_rotation_does_not_flip_a_face_across_the_dominant_axis():
+    """A 90° turn used to re-project onto different world axes and flip.
+
+    With the basis locked, a wall turned a quarter turn keeps the mapping it
+    had rather than swapping u and v.
+    """
+    brush = make_box()
+    bg.box_to_geometry(brush)
+    before = face_uvs(brush)
+    bg.rotate_brush(brush, 90.0, [0.0, 1.0, 0.0], pivot=[0.0, 0.0, 0.0])
+    after = face_uvs(brush)
+    for key in before:
+        assert np.allclose(before[key], after[key], atol=1e-8)
+
+
+def test_rotation_records_an_orthonormal_basis_on_every_plane():
+    brush = make_box()
+    bg.box_to_geometry(brush)
+    assert bg.rotate_brush(brush, 23.0, [0.0, 1.0, 0.0])
+    for plane in brush['geometry']['planes']:
+        u = np.asarray(plane['uv_u'])
+        v = np.asarray(plane['uv_v'])
+        assert np.linalg.norm(u) == pytest.approx(1.0)
+        assert np.linalg.norm(v) == pytest.approx(1.0)
+        assert float(u @ v) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_face_scale_survives_a_rotation():
+    brush = make_box()
+    bg.box_to_geometry(brush)
+    for plane in brush['geometry']['planes']:
+        plane['uv_scale'] = [2.5, 0.75]
+    assert bg.rotate_brush(brush, 31.0, [0.0, 1.0, 0.0])
+    for plane in brush['geometry']['planes']:
+        assert plane['uv_scale'] == [2.5, 0.75]
+
+
+def test_the_texture_basis_is_saved_and_reloaded():
+    brush = make_box()
+    bg.box_to_geometry(brush)
+    bg.rotate_brush(brush, 19.0, [0.0, 1.0, 0.0])
+    saved = [bg._plane_to_json(p) for p in brush['geometry']['planes']]
+    assert all('uv_u' in p and 'uv_v' in p for p in saved)
+    reloaded = {'pos': brush['pos'], 'size': brush['size'],
+                'geometry': {'planes': saved}}
+    assert face_uvs(reloaded).keys() == face_uvs(brush).keys()
+    for key, value in face_uvs(brush).items():
+        assert np.allclose(face_uvs(reloaded)[key], value)
+
+
+def test_a_component_drag_keeps_a_rotated_face_locked():
+    """A vertex drag rebuilds the plane set; the basis must ride along."""
+    brush = make_box()
+    bg.box_to_geometry(brush)
+    bg.rotate_brush(brush, 25.0, [0.0, 1.0, 0.0])
+    points = bg.brush_points(brush).copy()
+    points[0] += np.array([0.0, 8.0, 0.0])
+    assert bg.rebuild_brush_from_points(brush, points)
+    kept = [p for p in brush['geometry']['planes'] if p.get('uv_u') is not None]
+    assert len(kept) >= 5          # every surviving box side keeps its basis
+
+
+def test_clipping_a_rotated_brush_keeps_the_basis_on_the_old_faces():
+    brush = make_box()
+    bg.box_to_geometry(brush)
+    bg.rotate_brush(brush, 25.0, [0.0, 1.0, 0.0])
+    before = {id(p): p.get('uv_u') for p in brush['geometry']['planes']}
+    assert bg.clip_brush(brush, [0.0, 1.0, 0.0], 0.0)
+    with_basis = [p for p in brush['geometry']['planes'] if p.get('uv_u')]
+    assert len(with_basis) == len(before)      # the new cut plane has none

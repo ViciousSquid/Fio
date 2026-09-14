@@ -2835,13 +2835,13 @@ class BaseRenderer:
     @staticmethod
     def _geo_uv_axes(n):
         """World axes a face's planar UVs project onto, by dominant normal
-        axis.  Matches the cube VAO's orientation (v runs up walls)."""
-        ax, ay, az = abs(n[0]), abs(n[1]), abs(n[2])
-        if ay >= ax and ay >= az:                        # floor / ceiling
-            return (1.0, 0.0, 0.0), (0.0, 0.0, -1.0)
-        if ax >= az:                                     # X-facing wall
-            return (0.0, 0.0, 1.0), (0.0, 1.0, 0.0)
-        return (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)          # Z-facing wall
+        axis.  Matches the cube VAO's orientation (v runs up walls).
+
+        The rule itself lives in brush_geometry so the geometry layer can
+        materialise the same basis when it locks a face's texture to a
+        rotation; this stays as the renderer's name for it.
+        """
+        return brush_geometry.render_uv_axes(n)
 
     def _build_geo_mesh(self, brush, convex, key):
         pos = brush.get('pos', [0, 0, 0])
@@ -2876,11 +2876,11 @@ class BaseRenderer:
             ln = n * scale
             ll = math.sqrt(float(ln @ ln))
             ln = ln / ll if ll > 1e-9 else n
-            ua, va = self._geo_uv_axes(n)
-            us = ring_w @ np.array(ua)
-            vs = ring_w @ np.array(va)
-            u0, eu = float(us.min()), max(float(us.max() - us.min()), 1e-6)
-            v0, ev = float(vs.min()), max(float(vs.max() - vs.min()), 1e-6)
+            # Projection along the face's own texture basis when it has one
+            # (a rotated face carries a basis that turned with the brush), and
+            # along world axes when it does not — exactly as before.
+            us, vs, (u0, eu), (v0, ev) = brush_geometry.face_uv_projection(
+                ring_w, face)
             first = vert_count
             for k in range(1, len(idx) - 1):
                 for j in (0, k, k + 1):
