@@ -161,11 +161,22 @@ class BigWorldSession:
             self._apply_active_snapshot()
         self._started = True
 
+    #: Transient per-object markers the session writes while it is running.
+    #: They mean nothing once it has stopped, and a map saved with them in it
+    #: would carry this session's activation state into the file.
+    TRANSIENT_KEYS = ("bw_active",)
+
     def stop(self) -> None:
         """Restore every object the session parked; leave the world untouched.
 
         Guarantees the editor/runtime world is exactly as it was before play —
-        no lingering hidden/disabled flags, no lost data, no changed UUIDs.
+        no lingering hidden/disabled flags, no lost data, no changed UUIDs, and
+        none of the session's own activation markers.
+
+        The marker sweep covers the whole world, not just the parked set: an
+        object inside the active region is marked ``bw_active`` too, and it was
+        never parked, so restoring the parked objects alone would leave the
+        markers on everything the player walked near.
         """
         for brush in list(self._parked_brushes.values()):
             self._restore_brush(brush)
@@ -176,8 +187,21 @@ class BigWorldSession:
         self._parked_brushes.clear()
         self._parked_things.clear()
         self._parked_lights.clear()
+        self._clear_transient_markers()
         self._restore_terrain()
         self._started = False
+
+    def _clear_transient_markers(self) -> None:
+        """Drop this session's own activation markers from every object."""
+        for brush in getattr(self.logic, "brushes", None) or ():
+            if isinstance(brush, dict):
+                for key in self.TRANSIENT_KEYS:
+                    brush.pop(key, None)
+        for thing in getattr(self.logic, "things", None) or ():
+            props = getattr(thing, "properties", None)
+            if isinstance(props, dict):
+                for key in self.TRANSIENT_KEYS:
+                    props.pop(key, None)
 
     def tick(self, player_pos=None) -> bool:
         """Per-frame entry point. Returns True if the active set changed.

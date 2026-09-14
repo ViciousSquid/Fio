@@ -62,6 +62,13 @@ class PluginManager:
         self.plugins: List[FioPlugin] = []
         self._loaded = False
         self._loading = False
+        # Package names already loaded, so a retried discovery pass cannot
+        # register the same plugin twice.
+        self._loaded_modules: set = set()
+        # Package names that were mid-import when discovery reached them (see
+        # _load_one). While this is non-empty the manager does not consider
+        # itself loaded, so the next load_plugins() call finishes the job.
+        self._deferred: set = set()
         # (plugin, label, ThingClass) placement entries for the editor menu.
         self._menu_entries: List[Tuple[FioPlugin, str, type]] = []
         # Built-in layers installed natively by the application bootstrap rather
@@ -152,6 +159,7 @@ class PluginManager:
 
         package_dir = os.path.dirname(os.path.abspath(__file__))
         found = 0
+        self._deferred.clear()
         for entry in sorted(pkgutil.iter_modules([package_dir])):
             mod_name = entry.name
             if not entry.ispkg:
@@ -161,11 +169,21 @@ class PluginManager:
             if mod_name.lower() in self._disabled:
                 self._debug(f"Skipping disabled plugin package '{mod_name}'")
                 continue
+            if mod_name in self._loaded_modules:
+                continue          # already loaded by an earlier, partial pass
             self._load_one(mod_name)
             found += 1
 
-        self._loaded = True
         self._loading = False
+        # A plugin whose own import triggered this discovery could not be read
+        # yet (see _load_one). Leaving _loaded False means the next call - the
+        # one the outer import makes once it has finished - picks it up, instead
+        # of the plugin being dropped for the life of the process.
+        self._loaded = not self._deferred
+        if self._deferred:
+            self._debug("Deferring %s until their import completes"
+                        % ", ".join(sorted(self._deferred)))
+            return
 
         self._verify_requirements()
 
@@ -180,6 +198,17 @@ class PluginManager:
             module = importlib.import_module(f"plugins.{mod_name}")
         except Exception:
             self._log(f"Failed to import plugin '{mod_name}':\n{traceback.format_exc()}")
+            return
+
+        # A plugin package whose own import reached back into the host and
+        # started discovery (tidy's entities import `editor`, whose package
+        # initialiser calls load_plugins) is still mid-import here: Python hands
+        # back the partially-initialised module, which has no PLUGIN yet.
+        # Skipping it quietly would drop that plugin for the life of the
+        # process, so it is recorded and retried by the outer call instead.
+        if getattr(getattr(module, "__spec__", None), "_initializing", False):
+            self._deferred.add(mod_name)
+            self._debug(f"Plugin '{mod_name}' is still importing; will retry")
             return
 
         plugin = getattr(module, "PLUGIN", None)
@@ -234,6 +263,7 @@ class PluginManager:
             self._log(f"menu_entries() failed for '{plugin.name}':\n{traceback.format_exc()}")
 
         self.plugins.append(plugin)
+        self._loaded_modules.add(mod_name)
         self._enabled_generation += 1
 
     def _verify_requirements(self):

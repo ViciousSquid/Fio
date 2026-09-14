@@ -964,11 +964,15 @@ class LogicThread(threading.Thread):
             self.player_dead = False
             self.muzzle_flash_active = False
 
-            # Clear spatial grid
+            # Clear spatial grid. Guarded on the *value*, not on the attribute
+            # existing: after one exit the attribute is present and None, so a
+            # second stop (a teardown path, or Stop pressed twice) used to raise
+            # AttributeError here and abandon the rest of the cleanup below.
             self.monster_ai.set_spatial_grid(None)
-            if hasattr(self, '_spatial_grid'):
-                self._spatial_grid.clear()
-                self._spatial_grid = None
+            grid = getattr(self, '_spatial_grid', None)
+            if grid is not None:
+                grid.clear()
+            self._spatial_grid = None
 
             # Reset mover path / cinematic state
             self.mover_path_states = {}

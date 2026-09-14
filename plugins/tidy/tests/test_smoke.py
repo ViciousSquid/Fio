@@ -21,8 +21,12 @@ if _ROOT not in sys.path:
 
 # A QApplication-free environment is fine for importing things.py, but QPixmap
 # construction needs a QGuiApplication. Force the offscreen platform so any
-# incidental pixmap load during the test can't require a display.
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# incidental pixmap load during the test can't require a display -- but only
+# when there is no display to use, because the offscreen plugin cannot create an
+# OpenGL context and this would otherwise disable the visual tier for the whole
+# session when the suite is run under Xvfb.
+if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
 class FakePlayer:
@@ -77,6 +81,8 @@ def _check(cond, msg):
 
 
 def test_plugin_loads_and_registers():
+    import pytest
+    pytest.importorskip("PyQt5", reason="this asserts the editor-side registration")
     print("[1] plugin discovery + registration")
     from plugins.manager import get_manager, load_plugins
     load_plugins()
@@ -99,6 +105,8 @@ def test_plugin_loads_and_registers():
 
 
 def test_entities_and_serialization():
+    import pytest
+    pytest.importorskip("PyQt5", reason="this asserts the editor-side registration")
     print("[2] entity construction + serialization round-trip")
     from plugins.tidy.entities import TidyObject, TidyReceptacle, TidyGoal
     from editor.things import Thing
@@ -308,6 +316,8 @@ def test_spatial_hash_scale():
 
 
 def test_integration_shim_applies():
+    import pytest
+    pytest.importorskip("PyQt5", reason="this asserts the editor-side registration")
     print("[6] core integration installs cleanly")
     # Importing the editor package runs editor/__init__.py, which loads plugins
     # and applies the editor integration shim (View2D placement menu, etc.).
@@ -335,16 +345,25 @@ def test_integration_shim_applies():
 
 
 def test_obj_asset_parses():
+    """The bundled model parses.
+
+    Deliberately through ``OBJLoader`` rather than ``OBJ``: the latter is the
+    OpenGL-ready wrapper and uploads VBOs in its constructor, so it needs a live
+    GL context and belongs to the visual tier.  Parsing the file is what this
+    smoke test is about, and it is head-less.
+    """
     print("[5] bundled model asset parses")
     try:
-        from engine.obj_loader import OBJ
+        from engine.obj_loader import OBJLoader
     except Exception as exc:
         print(f"  skip: obj_loader unavailable ({exc})")
         return
     path = os.path.join(_ROOT, "plugins", "tidy", "assets", "book.obj")
-    model = OBJ(path)
-    _check(getattr(model, "is_loaded", False), "book.obj loaded")
-    _check(getattr(model, "vertex_count", 0) > 0, "model has vertices")
+    loader = OBJLoader()
+    _check(loader.load(path) is True, "book.obj loaded")
+    _check(len(loader.vertices) > 0,
+           f"model has vertices (got {len(loader.vertices)})")
+    _check(len(loader.faces) > 0, f"model has faces (got {len(loader.faces)})")
 
 
 def main():
