@@ -1780,6 +1780,33 @@ class MainWindow(QMainWindow):
             self.state.selected_object['textures'][face] = 'caulk.jpg'
         self.update_views()
 
+    def handle_escape(self):
+        """Back out of whatever is in progress, innermost first.
+
+        Shared so that panels which would otherwise swallow Escape behave the
+        same as the viewports.  A QDialog closes itself on Escape, which meant
+        pressing it to leave Face Mode shut the Surface Inspector instead of
+        leaving the mode the panel had put the user in.
+
+        Returns True when something was backed out of, so a caller can tell an
+        Escape that did something from one that had nothing to do.
+        """
+        if self.cancel_clone_placement():
+            return True
+        if self.components.cancel_drag():
+            self.refresh_views()
+            return True
+        if self.components.is_component_mode():
+            self.set_component_mode(MODE_OBJECT)
+            return True
+        if getattr(self.view_3d, 'face_mode_active', False):
+            self.toggle_face_mode(False)
+            return True
+        if self.state.selected_object:
+            self.set_selected_object(None)
+            return True
+        return False
+
     def toggle_face_mode(self, active):
         """Toggles the Face Mode in the 3D view."""
         if not hasattr(self, 'view_3d'): return
@@ -1923,76 +1950,6 @@ class MainWindow(QMainWindow):
                 return
             target = (brush, keys[0])
         self.show_surface_inspector(*target)
-
-    def apply_texture_to_brush(self, texture_path, tiled=False):
-        """
-        Apply texture to the selected brush.
-        If tiled=True: 1 texture pixel = 1 world unit.
-        A 512x512 texture on a 512-unit face tiles once.
-        A 256x256 texture on a 512-unit face tiles twice.
-        If tiled=False: texture is stretched to fit (old behaviour).
-        """
-        import os
-        from PyQt5.QtGui import QPixmap
-
-        selected = self.state.selected_object
-        if not isinstance(selected, dict):
-            self.show_toast("Select a brush first", is_error=True)
-            return
-
-        # --- Load texture to read its pixel dimensions ---
-        full_path = os.path.join(self.root_dir, 'assets', 'textures', texture_path)
-        pixmap = QPixmap(full_path)
-        if pixmap.isNull():
-            self.show_toast("Failed to load texture", is_error=True)
-            return
-
-        tex_w = pixmap.width()
-        tex_h = pixmap.height()
-
-        # --- Ensure brush has texture storage ---
-        if 'textures' not in selected:
-            selected['textures'] = {}
-
-        faces = ['north', 'south', 'east', 'west', 'top', 'down']
-        sx, sy, sz = selected['size']
-
-        # --- Calculate face dimensions in world units ---
-        def get_face_size(face):
-                """Return (width, height) in world units for the given face."""
-                if face in ('north', 'south'):
-                    return (sx, sy)        # width = x, height = y
-                elif face in ('east', 'west'):
-                    return (sz, sy)        # width = z, height = y
-                else:  # top, down
-                    return (sx, sz)        # width = x, height = z
-
-        # --- Apply to all faces ---
-        for face in faces:
-            selected['textures'][face] = texture_path
-
-            if tiled:
-                face_w, face_h = get_face_size(face)
-
-                # 1 pixel = 1 world unit
-                # A 512px texture on a 512-unit face repeats 1.0 times
-                # A 256px texture on a 512-unit face repeats 2.0 times
-                repeat_u = face_w / tex_w
-                repeat_v = face_h / tex_h
-
-                if 'uv_scale' not in selected:
-                    selected['uv_scale'] = {}
-                selected['uv_scale'][face] = [repeat_u, repeat_v]
-            else:
-                # FIT mode: remove any custom UV scaling (stretch 0→1)
-                if 'uv_scale' in selected:
-                    selected['uv_scale'].pop(face, None)
-
-        self.save_state()
-        self.update_views()
-
-        mode_str = "tiled (1px = 1 unit)" if tiled else "fitted"
-        self.show_toast(f"Applied {mode_str}: {tex_w}x{tex_h}")
 
     def apply_texture_to_selected_face(self, face_name):
         if not isinstance(self.state.selected_object, dict):
@@ -3114,19 +3071,7 @@ class MainWindow(QMainWindow):
 
         # ESC: back out of whatever is in progress, innermost first
         if event.key() == Qt.Key_Escape:
-            if self.cancel_clone_placement():
-                return
-            if self.components.cancel_drag():
-                self.refresh_views()
-                return
-            if self.components.is_component_mode():
-                self.set_component_mode(MODE_OBJECT)
-                return
-            if getattr(self.view_3d, 'face_mode_active', False):
-                self.toggle_face_mode(False)
-                return
-            if self.state.selected_object:
-                self.set_selected_object(None)
+            if self.handle_escape():
                 return
 
         # Component modes — Radiant's V / E / F reflexes, spelled with the Shift

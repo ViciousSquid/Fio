@@ -340,6 +340,23 @@ class SurfaceInspector(QDialog):
             self.face_btn.setChecked(active)
             self.face_btn.blockSignals(False)
 
+    def keyPressEvent(self, event):
+        """Escape backs out of a mode; it never closes the panel.
+
+        A QDialog rejects itself on Escape, so pressing it to leave Face Mode
+        shut this window instead — and since the panel holds the only FACE
+        toggle, the mode and the way out of it disappeared together.  Escape
+        now does here exactly what it does in a viewport, and the panel is
+        closed the ways it always was: T, Shift+S, or its close button.
+        """
+        if event.key() == Qt.Key_Escape:
+            handler = getattr(self.editor, 'handle_escape', None)
+            if handler is not None:
+                handler()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def hideEvent(self, event):
         """Closing the panel leaves Face Mode behind with it.
 

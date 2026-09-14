@@ -275,7 +275,10 @@ class AssetBrowserTab(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 1. Action bar — FACE / FIT / TILE buttons immediately below the tabs
+        # 1. Action bar — the folder toggle and the Surface Inspector button.
+        #    Every texture control lives in the Inspector; FIT and TILE used
+        #    to sit here and duplicated its Fit and Natural, one baking a
+        #    scale the other keeps live.
         self.action_bar = QFrame()
         self.action_bar.setFixedHeight(50)
         self.action_bar.setStyleSheet("""
@@ -325,8 +328,6 @@ class AssetBrowserTab(QWidget):
             QPushButton:pressed { background-color: #1B5E20; }
             QPushButton:disabled { background-color: #444; color: #888; border: 1px solid #555; }
         """
-        self.fit_btn = None
-        self.tile_btn = None
         self.add_btn = None
         self.inspector_btn = None
 
@@ -344,9 +345,9 @@ class AssetBrowserTab(QWidget):
             self.add_btn.clicked.connect(self.on_add_clicked)
             button_layout.addWidget(self.add_btn)
         else:
-            # The FACE toggle moved into the Surface Inspector, alongside the
-            # controls that act on the face it selects; this opens that panel.
-            # It borrows the toggle's purple so the two still read as a pair.
+            # The only button here: texturing is the Surface Inspector's job,
+            # and this opens it.  It borrows the FACE toggle's purple so the
+            # button and the panel it opens read as a pair.
             self.inspector_btn = QPushButton("INSPECTOR")
             self.inspector_btn.setStyleSheet(INSPECTOR_BUTTON_STYLE)
             self.inspector_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
@@ -356,20 +357,6 @@ class AssetBrowserTab(QWidget):
                 "for one face or every face of the selection")
             self.inspector_btn.clicked.connect(self.on_inspector_clicked)
             button_layout.addWidget(self.inspector_btn)
-
-            self.fit_btn = QPushButton("FIT")
-            self.fit_btn.setEnabled(False)
-            self.fit_btn.setStyleSheet(button_style)
-            self.fit_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-            self.fit_btn.clicked.connect(lambda: self.perform_main_action(tiled=False))
-            button_layout.addWidget(self.fit_btn)
-
-            self.tile_btn = QPushButton("TILE")
-            self.tile_btn.setEnabled(False)
-            self.tile_btn.setStyleSheet(button_style)
-            self.tile_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-            self.tile_btn.clicked.connect(lambda: self.perform_main_action(tiled=True))
-            button_layout.addWidget(self.tile_btn)
 
         # Add stretch on both sides to center the button group, but also let buttons expand
         banner_layout.addStretch()
@@ -552,32 +539,14 @@ class AssetBrowserTab(QWidget):
         self.update_buttons_enabled()
 
     def update_buttons_enabled(self):
-        has_item = self.selected_item is not None
+        # Only the model tab has a button that needs a selection.  The
+        # Inspector button opens a panel and so is always available.
         if self.is_model_tab and self.add_btn:
-            self.add_btn.setEnabled(has_item)
-        else:
-            if self.fit_btn: 
-                self.fit_btn.setEnabled(has_item)
-            if self.tile_btn: 
-                self.tile_btn.setEnabled(has_item)
-
-    def perform_main_action(self, tiled=False):
-        if not self.selected_item:
-            return
-        if self.is_model_tab:
-            self.add_current_model()
-        else:
-            self.apply_texture(tiled)
+            self.add_btn.setEnabled(self.selected_item is not None)
 
     def add_current_model(self):
         if self.editor and self.selected_item:
             self.editor.add_model_to_scene(self.selected_item.file_path, [0,0,0], [1,1,1])
-
-    def apply_texture(self, tiled=False):
-        if self.editor and hasattr(self.editor, 'apply_texture_to_brush') and self.selected_item:
-            rel_path = os.path.relpath(self.selected_item.file_path, self.root_path)
-            rel_path = rel_path.replace('\\', '/')
-            self.editor.apply_texture_to_brush(rel_path, tiled=tiled)
 
     def on_add_clicked(self):
         self.add_current_model()

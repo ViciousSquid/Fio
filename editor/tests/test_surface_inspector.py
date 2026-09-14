@@ -408,6 +408,56 @@ def test_the_asset_browser_no_longer_owns_a_face_toggle(qt_app, tmp_path):
     assert not hasattr(tab, 'face_btn')
 
 
+def test_the_asset_browser_owns_no_texture_controls(qt_app, tmp_path):
+    """FIT and TILE duplicated the Inspector's Fit and Natural.
+
+    TILE baked the very scale Natural keeps live, and FIT cleared it — the
+    same two projections, reached a second way and a worse one, since a baked
+    scale stretches when the brush is resized.  Texturing is the Inspector's
+    job now; the only button left here opens it.
+    """
+    from editor.asset_browser import AssetBrowserTab
+
+    tab = AssetBrowserTab(str(tmp_path), ['.png'], editor=None)
+
+    for gone in ('fit_btn', 'tile_btn', 'face_btn',
+                 'perform_main_action', 'apply_texture'):
+        assert not hasattr(tab, gone), "%s should have moved to the Inspector" % gone
+
+
+def test_the_asset_browser_action_bar_keeps_only_the_two_it_should(qt_app, tmp_path):
+    """The hamburger folder toggle stays; INSPECTOR is the only other button."""
+    from PyQt5.QtWidgets import QPushButton
+
+    from editor.asset_browser import AssetBrowserTab
+
+    tab = AssetBrowserTab(str(tmp_path), ['.png'], editor=None)
+    labels = [b.text() for b in tab.action_bar.findChildren(QPushButton)]
+
+    assert sorted(labels) == sorted(['\u2630', 'INSPECTOR'])
+
+
+def test_the_inspector_button_needs_no_texture_selected(qt_app, tmp_path):
+    """FIT and TILE were disabled until a texture was picked; this is not."""
+    from editor.asset_browser import AssetBrowserTab
+
+    tab = AssetBrowserTab(str(tmp_path), ['.png'], editor=None)
+
+    assert tab.selected_item is None
+    assert tab.inspector_btn.isEnabled()
+    tab.update_buttons_enabled()
+    assert tab.inspector_btn.isEnabled()
+
+
+def test_the_editor_no_longer_carries_the_duplicate_apply_path(qt_app):
+    """apply_texture_to_brush() was FIT/TILE's implementation, and only theirs."""
+    from editor.main_window import MainWindow
+
+    assert not hasattr(MainWindow, 'apply_texture_to_brush')
+    # The face-level apply the 3D view uses in Face Mode stays.
+    assert hasattr(MainWindow, 'apply_texture_to_specific_face')
+
+
 def test_closing_the_panel_leaves_face_mode(inspector):
     """The panel owns the only FACE toggle, so it must not strand the mode."""
     host, panel, _ = inspector
@@ -444,3 +494,64 @@ def test_hiding_with_face_mode_off_changes_nothing(inspector):
     panel.show()
     panel.hide()
     assert calls == []
+
+
+# ────────────────────────────
+# Escape
+# ────────────────────────────
+
+def _escape(panel):
+    from PyQt5.QtCore import QEvent, Qt
+    from PyQt5.QtGui import QKeyEvent
+    event = QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier)
+    panel.keyPressEvent(event)
+    return event
+
+
+def test_escape_backs_out_of_the_mode_without_closing_the_panel(inspector):
+    """A QDialog rejects itself on Escape; this one must not.
+
+    Pressing Escape to leave Face Mode used to shut the window, and since the
+    panel holds the only FACE toggle, the mode and the way out of it went at
+    the same time.
+    """
+    host, panel, brush = inspector
+    escapes = []
+    host.handle_escape = lambda: (escapes.append(True), True)[1]
+    panel.show()
+
+    _escape(panel)
+
+    assert escapes == [True]
+    assert panel.isVisible()
+
+
+def test_escape_is_accepted_so_the_dialog_never_sees_it(inspector):
+    host, panel, brush = inspector
+    host.handle_escape = lambda: False
+
+    event = _escape(panel)
+
+    assert event.isAccepted()
+
+
+def test_escape_survives_a_host_without_the_hook(inspector):
+    """An older host, or a panel built against a stand-in, must not crash."""
+    host, panel, brush = inspector
+    assert not hasattr(host, 'handle_escape')
+    panel.show()
+
+    _escape(panel)
+
+    assert panel.isVisible()
+
+
+def test_other_keys_still_reach_the_dialog(inspector):
+    """Only Escape is intercepted."""
+    from PyQt5.QtCore import QEvent, Qt
+    from PyQt5.QtGui import QKeyEvent
+
+    host, panel, brush = inspector
+    host.handle_escape = lambda: pytest.fail("Tab must not be routed to escape")
+
+    panel.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Tab, Qt.NoModifier))
