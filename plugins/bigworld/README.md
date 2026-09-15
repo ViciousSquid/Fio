@@ -1,433 +1,948 @@
-# Big World — cell streaming for very large Fio maps
+# Big World — large persistent worlds for Fio
 
-Big World lets a single Fio map hold **hundreds of thousands of brushes and
-entities** while keeping only the area around the player active. The world is
-divided into streamable **cells**; only the cells intersecting the player's
-activation radius (default **2048 units**) take part in runtime rendering,
-collision, entity processing and lighting. Distant cells stay stored in the map
-but inactive — costing nothing per frame.
+**Big World** is Fio's optional large-world runtime layer. It allows a single map to contain a very large number of brushes and entities while keeping only the region around the player **resident, active, and simulated**.
 
-Crucially, Big World is a **runtime scalability layer, not a new world format**.
-It builds on the systems Fio already has instead of replacing them: no BVH,
-octree, BSP, ECS, or renderer rewrite. Objects keep their existing UUIDs and
-positions; the plugin only decides, each frame, which of them are *live*.
+It is designed for **large persistent cell-based worlds and open-world games** without introducing a separate ECS, BSP/PVS compile, renderer replacement, or new world format.
 
-**Contents**
+Big World is a **plugin, not a new engine mode**. It sits on top of Fio's existing spatial grid, physics, renderer, entity system, terrain system, savegame/delta system, and plugin API.
 
-- [The idea](#the-idea)
-- [Quick start](#quick-start)
-- [Architecture](#architecture)
-  - [Cells](#cells-cellpy)
-  - [Manager](#manager-managerpy)
-  - [Runtime](#runtime-runtimepy)
-  - [Terrain fill](#terrain-fill)
-  - [Persistence](#persistence-persistencepy)
-- [Editor vs. runtime](#editor-vs-runtime)
-- [Configuration](#configuration-the-bigworldsettings-entity)
-- [Measured performance](#measured-performance)
-- [How it uses the plugin API](#how-it-uses-the-plugin-api)
-- [Isolation & compatibility](#isolation--compatibility)
-- [Generating and benchmarking worlds](#generating-and-benchmarking-worlds)
-- [Files](#files)
-- [Roadmap](#roadmap)
+> **Core idea:** don't make the engine process the whole world every frame. Divide the world into cells and only make the cells near the player live.
 
 ---
 
-## The idea
+## What Big World provides
 
-```
-                Fio World
-                    │
-          ┌─────────┴─────────┐
-          │ Existing 512 Grid │   (engine/physics.py SpatialGrid — reused, not replaced)
-          └─────────┬─────────┘
-                    │
-              Big World Plugin
-                    │
-          ┌─────────┴─────────┐
-          │   Cell Manager    │
-          └─────────┬─────────┘
-                    │
-             2048-unit radius
-                    │
-          ┌─────────┴─────────┐
-      ACTIVE CELLS       INACTIVE CELLS
-          ▼                   ▼
-   Render / Physics      Stored only
-   Entities / Lights
-```
+- Fixed **512 × 512 world cells**, matching Fio's existing `SpatialGrid`.
+- Player-driven cell residency.
+- Circular activation regions rather than square streaming regions.
+- Activation/deactivation hysteresis to prevent boundary thrashing.
+- Incremental streaming only when the player crosses a cell boundary.
+- Multi-cell objects with UUID-based reference counting.
+- Runtime parking of distant brushes, entities, and lights.
+- Four cell simulation tiers:
+  - **NEAR** — full simulation.
+  - **ACTIVE** — resident and active, but outside the full-simulation radius.
+  - **DISTANT** — resident but reduced/inactive simulation.
+  - **DORMANT** — outside the active simulation region.
+- Camera-independent residency and simulation.
+- Persistent entities that remain active regardless of player location.
+- Persistent per-cell gameplay deltas.
+- Normal Fio save/load integration.
+- Optional terrain streaming.
+- Optional infinite procedural terrain.
+- Experimental disk streaming that can actually free unloaded cell objects from memory.
+- A runtime debug panel and active-cell minimap.
+- No Big World runtime cost on maps that do not opt in.
 
-The cell coordinates, the 512-unit cell size, and the multi-cell "spanning" rule
-are all borrowed directly from Fio's existing `engine.physics.SpatialGrid`. Big
-World adds one thing on top: a per-frame decision about which cells are active,
-and a reversible way to apply that decision to the live engine.
-
-Work each frame is proportional to **active cells + objects in active cells** —
-*not* to the total size of the world. That is the entire point.
+The system is deliberately built so ordinary Fio maps remain ordinary Fio maps.
 
 ---
 
-## Quick start
+## The architecture
 
-1. Open a map in Fio and place a **Big World Settings** entity
-   (**Plugins ▸ Big World**). Its mere presence turns streaming on for that map;
-   its properties set the radii. A map *without* one loads and plays exactly as
-   before — see [Isolation & compatibility](#isolation--compatibility).
-2. Enter play mode. Only cells within the activation radius of the player are
-   active; walking moves the active set with you.
-3. The debug overlay (top-left) shows live cell/brush/entity counts and a minimap
-   of active cells.
+```text
+                         Fio Map
+                            │
+                ┌───────────┴───────────┐
+                │ Fio SpatialGrid       │
+                │ 512 × 512 X/Z cells   │
+                └───────────┬───────────┘
+                            │
+                     Big World Plugin
+                            │
+              ┌─────────────┴─────────────┐
+              │     Residency Manager      │
+              └─────────────┬─────────────┘
+                            │
+                    Player world position
+                            │
+                 ┌──────────┴──────────┐
+                 │ activation radius   │
+                 │ + hysteresis        │
+                 └──────────┬──────────┘
+                            │
+        ┌───────────────────┼───────────────────┐
+        │                   │                   │
+       NEAR              ACTIVE             outside
+        │                   │                   │
+ Full simulation       Resident/live       parked/distant
+```
 
-`maps/bigworld_demo.json` is a small, hand-sized example: brushes across a 6×6
-cell block, a spanning floor, NPCs, a light, a persistent world-manager and a
-settings entity.
+Big World does **not** replace Fio's spatial grid.
+
+The existing `engine.physics.SpatialGrid` already divides the world into 512-unit X/Z cells. Big World uses the same coordinate convention so there is only one underlying spatial partitioning model.
+
+Objects are indexed by their existing **stable UUIDs**. A brush spanning several cells is referenced from each relevant cell but remains one object.
+
+---
+
+# Quick start
+
+## 1. Opt a map into Big World
+
+Add a **Big World Settings** entity to the map:
+
+**Plugins → Big World → Big World Settings**
+
+The presence of this entity is the map-level opt-in.
+
+A map without one does not start the Big World runtime.
+
+The entity contains the streaming configuration:
+
+```text
+enabled
+activation_radius
+deactivation_radius
+sim_near_radius
+show_cell_debug
+terrain_fill
+terrain_infinite
+terrain_stream_radius
+disk_streaming
+```
+
+## 2. Enter Play mode
+
+Big World builds its cell index and activates the region around the player.
+
+Moving within the same cell requires no streaming calculation.
+
+Crossing a cell boundary causes the residency calculation to run and produces an incremental activation/deactivation delta.
+
+## 3. Watch the debug overlay
+
+When `show_cell_debug` is enabled, the play view displays:
+
+- player cell
+- active cells
+- loaded cells
+- activation radius
+- active/total brushes
+- active/total entities
+- active/total lights
+- terrain chunk residency when terrain streaming is enabled
+
+A small top-down cell minimap shows the loaded and active region around the player.
+
+---
+
+# Cell residency
+
+## 512-unit cells
+
+Big World uses integer cell coordinates:
+
+```text
+(cell_x, cell_z)
+```
+
+derived from:
+
+```text
+floor(world_x / 512)
+floor(world_z / 512)
+```
+
+This is deliberately identical to Fio's existing `SpatialGrid`.
+
+Cell coordinates are therefore stable and deterministic across sessions.
+
+---
+
+## Circular activation
+
+The activation radius is measured from the player rather than simply activating a square of cells.
+
+The implementation first obtains the inexpensive square range of candidate cell coordinates, then rejects cells whose nearest edge lies outside the circular activation radius.
+
+This means a 2048-unit radius does not accidentally become a 4096 × 4096 square of active cells.
+
+---
+
+## Hysteresis
+
+Activation and deactivation use separate radii.
+
+For example:
+
+```text
+activation_radius   = 2048
+deactivation_radius = 2304
+```
+
+A cell becomes active when it enters the 2048-unit activation region, but remains active until it is outside the 2304-unit deactivation region.
+
+This prevents cells repeatedly entering and leaving the active set when the player is near a boundary.
+
+---
+
+## No work while stationary
+
+The streaming manager remembers the player's current cell.
+
+If the player has not crossed a cell boundary:
+
+```text
+update()
+    ↓
+same cell?
+    ↓
+return immediately
+```
+
+There is no repeated global cell scan and no repeated tier classification simply because another game tick occurred.
+
+This is important for low-power CPUs.
+
+The expensive part of changing residency happens when residency actually needs to change.
+
+---
+
+# Simulation tiers
+
+Big World separates **residency** from **simulation fidelity**.
+
+A cell can remain resident without receiving full simulation.
+
+The four tiers are:
+
+| Tier | Meaning |
+|---|---|
+| **NEAR** | Full simulation fidelity. |
+| **ACTIVE** | Resident and active, but outside the NEAR radius. |
+| **DISTANT** | Resident but outside the active simulation region; reduced/inactive simulation. |
+| **DORMANT** | Outside the active world region and effectively parked. |
+
+The exact consumer of a tier remains an existing Fio system or game/plugin responsibility. Big World supplies the spatial classification; it does not create a parallel entity/AI/physics framework.
+
+## NEAR
+
+`sim_near_radius` defines the region receiving the highest simulation fidelity.
+
+The default is:
+
+```text
+1024 units
+```
+
+The NEAR radius is clamped to the activation radius so the simulation region cannot accidentally extend beyond the streamed world.
+
+## ACTIVE
+
+Cells inside the resident region but outside the NEAR radius are classified as ACTIVE.
+
+They remain resident and available to the runtime, but can be treated differently by simulation systems.
+
+## DISTANT
+
+Further resident cells can be classified DISTANT.
+
+This gives game systems a way to retain coarse world state without giving distant objects the same simulation cost as nearby objects.
+
+## DORMANT
+
+Cells outside the active/resident region are DORMANT.
+
+They remain represented by the world/index/persistence system but do not participate in ordinary nearby runtime work.
+
+### Tier calculation is not a global per-frame scan
+
+Tier classification occurs as part of residency changes.
+
+The system does **not** iterate over every cell or every entity every frame.
+
+The amount of work therefore depends on the region whose residency changed, rather than on the total population of the world.
+
+---
+
+# Camera independence
+
+Big World residency is driven by the **player/world position**, not the camera.
+
+This is intentional.
+
+Changing from:
+
+- first-person
+- top-down
+- another camera angle
+
+does not move the streamed world around or change simulation tiers.
+
+The camera determines what Fio renders.
+
+The player/world position determines what Big World considers resident.
+
+This is particularly important for Fio because the same engine supports both first-person and top-down games.
+
+A top-down camera looking far across the map does not suddenly cause distant cells to stream in.
+
+Likewise, moving the camera independently of the player cannot be used to change the simulation region.
+
+---
+
+# Objects spanning cells
+
+An object can overlap multiple cells.
+
+For example:
+
+```text
+        Cell A       Cell B
+      ┌─────────┬─────────┐
+      │         │         │
+      │     ┌──────────┐  │
+      │     │  Brush   │  │
+      │     └──────────┘  │
+      │         │         │
+      └─────────┴─────────┘
+```
+
+The object is **not duplicated**.
+
+Each cell references the same UUID.
+
+Big World maintains reference counts so that an object is only parked/freed after its final relevant cell leaves residency.
+
+This is particularly important for large floors, terrain structures, walls, and other geometry crossing cell boundaries.
+
+---
+
+# Runtime integration
+
+Big World deliberately reuses Fio's existing systems.
+
+| System | Big World integration |
+|---|---|
+| **Rendering** | Distant brushes use Fio's existing `hidden` mechanism. |
+| **Physics** | Fio's existing spatial-grid collision queries continue to determine nearby potential colliders. |
+| **Entities** | Distant entities use the existing `disabled`/`hidden` mechanisms. |
+| **Lights** | Distant lights are hidden rather than introducing a second lighting system. |
+| **Simulation** | Big World exposes cell simulation tiers to existing/game systems. |
+| **Terrain** | Big World drives Fio's existing terrain streaming support. |
+| **Persistence** | Uses Fio's existing save/delta machinery with per-cell bucketing. |
+| **Debugging** | Uses the plugin API's `render.overlay` event. |
+
+There is no Big World replacement for:
+
+- Fio physics
+- Fio rendering
+- Fio entities
+- Fio savegames
+- Fio terrain
+- Fio spatial partitioning
+
+That separation is deliberate.
+
+---
+
+# Runtime parking
+
+The default Big World implementation does not need to destroy distant objects.
+
+Instead, it parks them:
+
+```text
+ACTIVE
+  ↓
+hidden / disabled / parked
+  ↓
+INACTIVE
+```
+
+When the cell returns:
+
+```text
+INACTIVE
+  ↓
+unpark
+  ↓
+ACTIVE
+```
+
+Play-stop reverses the runtime changes so the editor returns to its authored state.
+
+Fio distinguishes authored-hidden geometry from Big World runtime parking so that parking an object does not accidentally make it disappear from collision.
+
+---
+
+# Persistent entities
+
+Some entities should exist regardless of where the player is.
+
+Examples include:
+
+- world managers
+- global state controllers
+- quest controllers
+- global script controllers
+
+An entity can be marked persistent with:
+
+```text
+bw_persistent = true
+```
+
+Some global entity types are persistent by default.
+
+Persistent entities are not treated as ordinary streamed world objects.
+
+---
+
+# Terrain
+
+Big World can drive Fio's procedural terrain system.
+
+## Terrain fill
+
+With:
+
+```text
+terrain_fill = true
+```
+
+Big World expands terrain coverage to the world represented by the indexed cells and enables terrain chunk streaming.
+
+The entire terrain does **not** need to be tessellated up front.
+
+Only terrain chunks around the player are resident.
+
+Because Fio's procedural terrain is deterministic from world position, a chunk can be regenerated when needed without changing the shape of the world.
+
+---
+
+## Infinite terrain
+
+With:
+
+```text
+terrain_fill = true
+terrain_infinite = true
+```
+
+terrain generation is no longer restricted to the authored world bounds.
+
+The player can continue moving and new terrain is generated around them indefinitely.
+
+Only nearby terrain chunks remain resident.
+
+This provides the basis for very large or effectively endless procedural worlds without keeping an infinite mesh in memory.
+
+---
+
+# Persistence
+
+Big World uses Fio's existing UUID and delta infrastructure rather than introducing a separate save format.
+
+## Stable identity
+
+Objects retain their existing Fio UUIDs:
+
+```text
+brush["id"]
+thing.properties["id"]
+```
+
+Cell membership is derived from world position.
+
+It is not stored as permanent object identity.
+
+---
+
+## Big World play-session saves
+
+When a Big World map is saved during play:
+
+```text
+Ordinary Fio map
+    → full save
+
+Big World map
+    → delta save
+```
+
+The delta is relative to the map's base state.
+
+Big World maintains a persistent registry of changes associated with world cells and stable UUIDs.
+
+Conceptually:
+
+```text
+cell
+ ├── changed brush UUIDs
+ └── changed entity UUIDs
+```
+
+A change remains recorded even after its cell leaves the player's active region.
+
+When the cell returns, its delta is applied to the freshly restored base state.
+
+This means the player can:
+
+```text
+modify cell
+    ↓
+walk away
+    ↓
+cell leaves residency
+    ↓
+modify another region
+    ↓
+return later
+    ↓
+original modification is still present
+```
+
+The registry represents **current state relative to base**, rather than an ever-growing history of changes.
+
+If something is changed and subsequently returned to its original state, its delta can disappear.
+
+---
+
+# Experimental disk streaming
+
+The normal Big World session keeps world objects resident in memory and parks them when inactive.
+
+`disk_streaming` is an experimental mode that goes further:
+
+```text
+active cell
+    ↓
+commit changes
+    ↓
+remove objects from live scene
+    ↓
+free cell objects
+```
+
+When the cell is needed again:
+
+```text
+cell source
+    ↓
+instantiate pristine base objects
+    ↓
+apply saved UUID-keyed delta
+    ↓
+activate cell
+```
+
+This changes the memory model from:
+
+```text
+entire world resident
+```
+
+to:
+
+```text
+loaded cells resident
+```
+
+The cell's base state is captured the first time it is loaded, because the complete world is not necessarily resident at once.
+
+Changes are committed before a cell is freed.
+
+---
+
+## Cell sources
+
+Two source implementations are provided.
+
+### `MemoryCellSource`
+
+Creates a pristine in-memory representation of the map.
+
+This is useful for testing the complete free/reload lifecycle without requiring a separate asset pipeline.
+
+### `DirectoryCellSource`
+
+Reads cell data from files named:
+
+```text
+cell_<cx>_<cz>.json
+```
+
+This provides the foundation for a genuinely disk-backed large-world workflow.
+
+---
+
+## Current disk-streaming status
+
+The disk-streaming architecture and persistence logic are implemented and tested.
+
+The remaining limitation is **live engine integration**: removing and recreating objects from Fio's live `things`/`brushes` collections requires the renderer and physics caches to be invalidated correctly while play mode is running.
+
+Therefore:
+
+```text
+disk_streaming = false
+```
+
+is the default.
+
+The experimental path fails back to the normal in-RAM Big World session if startup encounters an error.
+
+---
+
+# Editor vs. Play mode
+
+Big World is primarily a runtime scalability layer.
+
+The editor continues to expose the complete authored world.
+
+You can:
+
+- select distant objects
+- move them
+- duplicate them
+- delete them
+- edit properties
+- inspect UUIDs
+- work on the whole map
+
+Big World does not permanently hide distant content from the editor.
+
+Runtime parking occurs during Play mode and is reversed when Play mode stops.
+
+This preserves Fio's central editor/runtime model: the map remains the same world rather than being converted into a separate compiled representation.
+
+---
+
+# Configuration
+
+The `BigWorldSettings` entity provides:
+
+| Property | Default | Description |
+|---|---:|---|
+| `enabled` | `true` | Enable Big World for this map. |
+| `activation_radius` | `2048` | Radius within which cells become resident/active. |
+| `deactivation_radius` | `2304` | Radius beyond which active cells may be removed. Provides hysteresis. |
+| `sim_near_radius` | `1024` | Radius used for NEAR/full simulation fidelity. |
+| `show_cell_debug` | `true` | Display the Big World debug panel/minimap. |
+| `terrain_fill` | `false` | Expand procedural terrain to cover the streamed world. |
+| `terrain_infinite` | `false` | Continue generating terrain beyond authored bounds. Requires terrain fill. |
+| `terrain_stream_radius` | `0` | Terrain residency radius. `0` derives it from activation radius. |
+| `disk_streaming` | `false` | Experimental mode that frees unloaded cell objects and restores them from a cell source. |
+
+The properties are registered through Fio's normal typed plugin property API, so they appear as normal editor properties rather than requiring custom UI.
+
+---
+
+# Performance model
+
+Big World is designed around one rule:
+
+> **Runtime work should scale with the active region, not the total world population.**
+
+For example, a world might contain:
+
+```text
+500,000 brushes
+```
+
+while the player is surrounded by only:
+
+```text
+~500 active brushes
+```
+
+The renderer, physics queries, entity processing, and lighting therefore do not need to treat all 500,000 objects as active gameplay objects.
+
+The stationary path is especially cheap:
+
+```text
+player remains in same cell
+        ↓
+no residency change
+        ↓
+early-out
+```
+
+Crossing a cell boundary performs the bounded residency update.
+
+The implementation includes tests specifically intended to prevent accidental reintroduction of a global per-frame scan.
+
+---
+
+# Performance measurements
+
+The original large-world benchmark demonstrated approximately constant active population and flat streaming-update costs as world size increased:
+
+```text
+brushes     active brushes
+10,000           ~501
+50,000           ~501
+100,000          ~501
+250,000          ~501
+500,000          ~501
+```
+
+The benchmark also showed stationary update cost remaining around a few microseconds and cell-crossing work around the millisecond range on the reference machine.
+
+These numbers are **architecture measurements, not hardware guarantees**. They depend on Python version, hardware, map distribution, object complexity, and the exact benchmark configuration.
+
+The important result is the scaling behaviour:
+
+```text
+World size increases
+        │
+        ├── total indexed objects increases
+        │
+        └── nearby active population remains bounded
+```
+
+Big World therefore makes very large maps practical without requiring the entire world to participate in every frame.
+
+---
+
+# Plugin isolation
+
+Big World is deliberately optional.
+
+The plugin declares itself:
+
+```python
+enabled = False
+```
+
+and uses the presence of a `BigWorldSettings` entity as the map opt-in.
+
+More importantly, the plugin's heavy runtime modules are **lazy-imported**.
+
+An ordinary Fio map therefore does not import:
+
+- the Big World manager
+- the Big World runtime
+- the Big World persistence implementation
+- the disk-streaming implementation
+
+just because the plugin exists in the installation.
+
+The core engine also does not contain a distributed collection of:
+
+```python
+if bigworld_enabled:
+    ...
+```
+
+checks.
+
+The boundary is:
+
+```text
+Fio core
+   │
+   └── Plugin API
+          │
+          └── Big World
+```
+
+rather than:
+
+```text
+Fio core
+   │
+   └── Big World
+          │
+          └── everything else
+```
+
+This is important for Fio's smaller maps: a normal map should not become a Big World map merely because the plugin is installed.
+
+---
+
+# Plugin API integration
+
+Big World is implemented through Fio's plugin API.
+
+It uses:
+
+### `register`
+
+Registers:
+
+- `BigWorldSettings`
+- the Big World property schema
+
+### `on_play_start`
+
+Checks whether the map opts in before importing the runtime implementation.
+
+If it does not, the method returns without starting Big World.
+
+### `on_tick`
+
+Advances the active session.
+
+The session itself performs the cheap same-cell early-out.
+
+### `on_play_stop`
+
+Stops the session and restores the world.
+
+### `connect`
+
+Hooks:
+
+```text
+render.overlay
+```
+
+for the optional debug display and exposes the active session through the:
+
+```text
+bigworld
+```
+
+plugin service.
+
+Other plugins and tools can therefore obtain the active session through the normal plugin service mechanism rather than importing Big World internals.
+
+Current plugin API requirement:
+
+```text
+api_version = "1.2.0"
+```
+
+---
+
+# Testing
+
+Big World has dedicated headless tests covering the major invariants of the system.
+
+Important cases include:
+
+- cell coordinate calculation
+- object indexing
+- spanning brushes
+- active-set calculation
+- circular activation
+- hysteresis
+- same-cell early-out
+- bounded work when crossing cells
+- runtime parking/restoration
+- persistent entities
+- simulation tier classification
+- camera-independent residency
+- save/load
+- persistent cell deltas
+- re-streaming of modified cells
+- terrain streaming
+- disk-streaming lifecycle
+- base-world identity validation
+
+One particularly important invariant is that **camera movement must not alter the resident cell set or simulation tiers**.
+
+Another is that stationary ticks must not perform tier/residency work.
+
+These tests exist to protect the scaling model, not merely the individual functions.
+
+---
+
+# Generating large test worlds
+
+Synthetic worlds can be generated and benchmarked with:
 
 ```bash
-# run the headless test suite
-python -m plugins.bigworld.tests.test_bigworld
-```
-
-Generating and benchmarking large synthetic worlds is covered
-[below](#generating-and-benchmarking-worlds).
-
----
-
-## Architecture
-
-### Cells (`cell.py`)
-
-A cell is addressed by **integer** coordinates `(cell_x, cell_z)` — never floats
-— and covers a fixed `512 × 512` column in X/Z, using `floor(coord / 512)`,
-*identical* to `SpatialGrid`. Objects are **referenced** by a cell, never copied
-into it, so a brush's data and UUID live in exactly one place regardless of how
-many cells its footprint touches.
-
-Each cell moves through a streaming lifecycle:
-
-```
-UNLOADED → LOADING → INACTIVE → ACTIVE → UNLOADING
-```
-
-For this milestone the whole map is resident in RAM, so a cell is only ever
-`INACTIVE` or `ACTIVE`. The `LOADING`/`UNLOADING` states and the
-`load_cell`/`unload_cell` API exist so true asynchronous disk streaming can be
-layered on later **without reshaping the runtime above it** (see
-[Roadmap](#roadmap)). `BigWorldCell` exposes `key()`, `is_active()`,
-`is_loaded()`, `object_count()`, `bounds()` and `clear()`; `CELL_SIZE` and the
-`CellState` enum are the shared constants.
-
-### Manager (`manager.py`)
-
-`BigWorldManager` owns the index and the active-set calculation.
-
-- `index_world(brushes, things)` builds a UUID-addressed index and groups objects
-  into cells: brushes into **every** cell their footprint overlaps (spanning
-  handled exactly like `SpatialGrid.populate`), point entities into one cell,
-  lights into every cell their influence *radius* reaches. `add_brush` /
-  `add_thing` incrementally index a single object.
-- `update(player_pos, force=False)` is the per-frame entry point. It **early-outs
-  until the player crosses a cell boundary**, then:
-  - obtains candidate cells from the **square** bounding the radius (cheap integer
-    ranges over the grid), then keeps only those whose nearest edge is within the
-    **circular** radius — never measuring distance to individual brushes;
-  - applies **hysteresis** — a cell is added within `activation_radius` but not
-    dropped until beyond `deactivation_radius` — so loitering on a boundary does
-    not thrash cells on and off;
-  - returns an `ActivationDelta`: the **net** cells entering and leaving,
-    reference-counted so a brush shared by several cells is switched off only when
-    its **last** active cell leaves.
-- `activate_cell` / `deactivate_cell` return the `(brushes, things, lights)` that
-  changed state; `active_brushes()`, `active_things()`, `active_lights()`,
-  `is_brush_active()`, `is_thing_active()` and `stats()` expose the live set.
-
-### Runtime (`runtime.py`)
-
-`BigWorldSession` applies the manager's active set to the live engine by
-cooperating with existing machinery — every change is tracked and **fully
-reversed on play-stop**:
-
-| Concern | Integration (no subsystem replaced) |
-|---------|-------------------------------------|
-| Rendering | Inactive brushes get Fio's `hidden` flag; the per-frame cull already drops hidden brushes before the draw path, so only active geometry is submitted. |
-| Physics | The player already collides via `SpatialGrid.get_potential_colliders`, which only returns brushes in the player's *local* cells — distant inactive geometry is never queried. Nothing to duplicate. |
-| Entities | Inactive entities get `disabled` (and `hidden`), which the monster AI and pickup handlers already treat as "skip me". |
-| Lights | Inactive lights are hidden, keeping the lights the renderer considers local to active cells — no global increase in light count. |
-
-`start(player_pos)` snapshots what it is about to change and streams in the region
-around the player; `tick(player_pos)` advances streaming (cheap — the manager
-early-outs unless a boundary was crossed); `stop()` restores everything;
-`player_cell()` and `stats()` feed the debug overlay.
-
-### Terrain fill
-
-Fio's procedural terrain is generated from noise as a pure function of world
-position, so any point's height is the same however the mesh around it is built.
-Big World uses that to fill a massive world with ground **without tessellating
-the entire grid up-front**:
-
-- With `terrain_fill` on, the session expands the terrain's chunk bounds to the
-  bounding box of every indexed cell — so terrain covers the whole streamed world
-  seamlessly — and switches the terrain into **streaming mode**.
-- In streaming mode the terrain keeps resident only the chunks within
-  `terrain_stream_radius` of the camera and frees chunks beyond it (with a
-  hysteresis band, exactly like the cell manager). Because heights are
-  position-deterministic, a chunk streamed back in is byte-for-byte identical: the
-  world **stays the same shape**, it is simply built around the player as it moves
-  rather than all at once.
-- The terrain change is snapshotted on play-start and **restored verbatim on
-  play-stop**, so the authored terrain (bounds, streaming flag, radius) is
-  returned untouched — the editor is unaffected. The session never enables or
-  disables the terrain itself, and never makes an OpenGL call off the render
-  thread: a bounds change defers its chunk prune to the next render frame.
-
-Terrain streaming is a plain `engine.terrain.Terrain` feature (off by default,
-`set_streaming` / `set_world_extent`) that works with or without this plugin; Big
-World just drives it from the same player position it already tracks.
-
-### Persistence (`persistence.py`)
-
-Almost nothing new needs saving, by design:
-
-- **UUIDs** are Fio's existing identity (`brush['id']` /
-  `thing.properties['id']`). Big World only *reads* them — an object keeps the
-  same UUID across load → activate → deactivate → save → reload → stream.
-- **Cell assignment** is derived from position + the shared grid, so it is
-  recomputed on load and can never be "lost".
-- The only new datum — the map's streaming config — rides on the ordinary
-  `BigWorldSettings` entity, so it round-trips through Fio's normal save/load with
-  no core change. Transient runtime markers are stripped before a save.
-
-#### Play-session saves are forced deltas
-
-A **play-session save** of a Big World map (the native `save`/`quicksave`) is
-always a **delta**, never a full world snapshot — chosen automatically:
-
-```
-Standard Fio map  → Full save
-Big World map      → Forced delta save (world_mode = "bigworld")
-```
-
-The live `BigWorldSession` keeps a **persistent cell delta registry** —
-`{"cx,cz": {"things": [...], "brushes": [...]}}` — that records each cell's
-gameplay changes *relative to that cell's base state*, keyed by the same
-`(cell_x, cell_z)` cell id the streaming manager uses, and by stable **UUID**
-within a cell. It is independent of which cells are currently streamed in:
-
-```
-Cell loads → base instantiated → stored cell delta applied → gameplay mutates
-→ commit_cell() merges the change into the registry → cell unloads
-→ the change stays in the registry
-```
-
-Because the in-RAM streaming model never frees objects (parking only toggles
-`hidden`/`disabled`/`bw_active`), a cell modified earlier and since unloaded is
-still resident, so its changes are captured too. On save, `commit_all()` flushes
-every cell in one authoritative pass (nothing pending is omitted); the registry
-converges on *current − base*, dropping a change that has returned to base rather
-than accumulating history. Streaming state is normalised away before diffing
-(`normalize_streaming_state`) so a currently-parked-but-unmodified cell never
-appears as a change. The save carries base-world identity (name + a UUID
-fingerprint) to fail safe against the wrong world.
-
-On load the save is auto-detected as a Big World delta, the base world is
-validated, player/runtime state is restored, and every cell's UUID-keyed changes
-are overlaid onto the freshly-loaded world (and the registry handed back to the
-live session, so a cell streamed in later still carries its saved changes). This
-reuses the core delta machinery in
-[`engine/savegame.py`](../../engine/savegame.py) — Big World only adds the
-per-cell bucketing (`build_cell_delta_registry`) and streaming normalisation, so
-there is no second persistence subsystem and **no plugin-API bump**. Ordinary
-maps are untouched and keep their full-snapshot saves.
-
-#### Disk streaming — actually freeing unloaded cells (opt-in)
-
-The default session keeps every object resident and only toggles flags, so an
-unloaded cell's changes are trivially still in memory. The **disk-streaming**
-milestone ([`streaming.py`](streaming.py), enabled by the
-`disk_streaming` setting) is the real thing: an unloaded cell's objects are
-**removed from the live scene and freed**, and re-instantiated from a *cell
-source* (its "disk") when the cell streams back in.
-
-```
-Cell streams in   → base instantiated from the source (a fresh copy)
-                  → its base is CAPTURED here, the first time it is resident
-                  → its saved delta is re-applied by UUID → cell active
-gameplay mutates the cell
-Cell streams out  → its delta is COMMITTED to the registry  ← before the free
-                  → its objects are removed from the scene and freed
-Cell streams in again → base re-instantiated + delta re-applied → change is back
-```
-
-Two things the in-RAM path got for free are earned here, and they are the point:
-
-- **Each cell's base is captured the first time it streams in**, per UUID, from
-  the pristine `CellSource` — because the whole world is never resident at once,
-  a base can't be snapshotted up-front.
-- **A cell's changes are committed before it is freed**, so the world-level
-  registry (kept per UUID, bucketed by cell only when serialised) is the single
-  source of truth for the save — most of the world isn't loaded to serialize.
-  Freed UUIDs drop their retained base (re-captured on reload), so memory stays
-  proportional to *loaded* cells, not world size.
-
-`MemoryCellSource.from_logic(logic)` makes this usable over any ordinary map with
-no new on-disk format (it deep-copies the map once as the pristine "disk image",
-then the session empties the scene and streams cells in/out); `DirectoryCellSource`
-reads `cell_<cx>_<cz>.json` files for a real on-disk world. Save/load reuse the
-**same** Big World save format and the same `compute_delta_level` delta maths, so
-a disk-streamed save is byte-compatible with an in-RAM one. `DiskStreamingSession`
-exposes the same `commit_all` / `serialize_registry` / `base_identity` surface the
-engine's save branch already calls, and loading routes through
-`restore_saved` (the world can't be overlaid wholesale — cells apply their delta
-as they stream). Spanning objects are reference-counted, so a brush straddling
-two cells is freed only when its **last** loaded cell leaves. The base world is
-fingerprinted to fail a load safely against the wrong world.
-
-> Scope: the streaming/free/base-capture/registry/save-load logic is complete and
-> covered by [`tests/test_bigworld_disk.py`](tests/test_bigworld_disk.py). The
-> remaining engine-side work is live integration — mutating the scene's
-> `things`/`brushes` lists mid-frame and invalidating the renderer/physics caches
-> for freed objects — so the setting ships **experimental** and off by default,
-> falling back to the in-RAM session if anything goes wrong.
-
----
-
-## Editor vs. runtime
-
-Big World is primarily a **runtime** system. In the editor the full map stays
-available — select, move, duplicate, delete, edit properties, read UUIDs — and
-the session only parks geometry inside **play mode**, restoring everything exactly
-on stop. Distant geometry is never made permanently inaccessible.
-
----
-
-## Configuration (the `BigWorldSettings` entity)
-
-One optional entity per map holds all config. Placing it is the opt-in; its
-properties tune the behaviour:
-
-| Property | Default | Meaning |
-|----------|---------|---------|
-| `enabled` | `true` | Master switch for streaming on this map. |
-| `activation_radius` | `2048` | Cells within this distance of the player activate. |
-| `deactivation_radius` | `2304` | Active cells drop only beyond this (hysteresis; clamped ≥ `activation_radius`). |
-| `show_cell_debug` | `true` | Draw the stats panel + active-cell minimap in play mode. |
-| `terrain_fill` | `false` | If the map has a procedural terrain, expand it to cover every cell of the world and **stream its chunks** around the player instead of building the whole grid up-front. Off by default — terrain is left exactly as authored. |
-| `terrain_stream_radius` | `0` | World units of terrain kept resident around the player. `0` derives it from the activation radius. |
-
-The schema is declared with typed
-[`prop()`](../API.md#propertyspec-and-prop) specs (ranged floats, checkboxes,
-tooltips), so the editor renders proper widgets for each field.
-
-**Persistent (never-streamed) entities.** Mark any single entity persistent with
-a truthy `bw_persistent` property; entity `type`s like `worldmanager` /
-`globalscript` / `questcontroller` are persistent by default. Use this for world
-managers, global game state, and quest/script controllers that must keep running
-no matter where the player stands.
-
----
-
-## Measured performance
-
-`python -m plugins.bigworld.tools.generate_world benchmark` on the reference
-machine:
-
-```
-  brushes  startup  still/frame  per-cross   active/total brushes    save    load  idx-mem
-   10,000     155m       3.44us     0.77ms       501/10,000        327m   153m    2.5M
-   50,000    1030m       3.89us     1.01ms       501/49,729       1789m  1360m   14.4M
-  100,000    1471m       3.67us     0.97ms       501/99,856       3268m  2709m   28.7M
-  250,000    4127m       3.60us     1.09ms       501/250,000      9757m  8137m   65.8M
-  500,000    7497m       3.68us     1.00ms       501/499,849     18941m 15768m  131.6M
-```
-
-The point of the table: **active brushes stay ~constant (≈500)** while the world
-grows to 500k, and the **per-frame stationary cost (~3.7 µs)** and
-**per-cell-crossing cost (~1 ms)** stay **flat regardless of world size**. Work is
-proportional to `active cells + objects in active cells`, not to total world
-objects.
-
-Startup and save/load *do* scale with the total (a one-off whole-map pass —
-acceptable while the map is resident in RAM). Removing even that is the future
-milestone: async disk streaming, discussed in the [Roadmap](#roadmap).
-
----
-
-## How it uses the plugin API
-
-Big World is a good tour of the open-ended half of the
-[plugin API](../API.md) — it adds almost nothing to place, and instead hooks the
-engine:
-
-- **`register`** declares the single `BigWorldSettings` entity and its typed
-  property schema. That entity's presence is the map's opt-in.
-- **`on_play_start` / `on_tick` / `on_play_stop`** build, advance and tear down a
-  `BigWorldSession`, restoring the world exactly.
-- **`connect(host)`** subscribes to the **`render.overlay`** event to draw the
-  debug panel + minimap with the live `QPainter`, and publishes the live session
-  as a **`bigworld` service** (`host.provide("bigworld", session)`) that the
-  renderer, other plugins, or tools can look up via `host.service("bigworld")`.
-- It declares **`api_version = "1.2.0"`** because it needs the
-  [`PluginHost`](../API.md#pluginhost--the-open-ended-engine-seam) / event-bus
-  surface, and ships **`enabled = False`** so the manager only auto-enables it for
-  maps that actually contain a `BigWorldSettings` entity.
-
-No core engine file is edited: it hooks the play lifecycle, listens on the
-`render.overlay` event, and cooperates with existing flags (`hidden` /
-`disabled`).
-
----
-
-## Isolation & compatibility
-
-- **Zero cost when unused.** Ships **disabled by default**, auto-enabled only for
-  maps that contain a `BigWorldSettings` entity, so ordinary small maps incur no
-  overhead and behave exactly as before.
-- **Fails safe.** Every host call is guarded; a failure never takes down a frame —
-  including the debug overlay, which draws nothing rather than raising.
-- **Non-invasive.** Touches no core engine file. It cooperates with machinery Fio
-  already has rather than duplicating it.
-
----
-
-## Generating and benchmarking worlds
-
-The `generate_world` tool produces synthetic streaming maps and runs the scaling
-benchmark headlessly:
-
-```bash
-# scaling report across 10k / 50k / 100k / 250k / 500k brushes
 python -m plugins.bigworld.tools.generate_world benchmark
+```
 
-# write a streaming-enabled map file
-python -m plugins.bigworld.tools.generate_world generate --brushes 100000 \
+To generate a large map:
+
+```bash
+python -m plugins.bigworld.tools.generate_world generate \
+    --brushes 100000 \
     --out maps/bigworld_100k.json
 ```
 
-The generated maps include a `BigWorldSettings` entity, so they auto-enable the
-plugin on load.
+Generated maps contain a Big World Settings entity and therefore opt themselves into the plugin.
 
 ---
 
-## Files
+# Files
 
-| File | Role |
-|------|------|
-| `cell.py` | `BigWorldCell`, the `CellState` streaming states, shared 512-grid coordinate maths. |
-| `manager.py` | `BigWorldManager` — UUID index, active-cell calc, hysteresis, streaming API, stats. |
-| `runtime.py` | `BigWorldSession` — applies the active set to the live engine (reversible); persistent cell delta registry. |
-| `streaming.py` | `DiskStreamingSession` + `CellSource`/`MemoryCellSource`/`DirectoryCellSource` — disk streaming that frees unloaded cells, captures each cell's base on first stream-in. |
-| `entities.py` | `BigWorldSettings` — the map-level opt-in / config entity. |
-| `persistence.py` | Config extraction, save hygiene, UUID-stability verification, cell delta registry + streaming normalisation. |
-| `plugin.py` | `FioPlugin` wiring + the debug overlay. |
-| `tools/generate_world.py` | Synthetic map generator + benchmark harness. |
-| `tests/test_bigworld.py` | Headless test suite. |
+| File | Purpose |
+|---|---|
+| `cell.py` | Cell representation, cell states, 512-unit coordinate system. |
+| `manager.py` | UUID index, cell assignment, residency calculation, hysteresis and active-set management. |
+| `runtime.py` | Runtime integration, parking/restoration, simulation-tier handling and persistent session state. |
+| `streaming.py` | Experimental disk streaming, cell sources, freeing/recreating cell objects. |
+| `entities.py` | `BigWorldSettings` entity. |
+| `persistence.py` | Configuration, save hygiene, UUID identity, cell delta registry and streaming normalisation. |
+| `plugin.py` | Fio plugin lifecycle, service registration and debug overlay. |
+| `tools/generate_world.py` | Large-world generator and benchmark harness. |
+| `tests/` | Big World test suite. |
 
 ---
 
-## Roadmap
+# Design principles
 
-The API is deliberately shaped so **asynchronous disk streaming** slots in behind
-`load_cell` / `unload_cell` (reading/writing cell bytes) **without changing** the
-`activate_cell` / `deactivate_cell` runtime above it. Profile first: the current
-bottleneck is startup indexing + whole-map save — both one-off, both removed by
-real disk streaming — not the per-frame path, which is already flat.
+Big World deliberately avoids turning Fio into a conventional large-world engine with an entirely separate runtime architecture.
+
+It does **not** introduce:
+
+- an ECS
+- a second physics system
+- a second entity system
+- a second spatial database
+- a BSP/PVS compile
+- a mandatory asset-baking stage
+- a renderer rewrite
+- a new world format
+
+Instead it asks Fio's existing systems to operate on a **smaller live subset of the world**.
+
+That is the fundamental scalability mechanism.
+
+The world can be enormous because the engine does not have to pretend the entire world is nearby.
+
+---
+
+# Roadmap
+
+The main remaining large-world work is making disk streaming a fully integrated production path.
+
+In particular:
+
+1. Complete safe live removal/recreation of scene objects.
+2. Proper renderer-cache invalidation when cells are freed.
+3. Proper physics-cache invalidation/rebuild when cells are freed.
+4. Asynchronous cell I/O.
+5. Avoid whole-world startup indexing when using genuinely disk-backed worlds.
+6. Profile memory and I/O behaviour at substantially larger world sizes.
+7. Continue validating the system on Fio's low-power CPU targets.
+
+The important architectural pieces are already separated: cell residency, simulation tiers, persistence, cell sources, runtime integration, and the plugin boundary.
+
+---
+
+## Summary
+
+Big World gives Fio a way to represent worlds much larger than the region that is currently being played.
+
+```text
+                 HUGE PERSISTENT WORLD
+                         │
+              ┌──────────┴──────────┐
+              │    512-unit cells   │
+              └──────────┬──────────┘
+                         │
+                   Player position
+                         │
+              ┌──────────┴──────────┐
+              │  residency radius  │
+              └──────────┬──────────┘
+                         │
+             ┌───────────┴───────────┐
+             │                       │
+          LIVE REGION            Distant world
+             │                       │
+     render / physics /       stored / parked /
+       simulation               persistent
+```
+
+The world remains one Fio world.
+
+Big World simply makes the engine **care about the part of it that is currently relevant**.
