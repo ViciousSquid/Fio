@@ -3400,9 +3400,10 @@ class MainWindow(QMainWindow):
     def set_tool_mode(self, mode):
         """Switch the base 2D interaction tool between 'select' and 'brush'.
 
-        Picking a base tool also exits the Clip/Rotate drag tools (they are
-        mutually exclusive with everything else, Hammer/Radiant style) and syncs
-        the two toolbar buttons + view cursors.
+        Picking a base tool also exits the Clip/Rotate drag tools and returns
+        component editing to object mode (they are mutually exclusive with
+        everything else, Hammer/Radiant style) and syncs the toolbar buttons +
+        view cursors.
         """
         mode = 'brush' if mode == 'brush' else 'select'
         self.tool_mode = mode
@@ -3412,15 +3413,14 @@ class MainWindow(QMainWindow):
             self.set_clip_mode(False)
         if self.rotate_mode:
             self.set_rotate_mode(False)
+        # ...and drops out of vertex/edge/face, so exactly one button in the
+        # base-tool group is lit.  Done on the controller rather than through
+        # set_component_mode() so this does not fire a second toast over the
+        # one below.
+        if self.components.set_mode(MODE_OBJECT):
+            self.refresh_views()
 
-        # Keep both toolbar buttons in sync without re-triggering handlers.
-        for name, wanted in (('select_tool_btn', mode == 'select'),
-                             ('brush_tool_btn', mode == 'brush')):
-            btn = getattr(self, name, None)
-            if btn is not None and btn.isChecked() != wanted:
-                btn.blockSignals(True)
-                btn.setChecked(wanted)
-                btn.blockSignals(False)
+        self._sync_tool_group_buttons()
 
         cursor = Qt.ArrowCursor if mode == 'select' else Qt.CrossCursor
         for view in (self.view_top, self.view_side, self.view_front):
@@ -3471,19 +3471,38 @@ class MainWindow(QMainWindow):
         index = order.index(current) if current in order else 0
         self.set_component_mode(order[(index + 1) % len(order)])
 
-    def _sync_component_buttons(self):
-        """Keep the component-mode toolbar buttons and menu matching the mode."""
-        for mode, name in ((MODE_VERTEX, 'vertex_mode_btn'),
-                           (MODE_EDGE, 'edge_mode_btn'),
-                           (MODE_FACE, 'face_mode_btn')):
+    def _sync_tool_group_buttons(self):
+        """Light exactly one strip in the base-tool group.
+
+        The five buttons -- Select, Brush, Vertex, Edge, Face -- are one group
+        on the toolbar and show their state the way the grid switch does: the
+        strip underneath is grey until the button is the active one.  So only
+        one of them may be checked at a time.  A component mode supersedes the
+        base tool (the drag grabs a face/edge/vertex, not the object), which is
+        why it takes the light off Select/Brush; dropping back to object mode
+        hands it straight back.
+        """
+        component_mode = self.components.mode
+        in_components = component_mode != MODE_OBJECT
+        wanted_by_name = {
+            'select_tool_btn': not in_components and self.tool_mode == 'select',
+            'brush_tool_btn': not in_components and self.tool_mode == 'brush',
+            'vertex_mode_btn': component_mode == MODE_VERTEX,
+            'edge_mode_btn': component_mode == MODE_EDGE,
+            'face_mode_btn': component_mode == MODE_FACE,
+        }
+        for name, wanted in wanted_by_name.items():
             btn = getattr(self, name, None)
             if btn is None:
                 continue
-            wanted = self.components.mode == mode
             if btn.isChecked() != wanted:
                 btn.blockSignals(True)
                 btn.setChecked(wanted)
                 btn.blockSignals(False)
+
+    def _sync_component_buttons(self):
+        """Keep the component-mode toolbar buttons and menu matching the mode."""
+        self._sync_tool_group_buttons()
         for mode, action in getattr(self, 'component_mode_actions', {}).items():
             wanted = self.components.mode == mode
             if action.isChecked() != wanted:

@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (  # noqa: E402
     QAction, QApplication, QMainWindow, QPushButton,
 )
 
+from editor.main_window import MainWindow  # noqa: E402
 from editor.ui import Ui_MainWindow  # noqa: E402
 
 # Qt tier: PyQt5 must be importable.  No display and no GPU - the suite runs
@@ -109,24 +110,106 @@ def test_the_grid_button_starts_on(toolbar):
 
 
 # ────────────────────────────
-# The tool buttons are left as they were
+# The base-tool group: Select / Brush / Vertex / Edge / Face
 # ────────────────────────────
 
-def test_the_tool_buttons_keep_their_outline(toolbar):
-    """Only the grid switch changed; the tools still show which is picked."""
-    for button in (toolbar.select_tool_btn, toolbar.brush_tool_btn):
-        checked = button.styleSheet().split('QPushButton:checked')[1]
-        assert 'border: 1px solid %s;' % ORANGE in checked
+#: The five buttons that are one group on the toolbar — picking any of them
+#: changes what a drag in a 2D view does.
+TOOL_GROUP = ('select_tool_btn', 'brush_tool_btn',
+              'vertex_mode_btn', 'edge_mode_btn', 'face_mode_btn')
 
 
-def test_the_tool_buttons_keep_their_group_strip(toolbar):
-    for button in (toolbar.select_tool_btn, toolbar.brush_tool_btn):
-        assert 'border-bottom: 3px solid %s;' % ORANGE in button.styleSheet()
+def _group_buttons(toolbar):
+    return [getattr(toolbar, name) for name in TOOL_GROUP]
 
 
-def test_only_the_grid_button_uses_the_toggle_strip(toolbar):
-    """A grey strip anywhere else would mean the change leaked."""
-    greyed = [b for b in toolbar.tool_toolbar.findChildren(QPushButton)
-              if 'border-bottom: 3px solid %s;' % GREY in b.styleSheet()]
+@pytest.mark.parametrize("name", TOOL_GROUP)
+def test_a_tool_button_greys_its_strip_when_it_is_not_the_active_tool(toolbar, name):
+    """The strip is the state, exactly as on the grid switch."""
+    sheet = getattr(toolbar, name).styleSheet()
+    unchecked = sheet.split('QPushButton:checked')[0]
 
-    assert greyed == [toolbar.grid_btn]
+    assert 'border-bottom: 3px solid %s;' % GREY in unchecked, (
+        "%s paints its strip before it is checked, so more than one tool "
+        "reads as picked" % name)
+
+
+@pytest.mark.parametrize("name", TOOL_GROUP)
+def test_a_tool_button_lights_its_strip_when_it_is_the_active_tool(toolbar, name):
+    sheet = getattr(toolbar, name).styleSheet()
+    checked = sheet.split('QPushButton:checked')[1]
+
+    assert 'border-bottom: 3px solid %s;' % ORANGE in checked, (
+        "%s does not light up when picked" % name)
+
+
+def test_the_tool_buttons_show_state_the_same_way_the_grid_button_does(toolbar):
+    """The request was literally "copy the grid button", so check that."""
+    grid = toolbar.grid_btn.styleSheet().replace(BLUE, '<colour>')
+
+    for name in TOOL_GROUP:
+        sheet = getattr(toolbar, name).styleSheet().replace(ORANGE, '<colour>')
+        assert sheet == grid, (
+            "%s is styled differently from the grid switch it is meant to "
+            "copy" % name)
+
+
+def test_only_one_tool_button_is_checked_at_a_time(qt_app):
+    """Whatever the editor's state, exactly one strip in the group is lit.
+
+    Driven through the real ``_sync_tool_group_buttons`` — the method the
+    editor calls after every tool and component-mode change — against the
+    buttons ``create_tool_toolbar`` actually builds.
+    """
+    from editor import component_edit as ce
+
+    class SyncingWindow(FakeEditorWindow):
+        _sync_tool_group_buttons = MainWindow._sync_tool_group_buttons
+
+        def __init__(self):
+            super().__init__()
+            self.components = ce.ComponentController()
+            self.tool_mode = 'select'
+
+    window = SyncingWindow()
+    Ui_MainWindow().create_tool_toolbar(window)
+
+    cases = [
+        ('select', ce.MODE_OBJECT, 'select_tool_btn'),
+        ('brush', ce.MODE_OBJECT, 'brush_tool_btn'),
+        ('select', ce.MODE_VERTEX, 'vertex_mode_btn'),
+        ('select', ce.MODE_EDGE, 'edge_mode_btn'),
+        ('select', ce.MODE_FACE, 'face_mode_btn'),
+        # A component mode supersedes the base tool, whichever it is.
+        ('brush', ce.MODE_FACE, 'face_mode_btn'),
+    ]
+    for tool_mode, component_mode, expected in cases:
+        window.tool_mode = tool_mode
+        window.components.mode = component_mode
+        window._sync_tool_group_buttons()
+
+        lit = [name for name in TOOL_GROUP if getattr(window, name).isChecked()]
+        assert lit == [expected], (
+            "tool_mode=%r, component mode=%r: expected only %s to be lit, "
+            "got %s" % (tool_mode, component_mode, expected, lit or "nothing"))
+
+
+def test_the_editing_action_buttons_keep_their_plain_group_strip(toolbar):
+    """The change is scoped to the base-tool group; the green strip is a
+    grouping colour on buttons that are not tools, and stays on."""
+    green_strip = 'border-bottom: 3px solid #22b14c;'
+    buttons = toolbar.tool_toolbar.findChildren(QPushButton)
+    green = [b for b in buttons if green_strip in b.styleSheet()]
+
+    assert green, "the editing-action group lost its colour entirely"
+    for button in green:
+        unchecked = button.styleSheet().split('QPushButton:checked')[0]
+        assert green_strip in unchecked
+
+
+def test_the_greyed_strip_is_used_by_the_toggles_and_nothing_else(toolbar):
+    """A grey strip means "checkable, and not currently on"."""
+    greyed = {b for b in toolbar.tool_toolbar.findChildren(QPushButton)
+              if 'border-bottom: 3px solid %s;' % GREY in b.styleSheet()}
+
+    assert greyed == set(_group_buttons(toolbar)) | {toolbar.grid_btn}

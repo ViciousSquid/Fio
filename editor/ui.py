@@ -439,8 +439,11 @@ class Ui_MainWindow(object):
 
             ``toggle_strip`` makes the strip underneath the state, rather than
             an outline around the whole button: grey when off, the group's
-            colour when on.  It suits a standalone switch like the grid, where
-            the outline read as "selected tool" -- which it is not one of.
+            colour when on.  It is what the base-tool group and the grid switch
+            use, so a lit strip there means one thing -- this is the tool that
+            is active.  A plain ``bottom_color`` with no ``toggle_strip`` keeps
+            the strip permanently on, which is what groups the non-checkable
+            action buttons by colour.
             """
             b = QPushButton()
             b.setIcon(QIcon(icon))
@@ -520,7 +523,8 @@ class Ui_MainWindow(object):
             "Drag a box to marquee-select; click empty space to deselect",
             on_click=lambda: MainWindow.set_tool_mode('select'),
             checkable=True, checked=MainWindow.tool_mode == 'select',
-            shortcut="Shift+A", bottom_color=group_1_color)
+            shortcut="Shift+A", bottom_color=group_1_color,
+            toggle_strip=True)
 
         MainWindow.brush_tool_btn = make_btn(
             "assets/box.png",
@@ -528,7 +532,8 @@ class Ui_MainWindow(object):
             "Drag in a 2D view to create geometry",
             on_click=lambda: MainWindow.set_tool_mode('brush'),
             checkable=True, checked=MainWindow.tool_mode == 'brush',
-            shortcut="Shift+B", bottom_color=group_1_color)
+            shortcut="Shift+B", bottom_color=group_1_color,
+            toggle_strip=True)
 
         # --- Component modes: drag the brush itself, not just move it ---
         # Checkable and mutually exclusive with each other; unchecking the
@@ -544,19 +549,19 @@ class Ui_MainWindow(object):
             "Vertex mode (Shift+V)\n"
             "Drag a corner of the selected brush",
             on_click=component_mode_toggle('vertex'),
-            checkable=True, bottom_color=group_1_color)
+            checkable=True, bottom_color=group_1_color, toggle_strip=True)
         MainWindow.edge_mode_btn = make_btn(
             "assets/comp_edge.png",
             "Edge mode (Shift+E)\n"
             "Drag an edge of the selected brush",
             on_click=component_mode_toggle('edge'),
-            checkable=True, bottom_color=group_1_color)
+            checkable=True, bottom_color=group_1_color, toggle_strip=True)
         MainWindow.face_mode_btn = make_btn(
             "assets/comp_face.png",
             "Face mode (Shift+F)\n"
             "Drag a face to move its plane; Ctrl-drag shears it",
             on_click=component_mode_toggle('face'),
-            checkable=True, bottom_color=group_1_color)
+            checkable=True, bottom_color=group_1_color, toggle_strip=True)
 
         tool_toolbar.addSeparator()
 
