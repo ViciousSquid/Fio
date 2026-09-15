@@ -1,10 +1,9 @@
 from PyQt5.QtWidgets import (
     QDialog, QCheckBox, QVBoxLayout, QDialogButtonBox, QGroupBox, QHBoxLayout,
     QLabel, QSpinBox, QPushButton, QTabWidget, QWidget, QFormLayout, QSlider,
-    QMessageBox, QKeySequenceEdit, QFrame, QGridLayout, QComboBox
+    QMessageBox, QComboBox
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QKeySequence
 import sys
 import os
 
@@ -20,7 +19,6 @@ class SettingsWindow(QDialog):
         self.setMinimumWidth(600)
         self.config = config
         self.main_window = parent
-        self.binding_in_progress = None
 
         self.layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -30,7 +28,6 @@ class SettingsWindow(QDialog):
         self._create_display_tab()
         self._create_play_modes_tab()
         self._create_controls_tab()
-        self._create_keyboard_tab()
         self._create_split_screen_tab()   # new tab
         
         button_layout = QHBoxLayout()
@@ -400,95 +397,6 @@ class SettingsWindow(QDialog):
         
         layout.addStretch()
 
-    def _create_keyboard_tab(self):
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        self.tabs.addTab(widget, "Keyboard")
-
-        columns_layout = QHBoxLayout()
-        left_form = QFormLayout()
-        right_form = QFormLayout()
-        
-        left_form.setContentsMargins(0, 0, 10, 0)
-        right_form.setContentsMargins(10, 0, 0, 0)
-
-        asset_browser_label = QLabel("T")
-        left_form.addRow("Asset Browser:", asset_browser_label)
-
-        shortcut_definitions = {
-            "Clone Selected": "SPACE",
-            "Delete Selected": "DEL",
-            "reset_layout": "Ctrl+Shift+R",
-            "save_layout": "Ctrl+Shift+S",
-            "Logic Graph Editor": "Ctrl+L",
-            "Logic Wizard": "Ctrl+Shift+W",
-            "Hide Brush": "H",
-            "Unhide All Brushes": "Shift+H",
-            "Decrease Grid Size": "[",
-            "Increase Grid Size": "]",
-            "Use (play mode)": "E",
-            "Show connections": "F1",
-            "Show sprites": "F3",
-            "Light Radius": "Shift+Wheel",
-            "Light Intensity": "Ctrl+Wheel",
-            "Free Camera": "R-Click+WASD",
-        }
-        
-        self.shortcut_labels = {}
-        
-        items = list(shortcut_definitions.items())
-        mid_point = (len(items) // 2) + 1
-        
-        for i, (action_name, shortcut_text) in enumerate(items):
-            label_text = action_name.replace('_', ' ').title() + ":"
-            shortcut_label = QLabel(shortcut_text)
-            self.shortcut_labels[action_name] = shortcut_label
-            
-            if i < mid_point:
-                left_form.addRow(label_text, shortcut_label)
-            else:
-                right_form.addRow(label_text, shortcut_label)
-
-        switch_2d_views_label = QLabel("Ctrl+Tab")
-        right_form.addRow("Switch 2D Views:", switch_2d_views_label)
-
-        columns_layout.addLayout(left_form)
-        columns_layout.addLayout(right_form)
-        layout.addLayout(columns_layout)
-
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
-        layout.addSpacing(10)
-        layout.addWidget(line)
-        layout.addSpacing(10)
-        
-        header_label = QLabel("Function Keys (Rebindable)")
-        header_label.setStyleSheet("font-weight: bold;")
-        layout.addWidget(header_label)
-
-        rebind_grid = QGridLayout()
-        rebind_grid.setSpacing(10)
-        
-        self.key_f1_edit = QKeySequenceEdit()
-        rebind_grid.addWidget(QLabel("Show Logic Links:"), 0, 0)
-        rebind_grid.addWidget(self.key_f1_edit, 0, 1)
-        
-        self.key_f2_edit = QKeySequenceEdit()
-        rebind_grid.addWidget(QLabel("Toggle Wireframe:"), 0, 2)
-        rebind_grid.addWidget(self.key_f2_edit, 0, 3)
-
-        self.key_f3_edit = QKeySequenceEdit()
-        rebind_grid.addWidget(QLabel("System Monitor:"), 1, 0)
-        rebind_grid.addWidget(self.key_f3_edit, 1, 1)
-        
-        self.key_f5_edit = QKeySequenceEdit()
-        rebind_grid.addWidget(QLabel("Toggle Play Mode:"), 1, 2)
-        rebind_grid.addWidget(self.key_f5_edit, 1, 3)
-        
-        layout.addLayout(rebind_grid)
-        layout.addStretch()
-
     def _create_split_screen_tab(self):
         """Split Screen settings tab."""
         widget = QWidget()
@@ -614,11 +522,6 @@ class SettingsWindow(QDialog):
             self.config.getint('Controls', 'p2_turn_sensitivity', fallback=10)
         )
         
-        self.key_f1_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_show_connections', fallback='F1')))
-        self.key_f2_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_toggle_wireframe', fallback='F2')))
-        self.key_f3_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_sysmon', fallback='F3')))
-        self.key_f5_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_play_mode', fallback='F5')))
-
         k_mode = self.config.get('Kiosk', 'window_mode', fallback='Fullscreen')
         idx = self.kiosk_mode_combo.findText(k_mode)
         if idx >= 0:
@@ -724,13 +627,6 @@ class SettingsWindow(QDialog):
         self.config.set('Controls', 'middle_click_drag', str(self.middle_click_drag_checkbox.isChecked()))
         self.config.set('Controls', 'p2_turn_sensitivity', str(self.p2_turn_sensitivity_spin.value()))
         
-        if not self.config.has_section('Shortcuts'):
-            self.config.add_section('Shortcuts')
-        self.config.set('Shortcuts', 'key_show_connections', self.key_f1_edit.keySequence().toString())
-        self.config.set('Shortcuts', 'key_toggle_wireframe', self.key_f2_edit.keySequence().toString())
-        self.config.set('Shortcuts', 'key_sysmon', self.key_f3_edit.keySequence().toString())
-        self.config.set('Shortcuts', 'key_play_mode', self.key_f5_edit.keySequence().toString())
-
         if not self.config.has_section('Kiosk'):
             self.config.add_section('Kiosk')
         self.config.set('Kiosk', 'window_mode', self.kiosk_mode_combo.currentText())

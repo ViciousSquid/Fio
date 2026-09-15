@@ -109,6 +109,7 @@ class FakeEditorWindow(QWidget):
     set_component_mode = MainWindow.set_component_mode
     cycle_component_mode = MainWindow.cycle_component_mode
     _sync_component_buttons = MainWindow._sync_component_buttons
+    _sync_tool_group_buttons = MainWindow._sync_tool_group_buttons
     clone_placement_active = MainWindow.clone_placement_active
     move_clone_placement = MainWindow.move_clone_placement
     finish_clone_placement = MainWindow.finish_clone_placement
