@@ -15,13 +15,12 @@ from engine.brush_geometry import (brush_has_geometry, face_uses_natural_scale,
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.things import Thing, Light, PathNode, Portal, Pickup, Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger
 
-# Camera render-distance cull. The threshold and the pure per-object geometry
-# live in engine.render_cull (GL-free, so it is unit-testable without a GL
-# context); this module applies it to the MAIN camera pass only -- never to the
-# shadow or portal passes, which keep using the full scene. See
-# _camera_distance_cull below.
+# Camera render-distance cull. The pure per-object geometry lives in
+# engine.render_cull (GL-free, so it is unit-testable without a GL context) and
+# the live radius on self.view_distance (engine.view_distance); this module
+# applies the pair to the MAIN camera pass only -- never to the shadow or portal
+# passes, which keep using the full scene. See _camera_distance_cull below.
 from engine.render_cull import (
-    CAMERA_RENDER_CULL_DISTANCE, CAMERA_RENDER_CULL_DISTANCE_SQ,
     camera_xz as _cull_camera_xz, cull_by_distance as _cull_by_distance)
 
 # Beyond this distance from the camera a portal's virtual view is not rendered
@@ -459,8 +458,13 @@ class Renderer_F(BaseRenderer):
         return isinstance(t, Light) or (Portal is not None and isinstance(t, Portal))
 
     def _camera_distance_cull(self, brushes, things, camera_pos):
-        """Broad-phase distance cull for the MAIN camera pass (see
-        :data:`engine.render_cull.CAMERA_RENDER_CULL_DISTANCE`).
+        """Broad-phase distance cull for the MAIN camera pass.
+
+        The radius is :attr:`view_distance` — the live camera setting the editor
+        spinbox and ``r_viewdistance`` write, not a fixed constant, so pulling
+        the far plane in narrows this pass on the very next frame.
+        :data:`engine.render_cull.CAMERA_RENDER_CULL_DISTANCE` remains that
+        setting's default value.
 
         Returns ``(brushes, things)`` filtered to those within the cull radius on
         the XZ plane, reusing two persistent scratch buffers so nothing new is
@@ -468,19 +472,24 @@ class Renderer_F(BaseRenderer):
         without a readable position is kept (fail-open). The caller passes the
         results to ``_sort_objects`` only, leaving the original ``brushes`` /
         ``things`` lists (used by the shadow and portal passes) untouched.
+
+        This is a *visibility* decision and only that: an object dropped here is
+        still loaded, still simulated and still lighting and shadowing the rest
+        of the scene. Nothing about the world's resident set is this pass's to
+        change.
         """
         if camera_pos is None:
             return brushes, things
         cx, cz = _cull_camera_xz(camera_pos)
+        limit_sq = self.view_distance.distance_sq
         bbuf = getattr(self, "_cull_brush_buf", None)
         if bbuf is None:
             bbuf = self._cull_brush_buf = []
         tbuf = getattr(self, "_cull_thing_buf", None)
         if tbuf is None:
             tbuf = self._cull_thing_buf = []
-        brushes = _cull_by_distance(brushes, cx, cz,
-                                    CAMERA_RENDER_CULL_DISTANCE_SQ, out=bbuf)
-        things = _cull_by_distance(things, cx, cz, CAMERA_RENDER_CULL_DISTANCE_SQ,
+        brushes = _cull_by_distance(brushes, cx, cz, limit_sq, out=bbuf)
+        things = _cull_by_distance(things, cx, cz, limit_sq,
                                    out=tbuf, keep=self._cull_keep_thing)
         return brushes, things
 
@@ -496,6 +505,9 @@ class Renderer_F(BaseRenderer):
                 gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
         self._proj_ptr = glm.value_ptr(projection)
         self._view_ptr = glm.value_ptr(view)
+        # Every fog calculation this frame measures from here. Cached because
+        # the unlit passes (sprites) and the terrain are not handed a camera.
+        self._frame_camera_pos = self._camera_xyz(camera_pos)
         self.render_stats.reset()
         self.render_stats.total_brushes = len(brushes)
         self._begin_geo_frame()
@@ -517,6 +529,15 @@ class Renderer_F(BaseRenderer):
         # applies downstream. The original brushes/things lists are left intact
         # for the shadow and portal passes below. Enabled in play mode by
         # default; a caller can force it on/off via 'camera_distance_cull'.
+        #
+        # This is the cheap *approximation* of the view distance -- it drops an
+        # object by the distance to its centre, so it is deliberately not what
+        # guarantees "nothing renders past the far plane". The projection's far
+        # plane does that, per fragment, in the editor as well as in play; this
+        # pass only saves the CPU from sorting and submitting what that plane
+        # would have thrown away. Leaving it off in the editor keeps a large
+        # brush whose centre is out of range but whose near end is in shot from
+        # blinking out while it is being built.
         cull_brushes, cull_things = brushes, things
         if config.get('camera_distance_cull', config.get('play_mode', False)):
             cull_brushes, cull_things = self._camera_distance_cull(brushes, things, camera_pos)
@@ -565,6 +586,19 @@ class Renderer_F(BaseRenderer):
             if portal_things:
                 try:
                     def _portal_draw_scene(proj, vw, cam, br, th, sel, cfg):
+                        # Fog the virtual view from the *virtual* eye: a portal
+                        # shows the world as seen from its far end, so measuring
+                        # from the real camera would fog the aperture by how far
+                        # away the portal is rather than by what is through it.
+                        _saved_cam = self._frame_camera_pos
+                        self._frame_camera_pos = self._camera_xyz(cam)
+                        try:
+                            _portal_draw_scene_inner(proj, vw, cam, br, th, sel, cfg)
+                        finally:
+                            self._frame_camera_pos = _saved_cam
+                            self._frame_lights_uploaded.clear()
+
+                    def _portal_draw_scene_inner(proj, vw, cam, br, th, sel, cfg):
                         # Re-sort from the FULL unculled brush set, but cull it
                         # against the VIRTUAL camera frustum first — otherwise
                         # every portal re-shades the entire level. Sphere-based

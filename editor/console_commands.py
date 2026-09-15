@@ -107,6 +107,20 @@ class ConsoleCommandHandler:
             'r_reloadshaders': self.cmd_reload_shaders,
             'r_info': self.cmd_render_info,
 
+            # View distance & far-plane fog. These are the commands the I/O
+            # system drives: a logic_command entity firing RunCommand with
+            # e.g. "r_fogcolor 40 30 60" is how a map changes the weather.
+            'r_viewdistance': self.cmd_view_distance,
+            'r_culldistance': self.cmd_view_distance,
+            'r_distancefog': self.cmd_distance_fog,
+            'r_fogdistance': self.cmd_fog_distance,
+            'r_fogstart': self.cmd_fog_start,
+            'r_fogend': self.cmd_fog_end,
+            'r_fogdensity': self.cmd_fog_density,
+            'r_fogcolor': self.cmd_fog_color,
+            'r_fogcolour': self.cmd_fog_color,
+            'r_ambient': self.cmd_ambient,
+
             # Short aliases
             'wireframe': self.cmd_render_wireframe,
             'shadows': self.cmd_render_shadows,
@@ -117,6 +131,18 @@ class ConsoleCommandHandler:
             'deferred': self.cmd_render_deferred,
             'vsync': self.cmd_render_vsync,
             'reloadshaders': self.cmd_reload_shaders,
+            'viewdistance': self.cmd_view_distance,
+            'culldistance': self.cmd_view_distance,
+            'farplane': self.cmd_view_distance,
+            'distancefog': self.cmd_distance_fog,
+            'fogdistance': self.cmd_fog_distance,
+            'fogdist': self.cmd_fog_distance,
+            'fogstart': self.cmd_fog_start,
+            'fogend': self.cmd_fog_end,
+            'fogdensity': self.cmd_fog_density,
+            'fogcolor': self.cmd_fog_color,
+            'fogcolour': self.cmd_fog_color,
+            'ambient': self.cmd_ambient,
 
             # Visibility & Tint
             'hide': self.cmd_hide,
@@ -754,10 +780,22 @@ class ConsoleCommandHandler:
 <b style="color:orange;">r_list</b> — Show all current render settings<br>
 <b style="color:orange;">r_wireframe</b>{sep}<b style="color:orange;">wireframe</b> — Toggle wireframe mode<br>
 <b style="color:orange;">r_shadows</b>{sep}<b style="color:orange;">shadows</b> — Toggle shadows<br>
-<b style="color:orange;">r_fog</b>{sep}<b style="color:orange;">fog</b> — Toggle volumetric fog<br>
+<b style="color:orange;">r_fog</b>{sep}<b style="color:orange;">fog</b> — Toggle volumetric fog (fog brushes)<br>
 <b style="color:orange;">r_lighting</b>{sep}<b style="color:orange;">lighting</b> — Toggle real-time lighting<br>
 <b style="color:orange;">r_reloadshaders</b> — Hot-reload all shaders<br>
 <b style="color:orange;">r_clearcolor</b> r g b — Set background colour<br>
+<b style="color:cyan;">=== View Distance &amp; Far-Plane Fog ===</b><br>
+<i>Fog always reaches full opacity before the clip, so pulling the view
+distance in never makes geometry pop. Fire these from a logic_command
+entity to drive them from the I/O system.</i><br>
+<b style="color:orange;">r_viewdistance</b>{sep}<b style="color:orange;">culldistance</b>{sep}<b style="color:orange;">farplane</b> &lt;units&gt; — Max render distance (also the far plane)<br>
+<b style="color:orange;">r_distancefog</b>{sep}<b style="color:orange;">distancefog</b> [on|off] — Toggle far-plane fog<br>
+<b style="color:orange;">r_fogdistance</b>{sep}<b style="color:orange;">fogdist</b> &lt;start&gt; &lt;end&gt;{sep}<b style="color:orange;">auto</b> — Where fog ramps up and goes opaque<br>
+<b style="color:orange;">r_fogstart</b> &lt;units&gt;{sep}<b style="color:orange;">auto</b> — Where fog begins<br>
+<b style="color:orange;">r_fogend</b> &lt;units&gt;{sep}<b style="color:orange;">auto</b> — Where fog is fully opaque<br>
+<b style="color:orange;">r_fogdensity</b> &lt;value&gt; — 0 = linear ramp; higher thickens the near half<br>
+<b style="color:orange;">r_fogcolor</b> &lt;R&gt; &lt;G&gt; &lt;B&gt; — Fog colour, and the sky behind it<br>
+<b style="color:orange;">ambient</b> &lt;level&gt;{sep}&lt;R&gt; &lt;G&gt; &lt;B&gt;{sep}<b style="color:orange;">off</b> — Global omnidirectional light (no entity added)<br>
 <b style="color:cyan;">=== Movement & Physics ===</b><br>
 <b style="color:orange;">physics</b> on/off/toggle<br>
 <b style="color:orange;">setpos</b>{sep}<b style="color:orange;">teleport</b> x y z<br>
@@ -841,6 +879,13 @@ class ConsoleCommandHandler:
         cc = getattr(renderer, 'clear_color', [0.02, 0.02, 0.05])
         add_line("Clear Color", f"[{cc[0]:.2f}, {cc[1]:.2f}, {cc[2]:.2f}]")
 
+        # View distance and the far-plane fog that hides its clip.
+        vd = getattr(getattr(self.main_window, 'view_3d', None), 'view_distance', None)
+        if vd is not None:
+            lines.append("<b>--- View Distance &amp; Fog ---</b>")
+            for name, value in vd.describe():
+                add_line(name, value)
+
         debug_log("Info", "<br>".join(lines))
 
     def cmd_render_info(self, args):
@@ -917,6 +962,276 @@ class ConsoleCommandHandler:
                 debug_log("Error", "Usage: r_clearcolor r g b   (values 0.0 to 1.0)")
         except Exception:
             debug_log("Error", "Usage: r_clearcolor r g b")
+
+    # ===================================================================
+    # VIEW DISTANCE & FAR-PLANE FOG
+    # -------------------------------------------------------------------
+    # One camera setting (the view distance) and the fog that hides its far
+    # plane. Everything here writes engine.view_distance.ViewDistance, which
+    # the viewport, the renderer and the logic thread all hold by reference,
+    # so a change is on screen on the next frame.
+    #
+    # These are renderer/camera controls, not world-streaming ones: they change
+    # how much of the level is drawn and nothing about what is loaded, awake or
+    # simulated.
+    #
+    # The I/O system reaches all of them through a logic_command entity
+    # (RunCommand), so a trigger brush can raise the fog as the player enters a
+    # valley without a line of Python.
+    # ===================================================================
+
+    def _get_view_distance(self):
+        """The shared ViewDistance object, or None if the 3D view isn't up."""
+        try:
+            vd = self.main_window.view_3d.view_distance
+        except AttributeError:
+            vd = None
+        if vd is None:
+            debug_log("Error", "View distance not accessible (no 3D view).")
+        return vd
+
+    def _refresh_view(self):
+        """Repaint the 3D view so a console change is visible immediately."""
+        try:
+            self.main_window.view_3d.update()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _parse_color(parts):
+        """Three numbers as an RGB triple in 0..1, or None if unparseable.
+
+        Accepts either convention the rest of the console uses: 0-255 bytes
+        (like ``tint`` and ``portal_color``) or 0.0-1.0 floats (like
+        ``r_clearcolor``). Any component above 1.0 means the caller meant
+        bytes — "200 180 140" is not a plausible float colour.
+        """
+        try:
+            vals = [float(x) for x in parts]
+        except ValueError:
+            return None
+        if len(vals) != 3:
+            return None
+        if max(vals) > 1.0:
+            vals = [v / 255.0 for v in vals]
+        return [max(0.0, min(1.0, v)) for v in vals]
+
+    @staticmethod
+    def _parse_switch(arg):
+        """'on'/'off'/'toggle' (and the usual synonyms) -> True/False/None."""
+        a = arg.strip().lower()
+        if a in ('on', '1', 'true', 'yes', 'enable', 'enabled'):
+            return True
+        if a in ('off', '0', 'false', 'no', 'disable', 'disabled'):
+            return False
+        return None
+
+    def _report_fog_band(self, vd):
+        """Log the resolved fog band and where it sits against the far plane."""
+        start, end = vd.resolve()
+        debug_log("Info",
+                  f"Fog: {start:.0f} \u2192 {end:.0f} (opaque), "
+                  f"clip at {vd.far_plane:.0f}")
+
+    def cmd_view_distance(self, args):
+        """r_viewdistance [units] - max render distance; also moves the far plane."""
+        vd = self._get_view_distance()
+        if vd is None:
+            return
+        arg = args.strip()
+        if not arg:
+            debug_log("Info", f"View distance: {vd.distance:.0f} units")
+            self._report_fog_band(vd)
+            return
+        try:
+            requested = float(arg)
+        except ValueError:
+            debug_log("Error", "Usage: r_viewdistance <units>")
+            return
+        # Go through the viewport rather than writing ViewDistance directly: it
+        # is the one place that also refreshes the LOD bands and the logic
+        # thread, and it clamps to the supported span.
+        self.main_window.view_3d.set_cull_distance(requested)
+        # Keep the editor's "Cull Dist" spinbox showing the truth. setValue on
+        # the value it already holds emits nothing, so this cannot recurse.
+        spin = getattr(self.main_window, 'cull_dist_spinbox', None)
+        if spin is not None:
+            spin.setValue(int(vd.distance))
+        if abs(vd.distance - requested) > 0.5:
+            debug_log("Warning",
+                      f"View distance clamped to {vd.distance:.0f} units.")
+        else:
+            debug_log("Info", f"View distance: {vd.distance:.0f} units")
+        self._report_fog_band(vd)
+
+    def cmd_distance_fog(self, args):
+        """r_distancefog [on|off] - far-plane fog (distinct from volumetric fog)."""
+        vd = self._get_view_distance()
+        if vd is None:
+            return
+        wanted = self._parse_switch(args) if args.strip() else None
+        vd.fog_enabled = (not vd.fog_enabled) if wanted is None else wanted
+        self._refresh_view()
+        debug_log("Info", f"Distance fog: {'ON' if vd.fog_enabled else 'OFF'}")
+        if not vd.fog_enabled:
+            debug_log("Warning",
+                      "With fog off, geometry will pop at the far plane "
+                      f"({vd.far_plane:.0f} units).")
+
+    def cmd_fog_distance(self, args):
+        """r_fogdistance <start> <end> | <end> | auto - where fog ramps up."""
+        vd = self._get_view_distance()
+        if vd is None:
+            return
+        parts = args.split()
+        if not parts:
+            self._report_fog_band(vd)
+            return
+        if parts[0].lower() == 'auto':
+            vd.fog_start = None
+            vd.fog_end = None
+            self._refresh_view()
+            debug_log("Info", "Fog distance tracking the view distance again.")
+            self._report_fog_band(vd)
+            return
+        try:
+            values = [float(x) for x in parts[:2]]
+        except ValueError:
+            debug_log("Error", "Usage: r_fogdistance <start> <end> | <end> | auto")
+            return
+        if len(values) == 1:
+            vd.fog_end = values[0]
+        else:
+            vd.fog_start, vd.fog_end = values[0], values[1]
+        self._refresh_view()
+        self._warn_if_clamped(vd, values)
+
+    def _warn_if_clamped(self, vd, requested):
+        """Say so when the fog band had to be moved to stay ahead of the clip."""
+        start, end = vd.resolve()
+        asked_end = requested[-1]
+        if asked_end - end > 0.5:
+            debug_log("Warning",
+                      f"Fog end pulled back to {end:.0f}: it must go opaque "
+                      f"before the {vd.far_plane:.0f} clip, or geometry pops.")
+        self._report_fog_band(vd)
+
+    def cmd_fog_start(self, args):
+        """r_fogstart <units> | auto - where fog begins."""
+        vd = self._get_view_distance()
+        if vd is None:
+            return
+        arg = args.strip()
+        if not arg:
+            self._report_fog_band(vd)
+            return
+        if arg.lower() == 'auto':
+            vd.fog_start = None
+        else:
+            try:
+                vd.fog_start = float(arg)
+            except ValueError:
+                debug_log("Error", "Usage: r_fogstart <units> | auto")
+                return
+        self._refresh_view()
+        self._report_fog_band(vd)
+
+    def cmd_fog_end(self, args):
+        """r_fogend <units> | auto - where fog becomes fully opaque."""
+        vd = self._get_view_distance()
+        if vd is None:
+            return
+        arg = args.strip()
+        if not arg:
+            self._report_fog_band(vd)
+            return
+        if arg.lower() == 'auto':
+            vd.fog_end = None
+            self._refresh_view()
+            self._report_fog_band(vd)
+            return
+        try:
+            asked = float(arg)
+        except ValueError:
+            debug_log("Error", "Usage: r_fogend <units> | auto")
+            return
+        vd.fog_end = asked
+        self._refresh_view()
+        self._warn_if_clamped(vd, [asked])
+
+    def cmd_fog_density(self, args):
+        """r_fogdensity <value> - 0 for a linear ramp, higher thickens the near half."""
+        vd = self._get_view_distance()
+        if vd is None:
+            return
+        arg = args.strip()
+        if not arg:
+            debug_log("Info", f"Fog density: {vd.fog_density:.4f}"
+                              f"{'  (linear ramp)' if vd.fog_density <= 0.0 else ''}")
+            return
+        try:
+            vd.fog_density = float(arg)
+        except ValueError:
+            debug_log("Error", "Usage: r_fogdensity <value>   (0 = linear ramp)")
+            return
+        self._refresh_view()
+        debug_log("Info", f"Fog density: {vd.fog_density:.4f}")
+
+    def cmd_fog_color(self, args):
+        """r_fogcolor <r> <g> <b> - fog colour, and the colour of the sky behind it."""
+        vd = self._get_view_distance()
+        if vd is None:
+            return
+        parts = args.split()
+        if not parts:
+            r, g, b = vd.fog_color
+            debug_log("Info", f"Fog color: [{r:.2f}, {g:.2f}, {b:.2f}]")
+            return
+        color = self._parse_color(parts)
+        if color is None:
+            debug_log("Error", "Usage: r_fogcolor <r> <g> <b>   (0-255 or 0.0-1.0)")
+            return
+        vd.fog_color = color
+        self._refresh_view()
+        r, g, b = vd.fog_color
+        debug_log("Info", f"Fog color: [{r:.2f}, {g:.2f}, {b:.2f}] "
+                          "(also the background past the far plane)")
+
+    def cmd_ambient(self, args):
+        """ambient <level> | <r> <g> <b> | off - global omnidirectional light.
+
+        A level-wide Light entity in effect without one in the world: no
+        position, no falloff, no shadows, nothing added to the map and nothing
+        saved with it. Added on top of each shader's own baked ambient, so
+        ``ambient 0`` restores exactly the stock look.
+        """
+        vd = self._get_view_distance()
+        if vd is None:
+            return
+        parts = args.split()
+        if not parts:
+            r, g, b = vd.ambient
+            debug_log("Info", f"Ambient light: [{r:.2f}, {g:.2f}, {b:.2f}]")
+            return
+        if parts[0].lower() in ('off', 'none'):
+            vd.ambient = (0.0, 0.0, 0.0)
+        elif len(parts) == 1:
+            try:
+                level = float(parts[0])
+            except ValueError:
+                debug_log("Error", "Usage: ambient <level> | <r> <g> <b> | off")
+                return
+            # A lone number above 1 is a 0-255 byte, matching _parse_color.
+            vd.set_ambient_level(level / 255.0 if level > 1.0 else level)
+        else:
+            color = self._parse_color(parts[:3])
+            if color is None:
+                debug_log("Error", "Usage: ambient <level> | <r> <g> <b> | off")
+                return
+            vd.ambient = color
+        self._refresh_view()
+        r, g, b = vd.ambient
+        debug_log("Info", f"Ambient light: [{r:.2f}, {g:.2f}, {b:.2f}]")
 
     def cmd_reload_shaders(self, args):
         renderer = self._get_renderer()

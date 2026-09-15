@@ -171,6 +171,10 @@ class LogicThread(threading.Thread):
         # Frustum culling settings
         self.culling_enabled = True
         self.frustum_aspect = 16.0 / 9.0
+        # Shared with the viewport and the renderer (set_view_distance). Held
+        # as None until the viewport hands one over, so a LogicThread built in
+        # a test without one still culls against the historical far plane.
+        self.view_distance = None
 
         # Play-mode camera mode: "First Person" (default) or "Overhead" (a
         # native top-down camera, GTA 1 / Alien Swarm style). Controlled by the
@@ -1164,6 +1168,18 @@ class LogicThread(threading.Thread):
 
     def set_frustum_aspect(self, aspect: float):
         self.frustum_aspect = aspect
+
+    def set_view_distance(self, view_distance):
+        """Adopt the viewport's shared view-distance settings.
+
+        The frustum this thread culls against must use the same far plane the
+        renderer draws with. If it kept a larger one it would keep feeding the
+        renderer brushes the far plane then clips -- harmless but wasted work
+        every frame; a smaller one would cull something still on screen. The
+        object is shared, not copied, so a spinbox or console change is picked
+        up on the next tick.
+        """
+        self.view_distance = view_distance
 
     def set_camera_mode(self, mode: str):
         """Select the play-mode camera: 'First Person' or 'Overhead'."""
@@ -3116,7 +3132,8 @@ class LogicThread(threading.Thread):
             if current_time - m['time'] < self.BULLET_FADE_TIME
         ]
 
-        projection = glm.perspective(glm.radians(fov), self.frustum_aspect, 1.0, 10000.0)
+        _far = self.view_distance.far_plane if self.view_distance is not None else 10000.0
+        projection = glm.perspective(glm.radians(fov), self.frustum_aspect, 1.0, _far)
         proj_view = projection * view_matrix
         frustum_planes = self._extract_frustum_planes(proj_view)
 

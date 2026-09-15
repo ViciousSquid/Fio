@@ -33,6 +33,7 @@ from engine import brush_geometry
 from engine import shaders
 from engine.shaders import DEFAULT_SHADERS
 from engine.terrain import TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER
+from engine.view_distance import ViewDistance
 from editor.things import (
     Thing, PathNode, Portal, Pickup, Monster, LogicGate, LogicRelay,
     LogicTimer, LevelChanger, Light, LogicSpawner, LogicCamera,
@@ -237,6 +238,12 @@ class BaseRenderer:
     SHADOW_MAP_SIZE = 384         # per-face resolution of each depth cube-map
     SHADOW_TEXTURE_UNIT_BASE = 4   # shadow cube-maps bind to units 4..(4+MAX_SHADOW_LIGHTS-1)
 
+    #: Uniform names of the shared distance-fog / global-ambient block
+    #: (engine.shaders.FOG_GLSL). Preloaded for every shader that splices it in,
+    #: and uploaded together by :meth:`_upload_env_uniforms`.
+    ENV_UNIFORMS = ('uFogEnabled', 'uFogColor', 'uFogStart', 'uFogEnd',
+                    'uFogDensity', 'uFogCamPos', 'uAmbient')
+
     def __init__(self, texture_loader, initial_grid_size, initial_world_size, config=None):
         self.texture_manager = {}
         self.loaded_models = {}
@@ -245,6 +252,17 @@ class BaseRenderer:
         self._identity_mat3 = glm.mat3(1.0)
         self.render_stats = RenderStats()
         self.lod_manager = LODManager()
+
+        # How far this camera draws, and the fog that hides its far plane.
+        # A renderer/camera setting, never a world-streaming one: it changes
+        # what is on screen and nothing about what is loaded or simulated.
+        # The viewport replaces this with the instance it shares with the
+        # editor spinbox and the console, so a change there reaches the next
+        # frame with no rebuild -- see QtGameView._sync_view_distance.
+        self.view_distance = ViewDistance()
+        # Camera position for the current frame, cached by render_scene so the
+        # passes that do not receive one (sprites) can still fog correctly.
+        self._frame_camera_pos = (0.0, 0.0, 0.0)
 
         # Performance flags.  `lowpower_mode` picks the cheaper lighting shaders, and
         # it defaults from the hardware rather than being pinned on: it used to
@@ -441,6 +459,7 @@ class BaseRenderer:
             self.shaders['sprite'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['sprite'] = UniformCache(self.shaders['sprite'])
             self.uniforms['sprite'].preload(['projection', 'view', 'sprite_texture', 'sprite_pos_world', 'sprite_size'])
+            self.uniforms['sprite'].preload(self.ENV_UNIFORMS)
 
             # depth_cube – renders scene depth into a point light's cube-map for
             # omnidirectional shadow mapping (replaces the old projected shadows).
@@ -465,6 +484,7 @@ class BaseRenderer:
             self.uniforms['glass'].preload(['projection', 'view', 'model', 'viewPos', 'waterColor',
                                             'distortionStrength', 'causticStrength', 'glassOpacity',
                                             'refractionIndex', 'roughness', 'normalMatrix'])
+            self.uniforms['glass'].preload(self.ENV_UNIFORMS)
 
             # fog – use ARM‑optimised fragment shader (works everywhere)
             fog_vert = DEFAULT_SHADERS.get('fog.vert', '')
@@ -485,6 +505,7 @@ class BaseRenderer:
                     'texGrass', 'texRock', 'texSand', 'texSnow',
                     'biomeWeights', 'terrainHeightScale'
                 ])
+                self.uniforms['terrain'].preload(self.ENV_UNIFORMS)
                 for i in range(self.MAX_LIGHTS):
                     self.uniforms['terrain'].preload([
                         f'lights[{i}].position', f'lights[{i}].color',
@@ -539,6 +560,7 @@ class BaseRenderer:
     def _preload_lit_uniforms(self, shader_name):
         uniforms = self.uniforms[shader_name]
         uniforms.preload(['projection', 'view', 'model', 'object_color', 'alpha', 'active_lights'])
+        uniforms.preload(self.ENV_UNIFORMS)
         for i in range(self.MAX_LIGHTS):
             uniforms.preload([f'lights[{i}].position', f'lights[{i}].color',
                               f'lights[{i}].intensity', f'lights[{i}].radius'])
@@ -547,6 +569,7 @@ class BaseRenderer:
         uniforms = self.uniforms['water']
         uniforms.preload(['projection', 'view', 'model', 'time', 'viewPos', 'normalMap', 'waterOpacity',
                           'waterReflectivity', 'waterTint', 'normalMatrix', 'waveAmp', 'brushSize'])
+        uniforms.preload(self.ENV_UNIFORMS)
 
     def _preload_fog_uniforms(self):
         uniforms = self.uniforms['fog']
@@ -744,6 +767,7 @@ class BaseRenderer:
             shadow_cubemaps=(self._shadow_cubemaps if self.shadows_enabled else None),
             shadow_index_map=self._light_shadow_index,
             shadow_unit_base=self.SHADOW_TEXTURE_UNIT_BASE,
+            env_uniforms=self.env_uniform_values(),
         )
 
     # --------------------------------------------------------------------------
@@ -980,6 +1004,10 @@ class BaseRenderer:
 
         shader, uniforms = self.shaders['sprite'], self.uniforms['sprite']
         gl.glUseProgram(shader)
+        # Billboards are unlit, so they never reach _upload_lights_once — they
+        # still need fogging, or a distant monster would hang un-faded in front
+        # of fully fogged geometry.
+        self._upload_env_uniforms('sprite')
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
         gl.glActiveTexture(gl.GL_TEXTURE0)
@@ -1200,6 +1228,10 @@ class BaseRenderer:
             return
         shader, uniforms = self.shaders['glass'], self.uniforms['glass']
         gl.glUseProgram(shader)
+        # Glass lights itself from the view angle rather than from the light
+        # list, so it never reaches _upload_lights_once — but a distant pane
+        # still has to fog with everything around it.
+        self._upload_env_uniforms('glass')
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
         gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
@@ -1411,9 +1443,67 @@ class BaseRenderer:
             cap = min(cap, shaders.MAX_LIGHTS_ARM)
         return cap
 
+    def env_uniform_values(self):
+        """The fog/ambient block as a ``{uniform_name: value}`` dict.
+
+        For subsystems that own their GL program and uniform table rather than
+        going through :attr:`uniforms` — the terrain is the one that does.
+        Types are meaningful: ``int`` uploads as ``glUniform1i``, ``float`` as
+        ``glUniform1f``, a 3-sequence as ``glUniform3f``.
+        """
+        vd = self.view_distance
+        start, end = vd.resolve()
+        return {
+            'uFogEnabled': 1 if vd.fog_enabled else 0,
+            'uFogColor': tuple(vd.fog_color),
+            'uFogStart': float(start),
+            'uFogEnd': float(end),
+            'uFogDensity': float(vd.fog_density),
+            'uFogCamPos': tuple(self._frame_camera_pos),
+            'uAmbient': tuple(vd.ambient),
+        }
+
+    def _upload_env_uniforms(self, shader_name):
+        """Upload the distance-fog and global-ambient block to *shader_name*.
+
+        Cheap and unconditional -- seven uniform writes for a shader that reads
+        them, and seven no-ops (location -1) for one that does not, which is
+        what makes it safe to call for every shader without tracking which
+        splice in ``FOG_GLSL``. Being unconditional is also what makes the
+        editor spinbox update the fog live: there is no cached state between
+        :class:`~engine.view_distance.ViewDistance` and the next frame's draw.
+        """
+        uniforms = self.uniforms.get(shader_name)
+        if uniforms is None:
+            return
+        vd = self.view_distance
+        start, end = vd.resolve()
+        cam = self._frame_camera_pos
+        gl.glUniform1i(uniforms['uFogEnabled'], 1 if vd.fog_enabled else 0)
+        gl.glUniform3f(uniforms['uFogColor'], *vd.fog_color)
+        gl.glUniform1f(uniforms['uFogStart'], start)
+        gl.glUniform1f(uniforms['uFogEnd'], end)
+        gl.glUniform1f(uniforms['uFogDensity'], vd.fog_density)
+        gl.glUniform3f(uniforms['uFogCamPos'], cam[0], cam[1], cam[2])
+        gl.glUniform3f(uniforms['uAmbient'], *vd.ambient)
+
+    @staticmethod
+    def _camera_xyz(camera_pos):
+        """``(x, y, z)`` from a glm vec, a sequence, or ``None``."""
+        if camera_pos is None:
+            return (0.0, 0.0, 0.0)
+        if hasattr(camera_pos, 'x'):
+            return (float(camera_pos.x), float(camera_pos.y), float(camera_pos.z))
+        return (float(camera_pos[0]), float(camera_pos[1]), float(camera_pos[2]))
+
     def _upload_lights_once(self, shader_name, lights):
         if shader_name not in self.uniforms:
             return
+        # Fog and ambient ride along with the light upload: every lighting pass
+        # already calls this immediately after binding its program, and it must
+        # happen *before* the same-lights early-out below, or a frame that
+        # reuses last frame's light list would also reuse last frame's fog.
+        self._upload_env_uniforms(shader_name)
         cap = self._shader_light_cap(shader_name)
         # Skip if this shader already received this exact light list this
         # frame (portal passes may use a different list, so key on ids).

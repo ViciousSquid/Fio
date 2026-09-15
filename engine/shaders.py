@@ -202,6 +202,66 @@ float calcPointShadow(int idx, highp vec3 fragToLight, highp float farPlane, flo
 """
 
 # ==============================================================================
+# DISTANCE FOG + GLOBAL AMBIENT
+# ------------------------------------------------------------------------------
+# Shared GLSL injected into every fragment shader that draws world geometry.
+#
+# Far-plane fog. The camera's far plane is adjustable (engine.view_distance), and
+# a far plane on its own pops geometry out of existence at a hard edge. So every
+# surface fades toward `uFogColor` as it recedes, and the CPU side guarantees
+# `uFogEnd` lands strictly before the clip -- by default at 92% of the view
+# distance -- so a fragment is already fully fogged by the time the depth test
+# would have discarded it. The frame is cleared to the same colour, so what the
+# fog dissolves into and what lies past the far plane are the same pixel value
+# and the boundary is not visible at all.
+#
+# Distance is radial from the eye (`length(FragPos - uFogCamPos)`), not
+# view-space depth: the fog wall is then a sphere concentric with the cull
+# sphere the broad phase already uses, so a surface does not lighten or darken
+# just because the camera turned to put it off-axis.
+#
+# `uFogDensity` > 0 layers an exponential-squared curve on top of the linear
+# ramp (taking whichever is thicker), which deepens the near half of the band
+# without moving the opaque point -- the clip stays hidden at any density.
+#
+# Global ambient. `uAmbient` is a flat omnidirectional term added to every lit
+# surface: the `ambient` console command, i.e. a level-wide Light entity that
+# does not exist in the world. It is *added* to each shader's own baked ambient
+# constant rather than replacing it, so the default of black leaves every
+# existing map rendering exactly as before.
+#
+# Both are declared in one chunk so a shader opts into the pair with a single
+# splice, and both are inert at their defaults (uFogEnabled 0, uAmbient black).
+# ==============================================================================
+FOG_GLSL = """
+uniform int   uFogEnabled;
+uniform vec3  uFogColor;
+uniform float uFogStart;
+uniform float uFogEnd;
+uniform float uFogDensity;
+uniform highp vec3 uFogCamPos;
+uniform vec3  uAmbient;
+
+// 0 at uFogStart, 1 at uFogEnd and beyond. Returns 0 outright when fog is off
+// so the branch costs a uniform read and nothing else.
+float fogFactor(highp vec3 fragPos) {
+    if (uFogEnabled == 0) return 0.0;
+    highp float d = length(fragPos - uFogCamPos);
+    float band = max(uFogEnd - uFogStart, 1e-4);
+    float f = clamp((d - uFogStart) / band, 0.0, 1.0);
+    if (uFogDensity > 0.0) {
+        float e = uFogDensity * max(d - uFogStart, 0.0);
+        f = max(f, clamp(1.0 - exp(-e * e), 0.0, 1.0));
+    }
+    return f;
+}
+
+vec3 applyFog(vec3 color, highp vec3 fragPos) {
+    return mix(color, uFogColor, fogFactor(fragPos));
+}
+"""
+
+# ==============================================================================
 # DEFAULT SHADER SOURCES
 # These are the fallback strings used if the .vert/.frag files are missing from
 # disk (e.g. in a packaged build that doesn't include loose shader files).
@@ -250,10 +310,10 @@ uniform vec3 object_color;
 uniform float alpha;
 struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; int shadowIndex; };
 uniform Light lights[""" + str(MAX_LIGHTS) + """];
-uniform int active_lights;""" + SHADOW_GLSL + """
+uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """
 void main() {
     vec3 norm = normalize(Normal);
-    vec3 result = vec3(0.1) * object_color;
+    vec3 result = (vec3(0.1) + uAmbient) * object_color;
     for(int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS) + """; i++) {
         highp vec3  toLight  = lights[i].position - FragPos;
         highp float distSq   = dot(toLight, toLight);
@@ -268,7 +328,7 @@ void main() {
             result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * object_color;
         }
     }
-    FragColor = vec4(result, alpha);
+    FragColor = vec4(applyFog(result, FragPos), alpha);
 }""",
 
     'textured.vert': """#version 330 core
@@ -312,13 +372,13 @@ in highp vec2 TexCoords;
 uniform sampler2D texture_diffuse;
 struct Light { highp vec3 position; vec3 color; float intensity; highp float radius; int shadowIndex; };
 uniform Light lights[""" + str(MAX_LIGHTS) + """];
-uniform int active_lights;""" + SHADOW_GLSL + """
+uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """
 void main() {
     vec4 texColor = texture(texture_diffuse, TexCoords);
     if(texColor.a < 0.1) discard;
 
     vec3 norm = normalize(Normal);
-    vec3 result = vec3(0.1) * texColor.rgb;
+    vec3 result = (vec3(0.1) + uAmbient) * texColor.rgb;
 
     for(int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS) + """; i++) {
         highp vec3  toLight  = lights[i].position - FragPos;
@@ -334,13 +394,14 @@ void main() {
             result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
         }
     }
-    FragColor = vec4(result, texColor.a);
+    FragColor = vec4(applyFog(result, FragPos), texColor.a);
 }""",
 
     'sprite.vert': """#version 330 core
 precision highp float;
 layout (location = 0) in vec2 aPos;
 out vec2 TexCoords;
+out vec3 FragPos;
 uniform mat4 projection;
 uniform mat4 view;
 uniform vec3 sprite_pos_world;
@@ -352,6 +413,7 @@ void main() {
     vec3 worldPos = sprite_pos_world 
                   + cameraRight * aPos.x * sprite_size.x 
                   + cameraUp * aPos.y * sprite_size.y;
+    FragPos = worldPos;
     gl_Position = projection * view * vec4(worldPos, 1.0);
 }""",
     'sprite.frag': """#version 330 core
@@ -359,10 +421,11 @@ precision mediump float;
 out vec4 FragColor;
 in highp vec2 TexCoords;
 uniform sampler2D sprite_texture;
+in highp vec3 FragPos;""" + FOG_GLSL + """
 void main() {
     vec4 texColor = texture(sprite_texture, TexCoords);
     if(texColor.a < 0.1) discard;
-    FragColor = texColor;
+    FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a);
 }""",
 
     'fog.vert': """#version 330 core
@@ -536,7 +599,7 @@ uniform highp float time;
 
 uniform float waterOpacity;
 uniform float waterReflectivity;
-uniform vec3 waterTint;
+uniform vec3 waterTint;""" + FOG_GLSL + """
 
 const vec3 SUN_DIR   = vec3(0.4767, 0.6555, 0.5859);  // pre-normalized
 const vec3 SUN_COLOR = vec3(1.00, 0.95, 0.82);
@@ -686,7 +749,7 @@ void main()
         alpha = min(alpha + 0.15, 1.0);
     }
 
-    FragColor = vec4(color, alpha);
+    FragColor = vec4(applyFog(color, FragPos), alpha);
 }""",
 
     'glass.vert': """#version 330 core
@@ -725,7 +788,7 @@ uniform float distortionStrength;
 uniform float causticStrength;
 uniform float glassOpacity;
 uniform float refractionIndex;
-uniform float roughness;
+uniform float roughness;""" + FOG_GLSL + """
 
 highp float random(in highp vec2 st) {
     return fract(sin(dot(st, vec2(12.9898, 78.233))) * 43758.5453123);
@@ -816,7 +879,7 @@ void main() {
         0.05, 1.0
     );
     
-    FragColor = vec4(finalRGB, alpha);
+    FragColor = vec4(applyFog(finalRGB, FragPos), alpha);
 }""",
     
     # Depth cube-map pass: renders scene geometry from a point light's position
@@ -896,7 +959,7 @@ struct Light {
 
 uniform Light lights[""" + str(MAX_LIGHTS_TERRAIN) + """];
 uniform int active_lights;
-""" + SHADOW_GLSL + """
+""" + SHADOW_GLSL + FOG_GLSL + """
 highp float hash(highp vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
@@ -952,7 +1015,7 @@ void main() {
     vec3 skyColor    = vec3(0.6, 0.75, 0.9);
     vec3 groundColor = vec3(0.3, 0.25, 0.2);
     float skyFactor  = (norm.y + 1.0) * 0.5;
-    vec3 ambient     = mix(groundColor, skyColor, skyFactor) * 0.3 * texColor;
+    vec3 ambient     = (mix(groundColor, skyColor, skyFactor) * 0.3 + uAmbient) * texColor;
     
     vec3 result  = ambient;
     vec3 sunDir  = normalize(vec3(0.4, 0.7, 0.3));
@@ -981,7 +1044,7 @@ void main() {
     float gray = dot(result, vec3(0.299, 0.587, 0.114));
     result = mix(vec3(gray), result, 1.15);
     
-    FragColor = vec4(result, 1.0);
+    FragColor = vec4(applyFog(result, FragPos), 1.0);
 }"""
 }
 
@@ -1009,10 +1072,10 @@ uniform vec3 object_color;
 uniform float alpha;
 struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; };
 uniform Light lights[""" + str(MAX_LIGHTS_ARM) + """];
-uniform int active_lights;""" + SHADOW_GLSL + """
+uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """
 void main() {
     vec3 norm = normalize(Normal);
-    vec3 result = vec3(0.12) * object_color;
+    vec3 result = (vec3(0.12) + uAmbient) * object_color;
     for(int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS_ARM) + """; i++) {
         vec3 toLight = lights[i].position - FragPos;
         float distSq = dot(toLight, toLight);
@@ -1027,7 +1090,7 @@ void main() {
             result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * object_color;
         }
     }
-    FragColor = vec4(result, alpha);
+    FragColor = vec4(applyFog(result, FragPos), alpha);
 }"""
 
 DEFAULT_SHADERS['textured_arm.vert'] = """#version 330 core
@@ -1065,12 +1128,12 @@ in vec2 TexCoords;
 uniform sampler2D texture_diffuse;
 struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; };
 uniform Light lights[""" + str(MAX_LIGHTS_ARM) + """];
-uniform int active_lights;""" + SHADOW_GLSL + """
+uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """
 void main() {
     vec4 texColor = texture(texture_diffuse, TexCoords);
     if(texColor.a < 0.1) discard;
     vec3 norm = normalize(Normal);
-    vec3 result = vec3(0.12) * texColor.rgb;
+    vec3 result = (vec3(0.12) + uAmbient) * texColor.rgb;
     for(int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS_ARM) + """; i++) {
         vec3 toLight = lights[i].position - FragPos;
         float distSq = dot(toLight, toLight);
@@ -1085,7 +1148,7 @@ void main() {
             result += (1.0 - shadow) * (diff * lights[i].color * lights[i].intensity * att) * texColor.rgb;
         }
     }
-    FragColor = vec4(result, texColor.a);
+    FragColor = vec4(applyFog(result, FragPos), texColor.a);
 }"""
 
 DEFAULT_SHADERS['fog_arm.frag'] = """#version 330 core

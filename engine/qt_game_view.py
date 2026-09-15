@@ -47,6 +47,7 @@ from engine import shaders
 from engine import brush_geometry
 from editor import component_edit
 from engine.threaded_game_state import ThreadedGameState, RenderState
+from engine.view_distance import ViewDistance
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.debug_console import DebugConsole, get_debug_logger
@@ -266,7 +267,13 @@ class QtGameView(QOpenGLWidget):
         self.projection_matrix = glm.mat4(1.0)
         self.view_matrix = glm.mat4(1.0)
         self._cached_aspect_ratio = 1.0
-        self.cull_distance = 4096
+        # The camera's draw distance and the fog that hides its far plane, in
+        # one object shared with the renderer and the logic thread so the
+        # editor spinbox and the r_* console commands take effect on the next
+        # frame with nothing to rebuild. `cull_distance` stays as a plain
+        # attribute for existing callers and mirrors view_distance.distance.
+        self.view_distance = ViewDistance()
+        self.cull_distance = self.view_distance.distance
 
         self._proj_ptr = None
         self._view_ptr = None
@@ -529,7 +536,7 @@ class QtGameView(QOpenGLWidget):
 
 
     def initializeGL(self):
-        gl.glClearColor(0.1, 0.1, 0.15, 1.0)
+        gl.glClearColor(*self.view_distance.fog_color, 1.0)
         config = getattr(self.editor, 'config', None)
         self._renderer_mode = 'Forward'
         self.renderer = Renderer_F(self.load_texture, self.grid_size, self.world_size, config)
@@ -600,6 +607,7 @@ class QtGameView(QOpenGLWidget):
         if hasattr(self.logic_thread, "set_camera_mode"):
             self.logic_thread.set_camera_mode(getattr(self, "camera_mode", "First Person"))
         self.logic_thread.set_play_mode(False)
+        self._sync_view_distance()
         self.logic_thread.start()
         self._thread_started = True
 
@@ -998,7 +1006,18 @@ class QtGameView(QOpenGLWidget):
         if self.play_mode and self._is_overhead():
             _oh = float(getattr(getattr(self, 'logic_thread', None), 'overhead_height', 800.0) or 800.0)
             _near = max(1.0, _oh * 0.1)
-        self.projection_matrix = perspective_projection(self.camera.fov, self._cached_aspect_ratio, _near, 10000.0)
+        # The far plane IS the view distance -- that is what makes "nothing is
+        # drawn past it" true of a fragment and not just of a whole object. The
+        # broad-phase cull drops objects by the distance to their centre, so a
+        # large brush straddling the boundary survives it and is clipped here
+        # instead, by which point the fog has already taken it to full opacity.
+        _far = max(self.view_distance.far_plane, _near + 1.0)
+        # Clear to the fog colour so what geometry dissolves into and what lies
+        # beyond the clip are the same pixel, leaving no seam at the boundary.
+        # With fog off this is just the background colour, as before.
+        _bg = self.view_distance.fog_color
+        gl.glClearColor(_bg[0], _bg[1], _bg[2], 1.0)
+        self.projection_matrix = perspective_projection(self.camera.fov, self._cached_aspect_ratio, _near, _far)
         self._proj_ptr = glm.value_ptr(self.projection_matrix)
         self._view_ptr = glm.value_ptr(self.view_matrix)
         self._render_config["culling_enabled"] = self.culling_enabled
@@ -1041,7 +1060,7 @@ class QtGameView(QOpenGLWidget):
             _w, _h = self.width(), self.height()
             _half = _w // 2
             _asp = _half / _h if _h > 0 else 1.0
-            _split_proj = perspective_projection(self.camera.fov, _asp, 0.1, 10000.0)
+            _split_proj = perspective_projection(self.camera.fov, _asp, 0.1, _far)
 
             gl.glDisable(gl.GL_SCISSOR_TEST)
             gl.glDepthMask(gl.GL_TRUE)
@@ -1901,11 +1920,44 @@ class QtGameView(QOpenGLWidget):
         self.update()
 
     def set_cull_distance(self, distance):
-        self.cull_distance = distance
+        """Set the camera's maximum render distance, in world units.
+
+        The single entry point for the editor's "Cull Dist" spinbox, the
+        ``r_viewdistance`` console command and anything the I/O system fires at
+        them. It moves three things that have to agree — the broad-phase
+        object cull, the projection's far plane, and the fog that hides that
+        far plane — and nothing else: lighting, textures, LOD detail bands and
+        what the world has loaded are all untouched, so a player can pull the
+        draw distance in for framerate and get the same scene, just less of it
+        at once.
+
+        Fog start and end track this automatically unless they have been pinned
+        (see :class:`~engine.view_distance.ViewDistance`), which is what keeps
+        the fog opaque before the clip at any distance.
+        """
+        self.view_distance.distance = float(distance)
+        # Read back: ViewDistance clamps to its supported span, and callers
+        # (and the value shown in r_list) should see what actually took effect.
+        self.cull_distance = self.view_distance.distance
+        self._sync_view_distance()
+        self.update()
+
+    def _sync_view_distance(self):
+        """Push the shared view-distance object at everything that reads it.
+
+        The renderer and the logic thread hold the *same* instance rather than
+        a copy, so this only has to run when one of them is created or swapped
+        — and the per-frame LOD bands, which are plain numbers, are refreshed
+        here too.
+        """
+        distance = self.view_distance.distance
         if self.renderer:
+            self.renderer.view_distance = self.view_distance
             self.renderer.lod_manager.cull_dist_sq = distance * distance
             self.renderer.lod_manager.full_dist_sq = (distance * 0.25) ** 2
-        self.update()
+        lt = getattr(self, 'logic_thread', None)
+        if lt is not None and hasattr(lt, 'set_view_distance'):
+            lt.set_view_distance(self.view_distance)
 
     def switch_renderer(self, mode: str):
         if mode == self._renderer_mode:
@@ -1931,8 +1983,7 @@ class QtGameView(QOpenGLWidget):
                 self.load_texture, self.grid_size, self.world_size, config)
             self.renderer.set_sprite_textures(self.sprite_textures)
             self.renderer.set_instance_textures(self.sprite_textures)
-            self.renderer.lod_manager.cull_dist_sq = self.cull_distance * self.cull_distance
-            self.renderer.lod_manager.full_dist_sq = (self.cull_distance * 0.25) ** 2
+            self._sync_view_distance()
             self.grid_dirty = True
             self._renderer_mode = mode
             print(f"[QtGameView] Renderer switched to {mode}.")

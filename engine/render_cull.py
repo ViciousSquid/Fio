@@ -3,9 +3,14 @@ Camera render-distance cull -- the pure, GL-free geometry of it.
 
 The renderer's main camera pass runs this cheap broad-phase cull *before*
 ``_sort_objects`` (and on top of the frustum cull it already does): any object
-whose centre lies farther than :data:`CAMERA_RENDER_CULL_DISTANCE` world units
-from the camera on the XZ plane is dropped. Distances are compared squared, so
-no square root runs per object.
+whose centre lies farther than the camera's view distance on the XZ plane is
+dropped. Distances are compared squared, so no square root runs per object.
+
+The radius itself is *not* here any more. It is a live camera setting the
+editor and the console can move mid-session, so it lives on
+:class:`engine.view_distance.ViewDistance` and the renderer reads it per frame;
+:data:`CAMERA_RENDER_CULL_DISTANCE` below is only that setting's default value,
+kept under its old name for callers and tests that want the number.
 
 The logic lives here, apart from :mod:`engine.renderer_F`, for two reasons: it
 carries no OpenGL/glm/Qt dependency, so it is unit-testable headlessly; and it
@@ -19,13 +24,19 @@ from __future__ import annotations
 import math
 from typing import Callable, List, Optional, Sequence
 
-#: Hard outer limit (world units) on the XZ plane, measured from the camera
+from engine.view_distance import DEFAULT_VIEW_DISTANCE
+
+#: Default outer limit (world units) on the XZ plane, measured from the camera
 #: centre. A *ceiling*, not the working radius: :func:`visible_xz_bounds`
 #: derives the actual relevant region from the live camera, which for a
 #: steeply-angled or top-down view is several times tighter. The ceiling still
 #: matters -- it is what bounds a first-person view whose frustum runs all the
 #: way to the far plane.
-CAMERA_RENDER_CULL_DISTANCE = 4096.0
+#:
+#: Aliased from :mod:`engine.view_distance` so the default draw distance is
+#: written down once; a running camera's actual radius is read from its
+#: ViewDistance, not from here.
+CAMERA_RENDER_CULL_DISTANCE = DEFAULT_VIEW_DISTANCE
 #: Precomputed squared radius -- the value the per-object test actually compares.
 CAMERA_RENDER_CULL_DISTANCE_SQ = CAMERA_RENDER_CULL_DISTANCE * CAMERA_RENDER_CULL_DISTANCE
 

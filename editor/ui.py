@@ -11,6 +11,8 @@ from PyQt5.QtGui import QPalette, QColor
 
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
+from engine.view_distance import (
+    DEFAULT_VIEW_DISTANCE, MAX_VIEW_DISTANCE, MIN_VIEW_DISTANCE)
 from editor.property_editor import PropertyEditor
 from editor.scene_hierarchy import SceneHierarchy
 from editor.asset_browser import AssetBrowser
@@ -650,10 +652,17 @@ class Ui_MainWindow(object):
         bottom_layout.addSpacing(20)
         bottom_layout.addWidget(QLabel("Cull Dist:"))
         MainWindow.cull_dist_spinbox = QSpinBox()
-        MainWindow.cull_dist_spinbox.setRange(500, 20000)
-        MainWindow.cull_dist_spinbox.setValue(4096)
+        # Range mirrors engine.view_distance's supported span so the spinbox
+        # and the r_viewdistance console command cannot disagree about what is
+        # settable.
+        MainWindow.cull_dist_spinbox.setRange(int(MIN_VIEW_DISTANCE), int(MAX_VIEW_DISTANCE))
+        MainWindow.cull_dist_spinbox.setValue(int(DEFAULT_VIEW_DISTANCE))
         MainWindow.cull_dist_spinbox.setSingleStep(250)
-        MainWindow.cull_dist_spinbox.setToolTip("Objects beyond this distance will not be rendered")
+        MainWindow.cull_dist_spinbox.setToolTip(
+            "Maximum render distance. Nothing is drawn beyond it, and the fog "
+            "fades geometry out before the clip so there is no pop-out.\n"
+            "Updates live. Console: r_viewdistance / r_fogdistance / "
+            "r_fogdensity / r_fogcolor.")
         MainWindow.cull_dist_spinbox.valueChanged.connect(MainWindow.set_cull_distance)
         bottom_layout.addWidget(MainWindow.cull_dist_spinbox)
 

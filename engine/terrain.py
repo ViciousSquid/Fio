@@ -989,7 +989,8 @@ class Terrain:
         return self._placeholder_cubemap
 
     def update_and_render(self, projection: glm.mat4, view: glm.mat4, camera_pos: glm.vec3, frustum_planes=None, lights=None, active_lights_count=0,
-                          shadow_cubemaps=None, shadow_index_map=None, shadow_unit_base=4):
+                          shadow_cubemaps=None, shadow_index_map=None, shadow_unit_base=4,
+                          env_uniforms=None):
         if not self.enabled: return
         if not self.shader_program:
             self._init_shader()
@@ -1006,6 +1007,10 @@ class Terrain:
         for name in ('use_textures', 'lod_level'):
             if name not in self.uniforms:
                 self.uniforms[name] = gl.glGetUniformLocation(self.shader_program, name)
+        if env_uniforms:
+            for name in env_uniforms:
+                if name not in self.uniforms:
+                    self.uniforms[name] = gl.glGetUniformLocation(self.shader_program, name)
         for i in range(8):
             key = f'lights[{i}].shadowIndex'
             if key not in self.uniforms:
@@ -1048,6 +1053,24 @@ class Terrain:
                            and self.sand_tex != 0 and self.snow_tex != 0)
         use_tex = 0 if self.flat_mode or not textures_loaded else (1 if getattr(self, 'use_textures', True) else 0)
         gl.glUniform1i(self.uniforms['use_textures'], use_tex)
+
+        # Distance fog + global ambient (engine.shaders.FOG_GLSL). The terrain
+        # owns its program and its own uniform table, so the renderer hands the
+        # already-resolved values across rather than writing them itself --
+        # otherwise a terrain running its own fallback program would be the one
+        # surface in the level that ignored the fog and stayed sharp right up
+        # to the far plane.
+        if env_uniforms:
+            for name, value in env_uniforms.items():
+                loc = self.uniforms.get(name, -1)
+                if loc is None or loc == -1:
+                    continue
+                if isinstance(value, int):
+                    gl.glUniform1i(loc, value)
+                elif isinstance(value, float):
+                    gl.glUniform1f(loc, value)
+                else:
+                    gl.glUniform3f(loc, *value)
         
         # The terrain fragment shader holds fewer lights than the main renderer's
         # budget. Without this clamp a scene with more lights than that indexes
