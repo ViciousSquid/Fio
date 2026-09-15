@@ -51,12 +51,49 @@ from .persistence import (build_cell_delta_registry, flatten_cell_delta_registry
 # tell "the mapper hid this" from "Big World parked it a moment ago", and the
 # engine is where that question is answered — see `engine.spatial.authored_hidden`.
 from engine.spatial import (PARKED_DISABLED_KEY as _DIS_MARK,
-                            PARKED_HIDDEN_KEY as _HID_MARK)
+                            PARKED_HIDDEN_KEY as _HID_MARK,
+                            SIM_TIER_KEY)
+from .tiers import DEFAULT_NEAR_RADIUS, TierClassifier
 
 
 def _xz(pos):
     """(x, z) from a glm.vec3 / list / tuple position."""
     return float(pos[0]), float(pos[2])
+
+
+class StreamingHost:
+    """What :class:`BigWorldSession` needs of the object it streams into.
+
+    :class:`engine.logic_thread.LogicThread` is the real host and provides a
+    superset of this. The class exists so the contract is written down next to
+    the code that depends on it, and so a head-less test or a world-generation
+    benchmark can stand in for the logic thread without a live play session.
+
+    A host must additionally expose ``brushes``, ``things`` and ``player`` —
+    those come from the scene, so they are the caller's to supply.
+
+    Every member is read through ``getattr(..., default)`` by the session, so a
+    host that predates one of them still works; this is the documented shape,
+    not an enforced interface.
+    """
+
+    def __init__(self):
+        #: Outer edge of full-fidelity simulation. The session overwrites this
+        #: from the map's Big World settings so that whatever the host uses to
+        #: decide how hard to simulate agrees with what the streamer keeps
+        #: resident (§13).
+        self.sim_near_radius = DEFAULT_NEAR_RADIUS
+        #: Outer edge of live simulation; tracks the activation radius.
+        self.sim_active_radius = 0.0
+        #: Bumped whenever the set of drawable objects changes. A host that
+        #: caches "every non-hidden brush" between frames — rebuilding it per
+        #: frame is O(total brushes), exactly the cost streaming exists to
+        #: avoid — invalidates that cache on this.
+        self.visibility_changes = 0
+
+    def notify_visibility_changed(self) -> None:
+        """Streaming a cell in or out changed which objects are drawable."""
+        self.visibility_changes += 1
 
 
 class BigWorldSession:
@@ -72,12 +109,25 @@ class BigWorldSession:
                  deactivation_radius: float = DEFAULT_DEACTIVATION_RADIUS,
                  terrain_fill: bool = False,
                  terrain_infinite: bool = False,
-                 terrain_stream_radius: float = 0.0):
+                 terrain_stream_radius: float = 0.0,
+                 sim_near_radius: float = DEFAULT_NEAR_RADIUS):
         self.logic = logic
         self.manager = BigWorldManager(
             activation_radius=activation_radius,
             deactivation_radius=deactivation_radius,
         )
+        #: Assigns NEAR/ACTIVE/DISTANT/DORMANT to the resident set. Its active
+        #: boundary is the manager's activation radius, so "how far out is the
+        #: world resident" and "how far out is it simulated" are one number
+        #: rather than two that can drift apart (§13).
+        self.tiers = TierClassifier(
+            near_radius=sim_near_radius,
+            active_radius=self.manager.activation_radius,
+        )
+        #: The map's authored full-fidelity radius. Configuration in, nothing
+        #: more: it sizes the tier model's inner band and is published to the
+        #: host, and the session neither reads it back nor acts on it.
+        self.sim_near_radius = float(sim_near_radius)
         #: When False the session is inert — the full world stays active exactly
         #: as vanilla Fio (used for ordinary small maps / editor preview off).
         self.streaming = True
@@ -156,15 +206,44 @@ class BigWorldSession:
             else:
                 self._set_thing_active(thing, False)
 
+        # The tier model is configured from the manager's own activation radius,
+        # so "how far out is the world resident" and "how far out is it
+        # simulated" are one number (§13). Persistent globals are stamped once,
+        # here: they live in no cell, so no crossing can ever reach them.
+        self.tiers.set_radii(self.sim_near_radius, self.manager.activation_radius)
+        self.tiers.pin(self.manager.persistent_things)
+        self._publish_relevance_radii()
+
         if pos is not None:
             self.manager.update(pos, force=True)
             self._apply_active_snapshot()
+            self.tiers.update(self.manager, *_xz(pos))
         self._started = True
+
+    def _publish_relevance_radii(self) -> None:
+        """Tell the host how far out this map's world is live.
+
+        There has to be exactly one answer to that. A map that streams 8192
+        units would otherwise still have its consumers stop at the stock 2048,
+        and a map that streams 1024 would keep paying full simulation for
+        entities it has already parked.
+
+        This publishes; it does not manage. The values are the two boundaries
+        the tier model was configured with, written where a host can read them,
+        and nothing here looks at what the host does with them. Guarded, so a
+        host that has no such fields is simply given them.
+        """
+        logic = self.logic
+        try:
+            logic.sim_active_radius = float(self.tiers.active_radius)
+            logic.sim_near_radius = float(self.tiers.near_radius)
+        except Exception:
+            pass  # a host that refuses the attributes is not an error
 
     #: Transient per-object markers the session writes while it is running.
     #: They mean nothing once it has stopped, and a map saved with them in it
     #: would carry this session's activation state into the file.
-    TRANSIENT_KEYS = ("bw_active",)
+    TRANSIENT_KEYS = ("bw_active", SIM_TIER_KEY)
 
     def stop(self) -> None:
         """Restore every object the session parked; leave the world untouched.
@@ -187,7 +266,8 @@ class BigWorldSession:
         self._parked_brushes.clear()
         self._parked_things.clear()
         self._parked_lights.clear()
-        self._clear_transient_markers()
+        self._clear_transient_markers()   # includes every tier stamp
+        self.tiers.clear(())
         self._restore_terrain()
         self._started = False
 
@@ -216,8 +296,16 @@ class BigWorldSession:
         pos = player_pos if player_pos is not None else self._player_pos()
         if pos is None:
             return False
+        before = self.manager._last_player_cell
         delta = self.manager.update(pos)
+        crossed = self.manager._last_player_cell != before
         if not delta.changed:
+            if crossed:
+                # The active *set* did not change, but the player is in a new
+                # cell, so a cell's distance band may have. Re-tier the active
+                # set — O(active cells), and it stamps nothing unless a cell
+                # actually moved tier.
+                self.tiers.update(self.manager, *_xz(pos))
             return False
         # Commit the persistent state of every cell that is about to leave the
         # active set into the registry *before* it is parked, so its changes
@@ -236,6 +324,10 @@ class BigWorldSession:
             self._set_light_active(light, False)
         for light in delta.lights_entering:
             self._set_light_active(light, True)
+        # The entering/leaving stamps were written by _set_thing_active above,
+        # proportional to what actually moved. This re-tiers the active cells,
+        # restamping the entities of the ring whose distance band changed.
+        self.tiers.update(self.manager, *_xz(pos))
         return True
 
     def _apply_active_snapshot(self) -> None:
@@ -360,13 +452,23 @@ class BigWorldSession:
         brush["bw_active"] = True
 
     def _set_thing_active(self, thing, active: bool) -> None:
+        """Park or unpark one entity, tier stamp included.
+
+        The single place an entity crosses the residency boundary, and therefore
+        the single place its DORMANT stamp is written or dropped. Doing it here
+        rather than in ``tick`` means every caller -- the startup park-everything
+        pass, the per-crossing delta, the post-start snapshot -- keeps residency
+        and tier in step without any of them having to remember to.
+        """
         props = getattr(thing, "properties", None)
         if not isinstance(props, dict):
             return
         if active:
             self._restore_thing(thing)
             self._parked_things.pop(id(thing), None)
+            self.tiers.unpark(thing)
         else:
+            self.tiers.park(thing)
             if _HID_MARK not in props:
                 props[_HID_MARK] = props.get("hidden", False)
             if _DIS_MARK not in props:
@@ -540,4 +642,5 @@ class BigWorldSession:
             s["terrain_stream_radius"] = float(getattr(terrain, "stream_radius", 0.0))
         else:
             s["terrain_fill"] = False
+        s.update(self.tiers.stats())
         return s

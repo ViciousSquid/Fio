@@ -73,6 +73,13 @@ class BigWorldPlugin(FioPlugin):
                  min=256.0, max=65536.0,
                  help="Active cells are only dropped beyond this distance "
                       "(hysteresis — must be >= activation radius)."),
+            prop("sim_near_radius", "float", "Full-simulation radius", default=1024.0,
+                 min=0.0, max=65536.0,
+                 help="Entities within this distance are tiered NEAR (full "
+                      "simulation fidelity); beyond it, resident entities are "
+                      "ACTIVE and then DISTANT out to the activation radius. "
+                      "Clamped to the activation radius, so the streamed region "
+                      "and the simulated region always agree."),
             prop("show_cell_debug", "bool", "Show debug overlay", default=True,
                  help="Draw the Big World stats panel and active-cell minimap in play mode."),
             prop("terrain_fill", "bool", "Fill world with terrain", default=False,
@@ -174,6 +181,7 @@ class BigWorldPlugin(FioPlugin):
                 terrain_fill=cfg["terrain_fill"],
                 terrain_infinite=cfg["terrain_infinite"],
                 terrain_stream_radius=cfg["terrain_stream_radius"],
+                sim_near_radius=cfg["sim_near_radius"],
             )
             session.start()
         session._show_debug = cfg["show_cell_debug"]

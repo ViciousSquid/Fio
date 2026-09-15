@@ -707,6 +707,14 @@ def restore_auto(logic, data: dict, *, current_map_name: str = "") -> dict:
     if not isinstance(data, dict) or not data.get(_MAGIC):
         raise ValueError("not a Fio save file")
 
+    # A restore can move any object's `hidden`/`disabled` state, which is what
+    # a host's cached non-hidden brush list and live-actor partition are built
+    # from. Announce it up front so every path below lands on the next frame
+    # rather than at the next periodic re-validation.
+    notify = getattr(logic, "notify_visibility_changed", None)
+    if notify is not None:
+        notify()
+
     # Big World delta save: a per-cell registry rather than a flat delta level.
     if data.get("world_mode") == WORLD_MODE_BIGWORLD:
         return _restore_bigworld(logic, data, current_map_name)

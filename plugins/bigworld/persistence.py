@@ -37,7 +37,8 @@ _SETTINGS_TYPE = "bigworldsettings"
 #: The runtime marker keys the session writes onto objects while they are parked.
 #: They must never be persisted — they are transient streaming state, not map
 #: data. :func:`strip_runtime_keys` removes them before a save.
-RUNTIME_KEYS = ("_bw_parked_hidden", "_bw_parked_disabled", "bw_active")
+RUNTIME_KEYS = ("_bw_parked_hidden", "_bw_parked_disabled", "bw_active",
+                "_sim_tier")
 
 #: The two park markers hold an object's *real* (pre-streaming) hidden/disabled
 #: value while it is parked in an inactive cell. Delta comparison must resolve
@@ -118,6 +119,7 @@ def config_from_settings(settings) -> Dict:
         "terrain_infinite": _b("terrain_infinite", False),
         "terrain_stream_radius": _f("terrain_stream_radius", 0.0),
         "disk_streaming": _b("disk_streaming", False),
+        "sim_near_radius": _f("sim_near_radius", 1024.0),
     }
 
 

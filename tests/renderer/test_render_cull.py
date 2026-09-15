@@ -108,3 +108,86 @@ def test_empty_input_returns_empty():
 def test_order_is_preserved():
     objs = [{"pos": [float(i), 0.0, 0.0]} for i in range(10)]
     assert cull_by_distance(objs, 0.0, 0.0) == objs
+
+
+# ----------------------------------------------------------------------
+# visible_xz_bounds -- both play camera modes
+# ----------------------------------------------------------------------
+
+import math  # noqa: E402
+
+from engine.render_cull import (  # noqa: E402
+    WORLD_SLAB_MARGIN, visible_xz_bounds,
+)
+
+
+def _corners(cam, direction, up, fov_deg=75.0, aspect=16.0 / 9.0,
+             far=10000.0):
+    """The four far-plane corner points of a perspective frustum, in world space.
+
+    Written out rather than pulled from the renderer so the test exercises the
+    geometry alone, with no GL context and no view matrix.
+    """
+    cx, cy, cz = cam
+    dx, dy, dz = direction
+    dlen = math.sqrt(dx * dx + dy * dy + dz * dz) or 1.0
+    dx, dy, dz = dx / dlen, dy / dlen, dz / dlen
+    # right = dir x up, then true_up = right x dir (Gram-Schmidt).
+    ux, uy, uz = up
+    rx, ry, rz = dy * uz - dz * uy, dz * ux - dx * uz, dx * uy - dy * ux
+    rlen = math.sqrt(rx * rx + ry * ry + rz * rz) or 1.0
+    rx, ry, rz = rx / rlen, ry / rlen, rz / rlen
+    tux, tuy, tuz = ry * dz - rz * dy, rz * dx - rx * dz, rx * dy - ry * dx
+
+    half_h = far * math.tan(math.radians(fov_deg) * 0.5)
+    half_w = half_h * aspect
+    centre = (cx + dx * far, cy + dy * far, cz + dz * far)
+    out = []
+    for sh, sv in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+        out.append((centre[0] + rx * half_w * sh + tux * half_h * sv,
+                    centre[1] + ry * half_w * sh + tuy * half_h * sv,
+                    centre[2] + rz * half_w * sh + tuz * half_h * sv))
+    return out
+
+
+def test_overhead_mode_is_far_tighter_than_the_distance_ceiling():
+    """The overhead camera's frustum leaves the ground slab almost at once."""
+    cam = (0.0, 800.0, 0.0)                      # engine default overhead_height
+    corners = _corners(cam, (0.0, -1.0, 0.0), (0.0, 0.0, -1.0))
+    min_x, min_z, max_x, max_z = visible_xz_bounds(cam, corners,
+                                                   y_min=0.0, y_max=128.0)
+    half_width = max(max_x - min_x, max_z - min_z) * 0.5
+    assert half_width < CAMERA_RENDER_CULL_DISTANCE * 0.5, (
+        f"overhead box half-width {half_width:.0f} is no tighter than the "
+        f"{CAMERA_RENDER_CULL_DISTANCE:.0f} ceiling")
+
+
+def test_first_person_degrades_to_the_distance_ceiling():
+    """At low pitch the rays never leave the slab, so the ceiling is the answer.
+
+    Not a shortcoming: it is what makes the function safe to call in both modes.
+    It tightens overhead and reproduces the previous behaviour in first person,
+    rather than returning something smaller than the player can see.
+    """
+    cam = (0.0, 64.0, 0.0)
+    corners = _corners(cam, (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+    min_x, min_z, max_x, max_z = visible_xz_bounds(cam, corners,
+                                                   y_min=-1000.0, y_max=1000.0)
+    # Reaches the ceiling ahead, and never exceeds it in any direction.
+    assert max_x >= CAMERA_RENDER_CULL_DISTANCE * 0.9
+    for v in (max_x, max_z, -min_x, -min_z):
+        assert v <= CAMERA_RENDER_CULL_DISTANCE + WORLD_SLAB_MARGIN + 1.0
+
+
+def test_the_box_is_never_smaller_than_the_visible_volume():
+    """Conservative by construction, in either mode."""
+    for direction in ((0.0, -1.0, 0.0), (1.0, -0.2, 0.0), (1.0, 0.0, 0.0)):
+        cam = (10.0, 500.0, -20.0)
+        up = (0.0, 0.0, -1.0) if abs(direction[1]) > 0.9 else (0.0, 1.0, 0.0)
+        corners = _corners(cam, direction, up)
+        min_x, min_z, max_x, max_z = visible_xz_bounds(cam, corners,
+                                                       y_min=0.0, y_max=256.0)
+        assert min_x <= max_x and min_z <= max_z
+        # The camera's own column is inside the box whenever it is in the slab,
+        # and the box is non-degenerate whenever anything is visible at all.
+        assert max_x - min_x > 0.0

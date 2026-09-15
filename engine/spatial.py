@@ -42,6 +42,63 @@ PARKED_HIDDEN_KEY = '_bw_parked_hidden'
 PARKED_DISABLED_KEY = '_bw_parked_disabled'
 
 
+# --- Simulation tiers -------------------------------------------------------
+#
+# Residency and simulation are different questions.  A cell is resident or it
+# is not; an object that *is* resident may still not be worth simulating at
+# full rate.  These four names are how Fio says which, and they are here rather
+# than in the streaming plugin for one reason: a system that wants to ask "how
+# live is this thing?" must be able to name a tier without importing Big World.
+#
+# Nothing here runs.  It is four integers, a property key and a dict read.  The
+# classifier that assigns tiers lives in ``plugins.bigworld.tiers`` and is only
+# ever built by a live session, so a map that does not use Big World never
+# executes a line of tier code — and its objects, never stamped, read back as
+# :data:`TIER_NEAR`, which is ordinary Fio: simulate everything.
+
+#: Full runtime fidelity.  Everything a system normally does, it does.
+TIER_NEAR = 0
+#: Resident and simulated, but a system may legitimately do less per frame —
+#: stagger decisions, skip per-frame perception, coarsen movement.
+TIER_ACTIVE = 1
+#: Persistent state exists and is authoritative; expensive live simulation is
+#: suppressed.  Coarse/event-driven advancement only.
+TIER_DISTANT = 2
+#: No simulation.  The object may be parked, or gone from memory entirely; its
+#: identity and persistent state are unaffected either way.
+TIER_DORMANT = 3
+
+#: Indexable by tier, for debug text and test failure messages.
+TIER_NAMES = ('NEAR', 'ACTIVE', 'DISTANT', 'DORMANT')
+
+#: Property key a classifier stamps an object's current tier under.
+#:
+#: The stamp, not the classifier's arrays, is the contract.  It is what lets an
+#: AI thread read a tier without touching the classifier across threads, and
+#: what makes the absent case correct by construction: ``get(SIM_TIER_KEY,
+#: TIER_NEAR)``.
+SIM_TIER_KEY = '_sim_tier'
+
+
+def tier_of(obj, default=TIER_NEAR):
+    """The simulation tier stamped on ``obj``, or *default* if there is none.
+
+    Accepts a brush dict or a Thing-like object with a ``properties`` dict, so
+    one reader serves both.  Defaulting to :data:`TIER_NEAR` is the whole point:
+    an unclassified world is a fully simulated world, which is what an ordinary
+    map, an editor preview and a head-less test all want.
+    """
+    props = getattr(obj, 'properties', None)
+    if not isinstance(props, dict):
+        if not isinstance(obj, dict):
+            return default
+        props = obj
+    tier = props.get(SIM_TIER_KEY)
+    if tier is None:
+        return default
+    return int(tier)
+
+
 def authored_hidden(obj):
     """Whether ``obj`` is hidden *by the map*, ignoring streaming.
 

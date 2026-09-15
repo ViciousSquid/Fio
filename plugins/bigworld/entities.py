@@ -43,6 +43,12 @@ class BigWorldSettings(Thing):
                           position, so the ground is deterministic everywhere.
     terrain_stream_radius: world units of terrain kept resident around the
                           player; 0 derives it from the activation radius.
+    sim_near_radius:      world units within which entities are tiered NEAR —
+                          full simulation fidelity. Configuration only: it sizes
+                          the inner band of the tier model and is published to
+                          the host. The outer band is the activation radius, so
+                          the streamer and the tier model cannot disagree about
+                          how far out this map's world is live.
     """
 
     #: Reused by the property panel / manager to key its schema.
@@ -64,6 +70,7 @@ class BigWorldSettings(Thing):
         self.properties.setdefault("terrain_infinite", False)
         self.properties.setdefault("terrain_stream_radius", 0.0)
         self.properties.setdefault("disk_streaming", False)
+        self.properties.setdefault("sim_near_radius", 1024.0)
 
     # -- typed accessors ----------------------------------------------------
     def disk_streaming(self) -> bool:
