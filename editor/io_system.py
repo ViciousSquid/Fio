@@ -90,7 +90,23 @@ class IODef:
 
 # Registry of all entity I/O definitions
 # Maps entity_type -> {'inputs': [IODef, ...], 'outputs': [IODef, ...]}
+#
+# This is the *declaration*: what the editor offers a designer. The
+# *implementation* lives elsewhere — in an IOManager's handler table, which is
+# per-session and which plugins contribute to at runtime. The two cannot be one
+# structure, because they have different lifetimes: definitions are registered
+# at import and are global, handlers are registered against a live session.
+#
+# Two structures means they can drift, and a declaration that has gone stale is
+# invisible: the editor offers the input, a designer wires it, and nothing runs.
+# `audit_io_coverage` below is the reconciliation — it is what the conformance
+# tests assert on, and what a plugin author can call to check their own entity.
 IO_REGISTRY: Dict[str, Dict[str, List[IODef]]] = {}
+
+#: Lowercased declared output names per type, for the emission check in
+#: :meth:`IOManager.fire_output`. Memoised because that check runs per event;
+#: invalidated by :func:`register_io`, the only thing that changes the answer.
+_declared_outputs_cache: Dict[str, Set[str]] = {}
 
 
 def register_io(entity_type: str, inputs: List[IODef], outputs: List[IODef]):
@@ -99,6 +115,21 @@ def register_io(entity_type: str, inputs: List[IODef], outputs: List[IODef]):
         'inputs': inputs,
         'outputs': outputs
     }
+    _declared_outputs_cache.pop(entity_type, None)
+
+
+#: Declared I/O that deliberately has no runtime implementation, as
+#: ``(entity_type, io_name) -> why``.
+#:
+#: There is no good reason to add to this lightly.  A declared input that runs
+#: nothing, or a declared output that nothing fires, is a promise the editor
+#: makes to a designer and the runtime does not keep — the designer wires it,
+#: nothing happens, and there is no error anywhere.  An entry here is a claim
+#: that the entry is *meant* to be inert (an editor-only affordance, a slot a
+#: game layer is expected to fill), and the conformance tests read this table
+#: rather than a list of their own, so the exception is stated once, here,
+#: where anyone reading the declaration will see it.
+ABSTRACT_IO: Dict[tuple, str] = {}
 
 
 def register_io_alias(alias: str, entity_type: str):
@@ -356,6 +387,21 @@ class IOManager:
         # takes this entity as its own.  Read before dispatch, because dispatch
         # rebinds it for the duration of each hop.
         activator_id = self._activator_id or source_id
+
+        # The mirror of the stale-declaration problem: an output the code fires
+        # but no type declares is undiscoverable — it works perfectly for anyone
+        # who knows the name and does not exist for anyone reading the editor's
+        # dropdown.  Checked under the existing debug gate, so it costs a memoised
+        # set lookup on a path that is already logging, and nothing at all when
+        # I/O debugging is off.
+        if IO_DEBUG_ENABLED:
+            source_type = self._get_entity_type(source_entity)
+            if (is_registered_type(source_type)
+                    and output_name.lower() not in declared_outputs(source_type)):
+                debug_log("Error",
+                          "I/O: %s fired '%s', which %s entities do not declare — "
+                          "no designer can wire it"
+                          % (source_name or '<unnamed>', output_name, source_type))
 
         matching_count = 0
         for conn in connections:
@@ -963,6 +1009,8 @@ def register_default_io():
         inputs=[
             IODef('RunCommand', 'Run a console command (param: the command line, '
                                 'e.g. "cam 2"); blank uses the command property', 'string'),
+            IODef('Trigger',    'Run a console command (alias of RunCommand, so a '
+                                'generic trigger chain can drive one)', 'string'),
             IODef('SetCommand', 'Set the default command string', 'string'),
             IODef('Enable',     'Allow this entity to run commands'),
             IODef('Disable',    'Prevent this entity from running commands'),
@@ -1344,6 +1392,74 @@ def validate_connection(conn, entity, target, source_type=None):
                 % (output_name, source_type)))
 
     return problems
+
+
+def declared_outputs(entity_type: str) -> Set[str]:
+    """Lowercased declared output names for a type, memoised."""
+    cached = _declared_outputs_cache.get(entity_type)
+    if cached is None:
+        cached = {io.name.lower() for io in get_outputs(entity_type)}
+        _declared_outputs_cache[entity_type] = cached
+    return cached
+
+
+def audit_io_coverage(io_manager):
+    """Reconcile what the editor declares with what the runtime implements.
+
+    The registry and an ``IOManager``'s handler table are two separate things
+    and always will be — one is global and built at import, the other is
+    per-session and partly supplied by plugins. So the only way to know they
+    agree is to ask, which is what this does. Pass an ``IOManager`` that has had
+    every handler registered on it (the core ones *and* any plugin runtime's).
+
+    Returns a dict of three lists, each of ``(entity_type, io_name)``:
+
+    ``unimplemented_inputs``
+        Declared, but no handler is registered and the generic dispatcher does
+        not serve it either. The editor offers it; nothing runs. This is the
+        failure mode the split makes possible, and the reason this function
+        exists.
+    ``undeclared_inputs``
+        A handler exists for an input no type declares, so it works but no
+        designer can find it in the editor.
+    ``unknown_types``
+        A handler registered against a type the registry has never heard of —
+        usually a typo in the type token, which silently makes the handler
+        unreachable.
+
+    Entries listed in :data:`ABSTRACT_IO` are excluded, having been declared
+    inert on purpose. Outputs are not covered here: whether an output is ever
+    fired is a property of the code that fires it, not of any table, so it is
+    checked by reading the source (see the conformance tests).
+    """
+    handlers = set(getattr(io_manager, '_input_handlers', {}))
+    generic = set(IOManager.GENERIC_INPUTS)
+
+    declared = set()
+    unimplemented = []
+    for entity_type in IO_REGISTRY:
+        for name in get_input_names(entity_type):
+            key = (entity_type.lower(), name.lower())
+            declared.add(key)
+            if key in handlers or key[1] in generic:
+                continue
+            if (entity_type, name) in ABSTRACT_IO:
+                continue
+            unimplemented.append((entity_type, name))
+
+    known_types = {t.lower() for t in IO_REGISTRY}
+    undeclared, unknown = [], []
+    for entity_type, name in handlers:
+        if entity_type not in known_types:
+            unknown.append((entity_type, name))
+        elif (entity_type, name) not in declared:
+            undeclared.append((entity_type, name))
+
+    return {
+        'unimplemented_inputs': sorted(unimplemented),
+        'undeclared_inputs': sorted(undeclared),
+        'unknown_types': sorted(unknown),
+    }
 
 
 def validate_scene_connections(brushes, things, find_by_id=None, find_by_name=None):

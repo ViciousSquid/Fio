@@ -101,6 +101,49 @@ two; the length of the declared list cannot. The inputs every entity accepts
 regardless of type (`IOManager.GENERIC_INPUTS`) are accepted too, and a test
 asserts that set still matches what the dispatcher actually implements.
 
+### Declaration vs implementation
+
+`IO_REGISTRY` is the **declaration** — what the editor offers a designer.
+An `IOManager`'s handler table is the **implementation**. They are separate
+structures and have to be: definitions are global and built at import, handlers
+are per-session and partly supplied by plugins at runtime.
+
+Two structures can drift, and a drifted declaration is invisible in the worst
+way — the editor offers the input, a designer wires it, nothing runs, and no
+error appears anywhere. `is_registered_type()` fixes one symptom of the split;
+it does not prove the two agree. So the agreement is checked rather than
+assumed, from both directions:
+
+* **`audit_io_coverage(io_manager)`** reconciles them, returning declared inputs
+  with no implementation, implementations with no declaration, and handlers
+  registered against a type the registry has never heard of (a typo in a type
+  token, which silently makes a handler unreachable). Plugin authors can call
+  it against their own entities.
+* **`fire_output` reports an undeclared output** — one the code fires that no
+  type declares, so it works for whoever knows the name and exists for nobody
+  reading the editor. Checked under the existing debug gate, against a memoised
+  set, on a path that was already logging.
+* **`tests/io/test_io_contract.py`** asserts zero drift in the whole registry,
+  and goes further than the tables: it *invokes* every declared input through
+  the real dispatcher on a real instance of its type, and fails if one reaches
+  no implementation or raises. A handler that throws is not an implementation —
+  `_execute_input` swallows the exception, so the input silently does nothing in
+  exactly the way an unimplemented one does.
+* Every declared **output** is checked to have an emission site in shipped code,
+  following wrappers (the Tidy plugin fires everything through its own `_fire`,
+  and an output is no less implemented for going through one).
+
+The one sanctioned exception is **`ABSTRACT_IO`**, a table of declared I/O that
+is inert on purpose, each entry carrying its reason. The tests read that table
+rather than keeping a list of their own, so an exception is stated once, next to
+the declaration. It is currently empty: every declared input runs something and
+every declared output is fired.
+
+The probe's stand-in for `LogicThread` is itself checked against the real class,
+so it cannot drift into testing a fiction — a stub that grew an attribute the
+real host lacks would let every handler reaching for it pass here and fail in
+the game.
+
 ---
 
 ## 3. LogicState
