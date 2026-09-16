@@ -4473,15 +4473,37 @@ class MainWindow(QMainWindow):
         from editor.logic_graph_widget import LogicGraphWindow
         if not hasattr(self, '_logic_graph_win') or self._logic_graph_win is None:
             self._logic_graph_win = LogicGraphWindow(self.state, parent=self)
+            self._logic_graph_win.about_to_apply.connect(
+                self._on_logic_graph_about_to_apply)
             self._logic_graph_win.applied.connect(self._on_logic_graph_applied)
         self._logic_graph_win.show()
         self._logic_graph_win.raise_()
         self._logic_graph_win.activateWindow()
 
     def _on_logic_graph_applied(self):
-        """Called when the Logic Graph writes connections back to entities."""
+        """Called when the Logic Graph writes connections back to entities.
+
+        Applying rewrites connections across the whole scene, which is exactly
+        the kind of change undo exists for — and it had no checkpoint, so Ctrl+Z
+        after an Apply stepped over it to whatever came before.
+        """
         self.mark_as_modified()
+        self.invalidate_entity_caches()
         debug_log("IO", "Logic Graph applied connections to scene")
+
+    def _on_logic_graph_about_to_apply(self):
+        """Checkpoint the scene before the Logic Graph rewrites it.
+
+        Applying rewrites connections across the whole scene, which is exactly
+        what undo exists for, and it had no checkpoint at all — Ctrl+Z after an
+        Apply stepped over it to whatever came before. The checkpoint goes in
+        *before* the change, like every other tool in Fio, so the entry on the
+        stack is the state to go back to.
+        """
+        try:
+            self.state.save_state()
+        except Exception:
+            pass
 
     def open_logic_wizard(self):
         """Open the Logic Wizard (guided I/O scenario setup)."""

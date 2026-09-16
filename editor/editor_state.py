@@ -225,20 +225,20 @@ class EditorState:
         return data
 
     def _collect_logic_graph_positions(self):
-        """Collect node positions from the logic graph window, if open."""
-        win = getattr(self, '_logic_graph_win', None)
-        if win is None:
-            # Fall back to previously-loaded positions so they survive
-            # a save even when the graph window hasn't been opened.
-            return getattr(self, '_logic_graph_positions', {})
-        try:
-            scene = win.get_scene()
-            positions = {}
-            for entity_id, node in scene._nodes.items():
-                positions[entity_id] = {'x': node.x(), 'y': node.y()}
-            return positions
-        except Exception:
-            return getattr(self, '_logic_graph_positions', {})
+        """The logic graph's node positions, for the map file.
+
+        Read from ``_logic_graph_positions``, which the graph window keeps up to
+        date (see ``LogicGraphScene.store_positions``). It used to try to reach
+        the open window through ``self._logic_graph_win`` — but that attribute
+        lives on the *main window*, not here, so the lookup always missed and
+        every save fell back to whatever had been loaded from disk. Laid-out
+        graphs were never saved.
+
+        Having the graph push instead of this pulling also means the positions
+        are right whether the window is open, has been closed, or was never
+        opened at all.
+        """
+        return getattr(self, '_logic_graph_positions', {})
 
     def _serialize_brushes(self):
         """Serialize brushes with I/O connections."""
