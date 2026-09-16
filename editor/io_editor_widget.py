@@ -19,11 +19,18 @@ try:
     from .io_system import (
         OutputConnection, get_outputs, get_inputs, get_output_names,
         get_input_names, get_connections, add_connection, remove_connection,
-        get_entity_type_for_io, IO_REGISTRY
+        get_entity_type_for_io, IO_REGISTRY,
+        validate_connection, PROBLEM_UNKNOWN_INPUT, PROBLEM_UNKNOWN_OUTPUT,
     )
     IO_AVAILABLE = True
 except ImportError:
     IO_AVAILABLE = False
+
+    def validate_connection(conn, entity, target, source_type=None):
+        return []
+
+    PROBLEM_UNKNOWN_INPUT = 'unknown_input'
+    PROBLEM_UNKNOWN_OUTPUT = 'unknown_output'
 
 
 # ── Random name generator for unnamed entities ──
@@ -647,8 +654,21 @@ class IOEditorWidget(QWidget):
                 target_item.setForeground(QColor(255, 100, 100))
                 target_item.setToolTip("Target entity not found!")
             self.table.setItem(row, 1, target_item)
-            
-            self.table.setItem(row, 2, QTableWidgetItem(conn.input_name))
+
+            # A connection naming an input the target does not accept used to
+            # fail in silence — nothing at edit time, one line in the console at
+            # run time. Flag it here, where the mistake was made.
+            input_item = QTableWidgetItem(conn.input_name)
+            output_item = self.table.item(row, 0)
+            for code, message in validate_connection(
+                    conn, self.current_entity, resolved):
+                if code == PROBLEM_UNKNOWN_INPUT:
+                    input_item.setForeground(QColor(255, 170, 60))
+                    input_item.setToolTip(message)
+                elif code == PROBLEM_UNKNOWN_OUTPUT and output_item is not None:
+                    output_item.setForeground(QColor(255, 170, 60))
+                    output_item.setToolTip(message)
+            self.table.setItem(row, 2, input_item)
             
             param_text = conn.parameter if conn.parameter else "-"
             self.table.setItem(row, 3, QTableWidgetItem(param_text))

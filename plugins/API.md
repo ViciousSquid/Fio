@@ -615,15 +615,19 @@ api.register_properties("bigworldsettings", [
 ## `GlobalStore` — cross-level storage
 
 Process-wide, cross-level key/value storage for plugins. When the editor package
-is present it binds to the **same** persistent registry that map
-`LogicKeyValueStore` entities use, so a plugin's globals live alongside — and can
-share stores with — map state, persisting across level loads within a session.
-In the dependency-light player it falls back to a plain process-local
-dict-of-dicts with the same API. Values are stored as **strings**, matching the
-map store.
+is present it binds to the **same** persistent registry that map `LogicState`
+entities use (`LogicKeyValueStore` before 2.4 — the same class under its old
+name), so a plugin's globals live alongside — and can share stores with — map
+state, persisting across level loads within a session. In the dependency-light
+player it falls back to a plain process-local dict-of-dicts with the same API.
+
+Values are read back as **strings**, as they always have been. Since 2.4 a map
+store holds values with their types (an integer counter really is an `int`), so
+this API converts on the way out: a plugin sees `"5"` and `"true"` whatever the
+map wrote. There is still exactly one registry — nothing is copied or mirrored.
 
 Keys are grouped by *store* name (default `"plugins"`). Pass a store name a map's
-`LogicKeyValueStore` uses to read/write the exact same values.
+`LogicState` uses to read/write the exact same values.
 
 ```python
 def get(self, key, default=None, store="plugins")

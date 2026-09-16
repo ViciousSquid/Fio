@@ -621,6 +621,73 @@ class MainWindow(QMainWindow):
         self.view_front.update()
 
 
+    @staticmethod
+    def _object_focus_target(obj):
+        """``(centre, radius)`` of a brush or thing, in world units.
+
+        The radius is what decides how far back to stand: a 2048-unit floor and
+        a light entity both want to fill the view, and a fixed distance would
+        bury one and lose the other.
+        """
+        if isinstance(obj, dict):
+            pos = obj.get('pos') or [0.0, 0.0, 0.0]
+            size = obj.get('size') or [64.0, 64.0, 64.0]
+            centre = [float(pos[0]), float(pos[1]), float(pos[2])]
+            radius = max(float(size[0]), float(size[1]), float(size[2])) * 0.5
+        else:
+            pos = getattr(obj, 'pos', None) or [0.0, 0.0, 0.0]
+            centre = [float(pos[0]), float(pos[1]), float(pos[2])]
+            radius = 48.0
+            getter = getattr(obj, 'get_radius', None)
+            if callable(getter):
+                try:
+                    radius = max(radius, float(getter()))
+                except Exception:
+                    pass
+        return centre, max(16.0, radius)
+
+    def focus_on_object(self, obj):
+        """Centre every view on one object, in 2D and in 3D."""
+        if obj is None:
+            return
+        centre, radius = self._object_focus_target(obj)
+        self.focus_on_bounds(centre, radius)
+        name = (obj.get('name') if isinstance(obj, dict)
+                else obj.properties.get('name', '')) or 'object'
+        self.show_toast("Focused on %s" % name)
+
+    def focus_on_bounds(self, centre, radius):
+        """Centre every view on a point, framed for something *radius* across.
+
+        The 3D camera keeps its current yaw and pitch and simply moves so the
+        target is in front of it. Snapping to a canned angle would be easier and
+        would throw away the orientation the user had chosen, which is usually
+        the thing they were reasoning about.
+        """
+        radius = max(16.0, float(radius))
+        self.center_2d_views_on(centre)
+        # Zoom so the object spans a comfortable fraction of the viewport rather
+        # than whatever zoom happened to be set.
+        for view in (self.view_top, self.view_side, self.view_front):
+            try:
+                extent = min(view.width(), view.height())
+                if extent > 0:
+                    view.zoom_factor = max(0.05, min(8.0, extent / (radius * 6.0)))
+                view.update()
+            except Exception:
+                pass
+
+        camera = getattr(getattr(self, 'view_3d', None), 'camera', None)
+        if camera is not None:
+            try:
+                import glm
+                front = camera.get_front_vector()
+                distance = max(radius * 3.0, 128.0)
+                camera.pos = glm.vec3(centre[0], centre[1], centre[2]) - front * distance
+                self.view_3d.update()
+            except Exception:
+                pass
+
     def moveEvent(self, event):
         """Handle window move."""
         super().moveEvent(event)
@@ -4473,15 +4540,37 @@ class MainWindow(QMainWindow):
         from editor.logic_graph_widget import LogicGraphWindow
         if not hasattr(self, '_logic_graph_win') or self._logic_graph_win is None:
             self._logic_graph_win = LogicGraphWindow(self.state, parent=self)
+            self._logic_graph_win.about_to_apply.connect(
+                self._on_logic_graph_about_to_apply)
             self._logic_graph_win.applied.connect(self._on_logic_graph_applied)
         self._logic_graph_win.show()
         self._logic_graph_win.raise_()
         self._logic_graph_win.activateWindow()
 
     def _on_logic_graph_applied(self):
-        """Called when the Logic Graph writes connections back to entities."""
+        """Called when the Logic Graph writes connections back to entities.
+
+        Applying rewrites connections across the whole scene, which is exactly
+        the kind of change undo exists for — and it had no checkpoint, so Ctrl+Z
+        after an Apply stepped over it to whatever came before.
+        """
         self.mark_as_modified()
+        self.invalidate_entity_caches()
         debug_log("IO", "Logic Graph applied connections to scene")
+
+    def _on_logic_graph_about_to_apply(self):
+        """Checkpoint the scene before the Logic Graph rewrites it.
+
+        Applying rewrites connections across the whole scene, which is exactly
+        what undo exists for, and it had no checkpoint at all — Ctrl+Z after an
+        Apply stepped over it to whatever came before. The checkpoint goes in
+        *before* the change, like every other tool in Fio, so the entry on the
+        stack is the state to go back to.
+        """
+        try:
+            self.state.save_state()
+        except Exception:
+            pass
 
     def open_logic_wizard(self):
         """Open the Logic Wizard (guided I/O scenario setup)."""
@@ -4502,69 +4591,79 @@ class MainWindow(QMainWindow):
             # and press Apply to persist the connections.
             self.open_logic_graph()
 
+    def open_project_overview(self):
+        """Show what this map contains, as a report rather than a panel.
+
+        It lived in the bottom third of the Scene Hierarchy, where a report
+        competed for height with the list people open that panel to use.
+        """
+        try:
+            from editor.project_overview import show_project_overview
+        except ImportError:
+            QMessageBox.warning(self, "Project Overview",
+                                "The overview is unavailable in this build.")
+            return
+        show_project_overview(self)
+
     def validate_io_connections(self):
-        """Check all entities for connections that point to missing targets (by name or ID)."""
-        all_names = set()
-        all_ids = set()
-        for t in self.state.things:
-            n = t.properties.get('name', '')
-            if n:
-                all_names.add(n)
-            eid = getattr(t, 'id', None) or t.properties.get('id')
-            if eid is not None:
-                all_ids.add(eid)
+        """Report every broken connection in the map.
 
-        for b in self.state.brushes:
-            n = b.get('name', '')
-            if n:
-                all_names.add(n)
-            eid = b.get('id')
-            if eid is not None:
-                all_ids.add(eid)
+        The checking itself lives in :mod:`editor.io_system`, next to the
+        dispatcher whose rules it has to agree with — a second copy of "how does
+        a connection find its target" here is a second copy that can drift, and
+        the one that used to be here had: it treated a connection's ``target_id``
+        as missing only when it was ``None``, but the field defaults to the empty
+        string, so every name-addressed connection in every legacy map was
+        reported broken.
 
-        broken = []
+        It also reports inputs and outputs the entity types do not declare, which
+        nothing checked before: a connection calling ``Opne`` instead of ``Open``
+        resolved its target perfectly well and then did nothing, with no error
+        anywhere until someone noticed the door was not opening.
+        """
+        try:
+            from editor.io_system import (validate_scene_connections,
+                                          PROBLEM_MISSING_TARGET)
+        except ImportError:
+            QMessageBox.warning(self, "Validate Connections",
+                                "The I/O system is unavailable in this build.")
+            return
+
+        problems = validate_scene_connections(self.state.brushes, self.state.things)
+
         all_entities = list(self.state.things) + list(self.state.brushes)
-        for entity in all_entities:
-            if hasattr(entity, 'properties'):
-                conns = entity.properties.get('_io_connections', [])
-                src_name = entity.properties.get('name', '?')
-            else:
-                conns = entity.get('_io_connections', [])
-                src_name = entity.get('name', '?')
+        total = sum(
+            len(e.properties.get('_io_connections', [])
+                if hasattr(e, 'properties')
+                else e.get('_io_connections', []))
+            for e in all_entities
+        )
 
-            for c in conns:
-                if isinstance(c, dict):
-                    tgt_name = c.get('target', '')
-                    tgt_id   = c.get('target_id')
-                    out_pin  = c.get('output', '?')
-                else:
-                    tgt_name = getattr(c, 'target_name', '')
-                    tgt_id   = getattr(c, 'target_id', None)
-                    out_pin  = getattr(c, 'output_name', '?')
-
-                if tgt_id is not None:
-                    if tgt_id not in all_ids:
-                        broken.append(f"  {src_name}.{out_pin}  →  (ID:{tgt_id})  NOT FOUND")
-                elif tgt_name and tgt_name not in all_names:
-                    broken.append(f"  {src_name}.{out_pin}  →  \"{tgt_name}\"  NOT FOUND")
-
-        if broken:
-            QMessageBox.warning(
-                self, "Validate Connections",
-                "Broken connections found — target entity does not exist:\n\n"
-                + "\n".join(broken)
-            )
-        else:
-            total = sum(
-                len(e.properties.get('_io_connections', [])
-                    if hasattr(e, 'properties')
-                    else e.get('_io_connections', []))
-                for e in all_entities
-            )
+        if not problems:
             QMessageBox.information(
                 self, "Validate Connections",
                 f"All {total} connection(s) are valid. ✔"
             )
+            return
+
+        def _name(entity):
+            if hasattr(entity, 'properties'):
+                return entity.properties.get('name', '?')
+            return entity.get('name', '?')
+
+        # Missing targets first: a connection pointing at nothing is a broken
+        # map, while an unknown input is usually a typo in an otherwise sound one.
+        ordered = sorted(problems,
+                         key=lambda p: 0 if p[2] == PROBLEM_MISSING_TARGET else 1)
+        lines = [
+            "  %s.%s %s" % (_name(entity), conn.output_name, message)
+            for entity, conn, _code, message in ordered
+        ]
+        QMessageBox.warning(
+            self, "Validate Connections",
+            "%d of %d connection(s) have problems:\n\n%s"
+            % (len(problems), total, "\n".join(lines))
+        )
 
     def closeEvent(self, event):
         try:

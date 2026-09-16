@@ -265,8 +265,10 @@ class LogicThread(threading.Thread):
         # Logic Gate State
         self.gate_inputs = {}
         
-        # Timer states for logic_timer entities
-        self.timer_states: Dict[int, Dict[str, float]] = {}
+        # Countdown state for logic_timer entities, keyed by the timer's UUID
+        # (see LogicThread._timer_key) so it survives a save and can never be
+        # confused with another entity's.
+        self.timer_states: Dict[str, Dict[str, float]] = {}
 
         # Active light FadeIn/FadeOut transitions, keyed by id(light entity)
         self.light_fade_states: Dict[int, Dict[str, Any]] = {}
@@ -355,6 +357,10 @@ class LogicThread(threading.Thread):
         self._levelchanger_things = []
         self._monster_things = []
         self._monster_by_id = {}
+        self._timer_things = []
+        # Authored health per monster UUID, captured on play-mode enter so the
+        # Respawn input has a value to restore (see _reset_all_monsters).
+        self._monster_spawn_health: Dict[str, int] = {}
 
         # ── Portal transit state ───────────────────────────────────────────
         self._portal_cooldowns: Dict[int, float] = {}
@@ -458,6 +464,11 @@ class LogicThread(threading.Thread):
         # every entity in the level on every AI tick.
         self._monster_things = [t for t in self.things if MonsterThing and isinstance(t, MonsterThing)]
         self._monster_by_id = {id(t): t for t in self._monster_things}
+
+        # PERF: the timer list, for the same reason — _update_logic_timers is
+        # the one per-frame path the logic system has, and it should walk the
+        # timers, not the level.
+        self._timer_things = [t for t in self.things if LogicTimer and isinstance(t, LogicTimer)]
 
     def _find_entity_by_name(self, name: str):
         if not name:
@@ -1151,13 +1162,28 @@ class LogicThread(threading.Thread):
             self.monster_ai_thread = None
 
     def _reset_all_monsters(self, clear_dead=True):
-        """Reset all monster AI state. Called when entering or exiting play mode."""
+        """Reset all monster AI state. Called when entering or exiting play mode.
+
+        Also records each monster's authored health, keyed by UUID, so the
+        Respawn input has something to restore to: the live ``health`` property
+        is what damage mutates, so by the time a monster is dead the number the
+        map authored is gone.  One dict filled during a pass that already walks
+        every monster — no extra scan, and nothing new on the entity itself.
+        """
         self.monster_ai.monster_states = {}
         if not MonsterThing:
             return
+        if clear_dead:
+            self._monster_spawn_health = {}
         for thing in self.things:
             if not isinstance(thing, MonsterThing):
                 continue
+            if clear_dead:
+                try:
+                    self._monster_spawn_health[thing.properties.get('id')] = \
+                        int(thing.properties.get('health', 100))
+                except (TypeError, ValueError):
+                    pass
             thing.properties.pop('is_shooting', None)
             thing.properties.pop('_vel_y', None)
             if clear_dead:
@@ -1180,19 +1206,30 @@ class LogicThread(threading.Thread):
                 self._plugin_emit("player_spawn", start=thing)
                 break
     
+    @staticmethod
+    def _timer_key(thing):
+        """A timer's countdown is filed under its UUID, not its memory address.
+
+        ``id(thing)`` is not an identity: it changes on every load, so a
+        countdown could never be saved, and CPython reuses addresses, so a
+        freed entity's slot could be inherited by an unrelated one.
+        """
+        return thing.properties.get('id') or thing.properties.get('name', '')
+
     def _init_logic_timers(self):
         if not LogicTimer:
             return
-        for thing in self.things:
-            if isinstance(thing, LogicTimer):
-                if thing.properties.get('start_on', False):
-                    entity_id = id(thing)
-                    interval = float(thing.properties.get('interval', 1.0))
-                    thing.properties['timer_enabled'] = True
-                    self.timer_states[entity_id] = {
-                        'remaining': interval,
-                        'interval': interval
-                    }
+        for thing in self._timer_things:
+            if thing.properties.get('start_on', False):
+                try:
+                    interval = max(0.01, float(thing.properties.get('interval', 1.0)))
+                except (TypeError, ValueError):
+                    interval = 1.0
+                thing.properties['timer_enabled'] = True
+                self.timer_states[self._timer_key(thing)] = {
+                    'remaining': interval,
+                    'interval': interval
+                }
     
     def set_terrain(self, terrain):
         self.terrain = terrain
@@ -1917,26 +1954,48 @@ class LogicThread(threading.Thread):
     # =========================================================================
     
     def _update_logic_timers(self, delta: float):
-        if not LogicTimer:
+        """Advance the running timers.  The only clock Fio's logic has.
+
+        Walks a precomputed list of timer entities rather than isinstance-testing
+        every thing in the level each frame, and an *enabled* timer is the only
+        thing it touches — a level full of timers that are switched off costs a
+        flag read each, and a level with none costs nothing at all.
+
+        This is not a logic tick: no state is scanned, no condition is
+        evaluated, and nothing else in the logic system has a per-frame path.
+        Time is simply the one event source that has to come from somewhere.
+        """
+        if not self._timer_things:
             return
-        
-        for thing in self.things:
-            if not isinstance(thing, LogicTimer):
-                continue
+
+        for thing in self._timer_things:
             if not thing.properties.get('timer_enabled', False):
                 continue
-            entity_id = id(thing)
-            if entity_id not in self.timer_states:
-                interval = float(thing.properties.get('interval', 1.0))
-                self.timer_states[entity_id] = {
-                    'remaining': interval,
-                    'interval': interval
-                }
-            state = self.timer_states[entity_id]
+            key = self._timer_key(thing)
+            state = self.timer_states.get(key)
+            if state is None:
+                try:
+                    interval = max(0.01, float(thing.properties.get('interval', 1.0)))
+                except (TypeError, ValueError):
+                    interval = 1.0
+                state = {'remaining': interval, 'interval': interval}
+                self.timer_states[key] = state
             state['remaining'] -= delta
-            if state['remaining'] <= 0:
+            if state['remaining'] > 0:
+                continue
+
+            if self.io_manager:
+                self.io_manager.fire_output(thing, 'OnTimer')
+            # A one-shot timer stops itself rather than being stopped by the
+            # chain it drives, so a map does not have to remember to wire the
+            # Disable back — and OnFinished says it happened, for a chain that
+            # wants to know.
+            if thing.properties.get('one_shot', False):
+                thing.properties['timer_enabled'] = False
+                self.timer_states.pop(key, None)
                 if self.io_manager:
-                    self.io_manager.fire_output(thing, 'OnTimer')
+                    self.io_manager.fire_output(thing, 'OnFinished')
+            else:
                 state['remaining'] = state['interval']
 
     # =========================================================================

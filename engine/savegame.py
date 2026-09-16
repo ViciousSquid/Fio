@@ -187,6 +187,71 @@ def _public_state(state: dict) -> dict:
     return {k: v for k, v in state.items() if not str(k).startswith("_")}
 
 
+def _capture_pending_events(logic) -> list:
+    """The I/O events that are queued but have not fired yet.
+
+    A save taken while a delayed connection is in flight used to lose it: the
+    queue lived only in memory, so a door due to open three seconds later simply
+    never opened after a reload.  Events are stored with the time *remaining*
+    rather than the absolute fire time, because the manager's clock restarts
+    from zero on a fresh session and a stored deadline would be meaningless in
+    it — and with UUIDs rather than object references, so a target resolves in
+    the restored world the same way it would have in the old one.
+
+    Timers are not captured here; a timer's countdown is its own state (see
+    ``logic.timer_states``) and this is only the queue.
+    """
+    manager = getattr(logic, "io_manager", None)
+    if manager is None:
+        return []
+    now = float(getattr(manager, "current_time", 0.0))
+    events = []
+    for event in getattr(manager, "pending_events", []) or []:
+        try:
+            events.append({
+                "remaining": max(0.0, float(event.fire_time) - now),
+                "target_name": event.target_name,
+                "target_id": getattr(event, "target_id", "") or "",
+                "input": event.input_name,
+                "parameter": event.parameter,
+                "source_name": event.source_name,
+                "source_id": getattr(event, "source_id", "") or "",
+                "activator_id": getattr(event, "activator_id", "") or "",
+            })
+        except Exception:
+            continue
+    return events
+
+
+def _restore_pending_events(logic, events) -> None:
+    """Put a saved I/O queue back, rebasing every delay on the live clock."""
+    manager = getattr(logic, "io_manager", None)
+    if manager is None or not events:
+        return
+    try:
+        from editor.io_system import PendingEvent
+    except Exception:       # pragma: no cover - editor-less player builds
+        return
+    now = float(getattr(manager, "current_time", 0.0))
+    restored = []
+    for data in events:
+        try:
+            restored.append(PendingEvent(
+                fire_time=now + max(0.0, float(data.get("remaining", 0.0))),
+                target_name=data.get("target_name", ""),
+                input_name=data.get("input", ""),
+                parameter=data.get("parameter", ""),
+                source_name=data.get("source_name", ""),
+                connection=None,
+                target_id=data.get("target_id", "") or "",
+                source_id=data.get("source_id", "") or "",
+                activator_id=data.get("activator_id", "") or "",
+            ))
+        except Exception:
+            continue
+    manager.pending_events = restored
+
+
 def _thing_id(thing) -> str:
     try:
         return thing.properties.get("id", "")
@@ -285,6 +350,9 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "door_states": {str(i): _public_state(s) for i, s in getattr(logic, "door_states", {}).items()},
         "mover_states": {str(i): _public_state(s) for i, s in getattr(logic, "mover_states", {}).items()},
         "monster_states": monster_states,
+        "timer_states": {str(k): dict(s)
+                         for k, s in (getattr(logic, "timer_states", {}) or {}).items()},
+        "pending_io_events": _capture_pending_events(logic),
     }
 
     return {
@@ -631,6 +699,21 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
                 if mon is not None:
                     remapped[id(mon)] = _public_state(state)
             logic.monster_ai.monster_states = remapped
+    except Exception:
+        pass
+
+    # Logic-timer countdowns, keyed by the timer's UUID so they survive the
+    # reload the way every other piece of entity state does.
+    try:
+        saved_timers = runtime.get("timer_states", {}) or {}
+        logic.timer_states = {str(k): dict(s) for k, s in saved_timers.items()}
+    except Exception:
+        pass
+
+    # Delayed I/O still in flight.  Restored after the entity overlay, so the
+    # UUIDs these events name resolve against the world they will fire into.
+    try:
+        _restore_pending_events(logic, runtime.get("pending_io_events", []) or [])
     except Exception:
         pass
 

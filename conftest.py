@@ -93,15 +93,24 @@ def _isolate_process_singletons():
     """Undo the process-wide state a test can leave behind.
 
     Fio keeps several deliberate singletons: the plugin manager, the I/O
-    revision counter and its cached reverse index, and ``Thing._counters``
-    (which is what makes entity names unique).  A test that adds a connection or
-    places an entity changes what the *next* test sees, which is exactly the
-    kind of order dependence that makes a suite untrustworthy.  Everything here
-    is restored, not merely cleared, so a test that deliberately sets one of
-    them up still sees its own value.
+    revision counter and its cached reverse index, ``IO_REGISTRY`` (the
+    process-wide schema of every entity type's inputs and outputs), and
+    ``Thing._counters`` (which is what makes entity names unique).  A test that
+    adds a connection, registers an entity type or places an entity changes what
+    the *next* test sees, which is exactly the kind of order dependence that
+    makes a suite untrustworthy.  Everything here is restored, not merely
+    cleared, so a test that deliberately sets one of them up still sees its own
+    value.
+
+    ``IO_REGISTRY`` matters more than it looks: several tests register a fake
+    entity type to exercise the registration path, and a leftover fake is a type
+    declaring inputs that nothing implements — which is precisely what the I/O
+    conformance tests exist to catch, so a leak there shows up as a failure
+    about Fio's own entities.
     """
     io_system = sys.modules.get("editor.io_system")
     saved_rev = getattr(io_system, "_io_revision", None) if io_system else None
+    saved_registry = dict(io_system.IO_REGISTRY) if io_system else None
     counters = None
     things = sys.modules.get("editor.things")
     if things is not None:
@@ -120,6 +129,12 @@ def _isolate_process_singletons():
         io_system._target_index_key = None
         if saved_rev is not None:
             io_system._io_revision = saved_rev
+        if saved_registry is not None:
+            io_system.IO_REGISTRY.clear()
+            io_system.IO_REGISTRY.update(saved_registry)
+            # Derived from the registry, so it has to go back with it.
+            if hasattr(io_system, "_declared_outputs_cache"):
+                io_system._declared_outputs_cache.clear()
     things = sys.modules.get("editor.things")
     if things is not None and counters is not None:
         things.Thing._counters.clear()

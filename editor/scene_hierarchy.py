@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem, 
                              QMenu, QAction, QHeaderView, QAbstractItemView, 
-                             QPushButton, QHBoxLayout, QLabel, QFrame, QGridLayout)
+                             QPushButton, QHBoxLayout, QLabel, QFrame, QGridLayout,
+                             QLineEdit, QStyle)
 from PyQt5.QtGui import QIcon, QColor, QBrush, QFont, QPainter, QPixmap
 from PyQt5 import QtCore
 import os
@@ -42,7 +43,49 @@ class SceneHierarchy(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        
+
+        # Search box, above everything: on a level with a few hundred objects
+        # the hierarchy is the only place to find one by name, and scrolling is
+        # not finding.
+        self.search_box = QLineEdit()
+        # Just "Search": the box is narrow, and a longer hint was elided to
+        # "Search scene... (Ente..." — a placeholder that cannot be read whole
+        # is decoration, not help. The Enter behaviour is in the tooltip.
+        self.search_box.setPlaceholderText("Search")
+        self.search_box.setToolTip(
+            "Type part of a name or type, then press Enter to select every match")
+        # Qt's built-in clear button lives on the right; this one is on the
+        # left, next to where the eye already is, and only appears once there
+        # are results to clear.
+        self.search_box.setClearButtonEnabled(False)
+        self.search_box.setFixedHeight(38)
+        self.search_box.setStyleSheet("""
+            QLineEdit {
+                background-color: #1b1b1f;
+                color: #e0e0e0;
+                border: none;
+                border-bottom: 1px solid #425F5D;
+                padding: 6px 10px;
+            }
+            QLineEdit:focus { border-bottom: 1px solid #E4D00A; }
+        """)
+        self.search_box.returnPressed.connect(self.apply_search)
+        self.search_box.textChanged.connect(self._on_search_text_changed)
+
+        clear_icon = self.style().standardIcon(QStyle.SP_LineEditClearButton)
+        if clear_icon.isNull():          # not every style ships that one
+            clear_icon = self.style().standardIcon(QStyle.SP_DialogCloseButton)
+        self.clear_search_action = self.search_box.addAction(
+            clear_icon, QLineEdit.LeadingPosition)
+        self.clear_search_action.setToolTip("Clear the search")
+        self.clear_search_action.triggered.connect(self.clear_search)
+        self.clear_search_action.setVisible(False)
+
+        layout.addWidget(self.search_box)
+
+        #: Names matched by the last search, so a rebuilt tree keeps showing them.
+        self._search_matches = set()
+
         # Create sort button
         self.sort_button = QPushButton(f"Sort: {self.SORT_MODE_NAMES[self.sort_mode]}")
         self.sort_button.setFixedHeight(38)
@@ -123,155 +166,167 @@ class SceneHierarchy(QWidget):
             "circ_white.png": "white",
         }
 
-        # Create overview overlay (bottom third)
-        self.overview_overlay = QFrame()
-        self.overview_overlay.setFrameShape(QFrame.StyledPanel)
-        self.overview_overlay.setStyleSheet("""
-            QFrame {
-                background-color: #2b2b2b;
-                color: #f0f0f0;
-                border: 1px solid #555;
-                border-bottom: none;
-            }
-            QLabel {
-                color: #f0f0f0;
-                background-color: transparent;
-                border: none;
-            }
-        """)
-        content_layout.addWidget(self.overview_overlay, stretch=1)
-        self.overview_overlay.hide()
-
-        # Build overlay layout
-        overlay_layout = QVBoxLayout(self.overview_overlay)
-        overlay_layout.setContentsMargins(12, 12, 12, 12)
-        overlay_layout.setSpacing(8)
-
-        # Header row with arrow indicator
-        header_row = QHBoxLayout()
-        header_row.setSpacing(6)
-        
-        self.arrow_label = QLabel("▲")
-        self.arrow_label.setStyleSheet("color: #FF8C00; font-size: 14px;")
-        header_row.addWidget(self.arrow_label)
-        
-        header_label = QLabel("Overview")
-        header_font = QFont()
-        header_font.setBold(True)
-        header_font.setPointSize(14)
-        header_label.setFont(header_font)
-        header_label.setStyleSheet("color: #FF8C00;")
-        header_row.addWidget(header_label)
-        header_row.addStretch()
-        
-        overlay_layout.addLayout(header_row)
-
-        # Map name label (populated by _update_overview_metrics)
-        self.map_name_label = QLabel("Untitled")
-        map_name_font = QFont()
-        map_name_font.setBold(True)
-        map_name_font.setPointSize(10)
-        self.map_name_label.setFont(map_name_font)
-        self.map_name_label.setStyleSheet("color: #585F2A;")
-        overlay_layout.addWidget(self.map_name_label)
-
-        metrics_grid = QGridLayout()
-        metrics_grid.setSpacing(8)
-        self.overview_labels = {}
-
-        metrics = [
-            ("Lights", "lights"),
-            ("Brushes", "brushes"),
-            ("Things", "things"),
-            ("Models", "models"),
-            ("Movers", "movers"),
-            ("Monsters", "monsters"),
-            ("Triggers", "triggers"),
-            ("Links", "connections"),
-        ]
-
-        for i, (name, key) in enumerate(metrics):
-            name_label = QLabel(f"{name}:")
-            name_label.setStyleSheet("color: #aaaaaa;")
-            value_label = QLabel("0")
-            value_label.setStyleSheet("color: #ffffff; font-weight: bold;")
-            metrics_grid.addWidget(name_label, i, 0)
-            metrics_grid.addWidget(value_label, i, 1)
-            self.overview_labels[key] = value_label
-
-        overlay_layout.addLayout(metrics_grid)
-        overlay_layout.addStretch()
-
         layout.addWidget(self.content_container)
 
-        # Create metrics banner at bottom (taller)
-        self.metrics_banner = QPushButton("Overview ▲")
-        self.metrics_banner.setFixedHeight(38)
-        self.metrics_banner.setStyleSheet("""
-            QPushButton {
-                background-color: #000000;
-                color: white;
-                border: none;
-                border-top: 1px solid #333;
-                padding: 4px 8px;
-                text-align: center;
-            }
-            QPushButton:hover {
-                background-color: #1a1a1a;
-            }
-            QPushButton:pressed {
-                background-color: #333333;
-            }
-        """)
-        self.metrics_banner.clicked.connect(self._toggle_overview)
-        layout.addWidget(self.metrics_banner)
+    # =====================================================================
+    # SEARCH
+    # =====================================================================
 
-    def _toggle_overview(self):
-        """Toggle the overview overlay on/off."""
-        if self.overview_overlay.isVisible():
-            self.overview_overlay.hide()
-            self.metrics_banner.setText("Overview ▲")
+    @staticmethod
+    def _searchable_text(obj, display_name):
+        """Everything a search should match on for one object.
+
+        The display name, the authored name and the entity type — so "monster"
+        finds every monster and "door" finds both a brush called ``door_main``
+        and every door brush, which is what someone typing either actually
+        wants.
+        """
+        parts = [display_name or ""]
+        if isinstance(obj, dict):
+            parts.append(obj.get("name", "") or "")
+            for flag, label in (("is_trigger", "trigger"), ("is_door", "door"),
+                                ("is_mover", "mover"), ("is_water", "water"),
+                                ("is_fog", "fog")):
+                if obj.get(flag):
+                    parts.append(label)
+            if not any(obj.get(f) for f, _ in (("is_trigger", 0), ("is_door", 0),
+                                               ("is_mover", 0), ("is_water", 0),
+                                               ("is_fog", 0))):
+                parts.append("brush")
         else:
-            self._update_overview_metrics()
-            self.overview_overlay.show()
-            self.metrics_banner.setText("Overview ▼")
+            props = getattr(obj, "properties", {}) or {}
+            parts.append(props.get("name", "") or "")
+            parts.append(props.get("type", "") or "")
+            parts.append(type(obj).__name__)
+        return " ".join(parts).lower()
 
-    def _update_overview_metrics(self):
-        """Calculate and display scene metrics in the overview overlay."""
-        # Update map name display
-        if hasattr(self.main_window, 'file_path') and self.main_window.file_path:
-            map_name = os.path.basename(self.main_window.file_path)
-            self.map_name_label.setText(f"{map_name}")
-            self.map_name_label.setStyleSheet("color: #A7B454;")
-        else:
-            self.map_name_label.setText("Untitled")
-            self.map_name_label.setStyleSheet("color: #A7B454;")
+    def find_matches(self, text):
+        """Every object whose name or type contains *text*.
 
+        Substring matching, not prefix or exact: someone looking for a switch
+        types "switch", not the whole of ``door_switch_north_02``.
+        """
+        needle = (text or "").strip().lower()
+        if not needle:
+            return []
+        matches = []
+        for index, brush in enumerate(self.main_window.state.brushes):
+            name = self._get_brush_display_name(brush, index)
+            if needle in self._searchable_text(brush, name):
+                matches.append(brush)
+        for thing in self.main_window.state.things:
+            name = thing.properties.get("name", "") if hasattr(thing, "properties") else ""
+            if needle in self._searchable_text(thing, name):
+                matches.append(thing)
+        return matches
+
+    def _on_search_text_changed(self, text):
+        """Clearing the box drops the highlight; typing waits for Enter.
+
+        Selecting on every keystroke would rebuild the tree and move the 2D
+        views on each letter typed, which is unusable.
+        """
+        if not (text or "").strip():
+            self._search_matches = set()
+            self._apply_search_styling()
+            self._update_clear_button()
+
+    def _update_clear_button(self):
+        """Show the clear button only while results are on screen.
+
+        It clears a *result*, not the text — offering it the moment someone
+        starts typing would put a button under the cursor that undoes work
+        nobody has done yet.
+        """
+        action = getattr(self, 'clear_search_action', None)
+        if action is not None:
+            action.setVisible(bool(self._search_matches))
+
+    def clear_search(self):
+        """Empty the box and drop the highlight and the selection with it."""
+        self._search_matches = set()
+        self.search_box.clear()
+        self._apply_search_styling()
+        self._update_clear_button()
+        self.main_window.set_selected_objects([])
+
+    def apply_search(self):
+        """Select every match and show how many there were.
+
+        Selecting them is what makes the result useful rather than decorative:
+        the selection is the editor's own, so the matches light up in the 2D and
+        3D views too, and Focus On works on the lot.
+        """
+        text = self.search_box.text()
+        matches = self.find_matches(text)
+        self._search_matches = {id(obj) for obj in matches}
+
+        if not matches:
+            self._apply_search_styling()
+            self._update_clear_button()
+            if (text or "").strip():
+                self.main_window.show_toast("No object matches '%s'" % text.strip(),
+                                            is_error=True)
+            return
+
+        self.main_window.set_selected_objects(matches)
+        self._apply_search_styling()
+        self._update_clear_button()
+        first = self._tree_item_for(matches[0])
+        if first is not None:
+            self.tree.scrollToItem(first)
+        self.main_window.show_toast(
+            "%d match%s for '%s'" % (len(matches), "" if len(matches) == 1 else "es",
+                                     text.strip()))
+
+    def _tree_item_for(self, obj):
+        """The tree row standing for *obj*, or None."""
         state = self.main_window.state
-        
-        lights = sum(1 for t in state.things if isinstance(t, Light))
-        brushes = len(state.brushes)
-        things = len(state.things)
-        models = sum(1 for t in state.things if isinstance(t, Model))
-        movers = sum(1 for b in state.brushes if b.get('is_mover', False))
-        monsters = sum(1 for t in state.things if isinstance(t, Monster))
-        triggers = sum(1 for b in state.brushes if b.get('is_trigger', False))
-        
-        connections = 0
-        if IO_AVAILABLE:
-            for brush in state.brushes:
-                connections += len(get_connections(brush))
-            for thing in state.things:
-                connections += len(get_connections(thing))
-        
-        self.overview_labels['lights'].setText(str(lights))
-        self.overview_labels['brushes'].setText(str(brushes))
-        self.overview_labels['things'].setText(str(things))
-        self.overview_labels['models'].setText(str(models))
-        self.overview_labels['movers'].setText(str(movers))
-        self.overview_labels['monsters'].setText(str(monsters))
-        self.overview_labels['triggers'].setText(str(triggers))
-        self.overview_labels['connections'].setText(str(connections))
+        for i in range(self.tree.topLevelItemCount()):
+            header = self.tree.topLevelItem(i)
+            for j in range(header.childCount()):
+                item = header.child(j)
+                data = item.data(0, Qt.UserRole)
+                if not data:
+                    continue
+                kind, index = data
+                try:
+                    if kind == 'brush' and state.brushes[index] is obj:
+                        return item
+                    if kind == 'thing' and state.things[index] is obj:
+                        return item
+                except (IndexError, TypeError):
+                    continue
+        return None
+
+    def _apply_search_styling(self):
+        """Tint every matching row, so several matches are all visible at once.
+
+        Selection alone is not enough when the matches are scattered: only the
+        rows on screen show it, and the count in the toast does not say *which*.
+        """
+        state = self.main_window.state
+        for i in range(self.tree.topLevelItemCount()):
+            header = self.tree.topLevelItem(i)
+            for j in range(header.childCount()):
+                item = header.child(j)
+                data = item.data(0, Qt.UserRole)
+                if not data:
+                    continue
+                kind, index = data
+                obj = None
+                try:
+                    if kind == 'brush':
+                        obj = state.brushes[index]
+                    elif kind == 'thing':
+                        obj = state.things[index]
+                except (IndexError, TypeError):
+                    obj = None
+                matched = obj is not None and id(obj) in self._search_matches
+                for column in (0, 1):
+                    item.setBackground(column,
+                                       QBrush(QColor("#4a4320")) if matched
+                                       else QBrush(Qt.transparent))
 
     def cycle_sort_mode(self):
         """Cycle through sort modes and refresh."""
@@ -502,7 +557,12 @@ class SceneHierarchy(QWidget):
 
             if thing_obj in selected_objects:
                 item.setSelected(True)
-                
+
+        # The tree is rebuilt on nearly every edit, so the search highlight has
+        # to be reapplied or it vanishes the moment anything else happens.
+        if self._search_matches:
+            self._apply_search_styling()
+
         self.tree.blockSignals(False)
 
         # Scroll to the first selected item
@@ -654,6 +714,40 @@ class SceneHierarchy(QWidget):
                 self.main_window.set_selected_objects([])
                 self.main_window.update_all_ui()
             return
+
+        # -----------------------------------------------------------------
+        # Focus On — every brush/thing menu, never terrain
+        # -----------------------------------------------------------------
+        # Deliberately placed after the terrain branch has returned: terrain has
+        # no position to centre on (it is the whole world), so offering to focus
+        # on it would be offering something that cannot work.
+        #
+        # Connected rather than compared against the exec_() result, because the
+        # branches below each run their own exec_ and compare against their own
+        # actions; a connected action fires from whichever of them runs, and the
+        # branch's comparisons simply all miss.
+        focus_targets = []
+        state = self.main_window.state
+        for _item, index in brush_items:
+            try:
+                focus_targets.append(state.brushes[index])
+            except IndexError:
+                pass
+        for _item, index in thing_items:
+            try:
+                focus_targets.append(state.things[index])
+            except IndexError:
+                pass
+
+        if focus_targets:
+            label = ("Focus on" if len(focus_targets) == 1
+                     else "Focus on %d objects" % len(focus_targets))
+            focus_action = menu.addAction(label)
+            focus_action.setToolTip("Centre the 2D and 3D views on this object")
+            focus_action.triggered.connect(
+                lambda _checked=False, targets=list(focus_targets):
+                self.focus_on(targets))
+            menu.addSeparator()
 
         # If multiple items of the same type selected, show bulk operations
         if len(brush_items) > 1 and len(thing_items) == 0:
@@ -847,6 +941,31 @@ class SceneHierarchy(QWidget):
             return
 
         self.main_window.set_selected_objects(selected_objects)
+
+    def focus_on(self, targets):
+        """Centre the 2D and 3D views on one object, or on a group of them.
+
+        For several objects the views centre on the middle of the whole set and
+        pull back far enough to hold it, which is what "focus on these" means —
+        framing only the first would hide the rest.
+        """
+        targets = [t for t in targets if t is not None]
+        if not targets:
+            return
+        if len(targets) == 1:
+            self.main_window.focus_on_object(targets[0])
+            return
+
+        centres, radius = [], 0.0
+        for obj in targets:
+            centre, r = self.main_window._object_focus_target(obj)
+            centres.append(centre)
+            radius = max(radius, r)
+        mid = [sum(c[axis] for c in centres) / len(centres) for axis in range(3)]
+        spread = max(
+            (max(c[axis] for c in centres) - min(c[axis] for c in centres))
+            for axis in range(3))
+        self.main_window.focus_on_bounds(mid, max(radius, spread * 0.5))
 
     def handle_double_click(self, item, column):
         """Double-clicking the terrain item opens the terrain editor."""

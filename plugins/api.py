@@ -285,14 +285,15 @@ class GlobalStore:
     """Process-wide, cross-level key/value storage for plugins.
 
     When the editor package is present this binds to the *same* persistent
-    registry the map ``LogicKeyValueStore`` entities use, so a plugin's globals
+    registry the map ``LogicState`` entities use, so a plugin's globals
     live alongside — and can share stores with — map state (persisting across
     level loads within a session). In the dependency-light player the editor is
     absent, so it falls back to a plain process-local dict-of-dicts with the
-    same API. Values are stored as strings, matching the map store.
+    same API. Values are read back as strings; a map store may hold them
+    typed, and this converts on the way out rather than keeping a copy.
 
     Keys are grouped by *store* name (default ``"plugins"``); pass a store name
-    a map's ``LogicKeyValueStore`` uses to read/write the exact same values.
+    a map's ``LogicState`` uses to read/write the exact same values.
     """
 
     #: Fallback registry used when the editor store is unavailable (player).
@@ -300,13 +301,34 @@ class GlobalStore:
 
     def _registry(self) -> dict:
         try:
-            from editor.things import LogicKeyValueStore
-            return LogicKeyValueStore._persistent_registry
+            from editor.things import LogicState
+            return LogicState._persistent_registry
         except Exception:
             return GlobalStore._fallback
 
+    @staticmethod
+    def _as_text(value):
+        """A stored value as the string this API has always returned.
+
+        Map stores hold typed values as of 2.4 — an integer counter really is
+        an ``int`` — but this API's contract is strings, and a plugin written
+        against it would break on a value a map happened to set.  Converting on
+        the way out keeps that contract without needing a second copy of the
+        data: there is still exactly one registry.
+        """
+        if value is None or isinstance(value, str):
+            return value
+        try:
+            from editor.state_values import format_value
+            return format_value(value)
+        except Exception:
+            return str(value)
+
     def get(self, key, default=None, store: str = "plugins"):
-        return self._registry().get(str(store), {}).get(str(key), default)
+        data = self._registry().get(str(store), {})
+        if str(key) not in data:
+            return default
+        return self._as_text(data[str(key)])
 
     def set(self, key, value, store: str = "plugins") -> None:
         self._registry().setdefault(str(store), {})[str(key)] = str(value)
@@ -319,7 +341,8 @@ class GlobalStore:
         return False
 
     def all(self, store: str = "plugins") -> dict:
-        return dict(self._registry().get(str(store), {}))
+        return {k: self._as_text(v)
+                for k, v in self._registry().get(str(store), {}).items()}
 
     def keys(self, store: str = "plugins") -> list:
         return list(self._registry().get(str(store), {}).keys())

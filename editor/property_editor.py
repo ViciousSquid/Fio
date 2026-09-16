@@ -9,7 +9,8 @@ from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QFont
 from editor.things import (Thing, Light, Pickup, Monster, Model, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
-                           LogicKeyValueStore)
+                           LogicState)
+from editor import state_values as _sv
 from engine.brush_geometry import GEO_RUNTIME_KEYS
 from engine.monster_constants import MONSTER_VARIANTS
 from editor.tooltips import set_tooltips_enabled
@@ -1401,7 +1402,7 @@ class PropertyEditor(QWidget):
             self._build_logic_camera_group(tab_layout, thing)
         if isinstance(thing, LogicSpawner):
             self._build_spawner_group(tab_layout, thing)
-        if isinstance(thing, LogicKeyValueStore):
+        if isinstance(thing, LogicState):
             self._build_keyvalue_group(tab_layout, thing)
         if isinstance(thing, Monster):
             self._build_monster_groups(tab_layout, thing)
@@ -1583,7 +1584,7 @@ class PropertyEditor(QWidget):
                 continue
             if isinstance(thing, LogicSpawner) and key in ('spawn_type', 'target_node', 'max_spawn', 'spawn_properties'):
                 continue
-            if isinstance(thing, LogicKeyValueStore) and key in ('store_name', 'initial_data', '_runtime_data'):
+            if isinstance(thing, LogicState) and key in ('store_name', 'initial_data', '_runtime_data', 'capacity'):
                 continue
             if is_pickup and key in ('key_name', 'custom_sprite', 'respawns', 'respawn_time'):
                 continue
@@ -2090,21 +2091,89 @@ class PropertyEditor(QWidget):
         tab_layout.addWidget(monster_group)
 
 
-    def _build_keyvalue_group(self, tab_layout, thing):
-        """Editable LogicKeyValueStore designer defaults + live runtime display.
+    # -- LogicState panel ---------------------------------------------------
+    #
+    # One table, one row per key, rather than the two disjoint lists this panel
+    # used to show (designer defaults above, live values below).  A designer
+    # asking "what is `door_unlocked` right now?" had to read both and work out
+    # which one won; now the row says, in a State column:
+    #
+    #   default  - a designer default, not written during play
+    #   set      - a live value that matches the default
+    #   changed  - a live value that differs from the default
+    #   runtime  - a live value with no designer default at all
+    #
+    # That last one matters: a key a map creates at run time (a counter, an
+    # object-local flag) had no row in the old panel at all, so the values that
+    # actually drive a level were the ones you could not see.
 
-        The store name and the initial key/value pairs are edited directly here
-        (they were previously read-only, so a designer had to hand-edit the map
-        file to seed a store). The live runtime/persistent values remain shown
-        read-only below.
+    #: Column order of the state table.
+    _STATE_COLUMNS = ("Key", "Type", "Value", "State")
+
+    _STATE_COLOURS = {
+        'default': "#888888",
+        'set':     "#88FF88",
+        'changed': "#F08000",
+        'runtime': "#88AAFF",
+    }
+
+    @staticmethod
+    def _state_rows(thing):
+        """One row per key, defaults and live values reconciled.
+
+        Returns ``[(key, type name, display value, state), ...]`` sorted by key,
+        so the table order is stable and two stores with the same contents look
+        the same.
         """
-        group = QGroupBox("Key/Value Store")
+        defaults = thing.properties.get('initial_data', {})
+        if not isinstance(defaults, dict):
+            defaults = {}
+        live = getattr(thing, '_runtime_data', {}) or {}
+
+        rows = []
+        for key in sorted(set(defaults) | set(live), key=str):
+            if key in live:
+                value = live[key]
+                if key not in defaults:
+                    state = 'runtime'
+                elif _sv.format_value(defaults[key]) == _sv.format_value(value):
+                    state = 'set'
+                else:
+                    state = 'changed'
+            else:
+                value = defaults[key]
+                state = 'default'
+            rows.append((str(key), _sv.type_of(value),
+                         _sv.format_value(value), state))
+        return rows
+
+    @staticmethod
+    def _unused_state_key(existing):
+        """An unused key name, so adding a row twice does not collide.
+
+        The panel used to insert a literal ``new_key`` every time, and the
+        second one silently replaced the first when the table was written back.
+        """
+        taken = set(existing)
+        if 'new_key' not in taken:
+            return 'new_key'
+        index = 2
+        while ('new_key_%d' % index) in taken:
+            index += 1
+        return 'new_key_%d' % index
+
+    def _build_keyvalue_group(self, tab_layout, thing):
+        """The LogicState editor: store name, capacity, and the value table."""
+        # No group title and no "State:" caption above the table: the panel
+        # already sits under the entity's own heading, and the table's Key /
+        # Type / Value / State columns say what it is. Two more labels saying
+        # the same thing cost a row of height each and add nothing.
+        group = QGroupBox()
         group.setStyleSheet(_Style.group_box("#26A69A", "#1a2f2d"))
         layout = QVBoxLayout(group)
         layout.setSpacing(6)
         layout.setContentsMargins(8, 8, 8, 8)
 
-        # Refresh button — pinned to the very top (reloads live runtime values).
         refresh_btn = QPushButton("🔄 Refresh Live Values")
         refresh_btn.setStyleSheet("""
             QPushButton { background-color: #2a5a5a; color: white; border: 1px solid #26A69A;
@@ -2115,14 +2184,14 @@ class PropertyEditor(QWidget):
         refresh_btn.clicked.connect(lambda: self._refresh_keyvalue_group(thing))
         layout.addWidget(refresh_btn)
 
-        # Store name (editable — stores sharing a name sync across levels)
+        # Store name — stores sharing a name are the same store, across levels.
         store_name = thing.properties.get('store_name', thing.properties.get('name', ''))
         name_row = QHBoxLayout()
         name_row.setSpacing(4)
-        name_row.addWidget(QLabel("<b>Store Name:</b>"))
+        name_row.addWidget(QLabel("<b>Store:</b>"))
         name_edit = QLineEdit(str(store_name))
-        name_edit.setToolTip("Stores that share a name sync their values across "
-                             "level transitions.")
+        name_edit.setToolTip("Stores that share a name share their values, across "
+                             "level transitions and with plugins.")
         name_edit.setStyleSheet("QLineEdit { color: #88FF88; }")
 
         def _on_name():
@@ -2131,19 +2200,26 @@ class PropertyEditor(QWidget):
         name_row.addWidget(name_edit)
         layout.addLayout(name_row)
 
-        # --- Initial data (designer defaults) — an EDITABLE table ---
-        layout.addWidget(QLabel("<b>Initial Data (Designer Defaults):</b>"))
-        initial_data = thing.properties.get('initial_data', {})
-        if not isinstance(initial_data, dict):
-            initial_data = {}
-            thing.properties['initial_data'] = initial_data
+        cap = getattr(thing, 'capacity', getattr(thing, 'MAX_PAIRS', 25))
+        cap_row = QHBoxLayout()
+        cap_row.setSpacing(4)
+        cap_row.addWidget(QLabel("<b>Capacity:</b>"))
+        cap_spin = QSpinBox()
+        cap_spin.setRange(1, 4096)
+        cap_spin.setValue(int(cap))
+        cap_spin.setToolTip("How many keys this store accepts before writes are "
+                            "refused and OnStoreFull fires.")
+        cap_spin.valueChanged.connect(
+            lambda v: thing.properties.__setitem__('capacity', int(v)))
+        cap_row.addWidget(cap_spin)
+        cap_row.addStretch()
+        layout.addLayout(cap_row)
 
-        kv_table = QTableWidget(0, 2)
-        kv_table.setHorizontalHeaderLabels(["Key", "Value"])
+        kv_table = QTableWidget(0, len(self._STATE_COLUMNS))
+        kv_table.setHorizontalHeaderLabels(list(self._STATE_COLUMNS))
         kv_table.horizontalHeader().setStretchLastSection(True)
         kv_table.verticalHeader().setVisible(False)
-        kv_table.setMaximumHeight(180)
-        # Dark theming so an empty table reads as a panel, not a glaring white bar.
+        kv_table.setMaximumHeight(220)
         kv_table.setStyleSheet("""
             QTableWidget { background-color: #1e2b2a; alternate-background-color: #24322f;
                            color: #e0e0e0; gridline-color: #3a4a48; border: 1px solid #2f4340;
@@ -2154,41 +2230,80 @@ class PropertyEditor(QWidget):
         """)
         kv_table.setAlternatingRowColors(True)
         kv_table.setShowGrid(True)
-        self._kv_loading = True
-        for r, (k, v) in enumerate(sorted(initial_data.items())):
-            kv_table.insertRow(r)
-            kv_table.setItem(r, 0, QTableWidgetItem(str(k)))
-            kv_table.setItem(r, 1, QTableWidgetItem(str(v)))
-        self._kv_loading = False
+
+        initial_data = thing.properties.get('initial_data', {})
+        if not isinstance(initial_data, dict):
+            initial_data = {}
+            thing.properties['initial_data'] = initial_data
+
+        def _fill():
+            """Draw the current rows.  Guarded so filling is not a user edit."""
+            self._kv_loading = True
+            kv_table.setRowCount(0)
+            for r, (key, type_name, value, state) in enumerate(self._state_rows(thing)):
+                kv_table.insertRow(r)
+                kv_table.setItem(r, 0, QTableWidgetItem(key))
+
+                # Type is derived from the value, never stored separately: a
+                # second place to say what type a value is, is a second place
+                # for it to be wrong.
+                type_item = QTableWidgetItem(type_name)
+                type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
+                type_item.setForeground(QColor("#9fded6"))
+                type_item.setToolTip(
+                    "Inferred from the value. Write 5 for an integer, true for a "
+                    "boolean, or name the type in an I/O parameter (key:string=007).")
+                kv_table.setItem(r, 1, type_item)
+
+                kv_table.setItem(r, 2, QTableWidgetItem(value))
+
+                state_item = QTableWidgetItem(state)
+                state_item.setFlags(state_item.flags() & ~Qt.ItemIsEditable)
+                state_item.setForeground(QColor(self._STATE_COLOURS.get(state, "#888")))
+                state_item.setToolTip({
+                    'default': "A designer default. Nothing has written this during play.",
+                    'set':     "Written during play, and equal to the designer default.",
+                    'changed': "Written during play, and different from the designer default.",
+                    'runtime': "Created during play. This key has no designer default.",
+                }.get(state, ""))
+                kv_table.setItem(r, 3, state_item)
+            self._kv_loading = False
+            self._update_kv_count(thing.properties.get('initial_data', {}), int(cap))
 
         def _write_back_kv(*_):
+            """Table -> designer defaults.
+
+            Only the defaults are authored here; live values belong to the
+            running session and are shown, not edited, so a panel left open
+            during play cannot quietly rewrite the world.
+            """
             if getattr(self, '_kv_loading', False):
                 return
             data = {}
             for r in range(kv_table.rowCount()):
                 kcell = kv_table.item(r, 0)
-                vcell = kv_table.item(r, 1)
+                vcell = kv_table.item(r, 2)
                 key = kcell.text().strip() if kcell else ""
                 if not key:
                     continue
-                data[key] = vcell.text() if vcell else ""
-            # Respect the store's capacity (MAX_PAIRS) — trim extras, warn once.
-            cap = getattr(thing, 'MAX_PAIRS', 25)
-            if len(data) > cap:
-                for extra in list(data.keys())[cap:]:
+                data[key] = _sv.parse(vcell.text() if vcell else "")
+            capacity = int(cap)
+            if len(data) > capacity:
+                for extra in list(data.keys())[capacity:]:
                     del data[extra]
-                debug_log("Warning", f"Key/Value store is full ({cap} pairs); extra keys dropped.")
+                debug_log("Warning",
+                          f"Logic state store is full ({capacity} keys); extra keys dropped.")
             thing.properties['initial_data'] = data
-            self._update_kv_count(data, cap)
+            self._update_kv_count(data, capacity)
 
+        _fill()
         kv_table.itemChanged.connect(_write_back_kv)
         layout.addWidget(kv_table)
         self._widgets['kv_table'] = kv_table
 
-        # Add / remove row
         btn_row = QHBoxLayout()
         btn_row.setSpacing(4)
-        add_btn = QPushButton("➕ Add Pair")
+        add_btn = QPushButton("➕ Add Key")
         rem_btn = QPushButton("➖ Remove Selected")
         for b in (add_btn, rem_btn):
             b.setStyleSheet("""
@@ -2197,16 +2312,24 @@ class PropertyEditor(QWidget):
                 QPushButton:hover { background-color: #3a7a7a; }
             """)
 
-        def _add_pair(key="new_key", value="value"):
-            cap = getattr(thing, 'MAX_PAIRS', 25)
-            if kv_table.rowCount() >= cap:
-                debug_log("Warning", f"Key/Value store is full ({cap} pairs).")
+        def _add_pair():
+            capacity = int(cap)
+            if kv_table.rowCount() >= capacity:
+                debug_log("Warning", f"Logic state store is full ({capacity} keys).")
                 return
+            existing = [kv_table.item(r, 0).text() if kv_table.item(r, 0) else ""
+                        for r in range(kv_table.rowCount())]
             self._kv_loading = True
             r = kv_table.rowCount()
             kv_table.insertRow(r)
-            kv_table.setItem(r, 0, QTableWidgetItem(str(key)))
-            kv_table.setItem(r, 1, QTableWidgetItem(str(value)))
+            kv_table.setItem(r, 0, QTableWidgetItem(self._unused_state_key(existing)))
+            type_item = QTableWidgetItem("string")
+            type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
+            kv_table.setItem(r, 1, type_item)
+            kv_table.setItem(r, 2, QTableWidgetItem("value"))
+            state_item = QTableWidgetItem("default")
+            state_item.setFlags(state_item.flags() & ~Qt.ItemIsEditable)
+            kv_table.setItem(r, 3, state_item)
             self._kv_loading = False
             kv_table.setCurrentCell(r, 0)
             _write_back_kv()
@@ -2217,7 +2340,7 @@ class PropertyEditor(QWidget):
                 kv_table.removeRow(row)
                 _write_back_kv()
 
-        add_btn.clicked.connect(lambda: _add_pair())
+        add_btn.clicked.connect(_add_pair)
         rem_btn.clicked.connect(_remove_selected)
         btn_row.addWidget(add_btn)
         btn_row.addWidget(rem_btn)
@@ -2227,74 +2350,19 @@ class PropertyEditor(QWidget):
         self._kv_count_lbl = QLabel("")
         self._kv_count_lbl.setStyleSheet("QLabel { color: #888; font-size: 10px; }")
         layout.addWidget(self._kv_count_lbl)
-        self._update_kv_count(initial_data, getattr(thing, 'MAX_PAIRS', 25))
-
-        # Separator before the live/runtime view
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setStyleSheet("QFrame { color: #555; }")
-        layout.addWidget(line)
-
-        # Runtime data (live values)
-        runtime_data = getattr(thing, '_runtime_data', {})
-        persistent = getattr(thing.__class__, '_persistent_registry', {})
-
-        # Check persistent registry for this store
-        persistent_data = persistent.get(store_name, {})
-
-        if runtime_data or persistent_data:
-            layout.addWidget(QLabel("<b>Runtime Values (Live):</b>"))
-
-            # Show runtime data (authoritative for this instance)
-            all_keys = set(runtime_data.keys()) | set(persistent_data.keys())
-            for k in sorted(all_keys):
-                row = QHBoxLayout()
-                row.setSpacing(4)
-
-                # Key label
-                key_lbl = QLabel(f"  {k}:")
-                key_lbl.setStyleSheet("QLabel { color: #F08000; min-width: 100px; }")
-
-                # Value with source indicator
-                if k in runtime_data:
-                    val_str = str(runtime_data[k])
-                    source = "runtime"
-                else:
-                    val_str = str(persistent_data[k])
-                    source = "persistent"
-
-                val_lbl = QLabel(val_str)
-                if source == "runtime":
-                    val_lbl.setStyleSheet("QLabel { color: #00FF00; font-weight: bold; }")
-                else:
-                    val_lbl.setStyleSheet("QLabel { color: #88AAFF; }")
-
-                row.addWidget(key_lbl)
-                row.addWidget(val_lbl)
-                row.addStretch()
-                layout.addLayout(row)
-
-            # Count
-            count_lbl = QLabel(f"<i>{len(all_keys)} / {thing.MAX_PAIRS} pairs stored</i>")
-            count_lbl.setStyleSheet("QLabel { color: #888; font-size: 10px; }")
-            layout.addWidget(count_lbl)
-        else:
-            empty_lbl = QLabel("<i>No values stored yet.</i>")
-            empty_lbl.setStyleSheet("QLabel { color: #888; font-style: italic; }")
-            layout.addWidget(empty_lbl)
-
+        self._update_kv_count(initial_data, int(cap))
 
         tab_layout.addWidget(group)
         self._widgets['keyvalue_group'] = group
 
     def _update_kv_count(self, data, cap):
-        """Update the '<n> / <cap> designer pairs' hint under the KeyValue table."""
+        """Update the '<n> / <cap> designer keys' hint under the state table."""
         lbl = getattr(self, '_kv_count_lbl', None)
         if lbl is not None:
-            lbl.setText(f"<i>{len(data)} / {cap} designer pairs</i>")
+            lbl.setText(f"<i>{len(data)} / {cap} designer keys</i>")
 
     def _refresh_keyvalue_group(self, thing):
-        """Refresh the keyvalue display by rebuilding the property editor."""
+        """Refresh the state display by rebuilding the property editor."""
         self.set_object(thing, force=True)
 
     def _build_monster_groups(self, tab_layout, thing):

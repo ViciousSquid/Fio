@@ -7,7 +7,8 @@ an input is called on an entity.
 Handler signature: (entity, parameter: str, logic_thread) -> None
 """
 
-from .io_system import IOManager
+from .io_system import IOManager, authored_flag, set_authored_flag
+from . import state_values as _sv
 import glm
 import os
 
@@ -174,10 +175,14 @@ def register_all_input_handlers(io_manager: IOManager):
             }
         
         state = logic.door_states[idx]
-        if state['state'] == 'closed':
+        # A door that is closing or has been stopped part-way is not open, and
+        # Open should send it back up rather than do nothing — the old check
+        # accepted only 'closed', so a door caught mid-close ignored the input
+        # until it had finished shutting.
+        if state['state'] in ('closed', 'closing', 'stopped'):
             state['state'] = 'opening'
             logic.io_manager.fire_output(entity, 'OnOpen')
-    
+
     def door_close(entity, param, logic):
         """Close a door brush."""
         idx = _get_brush_index(entity, logic)
@@ -185,9 +190,47 @@ def register_all_input_handlers(io_manager: IOManager):
             return
         
         state = logic.door_states[idx]
-        if state['state'] == 'open':
+        if state['state'] in ('open', 'opening', 'stopped'):
             state['state'] = 'closing'
             logic.io_manager.fire_output(entity, 'OnClose')
+
+    def door_stop(entity, param, logic):
+        """Halt a moving door where it is.
+
+        'stopped' is a state the door animation simply has no branch for, so
+        the door holds its current offset and costs nothing until something
+        sends it on its way again.  A door that is not moving is left alone.
+        """
+        idx = _get_brush_index(entity, logic)
+        if idx < 0 or idx not in logic.door_states:
+            return
+        state = logic.door_states[idx]
+        if state['state'] in ('opening', 'closing'):
+            state['state'] = 'stopped'
+
+    def door_reverse(entity, param, logic):
+        """Send a door back the way it came.
+
+        A stopped door resumes in whichever direction is further from where it
+        already is, which is the only reading of "reverse" that does something
+        for a door halted in the middle.
+        """
+        idx = _get_brush_index(entity, logic)
+        if idx < 0 or idx not in logic.door_states:
+            return
+        state = logic.door_states[idx]
+        current = state['state']
+        if current == 'opening':
+            door_close(entity, param, logic)
+        elif current == 'closing':
+            door_open(entity, param, logic)
+        elif current == 'stopped':
+            if state.get('progress', 0.0) >= 0.5:
+                door_close(entity, param, logic)
+            else:
+                door_open(entity, param, logic)
+        else:
+            door_toggle(entity, param, logic)
     
     def door_toggle(entity, param, logic):
         """Toggle door open/closed."""
@@ -219,6 +262,8 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('door', 'open', door_open)
     io_manager.register_input_handler('door', 'close', door_close)
     io_manager.register_input_handler('door', 'toggle', door_toggle)
+    io_manager.register_input_handler('door', 'stop', door_stop)
+    io_manager.register_input_handler('door', 'reverse', door_reverse)
     io_manager.register_input_handler('door', 'lock', door_lock)
     io_manager.register_input_handler('door', 'unlock', door_unlock)
     io_manager.register_input_handler('door', 'setspeed', door_set_speed)
@@ -265,12 +310,30 @@ def register_all_input_handlers(io_manager: IOManager):
         except (ValueError, TypeError):
             pass
 
+    def mover_stop(entity, param, logic):
+        """Halt the mover where it is, keeping its progress and direction."""
+        entity['start_on'] = False
+
+    def mover_reverse(entity, param, logic):
+        """Reverse the direction of travel without stopping.
+
+        A mover's motion is a progress value and a direction flag, so reversing
+        is flipping the flag — the position it has already reached is kept, and
+        it retraces from there.
+        """
+        idx = _get_brush_index(entity, logic)
+        if idx >= 0 and idx in logic.mover_states:
+            state = logic.mover_states[idx]
+            state['forward'] = not state.get('forward', True)
+
     io_manager.register_input_handler('mover', 'open', mover_open)
     io_manager.register_input_handler('mover', 'close', mover_close)
     io_manager.register_input_handler('mover', 'toggle', mover_toggle)
     io_manager.register_input_handler('mover', 'setposition', mover_set_position)
     io_manager.register_input_handler('mover', 'enable', mover_enable)
     io_manager.register_input_handler('mover', 'disable', mover_disable)
+    io_manager.register_input_handler('mover', 'stop', mover_stop)
+    io_manager.register_input_handler('mover', 'reverse', mover_reverse)
     io_manager.register_input_handler('mover', 'setspeed', mover_set_speed)
 
     # ==========================================================================
@@ -501,18 +564,35 @@ def register_all_input_handlers(io_manager: IOManager):
     # ==========================================================================
     
     def relay_trigger(entity, param, logic):
-        if entity.properties.get('disabled', False):
+        """Route one event on, honouring ``disabled`` and ``fire_once``.
+
+        ``fire_once`` is a property the relay has always carried and nothing
+        ever read, so a relay marked one-shot in the editor fired every time.
+        It latches here instead: the first trigger passes, the rest are dropped
+        until ``Reset``.  The parameter rides through, so a relay stays
+        transparent to whatever value it is routing.
+        """
+        props = entity.properties
+        if authored_flag(entity, 'disabled'):
             return
-        logic.io_manager.fire_output(entity, 'OnTrigger')
-    
+        if props.get('fire_once', False):
+            if props.get('_relay_fired', False):
+                return
+            props['_relay_fired'] = True
+        logic.io_manager.fire_output(entity, 'OnTrigger', value=param or None)
+
+    def relay_reset(entity, param, logic):
+        """Re-arm a one-shot relay so it can fire again."""
+        entity.properties.pop('_relay_fired', None)
+
     def relay_enable(entity, param, logic):
-        entity.properties['disabled'] = False
-    
+        set_authored_flag(entity, 'disabled', False)
+
     def relay_disable(entity, param, logic):
-        entity.properties['disabled'] = True
-    
+        set_authored_flag(entity, 'disabled', True)
+
     def relay_toggle(entity, param, logic):
-        entity.properties['disabled'] = not entity.properties.get('disabled', False)
+        set_authored_flag(entity, 'disabled', not authored_flag(entity, 'disabled'))
 
     def relay_cancel_pending(entity, param, logic):
         """Cancel any delayed events this relay has already queued."""
@@ -532,115 +612,195 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('logic_relay', 'enable', relay_enable)
     io_manager.register_input_handler('logic_relay', 'disable', relay_disable)
     io_manager.register_input_handler('logic_relay', 'toggle', relay_toggle)
+    io_manager.register_input_handler('logic_relay', 'reset', relay_reset)
     io_manager.register_input_handler('logic_relay', 'cancelpending', relay_cancel_pending)
     
     # ==========================================================================
     # LOGIC_GATE INPUTS
     # ==========================================================================
     
-    def gate_trigger(entity, param, logic):
-        if entity.properties.get('disabled', False):
-            return
-        
-        gate_name = entity.name
-        logic_type = entity.properties.get('logic_type', 'AND')
-        
-        if gate_name not in logic.gate_inputs:
-            logic.gate_inputs[gate_name] = set()
-        
-        source_name = param if param else 'anonymous'
-        if source_name in logic.gate_inputs[gate_name]:
-            logic.gate_inputs[gate_name].remove(source_name)
-        else:
-            logic.gate_inputs[gate_name].add(source_name)
-        
-        active_inputs = len(logic.gate_inputs[gate_name])
-        
-        total_possible = 0
-        from .io_system import get_connections
-        for b in logic.brushes:
-            for conn in get_connections(b):
-                if conn.target_name == gate_name:
-                    total_possible += 1
-        for t in logic.things:
-            if t is not entity:
-                for conn in get_connections(t):
-                    if conn.target_name == gate_name:
-                        total_possible += 1
-        
-        if total_possible == 0:
-            total_possible = 1
-        
-        should_fire = False
+    def _gate_key(entity):
+        """The identity a gate's signal set is filed under.
+
+        Its UUID, not its name.  Names are a human convenience and two entities
+        may share one (a brush and a thing, a duplicate before it is renamed),
+        which would have two gates quietly sharing one set of input signals.
+        """
+        return entity.properties.get('id') or entity.properties.get('name', '')
+
+    def _gate_expected_inputs(entity, logic):
+        """How many signals this gate is waiting for.
+
+        The number of *connections* calling its Trigger input — two wires from
+        one entity are two signals, and only Trigger counts, so a gate that also
+        has a Reset or an Enable wired into it still waits for the right number.
+
+        Read out of the I/O reverse-target index, which is built once per
+        connection change and cached against a revision counter, rather than
+        rescanning every brush and thing on every signal: a gate in a large
+        level used to walk the whole scene each time an input arrived.
+
+        It also counts connections addressed by UUID.  The previous count
+        matched target *names* only, so a gate wired the way the editor actually
+        wires things (by id) saw zero expected inputs, fell back to one, and an
+        AND gate fired on its first signal.
+        """
+        try:
+            from .io_system import count_incoming_connections
+        except ImportError:                              # pragma: no cover
+            from editor.io_system import count_incoming_connections
+        return count_incoming_connections(
+            logic.brushes, logic.things,
+            target_name=entity.properties.get('name', ''),
+            target_id=entity.properties.get('id', ''),
+            input_name='Trigger')
+
+    def _gate_evaluate(entity, logic):
+        """Test the gate against its current signals and fire the result.
+
+        Evaluation happens because a signal arrived, never on a clock: a gate
+        holds a set of asserted inputs and answers a question about that set
+        when asked to.
+        """
+        gate_key = _gate_key(entity)
+        active = len(logic.gate_inputs.get(gate_key, ()))
+        expected = max(1, _gate_expected_inputs(entity, logic))
+        logic_type = str(entity.properties.get('logic_type', 'AND')).upper()
+
         if logic_type == 'AND':
-            should_fire = (active_inputs >= total_possible)
+            result = active >= expected
         elif logic_type == 'OR':
-            should_fire = (active_inputs > 0)
+            result = active > 0
         elif logic_type == 'XOR':
-            should_fire = (active_inputs == 1)
+            result = active == 1
         elif logic_type == 'NAND':
-            should_fire = (active_inputs < total_possible)
+            result = active < expected
         elif logic_type == 'NOR':
-            should_fire = (active_inputs == 0)
-        
-        if should_fire:
-            logic.io_manager.fire_output(entity, 'OnTrigger')
-    
+            result = active == 0
+        else:
+            debug_log('Error', f"LogicGate '{entity.name}': unknown type "
+                               f"'{logic_type}' — treating as OR")
+            result = active > 0
+
+        logic.io_manager.fire_output(entity, 'OnTrigger' if result else 'OnFalse')
+        return result
+
+    def _gate_signal(entity, param, logic, mode):
+        """Change one input signal, then evaluate.
+
+        *mode* is 'assert', 'clear' or 'flip'.  ``Trigger`` asserts, and does so
+        idempotently: two switches wired into an AND gate close it whether or
+        not either switch reports twice.  (Before 2.4 ``Trigger`` *flipped* the
+        signal, so a source firing twice silently un-asserted itself and the
+        gate could never close.  ``ToggleInput`` keeps that behaviour for maps
+        that wanted it.)
+        """
+        if authored_flag(entity, 'disabled'):
+            return
+        gate_key = _gate_key(entity)
+        signals = logic.gate_inputs.setdefault(gate_key, set())
+        source = param.strip() if param else ''
+        if not source:
+            # An unnamed signal is identified by whoever fired it, so two
+            # different sources wired without a parameter still count as two
+            # inputs instead of overwriting each other.
+            source = logic.io_manager.current_source_id() or 'anonymous'
+
+        if mode == 'assert':
+            signals.add(source)
+        elif mode == 'clear':
+            signals.discard(source)
+        else:
+            signals.symmetric_difference_update({source})
+
+        _gate_evaluate(entity, logic)
+
+    def gate_trigger(entity, param, logic):
+        """Assert one input signal."""
+        _gate_signal(entity, param, logic, 'assert')
+
+    def gate_clear_input(entity, param, logic):
+        """De-assert one input signal."""
+        _gate_signal(entity, param, logic, 'clear')
+
+    def gate_toggle_input(entity, param, logic):
+        """Flip one input signal — the pre-2.4 Trigger behaviour."""
+        _gate_signal(entity, param, logic, 'flip')
+
+    def gate_evaluate(entity, param, logic):
+        """Re-test the gate without changing any signal."""
+        if authored_flag(entity, 'disabled'):
+            return
+        _gate_evaluate(entity, logic)
+
     def gate_reset(entity, param, logic):
-        gate_name = entity.name
-        if gate_name in logic.gate_inputs:
-            logic.gate_inputs[gate_name].clear()
-    
+        """De-assert every input signal."""
+        logic.gate_inputs.pop(_gate_key(entity), None)
+
     io_manager.register_input_handler('logic_gate', 'trigger', gate_trigger)
+    io_manager.register_input_handler('logic_gate', 'clearinput', gate_clear_input)
+    io_manager.register_input_handler('logic_gate', 'toggleinput', gate_toggle_input)
+    io_manager.register_input_handler('logic_gate', 'evaluate', gate_evaluate)
     io_manager.register_input_handler('logic_gate', 'reset', gate_reset)
     io_manager.register_input_handler('logic_gate', 'enable', relay_enable)
     io_manager.register_input_handler('logic_gate', 'disable', relay_disable)
+    io_manager.register_input_handler('logic_gate', 'toggle', relay_toggle)
     
     # ==========================================================================
     # LOGIC_TIMER INPUTS
     # ==========================================================================
     
+    def _timer_key(entity):
+        """The identity a timer's countdown is filed under.
+
+        Its UUID.  ``id(entity)`` was used before, which is a memory address:
+        it changes on every load, so a timer's countdown could not survive a
+        save, and CPython reuses addresses, so a freed entity's slot could be
+        inherited by an unrelated one.
+        """
+        return entity.properties.get('id') or entity.properties.get('name', '')
+
+    def _timer_arm(entity, logic):
+        """Start (or restart) the countdown from the full interval."""
+        try:
+            interval = max(0.01, float(entity.properties.get('interval', 1.0)))
+        except (TypeError, ValueError):
+            interval = 1.0
+        logic.timer_states[_timer_key(entity)] = {
+            'remaining': interval,
+            'interval': interval,
+        }
+
     def timer_enable(entity, param, logic):
         entity.properties['timer_enabled'] = True
-        if not hasattr(logic, 'timer_states'):
-            logic.timer_states = {}
-        entity_id = id(entity)
-        interval = float(entity.properties.get('interval', 1.0))
-        logic.timer_states[entity_id] = {
-            'remaining': interval,
-            'interval': interval
-        }
-    
+        _timer_arm(entity, logic)
+
     def timer_disable(entity, param, logic):
         entity.properties['timer_enabled'] = False
-    
+
     def timer_toggle(entity, param, logic):
         if entity.properties.get('timer_enabled', False):
             timer_disable(entity, param, logic)
         else:
             timer_enable(entity, param, logic)
-    
+
     def timer_fire(entity, param, logic):
         logic.io_manager.fire_output(entity, 'OnTimer')
-    
+
     def timer_set_time(entity, param, logic):
         try:
-            entity.properties['interval'] = max(0.1, float(param))
-        except ValueError:
+            entity.properties['interval'] = max(0.01, float(param))
+        except (TypeError, ValueError):
             pass
 
     def timer_reset(entity, param, logic):
         """Reset the countdown to the full interval without firing."""
-        if not hasattr(logic, 'timer_states'):
-            logic.timer_states = {}
-        interval = float(entity.properties.get('interval', 1.0))
-        logic.timer_states[id(entity)] = {
-            'remaining': interval,
-            'interval': interval,
-        }
+        _timer_arm(entity, logic)
 
     io_manager.register_input_handler('logic_timer', 'enable', timer_enable)
     io_manager.register_input_handler('logic_timer', 'disable', timer_disable)
+    io_manager.register_input_handler('logic_timer', 'start', timer_enable)
+    io_manager.register_input_handler('logic_timer', 'stop', timer_disable)
     io_manager.register_input_handler('logic_timer', 'toggle', timer_toggle)
     io_manager.register_input_handler('logic_timer', 'firetimer', timer_fire)
     io_manager.register_input_handler('logic_timer', 'settime', timer_set_time)
@@ -701,11 +861,71 @@ def register_all_input_handlers(io_manager: IOManager):
         entity.properties['awake'] = True
         entity.properties['triggered'] = False   # clear dormant flag
 
+    def monster_sleep(entity, param, logic):
+        """Send a monster back to dormant — the inverse of Wake.
+
+        Sets the same two properties Wake clears, so a monster put to sleep
+        behaves exactly like one that has never been woken: the AI skips it, and
+        whatever its map authored as a wake condition still applies.
+        """
+        entity.properties['awake'] = False
+        entity.properties['triggered'] = True
+
+    def monster_set_health(entity, param, logic):
+        """Set current health.  Zero or less does not kill — use Kill for that.
+
+        Deliberately just a write: the death path belongs to the AI, which owns
+        what dying means (dropping aggro, the OnDeath output, the corpse
+        sprite), and an input that half-killed a monster here would be a second
+        version of it.
+        """
+        try:
+            entity.properties['health'] = int(float(param))
+        except (TypeError, ValueError):
+            debug_log('Error', f"Monster.SetHealth: bad parameter '{param}'")
+
+    def monster_respawn(entity, param, logic):
+        """Revive a dead monster at its spawn health.
+
+        The health to come back with is the value the map authored, recorded
+        once when play started (see LogicThread._reset_all_monsters) because
+        the live property is mutated by damage.  A parameter overrides it, and
+        if neither is available the monster keeps whatever health it has —
+        inventing a number here would be inventing behaviour.
+        """
+        props = entity.properties
+        health = None
+        if param:
+            try:
+                health = int(float(param))
+            except (TypeError, ValueError):
+                health = None
+        if health is None:
+            spawn = getattr(logic, '_monster_spawn_health', None)
+            if isinstance(spawn, dict):
+                health = spawn.get(props.get('id'))
+        if health is not None:
+            props['health'] = health
+
+        props.pop('dead', None)
+        props.pop('is_shooting', None)
+        props.pop('_aggro_target', None)
+        props.pop('_kill', None)
+        # Come back asleep or awake exactly as the map says a fresh monster
+        # should, rather than always alert.
+        props['awake'] = not (props.get('triggered', False)
+                              or props.get('wake_on_sight', True))
+        if logic.io_manager:
+            logic.io_manager.fire_output(entity, 'OnRespawn')
+
     def monster_set_target(entity, param, logic):
         """Override pursuit target by entity name (empty string = back to player)."""
         entity.properties['target_name'] = param.strip() if param else ''
 
     io_manager.register_input_handler('monster', 'wake', monster_wake)
+    io_manager.register_input_handler('monster', 'sleep', monster_sleep)
+    io_manager.register_input_handler('monster', 'sethealth', monster_set_health)
+    io_manager.register_input_handler('monster', 'respawn', monster_respawn)
     io_manager.register_input_handler('monster', 'settarget', monster_set_target)
 
     # ==========================================================================
@@ -1003,145 +1223,293 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('logic_spawner', 'settargetnode', spawner_set_target)
 
     # ==========================================================================
-    # LOGIC KEYVALUE STORE INPUTS
+    # LOGIC STATE INPUTS
+    #
+    # LogicState is Fio's persistent state primitive and nothing else: these
+    # handlers read, write and compare values, and turn what happened into I/O
+    # events.  None of them knows what a door, a monster or a counter *means* —
+    # that is the map's business, expressed as connections.
+    #
+    # Every write reports two things, and the difference between them is the
+    # whole event model: OnValueSet fires for an accepted write, OnValueChanged
+    # only when the stored value actually moved.  A chain hung off
+    # OnValueChanged therefore runs on real transitions without anything having
+    # to poll for them.
     # ==========================================================================
 
-    def keyvalue_setvalue(entity, param, logic):
-        """Set a key/value pair. Parameter format: 'key=value' or just 'key' (value='1')."""
-        if not param:
-            return
+    def _state_pair(param, default_value="1"):
+        """Split a ``"key=value"`` parameter, tolerating a bare key.
+
+        A bare key means "set this flag", and the value it sets is *default*,
+        which keeps ``SetValue  door_unlocked`` working the way it always has.
+        """
         if '=' in param:
             key, value = param.split('=', 1)
-        else:
-            key, value = param.strip(), "1"
-        success = entity.set_value(key.strip(), value.strip())
-        store_name = entity.properties.get('store_name', entity.properties.get('name', 'unknown'))
-        if success:
-            debug_log("IO", f"LogicKeyValueStore '{store_name}': set '{key}' = '{value}'")
-            logic.io_manager.fire_output(entity, 'OnValueSet', value=f"{key.strip()}={value.strip()}")
-        else:
-            debug_log("IO", f"LogicKeyValueStore '{store_name}': FAILED to set '{key}' (store full?)")
-            logic.io_manager.fire_output(entity, 'OnStoreFull')
+            return key.strip(), value.strip()
+        return param.strip(), default_value
 
-    def keyvalue_getvalue(entity, param, logic):
-        """Read a key and fire OnValueRead with the value as parameter."""
+    def _state_operand(param, default=1):
+        """Split a ``"key,amount"`` parameter; a bare key means *default*."""
+        if ',' in param:
+            key, amount = param.split(',', 1)
+            return key.strip(), amount.strip()
+        return param.strip(), default
+
+    def _state_report(entity, logic, key, ok, changed, stored):
+        """Fire the outputs one write implies.
+
+        Refused writes fire ``OnStoreFull``: the only ways a write is refused
+        are a full store and a value that does not fit the type the parameter
+        asked for, and both mean "this value did not go in", which is what a
+        map wired to that output is reacting to.
+        """
+        mgr = logic.io_manager if logic is not None else None
+        if mgr is None:
+            return
+        if not ok:
+            mgr.fire_output(entity, 'OnStoreFull', value=key)
+            return
+        payload = "%s=%s" % (key, _sv.format_value(stored))
+        mgr.fire_output(entity, 'OnValueSet', value=payload)
+        if changed:
+            mgr.fire_output(entity, 'OnValueChanged', value=payload)
+
+    def _state_branch(entity, logic, result, payload):
+        """Fire the true/false pair a query implies, legacy names included."""
+        mgr = logic.io_manager if logic is not None else None
+        if mgr is None:
+            return
+        if result:
+            mgr.fire_output(entity, 'OnTrue', value=payload)
+            mgr.fire_output(entity, 'OnCompareTrue', value=payload)
+        else:
+            mgr.fire_output(entity, 'OnFalse', value=payload)
+            mgr.fire_output(entity, 'OnCompareFalse', value=payload)
+
+    def state_setvalue(entity, param, logic):
+        """Set a value.  Param: ``key=value``, or ``key:type=value``."""
         if not param:
-            logic.io_manager.fire_output(entity, 'OnKeyNotFound')
+            return
+        key, value = _state_pair(param)
+        key, value_type = _sv.split_typed_key(key)
+        ok, changed, stored = entity.apply_value(key, value, value_type)
+        _state_report(entity, logic, key, ok, changed, stored)
+
+    def state_getvalue(entity, param, logic):
+        """Read a key and fire OnValueRead with the value as the payload.
+
+        The payload is the pass-through mechanism Fio already has: any
+        connection on OnValueRead whose own parameter is blank receives this
+        value.  That is how a stored value reaches another entity's input, and
+        it is why Fio needs no templating language to move state around.
+        """
+        mgr = logic.io_manager
+        if not param:
+            mgr.fire_output(entity, 'OnKeyNotFound')
             return
         key = param.strip()
-        value = entity.get_value(key, "<missing>")
-        if value == "<missing>":
-            logic.io_manager.fire_output(entity, 'OnKeyNotFound', value=key)
-        else:
-            # Pass the value through: connections with a blank parameter
-            # receive it (e.g. GameText.SetText, LogicCase.Test, etc.)
-            logic.io_manager.fire_output(entity, 'OnValueRead', value=value)
+        if not entity.has_key(key):
+            mgr.fire_output(entity, 'OnKeyNotFound', value=key)
+            return
+        mgr.fire_output(entity, 'OnValueRead',
+                        value=_sv.format_value(entity.get_value(key)))
 
-    def keyvalue_testvalue(entity, param, logic):
-        """
-        Compare a stored key against an expected value and branch.
-        Parameter: "key==value" (also supports !=, >=, <=, >, <).
-        Fires OnCompareTrue / OnCompareFalse with the actual value as payload,
-        or OnKeyNotFound if the key doesn't exist.
-        """
+    def state_compare(entity, param, logic):
+        """Test a key and branch.  Param: ``key>=value`` (also == != > < <=)."""
         if not param:
             return
-        # Order matters: check two-char operators before their one-char prefixes
-        for op in ('==', '!=', '>=', '<=', '>', '<'):
-            if op in param:
-                key, expected = param.split(op, 1)
-                key, expected = key.strip(), expected.strip()
-                break
-        else:
-            return  # no operator found
-
-        actual = entity.get_value(key, "<missing>")
-        if actual == "<missing>":
+        split = _sv.split_comparison(param)
+        if split is None:
+            debug_log('Error', f"LogicState.Compare: no operator in '{param}'")
+            return
+        key, op, expected = split
+        found, result = entity.compare(key, op, expected)
+        if not found:
             logic.io_manager.fire_output(entity, 'OnKeyNotFound', value=key)
             return
+        _state_branch(entity, logic, result,
+                      _sv.format_value(entity.get_value(key)))
 
-        # Numeric comparison when both sides parse as numbers, else string
-        try:
-            a, b = float(actual), float(expected)
-        except ValueError:
-            a, b = actual, expected
-            if op in ('>', '<', '>=', '<='):
-                # Ordered comparison on strings is rarely intended; fall back
-                # to lexicographic, which Python supports natively.
-                pass
+    def state_exists(entity, param, logic):
+        """Branch on whether a key is present."""
+        if not param:
+            return
+        key = param.strip()
+        _state_branch(entity, logic, entity.has_key(key), key)
 
-        result = {
-            '==': a == b, '!=': a != b,
-            '>':  a > b,  '<':  a < b,
-            '>=': a >= b, '<=': a <= b,
-        }[op]
+    def state_missing(entity, param, logic):
+        """Branch on whether a key is absent — the inverse of Exists."""
+        if not param:
+            return
+        key = param.strip()
+        _state_branch(entity, logic, not entity.has_key(key), key)
 
-        ev = 'OnCompareTrue' if result else 'OnCompareFalse'
-        logic.io_manager.fire_output(entity, ev, value=actual)
-
-    def keyvalue_clearkey(entity, param, logic):
+    def state_clearkey(entity, param, logic):
         """Remove a single key."""
         if not param:
             return
         key = param.strip()
-        existed = entity.clear_key(key)
-        if existed:
-            logic.io_manager.fire_output(entity, 'OnKeyCleared')
+        if entity.clear_key(key):
+            logic.io_manager.fire_output(entity, 'OnValueCleared', value=key)
+            logic.io_manager.fire_output(entity, 'OnKeyCleared', value=key)
 
-    def keyvalue_clearall(entity, param, logic):
-        """Remove all keys."""
+    def state_clearall(entity, param, logic):
+        """Remove every key."""
         entity.clear_all()
 
-    def keyvalue_copyfrom(entity, param, logic):
-        """Copy all keys from another LogicKeyValueStore by store_name."""
+    def state_copyfrom(entity, param, logic):
+        """Copy every pair from another store by name."""
         if not param:
             return
-        other_name = param.strip()
-        success = entity.copy_from(other_name)
-        if success and logic.io_manager:
+        if entity.copy_from(param.strip()) and logic.io_manager:
             logic.io_manager.fire_output(entity, 'OnValueSet')
 
-    def keyvalue_increment(entity, param, logic):
-        """Increment an integer value. Parameter: 'key,amount' or just 'key'."""
+    def state_copyvalue(entity, param, logic):
+        """Copy one key to another.  Param: ``from,to`` or ``store.from,to``."""
+        if not param or ',' not in param:
+            return
+        source, dest = param.split(',', 1)
+        source, dest = source.strip(), dest.strip()
+        source_store = None
+        if '.' in source:
+            source_store, source = source.split('.', 1)
+            source_store, source = source_store.strip(), source.strip()
+        ok, changed, stored = entity.copy_value(source, dest, source_store)
+        if not ok:
+            logic.io_manager.fire_output(entity, 'OnKeyNotFound', value=source)
+            return
+        _state_report(entity, logic, dest, ok, changed, stored)
+
+    def _state_arithmetic(operation, default_operand=1):
+        """Build the handler for one arithmetic operation.
+
+        One factory rather than seven near-identical functions: the operations
+        differ only in the word passed to the store, so the parameter handling
+        and the event reporting are written once.
+        """
+        def _handle(entity, param, logic):
+            if not param:
+                return
+            key, operand = _state_operand(param, default_operand)
+            ok, changed, stored = entity.arithmetic(key, operation, operand)
+            _state_report(entity, logic, key, ok, changed, stored)
+        return _handle
+
+    def state_decrement(entity, param, logic):
+        """Subtract from a numeric value.  Param: ``key,amount``."""
         if not param:
             return
-        if ',' in param:
-            key, amount_str = param.split(',', 1)
-            try:
-                amount = int(amount_str.strip())
-            except ValueError:
-                amount = 1
-        else:
-            key, amount = param.strip(), 1
-        new_val = entity.increment(key.strip(), amount)
-        if logic.io_manager:
-            logic.io_manager.fire_output(entity, 'OnValueSet')
+        key, operand = _state_operand(param, 1)
+        ok, changed, stored = entity.arithmetic(
+            key, 'subtract', _sv.to_number(operand, 1))
+        _state_report(entity, logic, key, ok, changed, stored)
 
-    def keyvalue_decrement(entity, param, logic):
-        """Decrement an integer value. Parameter: 'key,amount' or just 'key'."""
+    def state_clamp(entity, param, logic):
+        """Confine a value to a range.  Param: ``key,low,high``."""
+        parts = [p.strip() for p in param.split(',')] if param else []
+        if len(parts) < 3:
+            return
+        ok, changed, stored = entity.clamp(parts[0], parts[1], parts[2])
+        _state_report(entity, logic, parts[0], ok, changed, stored)
+
+    def state_toggle(entity, param, logic):
+        """Invert a value as a boolean."""
         if not param:
             return
-        if ',' in param:
-            key, amount_str = param.split(',', 1)
-            try:
-                amount = int(amount_str.strip())
-            except ValueError:
-                amount = 1
-        else:
-            key, amount = param.strip(), 1
-        new_val = entity.decrement(key.strip(), amount)
-        if logic.io_manager:
-            logic.io_manager.fire_output(entity, 'OnValueSet')
+        key = param.strip()
+        ok, changed, stored = entity.toggle(key)
+        _state_report(entity, logic, key, ok, changed, stored)
 
-    io_manager.register_input_handler('logic_keyvalue', 'setvalue',   keyvalue_setvalue)
-    io_manager.register_input_handler('logic_keyvalue', 'getvalue',   keyvalue_getvalue)
-    io_manager.register_input_handler('logic_keyvalue', 'testvalue',  keyvalue_testvalue)
-    io_manager.register_input_handler('logic_keyvalue', 'clearkey',   keyvalue_clearkey)
-    io_manager.register_input_handler('logic_keyvalue', 'clearall',   keyvalue_clearall)
-    io_manager.register_input_handler('logic_keyvalue', 'copyfrom',   keyvalue_copyfrom)
-    io_manager.register_input_handler('logic_keyvalue', 'increment',  keyvalue_increment)
-    io_manager.register_input_handler('logic_keyvalue', 'decrement',  keyvalue_decrement)
+    # -- object-local state ------------------------------------------------
+    #
+    # The same store, namespaced by the UUID of whichever entity fired the
+    # connection.  No second database, no per-entity state framework: a
+    # monster's "looted" flag is a key in the world store whose name happens to
+    # contain the monster's UUID, so it persists, saves and survives dormancy
+    # exactly like every other value.
 
+    def _state_source_id(logic):
+        """The UUID object-local state is filed under.
+
+        The chain's *activator*, not the entity one hop back.  A monster's
+        death routed through a relay should still record against the monster —
+        the relay is plumbing, and a designer who inserts one to add a delay
+        does not expect the state to start belonging to it.  The immediate
+        source is the fallback for a chain that never had an activator.
+        """
+        mgr = logic.io_manager if logic is not None else None
+        if mgr is None:
+            return ""
+        return mgr.current_activator_id() or mgr.current_source_id()
+
+    def state_set_object_value(entity, param, logic):
+        """Set a value against the firing entity's UUID.  Param: ``key=value``."""
+        if not param:
+            return
+        source_id = _state_source_id(logic)
+        if not source_id:
+            debug_log('Error', "LogicState.SetObjectValue: no firing entity to key on")
+            return
+        key, value = _state_pair(param)
+        key, value_type = _sv.split_typed_key(key)
+        ok, changed, stored = entity.set_object_value(
+            source_id, key, value, value_type)
+        _state_report(entity, logic, entity.object_key(source_id, key),
+                      ok, changed, stored)
+
+    def state_get_object_value(entity, param, logic):
+        """Read a value held against the firing entity's UUID."""
+        source_id = _state_source_id(logic)
+        if not param or not source_id:
+            logic.io_manager.fire_output(entity, 'OnKeyNotFound')
+            return
+        key = entity.object_key(source_id, param.strip())
+        if not entity.has_key(key):
+            logic.io_manager.fire_output(entity, 'OnKeyNotFound', value=key)
+            return
+        logic.io_manager.fire_output(
+            entity, 'OnValueRead', value=_sv.format_value(entity.get_value(key)))
+
+    def state_clear_object_state(entity, param, logic):
+        """Forget every value held against the firing entity's UUID."""
+        source_id = _state_source_id(logic)
+        if not source_id:
+            return
+        if entity.clear_object_state(source_id):
+            logic.io_manager.fire_output(entity, 'OnValueCleared', value=source_id)
+            logic.io_manager.fire_output(entity, 'OnKeyCleared', value=source_id)
+
+    _STATE_INPUTS = {
+        'setvalue':         state_setvalue,
+        'getvalue':         state_getvalue,
+        'compare':          state_compare,
+        'testvalue':        state_compare,      # pre-2.4 name
+        'exists':           state_exists,
+        'missing':          state_missing,
+        'clearkey':         state_clearkey,
+        'clearall':         state_clearall,
+        'copyfrom':         state_copyfrom,
+        'copyvalue':        state_copyvalue,
+        'increment':        _state_arithmetic('add'),
+        'add':              _state_arithmetic('add'),
+        'decrement':        state_decrement,
+        'subtract':         _state_arithmetic('subtract'),
+        'multiply':         _state_arithmetic('multiply', 1),
+        'divide':           _state_arithmetic('divide', 1),
+        'min':              _state_arithmetic('min', 0),
+        'max':              _state_arithmetic('max', 0),
+        'clamp':            state_clamp,
+        'toggle':           state_toggle,
+        'setobjectvalue':   state_set_object_value,
+        'getobjectvalue':   state_get_object_value,
+        'clearobjectstate': state_clear_object_state,
+    }
+
+    # Registered under the current type token and the pre-2.4 one, so a store
+    # loaded from an old map dispatches through exactly the same handlers.
+    for _state_type in ('logic_state', 'logic_keyvalue'):
+        for _input_name, _handler in _STATE_INPUTS.items():
+            io_manager.register_input_handler(_state_type, _input_name, _handler)
 
     # ==========================================================================
     # PORTAL INPUTS

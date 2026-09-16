@@ -1,5 +1,10 @@
 # `editor/`
 
+Fio's event-driven world model — how `LogicState`, `LogicRelay`, `LogicGate`,
+`LogicTimer` and the I/O system compose into gameplay without a scripting
+language — is documented in **[`LOGIC.md`](LOGIC.md)**, along with the 2.4
+architectural review and the comparative notes on TrenchBroom and Source.
+
 ### `__init__.py`
 Package initialiser. Bootstraps the plugin system before any map is loaded or the main window is built, so plugin-provided entity types, I/O definitions, and editor integrations are available everywhere.
 
@@ -25,10 +30,13 @@ Reading and writing one brush face's texture transform, wherever that face happe
 "Output Connections" panel (Hammer-style) for adding and editing entity I/O connections — target entity, input name, parameter, delay, and fire-once flag.
 
 ### `io_handlers.py`
-Registers all input handlers for the I/O system. Defines what happens when an input is called on an entity (e.g. `TurnOn`, `Open`, `Kill`, `SetBrightness`) for every entity type — lights, doors, movers, monsters, triggers, speakers, pickups, logic entities, and more.
+Registers all input handlers for the I/O system. Defines what happens when an input is called on an entity (e.g. `TurnOn`, `Open`, `Kill`, `SetBrightness`) for every entity type — lights, doors, movers, monsters, triggers, speakers, pickups, logic entities, and more. `LogicState`'s operations are parameterised (`Increment  killed,1`) rather than each having their own input, so the set stays small and a map can express something the engine was never told about.
+
+### `state_values.py`
+Fio's state type system, and nothing else: `string`, `int`, `float`, `bool`, `null` and `uuid`, with the parsing that types an I/O parameter, the formatting that puts a value back on the wire, comparison, arithmetic and deterministic store serialisation. Imports nothing — no Qt, no engine, no entity model — so what a stored value *means* is testable on a bare Python install. Legacy string-only stores are never rewritten on load, because comparison and arithmetic already understand them.
 
 ### `io_system.py`
-Core I/O framework inspired by Half-Life 2's Hammer Editor. Defines `IODef` (input/output definitions), the `IO_REGISTRY` (per-entity-type I/O schema), `OutputConnection` (target + input + delay + parameter), and `IOManager` (runtime dispatcher with delayed firing and fire-once tracking). Also holds the reverse lookup — "what points at this entity?" — as a cached index rebuilt only when a revision counter moves. The index files source *entities*, never their names, and `find_targeting_sources` reads names off the live objects at lookup time, so a rename (which invalidates no connection) can never leave it quoting a name nothing in the scene answers to.
+Core I/O framework inspired by Half-Life 2's Hammer Editor. Defines `IODef` (input/output definitions), the `IO_REGISTRY` (per-entity-type I/O schema), `OutputConnection` (target + input + delay + parameter), and `IOManager` (runtime dispatcher with delayed firing and fire-once tracking). Also holds the reverse lookup — "what points at this entity?" — as a cached index rebuilt only when a revision counter moves. The index files source *entities*, never their names, and `find_targeting_sources` reads names off the live objects at lookup time, so a rename (which invalidates no connection) can never leave it quoting a name nothing in the scene answers to. Also validates a map's connections (`validate_scene_connections`), reporting a target that is not there, an input the target's type does not accept, and an output the source does not have — the checking lives here, next to the dispatcher whose resolution rules it has to agree with, rather than being reimplemented by each caller. `audit_io_coverage` reconciles the *declaration* (this registry) against the *implementation* (an `IOManager`'s handler table): the two are necessarily separate structures with different lifetimes, so the only way to know a declared input still runs something is to ask. `ABSTRACT_IO` is the one sanctioned exception list, and `tests/io/test_io_contract.py` asserts zero drift — by invoking every declared input for real, not just by comparing tables.
 
 ### `logic_graph_widget.py`
 Visual node-graph editor for entity I/O connections. Each named entity becomes a node with output pins (right, orange) and input pins (left, blue); drag-connecting pins creates wiring. Existing `_io_connections` are drawn on open. Supports right-click to delete or edit connection delay/parameter, and Apply (Ctrl+S) to write changes back.
@@ -76,7 +84,7 @@ Radiant-style floating Surface Inspector for tuning per-face texture mapping in 
 Dedicated terrain parameter editor panel for configuring terrain chunk settings (noise seed, scale, amplitude, texturing).
 
 ### `things.py`
-Entity class definitions for all placeable Things: `PlayerStart`, `Light`, `Model`, `Speaker`, `Pickup`, `Monster`, `PathNode`, `Portal`, `LevelChanger`, `LogicGate`, `LogicRelay`, `LogicTimer`, `LogicCommand`, `LogicSpawner`, `LogicCamera`, and the `TriggerBrush` mixin. Each class defines default properties and I/O registrations. `LogicCommand` runs a console command (from its connection parameter or `command` property) when its `RunCommand` input fires — e.g. a trigger brush wired to run `cam 2`.
+Entity class definitions for all placeable Things: `PlayerStart`, `Light`, `Model`, `Speaker`, `Pickup`, `Monster`, `PathNode`, `Portal`, `LevelChanger`, `LogicGate`, `LogicRelay`, `LogicTimer`, `LogicCommand`, `LogicSpawner`, `LogicCamera`, `LogicState`, and the `TriggerBrush` mixin. Each class defines default properties and I/O registrations. `LogicCommand` runs a console command (from its connection parameter or `command` property) when its `RunCommand` input fires — e.g. a trigger brush wired to run `cam 2`. `LogicState` is Fio's persistent state primitive: typed named values, read, compared and mutated through I/O, persisting across level transitions and shared with plugins through one registry (it was `LogicKeyValueStore` before 2.4, and is still importable under that name). A class may declare `map_type` when its serialised token differs from its class name, and `legacy_map_types` for tokens an older Fio wrote, so a rename never orphans a map.
 
 ### `tooltips.py`
 Showing and hiding a panel's tooltips (Settings > Editor > Tooltips). Qt keeps a tooltip on the widget it belongs to, so switching them off means taking the text away and being able to give it back; the original is parked in a Qt dynamic property that travels with the widget, so a panel rebuilt around a stashed widget still knows what its tooltip said. Per-area rather than global, because toolbar tooltips stop being wanted long before the Property Editor's do.

@@ -348,20 +348,33 @@ class AssetBrowserTab(QWidget):
             # The only button here: texturing is the Surface Inspector's job,
             # and this opens it.  It borrows the FACE toggle's purple so the
             # button and the panel it opens read as a pair.
+            # Sized to its label rather than stretched across the bar: it is one
+            # button that opens one panel, and a full-width slab reads as the
+            # bar's primary action when the primary action here is the texture
+            # grid below it.
             self.inspector_btn = QPushButton("INSPECTOR")
             self.inspector_btn.setStyleSheet(INSPECTOR_BUTTON_STYLE)
-            self.inspector_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+            self.inspector_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)
             self.inspector_btn.setToolTip(
                 "Open the Surface Inspector (T)\n"
                 "Fit / Natural / Axial projections, shift, scale and rotation,\n"
                 "for one face or every face of the selection")
             self.inspector_btn.clicked.connect(self.on_inspector_clicked)
             button_layout.addWidget(self.inspector_btn)
+            # Take up the rest of the row so the button stays left-aligned next
+            # to the folder toggle instead of drifting to the middle.
+            button_layout.addStretch()
 
-        # Add stretch on both sides to center the button group, but also let buttons expand
-        banner_layout.addStretch()
-        banner_layout.addWidget(button_container, stretch=1)
-        banner_layout.addStretch()
+        if self.is_model_tab:
+            # "Add to Scene" is this tab's primary action and stays centred.
+            banner_layout.addStretch()
+            banner_layout.addWidget(button_container, stretch=1)
+            banner_layout.addStretch()
+        else:
+            # The Inspector button sits next to the folder toggle at its natural
+            # width; the container's own trailing stretch fills the rest of the
+            # bar, so nothing centres it and nothing stretches it.
+            banner_layout.addWidget(button_container, stretch=1)
 
         main_layout.addWidget(self.action_bar)
 

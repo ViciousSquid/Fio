@@ -26,6 +26,39 @@ except ImportError:
                 print(f"[{category}] {message}")
 
 
+# The authored-flag helpers.  ``hidden`` and ``disabled`` are the two flags a
+# streaming layer parks, and the engine is where the question "what is this
+# object's *authored* value?" is answered — see `engine.spatial`.  Imported
+# defensively so the editor still runs if the engine package is unavailable, in
+# which case the flags behave exactly as they did before streaming existed.
+def _property_dict(obj):
+    """The mutable property mapping of a brush dict or a Thing, or None."""
+    if isinstance(obj, dict):
+        return obj
+    props = getattr(obj, 'properties', None)
+    return props if isinstance(props, dict) else None
+
+
+def _plain_authored_flag(obj, flag, default=False):
+    props = _property_dict(obj)
+    return bool(props.get(flag, default)) if props is not None else default
+
+
+def _plain_set_authored_flag(obj, flag, value):
+    props = _property_dict(obj)
+    if props is None:
+        return False
+    props[flag] = bool(value)
+    return True
+
+
+try:
+    from engine.spatial import authored_flag, set_authored_flag
+except Exception:  # pragma: no cover - engine-less editor/tooling contexts
+    authored_flag = _plain_authored_flag
+    set_authored_flag = _plain_set_authored_flag
+
+
 # =============================================================================
 # DEBUG CONFIGURATION
 # =============================================================================
@@ -57,7 +90,23 @@ class IODef:
 
 # Registry of all entity I/O definitions
 # Maps entity_type -> {'inputs': [IODef, ...], 'outputs': [IODef, ...]}
+#
+# This is the *declaration*: what the editor offers a designer. The
+# *implementation* lives elsewhere — in an IOManager's handler table, which is
+# per-session and which plugins contribute to at runtime. The two cannot be one
+# structure, because they have different lifetimes: definitions are registered
+# at import and are global, handlers are registered against a live session.
+#
+# Two structures means they can drift, and a declaration that has gone stale is
+# invisible: the editor offers the input, a designer wires it, and nothing runs.
+# `audit_io_coverage` below is the reconciliation — it is what the conformance
+# tests assert on, and what a plugin author can call to check their own entity.
 IO_REGISTRY: Dict[str, Dict[str, List[IODef]]] = {}
+
+#: Lowercased declared output names per type, for the emission check in
+#: :meth:`IOManager.fire_output`. Memoised because that check runs per event;
+#: invalidated by :func:`register_io`, the only thing that changes the answer.
+_declared_outputs_cache: Dict[str, Set[str]] = {}
 
 
 def register_io(entity_type: str, inputs: List[IODef], outputs: List[IODef]):
@@ -66,6 +115,45 @@ def register_io(entity_type: str, inputs: List[IODef], outputs: List[IODef]):
         'inputs': inputs,
         'outputs': outputs
     }
+    _declared_outputs_cache.pop(entity_type, None)
+
+
+#: Declared I/O that deliberately has no runtime implementation, as
+#: ``(entity_type, io_name) -> why``.
+#:
+#: There is no good reason to add to this lightly.  A declared input that runs
+#: nothing, or a declared output that nothing fires, is a promise the editor
+#: makes to a designer and the runtime does not keep — the designer wires it,
+#: nothing happens, and there is no error anywhere.  An entry here is a claim
+#: that the entry is *meant* to be inert (an editor-only affordance, a slot a
+#: game layer is expected to fill), and the conformance tests read this table
+#: rather than a list of their own, so the exception is stated once, here,
+#: where anyone reading the declaration will see it.
+ABSTRACT_IO: Dict[tuple, str] = {}
+
+
+def register_io_alias(alias: str, entity_type: str):
+    """Make *alias* resolve to the same I/O definitions as *entity_type*.
+
+    Used when an entity is renamed: the old type token keeps answering, so a
+    map saved by an older Fio still shows its inputs and outputs in the editor
+    instead of an empty list.  The two names share one definition object, so
+    they cannot drift apart.
+    """
+    if entity_type in IO_REGISTRY:
+        IO_REGISTRY[alias] = IO_REGISTRY[entity_type]
+
+
+def is_registered_type(entity_type: str) -> bool:
+    """Whether Fio has I/O definitions for this entity type at all.
+
+    The question :func:`get_inputs` cannot answer: it returns an empty list both
+    for a type that declares no inputs (``playerstart``) and for one Fio has
+    never heard of (a plugin entity that registered none, a type from a newer
+    map).  Those are opposites — the first means "any input here is wrong", the
+    second means "no opinion" — and validation needs to tell them apart.
+    """
+    return entity_type in IO_REGISTRY
 
 
 def get_inputs(entity_type: str) -> List[IODef]:
@@ -162,6 +250,8 @@ class PendingEvent:
     source_name: str          # Who fired this (for debugging)
     connection: OutputConnection = None  # Original connection (for fire_once tracking)
     target_id: str = ""       # Stable UUID of target entity
+    source_id: str = ""       # Stable UUID of the entity that fired this
+    activator_id: str = ""    # Stable UUID of the entity that began the chain
 
 
 # =============================================================================
@@ -192,6 +282,25 @@ class IOManager:
         
         self._logic_thread = None
         self._game_state = None
+
+        # The entity whose output is being delivered right now, and its UUID.
+        # Set for the duration of one input call and cleared afterwards, so a
+        # handler that needs to know *who* fired it (object-local state, most
+        # of all) can ask without every handler signature having to carry it.
+        # This is not a queue and not a bus: it is the argument the dispatcher
+        # already has, made readable by the handler it is dispatching to.
+        self._source_entity = None
+        self._source_id: str = ""
+
+        # The entity that *began* the chain this delivery belongs to, as
+        # distinct from the one immediately firing it.  A trigger brush the
+        # player walks into fires a relay, which fires a state write: the source
+        # of that last hop is the relay, but the thing the chain is *about* is
+        # still the trigger.  Carried forward across every hop so a handler at
+        # the far end can still tell what set it off; a chain that starts with no
+        # activator simply has none.
+        self._activator_entity = None
+        self._activator_id: str = ""
     
     def set_logic_thread(self, logic_thread):
         """Set reference to logic thread."""
@@ -204,6 +313,31 @@ class IOManager:
     def get_game_state(self):
         """Get the game state reference."""
         return self._game_state
+
+    def current_source(self):
+        """The entity whose output is being delivered, or None.
+
+        Only meaningful inside an input handler.  Outside one it is None,
+        which is what a handler invoked from a console command or a test
+        should see.
+        """
+        return self._source_entity
+
+    def current_source_id(self) -> str:
+        """The stable UUID of :meth:`current_source`, or ``""``."""
+        return self._source_id
+
+    def current_activator(self):
+        """The entity that began this chain, or None.
+
+        Differs from :meth:`current_source` only once a chain is more than one
+        hop long, which is exactly when it matters.
+        """
+        return self._activator_entity
+
+    def current_activator_id(self) -> str:
+        """The stable UUID of :meth:`current_activator`, or ``""``."""
+        return self._activator_id
     
     def set_entity_finder(self, finder: Callable):
         """
@@ -233,6 +367,10 @@ class IOManager:
         """Reset for new play session."""
         self.pending_events.clear()
         self.current_time = 0.0
+        self._source_entity = None
+        self._source_id = ""
+        self._activator_entity = None
+        self._activator_id = ""
     
     def fire_output(self, source_entity, output_name: str, value: str = None):
         """
@@ -244,6 +382,26 @@ class IOManager:
         """
         connections = self._get_connections(source_entity)
         source_name = self._get_entity_name(source_entity)
+        source_id = self._get_entity_id(source_entity)
+        # A chain that is already running keeps its activator; one starting here
+        # takes this entity as its own.  Read before dispatch, because dispatch
+        # rebinds it for the duration of each hop.
+        activator_id = self._activator_id or source_id
+
+        # The mirror of the stale-declaration problem: an output the code fires
+        # but no type declares is undiscoverable — it works perfectly for anyone
+        # who knows the name and does not exist for anyone reading the editor's
+        # dropdown.  Checked under the existing debug gate, so it costs a memoised
+        # set lookup on a path that is already logging, and nothing at all when
+        # I/O debugging is off.
+        if IO_DEBUG_ENABLED:
+            source_type = self._get_entity_type(source_entity)
+            if (is_registered_type(source_type)
+                    and output_name.lower() not in declared_outputs(source_type)):
+                debug_log("Error",
+                          "I/O: %s fired '%s', which %s entities do not declare — "
+                          "no designer can wire it"
+                          % (source_name or '<unnamed>', output_name, source_type))
 
         matching_count = 0
         for conn in connections:
@@ -275,13 +433,18 @@ class IOManager:
                     parameter=effective_param,
                     source_name=source_name,
                     connection=conn,
-                    target_id=conn.target_id
+                    target_id=conn.target_id,
+                    source_id=source_id,
+                    activator_id=activator_id,
                 )
                 self.pending_events.append(event)
             else:
                 self._execute_input(conn.target_name, conn.input_name, 
                                 effective_param, source_name,
-                                target_id=conn.target_id)
+                                target_id=conn.target_id,
+                                source_entity=source_entity,
+                                source_id=source_id,
+                                activator_id=activator_id)
         
         if matching_count == 0:
             io_log(f"{source_name}.{output_name} (no connections)")
@@ -295,15 +458,27 @@ class IOManager:
                 io_log(f"[Delayed] {event.target_name}.{event.input_name} (from {event.source_name})")
                 self._execute_input(event.target_name, event.input_name,
                                 event.parameter, event.source_name,
-                                target_id=event.target_id)
+                                target_id=event.target_id,
+                                source_id=event.source_id,
+                                activator_id=event.activator_id)
             else:
                 still_pending.append(event)
         
         self.pending_events = still_pending
     
     def _execute_input(self, target_name: str, input_name: str, 
-                   parameter: str, source_name: str, target_id: str = ""):
-        """Execute an input on a target entity.  Prefers ID lookup, falls back to name."""
+                   parameter: str, source_name: str, target_id: str = "",
+                   source_entity=None, source_id: str = "",
+                   activator_id: str = ""):
+        """Execute an input on a target entity.  Prefers ID lookup, falls back to name.
+
+        Targets are resolved *here*, when the event fires, never when it was
+        queued.  That is what makes a delayed event and a streamed world agree:
+        the entity a delayed event names may have been parked by Big World in
+        the meantime, and it is still the same object with the same UUID, so it
+        still receives the input and its state still changes.  See
+        :meth:`_try_generic_input` for why that change then survives.
+        """
         if not self._find_entity:
             debug_log("Error", "I/O: No entity finder set!")
             return
@@ -323,34 +498,69 @@ class IOManager:
         
         handler_key = (entity_type.lower(), input_name.lower())
         handler = self._input_handlers.get(handler_key)
-        
-        if handler:
-            try:
-                handler(target, parameter, self._logic_thread)
-            except Exception as e:
-                debug_log("Error", f"{entity_type}.{input_name} handler failed: {e}")
-                import traceback
-                traceback.print_exc()
-        else:
-            self._try_generic_input(target, input_name, parameter)
+
+        # A delayed event outlives the call that queued it, so the source object
+        # may be gone by now; the id it was queued with still identifies it, and
+        # the live object is looked up only if one is still there.
+        if source_entity is None and source_id and self._find_entity_by_id:
+            source_entity = self._find_entity_by_id(source_id)
+        previous = (self._source_entity, self._source_id,
+                    self._activator_entity, self._activator_id)
+        self._source_entity = source_entity
+        self._source_id = source_id or self._get_entity_id(source_entity)
+        self._activator_id = activator_id or self._source_id
+        self._activator_entity = source_entity
+        if (self._activator_id and self._activator_id != self._source_id
+                and self._find_entity_by_id):
+            self._activator_entity = self._find_entity_by_id(self._activator_id)
+
+        try:
+            if handler:
+                try:
+                    handler(target, parameter, self._logic_thread)
+                except Exception as e:
+                    debug_log("Error", f"{entity_type}.{input_name} handler failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                self._try_generic_input(target, input_name, parameter)
+        finally:
+            (self._source_entity, self._source_id,
+             self._activator_entity, self._activator_id) = previous
     
+    #: Inputs every entity accepts, whatever its type, because
+    #: :meth:`_try_generic_input` implements them for anything with properties.
+    #: They are not in any type's declared list, so validation has to know about
+    #: them separately — and it reads them from here, so the two cannot drift.
+    GENERIC_INPUTS = frozenset({
+        'enable', 'disable', 'kill',
+        'hide', 'show', 'togglevisibility',
+        'settint', 'cleartint',
+    })
+
     def _try_generic_input(self, entity, input_name: str, parameter: str):
-        """Try generic input handling for common patterns."""
+        """Try generic input handling for common patterns.
+
+        ``disabled`` and ``hidden`` are written through
+        :func:`engine.spatial.set_authored_flag` rather than straight onto the
+        object.  Those two flags are the pair a streaming layer parks: Big World
+        stashes the authored value, forces both on, and restores the stash when
+        the cell comes back.  A plain write lands on the *parked* value and is
+        thrown away at the next unpark, so an event delivered to a dormant
+        entity would silently do nothing — the one way an event-driven world can
+        lose a change without anything reporting an error.  Writing through the
+        helper updates whichever of the two the object is actually using, so the
+        event lands whether the entity is live or dormant.
+        """
         input_lower = input_name.lower()
         
         # Generic enable/disable
         if input_lower == 'enable':
-            if isinstance(entity, dict):
-                entity['disabled'] = False
-            elif hasattr(entity, 'properties'):
-                entity.properties['disabled'] = False
-                
+            set_authored_flag(entity, 'disabled', False)
+
         elif input_lower == 'disable':
-            if isinstance(entity, dict):
-                entity['disabled'] = True
-            elif hasattr(entity, 'properties'):
-                entity.properties['disabled'] = True
-                
+            set_authored_flag(entity, 'disabled', True)
+
         elif input_lower == 'kill':
             # Mark for removal (handled by logic thread)
             if isinstance(entity, dict):
@@ -360,22 +570,13 @@ class IOManager:
 
         # ---- Generic Hide / Show / ToggleVisibility --------------------------
         elif input_lower == 'hide':
-            if isinstance(entity, dict):
-                entity['hidden'] = True
-            elif hasattr(entity, 'properties'):
-                entity.properties['hidden'] = True
+            set_authored_flag(entity, 'hidden', True)
 
         elif input_lower == 'show':
-            if isinstance(entity, dict):
-                entity['hidden'] = False
-            elif hasattr(entity, 'properties'):
-                entity.properties['hidden'] = False
+            set_authored_flag(entity, 'hidden', False)
 
         elif input_lower == 'togglevisibility':
-            if isinstance(entity, dict):
-                entity['hidden'] = not entity.get('hidden', False)
-            elif hasattr(entity, 'properties'):
-                entity.properties['hidden'] = not entity.properties.get('hidden', False)
+            set_authored_flag(entity, 'hidden', not authored_flag(entity, 'hidden'))
 
         # ---- Generic SetTint / ClearTint ------------------------------------
         elif input_lower == 'settint':
@@ -426,6 +627,17 @@ class IOManager:
             return entity.properties.get('name', '')
         return ''
     
+    def _get_entity_id(self, entity) -> str:
+        """The stable UUID of an entity, or ``""`` when it has none."""
+        if entity is None:
+            return ""
+        if isinstance(entity, dict):
+            return entity.get('id', '') or ""
+        props = getattr(entity, 'properties', None)
+        if isinstance(props, dict):
+            return props.get('id', '') or ""
+        return ""
+
     def _get_entity_type(self, entity) -> str:
         """Get the type of an entity."""
         if isinstance(entity, dict):
@@ -446,36 +658,43 @@ class IOManager:
         return 'unknown'
 
 
-    def query_keyvalue(self, store_name: str, key: str, default: str = "<missing>") -> str:
-        """
-        Query a value from a LogicKeyValueStore by store_name.
-        This is a convenience method for other systems (not I/O handlers)
-        to read persistent state without going through the entity system.
+    def query_keyvalue(self, store_name: str, key: str, default: str = "<missing>"):
+        """Read one value out of a :class:`~editor.things.LogicState` store.
+
+        A convenience for systems that are not I/O handlers and just want to
+        look at persistent state.  The entity is preferred when one exists in
+        the scene, so a store whose live values differ from the registry is
+        read correctly; otherwise the registry answers, which is what a store
+        belonging to a level that is not loaded needs.
+
+        The value comes back with its type, so a stored integer is an integer.
         """
         # First try to find the actual entity
         if self._find_entity:
             entity = self._find_entity(store_name)
-            if entity and hasattr(entity, 'get_value'):
+            if entity is not None and hasattr(entity, 'get_value'):
                 return entity.get_value(key, default)
 
         # Fallback to the class-level persistent registry
         try:
-            from editor.things import LogicKeyValueStore
-            if store_name in LogicKeyValueStore._persistent_registry:
-                return LogicKeyValueStore._persistent_registry[store_name].get(key, default)
+            from editor.things import LogicState
+            store = LogicState._persistent_registry.get(store_name)
+            if store is not None:
+                return store.get(key, default)
         except ImportError:
             pass
 
         return default
 
-    def set_keyvalue(self, store_name: str, key: str, value: str) -> bool:
-        """
-        Set a value in a LogicKeyValueStore by store_name.
-        Returns True on success, False if store is full or not found.
+    def set_keyvalue(self, store_name: str, key: str, value) -> bool:
+        """Write one value into a :class:`~editor.things.LogicState` store.
+
+        True on success, False when no such store is in the scene or the write
+        was refused (a blank key, or a full store).
         """
         if self._find_entity:
             entity = self._find_entity(store_name)
-            if entity and hasattr(entity, 'set_value'):
+            if entity is not None and hasattr(entity, 'set_value'):
                 return entity.set_value(key, value)
         return False
 
@@ -516,6 +735,8 @@ def register_default_io():
             IODef('Open', 'Open the door'),
             IODef('Close', 'Close the door'),
             IODef('Toggle', 'Toggle open/closed state'),
+            IODef('Stop', 'Halt the door where it is'),
+            IODef('Reverse', 'Send the door back the way it came'),
             IODef('Lock', 'Lock the door'),
             IODef('Unlock', 'Unlock the door'),
             IODef('SetSpeed', 'Set movement speed', 'float'),
@@ -540,6 +761,8 @@ def register_default_io():
             IODef('Open', 'Move to end position'),
             IODef('Close', 'Move to start position'),
             IODef('Toggle', 'Toggle movement direction'),
+            IODef('Stop', 'Halt the mover where it is'),
+            IODef('Reverse', 'Reverse the direction of travel'),
             IODef('SetPosition', 'Set position (0-1)', 'float'),
             IODef('SetSpeed', 'Set movement speed', 'float'),
             IODef('Enable', 'Enable movement'),
@@ -626,6 +849,7 @@ def register_default_io():
             IODef('Enable', 'Enable this relay'),
             IODef('Disable', 'Disable this relay'),
             IODef('Toggle', 'Toggle enabled state'),
+            IODef('Reset', 'Re-arm a fire_once relay so it can fire again'),
             IODef('CancelPending', 'Cancel any pending triggers'),
         ],
         outputs=[
@@ -640,11 +864,14 @@ def register_default_io():
             IODef('Disable', 'Stop the timer'),
             IODef('Toggle', 'Toggle timer state'),
             IODef('FireTimer', 'Fire immediately'),
+            IODef('Start', 'Start the timer (same as Enable)'),
+            IODef('Stop', 'Stop the timer (same as Disable)'),
             IODef('SetTime', 'Set interval in seconds', 'float'),
             IODef('ResetTimer', 'Reset to initial time'),
         ],
         outputs=[
             IODef('OnTimer', 'Fired when timer elapses'),
+            IODef('OnFinished', 'Fired when a one-shot timer stops itself'),
         ]
     )
     
@@ -665,6 +892,9 @@ def register_default_io():
             IODef('Kill',      'Kill this monster'),
             IODef('SetTarget', 'Set pursuit target (entity name, blank = player)', 'string'),
             IODef('Wake',      'Wake from dormant state'),
+            IODef('Sleep',     'Return to dormant state'),
+            IODef('SetHealth', 'Set current health', 'int'),
+            IODef('Respawn',   'Revive at full health (param overrides the health)', 'int'),
             IODef('Hide',      'Hide this monster'),
             IODef('Show',      'Show this monster'),
             IODef('ToggleVisibility', 'Toggle visibility'),
@@ -675,6 +905,7 @@ def register_default_io():
             IODef('OnSeePlayer',  'Fired on first sight of the player'),
             IODef('OnLostPlayer', 'Fired when player leaves sight range'),
             IODef('OnAttack',     'Fired each time the monster attacks'),
+            IODef('OnRespawn',    'Fired when revived by the Respawn input'),
         ]
     )
     
@@ -697,13 +928,19 @@ def register_default_io():
     # === LOGIC_GATE ===
     register_io('logic_gate',
         inputs=[
-            IODef('Trigger', 'Send input signal'),
-            IODef('Reset', 'Reset all input states'),
-            IODef('Enable', 'Enable gate'),
-            IODef('Disable', 'Disable gate'),
+            IODef('Trigger',     'Assert one input signal (param: its name; '
+                                 'blank means "anonymous")', 'string'),
+            IODef('ClearInput',  'De-assert one input signal (param: its name)', 'string'),
+            IODef('ToggleInput', 'Flip one input signal between asserted and not', 'string'),
+            IODef('Reset',       'De-assert every input signal'),
+            IODef('Evaluate',    'Re-test the gate without changing any input'),
+            IODef('Enable',      'Enable gate'),
+            IODef('Disable',     'Disable gate'),
+            IODef('Toggle',      'Toggle enabled state'),
         ],
         outputs=[
-            IODef('OnTrigger', 'Fired when gate condition is met'),
+            IODef('OnTrigger', 'Fired when the gate condition is met'),
+            IODef('OnFalse',   'Fired when the gate is evaluated and the condition fails'),
         ]
     )
     
@@ -772,6 +1009,8 @@ def register_default_io():
         inputs=[
             IODef('RunCommand', 'Run a console command (param: the command line, '
                                 'e.g. "cam 2"); blank uses the command property', 'string'),
+            IODef('Trigger',    'Run a console command (alias of RunCommand, so a '
+                                'generic trigger chain can drive one)', 'string'),
             IODef('SetCommand', 'Set the default command string', 'string'),
             IODef('Enable',     'Allow this entity to run commands'),
             IODef('Disable',    'Prevent this entity from running commands'),
@@ -819,29 +1058,70 @@ def register_default_io():
         ]
     )
 
-    # === LOGIC KEYVALUE STORE ===
-    # Persistent key/value store that survives level transitions.
-    register_io('logic_keyvalue',
+    # === LOGIC STATE ===
+    # Fio's persistent state primitive.  Every operation is parameterised
+    # ("Increment  killed,1") rather than given its own input, so the set stays
+    # small and a map can express something the engine was never told about.
+    register_io('logic_state',
         inputs=[
-            IODef('SetValue',      'Set a key/value pair (param: "key=value")', 'string'),
+            IODef('SetValue',      'Set a value (param: "key=value", or "key:type=value" '
+                                   'to state the type outright)', 'string'),
             IODef('GetValue',      'Read a key and fire OnValueRead (param: key name)', 'string'),
             IODef('ClearKey',      'Remove a single key (param: key name)', 'string'),
             IODef('ClearAll',      'Remove all keys'),
             IODef('CopyFrom',      'Copy all keys from another store by name', 'string'),
-            IODef('Increment',     'Increment integer value (param: "key,amount")', 'string'),
-            IODef('Decrement',     'Decrement integer value (param: "key,amount")', 'string'),
-            IODef('TestValue',     'Compare a key against a value (param: "key==val", also != > < >= <=)', 'string'),
+            IODef('CopyValue',     'Copy one key to another (param: "from,to" or '
+                                   '"store.from,to")', 'string'),
+            IODef('Increment',     'Add to a numeric value (param: "key,amount"; '
+                                   'amount defaults to 1)', 'string'),
+            IODef('Decrement',     'Subtract from a numeric value (param: "key,amount")', 'string'),
+            IODef('Add',           'Add to a numeric value (param: "key,amount")', 'string'),
+            IODef('Subtract',      'Subtract from a numeric value (param: "key,amount")', 'string'),
+            IODef('Multiply',      'Multiply a numeric value (param: "key,factor")', 'string'),
+            IODef('Divide',        'Divide a numeric value (param: "key,divisor")', 'string'),
+            IODef('Min',           'Keep the smaller of the value and the operand '
+                                   '(param: "key,value")', 'string'),
+            IODef('Max',           'Keep the larger of the value and the operand '
+                                   '(param: "key,value")', 'string'),
+            IODef('Clamp',         'Confine a value to a range (param: "key,low,high")', 'string'),
+            IODef('Toggle',        'Invert a value as a boolean (param: key name)', 'string'),
+            IODef('Compare',       'Test a key and fire OnTrue/OnFalse '
+                                   '(param: "key>=value"; also == != > < <=)', 'string'),
+            IODef('Exists',        'Fire OnTrue if a key is present, OnFalse if not '
+                                   '(param: key name)', 'string'),
+            IODef('Missing',       'Fire OnTrue if a key is absent, OnFalse if present '
+                                   '(param: key name)', 'string'),
+            IODef('TestValue',     'Compare a key against a value (legacy name for '
+                                   'Compare)', 'string'),
+            IODef('SetObjectValue', "Set a value against the firing entity's UUID "
+                                    '(param: "key=value")', 'string'),
+            IODef('GetObjectValue', "Read a value held against the firing entity's UUID "
+                                    '(param: key name)', 'string'),
+            IODef('ClearObjectState', "Forget every value held against the firing "
+                                      "entity's UUID"),
         ],
         outputs=[
-            IODef('OnValueSet',    'Fired when any key is set (param: "key=value")'),
-            IODef('OnValueRead',   'Fired by GetValue (param: value)'),
-            IODef('OnKeyCleared',  'Fired when a key is removed (param: key name)'),
-            IODef('OnStoreFull',   'Fired when trying to add beyond 25 keys'),
-            IODef('OnKeyNotFound', 'Fired when GetValue/TestValue targets a missing key'),
-            IODef('OnCompareTrue', 'Fired when TestValue comparison passes (param: actual value)'),
-            IODef('OnCompareFalse','Fired when TestValue comparison fails (param: actual value)'),
+            IODef('OnValueSet',    'Fired for every accepted write (param: "key=value")'),
+            IODef('OnValueChanged','Fired only when a write actually changed the value '
+                                   '(param: "key=value")'),
+            IODef('OnValueRead',   'Fired by GetValue (param: the value)'),
+            IODef('OnValueCleared','Fired when a key is removed (param: key name)'),
+            IODef('OnKeyCleared',  'Legacy name for OnValueCleared (param: key name)'),
+            IODef('OnStoreFull',   'Fired when a new key would exceed the store capacity'),
+            IODef('OnKeyNotFound', 'Fired when a read or comparison targets a missing key'),
+            IODef('OnTrue',        'Fired when a Compare/Exists/Missing test passes '
+                                   '(param: the value)'),
+            IODef('OnFalse',       'Fired when a Compare/Exists/Missing test fails '
+                                   '(param: the value)'),
+            IODef('OnCompareTrue', 'Legacy name for OnTrue (param: the value)'),
+            IODef('OnCompareFalse','Legacy name for OnFalse (param: the value)'),
         ]
     )
+
+    # Pre-2.4 type token for the same entity: a map saved before the rename
+    # still resolves its inputs and outputs in the editor.
+    register_io_alias('logic_keyvalue', 'logic_state')
+
 
 
 # =============================================================================
@@ -900,10 +1180,16 @@ def _entity_name(entity):
 def build_target_index(brushes, things):
     """Map every targeted name and id to the sources pointing at it.
 
-    Returns ``{key: [(source entity, label), ...]}`` where ``key`` is either a
-    target name or a target id — a connection is filed under both, so a lookup
-    finds it whether the entity is addressed by identity or by name.  Also
-    files the legacy ``brush['target']`` property that predates connections.
+    Returns ``{key: [(source entity, label, connection), ...]}`` where ``key``
+    is either a target name or a target id — a connection is filed under both,
+    so a lookup finds it whether the entity is addressed by identity or by name.
+    Also files the legacy ``brush['target']`` property that predates
+    connections, whose entry carries ``None`` for the connection because there
+    is not one.
+
+    The connection is carried so a caller can count *connections* rather than
+    sources: two wires from one entity into one target are two inputs, and a
+    listing keyed by source alone cannot see the difference.
 
     The *entity* is filed, never its name.  An index that stored the name would
     stop being an index and start being a stale copy of one: renaming a source
@@ -924,10 +1210,10 @@ def build_target_index(brushes, things):
             src_type = ('trigger' if brush.get('is_trigger')
                         else 'mover' if brush.get('is_mover') else None)
             if src_type:
-                _add(legacy, (brush, src_type))
+                _add(legacy, (brush, src_type, None))
         for conn in brush.get('_io_connections', []) or []:
             tid, tname = _connection_target(conn)
-            entry = (brush, "I/O: %s" % _connection_output(conn))
+            entry = (brush, "I/O: %s" % _connection_output(conn), conn)
             _add(tid, entry)
             if tname and tname != tid:
                 _add(tname, entry)
@@ -935,7 +1221,7 @@ def build_target_index(brushes, things):
     for thing in things:
         for conn in thing.properties.get('_io_connections', []) or []:
             tid, tname = _connection_target(conn)
-            entry = (thing, "I/O: %s" % _connection_output(conn))
+            entry = (thing, "I/O: %s" % _connection_output(conn), conn)
             _add(tid, entry)
             if tname and tname != tid:
                 _add(tname, entry)
@@ -968,8 +1254,21 @@ def find_targeting_sources(brushes, things, target_name="", target_id=""):
     index, so a rename shows up immediately without the index having to be
     rebuilt for something that did not change any connection.
 
-    Deduplicated, because a connection addressed by both id and name is filed
-    under each and would otherwise be reported twice.
+    Deduplicated by connection, because a connection addressed by both id and
+    name is filed under each and would otherwise be reported twice.
+    """
+    return [(_entity_name(entity), label)
+            for entity, label, _conn in _incoming(brushes, things,
+                                                  target_name, target_id)]
+
+
+def _incoming(brushes, things, target_name="", target_id=""):
+    """Every index entry pointing at one entity, each counted once.
+
+    Deduplication is by connection identity rather than by ``(source, label)``:
+    a connection filed under both a target id and a target name is one wire and
+    must be counted once, but two separate wires from the same entity's same
+    output are two and must be counted twice.
     """
     if not target_name and not target_id:
         return []
@@ -977,13 +1276,36 @@ def find_targeting_sources(brushes, things, target_name="", target_id=""):
     out = []
     seen = set()
     for key in (target_id, target_name):
-        for entity, label in index.get(key, ()) if key else ():
-            ident = (id(entity), label)
+        for entry in (index.get(key, ()) if key else ()):
+            entity, label, conn = entry
+            ident = id(conn) if conn is not None else (id(entity), label)
             if ident in seen:
                 continue
             seen.add(ident)
-            out.append((_entity_name(entity), label))
+            out.append(entry)
     return out
+
+
+def count_incoming_connections(brushes, things, target_name="", target_id="",
+                               input_name=""):
+    """How many connections call one input on one entity.
+
+    What a :class:`~editor.things.LogicGate` needs to know: how many signals is
+    it waiting for?  Answered from the cached reverse index rather than by
+    walking the level, and filtered by input name so a gate that also has a
+    ``Reset`` wired into it is still waiting for the right number of
+    ``Trigger`` signals.
+    """
+    wanted = input_name.lower() if input_name else ""
+    total = 0
+    for _entity, _label, conn in _incoming(brushes, things, target_name, target_id):
+        if conn is None:
+            continue
+        name = (conn.get('input') or conn.get('input_name') or ''
+                ) if isinstance(conn, dict) else getattr(conn, 'input_name', '')
+        if not wanted or (name or '').lower() == wanted:
+            total += 1
+    return total
 
 
 def entity_names(brushes, things):
@@ -992,6 +1314,194 @@ def entity_names(brushes, things):
     names.update(t.properties.get('name') for t in things
                  if t.properties.get('name'))
     return names
+
+
+# =============================================================================
+# CONNECTION VALIDATION
+# =============================================================================
+#
+# When the map is the program, a connection pointing at nothing is a broken
+# reference — and until now it failed at run time, as a line in the debug
+# console, long after the mistake was made.  These functions answer "what is
+# wrong with this network?" from the data the editor already has.
+#
+# They are pure: no state, no cache, no manager, no scheduling.  Nothing calls
+# them per frame; the editor calls them when it draws a panel, and a test calls
+# them to assert a map is sound.
+
+#: What :func:`validate_connections` can report.  Codes rather than sentences so
+#: a caller can decide which ones it cares about.
+PROBLEM_MISSING_TARGET = 'missing_target'
+PROBLEM_UNKNOWN_INPUT = 'unknown_input'
+PROBLEM_UNKNOWN_OUTPUT = 'unknown_output'
+
+
+def _io_names_lower(names):
+    return {n.lower() for n in names}
+
+
+def validate_connection(conn, entity, target, source_type=None):
+    """Problems with one connection, as ``[(code, message), ...]``.
+
+    *target* is the entity the connection resolves to, or None.  An unresolved
+    target is reported; so is an input the target's type does not accept, which
+    is the failure that used to be completely silent — a connection naming
+    ``Opne`` instead of ``Open`` resolved its target perfectly well and then did
+    nothing, with no error anywhere.
+
+    Two cases are carefully *not* conflated.  A type Fio has no definitions for
+    (a plugin entity, a type from a newer map) is not judged at all, because
+    reporting every input on it would train people to ignore the report.  A type
+    that *is* registered and declares no inputs is judged — every input on it is
+    wrong, and saying so is the whole point.  :func:`is_registered_type` is what
+    tells the two apart; the length of the declared list cannot.
+
+    The inputs every entity accepts regardless of type
+    (:data:`IOManager.GENERIC_INPUTS` — Enable, Hide, SetTint and the rest) are
+    accepted here too, because the dispatcher really does implement them for
+    anything.
+    """
+    problems = []
+    target_name = getattr(conn, 'target_name', '') or ''
+    input_name = getattr(conn, 'input_name', '') or ''
+    output_name = getattr(conn, 'output_name', '') or ''
+
+    if target is None:
+        problems.append((
+            PROBLEM_MISSING_TARGET,
+            "targets '%s', which is not in this map" % (target_name or '<unnamed>',)))
+    else:
+        target_type = get_entity_type_for_io(target)
+        if is_registered_type(target_type):
+            accepted = _io_names_lower(get_input_names(target_type))
+            accepted |= IOManager.GENERIC_INPUTS
+            if input_name.lower() not in accepted:
+                problems.append((
+                    PROBLEM_UNKNOWN_INPUT,
+                    "calls '%s', which %s entities do not accept"
+                    % (input_name, target_type)))
+
+    if source_type is None and entity is not None:
+        source_type = get_entity_type_for_io(entity)
+    if source_type and is_registered_type(source_type):
+        declared = _io_names_lower(get_output_names(source_type))
+        if output_name.lower() not in declared:
+            problems.append((
+                PROBLEM_UNKNOWN_OUTPUT,
+                "fires '%s', which %s entities do not have"
+                % (output_name, source_type)))
+
+    return problems
+
+
+def declared_outputs(entity_type: str) -> Set[str]:
+    """Lowercased declared output names for a type, memoised."""
+    cached = _declared_outputs_cache.get(entity_type)
+    if cached is None:
+        cached = {io.name.lower() for io in get_outputs(entity_type)}
+        _declared_outputs_cache[entity_type] = cached
+    return cached
+
+
+def audit_io_coverage(io_manager):
+    """Reconcile what the editor declares with what the runtime implements.
+
+    The registry and an ``IOManager``'s handler table are two separate things
+    and always will be — one is global and built at import, the other is
+    per-session and partly supplied by plugins. So the only way to know they
+    agree is to ask, which is what this does. Pass an ``IOManager`` that has had
+    every handler registered on it (the core ones *and* any plugin runtime's).
+
+    Returns a dict of three lists, each of ``(entity_type, io_name)``:
+
+    ``unimplemented_inputs``
+        Declared, but no handler is registered and the generic dispatcher does
+        not serve it either. The editor offers it; nothing runs. This is the
+        failure mode the split makes possible, and the reason this function
+        exists.
+    ``undeclared_inputs``
+        A handler exists for an input no type declares, so it works but no
+        designer can find it in the editor.
+    ``unknown_types``
+        A handler registered against a type the registry has never heard of —
+        usually a typo in the type token, which silently makes the handler
+        unreachable.
+
+    Entries listed in :data:`ABSTRACT_IO` are excluded, having been declared
+    inert on purpose. Outputs are not covered here: whether an output is ever
+    fired is a property of the code that fires it, not of any table, so it is
+    checked by reading the source (see the conformance tests).
+    """
+    handlers = set(getattr(io_manager, '_input_handlers', {}))
+    generic = set(IOManager.GENERIC_INPUTS)
+
+    declared = set()
+    unimplemented = []
+    for entity_type in IO_REGISTRY:
+        for name in get_input_names(entity_type):
+            key = (entity_type.lower(), name.lower())
+            declared.add(key)
+            if key in handlers or key[1] in generic:
+                continue
+            if (entity_type, name) in ABSTRACT_IO:
+                continue
+            unimplemented.append((entity_type, name))
+
+    known_types = {t.lower() for t in IO_REGISTRY}
+    undeclared, unknown = [], []
+    for entity_type, name in handlers:
+        if entity_type not in known_types:
+            unknown.append((entity_type, name))
+        elif (entity_type, name) not in declared:
+            undeclared.append((entity_type, name))
+
+    return {
+        'unimplemented_inputs': sorted(unimplemented),
+        'undeclared_inputs': sorted(undeclared),
+        'unknown_types': sorted(unknown),
+    }
+
+
+def validate_scene_connections(brushes, things, find_by_id=None, find_by_name=None):
+    """Every problem in a whole map, as ``[(entity, connection, code, message)]``.
+
+    Resolution follows the runtime's own rule — id first, name second — so what
+    this reports is what would actually happen, not an approximation of it.
+    Callers that already have the editor's lookups pass them in; otherwise a
+    pair of dicts is built from the scene once, for this call only.
+    """
+    if find_by_id is None or find_by_name is None:
+        by_id, by_name = {}, {}
+        for brush in brushes:
+            if brush.get('id'):
+                by_id[brush['id']] = brush
+            if brush.get('name'):
+                by_name[brush['name']] = brush
+        for thing in things:
+            props = thing.properties
+            if props.get('id'):
+                by_id[props['id']] = thing
+            if props.get('name'):
+                by_name[props['name']] = thing
+        find_by_id = find_by_id or by_id.get
+        find_by_name = find_by_name or by_name.get
+
+    def _resolve(conn):
+        target_id = getattr(conn, 'target_id', '')
+        if target_id:
+            found = find_by_id(target_id)
+            if found is not None:
+                return found
+        return find_by_name(getattr(conn, 'target_name', '') or '')
+
+    report = []
+    for entity in list(brushes) + list(things):
+        source_type = get_entity_type_for_io(entity)
+        for conn in get_connections(entity):
+            target = _resolve(conn)
+            for code, message in validate_connection(conn, entity, target, source_type):
+                report.append((entity, conn, code, message))
+    return report
 
 
 # =============================================================================
