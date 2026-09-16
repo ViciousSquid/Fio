@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem, 
                              QMenu, QAction, QHeaderView, QAbstractItemView, 
                              QPushButton, QHBoxLayout, QLabel, QFrame, QGridLayout,
-                             QLineEdit)
+                             QLineEdit, QStyle)
 from PyQt5.QtGui import QIcon, QColor, QBrush, QFont, QPainter, QPixmap
 from PyQt5 import QtCore
 import os
@@ -48,21 +48,39 @@ class SceneHierarchy(QWidget):
         # the hierarchy is the only place to find one by name, and scrolling is
         # not finding.
         self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Search scene…  (Enter to select matches)")
-        self.search_box.setClearButtonEnabled(True)
-        self.search_box.setFixedHeight(30)
+        # Just "Search": the box is narrow, and a longer hint was elided to
+        # "Search scene... (Ente..." — a placeholder that cannot be read whole
+        # is decoration, not help. The Enter behaviour is in the tooltip.
+        self.search_box.setPlaceholderText("Search")
+        self.search_box.setToolTip(
+            "Type part of a name or type, then press Enter to select every match")
+        # Qt's built-in clear button lives on the right; this one is on the
+        # left, next to where the eye already is, and only appears once there
+        # are results to clear.
+        self.search_box.setClearButtonEnabled(False)
+        self.search_box.setFixedHeight(38)
         self.search_box.setStyleSheet("""
             QLineEdit {
                 background-color: #1b1b1f;
                 color: #e0e0e0;
                 border: none;
                 border-bottom: 1px solid #425F5D;
-                padding: 4px 8px;
+                padding: 6px 10px;
             }
             QLineEdit:focus { border-bottom: 1px solid #E4D00A; }
         """)
         self.search_box.returnPressed.connect(self.apply_search)
         self.search_box.textChanged.connect(self._on_search_text_changed)
+
+        clear_icon = self.style().standardIcon(QStyle.SP_LineEditClearButton)
+        if clear_icon.isNull():          # not every style ships that one
+            clear_icon = self.style().standardIcon(QStyle.SP_DialogCloseButton)
+        self.clear_search_action = self.search_box.addAction(
+            clear_icon, QLineEdit.LeadingPosition)
+        self.clear_search_action.setToolTip("Clear the search")
+        self.clear_search_action.triggered.connect(self.clear_search)
+        self.clear_search_action.setVisible(False)
+
         layout.addWidget(self.search_box)
 
         #: Names matched by the last search, so a rebuilt tree keeps showing them.
@@ -211,6 +229,26 @@ class SceneHierarchy(QWidget):
         if not (text or "").strip():
             self._search_matches = set()
             self._apply_search_styling()
+            self._update_clear_button()
+
+    def _update_clear_button(self):
+        """Show the clear button only while results are on screen.
+
+        It clears a *result*, not the text — offering it the moment someone
+        starts typing would put a button under the cursor that undoes work
+        nobody has done yet.
+        """
+        action = getattr(self, 'clear_search_action', None)
+        if action is not None:
+            action.setVisible(bool(self._search_matches))
+
+    def clear_search(self):
+        """Empty the box and drop the highlight and the selection with it."""
+        self._search_matches = set()
+        self.search_box.clear()
+        self._apply_search_styling()
+        self._update_clear_button()
+        self.main_window.set_selected_objects([])
 
     def apply_search(self):
         """Select every match and show how many there were.
@@ -225,6 +263,7 @@ class SceneHierarchy(QWidget):
 
         if not matches:
             self._apply_search_styling()
+            self._update_clear_button()
             if (text or "").strip():
                 self.main_window.show_toast("No object matches '%s'" % text.strip(),
                                             is_error=True)
@@ -232,6 +271,7 @@ class SceneHierarchy(QWidget):
 
         self.main_window.set_selected_objects(matches)
         self._apply_search_styling()
+        self._update_clear_button()
         first = self._tree_item_for(matches[0])
         if first is not None:
             self.tree.scrollToItem(first)
