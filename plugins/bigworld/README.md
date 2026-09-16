@@ -240,6 +240,14 @@ Further resident cells can be classified DISTANT.
 
 This gives game systems a way to retain coarse world state without giving distant objects the same simulation cost as nearby objects.
 
+Note that DISTANT only appears where a cell is kept resident well past the
+activation radius. The tier model's own hysteresis stretches ACTIVE out to
+`activation_radius × (1 + TIER_HYSTERESIS)`, which with the shipped 2048/2304
+radii lands exactly on the deactivation radius — so on the defaults a resident
+cell goes straight from ACTIVE to DORMANT. A map that wants a distant band sets
+a deactivation radius more than an eighth beyond its activation radius. The
+model errs towards *more* simulation, which is the safe direction.
+
 ## DORMANT
 
 Cells outside the active/resident region are DORMANT.
@@ -447,6 +455,38 @@ thing.properties["id"]
 Cell membership is derived from world position.
 
 It is not stored as permanent object identity.
+
+### Entities that move
+
+A brush stays where the mapper put it, so its cell membership is settled the
+moment the world is indexed. An entity walks, and the cell it was *authored* in
+stops describing where it is.
+
+Resident entities are therefore re-filed on each cell crossing, alongside the
+residency work that crossing already does:
+
+```text
+player crosses a cell boundary
+    ↓
+resident entities that changed cell are re-filed   O(active entities)
+    ↓
+residency recomputed
+    ↓
+tiers re-evaluated
+```
+
+Only **resident** entities are considered, and that is what keeps the pass
+bounded: a parked entity carries `disabled`, so nothing simulates it and it
+cannot have moved. The cost never mentions the world's population.
+
+Without this a monster that chased the player two cells from home was parked —
+hidden and disabled — in the middle of a fight, while one that wandered towards
+the player stayed dormant standing next to them.
+
+Like residency itself, the pass runs on crossings rather than per frame, so an
+entity's filing is accurate to within one player cell movement. That errs
+towards keeping a mover resident, which is the same safe direction the tier
+model chooses.
 
 ---
 
@@ -866,6 +906,7 @@ Generated maps contain a Big World Settings entity and therefore opt themselves 
 | File | Purpose |
 |---|---|
 | `cell.py` | Cell representation, cell states, 512-unit coordinate system. |
+| `config.py` | The one field table a map's Big World settings are described by: defaults, editor property schema and runtime coercion all derive from it. |
 | `manager.py` | UUID index, cell assignment, residency calculation, hysteresis and active-set management. |
 | `runtime.py` | Runtime integration, parking/restoration, simulation-tier handling and persistent session state. |
 | `streaming.py` | Experimental disk streaming, cell sources, freeing/recreating cell objects. |

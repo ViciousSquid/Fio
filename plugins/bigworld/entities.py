@@ -21,34 +21,22 @@ try:
 except Exception:  # pragma: no cover - exercised only in the PyQt-free player
     from plugins.entitybase import Thing
 
+from .config import BY_KEY, coerce, defaults
+
 
 class BigWorldSettings(Thing):
     """Map-level Big World configuration (one per map, optional).
 
-    Properties
-    ----------
-    enabled:              master switch for streaming on this map (default True).
-    activation_radius:    world units; cells within this of the player activate.
-    deactivation_radius:  world units; active cells drop only beyond this
-                          (the hysteresis band that prevents boundary thrash).
-    show_cell_debug:      draw the Big World debug overlay / cell grid in play.
-    terrain_fill:         if the map has a procedural terrain, expand it to cover
-                          every cell of the world and stream its chunks around
-                          the player instead of tessellating the whole grid
-                          up-front (default False — terrain is left as authored).
-    terrain_infinite:     with terrain_fill on, stream the terrain **forever**
-                          around the camera/player instead of stopping at the
-                          world's content bounds — so you never walk off an edge
-                          (default False). Heights are a pure function of world
-                          position, so the ground is deterministic everywhere.
-    terrain_stream_radius: world units of terrain kept resident around the
-                          player; 0 derives it from the activation radius.
-    sim_near_radius:      world units within which entities are tiered NEAR —
-                          full simulation fidelity. Configuration only: it sizes
-                          the inner band of the tier model and is published to
-                          the host. The outer band is the activation radius, so
-                          the streamer and the tier model cannot disagree about
-                          how far out this map's world is live.
+    Holds *config only*, no runtime behaviour — that lives in
+    :mod:`plugins.bigworld.runtime`. Its presence in a map is the opt-in; a map
+    without one plays as ordinary Fio.
+
+    The properties it carries, their defaults, their editor labels and their
+    help text are :data:`plugins.bigworld.config.FIELDS` — not repeated here,
+    because a fourth copy of that list is a fourth thing to keep in step. This
+    class adds only the ``Thing`` wrapper: the defaults a placed entity is
+    seeded with, and typed accessors that read a saved value back through the
+    table's own coercion rules.
     """
 
     #: Reused by the property panel / manager to key its schema.
@@ -62,62 +50,47 @@ class BigWorldSettings(Thing):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault("type", self.TYPE)
-        self.properties.setdefault("enabled", True)
-        self.properties.setdefault("activation_radius", 2048.0)
-        self.properties.setdefault("deactivation_radius", 2304.0)
-        self.properties.setdefault("show_cell_debug", True)
-        self.properties.setdefault("terrain_fill", False)
-        self.properties.setdefault("terrain_infinite", False)
-        self.properties.setdefault("terrain_stream_radius", 0.0)
-        self.properties.setdefault("disk_streaming", False)
-        self.properties.setdefault("sim_near_radius", 1024.0)
+        # Defaults come from the one field table, so a placed entity, the
+        # editor's property schema and the runtime config cannot disagree
+        # about what this map is configured to do.
+        for key, value in defaults().items():
+            self.properties.setdefault(key, value)
 
     # -- typed accessors ----------------------------------------------------
+    #
+    # Each reads through :func:`plugins.bigworld.config.coerce`, so a value
+    # that survived a JSON round trip as ``"true"`` or a hand edit as ``""``
+    # answers the same as one the property panel wrote.
+
+    def _get(self, key):
+        return coerce(key, self.properties.get(key, BY_KEY[key].default))
+
     def disk_streaming(self) -> bool:
-        val = self.properties.get("disk_streaming", False)
-        if isinstance(val, bool):
-            return val
-        return str(val).strip().lower() in ("1", "true", "yes", "on")
+        return bool(self._get("disk_streaming"))
 
     def is_enabled(self) -> bool:
-        val = self.properties.get("enabled", True)
-        if isinstance(val, bool):
-            return val
-        return str(val).strip().lower() in ("1", "true", "yes", "on")
+        return bool(self._get("enabled"))
 
     def activation_radius(self) -> float:
-        try:
-            return float(self.properties.get("activation_radius", 2048.0))
-        except (TypeError, ValueError):
-            return 2048.0
+        return float(self._get("activation_radius"))
 
     def deactivation_radius(self) -> float:
-        try:
-            r = float(self.properties.get("deactivation_radius", 2304.0))
-        except (TypeError, ValueError):
-            r = 2304.0
-        return max(r, self.activation_radius())
+        # Never inside the activation radius — the hysteresis band has to be a
+        # band. Same rule as config_from_settings, from the same place.
+        return max(float(self._get("deactivation_radius")),
+                   self.activation_radius())
 
     def show_cell_debug(self) -> bool:
-        val = self.properties.get("show_cell_debug", True)
-        if isinstance(val, bool):
-            return val
-        return str(val).strip().lower() in ("1", "true", "yes", "on")
+        return bool(self._get("show_cell_debug"))
 
     def terrain_fill(self) -> bool:
-        val = self.properties.get("terrain_fill", False)
-        if isinstance(val, bool):
-            return val
-        return str(val).strip().lower() in ("1", "true", "yes", "on")
+        return bool(self._get("terrain_fill"))
 
     def terrain_infinite(self) -> bool:
-        val = self.properties.get("terrain_infinite", False)
-        if isinstance(val, bool):
-            return val
-        return str(val).strip().lower() in ("1", "true", "yes", "on")
+        return bool(self._get("terrain_infinite"))
 
     def terrain_stream_radius(self) -> float:
-        try:
-            return float(self.properties.get("terrain_stream_radius", 0.0))
-        except (TypeError, ValueError):
-            return 0.0
+        return float(self._get("terrain_stream_radius"))
+
+    def sim_near_radius(self) -> float:
+        return float(self._get("sim_near_radius"))

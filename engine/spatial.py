@@ -80,6 +80,21 @@ TIER_NAMES = ('NEAR', 'ACTIVE', 'DISTANT', 'DORMANT')
 SIM_TIER_KEY = '_sim_tier'
 
 
+def _props_of(obj):
+    """The mutable property dict of a Thing-like object, or a raw dict.
+
+    Brushes are dicts and entities keep theirs under ``properties``; every
+    accessor in this module takes either, so one caller serves both halves of
+    Fio's world without asking which it is holding.  ``None`` for anything else.
+    """
+    props = getattr(obj, 'properties', None)
+    if isinstance(props, dict):
+        return props
+    if isinstance(obj, dict):
+        return obj
+    return None
+
+
 def tier_of(obj, default=TIER_NEAR):
     """The simulation tier stamped on ``obj``, or *default* if there is none.
 
@@ -88,28 +103,82 @@ def tier_of(obj, default=TIER_NEAR):
     an unclassified world is a fully simulated world, which is what an ordinary
     map, an editor preview and a head-less test all want.
     """
-    props = getattr(obj, 'properties', None)
-    if not isinstance(props, dict):
-        if not isinstance(obj, dict):
-            return default
-        props = obj
+    props = _props_of(obj)
+    if props is None:
+        return default
     tier = props.get(SIM_TIER_KEY)
     if tier is None:
         return default
     return int(tier)
 
 
-def authored_hidden(obj):
+#: The two flags a streaming layer parks, paired with the key it stashes the
+#: authored value under.  One table so the reader and the writer below cannot
+#: learn about a third parked flag at different times.
+_PARKED_FLAGS = {
+    'hidden': PARKED_HIDDEN_KEY,
+    'disabled': PARKED_DISABLED_KEY,
+}
+
+
+def authored_flag(obj, flag, default=False):
+    """The *authored* value of a parkable flag, ignoring streaming.
+
+    For an object no streaming layer has touched this is just the flag.  For a
+    parked one it is the value the layer stashed — so the object still takes
+    part in anything built to last, and comes back correctly when the cell it
+    lives in is activated again.
+    """
+    props = _props_of(obj)
+    if props is None:
+        return default
+    mark = _PARKED_FLAGS.get(flag)
+    if mark is not None and mark in props:
+        return bool(props[mark])
+    return bool(props.get(flag, default))
+
+
+def set_authored_flag(obj, flag, value):
+    """Write the *authored* value of a parkable flag, ignoring streaming.
+
+    The write half of :func:`authored_flag`, and the reason it exists: anything
+    that restores an object's persistent state — a save being loaded, most
+    importantly — must land on what the object *is*, not on what a streaming
+    layer has temporarily made it.  Writing ``hidden`` directly onto a parked
+    object is silently undone the moment its cell comes back, because unparking
+    restores the stashed value; writing through here updates the stash instead,
+    so the restored state is the one that survives.
+
+    Returns True if it wrote anything (i.e. ``obj`` has a property dict).
+    """
+    props = _props_of(obj)
+    if props is None:
+        return False
+    mark = _PARKED_FLAGS.get(flag)
+    if mark is not None and mark in props:
+        props[mark] = bool(value)
+    else:
+        props[flag] = bool(value)
+    return True
+
+
+def authored_hidden(obj, default=False):
     """Whether ``obj`` is hidden *by the map*, ignoring streaming.
 
-    For an object no streaming layer has touched this is just its ``hidden``
-    flag.  For a parked one it is the value the layer saved — so the object
-    still takes part in anything built to last, and comes back correctly when
-    the cell it lives in is activated again.
+    The question the collision grid asks of every brush it files, and the one a
+    restore asks before it writes.  See :func:`authored_flag`.
     """
-    if PARKED_HIDDEN_KEY in obj:
-        return bool(obj[PARKED_HIDDEN_KEY])
-    return bool(obj.get('hidden'))
+    return authored_flag(obj, 'hidden', default)
+
+
+def authored_disabled(obj, default=False):
+    """Whether ``obj``'s gameplay is disabled *by the map*, ignoring streaming.
+
+    ``hidden``'s counterpart for entities: parking sets both, so anything that
+    reasons about an entity's authored state needs both questions answered the
+    same way.
+    """
+    return authored_flag(obj, 'disabled', default)
 
 
 def cell_of_point(x, z, cell_size=CELL_SIZE):

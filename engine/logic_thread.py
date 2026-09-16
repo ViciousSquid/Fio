@@ -309,6 +309,10 @@ class LogicThread(threading.Thread):
         # PERF: cached self.brushes + self._model_collision_brushes (see
         # _refresh_collision_brushes_cache)
         self._collision_brushes_cache: list = []
+        # Bumped every time the set of drawable objects changes, so a consumer
+        # that caches across frames can tell whether its cache still describes
+        # this world.  See notify_visibility_changed().
+        self.visibility_changes = 0
 
         # Global toggle for model collision (F6 in play mode)
         self.model_collision_enabled = True
@@ -790,6 +794,42 @@ class LogicThread(threading.Thread):
         concatenation and reuse it from the hot paths instead.
         """
         self._collision_brushes_cache = self.brushes + self._model_collision_brushes
+
+    # -- visibility invalidation ------------------------------------------
+    #
+    # Two notifications, because "what is drawn" and "what is collided with"
+    # go stale at different costs.  Both are the *host* side of the streaming
+    # contract in ``plugins.bigworld.runtime.StreamingHost``; neither knows
+    # anything about a particular streaming layer.
+
+    def notify_visibility_changed(self):
+        """The set of drawable objects changed.
+
+        Cheap by contract — a counter bump and the per-frame cull buffers —
+        because a streaming layer calls it every time the player crosses a cell
+        boundary.  The cull buffers are rebuilt lazily on the next frame, and
+        `hidden` itself is read fresh there, so this costs nothing until a frame
+        actually wants it.
+        """
+        self.visibility_changes += 1
+        self._invalidate_cull_cache()
+
+    def notify_authored_visibility_changed(self):
+        """An object's *authored* hidden/disabled state changed.
+
+        The expensive one, and the one streaming must never need: parking
+        stashes an object's authored ``hidden`` rather than overwriting it
+        (``engine.spatial.authored_hidden``), precisely so the collision grid
+        can outlive a cell going in and out.  An *authored* change is different
+        — an editor edit, an I/O Show/Hide, a save being restored over the live
+        world — and the grid is built from exactly that, once, so it has to be
+        rebuilt or the world collides like the map it used to be.
+        """
+        self.notify_visibility_changed()
+        self._refresh_collision_brushes_cache()
+        grid = getattr(self, '_spatial_grid', None)
+        if grid is not None:
+            grid.populate(self._collision_brushes_cache)
 
     # =========================================================================
     # PLAYER & MODE MANAGEMENT

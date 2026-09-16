@@ -286,32 +286,59 @@ class BigWorldSession:
     def tick(self, player_pos=None) -> bool:
         """Per-frame entry point. Returns True if the active set changed.
 
-        The hot path: a single cell-of-point compare inside ``manager.update``
-        early-outs until the player crosses a cell boundary, so a stationary or
-        slow-moving player pays almost nothing. On a crossing, only the objects
-        that entered/left the region are toggled.
+        The hot path: a single cell-of-point compare early-outs until the
+        player crosses a cell boundary, so a stationary or slow-moving player
+        pays almost nothing. On a crossing, only the objects that entered or
+        left the region are toggled — plus the resident entities that walked
+        into a different cell, which is the same order of work.
         """
         if not self.streaming or not self._started:
             return False
         pos = player_pos if player_pos is not None else self._player_pos()
         if pos is None:
             return False
-        before = self.manager._last_player_cell
-        delta = self.manager.update(pos)
-        crossed = self.manager._last_player_cell != before
-        if not delta.changed:
-            if crossed:
-                # The active *set* did not change, but the player is in a new
-                # cell, so a cell's distance band may have. Re-tier the active
-                # set — O(active cells), and it stamps nothing unless a cell
-                # actually moved tier.
-                self.tiers.update(self.manager, *_xz(pos))
+        px, pz = _xz(pos)
+        crossed = (cell_of_point(px, pz, self.manager.cell_size)
+                   != self.manager._last_player_cell)
+        if not crossed:
+            # The hot path: a single cell-of-point compare, so a stationary or
+            # slow-moving player pays almost nothing.
             return False
-        # Commit the persistent state of every cell that is about to leave the
-        # active set into the registry *before* it is parked, so its changes
-        # outlive the unload (the core invariant of a Big World save).
-        for coord in delta.leaving_cells:
-            self.commit_cell(coord)
+
+        # Entities walk, and the cell one was authored in stops describing
+        # where it is. Re-file the resident movers *before* residency is
+        # recomputed, so an entity that travelled with the player is measured
+        # from where it now stands rather than parked with the cell it left.
+        # Bounded by the active set — a parked entity carries ``disabled``, so
+        # it cannot have moved.
+        moved = self.manager.refile_moved_things(pos)
+        if moved.changed:
+            self._apply_delta(moved)
+
+        delta = self.manager.update(pos)
+        if delta.changed:
+            # Commit the persistent state of every cell that is about to leave
+            # the active set into the registry *before* it is parked, so its
+            # changes outlive the unload (the core invariant of a Big World
+            # save).
+            for coord in delta.leaving_cells:
+                self.commit_cell(coord)
+            self._apply_delta(delta)
+
+        # The entering/leaving stamps were written by _set_thing_active above,
+        # proportional to what actually moved. This re-tiers the active cells,
+        # restamping the entities of the ring whose distance band changed — and
+        # on a crossing that changed no cell's residency, it is all that runs.
+        self.tiers.update(self.manager, *_xz(pos))
+        return delta.changed or moved.changed
+
+    def _apply_delta(self, delta) -> None:
+        """Switch the world on/off for one activation delta.
+
+        Shared by the residency delta and the moved-entity delta because they
+        are the same statement — *these objects entered the live region, those
+        left it* — reached by two different routes.
+        """
         for brush in delta.brushes_leaving:
             self._set_brush_active(brush, False)
         for brush in delta.brushes_entering:
@@ -324,11 +351,6 @@ class BigWorldSession:
             self._set_light_active(light, False)
         for light in delta.lights_entering:
             self._set_light_active(light, True)
-        # The entering/leaving stamps were written by _set_thing_active above,
-        # proportional to what actually moved. This re-tiers the active cells,
-        # restamping the entities of the ring whose distance band changed.
-        self.tiers.update(self.manager, *_xz(pos))
-        return True
 
     def _apply_active_snapshot(self) -> None:
         """Turn on everything the manager currently marks active (post-start)."""
