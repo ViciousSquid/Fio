@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
 from PyQt5.QtGui import QIcon, QColor, QBrush, QFont, QPainter, QPixmap
 from PyQt5 import QtCore
 import os
+import re
 from PyQt5.QtCore import Qt, QTimer
 
 from editor.things import Light, Model, Monster
@@ -44,6 +45,12 @@ class SceneHierarchy(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # Search container (QLineEdit + Match Whole Word button)
+        search_container = QWidget()
+        search_layout = QHBoxLayout(search_container)
+        search_layout.setContentsMargins(0, 0, 0, 0)
+        search_layout.setSpacing(0)
+
         # Search box, above everything: on a level with a few hundred objects
         # the hierarchy is the only place to find one by name, and scrolling is
         # not finding.
@@ -81,7 +88,37 @@ class SceneHierarchy(QWidget):
         self.clear_search_action.triggered.connect(self.clear_search)
         self.clear_search_action.setVisible(False)
 
-        layout.addWidget(self.search_box)
+        search_layout.addWidget(self.search_box, stretch=1)
+
+        # Match Whole Word Button ("ab")
+        self.match_word_button = QPushButton("ab")
+        self.match_word_button.setCheckable(True)
+        self.match_word_button.setFixedSize(38, 38)
+        self.match_word_button.setToolTip("Match Whole Word")
+        self.match_word_button.setStyleSheet("""
+            QPushButton {
+                background-color: #1b1b1f;
+                color: #888888;
+                border: none;
+                border-bottom: 1px solid #425F5D;
+                font-weight: bold;
+                font-family: monospace;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                color: #ffffff;
+                background-color: #2a2a30;
+            }
+            QPushButton:checked {
+                color: #ffffff;
+                background-color: #007acc;
+                border-bottom: 1px solid #007acc;
+            }
+        """)
+        self.match_word_button.toggled.connect(self.apply_search)
+        search_layout.addWidget(self.match_word_button)
+
+        layout.addWidget(search_container)
 
         #: Names matched by the last search, so a rebuilt tree keeps showing them.
         self._search_matches = set()
@@ -201,22 +238,26 @@ class SceneHierarchy(QWidget):
         return " ".join(parts).lower()
 
     def find_matches(self, text):
-        """Every object whose name or type contains *text*.
-
-        Substring matching, not prefix or exact: someone looking for a switch
-        types "switch", not the whole of ``door_switch_north_02``.
-        """
+        """Every object whose name or type matches *text*."""
         needle = (text or "").strip().lower()
         if not needle:
             return []
+
+        match_whole = self.match_word_button.isChecked()
+        if match_whole:
+            pattern = re.compile(r'\b' + re.escape(needle) + r'\b', re.IGNORECASE)
+            is_match = lambda text: bool(pattern.search(text))
+        else:
+            is_match = lambda text: needle in text
+
         matches = []
         for index, brush in enumerate(self.main_window.state.brushes):
             name = self._get_brush_display_name(brush, index)
-            if needle in self._searchable_text(brush, name):
+            if is_match(self._searchable_text(brush, name)):
                 matches.append(brush)
         for thing in self.main_window.state.things:
             name = thing.properties.get("name", "") if hasattr(thing, "properties") else ""
-            if needle in self._searchable_text(thing, name):
+            if is_match(self._searchable_text(thing, name)):
                 matches.append(thing)
         return matches
 
@@ -706,7 +747,7 @@ class SceneHierarchy(QWidget):
                 # Remove the live terrain object so the 3D view stops rendering it
                 if hasattr(self.main_window, 'terrain'):
                     self.main_window.terrain = None
-                panel = getattr(self.main_window, 'terrain_editor_window', None)
+                panel = getattr(self.main_window, '_current_overlay', None)
                 if panel is not None:
                     if getattr(self.main_window, '_current_overlay', None) is panel:
                         self.main_window._close_current_overlay()
@@ -718,14 +759,6 @@ class SceneHierarchy(QWidget):
         # -----------------------------------------------------------------
         # Focus On — every brush/thing menu, never terrain
         # -----------------------------------------------------------------
-        # Deliberately placed after the terrain branch has returned: terrain has
-        # no position to centre on (it is the whole world), so offering to focus
-        # on it would be offering something that cannot work.
-        #
-        # Connected rather than compared against the exec_() result, because the
-        # branches below each run their own exec_ and compare against their own
-        # actions; a connected action fires from whichever of them runs, and the
-        # branch's comparisons simply all miss.
         focus_targets = []
         state = self.main_window.state
         for _item, index in brush_items:
@@ -934,9 +967,6 @@ class SceneHierarchy(QWidget):
                     terrain_selected = True
         
         if terrain_selected and not selected_objects:
-            # Terrain is selected in the hierarchy but it's not a brush/thing —
-            # nothing to pass to set_selected_objects.  Just leave it visually
-            # highlighted; the right-click menu handles Edit / Delete.
             self.main_window.set_selected_objects([])
             return
 
