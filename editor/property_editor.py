@@ -2164,7 +2164,11 @@ class PropertyEditor(QWidget):
 
     def _build_keyvalue_group(self, tab_layout, thing):
         """The LogicState editor: store name, capacity, and the value table."""
-        group = QGroupBox("Logic State")
+        # No group title and no "State:" caption above the table: the panel
+        # already sits under the entity's own heading, and the table's Key /
+        # Type / Value / State columns say what it is. Two more labels saying
+        # the same thing cost a row of height each and add nothing.
+        group = QGroupBox()
         group.setStyleSheet(_Style.group_box("#26A69A", "#1a2f2d"))
         layout = QVBoxLayout(group)
         layout.setSpacing(6)
@@ -2210,8 +2214,6 @@ class PropertyEditor(QWidget):
         cap_row.addWidget(cap_spin)
         cap_row.addStretch()
         layout.addLayout(cap_row)
-
-        layout.addWidget(QLabel("<b>State:</b>"))
 
         kv_table = QTableWidget(0, len(self._STATE_COLUMNS))
         kv_table.setHorizontalHeaderLabels(list(self._STATE_COLUMNS))
