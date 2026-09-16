@@ -621,6 +621,73 @@ class MainWindow(QMainWindow):
         self.view_front.update()
 
 
+    @staticmethod
+    def _object_focus_target(obj):
+        """``(centre, radius)`` of a brush or thing, in world units.
+
+        The radius is what decides how far back to stand: a 2048-unit floor and
+        a light entity both want to fill the view, and a fixed distance would
+        bury one and lose the other.
+        """
+        if isinstance(obj, dict):
+            pos = obj.get('pos') or [0.0, 0.0, 0.0]
+            size = obj.get('size') or [64.0, 64.0, 64.0]
+            centre = [float(pos[0]), float(pos[1]), float(pos[2])]
+            radius = max(float(size[0]), float(size[1]), float(size[2])) * 0.5
+        else:
+            pos = getattr(obj, 'pos', None) or [0.0, 0.0, 0.0]
+            centre = [float(pos[0]), float(pos[1]), float(pos[2])]
+            radius = 48.0
+            getter = getattr(obj, 'get_radius', None)
+            if callable(getter):
+                try:
+                    radius = max(radius, float(getter()))
+                except Exception:
+                    pass
+        return centre, max(16.0, radius)
+
+    def focus_on_object(self, obj):
+        """Centre every view on one object, in 2D and in 3D."""
+        if obj is None:
+            return
+        centre, radius = self._object_focus_target(obj)
+        self.focus_on_bounds(centre, radius)
+        name = (obj.get('name') if isinstance(obj, dict)
+                else obj.properties.get('name', '')) or 'object'
+        self.show_toast("Focused on %s" % name)
+
+    def focus_on_bounds(self, centre, radius):
+        """Centre every view on a point, framed for something *radius* across.
+
+        The 3D camera keeps its current yaw and pitch and simply moves so the
+        target is in front of it. Snapping to a canned angle would be easier and
+        would throw away the orientation the user had chosen, which is usually
+        the thing they were reasoning about.
+        """
+        radius = max(16.0, float(radius))
+        self.center_2d_views_on(centre)
+        # Zoom so the object spans a comfortable fraction of the viewport rather
+        # than whatever zoom happened to be set.
+        for view in (self.view_top, self.view_side, self.view_front):
+            try:
+                extent = min(view.width(), view.height())
+                if extent > 0:
+                    view.zoom_factor = max(0.05, min(8.0, extent / (radius * 6.0)))
+                view.update()
+            except Exception:
+                pass
+
+        camera = getattr(getattr(self, 'view_3d', None), 'camera', None)
+        if camera is not None:
+            try:
+                import glm
+                front = camera.get_front_vector()
+                distance = max(radius * 3.0, 128.0)
+                camera.pos = glm.vec3(centre[0], centre[1], centre[2]) - front * distance
+                self.view_3d.update()
+            except Exception:
+                pass
+
     def moveEvent(self, event):
         """Handle window move."""
         super().moveEvent(event)
@@ -4523,6 +4590,20 @@ class MainWindow(QMainWindow):
             # If the graph window is not yet open, open it so the user can review
             # and press Apply to persist the connections.
             self.open_logic_graph()
+
+    def open_project_overview(self):
+        """Show what this map contains, as a report rather than a panel.
+
+        It lived in the bottom third of the Scene Hierarchy, where a report
+        competed for height with the list people open that panel to use.
+        """
+        try:
+            from editor.project_overview import show_project_overview
+        except ImportError:
+            QMessageBox.warning(self, "Project Overview",
+                                "The overview is unavailable in this build.")
+            return
+        show_project_overview(self)
 
     def validate_io_connections(self):
         """Report every broken connection in the map.

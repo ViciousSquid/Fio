@@ -350,6 +350,13 @@ class Ui_MainWindow(object):
         MainWindow.logic_wizard_action.setToolTip('Guided setup for common I/O scenarios')
         MainWindow.logic_wizard_action.triggered.connect(MainWindow.open_logic_wizard)
 
+        MainWindow.project_overview_action = QAction('Project Overview…', MainWindow)
+        MainWindow.project_overview_action.setToolTip(
+            'What this map contains: brushes, movers, lights, monsters, '
+            'connections, and when it was created and last saved')
+        MainWindow.project_overview_action.triggered.connect(
+            MainWindow.open_project_overview)
+
         MainWindow.validate_action = QAction('Validate All Connections…', MainWindow)
         MainWindow.validate_action.setToolTip(
             'Check every connection for a missing target, or an input or output '
@@ -365,6 +372,7 @@ class Ui_MainWindow(object):
         
         MainWindow.tools_menu.addAction(MainWindow.logic_graph_action)
         MainWindow.tools_menu.addAction(MainWindow.logic_wizard_action)
+        MainWindow.tools_menu.addAction(MainWindow.project_overview_action)
         MainWindow.tools_menu.addAction(MainWindow.validate_action)
         MainWindow.tools_menu.addSeparator()
         MainWindow.tools_menu.addAction(MainWindow.terrain_action)

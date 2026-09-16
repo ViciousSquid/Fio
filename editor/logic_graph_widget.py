@@ -28,7 +28,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore  import Qt, QRectF, QPointF, pyqtSignal, QSize
 from PyQt5.QtGui   import (
-    QPainter, QPen, QBrush, QColor, QFont, QPainterPath,
+    QPainter, QPen, QBrush, QColor, QFont, QPainterPath, QPainterPathStroker,
     QLinearGradient, QIcon, QKeySequence, QFontMetrics
 )
 
@@ -224,6 +224,7 @@ class ConnectionItem(QGraphicsPathItem):
 
     def refresh(self):
         if self.src_pin and self.dst_pin:
+            self.prepareGeometryChange()
             self._bezier(self.src_pin.scene_center(),
                          self.dst_pin.scene_center())
 
@@ -254,6 +255,25 @@ class ConnectionItem(QGraphicsPathItem):
         if getattr(conn, 'fire_once', False):
             parts.append("once")
         return "  ·  ".join(parts)
+
+    def boundingRect(self) -> QRectF:
+        """The path, widened to hold the label.
+
+        A nearly straight wire has an almost flat bounding rect, so the label
+        box drawn at its midpoint fell outside it and Qt clipped the text away
+        entirely — the label existed and was simply never visible.
+        """
+        rect = super().boundingRect()
+        if self._mid is not None and self.label_text():
+            rect = rect.united(QRectF(self._mid.x() - 140, self._mid.y() - 16,
+                                      280, 32))
+        return rect.adjusted(-2, -2, 2, 2)
+
+    def shape(self):
+        """Hit-testing stays the wire itself, not the label's box."""
+        stroker = QPainterPathStroker()
+        stroker.setWidth(8.0)
+        return stroker.createStroke(self.path())
 
     def paint(self, p: QPainter, opt, widget=None):
         super().paint(p, opt, widget)
@@ -426,6 +446,12 @@ class EntityNodeItem(QGraphicsItem):
             return
         self.show_all_pins = bool(show)
         self.relayout()
+        # A node that just grew by thirty rows will be sitting on top of
+        # whatever was below it, so the auto-placed column is repacked. Nodes
+        # the user has positioned are left alone (see reflow_auto_placed).
+        scene = self.scene()
+        if scene is not None and hasattr(scene, 'reflow_auto_placed'):
+            scene.reflow_auto_placed()
 
     def reveal_for_drag(self, revealed: bool):
         """Temporarily show every pin while a wire is being dragged."""
@@ -465,15 +491,37 @@ class EntityNodeItem(QGraphicsItem):
         p.drawRoundedRect(hdr, r, r)
         p.drawRect(QRectF(0, hh - r, nw, r))
 
-        p.setPen(QPen(Qt.white))
+        # The type is drawn first and its width reserved, so a long entity name
+        # is elided rather than printed straight through it. Both used to be
+        # drawn across the full header width — one left-aligned, one right — and
+        # a name like "LevelChanger_1" landed on top of "levelchanger".
+        # The name is what a designer addresses the entity by, so it gets the
+        # room it needs and the type is elided into what is left. The other way
+        # round turned "LevelChanger_1" into "Lev...r_1" to protect a label that
+        # merely repeats the node's colour.
+        # Measured through the painter's own metrics, not a detached
+        # QFontMetrics: those disagree by a pixel or two depending on the paint
+        # device, and a name measured one pixel narrow than it draws gets
+        # elided when it would have fitted exactly.
         p.setFont(_ui_font(bold=True))
-        p.drawText(QRectF(10, 0, nw - 14, hh),
-                   Qt.AlignVCenter | Qt.AlignLeft, self.entity_name)
+        name_metrics = p.fontMetrics()
+        name_w = min(float(name_metrics.horizontalAdvance(self.entity_name)) + 2.0,
+                     nw - 24)
+        name_text = name_metrics.elidedText(self.entity_name, Qt.ElideMiddle,
+                                            int(name_w) + 1)
+        p.setPen(QPen(Qt.white))
+        p.drawText(QRectF(10, 0, name_w, hh), Qt.AlignVCenter | Qt.AlignLeft,
+                   name_text)
 
-        p.setPen(QPen(QColor(255, 255, 255, 130)))
-        p.setFont(_ui_font(delta=-2))
-        p.drawText(QRectF(0, 0, nw - 8, hh),
-                   Qt.AlignVCenter | Qt.AlignRight, self.entity_type)
+        type_w = max(0.0, nw - name_w - 24)
+        if type_w > 12:
+            p.setFont(_ui_font(delta=-2))
+            type_metrics = p.fontMetrics()
+            p.setPen(QPen(QColor(255, 255, 255, 130)))
+            p.drawText(QRectF(nw - type_w - 8, 0, type_w, hh),
+                       Qt.AlignVCenter | Qt.AlignRight,
+                       type_metrics.elidedText(self.entity_type, Qt.ElideRight,
+                                               int(type_w)))
 
         p.setPen(QPen(QColor(255, 255, 255, 25), 1))
         p.drawLine(QPointF(0, hh), QPointF(nw, hh))
@@ -494,19 +542,26 @@ class EntityNodeItem(QGraphicsItem):
         # The collapsed remainder, so a node never silently omits anything: it
         # says how much it is not showing, and double-click opens it.
         if self._hidden_out or self._hidden_in:
+            # Each side gets half the row and is elided into it. Both notices
+            # used to be drawn across nearly the whole node width — one aligned
+            # left, one right — so on any node with both they collided in the
+            # middle and rendered as unreadable overstruck text.
             y = hh + max(len(self._rows_out), len(self._rows_in)) * row
-            p.setFont(_ui_font(delta=-2))
+            more_font = _ui_font(delta=-2)
+            more_metrics = QFontMetrics(more_font)
+            p.setFont(more_font)
             p.setPen(QPen(QColor(200, 200, 210, 150)))
+            half = (nw - pr * 2 - 12) / 2.0
             if self._hidden_in:
-                p.drawText(QRectF(pr * 2 + 6, y, nw - pr * 2 - 12, row),
-                           Qt.AlignVCenter | Qt.AlignLeft,
-                           "＋ %d more input%s" % (self._hidden_in,
-                                                  "" if self._hidden_in == 1 else "s"))
+                text = more_metrics.elidedText("+%d in" % self._hidden_in,
+                                               Qt.ElideRight, int(half))
+                p.drawText(QRectF(pr * 2 + 6, y, half, row),
+                           Qt.AlignVCenter | Qt.AlignLeft, text)
             if self._hidden_out:
-                p.drawText(QRectF(0, y, nw - pr * 2 - 6, row),
-                           Qt.AlignVCenter | Qt.AlignRight,
-                           "%d more output%s ＋" % (self._hidden_out,
-                                                   "" if self._hidden_out == 1 else "s"))
+                text = more_metrics.elidedText("%d out+" % self._hidden_out,
+                                               Qt.ElideRight, int(half))
+                p.drawText(QRectF(nw - pr * 2 - 6 - half, y, half, row),
+                           Qt.AlignVCenter | Qt.AlignRight, text)
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionHasChanged:
@@ -574,9 +629,47 @@ class LogicGraphScene(QGraphicsScene):
         self._build_connections()
         self._fix_source_target_order()
         # Pin visibility depends on which pins ended up with wires, so it can
-        # only be decided once the wires exist.
+        # only be decided once the wires exist — and a node's height follows
+        # from that, so the grid can only be packed afterwards.
         for node in self._nodes.values():
             node.relayout()
+        self.reflow_auto_placed()
+
+    def reflow_auto_placed(self):
+        """Pack the auto-placed nodes into columns using their real heights.
+
+        The first layout put nodes on a grid with one fixed row height, guessed
+        from a nine-pin node. Node heights vary by an order of magnitude now — a
+        collapsed node is one row, an expanded LogicState is thirty-four — so a
+        fixed step either overlapped the row below or left a screen of space
+        between rows. This walks each column with a cursor instead.
+
+        Nodes the user has placed are left exactly where they are: a saved
+        position is a decision, and re-packing it would undo that decision every
+        time the window opened.
+        """
+        saved = getattr(self.editor_state, '_logic_graph_positions', {}) or {}
+        auto = [(key, node) for key, node in self._nodes.items() if key not in saved]
+        if not auto:
+            return
+
+        metrics = _node_metrics()
+        spacing_x = metrics['nw'] + 60
+        per_column = max(1, int(len(auto) ** 0.5))
+
+        column, cursor = 0, 0.0
+        placed_in_column = 0
+        for _key, node in auto:
+            node.setPos(column * spacing_x, cursor)
+            cursor += node._h + 40
+            placed_in_column += 1
+            if placed_in_column >= per_column:
+                column += 1
+                cursor = 0.0
+                placed_in_column = 0
+
+        for ci in self._connections:
+            ci.refresh()
 
     def request_select(self, entity):
         self.select_entity.emit(entity)
@@ -588,7 +681,10 @@ class LogicGraphScene(QGraphicsScene):
 
     def set_all_pins_expanded(self, expanded: bool):
         for node in self._nodes.values():
-            node.set_show_all_pins(expanded)
+            if bool(expanded) != node.show_all_pins:
+                node.show_all_pins = bool(expanded)
+                node.relayout()
+        self.reflow_auto_placed()
 
     def find_nodes(self, text: str) -> List[EntityNodeItem]:
         """Nodes whose name or type contains *text*, case-insensitively."""

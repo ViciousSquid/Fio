@@ -11,6 +11,7 @@ Manages all the data for the current level being edited, including:
 
 import json
 import copy
+import datetime
 import uuid
 from collections import deque
 from .things import Thing, Model
@@ -68,6 +69,7 @@ class EditorState:
         self.selected_objects = []
         self.terrain_data = None
         self._logic_graph_positions = {}  # Persisted node positions for the logic graph
+        self.created_at = ''              # ISO timestamp, set on first save
         self.undo_stack = deque(maxlen=50)
         self.redo_stack = []
         # The redo branch the most recent save_state() cleared, so a checkpoint
@@ -209,6 +211,13 @@ class EditorState:
             'things': [t.to_dict() for t in self.things]
         }
 
+        # When this map was first written. Set once and carried forward on every
+        # later save, so it means "created" and not "saved most recently" — the
+        # file's own mtime already answers the second question.
+        if not getattr(self, 'created_at', ''):
+            self.created_at = datetime.datetime.now().isoformat(timespec='seconds')
+        data['created'] = self.created_at
+
         # Include terrain data if present
         if hasattr(self, 'terrain_data') and self.terrain_data:
             data['terrain_data'] = self.terrain_data
@@ -324,6 +333,9 @@ class EditorState:
                     self._migrate_legacy_target(brush)
 
         self.terrain_data = level_data.get('terrain_data', None)
+        # Absent in maps written before this existed; the overview falls back to
+        # the file's own timestamps rather than inventing one.
+        self.created_at = level_data.get('created', '')
 
         # Store logic graph positions for later use by the graph window
         self._logic_graph_positions = {}
