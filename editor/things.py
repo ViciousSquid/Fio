@@ -13,6 +13,8 @@ from PyQt5.QtCore import Qt
 import json
 import ast
 
+from . import state_values as _sv
+
 
 try:
     from .debug_console import debug_log
@@ -243,16 +245,24 @@ class Thing:
                 except (ValueError, SyntaxError):
                     pass
 
+        # A subclass may declare `map_type` when its serialised type token
+        # differs from its class name; otherwise the class name is used, so
+        # every existing entity resolves exactly as before.  `legacy_map_types`
+        # lists tokens an *older* Fio wrote for the same entity, so a map saved
+        # before a rename still loads into the renamed class rather than being
+        # dropped with a warning.  Current tokens are matched across every class
+        # first, so a legacy alias can never shadow a live entity type.
         thing = None
-        for cls in find_subclasses(Thing):
-            # A subclass may declare `map_type` when its serialised type token
-            # differs from its class name; otherwise the class name is used, so
-            # every existing entity resolves exactly as before.
-            class_type = getattr(cls, 'map_type', cls.__name__.lower())
-            if class_type == thing_type.replace('_', ''):
-                thing = cls(pos=data.get('pos'), properties=properties)
-                break
-        
+        token = thing_type.replace('_', '').lower()
+        subclasses = find_subclasses(Thing)
+        match = next((c for c in subclasses
+                      if token == getattr(c, 'map_type', c.__name__.lower())), None)
+        if match is None:
+            match = next((c for c in subclasses
+                          if token in getattr(c, 'legacy_map_types', ())), None)
+        if match is not None:
+            thing = match(pos=data.get('pos'), properties=properties)
+
         if thing is None:
             if thing_type == 'thing':
                 thing = Thing(pos=data.get('pos'), properties=properties)
@@ -869,6 +879,10 @@ class LogicTimer(Thing):
         self.properties.setdefault('interval', 1.0)
         self.properties.setdefault('timer_enabled', False)
         self.properties.setdefault('start_on', False)
+        # A one-shot timer fires once and switches itself off, so a delayed
+        # one-off event does not need the chain it drives to remember to stop
+        # it.  Defaults off: an existing timer keeps repeating as it always did.
+        self.properties.setdefault('one_shot', False)
     
     def get_instance_pixmap(self):
         pix = super().get_instance_pixmap()
@@ -1467,54 +1481,91 @@ class Portal(Thing):
 
 
 # =============================================================================
-# KEY/VALUE STORE ENTITY
+# PERSISTENT STATE ENTITY
 # =============================================================================
 
-class LogicKeyValueStore(Thing):
-    """
-    A persistent key/value store that survives level transitions.
+class LogicState(Thing):
+    """Fio's persistent state primitive: named values that survive the level.
 
-    Stores up to 25 key/value pairs (strings). Other entities can query
-    values via I/O inputs, and values can be set/read during gameplay.
+    A ``LogicState`` holds keyed values under a *store name*, answers questions
+    about them, and turns every change into an ordinary I/O event.  That is the
+    whole of it.  It does not know what a door is, it never runs, and nothing
+    about it is evaluated per frame — state is looked at because a connection
+    asked it to be.
 
-    The store is identified by its store_name — if a store with the same name
-    exists in the destination level, its values are preserved across
-    the transition. This allows cross-level state like quest progress,
-    puzzle solutions, or flags to persist.
+    Behaviour is composed around it rather than built into it::
 
-    Properties:
-      - store_name (str): Unique identifier for this store (defaults to entity name).
-                          Levels that share the same store_name will sync values.
-      - initial_data (dict): Up to 25 key/value pairs set at design time.
+        Monster.OnDeath -> LogicState.Increment("killed")
+                        -> OnValueChanged
+                        -> LogicState.Compare("killed>=5")
+                        -> OnTrue -> Door.Open
 
-    I/O Inputs:
-      - SetValue:    Set a key/value pair. Parameter format: "key=value"
-      - GetValue:    Fire OnValueRead with the value of the given key as parameter.
-      - ClearKey:    Remove a single key.
-      - ClearAll:    Remove all keys.
-      - CopyFrom:    Copy all keys from another LogicKeyValueStore by name.
-      - Increment:   Treat value as int and increment. Parameter: "key,amount"
-      - Decrement:   Treat value as int and decrement. Parameter: "key,amount"
+    Nothing in that chain knows about the rest of it, and the engine has no idea
+    what the five kills *mean*.  The map supplies the composition; the game
+    supplies the meaning.
 
-    I/O Outputs:
-      - OnValueSet:      Fired when any key is set (parameter = "key=value")
-      - OnValueRead:     Fired by GetValue (parameter = value, or "<missing>")
-      - OnKeyCleared:    Fired when a key is removed (parameter = key name)
-      - OnStoreFull:     Fired when trying to add a 26th key
-      - OnKeyNotFound:   Fired when GetValue targets a missing key
+    Values are typed
+    ----------------
+    ``string``, ``int``, ``float``, ``bool``, ``null`` and ``uuid`` (see
+    :mod:`editor.state_values`).  I/O parameters are text, so a value's type is
+    inferred from what is written — ``5`` is an integer, ``true`` a boolean —
+    and can be stated outright when inference is not wanted::
+
+        SetValue    door_code:string=007
+
+    Legacy stores held only strings and are left exactly as they were: nothing
+    re-types data on load, because comparison and arithmetic already understand
+    ``"5"``.  An old map behaves the same or better, never worse.
+
+    Persistence
+    -----------
+    Values live in a process-wide registry keyed by ``store_name``, so two
+    stores sharing a name in different levels are the same store, and a level
+    transition carries their contents across.  Plugins reach the same registry
+    through ``api.global_store``.  It is one registry, and this class does not
+    own it — it reads and writes it like anything else does.
+
+    Properties
+    ----------
+    store_name
+        Which store this entity is a view of.  Defaults to the entity name.
+    initial_data
+        Designer-authored defaults, used when the store does not exist yet.
+    capacity
+        How many keys this store accepts.  Defaults to :data:`MAX_PAIRS`, so a
+        map that never sets it behaves exactly as before.
+
+    Inputs and outputs are declared in :mod:`editor.io_system` and implemented
+    in :mod:`editor.io_handlers`; see ``editor/LOGIC.md`` for the whole model.
     """
     pixmap_path = "assets/sprites/logic_keyvalue.png"
+
+    #: Type token written to map files.
+    map_type = 'logicstate'
+    #: Tokens older Fio versions wrote for this same entity.  Listed so maps
+    #: and saves made before the rename load into this class instead of being
+    #: dropped as an unknown type.
+    legacy_map_types = ('logickeyvalue', 'logickeyvaluestore')
 
     # Class-level registry of persistent stores across level transitions.
     # Keyed by store_name, stores the dict of values. Survives as long as
     # the Python process lives (i.e., across level loads within one session).
     _persistent_registry = {}
 
+    #: Default capacity.  A per-entity ``capacity`` property may raise it; the
+    #: default is unchanged so existing maps hit ``OnStoreFull`` where they
+    #: always did.
     MAX_PAIRS = 25
+
+    #: Prefix for object-local keys (see :meth:`object_key`).  Chosen because a
+    #: designer-authored key never starts with it, so object-local state and
+    #: world state share one store without either being able to shadow the
+    #: other.
+    OBJECT_KEY_PREFIX = '@'
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
-        self.properties['type'] = 'logic_keyvalue'
+        self.properties['type'] = 'logic_state'
         self.properties.setdefault('store_name', self.properties.get('name', ''))
 
         # initial_data holds the designer-specified defaults.
@@ -1525,50 +1576,137 @@ class LogicKeyValueStore(Thing):
         self._runtime_data = {}
         self._sync_from_persistent()
 
+    # ------------------------------------------------------------------
+    # Persistence plumbing
+    # ------------------------------------------------------------------
+
+    @property
+    def capacity(self):
+        """How many keys this store accepts, never below one."""
+        try:
+            return max(1, int(self.properties.get('capacity', self.MAX_PAIRS)))
+        except (TypeError, ValueError):
+            return self.MAX_PAIRS
+
+    @property
+    def store_name(self):
+        """The name of the store this entity is a view of."""
+        return str(self.properties.get('store_name', '') or '')
+
     def _sync_from_persistent(self):
         """Load values from the persistent registry, falling back to initial_data."""
-        store_name = self.properties.get('store_name', '')
-        if store_name and store_name in LogicKeyValueStore._persistent_registry:
-            self._runtime_data = dict(LogicKeyValueStore._persistent_registry[store_name])
+        store_name = self.store_name
+        if store_name and store_name in LogicState._persistent_registry:
+            self._runtime_data = _sv.load_store(
+                LogicState._persistent_registry[store_name])
         else:
-            # Deep copy initial_data so we don't mutate the property directly
-            initial = self.properties.get('initial_data', {})
-            if isinstance(initial, dict):
-                self._runtime_data = {k: str(v) for k, v in initial.items()}
-            else:
-                self._runtime_data = {}
+            # Copy initial_data so we don't mutate the property directly.
+            self._runtime_data = _sv.load_store(
+                self.properties.get('initial_data', {}))
 
     def _sync_to_persistent(self):
         """Write current runtime values back to the persistent registry."""
-        store_name = self.properties.get('store_name', '')
+        store_name = self.store_name
         if store_name:
-            LogicKeyValueStore._persistent_registry[store_name] = dict(self._runtime_data)
+            LogicState._persistent_registry[store_name] = dict(self._runtime_data)
 
-    def set_value(self, key, value):
-        """Set a key/value pair. Returns False if store is full (25 keys)."""
-        key = str(key).strip()
-        value = str(value)
-        if not key:
-            return False
+    # ------------------------------------------------------------------
+    # Reading
+    # ------------------------------------------------------------------
 
-        if key in self._runtime_data:
-            self._runtime_data[key] = value
-            self._sync_to_persistent()
-            return True
+    #: Sentinel returned for a key that is not there.  A plain string, and the
+    #: same one the pre-2.4 store used, so a map that wired a connection
+    #: against it still matches.
+    MISSING = "<missing>"
 
-        if len(self._runtime_data) >= self.MAX_PAIRS:
-            return False
+    def get_value(self, key, default=MISSING):
+        """The value stored under *key*, or *default*.
 
-        self._runtime_data[key] = value
-        self._sync_to_persistent()
-        return True
-
-    def get_value(self, key, default="<missing>"):
-        """Get the value for a key, or default if not present."""
+        Returns the value with its type intact — an ``int`` key comes back an
+        ``int``.  Callers that need the wire form use
+        :func:`editor.state_values.format_value`.
+        """
         return self._runtime_data.get(str(key).strip(), default)
 
-    def clear_key(self, key):
-        """Remove a single key. Returns True if the key existed."""
+    def has_key(self, key) -> bool:
+        """Whether *key* is present, regardless of its value.
+
+        A key holding ``null`` exists; that is the difference between a flag
+        that was cleared and one that was never set.
+        """
+        return str(key).strip() in self._runtime_data
+
+    def value_type(self, key) -> str:
+        """The state type of *key*'s value, or ``'null'`` when it is absent."""
+        if not self.has_key(key):
+            return 'null'
+        return _sv.type_of(self.get_value(key, None))
+
+    def get_all_pairs(self):
+        """A copy of every key/value pair."""
+        return dict(self._runtime_data)
+
+    def get_pair_count(self):
+        """How many pairs are stored."""
+        return len(self._runtime_data)
+
+    # ------------------------------------------------------------------
+    # Writing
+    # ------------------------------------------------------------------
+
+    def apply_value(self, key, value, value_type=None):
+        """Store *value* under *key*; the full result of one write.
+
+        Returns ``(ok, changed, stored)``:
+
+        ``ok``
+            False when the write could not happen — a blank key, a full store,
+            or text that does not denote a value of the requested type.
+        ``changed``
+            Whether the stored value is different from what was there.  This is
+            the distinction the event model is built on: ``OnValueSet`` fires
+            for every accepted write, ``OnValueChanged`` only when the world
+            actually changed, so a chain can be driven by real transitions
+            without needing a watcher to notice them.
+        ``stored``
+            The typed value now in the store.
+
+        A string *value* is typed by :func:`editor.state_values.parse` unless
+        *value_type* names the type outright.
+        """
+        key = str(key).strip()
+        if not key:
+            return False, False, None
+
+        if value_type:
+            typed, ok = _sv.coerce(value, value_type)
+            if not ok:
+                return False, False, None
+        else:
+            typed = _sv.parse(value)
+
+        existed = key in self._runtime_data
+        if not existed and len(self._runtime_data) >= self.capacity:
+            return False, False, None
+
+        previous = self._runtime_data.get(key, self.MISSING)
+        changed = (not existed) or not _same_value(previous, typed)
+        self._runtime_data[key] = typed
+        if changed:
+            self._sync_to_persistent()
+        return True, changed, typed
+
+    def set_value(self, key, value, value_type=None) -> bool:
+        """Store *value* under *key*.  True unless the write was refused.
+
+        The pre-2.4 signature, kept because plugins and the I/O manager call it.
+        Use :meth:`apply_value` when the caller cares whether anything changed.
+        """
+        ok, _changed, _stored = self.apply_value(key, value, value_type)
+        return ok
+
+    def clear_key(self, key) -> bool:
+        """Remove *key*.  True if it was there."""
         key = str(key).strip()
         if key in self._runtime_data:
             del self._runtime_data[key]
@@ -1577,69 +1715,210 @@ class LogicKeyValueStore(Thing):
         return False
 
     def clear_all(self):
-        """Remove all keys."""
+        """Remove every key."""
         self._runtime_data.clear()
         self._sync_to_persistent()
 
-    def get_all_pairs(self):
-        """Return a copy of all key/value pairs."""
-        return dict(self._runtime_data)
+    def copy_from(self, other_store_name) -> bool:
+        """Copy every pair from another store by name.  True if it existed."""
+        other = LogicState._persistent_registry.get(str(other_store_name))
+        if other is None:
+            return False
+        capacity = self.capacity
+        for k, v in _sv.load_store(other).items():
+            if len(self._runtime_data) >= capacity and k not in self._runtime_data:
+                break
+            self._runtime_data[k] = v
+        self._sync_to_persistent()
+        return True
 
-    def get_pair_count(self):
-        """Return the number of stored pairs."""
-        return len(self._runtime_data)
+    def copy_value(self, source_key, dest_key, source_store=None):
+        """Copy one value between keys, optionally from another store.
 
-    def copy_from(self, other_store_name):
-        """Copy all key/value pairs from another store by name."""
-        if other_store_name in LogicKeyValueStore._persistent_registry:
-            source = LogicKeyValueStore._persistent_registry[other_store_name]
-            # Only copy up to MAX_PAIRS total
-            for k, v in source.items():
-                if len(self._runtime_data) >= self.MAX_PAIRS and k not in self._runtime_data:
-                    break
-                self._runtime_data[k] = v
-            self._sync_to_persistent()
-            return True
-        return False
+        Returns ``(ok, changed, stored)`` like :meth:`apply_value`; ``ok`` is
+        False when the source key does not exist, so a copy of nothing is a
+        no-op rather than a write of ``"<missing>"``.
+        """
+        source_key = str(source_key).strip()
+        if source_store:
+            data = LogicState._persistent_registry.get(str(source_store))
+            if data is None or source_key not in data:
+                return False, False, None
+            value = _sv.load_store(data)[source_key]
+        else:
+            if not self.has_key(source_key):
+                return False, False, None
+            value = self.get_value(source_key, None)
+        return self.apply_value(dest_key, value)
+
+    # ------------------------------------------------------------------
+    # Arithmetic
+    # ------------------------------------------------------------------
+
+    def arithmetic(self, key, operation, operand):
+        """Apply one arithmetic operation to *key* in place.
+
+        Returns ``(ok, changed, stored)``.  A key that is absent (or holds
+        something non-numeric) counts as zero, so ``Increment`` on a fresh
+        counter yields one without the map having to seed it first.
+        """
+        key = str(key).strip()
+        if not key:
+            return False, False, None
+        current = self.get_value(key, 0)
+        if current is self.MISSING:
+            current = 0
+        new_value, ok = _sv.arithmetic(current, operation, operand)
+        if not ok:
+            return False, False, current
+        return self.apply_value(key, new_value)
+
+    def clamp(self, key, low, high):
+        """Confine *key* to ``[low, high]``.  ``(ok, changed, stored)``."""
+        key = str(key).strip()
+        if not key:
+            return False, False, None
+        current = self.get_value(key, 0)
+        if current is self.MISSING:
+            current = 0
+        return self.apply_value(key, _sv.clamp(current, low, high))
+
+    def toggle(self, key):
+        """Invert *key* as a boolean.  ``(ok, changed, stored)``.
+
+        A key that was never set toggles to ``True``, which is the only useful
+        reading of "turn this flag the other way" for a flag that is not there.
+        """
+        key = str(key).strip()
+        if not key:
+            return False, False, None
+        current = self.get_value(key, None)
+        if current is self.MISSING:
+            current = None
+        return self.apply_value(key, _sv.toggled(current))
 
     def increment(self, key, amount=1):
-        """Treat value as integer and increment. Returns new value or 0 if not numeric."""
-        key = str(key).strip()
-        try:
-            current = int(self._runtime_data.get(key, "0"))
-        except ValueError:
-            current = 0
-        new_val = current + amount
-        self._runtime_data[key] = str(new_val)
-        self._sync_to_persistent()
-        return new_val
+        """Add *amount* to *key*, returning the new value.
+
+        The pre-2.4 signature and return type, kept for callers that only want
+        the number.
+        """
+        _ok, _changed, value = self.arithmetic(key, 'add', amount)
+        return value if value is not None else 0
 
     def decrement(self, key, amount=1):
-        """Treat value as integer and decrement."""
-        return self.increment(key, -amount)
+        """Subtract *amount* from *key*, returning the new value."""
+        return self.increment(key, -_sv.to_number(amount, 1))
+
+    # ------------------------------------------------------------------
+    # Queries
+    # ------------------------------------------------------------------
+
+    def compare(self, key, operator, expected):
+        """Answer one question about *key*.  ``(found, result)``.
+
+        *expected* is typed the same way a stored value is, so ``"5"`` from a
+        connection parameter compares numerically against a stored ``5`` and
+        ``"true"`` compares as a boolean against a stored flag.  When the key is
+        missing, *found* is False and the caller fires ``OnKeyNotFound`` instead
+        of guessing what the comparison would have meant.
+
+        This is the whole of Fio's conditional logic.  Everything more
+        complicated — two conditions, a negation, a sequence — is a
+        :class:`LogicGate`, a :class:`LogicRelay` and more connections, which is
+        cheaper than an expression language and visible in the I/O editor.
+        """
+        key = str(key).strip()
+        if key not in self._runtime_data:
+            return False, False
+        actual = self._runtime_data[key]
+        return True, _sv.compare(actual, _sv.parse(expected), operator)
+
+    # ------------------------------------------------------------------
+    # Object-local state
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def object_key(cls, entity_id, key) -> str:
+        """The store key holding *key* for the object with UUID *entity_id*.
+
+        Object-local state is not a second database and not a second entity
+        framework: it is ordinary keys in this same store, namespaced by the
+        object's UUID.  So it persists, saves, transitions levels and shows up
+        in the Property Manager exactly like every other value, and a dormant
+        entity's state is simply data that outlives the entity's dormancy.
+        """
+        return '%s%s/%s' % (cls.OBJECT_KEY_PREFIX, entity_id, str(key).strip())
+
+    def set_object_value(self, entity_id, key, value, value_type=None):
+        """Store a value against one object's UUID.  ``(ok, changed, stored)``."""
+        if not entity_id:
+            return False, False, None
+        return self.apply_value(self.object_key(entity_id, key), value, value_type)
+
+    def get_object_value(self, entity_id, key, default=MISSING):
+        """Read a value stored against one object's UUID."""
+        if not entity_id:
+            return default
+        return self.get_value(self.object_key(entity_id, key), default)
+
+    def clear_object_state(self, entity_id) -> int:
+        """Forget every value held against one object.  Returns how many."""
+        if not entity_id:
+            return 0
+        prefix = '%s%s/' % (self.OBJECT_KEY_PREFIX, entity_id)
+        doomed = [k for k in self._runtime_data if k.startswith(prefix)]
+        for key in doomed:
+            del self._runtime_data[key]
+        if doomed:
+            self._sync_to_persistent()
+        return len(doomed)
+
+    # ------------------------------------------------------------------
+    # Serialisation
+    # ------------------------------------------------------------------
 
     def to_dict(self):
-        """Override to_dict to include runtime data in the persistent registry."""
+        """Serialise, embedding the live values so a save is self-contained."""
         # Ensure persistent registry is up to date before serialising
         self._sync_to_persistent()
         result = super().to_dict()
-        # Also embed current runtime data so save files are self-contained
-        result['runtime_data'] = dict(self._runtime_data)
+        result['runtime_data'] = _sv.save_store(self._runtime_data)
         return result
 
     @staticmethod
     def from_dict(data):
-        """Override from_dict to restore runtime data from save file."""
+        """Deserialise, restoring the embedded values into the registry."""
         thing = Thing.from_dict(data)
-        if thing and isinstance(thing, LogicKeyValueStore):
-            # Restore runtime data from save file if present
-            runtime = data.get('runtime_data', {})
+        if thing is not None and isinstance(thing, LogicState):
+            runtime = data.get('runtime_data')
             if isinstance(runtime, dict):
-                thing._runtime_data = {k: str(v) for k, v in runtime.items()}
+                thing._runtime_data = _sv.load_store(runtime)
                 thing._sync_to_persistent()
             else:
                 thing._sync_from_persistent()
         return thing
+
+
+def _same_value(a, b) -> bool:
+    """Whether two stored values are the same value *and* the same type.
+
+    ``1`` and ``True`` compare equal in Python and are not the same state, so
+    change detection has to ask about the type as well — otherwise setting a
+    counter to ``1`` over a flag of ``True`` would report "unchanged" and the
+    chain hanging off ``OnValueChanged`` would never run.
+    """
+    if a is None or b is None:
+        return a is None and b is None
+    if isinstance(a, bool) != isinstance(b, bool):
+        return False
+    return type(a) is type(b) and a == b
+
+
+#: Pre-2.4 name for the state entity.  Kept as an alias so existing imports,
+#: plugins and the persistent-registry attribute path keep resolving; the two
+#: names are the same class, so ``isinstance`` checks written either way agree.
+LogicKeyValueStore = LogicState
 
 
 # =============================================================================
@@ -1663,13 +1942,13 @@ ENTITY_TYPES = {
     'LogicCamera': LogicCamera,
     'LogicSpawner': LogicSpawner,
     'Portal': Portal,
-    'LogicKeyValueStore': LogicKeyValueStore,
+    'LogicState': LogicState,
 }
 
 # Categories for editor UI
 ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Pickup', 'LevelChanger'],
     'Environment': ['Light', 'Speaker', 'Model', 'Portal'],
-    'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicKeyValueStore'],
+    'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicState'],
     'AI': ['PathNode'],
 }

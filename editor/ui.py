@@ -351,7 +351,9 @@ class Ui_MainWindow(object):
         MainWindow.logic_wizard_action.triggered.connect(MainWindow.open_logic_wizard)
 
         MainWindow.validate_action = QAction('Validate All Connections…', MainWindow)
-        MainWindow.validate_action.setToolTip('Check for connections with missing target entities')
+        MainWindow.validate_action.setToolTip(
+            'Check every connection for a missing target, or an input or output '
+            'the entity type does not have')
         MainWindow.validate_action.triggered.connect(MainWindow.validate_io_connections)
 
         MainWindow.terrain_action = QAction('Terrain Generator…', MainWindow)

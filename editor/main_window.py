@@ -4503,68 +4503,64 @@ class MainWindow(QMainWindow):
             self.open_logic_graph()
 
     def validate_io_connections(self):
-        """Check all entities for connections that point to missing targets (by name or ID)."""
-        all_names = set()
-        all_ids = set()
-        for t in self.state.things:
-            n = t.properties.get('name', '')
-            if n:
-                all_names.add(n)
-            eid = getattr(t, 'id', None) or t.properties.get('id')
-            if eid is not None:
-                all_ids.add(eid)
+        """Report every broken connection in the map.
 
-        for b in self.state.brushes:
-            n = b.get('name', '')
-            if n:
-                all_names.add(n)
-            eid = b.get('id')
-            if eid is not None:
-                all_ids.add(eid)
+        The checking itself lives in :mod:`editor.io_system`, next to the
+        dispatcher whose rules it has to agree with — a second copy of "how does
+        a connection find its target" here is a second copy that can drift, and
+        the one that used to be here had: it treated a connection's ``target_id``
+        as missing only when it was ``None``, but the field defaults to the empty
+        string, so every name-addressed connection in every legacy map was
+        reported broken.
 
-        broken = []
+        It also reports inputs and outputs the entity types do not declare, which
+        nothing checked before: a connection calling ``Opne`` instead of ``Open``
+        resolved its target perfectly well and then did nothing, with no error
+        anywhere until someone noticed the door was not opening.
+        """
+        try:
+            from editor.io_system import (validate_scene_connections,
+                                          PROBLEM_MISSING_TARGET)
+        except ImportError:
+            QMessageBox.warning(self, "Validate Connections",
+                                "The I/O system is unavailable in this build.")
+            return
+
+        problems = validate_scene_connections(self.state.brushes, self.state.things)
+
         all_entities = list(self.state.things) + list(self.state.brushes)
-        for entity in all_entities:
-            if hasattr(entity, 'properties'):
-                conns = entity.properties.get('_io_connections', [])
-                src_name = entity.properties.get('name', '?')
-            else:
-                conns = entity.get('_io_connections', [])
-                src_name = entity.get('name', '?')
+        total = sum(
+            len(e.properties.get('_io_connections', [])
+                if hasattr(e, 'properties')
+                else e.get('_io_connections', []))
+            for e in all_entities
+        )
 
-            for c in conns:
-                if isinstance(c, dict):
-                    tgt_name = c.get('target', '')
-                    tgt_id   = c.get('target_id')
-                    out_pin  = c.get('output', '?')
-                else:
-                    tgt_name = getattr(c, 'target_name', '')
-                    tgt_id   = getattr(c, 'target_id', None)
-                    out_pin  = getattr(c, 'output_name', '?')
-
-                if tgt_id is not None:
-                    if tgt_id not in all_ids:
-                        broken.append(f"  {src_name}.{out_pin}  →  (ID:{tgt_id})  NOT FOUND")
-                elif tgt_name and tgt_name not in all_names:
-                    broken.append(f"  {src_name}.{out_pin}  →  \"{tgt_name}\"  NOT FOUND")
-
-        if broken:
-            QMessageBox.warning(
-                self, "Validate Connections",
-                "Broken connections found — target entity does not exist:\n\n"
-                + "\n".join(broken)
-            )
-        else:
-            total = sum(
-                len(e.properties.get('_io_connections', [])
-                    if hasattr(e, 'properties')
-                    else e.get('_io_connections', []))
-                for e in all_entities
-            )
+        if not problems:
             QMessageBox.information(
                 self, "Validate Connections",
                 f"All {total} connection(s) are valid. ✔"
             )
+            return
+
+        def _name(entity):
+            if hasattr(entity, 'properties'):
+                return entity.properties.get('name', '?')
+            return entity.get('name', '?')
+
+        # Missing targets first: a connection pointing at nothing is a broken
+        # map, while an unknown input is usually a typo in an otherwise sound one.
+        ordered = sorted(problems,
+                         key=lambda p: 0 if p[2] == PROBLEM_MISSING_TARGET else 1)
+        lines = [
+            "  %s.%s %s" % (_name(entity), conn.output_name, message)
+            for entity, conn, _code, message in ordered
+        ]
+        QMessageBox.warning(
+            self, "Validate Connections",
+            "%d of %d connection(s) have problems:\n\n%s"
+            % (len(problems), total, "\n".join(lines))
+        )
 
     def closeEvent(self, event):
         try:
