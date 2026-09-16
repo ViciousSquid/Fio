@@ -59,51 +59,23 @@ class BigWorldPlugin(FioPlugin):
     # so streaming maps just work while ordinary maps never pay for it.
     enabled = False
 
+    #: Normalised ``type`` of the entity whose presence opts a map in. Kept here
+    #: as a bare string rather than read off ``.entities`` so asking "does this
+    #: map use Big World?" costs no import at all.
+    SETTINGS_TYPE = "bigworldsettings"
+
     # -- load time ----------------------------------------------------------
     def register(self, api):
+        from .config import FIELDS
         from .entities import BigWorldSettings  # lazy: pulls in editor.things
         api.register_entity(BigWorldSettings, menu_label="Big World Settings")
-        api.register_properties("bigworldsettings", [
-            prop("enabled", "bool", "Streaming enabled", default=True,
-                 help="Turn cell streaming on for this map."),
-            prop("activation_radius", "float", "Activation radius", default=2048.0,
-                 min=256.0, max=65536.0,
-                 help="Cells within this distance of the player become active."),
-            prop("deactivation_radius", "float", "Deactivation radius", default=2304.0,
-                 min=256.0, max=65536.0,
-                 help="Active cells are only dropped beyond this distance "
-                      "(hysteresis — must be >= activation radius)."),
-            prop("sim_near_radius", "float", "Full-simulation radius", default=1024.0,
-                 min=0.0, max=65536.0,
-                 help="Entities within this distance are tiered NEAR (full "
-                      "simulation fidelity); beyond it, resident entities are "
-                      "ACTIVE and then DISTANT out to the activation radius. "
-                      "Clamped to the activation radius, so the streamed region "
-                      "and the simulated region always agree."),
-            prop("show_cell_debug", "bool", "Show debug overlay", default=True,
-                 help="Draw the Big World stats panel and active-cell minimap in play mode."),
-            prop("terrain_fill", "bool", "Fill world with terrain", default=False,
-                 help="If the map has a procedural terrain, expand it to cover every "
-                      "cell of the world and stream its chunks around the player "
-                      "(instead of tessellating the whole grid up-front). Off by "
-                      "default, so terrain is left exactly as authored."),
-            prop("terrain_infinite", "bool", "Infinite terrain (generate forever)",
-                 default=False,
-                 help="With 'Fill world with terrain' on, keep generating ground "
-                      "around the camera/player forever instead of stopping at the "
-                      "world's content bounds — so you never walk off the edge. "
-                      "Only the chunks near you are ever resident."),
-            prop("terrain_stream_radius", "float", "Terrain stream radius", default=0.0,
-                 min=0.0, max=65536.0,
-                 help="World units of terrain kept resident around the player. "
-                      "0 derives it from the activation radius."),
-            prop("disk_streaming", "bool", "Disk streaming (free unloaded cells)",
-                 default=False,
-                 help="Experimental: instead of only hiding inactive cells, remove "
-                      "an unloaded cell's objects from memory and re-stream them "
-                      "from a pristine per-cell source when the cell comes back. "
-                      "Play-session saves become a delta of the persistent cell "
-                      "registry. Off by default (keeps the in-RAM behaviour)."),
+        # The schema is derived, not written out again: the entity's defaults
+        # and the runtime's coercion read the same table, so a field can't be
+        # editable here and invisible to the session (see .config).
+        api.register_properties(self.SETTINGS_TYPE, [
+            prop(f.key, f.kind, f.label, default=f.default,
+                 min=f.min, max=f.max, help=f.help)
+            for f in FIELDS
         ])
 
     # -- runtime host wiring ------------------------------------------------
@@ -114,11 +86,6 @@ class BigWorldPlugin(FioPlugin):
         host.on("render.overlay", self._on_overlay)
 
     # -- opt-in test --------------------------------------------------------
-    #: Normalised ``type`` of the entity whose presence opts a map in. Kept here
-    #: as a bare string rather than read off ``.entities`` so asking "does this
-    #: map use Big World?" costs no import at all.
-    SETTINGS_TYPE = "bigworldsettings"
-
     @classmethod
     def map_uses_bigworld(cls, things) -> bool:
         """Whether a map actually needs Big World.

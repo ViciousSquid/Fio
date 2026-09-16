@@ -209,3 +209,80 @@ def test_authored_hidden_sees_through_streaming():
         "would be dropped from collision for good")
     assert spatial.authored_hidden(parked_hidden) is True, (
         "a brush the mapper hid must stay hidden even while parked")
+
+
+def test_the_authored_accessors_take_an_entity_as_well_as_a_brush():
+    """Both halves of Fio's world, one question.
+
+    Parking sets ``hidden`` on brushes and ``hidden`` + ``disabled`` on
+    entities, so "what is this object authored as?" has to be answerable for an
+    entity too.  ``tier_of`` next door already takes either shape; an accessor
+    that raised ``TypeError`` on the entity half would push every caller into
+    reaching past it and into ``properties`` by hand — which is how the two
+    meanings of ``hidden`` get confused again.
+    """
+    class _Thing:
+        def __init__(self, **props):
+            self.properties = dict(props)
+
+    assert spatial.authored_hidden(_Thing(hidden=True)) is True
+    assert spatial.authored_disabled(_Thing(disabled=True)) is True
+    parked = _Thing(hidden=True, disabled=True,
+                    **{spatial.PARKED_HIDDEN_KEY: False,
+                       spatial.PARKED_DISABLED_KEY: True})
+    assert spatial.authored_hidden(parked) is False, (
+        "a parked entity read as authored-hidden")
+    assert spatial.authored_disabled(parked) is True, (
+        "an entity the map disabled stopped reading as disabled while parked")
+    # Anything without a property dict answers the default rather than raising.
+    assert spatial.authored_hidden(object()) is False
+
+
+def test_setting_an_authored_flag_on_a_parked_object_updates_the_stash():
+    """The write half of ``authored_hidden``, and why it has to exist.
+
+    Unparking restores the live flag *from* the stash, so a write that lands on
+    the live flag of a parked object is discarded the instant its cell comes
+    back.  Writing through the accessor puts the value where unparking will
+    read it.
+    """
+    parked = {"hidden": True, spatial.PARKED_HIDDEN_KEY: False}
+    spatial.set_authored_flag(parked, "hidden", True)
+    assert parked[spatial.PARKED_HIDDEN_KEY] is True, (
+        "the authored value went to the live flag, which parking owns; it "
+        "would be thrown away on the next unpark")
+    assert parked["hidden"] is True, "parking's own flag must not be disturbed"
+
+    # Simulate the unpark the streaming layer performs.
+    parked["hidden"] = parked.pop(spatial.PARKED_HIDDEN_KEY)
+    assert spatial.authored_hidden(parked) is True
+
+
+def test_setting_an_authored_flag_on_an_unparked_object_writes_the_flag():
+    plain = {}
+    spatial.set_authored_flag(plain, "hidden", True)
+    assert plain == {"hidden": True}
+    spatial.set_authored_flag(plain, "hidden", False)
+    assert plain["hidden"] is False
+    assert spatial.PARKED_HIDDEN_KEY not in plain, (
+        "writing an authored value invented a parking marker on an object no "
+        "streaming layer has touched")
+
+
+def test_the_reader_and_the_writer_agree_on_every_parkable_flag():
+    """Whatever is written through the pair must read back through it.
+
+    The two functions share one table of parked flags precisely so a third
+    parkable flag cannot be taught to one of them and not the other.
+    """
+    for flag in spatial._PARKED_FLAGS:
+        for parked in (False, True):
+            for value in (False, True):
+                obj = {}
+                if parked:
+                    obj[flag] = True
+                    obj[spatial._PARKED_FLAGS[flag]] = not value
+                spatial.set_authored_flag(obj, flag, value)
+                assert spatial.authored_flag(obj, flag) is value, (
+                    "%s: wrote %r (parked=%s) and read back %r"
+                    % (flag, value, parked, spatial.authored_flag(obj, flag)))

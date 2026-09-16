@@ -363,3 +363,140 @@ if __name__ == "__main__":
             traceback.print_exc()
     print(f"\n{len(fns) - failed}/{len(fns)} passed")
     sys.exit(1 if failed else 0)
+
+
+# ---------------------------------------------------------------------------
+# Dormant entities: restoring state onto a cell that is currently parked
+# ---------------------------------------------------------------------------
+#
+# The hardest case a Big World save has, and the one that reads as working when
+# it is not.  Parking borrows ``hidden``/``disabled``: it sets them True and
+# stashes the authored value in the engine's parking markers, then puts the
+# stash back when the cell returns.  So a restore that writes a saved
+# ``hidden`` straight onto a parked object writes into a flag whose value is
+# about to be overwritten — the object looks right for exactly as long as it
+# stays dormant, and reverts the moment it wakes up.
+
+def _park_and_save(hide_ids=()):
+    """Play into cell B with cell A parked, hiding *hide_ids* first.
+
+    Returns the save, so a fresh world can be restored from it.
+    """
+    things, brushes = make_world()
+    logic = FakeLogic(things, brushes, A_POS)
+    s = new_session(logic)
+    s.start(player_pos=A_POS)
+
+    by_id = {t.properties["id"]: t for t in things}
+    for tid in hide_ids:
+        by_id[tid].properties["hidden"] = True
+        by_id[tid].properties["disabled"] = True
+    brushes[0]["hidden"] = True                   # A-door, a brush in cell A
+
+    s.tick(player_pos=B_POS)                       # cell A unloads and parks
+    s.commit_all()
+    return savegame.build_snapshot(
+        logic, map_name="world.json",
+        world_mode=savegame.WORLD_MODE_BIGWORLD,
+        cell_deltas=s.serialize_registry(),
+        base_world=s.base_identity("world.json"))
+
+
+def test_a_dormant_entitys_hidden_state_survives_being_restored():
+    """Save with cell A dormant, load with cell A dormant, then walk back.
+
+    The state has to be waiting when the cell streams in.  Written onto the
+    parked object's live flag it would be discarded by the unpark, which is the
+    one moment a player would notice.
+    """
+    snap = _park_and_save(hide_ids=("A-mon",))
+
+    things2, brushes2 = make_world()
+    logic2 = FakeLogic(things2, brushes2, B_POS)
+    s2 = new_session(logic2)
+    s2.start(player_pos=B_POS)                     # cell A parked from the start
+
+    a_mon = {t.properties["id"]: t for t in things2}["A-mon"]
+    assert a_mon.properties.get("_bw_parked_hidden") is False, (
+        "fixture: A-mon should be parked with an authored 'visible' stash")
+
+    savegame.restore_auto(logic2, snap, current_map_name="world.json")
+
+    assert a_mon.properties.get("_bw_parked_hidden") is True, (
+        "the restore wrote the saved 'hidden' onto the flag parking owns; the "
+        "unpark below will throw it away")
+    assert a_mon.properties.get("_bw_parked_disabled") is True
+
+    s2.tick(player_pos=A_POS)                      # walk back: cell A streams in
+
+    assert a_mon.properties.get("hidden") is True, (
+        "the entity was hidden in the save and came back visible when its "
+        "cell streamed in")
+    assert a_mon.properties.get("disabled") is True, (
+        "the entity's simulation came back on when its cell streamed in")
+
+
+def test_a_dormant_brushs_hidden_state_survives_being_restored():
+    snap = _park_and_save()
+
+    things2, brushes2 = make_world()
+    logic2 = FakeLogic(things2, brushes2, B_POS)
+    s2 = new_session(logic2)
+    s2.start(player_pos=B_POS)
+
+    a_door = {b["id"]: b for b in brushes2}["A-door"]
+    savegame.restore_auto(logic2, snap, current_map_name="world.json")
+    s2.tick(player_pos=A_POS)
+
+    assert a_door.get("hidden") is True, (
+        "the door brush was open (hidden) in the save and closed itself again "
+        "when its cell streamed back in")
+
+
+def test_restoring_a_dormant_object_does_not_wake_it():
+    """The restore must land on persistent state, not on residency.
+
+    Writing the authored value through the stash is also what keeps a distant
+    cell parked: an object made visible in the live world while its cell is out
+    of range is an object being drawn and simulated thousands of units away.
+    """
+    snap = _park_and_save()
+
+    things2, brushes2 = make_world()
+    logic2 = FakeLogic(things2, brushes2, B_POS)
+    s2 = new_session(logic2)
+    s2.start(player_pos=B_POS)
+
+    savegame.restore_auto(logic2, snap, current_map_name="world.json")
+
+    parked = [t.properties["id"] for t in things2
+              if t.properties["id"].startswith("A-")
+              and t.properties.get("hidden") is not True]
+    assert parked == [], (
+        "restoring a save un-parked dormant entities %s: they are now drawn "
+        "and simulated from a cell the player is nowhere near" % (parked,))
+    a_door = {b["id"]: b for b in brushes2}["A-door"]
+    assert a_door.get("hidden") is True, "restoring a save un-parked a brush"
+
+
+def test_play_stop_returns_a_restored_dormant_world_to_its_saved_state():
+    """Quitting from a dormant cell must not lose the restored state either.
+
+    ``stop()`` unparks everything, so it reads the stash for every object at
+    once — the same question the streaming path asks one cell at a time.
+    """
+    snap = _park_and_save(hide_ids=("A-mon",))
+
+    things2, brushes2 = make_world()
+    logic2 = FakeLogic(things2, brushes2, B_POS)
+    s2 = new_session(logic2)
+    s2.start(player_pos=B_POS)
+    savegame.restore_auto(logic2, snap, current_map_name="world.json")
+
+    s2.stop()
+
+    a_mon = {t.properties["id"]: t for t in things2}["A-mon"]
+    assert a_mon.properties.get("hidden") is True
+    assert a_mon.properties.get("disabled") is True
+    assert "_bw_parked_hidden" not in a_mon.properties, (
+        "play-stop left a parking marker behind")

@@ -82,6 +82,8 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from .spatial import PARKED_DISABLED_KEY, PARKED_HIDDEN_KEY
+
 #: Bump only when the snapshot layout changes incompatibly. This is the *save
 #: file* format version and is unrelated to the plugin API version. v2 adds the
 #: explicit ``save_mode`` metadata and delta/both support; v1 saves (no
@@ -134,6 +136,43 @@ def _set_vec3(target, value) -> None:
 #: gameplay-mutable brush state belongs here; door/mover animation is restored
 #: separately via door_states/mover_states.
 _BRUSH_OVERLAY_KEYS = frozenset({"hidden", "tint"})
+
+#: Overlay keys a streaming layer may be parking at the instant a save is
+#: restored, mapped to the key it stashed the authored value under (see
+#: :mod:`engine.spatial`).
+#:
+#: A save records what an object *is*, not what streaming has temporarily made
+#: it.  Written straight onto a parked object, a restored ``hidden``/``disabled``
+#: is thrown away the moment the object's cell comes back — unparking overwrites
+#: the live flag from the stash — so for a parked object the restored value has
+#: to go into the stash instead.  That is the whole difference between a dormant
+#: entity's persistent state surviving a save/load and silently reverting.
+_PARKABLE_KEYS = {
+    "hidden": PARKED_HIDDEN_KEY,
+    "disabled": PARKED_DISABLED_KEY,
+}
+
+
+def _overlay_parkable(props: dict, key: str, saved: dict) -> None:
+    """Restore one parkable flag onto a live object's property dict.
+
+    *saved* is the object's saved record; the flag being **absent** from it is a
+    restored value too, because a serialized level canonicalises a false
+    ``hidden``/``disabled`` away.  Writing nothing when the value already
+    matches keeps a restore from inventing keys the map never had.
+    """
+    mark = _PARKABLE_KEYS[key]
+    want = bool(saved.get(key))
+    if mark in props:                       # parked: streaming owns the flag
+        if bool(props[mark]) != want:
+            props[mark] = want
+        return
+    if bool(props.get(key)) == want:
+        return
+    if want:
+        props[key] = True
+    else:
+        props.pop(key, None)
 
 
 def _public_state(state: dict) -> dict:
@@ -494,9 +533,14 @@ def _overlay_entities(logic, level: dict) -> None:
             if "pos" in t_data and t_data["pos"] is not None:
                 live.pos = list(t_data["pos"])
             for k, v in props.items():
-                if k == "_io_connections":
+                if k == "_io_connections" or k in _PARKABLE_KEYS:
                     continue
                 live.properties[k] = v
+            # hidden/disabled last, and through the parking-aware writer: they
+            # are the two flags a streaming layer borrows, and the two a stale
+            # restore leaves visibly wrong.
+            for k in _PARKABLE_KEYS:
+                _overlay_parkable(live.properties, k, props)
         except Exception:
             continue
 
@@ -510,7 +554,9 @@ def _overlay_entities(logic, level: dict) -> None:
         if live is None:
             continue
         for k in _BRUSH_OVERLAY_KEYS:
-            if k in b_data:
+            if k in _PARKABLE_KEYS:
+                _overlay_parkable(live, k, b_data)
+            elif k in b_data:
                 live[k] = b_data[k]
             else:
                 live.pop(k, None)
@@ -600,6 +646,44 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
         Monster.clear_sprite_cache()
     except Exception:
         pass
+
+    # A restore moves `hidden`/`disabled` on arbitrary objects, and those are
+    # what the host's *durable* derived state is built from — the collision
+    # grid above all, which files a brush by `authored_hidden` once and then
+    # outlives every frame. Announce it here, at the end of the one function
+    # every restore path funnels through, and therefore *after* the state it
+    # describes has actually moved: announcing up front would have a host
+    # rebuild those caches from the pre-restore world.
+    _notify_authored_visibility_changed(logic)
+
+
+def _notify_authored_visibility_changed(logic) -> None:
+    """Tell the host that objects' authored hidden/disabled state has moved.
+
+    Two hooks, tried in order, because they are two different costs and a host
+    may implement either:
+
+    ``notify_authored_visibility_changed``
+        rebuild what is built to last (the collision grid). O(world), and only
+        an authored change — an edit, an I/O Show/Hide, a restore — ever needs
+        it. Streaming does not: parking stashes the authored value rather than
+        overwriting it, which is exactly why the grid can survive it.
+    ``notify_visibility_changed``
+        the cheap drawable-set bump a streaming layer uses. Accepted as a
+        fallback so an older host still lands the change on the next frame.
+
+    A host with neither is not an error: it has no cache to invalidate.
+    """
+    for hook in ("notify_authored_visibility_changed",
+                 "notify_visibility_changed"):
+        fn = getattr(logic, hook, None)
+        if fn is None:
+            continue
+        try:
+            fn()
+        except Exception:
+            pass
+        return
 
 
 def restore_snapshot(logic, data: dict) -> None:
@@ -706,14 +790,6 @@ def restore_auto(logic, data: dict, *, current_map_name: str = "") -> dict:
     """
     if not isinstance(data, dict) or not data.get(_MAGIC):
         raise ValueError("not a Fio save file")
-
-    # A restore can move any object's `hidden`/`disabled` state, which is what
-    # a host's cached non-hidden brush list and live-actor partition are built
-    # from. Announce it up front so every path below lands on the next frame
-    # rather than at the next periodic re-validation.
-    notify = getattr(logic, "notify_visibility_changed", None)
-    if notify is not None:
-        notify()
 
     # Big World delta save: a per-cell registry rather than a flat delta level.
     if data.get("world_mode") == WORLD_MODE_BIGWORLD:

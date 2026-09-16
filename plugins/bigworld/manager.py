@@ -36,7 +36,8 @@ from collections import Counter
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from .cell import (CELL_SIZE, BigWorldCell, CellCoord, CellState,
-                   cell_of_point, cells_for_aabb, cells_within)
+                   cell_distance_sq, cell_of_point, cells_for_aabb,
+                   cells_within)
 
 #: Default radius (world units) of the player's active region.
 DEFAULT_ACTIVATION_RADIUS = 2048.0
@@ -120,6 +121,10 @@ class BigWorldManager:
         self._light_by_id: Dict[str, object] = {}
         # Entities that ignore streaming entirely (world managers, global scripts).
         self.persistent_things: List = []
+        # UUID -> the cell a point entity is currently filed under. A brush is
+        # filed by its footprint and never moves; an entity walks, and where it
+        # is filed has to be able to follow it (see refile_moved_things).
+        self._thing_cell: Dict[str, CellCoord] = {}
 
         # Live active state.
         self.active_cells: Set[CellCoord] = set()
@@ -200,6 +205,7 @@ class BigWorldManager:
         self._thing_by_id.clear()
         self._light_by_id.clear()
         self.persistent_things = []
+        self._thing_cell.clear()
         self.active_cells.clear()
         self._brush_active_ref.clear()
         self._thing_active_ref.clear()
@@ -255,7 +261,9 @@ class BigWorldManager:
                 self._cell(coord).lights.append(thing)
         else:
             self._thing_by_id[uuid] = thing
-            self._cell(cell_of_point(pos[0], pos[2], self.cell_size)).things.append(thing)
+            coord = cell_of_point(pos[0], pos[2], self.cell_size)
+            self._thing_cell[uuid] = coord
+            self._cell(coord).things.append(thing)
 
     # ------------------------------------------------------------------
     # Streaming API (state transitions; future disk streaming slots in here)
@@ -331,6 +339,84 @@ class BigWorldManager:
             self._ref_down(cell.lights, self._light_active_ref, self._active_light_ids,
                            self.thing_uuid),
         )
+
+    # ------------------------------------------------------------------
+    # Entities that moved
+    # ------------------------------------------------------------------
+
+    def refile_moved_things(self, player_pos) -> ActivationDelta:
+        """Re-file resident entities that have walked into a different cell.
+
+        A brush is filed by its footprint and stays where the mapper put it.
+        An entity walks, and the cell it was *authored* in stops describing
+        where it is — so a monster that chases the player two cells from home
+        was parked with a cell it had already left, freezing and hiding it in
+        the middle of a fight, while a monster that wandered towards the player
+        stayed dormant standing next to them.
+
+        Only the **resident** entities are considered, and that is what keeps
+        this bounded: a parked entity carries ``disabled``, so nothing
+        simulates it, so it cannot have moved.  The cost is therefore
+        ``O(active entities)`` on a crossing — the same order as the residency
+        work that crossing already does — and never mentions the world.
+
+        Like residency itself this runs on crossings, not per frame, so an
+        entity's filing is accurate to within one player cell movement.  That
+        errs towards keeping a mover resident rather than dropping it, which is
+        the same safe direction the tier model chooses.
+
+        Returns an :class:`ActivationDelta` holding only what the *move*
+        changed, for the caller to apply exactly as it applies a residency
+        delta.
+        """
+        delta = ActivationDelta()
+        px, pz = float(player_pos[0]), float(player_pos[2])
+        r2 = self.activation_radius * self.activation_radius
+
+        for uuid in list(self._active_thing_ids):
+            thing = self._thing_by_id.get(uuid)
+            if thing is None:
+                continue
+            pos = getattr(thing, "pos", None)
+            if pos is None:
+                continue
+            new_coord = cell_of_point(float(pos[0]), float(pos[2]), self.cell_size)
+            old_coord = self._thing_cell.get(uuid)
+            if old_coord == new_coord:
+                continue
+
+            old_cell = self.cells.get(old_coord) if old_coord else None
+            if old_cell is not None:
+                try:
+                    old_cell.things.remove(thing)
+                except ValueError:
+                    pass
+            self._cell(new_coord).things.append(thing)
+            self._thing_cell[uuid] = new_coord
+            delta.changed = True
+
+            # Gain the destination's reference *before* releasing the origin's,
+            # so an entity crossing between two active cells never blinks out.
+            if new_coord in self.active_cells:
+                self._ref_up([thing], self._thing_active_ref,
+                             self._active_thing_ids, self.thing_uuid)
+            elif cell_distance_sq(new_coord[0], new_coord[1], px, pz,
+                                  self.cell_size) <= r2:
+                # It walked into a cell that held nothing, so the cell was
+                # never a candidate for the active set — but it is in range, so
+                # activate it now rather than parking an entity at the player's
+                # feet.
+                b, t, l = self.activate_cell(*new_coord)
+                delta.entering_cells.append(new_coord)
+                delta.brushes_entering.extend(b)
+                delta.things_entering.extend(t)
+                delta.lights_entering.extend(l)
+
+            if old_coord in self.active_cells:
+                gone = self._ref_down([thing], self._thing_active_ref,
+                                      self._active_thing_ids, self.thing_uuid)
+                delta.things_leaving.extend(gone)
+        return delta
 
     @staticmethod
     def _ref_up(objects, refs: Counter, active_ids: Set[str], key_fn) -> list:
