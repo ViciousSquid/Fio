@@ -123,17 +123,56 @@ def _make_entity(entity_type):
 
 #: A plausible parameter per input, so the probe exercises the handler's real
 #: path rather than only its "no parameter, give up" branch.
+#:
+#: Keyed by ``(entity_type, input)`` and not by input name alone, because the
+#: same name means different things on different entities: ``SetValue`` takes
+#: ``"key=value"`` on a LogicState and a plain integer on a Pickup, and a table
+#: keyed on the name fed the state-shaped parameter to the pickup — which threw
+#: it out as unparseable, so that input was probed without ever being exercised.
 PROBE_PARAMS = {
-    "setvalue": "k=1", "getvalue": "k", "clearkey": "k", "copyfrom": "other",
-    "copyvalue": "k,k2", "increment": "k,1", "decrement": "k,1", "add": "k,1",
-    "subtract": "k,1", "multiply": "k,2", "divide": "k,2", "min": "k,1",
-    "max": "k,1", "clamp": "k,0,10", "toggle": "k", "compare": "k>=1",
-    "testvalue": "k>=1", "exists": "k", "missing": "k",
-    "setobjectvalue": "k=1", "getobjectvalue": "k",
+    ("logic_state", "setvalue"): "k=1",
+    ("logic_state", "getvalue"): "k",
+    ("logic_state", "clearkey"): "k",
+    ("logic_state", "copyfrom"): "other",
+    ("logic_state", "copyvalue"): "k,k2",
+    ("logic_state", "increment"): "k,1",
+    ("logic_state", "decrement"): "k,1",
+    ("logic_state", "add"): "k,1",
+    ("logic_state", "subtract"): "k,1",
+    ("logic_state", "multiply"): "k,2",
+    ("logic_state", "divide"): "k,2",
+    ("logic_state", "min"): "k,1",
+    ("logic_state", "max"): "k,1",
+    ("logic_state", "clamp"): "k,0,10",
+    ("logic_state", "toggle"): "k",
+    ("logic_state", "compare"): "k>=1",
+    ("logic_state", "testvalue"): "k>=1",
+    ("logic_state", "exists"): "k",
+    ("logic_state", "missing"): "k",
+    ("logic_state", "setobjectvalue"): "k=1",
+    ("logic_state", "getobjectvalue"): "k",
+}
+#: Fallbacks by input name, for names that mean the same thing everywhere.
+PROBE_PARAMS_BY_NAME = {
     "settint": "255 128 0", "setcolor": "255 128 0",
+    "settarget": "probe", "settargetnode": "probe", "setpathtarget": "probe",
+    "setanimation": "idle",
 }
 PROBE_BY_PARAM_TYPE = {"float": "1.0", "int": "1", "bool": "true",
                        "color": "255 128 0", "string": "probe", "": ""}
+
+
+def probe_parameter(entity_type: str, io_def) -> str:
+    """A parameter worth sending to this specific input."""
+    name = io_def.name.lower()
+    if (entity_type, name) in PROBE_PARAMS:
+        return PROBE_PARAMS[(entity_type, name)]
+    # The pre-2.4 type token shares LogicState's definitions and its parameters.
+    if entity_type == "logic_keyvalue" and ("logic_state", name) in PROBE_PARAMS:
+        return PROBE_PARAMS[("logic_state", name)]
+    if name in PROBE_PARAMS_BY_NAME:
+        return PROBE_PARAMS_BY_NAME[name]
+    return PROBE_BY_PARAM_TYPE.get(io_def.param_type, "")
 
 
 @pytest.fixture(scope="module")
@@ -301,9 +340,7 @@ def _probe_all_inputs(manager):
             for io_def in IO_REGISTRY[entity_type]["inputs"]:
                 if (entity_type, io_def.name) in ABSTRACT_IO:
                     continue
-                parameter = PROBE_PARAMS.get(
-                    io_def.name.lower(),
-                    PROBE_BY_PARAM_TYPE.get(io_def.param_type, ""))
+                parameter = probe_parameter(entity_type, io_def)
                 before = len(errors)
                 manager._execute_input(name, io_def.name, parameter, "probe",
                                        target_id=entity_id)
