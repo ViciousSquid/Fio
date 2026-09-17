@@ -1,4 +1,5 @@
 """Generic Prop gameplay must not depend on the Tidy plugin."""
+from pathlib import Path
 from types import SimpleNamespace
 
 from engine.prop_runtime import PropSession
@@ -56,3 +57,11 @@ def test_session_detects_maps_without_props_and_unloads_when_removed():
     assert session.is_empty()
     assert session.props == []
     assert not PropSession.has_props(logic.things)
+
+
+def test_prop_has_a_default_billboard_and_2d_menu_entry():
+    prop = Prop()
+    assert prop.get_sprite_path() == 'assets/sprites/pickup.png'
+    source = Path('editor/view_2d.py').read_text()
+    assert 'add_prop_action = menu.addAction("Prop")' in source
+    assert 'new_thing = Prop(pos=pos_3d)' in source

@@ -819,7 +819,7 @@ class Prop(Model):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties['type'] = 'prop'
-        self.properties.setdefault('sprite_path', '')
+        self.properties.setdefault('sprite_path', 'assets/sprites/pickup.png')
         self.properties.setdefault('sprite_size', [32.0, 32.0])
         self.properties.setdefault('mass', 1.0)
         self.properties.setdefault('collision_size', [0.0, 0.0, 0.0])
@@ -840,6 +840,22 @@ class Prop(Model):
     def get_sprite_path(self):
         """Return the authored billboard texture path, if this prop has one."""
         return self.properties.get('sprite_path', '')
+
+    def get_instance_pixmap(self):
+        """Load the authored billboard for 2D editor views."""
+        sprite_path = self.get_sprite_path()
+        if not sprite_path:
+            return super().get_instance_pixmap()
+        cache_key = ('prop_sprite', sprite_path)
+        if cache_key in self._pixmap_cache:
+            return self._pixmap_cache[cache_key]
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        absolute_path = sprite_path if os.path.isabs(sprite_path) else os.path.join(project_root, sprite_path)
+        pixmap = QPixmap(absolute_path) if os.path.exists(absolute_path) else None
+        if pixmap is not None and pixmap.isNull():
+            pixmap = None
+        self._pixmap_cache[cache_key] = pixmap
+        return pixmap
 
 
 # =============================================================================
