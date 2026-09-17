@@ -806,6 +806,42 @@ class Model(Thing):
         self.properties.setdefault('scale', [1, 1, 1])
 
 
+class Prop(Model):
+    """A generic carryable world object.
+
+    A prop uses ``model_path`` when it is set; otherwise ``sprite_path`` is
+    rendered as a camera-facing billboard.  Its data-only defaults are kept on
+    the entity so maps serialize through :class:`Thing` without a special
+    format and runtimes can opt into the same carry/physics contract.
+    """
+    pixmap_path = "assets/sprites/model.png"
+
+    def __init__(self, pos=None, properties=None):
+        super().__init__(pos, properties)
+        self.properties['type'] = 'prop'
+        self.properties.setdefault('sprite_path', '')
+        self.properties.setdefault('sprite_size', [32.0, 32.0])
+        self.properties.setdefault('mass', 1.0)
+        self.properties.setdefault('collision_size', [0.0, 0.0, 0.0])
+        self.properties.setdefault('no_collision', True)
+        self.properties.setdefault('physics_enabled', False)
+        self.properties.setdefault('gravity', True)
+        self.properties.setdefault('friction', 0.55)
+        self.properties.setdefault('linear_damping', 0.08)
+        self.properties.setdefault('angular_damping', 0.12)
+        self.properties.setdefault('pickup_enabled', True)
+        self.properties.setdefault('pickup_reach', 110.0)
+        self.properties.setdefault('carry_distance', 55.0)
+        self.properties.setdefault('carry_offset', [0.0, -6.0, 0.0])
+        self.properties.setdefault('drop_velocity', 0.0)
+        self.properties.setdefault('drop_angular_velocity', [0.0, 0.0, 0.0])
+        self.properties.setdefault('disabled', False)
+
+    def get_sprite_path(self):
+        """Return the authored billboard texture path, if this prop has one."""
+        return self.properties.get('sprite_path', '')
+
+
 # =============================================================================
 # LOGIC ENTITIES
 # =============================================================================
