@@ -24,6 +24,7 @@ from .player import Player
 from .camera import Camera
 from .constants import is_water_brush, brush_aabb_bounds
 from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
+from .prop_runtime import PropSession
 
 # Import Thing subclasses for type checking
 try:
@@ -950,6 +951,11 @@ class LogicThread(threading.Thread):
             self._spatial_grid.populate(self.brushes + self._model_collision_brushes)
             self.monster_ai.set_spatial_grid(self._spatial_grid)
 
+            # Core props deliberately run without a plugin.  Start after the
+            # spatial grid exists so optional world collision can raycast it.
+            self._props = PropSession(self)
+            self._props.start()
+
             # Reset cinematic state (mover_path_states already reset by _init_movers)
             self.cinematic_state = None
             self.camera_transition = None
@@ -1023,6 +1029,10 @@ class LogicThread(threading.Thread):
             # existing: after one exit the attribute is present and None, so a
             # second stop (a teardown path, or Stop pressed twice) used to raise
             # AttributeError here and abandon the rest of the cleanup below.
+            props = getattr(self, '_props', None)
+            if props is not None:
+                props.stop()
+            self._props = None
             self.monster_ai.set_spatial_grid(None)
             grid = getattr(self, '_spatial_grid', None)
             if grid is not None:
@@ -1669,6 +1679,9 @@ class LogicThread(threading.Thread):
 
         # Gameplay
         self._handle_interactions(use_key)
+        props = getattr(self, '_props', None)
+        if props is not None:
+            props.tick(delta, use_key)
         self._check_pickups()
         self._handle_triggers(use_key)
 
