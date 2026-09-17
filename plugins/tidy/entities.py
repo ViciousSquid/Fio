@@ -65,12 +65,13 @@ class TidyObject(Prop):
     pixmap_path = "plugins/tidy/assets/tidyobject.png"
 
     def __init__(self, pos=None, properties=None):
+        has_authored_model = bool(properties and properties.get('model_path'))
         super().__init__(pos, properties)
         # Force the type regardless of what Model set, so serialization and the
         # I/O system route to the tidy handlers.
         self.properties['type'] = 'tidyobject'
         self.properties.setdefault('category', 'object')
-        if not self.properties.get('model_path'):
+        if not has_authored_model:
             self.properties['model_path'] = BOOK_MODEL
         # Give each book a random cover (the renderer applies 'texture' as a
         # per-instance override). Kept once assigned so saved maps are stable.
