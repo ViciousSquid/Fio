@@ -43,3 +43,16 @@ def test_core_prop_pickup_drop_and_rest_without_plugins():
     assert prop.pos[1] == 0.0
     assert ('OnRest' in [event for _, event in io.events])
     assert prop.properties['rotation'][0] > 0
+
+
+def test_session_detects_maps_without_props_and_unloads_when_removed():
+    prop = Prop(pos=[0, 0, 0])
+    logic = SimpleNamespace(things=[prop])
+    assert PropSession.has_props(logic.things)
+    session = PropSession(logic)
+    session.start()
+
+    logic.things.clear()
+    assert session.is_empty()
+    assert session.props == []
+    assert not PropSession.has_props(logic.things)

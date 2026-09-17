@@ -40,6 +40,11 @@ class PropSession:
         self.held = None
         self.moving = {}
 
+    @staticmethod
+    def has_props(things):
+        """Return whether a map currently contains a plain core Prop."""
+        return any(getattr(t, 'properties', {}).get('type') == 'prop' for t in things)
+
     def start(self):
         self.props = [t for t in self.logic.things
                       if getattr(t, 'properties', {}).get('type') == 'prop']
@@ -59,6 +64,19 @@ class PropSession:
                 prop.pos = home
         self.held = None
         self.moving.clear()
+
+    def is_empty(self):
+        """Drop stale references when props are removed from the live map."""
+        live = {id(t) for t in self.logic.things
+                if getattr(t, 'properties', {}).get('type') == 'prop'}
+        if len(live) == len(self.props) and all(id(prop) in live for prop in self.props):
+            return False
+        self.props = [prop for prop in self.props if id(prop) in live]
+        self.moving = {key: state for key, state in self.moving.items()
+                       if id(state['prop']) in live}
+        if self.held is not None and id(self.held) not in live:
+            self.held = None
+        return not self.props
 
     def _fire(self, prop, output):
         io = getattr(self.logic, 'io_manager', None)

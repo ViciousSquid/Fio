@@ -951,10 +951,12 @@ class LogicThread(threading.Thread):
             self._spatial_grid.populate(self.brushes + self._model_collision_brushes)
             self.monster_ai.set_spatial_grid(self._spatial_grid)
 
-            # Core props deliberately run without a plugin.  Start after the
-            # spatial grid exists so optional world collision can raycast it.
-            self._props = PropSession(self)
-            self._props.start()
+            # Props are a core feature, but do not allocate a runtime session
+            # for maps that do not contain one.
+            self._props = None
+            if PropSession.has_props(self.things):
+                self._props = PropSession(self)
+                self._props.start()
 
             # Reset cinematic state (mover_path_states already reset by _init_movers)
             self.cinematic_state = None
@@ -1681,7 +1683,13 @@ class LogicThread(threading.Thread):
         self._handle_interactions(use_key)
         props = getattr(self, '_props', None)
         if props is not None:
-            props.tick(delta, use_key)
+            # Editor/runtime map edits can remove every Prop while playing.
+            # Release the session immediately instead of retaining objects.
+            if props.is_empty():
+                props.stop()
+                self._props = None
+            else:
+                props.tick(delta, use_key)
         self._check_pickups()
         self._handle_triggers(use_key)
 
