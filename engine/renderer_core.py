@@ -1093,6 +1093,13 @@ class BaseRenderer:
                             tex_id = self.load_texture(filename, subfolder)
                             if tex_id:
                                 sprite_textures[class_name] = tex_id
+                    elif getattr(thing, 'properties', {}).get('sprite_path'):
+                        sprite_path = thing.properties.get('sprite_path')
+                        subfolder = os.path.dirname(sprite_path.replace('assets/', '', 1))
+                        filename = os.path.basename(sprite_path)
+                        tex_id = self.load_texture(filename, subfolder)
+                        if tex_id:
+                            sprite_textures[class_name] = tex_id
                     elif isinstance(thing, Monster):
                         sprite_path = thing.get_sprite_path()
                         if sprite_path:
@@ -1112,6 +1119,12 @@ class BaseRenderer:
                 gl.glUniform3fv(pos_loc, 1, thing.pos)
                 if isinstance(thing, Light):
                     gl.glUniform2f(size_loc, 16.0, 16.0)
+                elif getattr(thing, 'properties', {}).get('sprite_path'):
+                    size = thing.properties.get('sprite_size', [32.0, 32.0])
+                    try:
+                        gl.glUniform2f(size_loc, float(size[0]), float(size[1]))
+                    except (TypeError, ValueError, IndexError):
+                        gl.glUniform2f(size_loc, 32.0, 32.0)
                 elif isinstance(thing, (LogicSpawner, LogicCamera)):
                     gl.glUniform2f(size_loc, 32.0, 32.0)
                 else:
@@ -1388,6 +1401,9 @@ class BaseRenderer:
                         sprites.append(t)
                     elif getattr(t, 'properties', {}).get('model_path'):
                         # Always render models in play mode (3D geometry, not just editor sprites)
+                        sprites.append(t)
+                    elif getattr(t, 'properties', {}).get('sprite_path'):
+                        # Props may deliberately be camera-facing billboards.
                         sprites.append(t)
                     elif show_sprites:
                         sprites.append(t)
