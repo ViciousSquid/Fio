@@ -61,7 +61,6 @@ def test_session_detects_maps_without_props_and_unloads_when_removed():
 
 def test_prop_has_a_default_billboard_and_2d_menu_entry():
     prop = Prop()
-    assert prop.properties['model_path'] == 'prop_book.obj'
     assert prop.get_sprite_path() == 'assets/sprites/pickup.png'
     source = Path('editor/view_2d.py').read_text()
     assert 'add_prop_action = menu.addAction("Prop")' in source

@@ -817,13 +817,8 @@ class Prop(Model):
     pixmap_path = "assets/sprites/model.png"
 
     def __init__(self, pos=None, properties=None):
-        # Preserve an explicitly empty model_path for sprite-only saved maps.
-        has_authored_model = properties is not None and 'model_path' in properties
-        has_authored_sprite = properties is not None and 'sprite_path' in properties
         super().__init__(pos, properties)
         self.properties['type'] = 'prop'
-        if not has_authored_model and not has_authored_sprite:
-            self.properties['model_path'] = 'prop_book.obj'
         self.properties.setdefault('sprite_path', 'assets/sprites/pickup.png')
         self.properties.setdefault('sprite_size', [32.0, 32.0])
         self.properties.setdefault('mass', 1.0)

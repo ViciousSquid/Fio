@@ -100,12 +100,8 @@ class Prop(Model):
     """PyQt-free counterpart of :class:`editor.things.Prop`."""
 
     def __init__(self, pos=None, properties=None):
-        has_authored_model = properties is not None and 'model_path' in properties
-        has_authored_sprite = properties is not None and 'sprite_path' in properties
         super().__init__(pos, properties)
         self.properties['type'] = 'prop'
-        if not has_authored_model and not has_authored_sprite:
-            self.properties['model_path'] = 'prop_book.obj'
         for key, value in {
             'sprite_path': 'assets/sprites/pickup.png', 'sprite_size': [32.0, 32.0], 'mass': 1.0,
             'collision_size': [0.0, 0.0, 0.0], 'no_collision': True,
