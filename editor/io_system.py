@@ -944,6 +944,21 @@ def register_default_io():
         ]
     )
     
+    # === PROP ===
+    register_io('prop',
+        inputs=[
+            IODef('Enable', 'Make this prop pickable'),
+            IODef('Disable', 'Make this prop unavailable'),
+            IODef('Drop', 'Release this prop if it is being carried'),
+            IODef('Wake', 'Resume physics simulation'),
+        ],
+        outputs=[
+            IODef('OnPickedUp', 'Fired when the player picks up this prop'),
+            IODef('OnDropped', 'Fired when the player drops this prop'),
+            IODef('OnRest', 'Fired when this prop comes to rest'),
+        ]
+    )
+
     # === MODEL ===
     register_io('model',
         inputs=[

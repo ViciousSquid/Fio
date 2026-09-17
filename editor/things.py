@@ -806,6 +806,63 @@ class Model(Thing):
         self.properties.setdefault('scale', [1, 1, 1])
 
 
+class Prop(Model):
+    """A generic carryable world object.
+
+    A prop uses ``model_path`` when it is set; otherwise ``sprite_path`` is
+    rendered as a camera-facing billboard.  Its data-only defaults are kept on
+    the entity so maps serialize through :class:`Thing` without a special
+    format and runtimes can opt into the same carry/physics contract.
+    """
+    pixmap_path = "assets/sprites/model.png"
+
+    def __init__(self, pos=None, properties=None):
+        # Preserve an explicitly empty model_path for sprite-only saved maps.
+        has_authored_model = properties is not None and 'model_path' in properties
+        has_authored_sprite = properties is not None and 'sprite_path' in properties
+        super().__init__(pos, properties)
+        self.properties['type'] = 'prop'
+        if not has_authored_model and not has_authored_sprite:
+            self.properties['model_path'] = 'prop_book.obj'
+        self.properties.setdefault('sprite_path', 'assets/sprites/pickup.png')
+        self.properties.setdefault('sprite_size', [32.0, 32.0])
+        self.properties.setdefault('mass', 1.0)
+        self.properties.setdefault('collision_size', [0.0, 0.0, 0.0])
+        self.properties.setdefault('no_collision', True)
+        self.properties.setdefault('physics_enabled', False)
+        self.properties.setdefault('gravity', True)
+        self.properties.setdefault('friction', 0.55)
+        self.properties.setdefault('linear_damping', 0.08)
+        self.properties.setdefault('angular_damping', 0.12)
+        self.properties.setdefault('pickup_enabled', True)
+        self.properties.setdefault('pickup_reach', 110.0)
+        self.properties.setdefault('carry_distance', 55.0)
+        self.properties.setdefault('carry_offset', [0.0, -6.0, 0.0])
+        self.properties.setdefault('drop_velocity', 0.0)
+        self.properties.setdefault('drop_angular_velocity', [0.0, 0.0, 0.0])
+        self.properties.setdefault('disabled', False)
+
+    def get_sprite_path(self):
+        """Return the authored billboard texture path, if this prop has one."""
+        return self.properties.get('sprite_path', '')
+
+    def get_instance_pixmap(self):
+        """Load the authored billboard for 2D editor views."""
+        sprite_path = self.get_sprite_path()
+        if not sprite_path:
+            return super().get_instance_pixmap()
+        cache_key = ('prop_sprite', sprite_path)
+        if cache_key in self._pixmap_cache:
+            return self._pixmap_cache[cache_key]
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        absolute_path = sprite_path if os.path.isabs(sprite_path) else os.path.join(project_root, sprite_path)
+        pixmap = QPixmap(absolute_path) if os.path.exists(absolute_path) else None
+        if pixmap is not None and pixmap.isNull():
+            pixmap = None
+        self._pixmap_cache[cache_key] = pixmap
+        return pixmap
+
+
 # =============================================================================
 # LOGIC ENTITIES
 # =============================================================================

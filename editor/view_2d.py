@@ -5,7 +5,7 @@ import os
 from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog, QApplication
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
-from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Monster,
+from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
                           LogicCamera, LogicSpawner, Portal, LogicState)
 from editor.scene_hierarchy import SceneHierarchy
@@ -2225,7 +2225,7 @@ class View2D(QWidget):
             draw_rect = None
 
             # --- MODEL RENDERING ---
-            if isinstance(thing, Model):
+            if isinstance(thing, Model) and thing.properties.get('model_path'):
                 self._draw_model_wireframe(painter, thing, ax_map, ax1, ax2)
                 # Selection box for models
                 draw_rect = QRectF(s_pos.x() - 16, s_pos.y() - 16, 32, 32)
@@ -3783,6 +3783,7 @@ class View2D(QWidget):
         add_light_action = menu.addAction("Light")
         add_player_start_action = menu.addAction("PlayerStart")
         add_pickup_action = menu.addAction("Pickup")
+        add_prop_action = menu.addAction("Prop")
         add_monster_action = menu.addAction("Monster")
         add_speaker_action = menu.addAction("Speaker")
         add_logic_spawner_action = menu.addAction("Spawner")
@@ -3848,6 +3849,8 @@ class View2D(QWidget):
             new_thing = PlayerStart(pos=pos_3d)
         elif action == add_pickup_action: 
             new_thing = Pickup(pos=pos_3d)
+        elif action == add_prop_action:
+            new_thing = Prop(pos=pos_3d)
         elif action == add_speaker_action: 
             new_thing = Speaker(pos=pos_3d)
         elif action == add_levelchanger_action:
@@ -4225,7 +4228,7 @@ class View2D(QWidget):
             is_hit = False
             
             # Standard Thing Hit Test
-            if isinstance(thing, Model):
+            if isinstance(thing, Model) and thing.properties.get('model_path'):
                 # Advanced Model Hit Test: Check Bounding Box of projected vertices
                 coords = self._compute_model_screen_coords(thing, ax_map, ax1, ax2)
                 if coords:

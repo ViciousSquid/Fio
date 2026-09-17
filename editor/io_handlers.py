@@ -560,6 +560,28 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('pickup', 'setvalue', pickup_set_value)
     
     # ==========================================================================
+    # PROP INPUTS
+    # ==========================================================================
+
+    def prop_enable(entity, param, logic):
+        entity.properties['disabled'] = False
+
+    def prop_disable(entity, param, logic):
+        entity.properties['disabled'] = True
+
+    def prop_wake(entity, param, logic):
+        entity.properties['_physics_awake'] = True
+
+    def prop_drop(entity, param, logic):
+        # The active prop runtime observes this one-shot request on its next tick.
+        entity.properties['_drop_requested'] = True
+
+    io_manager.register_input_handler('prop', 'enable', prop_enable)
+    io_manager.register_input_handler('prop', 'disable', prop_disable)
+    io_manager.register_input_handler('prop', 'wake', prop_wake)
+    io_manager.register_input_handler('prop', 'drop', prop_drop)
+
+    # ==========================================================================
     # LOGIC_RELAY INPUTS
     # ==========================================================================
     
@@ -1016,7 +1038,7 @@ def register_all_input_handlers(io_manager: IOManager):
         debug_log('IO', f"Entity '{name}' toggled → {state}")
 
     # Register for every thing-based type that declares Hide/Show
-    for ttype in ('monster', 'light', 'speaker', 'pickup', 'model'):
+    for ttype in ('monster', 'light', 'speaker', 'pickup', 'model', 'prop'):
         io_manager.register_input_handler(ttype, 'hide', thing_hide)
         io_manager.register_input_handler(ttype, 'show', thing_show)
         io_manager.register_input_handler(ttype, 'togglevisibility', thing_toggle_vis)
