@@ -219,17 +219,11 @@ def cull_by_distance(objects: Sequence, cx: float, cz: float,
             raise ValueError("distance-cull positions must have shape (N, 2), got %r" %
                              (positions.shape,))
 
-        # The expensive scalar kernel is the part worth moving out of Python.
-        # No object references are copied into NumPy; only numeric X/Z rows are
-        # touched here, and the API's Python list is rebuilt from the mask below.
         dx = positions[:, 0] - cx
         dz = positions[:, 1] - cz
         visible = (dx * dx + dz * dz) <= limit_sq
 
         if keep is not None:
-            # keep remains an object-level callback because its semantics are
-            # arbitrary. In Fio it is a cheap isinstance check; the expensive
-            # distance arithmetic above is still fully batched.
             forced = np.fromiter(
                 (bool(keep(obj)) for obj in objects),
                 dtype=bool,
@@ -237,14 +231,10 @@ def cull_by_distance(objects: Sequence, cx: float, cz: float,
             )
             visible |= forced
 
-        # Avoid a Python walk over every culled object. The public API still has
-        # to return actual Python objects, so dense visible sets necessarily do
-        # O(number of returned objects) work here.
         for index in np.flatnonzero(visible):
             out.append(objects[int(index)])
         return out
 
-    # Original API-compatible scalar path.
     for obj in objects:
         if keep is not None and keep(obj):
             out.append(obj)
