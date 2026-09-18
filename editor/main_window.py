@@ -196,6 +196,15 @@ class MainWindow(QMainWindow):
         self.preview_data = {} 
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
+
+        # Tools > Benchmark... sits directly below Autocaulk. The benchmark
+        # runs pytest in a child process so the editor UI remains responsive.
+        self.benchmark_action = QAction("Benchmark...", self)
+        self.benchmark_action.setToolTip(
+            "Measure renderer performance using the visual test-suite paths")
+        self.benchmark_action.triggered.connect(self.run_benchmark)
+        self.tools_menu.insertAction(self.logic_graph_action, self.benchmark_action)
+
         self.update_recent_files_menu()
         self.setup_package_actions() 
         self.update_title()
@@ -341,6 +350,17 @@ class MainWindow(QMainWindow):
         self.properties_dock.setWidget(overlay_widget)
         self._current_overlay = overlay_widget
         self._overlay_close_callback = close_callback
+
+    def run_benchmark(self):
+        """Open the renderer benchmark dialog."""
+        from editor.benchmark_dialog import BenchmarkDialog
+
+        dialog = BenchmarkDialog(self.root_dir, self)
+        self._benchmark_dialog = dialog
+        dialog.finished.connect(
+            lambda _result: setattr(self, "_benchmark_dialog", None)
+        )
+        dialog.exec_()
 
     def update_title(self):
         """Updates window title with filename and dirty status."""
