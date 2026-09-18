@@ -23,7 +23,6 @@ import time
 import numpy as np
 import pytest
 
-from editor.things import Thing
 from engine.render_cull import cull_by_distance
 
 from tests.helpers import gl as glh
@@ -181,6 +180,7 @@ def _many_culled():
 
 def _many_entities():
     """Many real Thing objects that are intentionally outside the cull radius."""
+    from editor.things import Thing
     brushes = [box_brush("floor", (0, -16, 0), (4096, 32, 4096))]
     things = []
     width = 32
