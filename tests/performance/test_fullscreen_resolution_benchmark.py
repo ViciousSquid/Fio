@@ -105,25 +105,32 @@ def _measure_scenario(width, height, name, shadows, empty):
 
 
 def _make_renderer_stress_scene():
-    """Build a dense renderer workload: hundreds of brushes and many lights."""
+    """Build the baseline dense renderer workload."""
+    return _make_brush_stress_scene(576)
+
+
+def _make_brush_stress_scene(brush_count):
+    """Build a renderer stress scene containing exactly *brush_count* boxes."""
     from editor.things import Light
     from tests.helpers.worlds import box_brush, make_thing
     import math
 
     brushes = []
-    grid = 24
+    columns = int(math.ceil(math.sqrt(brush_count)))
     spacing = 120
-    for z in range(grid):
-        for x in range(grid):
-            brushes.append(box_brush(
-                "stress_brush_%d_%d" % (x, z),
-                ((x - grid // 2) * spacing, 0, (z - grid // 2) * spacing),
-                (96, 96, 96),
-            ))
+    half = columns // 2
+    for index in range(brush_count):
+        x = index % columns
+        z = index // columns
+        brushes.append(box_brush(
+            "stress_brush_%d" % index,
+            ((x - half) * spacing, 0, (z - half) * spacing),
+            (96, 96, 96),
+        ))
 
     things = []
     light_count = 32
-    radius = 1350.0
+    radius = max(1350.0, columns * spacing * 0.45)
     for i in range(light_count):
         angle = (i / float(light_count)) * 6.28318530718
         things.append(make_thing(
@@ -140,7 +147,7 @@ def _make_renderer_stress_scene():
 
 
 def _run_renderer_stress():
-    """Time the dense renderer workload in both windowed and fullscreen-style paths."""
+    """Time the baseline dense renderer workload in windowed/fullscreen modes."""
     glh.reset_texture_cache()
     brushes, things = _make_renderer_stress_scene()
     results = []
@@ -167,6 +174,7 @@ def _run_renderer_stress():
                     "description": "%d brushes + %d lights (%d shadowed)" % (
                         len(brushes), len(things),
                         sum(1 for t in things if t.properties.get("casts_shadows"))),
+                    "brush_count": len(brushes),
                     "resolution": "%dx%d" % (width, height),
                     "mean_ms": mean * 1000.0,
                     "p95_ms": sorted(samples)[min(
@@ -183,6 +191,73 @@ def _run_renderer_stress():
 
     glh.reset_texture_cache()
     return results
+
+
+def _run_brush_count_stress(counts):
+    """Run selected large brush scenes in both render-target modes."""
+    results = []
+    for brush_count in counts:
+        glh.reset_texture_cache()
+        brushes, things = _make_brush_stress_scene(brush_count)
+
+        # Large scenes are deliberately shorter than the normal benchmark:
+        # their purpose is to find scaling cliffs, not produce a long soak.
+        for mode, width, height in (("windowed", 1280, 720), ("fullscreen", 1920, 1080)):
+            with glh.GLTestContext(width, height) as context:
+                renderer = glh.make_renderer()
+                try:
+                    for _ in range(3):
+                        _render(renderer, context, brushes, things)
+
+                    samples = []
+                    for _ in range(10):
+                        start = time.perf_counter()
+                        _render(renderer, context, brushes, things)
+                        samples.append(time.perf_counter() - start)
+
+                    mean = statistics.fmean(samples)
+                    results.append({
+                        "test": "brush_scene_%d_%s" % (brush_count, mode),
+                        "mode": mode,
+                        "brush_count": brush_count,
+                        "description": "%d brushes + %d lights (%d shadowed)" % (
+                            brush_count, len(things),
+                            sum(1 for t in things if t.properties.get("casts_shadows"))),
+                        "resolution": "%dx%d" % (width, height),
+                        "mean_ms": mean * 1000.0,
+                        "p95_ms": sorted(samples)[min(
+                            len(samples) - 1,
+                            int(round(0.95 * (len(samples) - 1))))] * 1000.0,
+                        "worst_ms": max(samples) * 1000.0,
+                        "average_fps": 1.0 / mean if mean else float("inf"),
+                    })
+                finally:
+                    try:
+                        renderer.cleanup()
+                    except Exception:
+                        pass
+        del brushes, things
+
+    glh.reset_texture_cache()
+    return results
+
+
+def _selected_brush_counts():
+    raw = os.environ.get("FIO_FULLSCREEN_BENCH_BRUSH_STRESS", "")
+    if not raw:
+        return ()
+    allowed = {1000, 10000, 100000}
+    counts = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        count = int(item)
+        if count not in allowed:
+            raise ValueError("unsupported brush stress size: %s" % count)
+        if count not in counts:
+            counts.append(count)
+    return tuple(counts)
 
 
 def _run_io_stress():
@@ -238,6 +313,89 @@ def _run_io_stress():
     }
 
 
+def _run_io_chain_stress(entity_count=1000):
+    """Time a production I/O chain containing exactly *entity_count* entities."""
+    from editor import io_system as io
+    from editor.io_system import IOManager, OutputConnection
+    from editor.io_handlers import register_all_input_handlers
+    from editor.things import LogicRelay
+    import sys
+
+    manager = IOManager()
+    logic = type("StressLogic", (), {})()
+    logic.io_manager = manager
+    manager.set_logic_thread(logic)
+    register_all_input_handlers(manager)
+
+    entities = [
+        LogicRelay(
+            pos=[0, 0, 0],
+            properties={"name": "stress_chain_%d" % i, "fire_once": False},
+        )
+        for i in range(entity_count)
+    ]
+    by_name = {e.properties["name"]: e for e in entities}
+    by_id = {e.properties.get("id"): e for e in entities}
+    manager.set_entity_finder(lambda name: by_name.get(name))
+    manager.set_entity_finder_by_id(lambda entity_id: by_id.get(entity_id))
+
+    for i in range(entity_count - 1):
+        io.add_connection(entities[i], OutputConnection(
+            output_name="OnTrigger",
+            target_name=entities[i + 1].properties["name"],
+            input_name="Trigger",
+            parameter="",
+            target_id=entities[i + 1].properties.get("id"),
+        ))
+
+    samples = []
+    old_limit = sys.getrecursionlimit()
+    # fire_output -> relay handler -> fire_output is intentionally a direct
+    # synchronous chain. Raise the Python recursion limit only for this
+    # benchmark so a 1000-entity chain measures the production path rather
+    # than failing at CPython's default recursion guard.
+    sys.setrecursionlimit(max(old_limit, entity_count * 4))
+    try:
+        for _ in range(10):
+            manager.reset()
+            start = time.perf_counter()
+            manager.fire_output(entities[0], "OnTrigger")
+            samples.append(time.perf_counter() - start)
+    finally:
+        sys.setrecursionlimit(old_limit)
+
+    mean = statistics.fmean(samples)
+    return {
+        "test": "io_chain_%d" % entity_count,
+        "description": "%d LogicRelay I/O hops x %d runs" % (entity_count - 1, len(samples)),
+        "entities": entity_count,
+        "hops": entity_count - 1,
+        "runs": len(samples),
+        "mean_ms": mean * 1000.0,
+        "p95_ms": sorted(samples)[min(
+            len(samples) - 1, int(round(0.95 * (len(samples) - 1))))] * 1000.0,
+        "worst_ms": max(samples) * 1000.0,
+        "hops_per_second": (entity_count - 1) / mean if mean else float("inf"),
+    }
+
+
+def _selected_io_chain_counts():
+    raw = os.environ.get("FIO_FULLSCREEN_BENCH_IO_CHAIN", "")
+    if not raw:
+        return ()
+    counts = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        count = int(item)
+        if count != 1000:
+            raise ValueError("unsupported I/O chain size: %s" % count)
+        if count not in counts:
+            counts.append(count)
+    return tuple(counts)
+
+
 def _run_csg_stress():
     """Time repeated real convex-geometry/CSG reconstruction work."""
     from engine.brush_geometry import ConvexGeometry, box_planes, make_plane
@@ -278,7 +436,14 @@ def _run_csg_stress():
 
 def run_additional_stress_tests():
     """Run opt-in workloads for I/O, renderer and CSG."""
-    return _run_renderer_stress() + [_run_io_stress(), _run_csg_stress()]
+    results = _run_renderer_stress() + [_run_io_stress(), _run_csg_stress()]
+    brush_counts = _selected_brush_counts()
+    if brush_counts:
+        results.extend(_run_brush_count_stress(brush_counts))
+    io_counts = _selected_io_chain_counts()
+    for count in io_counts:
+        results.append(_run_io_chain_stress(count))
+    return results
 
 
 def run_benchmark(additional_tests=False):
