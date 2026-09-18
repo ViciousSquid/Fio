@@ -1,23 +1,12 @@
-"""Fullscreen-resolution renderer benchmark.
+"""Renderer benchmark scenarios derived directly from the visual test suite.
 
-This benchmark answers one specific question: does Fio get slower in fullscreen
-because the renderer processes more pixels, or because something else changes
-in the fullscreen path?
+The benchmark imports the visual suite's _render helper and uses the same
+lit_cube_scene, renderer configuration and GL path as
+tests/visual/test_lit_scene.py. This makes the numbers comparable to the
+renderer tests rather than measuring a synthetic scene.
 
-It renders the same deterministic scene at several framebuffer resolutions.
-The GPU is synchronized with glFinish() so the measured interval includes
-completed GPU work rather than only CPU command submission.
-
-Run with:
+Run:
     python -m pytest tests/performance/test_fullscreen_resolution_benchmark.py --run-benchmarks -s
-
-Interpretation:
-* frame time rising roughly with pixel count -> likely fill-rate / fragment /
-  framebuffer cost;
-* frame time staying roughly flat -> likely CPU submission, synchronization,
-  or another resolution-independent bottleneck;
-* a sharp discontinuity at one resolution -> investigate framebuffer/MSAA,
-  driver presentation, or a fullscreen-specific path.
 """
 
 import json
@@ -28,16 +17,15 @@ import time
 import pytest
 
 from tests.helpers import gl as glh
-
+from tests.visual.test_lit_scene import _render
 
 pytestmark = [pytest.mark.gl, pytest.mark.benchmark, pytest.mark.slow]
 
 WARMUP_FRAMES = 10
 MEASURED_FRAMES = 30
 
-# Surface Pro 9-class displays plus common desktop resolutions. Override with
-# FIO_FULLSCREEN_BENCH_RESOLUTIONS="1280x720,1920x1080" if desired.
 DEFAULT_RESOLUTIONS = (
+    (192, 192),       # exact framebuffer size used by test_lit_scene.py
     (1280, 720),
     (1600, 900),
     (1920, 1080),
@@ -50,7 +38,6 @@ def _resolutions():
     raw = os.environ.get("FIO_FULLSCREEN_BENCH_RESOLUTIONS")
     if not raw:
         return DEFAULT_RESOLUTIONS
-
     result = []
     for item in raw.split(","):
         width, height = item.strip().lower().split("x", 1)
@@ -58,34 +45,28 @@ def _resolutions():
     return tuple(result)
 
 
-def _benchmark_resolution(width, height):
-    """Render the same scene repeatedly into a framebuffer at one resolution."""
-    import OpenGL.GL as gl
+SCENARIOS = (
+    ("test_a_lit_cube_scene_renders_without_gl_errors", False, False),
+    ("test_a_scene_with_shadows_renders_without_gl_errors", True, False),
+    ("test_rendering_an_empty_world_is_harmless", False, True),
+)
 
+
+def _measure_scenario(width, height, name, shadows, empty):
     glh.reset_texture_cache()
-    brushes, things = glh.lit_cube_scene(shadows=False)
+
+    if empty:
+        brushes, things = [], []
+    else:
+        brushes, things = glh.lit_cube_scene(shadows=shadows)
 
     with glh.GLTestContext(width, height) as context:
         renderer = glh.make_renderer()
         try:
-            aspect = float(width) / float(height)
-            projection, view, eye = glh.camera_matrices(aspect=aspect)
-            config = glh.render_config(
-                all_brushes=brushes,
-                all_things=things,
-            )
-
             def frame():
-                context.bind()
-                gl.glClearColor(0.05, 0.05, 0.08, 1.0)
-                renderer.render_scene(
-                    projection, view, eye, brushes, things, None, config
-                )
-                # Include completed GPU work in the sample.
-                gl.glFinish()
+                # _render is the exact helper used by test_lit_scene.py.
+                _render(renderer, context, brushes, things)
 
-            # First frame is intentionally not part of steady-state timing:
-            # shader compilation and initial buffer creation can dominate it.
             frame()
             for _ in range(WARMUP_FRAMES):
                 frame()
@@ -96,24 +77,22 @@ def _benchmark_resolution(width, height):
                 frame()
                 samples.append(time.perf_counter() - start)
 
-            mean_seconds = statistics.fmean(samples)
-            p95_seconds = sorted(samples)[
-                min(len(samples) - 1, int(round(0.95 * (len(samples) - 1))))
+            mean = statistics.fmean(samples)
+            p95 = sorted(samples)[
+                min(len(samples) - 1, int(round(0.95 * (len(samples) - 1)))
             ]
             pixels = width * height
             return {
+                "scenario": name,
                 "width": width,
                 "height": height,
                 "pixels": pixels,
                 "megapixels": pixels / 1_000_000.0,
-                "mean_ms": mean_seconds * 1000.0,
-                "p95_ms": p95_seconds * 1000.0,
+                "mean_ms": mean * 1000.0,
+                "p95_ms": p95 * 1000.0,
                 "worst_ms": max(samples) * 1000.0,
-                "average_fps": 1.0 / mean_seconds if mean_seconds else float("inf"),
-                "ms_per_megapixel": (
-                    mean_seconds * 1000.0 / (pixels / 1_000_000.0)
-                    if pixels else 0.0
-                ),
+                "average_fps": 1.0 / mean if mean else float("inf"),
+                "ms_per_megapixel": mean * 1000.0 / (pixels / 1_000_000.0),
             }
         finally:
             try:
@@ -124,30 +103,32 @@ def _benchmark_resolution(width, height):
     glh.reset_texture_cache()
 
 
-def test_fullscreen_resolution_scaling_benchmark(capsys):
-    """Report how renderer cost changes as framebuffer resolution increases."""
-    results = [_benchmark_resolution(w, h) for w, h in _resolutions()]
+def run_benchmark():
+    """Run the real visual-suite rendering scenarios at each resolution."""
+    results = []
+    for width, height in _resolutions():
+        for name, shadows, empty in SCENARIOS:
+            results.append(
+                _measure_scenario(width, height, name, shadows, empty)
+            )
+    return results
 
-    with glh.GLTestContext(64, 64) as probe:
-        info = probe.info()
 
+def format_results(results, info=None):
     lines = [
+        "Fio renderer benchmark — visual test suite scenarios",
+        "Rendering path: tests/visual/test_lit_scene.py::_render",
         "",
-        "Fio fullscreen-resolution renderer benchmark",
-        "GPU: %s" % info["renderer"],
-        "GL:  %s" % info["version"],
-        "warm-up=%d  measured=%d" % (WARMUP_FRAMES, MEASURED_FRAMES),
-        "",
-        "resolution       megapixels   avg FPS   mean ms   p95 ms   ms/MP",
+        "scenario                                      resolution       FPS     mean ms   p95 ms   ms/MP",
     ]
 
     for result in results:
         lines.append(
-            "%4dx%-4d          %7.2f     %7.1f   %7.2f   %7.2f   %7.3f"
+            "%-46s %4dx%-4d %8.1f %10.2f %8.2f %8.3f"
             % (
+                result["scenario"],
                 result["width"],
                 result["height"],
-                result["megapixels"],
                 result["average_fps"],
                 result["mean_ms"],
                 result["p95_ms"],
@@ -155,15 +136,45 @@ def test_fullscreen_resolution_scaling_benchmark(capsys):
             )
         )
 
-    base = results[0]
-    lines.extend(["", "relative to %dx%d:" % (base["width"], base["height"])])
+    baselines = {
+        result["scenario"]: result
+        for result in results
+        if result["width"] == 192 and result["height"] == 192
+    }
+    lines.extend(["", "Resolution scaling relative to the suite's 192x192 framebuffer:"])
     for result in results:
-        pixel_ratio = result["pixels"] / float(base["pixels"])
-        time_ratio = result["mean_ms"] / max(base["mean_ms"], 1e-9)
+        if result["scenario"] not in baselines:
+            continue
+        if result["width"] == 192 and result["height"] == 192:
+            continue
+        base = baselines[result["scenario"]]
         lines.append(
-            "  %4dx%-4d  pixels x%.2f  frame-time x%.2f"
-            % (result["width"], result["height"], pixel_ratio, time_ratio)
+            "  %-46s %4dx%-4d  pixels x%7.2f  frame-time x%7.2f"
+            % (
+                result["scenario"],
+                result["width"],
+                result["height"],
+                result["pixels"] / float(base["pixels"]),
+                result["mean_ms"] / max(base["mean_ms"], 1e-9),
+            )
         )
+
+    if info:
+        lines.extend([
+            "",
+            "GL renderer: %s" % info.get("renderer", "?"),
+            "GL version:  %s" % info.get("version", "?"),
+        ])
+    return "\n".join(lines)
+
+
+def test_fullscreen_resolution_scaling_benchmark(capsys):
+    """Benchmark real visual-suite rendering paths across resolutions."""
+    with glh.GLTestContext(64, 64) as probe:
+        info = probe.info()
+
+    results = run_benchmark()
+    output = format_results(results, info)
 
     output_path = os.environ.get("FIO_FULLSCREEN_BENCH_OUT")
     if output_path:
@@ -179,10 +190,9 @@ def test_fullscreen_resolution_scaling_benchmark(capsys):
                 handle,
                 indent=2,
             )
-        lines.append("")
-        lines.append("written to %s" % output_path)
+        output += "\n\nWritten to %s" % output_path
 
     with capsys.disabled():
-        print("\n".join(lines))
+        print("\n" + output)
 
     assert results, "no benchmark resolutions configured"
