@@ -107,7 +107,6 @@ class RenderState:
                 (new_capacity, 2), dtype=np.float64)
         self.visible_thing_position_count = count
         return self.visible_thing_positions
-
     def reset(self):
         """Reset all fields to defaults for reuse (avoids per-frame allocation)."""
         self.camera_view_matrix = glm.mat4(1.0)
