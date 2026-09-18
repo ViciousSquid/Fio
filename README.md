@@ -5,7 +5,7 @@
 
 <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License">  <img src="https://img.shields.io/badge/status-Active%20Development-orange?style=for-the-badge" alt="Status">
 
-### Unified Liminal World Editor, Procedural Engine & Game Creation Toolkit inspired by Radiant and Hammer.
+### Unified “instant-iteration” World Editor, Procedural Engine & Game Creation Toolkit inspired by Radiant and Hammer.
 
 Fio is a modern, instant-iteration take on classic CSG level editors<br>
 **Designed on low-power ARM hardware with an efficiency-first philosophy.**
