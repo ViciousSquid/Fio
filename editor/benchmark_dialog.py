@@ -8,7 +8,7 @@ same measurements as command-line benchmark runs.
 import os
 import sys
 
-from PyQt5.QtCore import QProcess, Qt
+from PyQt5.QtCore import QProcess
 from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout
 
 
@@ -22,7 +22,7 @@ class BenchmarkDialog(QDialog):
         self.resize(900, 650)
 
         layout = QVBoxLayout(self)
-        self.status_label = QLabel("Running renderer benchmark...")
+        self.status_label = QLabel("Ready.")
         layout.addWidget(self.status_label)
 
         self.additional_tests = QCheckBox(
