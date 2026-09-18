@@ -84,6 +84,7 @@ class Thing:
         self.pos = pos if pos is not None else [0, 0, 0]
         self.properties = properties if properties is not None else {}
         self.properties.setdefault('type', self.__class__.__name__.lower())
+        self.properties.setdefault('io_enabled', True)
         
         # Set a default and unique name
         if 'name' not in self.properties or not self.properties['name']:

@@ -43,6 +43,11 @@ def _plain_authored_flag(obj, flag, default=False):
     props = _property_dict(obj)
     return bool(props.get(flag, default)) if props is not None else default
 
+def io_enabled(obj):
+    """Whether this entity participates in the runtime I/O graph."""
+    props = _property_dict(obj)
+    return bool(props.get('io_enabled', True)) if props is not None else True
+
 
 def _plain_set_authored_flag(obj, flag, value):
     props = _property_dict(obj)
@@ -380,6 +385,9 @@ class IOManager:
         parameter is blank (Source-engine style parameter pass-through). A
         connection with an explicit parameter always keeps its own parameter.
         """
+        if not io_enabled(source_entity):
+            return
+
         connections = self._get_connections(source_entity)
         source_name = self._get_entity_name(source_entity)
         source_id = self._get_entity_id(source_entity)
@@ -492,6 +500,9 @@ class IOManager:
             target = self._find_entity(target_name)
         if target is None:
             debug_log("Error", f"I/O: Target '{target_name}' (id={target_id}) not found!")
+            return
+
+        if not io_enabled(target):
             return
         
         entity_type = self._get_entity_type(target)
@@ -1518,6 +1529,140 @@ def validate_scene_connections(brushes, things, find_by_id=None, find_by_name=No
                 report.append((entity, conn, code, message))
     return report
 
+def validate_all_scene_connections(
+        brushes, things, find_by_id=None, find_by_name=None):
+    """Validate every authored graph connection in the scene.
+
+    This covers both graph systems currently used by Fio:
+
+    - I/O connections stored as OutputConnection objects.
+    - PathNode navigation links stored in ``next_node``.
+
+    PathNode links are deliberately validated separately because they are
+    navigation-graph edges, not I/O edges.
+    """
+
+    all_entities = list(brushes) + list(things)
+
+    # ------------------------------------------------------------------
+    # I/O connections
+    # ------------------------------------------------------------------
+    io_problems = validate_scene_connections(
+        brushes,
+        things,
+        find_by_id=find_by_id,
+        find_by_name=find_by_name,
+    )
+
+    io_count = sum(
+        len(get_connections(entity))
+        for entity in all_entities
+    )
+
+    # ------------------------------------------------------------------
+    # Build a name lookup for PathNode links.
+    #
+    # PathNode.next_node stores the target's name, not an OutputConnection
+    # and not a target UUID.
+    # ------------------------------------------------------------------
+    if find_by_name is None:
+        by_name = {}
+
+        for entity in all_entities:
+            if isinstance(entity, dict):
+                properties = entity.get("properties", entity)
+            else:
+                properties = getattr(entity, "properties", {})
+
+            if not isinstance(properties, dict):
+                continue
+
+            name = properties.get("name", "")
+            if name:
+                by_name[name] = entity
+
+        def find_by_name(name):
+            return by_name.get(name)
+
+    # ------------------------------------------------------------------
+    # PathNode navigation links
+    # ------------------------------------------------------------------
+    pathnode_count = 0
+    pathnode_problems = []
+
+    for entity in things:
+        if isinstance(entity, dict):
+            properties = entity.get("properties", entity)
+        else:
+            properties = getattr(entity, "properties", {})
+
+        if not isinstance(properties, dict):
+            continue
+
+        entity_type = str(properties.get("type", "")).replace("_", "").lower()
+
+        if entity_type != "pathnode":
+            continue
+
+        next_node = properties.get("next_node", "")
+        if not next_node:
+            # Empty next_node is a legitimate dead-end.
+            continue
+
+        pathnode_count += 1
+
+        target = find_by_name(next_node)
+
+        if target is None:
+            source_name = properties.get("name", "<unnamed>")
+
+            pathnode_problems.append((
+                entity,
+                next_node,
+                "missing_pathnode_target",
+                "PathNode '%s' points to missing PathNode '%s'."
+                % (source_name, next_node),
+            ))
+            continue
+
+        if isinstance(target, dict):
+            target_properties = target.get("properties", target)
+        else:
+            target_properties = getattr(target, "properties", {})
+
+        if not isinstance(target_properties, dict):
+            target_properties = {}
+
+        target_type = (
+            str(target_properties.get("type", ""))
+            .replace("_", "")
+            .lower()
+        )
+
+        if target_type != "pathnode":
+            source_name = properties.get("name", "<unnamed>")
+
+            pathnode_problems.append((
+                entity,
+                next_node,
+                "invalid_pathnode_target",
+                "PathNode '%s' points to '%s', which is not a PathNode."
+                % (source_name, next_node),
+            ))
+
+    # ------------------------------------------------------------------
+    # Combined result
+    # ------------------------------------------------------------------
+    problems = list(io_problems) + list(pathnode_problems)
+
+    return {
+        "io_count": io_count,
+        "pathnode_count": pathnode_count,
+        "total": io_count + pathnode_count,
+        "problems": problems,
+        "io_problems": io_problems,
+        "pathnode_problems": pathnode_problems,
+    }
 
 # =============================================================================
 # HELPER FUNCTIONS

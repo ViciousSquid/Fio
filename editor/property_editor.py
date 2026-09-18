@@ -1347,6 +1347,20 @@ class PropertyEditor(QWidget):
         tab_layout.setSpacing(4)
         form = QFormLayout()
 
+        # I/O participation
+        io_enabled = thing.properties.get('io_enabled', True)
+        io_cb = _make_checkbox(
+            "I/O Enabled",
+            bool(io_enabled),
+            lambda checked: self.update_object_prop('io_enabled', checked),
+            _Style.CHECKBOX
+        )
+        io_cb.setToolTip(
+            "When disabled, this entity does not send or receive entity I/O events."
+        )
+        form.addRow("", io_cb)
+        self._widgets['io_enabled_cb'] = io_cb
+
         if isinstance(thing, Model):
             self.add_model_path_widget(form, thing)
             self.add_vector3_widget(form, thing, 'scale')
@@ -1566,7 +1580,7 @@ class PropertyEditor(QWidget):
                          'patrol', 'patrol_target', 'patrol_mode'}
 
         for key, value in sorted(thing.properties.items()):
-            if key in ('name', 'id', '_io_connections', 'type'):
+            if key in ('name', 'id', '_io_connections', 'type', 'io_enabled'):
                 continue
             if isinstance(thing, Light) and key in ('colour', 'parent_mover', 'parent_offset'):
                 continue
