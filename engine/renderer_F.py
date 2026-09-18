@@ -493,7 +493,8 @@ class Renderer_F(BaseRenderer):
             things, cx, cz, limit_sq,
             out=tbuf, keep=self._cull_keep_thing,
             positions=thing_positions[:len(things)] if thing_positions is not None else None,
-        )        return brushes, things
+        )
+        return brushes, things
 
     def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config, clear=True):
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
