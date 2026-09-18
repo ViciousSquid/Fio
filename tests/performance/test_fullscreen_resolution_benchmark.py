@@ -140,39 +140,49 @@ def _make_renderer_stress_scene():
 
 
 def _run_renderer_stress():
-    """Time the renderer against a deliberately dense scene at 1920x1080."""
+    """Time the dense renderer workload in both windowed and fullscreen-style paths."""
     glh.reset_texture_cache()
     brushes, things = _make_renderer_stress_scene()
+    results = []
 
-    with glh.GLTestContext(1920, 1080) as context:
-        renderer = glh.make_renderer()
-        try:
-            for _ in range(5):
-                _render(renderer, context, brushes, things)
-            samples = []
-            for _ in range(20):
-                start = time.perf_counter()
-                _render(renderer, context, brushes, things)
-                samples.append(time.perf_counter() - start)
-            mean = statistics.fmean(samples)
-            return {
-                "test": "renderer_stress",
-                "description": "%d brushes + %d lights (%d shadowed)" % (
-                    len(brushes), len(things),
-                    sum(1 for t in things if t.properties.get("casts_shadows"))),
-                "resolution": "1920x1080",
-                "mean_ms": mean * 1000.0,
-                "p95_ms": sorted(samples)[min(
-                    len(samples) - 1, int(round(0.95 * (len(samples) - 1))))] * 1000.0,
-                "worst_ms": max(samples) * 1000.0,
-                "average_fps": 1.0 / mean if mean else float("inf"),
-            }
-        finally:
+    # The benchmark harness uses offscreen GL contexts, so "fullscreen" means
+    # the fullscreen-sized 1920x1080 render target used by the editor.
+    for mode, width, height in (("windowed", 1280, 720), ("fullscreen", 1920, 1080)):
+        with glh.GLTestContext(width, height) as context:
+            renderer = glh.make_renderer()
             try:
-                renderer.cleanup()
-            except Exception:
-                pass
+                for _ in range(5):
+                    _render(renderer, context, brushes, things)
+
+                samples = []
+                for _ in range(20):
+                    start = time.perf_counter()
+                    _render(renderer, context, brushes, things)
+                    samples.append(time.perf_counter() - start)
+
+                mean = statistics.fmean(samples)
+                results.append({
+                    "test": "renderer_stress_%s" % mode,
+                    "mode": mode,
+                    "description": "%d brushes + %d lights (%d shadowed)" % (
+                        len(brushes), len(things),
+                        sum(1 for t in things if t.properties.get("casts_shadows"))),
+                    "resolution": "%dx%d" % (width, height),
+                    "mean_ms": mean * 1000.0,
+                    "p95_ms": sorted(samples)[min(
+                        len(samples) - 1,
+                        int(round(0.95 * (len(samples) - 1))))] * 1000.0,
+                    "worst_ms": max(samples) * 1000.0,
+                    "average_fps": 1.0 / mean if mean else float("inf"),
+                })
+            finally:
+                try:
+                    renderer.cleanup()
+                except Exception:
+                    pass
+
     glh.reset_texture_cache()
+    return results
 
 
 def _run_io_stress():
@@ -268,7 +278,7 @@ def _run_csg_stress():
 
 def run_additional_stress_tests():
     """Run opt-in workloads for I/O, renderer and CSG."""
-    return [_run_io_stress(), _run_renderer_stress(), _run_csg_stress()]
+    return _run_renderer_stress() + [_run_io_stress(), _run_csg_stress()]
 
 
 def run_benchmark(additional_tests=False):
