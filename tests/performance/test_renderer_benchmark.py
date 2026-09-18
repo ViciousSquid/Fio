@@ -262,6 +262,13 @@ PATHS = [
 ]
 
 
+def test_distance_cull_benchmark(record_property, capsys):
+    """Run only the CPU distance-cull measurement, without requiring a GL context."""
+    result = _benchmark_distance_cull()
+    record_property("fio_distance_cull_benchmark", json.dumps(result))
+    print("distance_cull  objects=%d  scalar=%7.3f ms  batch=%7.3f ms  speedup=%6.2fx"
+          % (result["objects"], result["scalar_ms"], result["batch_ms"], result["speedup"]))
+
 def test_renderer_benchmark(record_property, capsys):
     """Measure renderer paths plus the scalar/batched distance-cull work."""
     cull_result = _benchmark_distance_cull()
