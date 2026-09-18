@@ -326,7 +326,7 @@ def format_results(results, info=None):
     baselines = {
         result["scenario"]: result
         for result in results
-        if result["width"] == 192 and result["height"] == 192
+        if "scenario" in result and result["width"] == 192 and result["height"] == 192
     }
     lines.extend(["", "Resolution scaling relative to the suite's 192x192 framebuffer:"])
     for result in results:
