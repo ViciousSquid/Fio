@@ -107,7 +107,7 @@ def test_empty_input_returns_empty():
     assert cull_by_distance([], 0.0, 0.0) == []
 
 
-def test_batched_positions_match_the_scalar_path(monkeypatch):
+def test_batched_positions_match_the_scalar_path():
     objects = [
         {"pos": [0.0, 0.0, 0.0]},
         {"pos": [100.0, 0.0, 25.0]},
@@ -124,7 +124,7 @@ def test_batched_positions_match_the_scalar_path(monkeypatch):
     assert batched == scalar
 
 
-def test_batched_positions_use_a_contiguous_xz_array_and_skip_scalar_distance(monkeypatch):
+def test_batched_positions_skip_the_scalar_distance_kernel(monkeypatch):
     objects = [
         _Thing([0.0, 0.0, 0.0]),
         _Thing([100.0, 0.0, 0.0]),
@@ -140,8 +140,7 @@ def test_batched_positions_use_a_contiguous_xz_array_and_skip_scalar_distance(mo
     def fail_scalar(*_args, **_kwargs):
         raise AssertionError("the batched path called the scalar distance kernel")
 
-    monkeypatch.setattr(
-        "engine.render_cull.within_xz_sq", fail_scalar)
+    monkeypatch.setattr("engine.render_cull.within_xz_sq", fail_scalar)
 
     kept = cull_by_distance(objects, 0.0, 0.0, 125.0, positions=positions)
     assert kept == objects[:2]
