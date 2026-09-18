@@ -142,7 +142,7 @@ def test_batched_positions_skip_the_scalar_distance_kernel(monkeypatch):
 
     monkeypatch.setattr("engine.render_cull.within_xz_sq", fail_scalar)
 
-    kept = cull_by_distance(objects, 0.0, 0.0, 125.0, positions=positions)
+    kept = cull_by_distance(objects, 0.0, 0.0, 10000.0, positions=positions)
     assert kept == objects[:2]
 
 
