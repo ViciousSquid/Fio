@@ -3345,17 +3345,30 @@ class LogicThread(threading.Thread):
         write_state.culled_brushes = culled_count
 
         visible_things = []
+        visible_thing_positions = write_state.ensure_visible_thing_positions(
+            len(self.things))
+        visible_thing_count = 0
         for thing in self.things:
             if self.play_mode and Pickup and isinstance(thing, Pickup) and id(thing) in self.collected_pickups:
                 continue
             if hasattr(thing.pos, 'x'):
                 thing.pos = [thing.pos.x, thing.pos.y, thing.pos.z]
+
+            # Publish only the X/Z pair needed by the renderer's broad-phase
+            # distance test. This is a snapshot derived from the authoritative
+            # Thing.pos; it is never written back to the entity.
+            pos = thing.pos
+            visible_thing_positions[visible_thing_count, 0] = float(pos[0])
+            visible_thing_positions[visible_thing_count, 1] = float(pos[2])
+            visible_thing_count += 1
+
             if isinstance(thing, MonsterThing):
                 visible_things.append(thing.get_render_snapshot())
             else:
                 visible_things.append(thing)
 
         write_state.visible_things = visible_things
+        write_state.visible_thing_position_count = visible_thing_count
         write_state.all_things = list(self.things)
         write_state.timestamp = time.perf_counter()
 

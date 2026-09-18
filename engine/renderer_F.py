@@ -457,7 +457,7 @@ class Renderer_F(BaseRenderer):
         kept so lighting, shadow and portal rendering are wholly unaffected."""
         return isinstance(t, Light) or (Portal is not None and isinstance(t, Portal))
 
-    def _camera_distance_cull(self, brushes, things, camera_pos):
+    def _camera_distance_cull(self, brushes, things, camera_pos, thing_positions=None):
         """Broad-phase distance cull for the MAIN camera pass.
 
         The radius is :attr:`view_distance` — the live camera setting the editor
@@ -489,8 +489,11 @@ class Renderer_F(BaseRenderer):
         if tbuf is None:
             tbuf = self._cull_thing_buf = []
         brushes = _cull_by_distance(brushes, cx, cz, limit_sq, out=bbuf)
-        things = _cull_by_distance(things, cx, cz, limit_sq,
-                                   out=tbuf, keep=self._cull_keep_thing)
+        things = _cull_by_distance(
+            things, cx, cz, limit_sq,
+            out=tbuf, keep=self._cull_keep_thing,
+            positions=thing_positions[:len(things)] if thing_positions is not None else None,
+        )
         return brushes, things
 
     def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config, clear=True):
@@ -540,7 +543,10 @@ class Renderer_F(BaseRenderer):
         # blinking out while it is being built.
         cull_brushes, cull_things = brushes, things
         if config.get('camera_distance_cull', config.get('play_mode', False)):
-            cull_brushes, cull_things = self._camera_distance_cull(brushes, things, camera_pos)
+            cull_brushes, cull_things = self._camera_distance_cull(
+                brushes, things, camera_pos,
+                thing_positions=config.get('thing_positions'),
+            )
         opaque_brushes, transparent_brushes, sprite_things, fog_volumes, water_brushes, glass_brushes, glow_brushes = \
             self._sort_objects(cull_brushes, cull_things, config)
         textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)

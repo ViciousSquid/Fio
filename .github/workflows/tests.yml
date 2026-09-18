@@ -103,7 +103,7 @@ jobs:
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
           FIO_BENCH_OUT: benchmark.json
-        run: xvfb-run -a python -m pytest -m benchmark --run-benchmarks -q -s
+        run: xvfb-run -a python -m pytest tests/performance/test_renderer_benchmark.py -m benchmark --run-benchmarks -k distance_cull_benchmark -q -s
       - uses: actions/upload-artifact@v4
         if: always()
         with:

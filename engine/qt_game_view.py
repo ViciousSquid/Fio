@@ -1038,6 +1038,14 @@ class QtGameView(QOpenGLWidget):
             self._render_config["all_things"] = render_state.all_things
         else:
             self._render_config["all_things"] = self.editor.state.things
+
+        # The render-state position buffer is a derived snapshot of
+        # authoritative Thing.pos values. It is aligned with things_to_render
+        # and lets the renderer batch the expensive X/Z distance arithmetic.
+        self._render_config["thing_positions"] = (
+            getattr(render_state, "visible_thing_positions", None)
+            if render_state is not None else None
+        )
         self.update_instance_textures(things_to_render)
 
         # Plugin render hooks. Guarded by has_listeners so an unhooked frame

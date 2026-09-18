@@ -261,6 +261,61 @@ def test_lights_and_entities_reach_the_render_state(logic):
     assert len(published.visible_things) == 2
 
 
+def test_visible_thing_positions_are_contiguous_and_aligned_with_snapshots(logic):
+    lamp = make_thing(Light, "lamp", (100, 200, -300))
+    monster = make_thing(Monster, "grunt", (-50, 96, 700))
+    thread = logic(things=[lamp, monster])
+
+    thread._prepare_render_state()
+
+    published = thread.game_state.get_write_state()
+    positions = published.visible_thing_positions
+    assert positions.flags.c_contiguous
+    assert positions.shape[1] == 2
+    assert published.visible_thing_position_count == 2
+    assert np.allclose(positions[:2], [[100.0, -300.0], [-50.0, 700.0]])
+    assert published.visible_things[0] is lamp
+    assert published.visible_things[1] is not monster
+    assert published.visible_things[1]["pos"] == [-50.0, 96.0, 700.0]
+
+
+def test_visible_thing_position_buffer_is_reused_and_tracks_movement(logic):
+    monster = make_thing(Monster, "grunt", (0, 96, -300))
+    thread = logic(things=[monster])
+
+    thread._prepare_render_state()
+    first = thread.game_state.get_write_state().visible_thing_positions
+
+    monster.pos = [800.0, 96.0, -900.0]
+    thread._prepare_render_state()
+    second = thread.game_state.get_write_state().visible_thing_positions
+
+    assert second is first
+    assert np.allclose(second[:1], [[800.0, -900.0]])
+
+
+def test_visible_thing_position_buffer_handles_entity_deletion_and_creation(logic):
+    first_thing = make_thing(Light, "first", (0, 100, 0))
+    second_thing = make_thing(Light, "second", (100, 100, 0))
+    thread = logic(things=[first_thing, second_thing])
+
+    thread._prepare_render_state()
+    buffer = thread.game_state.get_write_state().visible_thing_positions
+
+    thread.things.remove(second_thing)
+    third_thing = make_thing(Light, "third", (900, 100, -700))
+    thread.things.append(third_thing)
+    thread._prepare_render_state()
+
+    published = thread.game_state.get_write_state()
+    assert published.visible_thing_positions is buffer
+    assert published.visible_thing_position_count == 2
+    assert np.allclose(
+        published.visible_thing_positions[:2],
+        [[0.0, 0.0], [900.0, -700.0]],
+    )
+
+
 def test_a_monster_is_submitted_as_a_render_snapshot(logic):
     """The AI thread moves monsters; the renderer must read a stable copy."""
     monster = make_thing(Monster, "grunt", (0, 96, -300))
