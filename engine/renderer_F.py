@@ -489,9 +489,11 @@ class Renderer_F(BaseRenderer):
         if tbuf is None:
             tbuf = self._cull_thing_buf = []
         brushes = _cull_by_distance(brushes, cx, cz, limit_sq, out=bbuf)
-        things = _cull_by_distance(things, cx, cz, limit_sq,
-                                   out=tbuf, keep=self._cull_keep_thing)
-        return brushes, things
+        things = _cull_by_distance(
+            things, cx, cz, limit_sq,
+            out=tbuf, keep=self._cull_keep_thing,
+            positions=thing_positions[:len(things)] if thing_positions is not None else None,
+        )        return brushes, things
 
     def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config, clear=True):
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
