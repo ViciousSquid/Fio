@@ -20,7 +20,11 @@ import os
 import statistics
 import time
 
+import numpy as np
 import pytest
+
+from editor.things import Thing
+from engine.render_cull import cull_by_distance
 
 from tests.helpers import gl as glh
 from tests.helpers.worlds import box_brush, make_thing, pillar_grid
@@ -104,8 +108,12 @@ def _benchmark_scene(brushes, things, name, **config_overrides):
         renderer = glh.make_renderer()
         try:
             projection, view, eye = glh.camera_matrices(aspect=1.0)
+            use_batched_positions = bool(
+                config_overrides.pop("batched_thing_positions", False))
             config = glh.render_config(all_brushes=brushes, all_things=things,
                                        **config_overrides)
+            if use_batched_positions:
+                config["thing_positions"] = _thing_xz_positions(things)
 
             def _frame():
                 context.bind()
@@ -170,6 +178,74 @@ def _many_culled():
     return brushes, [light]
 
 
+def _many_entities():
+    """Many real Thing objects that are intentionally outside the cull radius."""
+    brushes = [box_brush("floor", (0, -16, 0), (4096, 32, 4096))]
+    things = []
+    width = 32
+    for i in range(2048):
+        x = (i % width - (width - 1) * 0.5) * 6000.0
+        z = (i // width + 1) * 6000.0
+        things.append(make_thing(
+            Thing, "bench_thing_%d" % i, (x, 0.0, z)))
+    return brushes, things
+
+
+def _thing_xz_positions(things):
+    """One contiguous render-state-like X/Z snapshot for a scene."""
+    return np.ascontiguousarray(
+        [[float(t.pos[0]), float(t.pos[2])] for t in things],
+        dtype=np.float64,
+    )
+
+
+def _benchmark_distance_cull():
+    """Measure the old scalar kernel against the batched NumPy kernel."""
+    count = 4096
+    objects = [
+        {"pos": [float((i % 64) * 6000.0), 0.0,
+                 float((i // 64 + 1) * 6000.0)]}
+        for i in range(count)
+    ]
+    positions = _thing_xz_positions(objects)
+    scalar_out = []
+    batch_out = []
+    keep = lambda _obj: False
+
+    def scalar():
+        cull_by_distance(
+            objects, 0.0, 0.0, 2048.0 * 2048.0,
+            out=scalar_out, keep=keep)
+
+    def batch():
+        cull_by_distance(
+            objects, 0.0, 0.0, 2048.0 * 2048.0,
+            out=batch_out, keep=keep, positions=positions)
+
+    # Warm-up the NumPy path and caches before taking samples.
+    for _ in range(5):
+        scalar()
+        batch()
+
+    def median_ms(fn):
+        samples = []
+        for _ in range(5):
+            start = time.perf_counter()
+            for _ in range(10):
+                fn()
+            samples.append(1000.0 * (time.perf_counter() - start) / 10.0)
+        return statistics.median(samples)
+
+    scalar_ms = median_ms(scalar)
+    batch_ms = median_ms(batch)
+    return {
+        "objects": count,
+        "scalar_ms": scalar_ms,
+        "batch_ms": batch_ms,
+        "speedup": scalar_ms / batch_ms if batch_ms else float("inf"),
+    }
+
+
 PATHS = [
     ("simple", _simple_scene, {}),
     ("dynamic_light", _simple_scene, {}),
@@ -177,11 +253,17 @@ PATHS = [
     ("frustum_cull_on", _many_culled, {"camera_distance_cull": True}),
     ("many_visible", _many_visible, {}),
     ("many_culled", _many_culled, {}),
+    ("many_entities_scalar", _many_entities,
+     {"camera_distance_cull": True}),
+    ("many_entities_batched", _many_entities,
+     {"camera_distance_cull": True, "batched_thing_positions": True}),
 ]
 
 
 def test_renderer_benchmark(record_property, capsys):
-    """Measure each renderer path and report; compare to a baseline if given."""
+    """Measure renderer paths plus the scalar/batched distance-cull work."""
+    cull_result = _benchmark_distance_cull()
+    record_property("fio_distance_cull_benchmark", json.dumps(cull_result))
     results = []
     for name, scene_factory, overrides in PATHS:
         brushes, things = scene_factory()
@@ -192,6 +274,11 @@ def test_renderer_benchmark(record_property, capsys):
     with glh.GLTestContext(64, 64) as probe:
         info = probe.info()
     lines.append("GL: %s | %s" % (info["renderer"], info["version"]))
+    lines.append(
+        "distance_cull  objects=%d  scalar=%7.3f ms  batch=%7.3f ms  "
+        "speedup=%6.2fx"
+        % (cull_result["objects"], cull_result["scalar_ms"],
+           cull_result["batch_ms"], cull_result["speedup"]))
     lines += [result.report() for result in results]
 
     measurements = {result.name: result.as_dict() for result in results}
