@@ -22,6 +22,8 @@ call this -- they keep operating on the full scene.
 from __future__ import annotations
 
 import math
+
+import numpy as np
 from typing import Callable, List, Optional, Sequence
 
 from engine.view_distance import DEFAULT_VIEW_DISTANCE
@@ -179,19 +181,70 @@ def camera_xz(camera_pos):
 def cull_by_distance(objects: Sequence, cx: float, cz: float,
                      limit_sq: float = CAMERA_RENDER_CULL_DISTANCE_SQ,
                      out: Optional[List] = None,
-                     keep: Optional[Callable[[object], bool]] = None) -> List:
-    """Return the subset of *objects* within *limit_sq* XZ of (cx, cz).
+                     keep: Optional[Callable[[object], bool]] = None,
+                     positions=None) -> List:
+    """Return the subset of objects within limit_sq XZ of (cx, cz).
 
-    Fills and returns *out* when given (cleared first), so a caller can reuse one
+    Fills and returns out when given (cleared first), so a caller can reuse one
     persistent buffer across frames and allocate nothing; otherwise a fresh list
-    is returned. An object for which *keep* returns True -- or that has no
+    is returned. An object for which keep returns True -- or that has no
     readable position -- is retained unconditionally (fail-open: never wrongly
     hide it).
+
+    positions is an optional contiguous (N, 2) NumPy array of [x, z] rows
+    aligned one-for-one with objects. When supplied, the X/Z distance arithmetic
+    is evaluated in one NumPy batch; the Python object walk is then limited to
+    assembling the surviving objects into out. Existing callers that do not
+    provide it keep the original scalar path and behaviour.
+
+    The batch contract is explicit: every object must have a row in positions.
+    The engine uses it only with render-state snapshots built from authoritative
+    Thing.pos values, so missing-position fail-open behaviour remains unchanged
+    for the legacy/API-compatible path.
     """
     if out is None:
         out = []
     else:
         del out[:]
+
+    if positions is not None:
+        count = len(objects)
+        if len(positions) != count:
+            raise ValueError(
+                "distance-cull positions must contain one [x, z] row per object "
+                "(got %d rows for %d objects)" % (len(positions), count)
+            )
+        positions = np.asarray(positions)
+        if positions.ndim != 2 or positions.shape[1] != 2:
+            raise ValueError("distance-cull positions must have shape (N, 2), got %r" %
+                             (positions.shape,))
+
+        # The expensive scalar kernel is the part worth moving out of Python.
+        # No object references are copied into NumPy; only numeric X/Z rows are
+        # touched here, and the API's Python list is rebuilt from the mask below.
+        dx = positions[:, 0] - cx
+        dz = positions[:, 1] - cz
+        visible = (dx * dx + dz * dz) <= limit_sq
+
+        if keep is not None:
+            # keep remains an object-level callback because its semantics are
+            # arbitrary. In Fio it is a cheap isinstance check; the expensive
+            # distance arithmetic above is still fully batched.
+            forced = np.fromiter(
+                (bool(keep(obj)) for obj in objects),
+                dtype=bool,
+                count=count,
+            )
+            visible |= forced
+
+        # Avoid a Python walk over every culled object. The public API still has
+        # to return actual Python objects, so dense visible sets necessarily do
+        # O(number of returned objects) work here.
+        for index in np.flatnonzero(visible):
+            out.append(objects[int(index)])
+        return out
+
+    # Original API-compatible scalar path.
     for obj in objects:
         if keep is not None and keep(obj):
             out.append(obj)
