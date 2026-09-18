@@ -340,6 +340,8 @@ class Ui_MainWindow(object):
         autocaulk_action.triggered.connect(MainWindow.autocaulk)
         MainWindow.tools_menu.addAction(autocaulk_action)
 
+        # Benchmark action is inserted by MainWindow immediately below Autocaulk.
+
         MainWindow.logic_graph_action = QAction('Logic Graph Editor…', MainWindow)
         MainWindow.logic_graph_action.setShortcut('Ctrl+L')
         MainWindow.logic_graph_action.setToolTip('Open the visual I/O node graph editor')
