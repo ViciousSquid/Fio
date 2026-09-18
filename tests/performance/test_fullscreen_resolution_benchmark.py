@@ -290,6 +290,8 @@ def format_results(results, info=None):
     ]
 
     for result in results:
+        if "scenario" not in result:
+            continue
         lines.append(
             "%-46s %4dx%-4d %8.1f %10.2f %8.2f %8.3f"
             % (
@@ -302,6 +304,21 @@ def format_results(results, info=None):
                 result["ms_per_megapixel"],
             )
         )
+
+    stress_results = [r for r in results if "test" in r]
+    if stress_results:
+        lines.extend(["", "Additional stress tests:"])
+        for r in stress_results:
+            lines.append(
+                "  %-16s %-52s mean %8.2f ms  p95 %8.2f ms  worst %8.2f ms" %
+                (r["test"], r["description"], r["mean_ms"], r["p95_ms"], r["worst_ms"])
+            )
+            if "average_fps" in r:
+                lines.append("    renderer FPS: %.1f" % r["average_fps"])
+            if "hops_per_second" in r:
+                lines.append("    I/O throughput: %.0f hops/s" % r["hops_per_second"])
+            if "rebuilds_per_second" in r:
+                lines.append("    CSG throughput: %.1f rebuilds/s" % r["rebuilds_per_second"])
 
     baselines = {
         result["scenario"]: result
@@ -340,7 +357,8 @@ def test_fullscreen_resolution_scaling_benchmark(capsys):
     with glh.GLTestContext(64, 64) as probe:
         info = probe.info()
 
-    results = run_benchmark()
+    additional_tests = os.environ.get("FIO_FULLSCREEN_BENCH_ADDITIONAL") == "1"
+    results = run_benchmark(additional_tests=additional_tests)
     output = format_results(results, info)
 
     output_path = os.environ.get("FIO_FULLSCREEN_BENCH_OUT")
@@ -352,6 +370,7 @@ def test_fullscreen_resolution_scaling_benchmark(capsys):
                     "gl_version": info["version"],
                     "warmup_frames": WARMUP_FRAMES,
                     "measured_frames": MEASURED_FRAMES,
+                    "additional_tests": additional_tests,
                     "results": results,
                 },
                 handle,
