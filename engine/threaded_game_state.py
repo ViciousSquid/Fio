@@ -1,5 +1,6 @@
 import threading
 import glm
+import numpy as np
 import time
 from typing import List, Any, Dict, Optional
 from collections import deque
@@ -51,6 +52,10 @@ class RenderState:
         self.visible_brushes = []
         self.all_brushes = []
         self.visible_things = []
+        # Reusable numeric view of visible entity positions. Rows are [x, z];
+        # Thing.pos remains the sole authoritative transform.
+        self.visible_thing_positions = np.empty((0, 2), dtype=np.float64)
+        self.visible_thing_position_count = 0
         
         # HUD / Gameplay
         self.collected_keys = set()
@@ -88,6 +93,21 @@ class RenderState:
         self.culled_brushes = 0
         self.timestamp = 0.0
 
+    def ensure_visible_thing_positions(self, count):
+        """Ensure a reusable contiguous [x, z] buffer can hold count entities.
+
+        Capacity grows geometrically and is never shrunk. The buffer is a render
+        snapshot derived from live Thing.pos values; it is not a transform store.
+        """
+        count = max(0, int(count))
+        capacity = int(self.visible_thing_positions.shape[0])
+        if count > capacity:
+            new_capacity = max(count, 16 if capacity == 0 else capacity * 2)
+            self.visible_thing_positions = np.empty(
+                (new_capacity, 2), dtype=np.float64)
+        self.visible_thing_position_count = count
+        return self.visible_thing_positions
+
     def reset(self):
         """Reset all fields to defaults for reuse (avoids per-frame allocation)."""
         self.camera_view_matrix = glm.mat4(1.0)
@@ -118,6 +138,7 @@ class RenderState:
         self.visible_brushes = []
         self.all_brushes = []
         self.visible_things = []
+        self.visible_thing_position_count = 0
         self.collected_keys = set()
         self.hud_message = ""
         self.bullet_marks = []
