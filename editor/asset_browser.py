@@ -436,6 +436,10 @@ class AssetBrowserTab(QWidget):
         self.scroll_area.setStyleSheet("background-color: #2b2b2b; border: none;")
         self.grid_container = QWidget()
         self.grid_layout = QGridLayout(self.grid_container)
+        self.grid_container.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Preferred
+        )
         self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.grid_layout.setSpacing(10)
         self.scroll_area.setWidget(self.grid_container)
@@ -474,8 +478,8 @@ class AssetBrowserTab(QWidget):
             return
         
         # Compute number of columns
-        item_width = 110  # 100px width + 10px spacing
-        available_width = self.grid_container.width() - 20  # margin
+        item_width = 110  # 100px item width + 10px spacing
+        available_width = self.scroll_area.viewport().width()
         col_count = max(1, available_width // item_width)
         
         if col_count == self.current_cols and not force:

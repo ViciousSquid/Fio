@@ -771,21 +771,9 @@ class PropertyEditor(QWidget):
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        # I/O participation
-        io_enabled = thing.properties.get('io_enabled', True)
-        io_cb = _make_checkbox(
-            "I/O Enabled",
-            bool(io_enabled),
-            lambda checked: self.update_object_prop('io_enabled', checked),
-            _Style.CHECKBOX
-        )
-        io_cb.setToolTip(
-            "When disabled, this entity does not send or receive entity I/O events."
-        )
-        layout.addWidget(io_cb)
-        self._widgets['io_enabled_cb'] = io_cb
-
+        io_enabled = bool(thing.properties.get('io_enabled', True))
         etype = get_entity_type_for_io(thing)
+
         io_editor = IOEditorWidget(
             entity=thing,
             entity_type=etype,
@@ -800,7 +788,42 @@ class PropertyEditor(QWidget):
         inputs.set_entity(etype)
         layout.addWidget(inputs)
 
+        # I/O participation checkbox
+        io_cb = _make_checkbox(
+            "I/O Enabled",
+            io_enabled,
+            lambda checked: self._on_io_enabled_changed(
+                checked,
+                io_editor,
+                inputs
+            ),
+            _Style.CHECKBOX
+        )
+        io_cb.setToolTip(
+            "When disabled, this entity does not send or receive entity I/O events."
+        )
+
+        # Move the checkbox above the I/O widgets.
+        layout.insertWidget(0, io_cb)
+
+        self._widgets['io_enabled_cb'] = io_cb
+
+        # Apply the initial visual state.
+        io_editor.set_io_enabled(io_enabled)
+        inputs.set_io_enabled(io_enabled)
+
         return tab
+
+    def _on_io_enabled_changed(self, enabled, io_editor, inputs):
+        """
+        Update the entity's I/O-enabled property and refresh the I/O tab
+        """
+        enabled = bool(enabled)
+
+        self.update_object_prop('io_enabled', enabled)
+
+        io_editor.set_io_enabled(enabled)
+        inputs.set_io_enabled(enabled)
 
     def _on_io_connections_changed(self):
         if hasattr(self.editor.state, 'save_state'):
