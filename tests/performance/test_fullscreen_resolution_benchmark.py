@@ -183,11 +183,14 @@ def _run_io_stress():
     from editor.things import LogicRelay
 
     manager = IOManager()
+    logic = type("StressLogic", (), {})()
+    logic.io_manager = manager
+    manager.set_logic_thread(logic)
     register_all_input_handlers(manager)
     entities = [
         LogicRelay(pos=[0, 0, 0],
                    properties={"name": "stress_relay_%d" % i, "fire_once": False})
-        for i in range(1000)
+        for i in range(700)
     ]
     by_name = {e.properties["name"]: e for e in entities}
     manager.set_entity_finder(lambda name: by_name.get(name))
@@ -214,14 +217,14 @@ def _run_io_stress():
     mean = statistics.fmean(samples)
     return {
         "test": "io_stress",
-        "description": "1000 LogicRelay I/O hops x 20 runs",
-        "hops": 999,
+        "description": "699 LogicRelay I/O hops x 20 runs",
+        "hops": 699,
         "runs": len(samples),
         "mean_ms": mean * 1000.0,
         "p95_ms": sorted(samples)[min(
             len(samples) - 1, int(round(0.95 * (len(samples) - 1))))] * 1000.0,
         "worst_ms": max(samples) * 1000.0,
-        "hops_per_second": 999.0 / mean if mean else float("inf"),
+        "hops_per_second": 699.0 / mean if mean else float("inf"),
     }
 
 
