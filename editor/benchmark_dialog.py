@@ -9,6 +9,7 @@ import os
 import sys
 
 from PyQt5.QtCore import QProcess
+from PyQt5.QtGui import QTextCursor
 from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout
 
 
@@ -33,6 +34,21 @@ class BenchmarkDialog(QDialog):
         )
         layout.addWidget(self.additional_tests)
 
+        self.brush_1000 = QCheckBox("Renderer scene: 1,000 brushes")
+        self.brush_10000 = QCheckBox("Renderer scene: 10,000 brushes")
+        self.brush_100000 = QCheckBox("Renderer scene: 100,000 brushes")
+        self.io_chain_1000 = QCheckBox("I/O chain: 1,000 entities")
+        for checkbox in (
+            self.brush_1000,
+            self.brush_10000,
+            self.brush_100000,
+            self.io_chain_1000,
+        ):
+            checkbox.setToolTip(
+                "Run this deliberately large workload in addition to the standard stress tests."
+            )
+            layout.addWidget(checkbox)
+
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
         self.output.setLineWrapMode(QPlainTextEdit.NoWrap)
@@ -56,6 +72,13 @@ class BenchmarkDialog(QDialog):
         self.status_label.setText("Running renderer benchmark...")
         self.run_button.setEnabled(False)
         self.additional_tests.setEnabled(False)
+        for checkbox in (
+            self.brush_1000,
+            self.brush_10000,
+            self.brush_100000,
+            self.io_chain_1000,
+        ):
+            checkbox.setEnabled(False)
         self.process = QProcess(self)
         self.process.setWorkingDirectory(self.root_dir)
         self.process.setProcessChannelMode(QProcess.MergedChannels)
@@ -65,8 +88,25 @@ class BenchmarkDialog(QDialog):
 
         environment = self.process.processEnvironment()
         environment.insert("PYTHONUNBUFFERED", "1")
-        if self.additional_tests.isChecked():
+
+        brush_counts = []
+        if self.brush_1000.isChecked():
+            brush_counts.append("1000")
+        if self.brush_10000.isChecked():
+            brush_counts.append("10000")
+        if self.brush_100000.isChecked():
+            brush_counts.append("100000")
+        if brush_counts:
+            environment.insert(
+                "FIO_FULLSCREEN_BENCH_BRUSH_STRESS", ",".join(brush_counts)
+            )
+
+        if self.io_chain_1000.isChecked():
+            environment.insert("FIO_FULLSCREEN_BENCH_IO_CHAIN", "1000")
+
+        if self.additional_tests.isChecked() or brush_counts or self.io_chain_1000.isChecked():
             environment.insert("FIO_FULLSCREEN_BENCH_ADDITIONAL", "1")
+
         self.process.setProcessEnvironment(environment)
 
         self.process.start(
@@ -88,7 +128,7 @@ class BenchmarkDialog(QDialog):
             "utf-8", errors="replace"
         )
         if data:
-            self.output.moveCursor(self.output.textCursor().End)
+            self.output.moveCursor(QTextCursor.End)
             self.output.insertPlainText(data)
             self.output.ensureCursorVisible()
 
@@ -102,6 +142,13 @@ class BenchmarkDialog(QDialog):
             )
         self.run_button.setEnabled(True)
         self.additional_tests.setEnabled(True)
+        for checkbox in (
+            self.brush_1000,
+            self.brush_10000,
+            self.brush_100000,
+            self.io_chain_1000,
+        ):
+            checkbox.setEnabled(True)
 
     def _error(self, error):
         self._read_output()
@@ -110,6 +157,13 @@ class BenchmarkDialog(QDialog):
         )
         self.run_button.setEnabled(True)
         self.additional_tests.setEnabled(True)
+        for checkbox in (
+            self.brush_1000,
+            self.brush_10000,
+            self.brush_100000,
+            self.io_chain_1000,
+        ):
+            checkbox.setEnabled(True)
 
     def reject(self):
         if self.process is not None and self.process.state() != QProcess.NotRunning:
