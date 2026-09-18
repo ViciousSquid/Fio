@@ -9,7 +9,7 @@ import os
 import sys
 
 from PyQt5.QtCore import QProcess, Qt
-from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QVBoxLayout
+from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout
 
 
 class BenchmarkDialog(QDialog):
@@ -41,14 +41,21 @@ class BenchmarkDialog(QDialog):
         )
         layout.addWidget(self.output)
 
+        self.run_button = QPushButton("Run Benchmark")
+        self.run_button.clicked.connect(self._start)
+        layout.addWidget(self.run_button)
+
         self.buttons = QDialogButtonBox(QDialogButtonBox.Close)
         self.buttons.rejected.connect(self.reject)
-        self.buttons.setEnabled(False)
         layout.addWidget(self.buttons)
 
-        self._start()
-
     def _start(self):
+        if self.process is not None and self.process.state() != QProcess.NotRunning:
+            return
+        self.output.clear()
+        self.status_label.setText("Running renderer benchmark...")
+        self.run_button.setEnabled(False)
+        self.additional_tests.setEnabled(False)
         self.process = QProcess(self)
         self.process.setWorkingDirectory(self.root_dir)
         self.process.setProcessChannelMode(QProcess.MergedChannels)
@@ -93,14 +100,16 @@ class BenchmarkDialog(QDialog):
             self.status_label.setText(
                 "Benchmark finished with exit code %d." % exit_code
             )
-        self.buttons.setEnabled(True)
+        self.run_button.setEnabled(True)
+        self.additional_tests.setEnabled(True)
 
     def _error(self, error):
         self._read_output()
         self.status_label.setText(
             "Could not start benchmark: %s" % error
         )
-        self.buttons.setEnabled(True)
+        self.run_button.setEnabled(True)
+        self.additional_tests.setEnabled(True)
 
     def reject(self):
         if self.process is not None and self.process.state() != QProcess.NotRunning:
