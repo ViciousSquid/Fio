@@ -682,6 +682,8 @@ class Renderer_F(BaseRenderer):
         if selected_object:
             if isinstance(selected_object, dict):
                 self.draw_selected_brush_outline(projection, view, selected_object)
+                if selected_object.get('is_trigger', False) and selected_object.get('show_aabb_bounds', False):
+                    self.draw_aabb_bounds(projection, view, selected_object)
                 pos = selected_object.get('pos')
                 if pos is not None and not selected_object.get('lock', False):
                     self.render_gizmo(projection, view, pos)

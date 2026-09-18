@@ -10,6 +10,7 @@ from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Pr
                           LogicCamera, LogicSpawner, Portal, LogicState)
 from editor.scene_hierarchy import SceneHierarchy
 from engine import brush_geometry as bg  # convex/angled-brush geometry
+from engine.constants import brush_aabb_bounds
 from editor import component_edit as ce  # shared object/face/edge/vertex model
 
 # How close (in screen pixels) the cursor has to be before a press grabs a
@@ -1878,7 +1879,25 @@ class View2D(QWidget):
                 font.setPointSize(10)
                 painter.setFont(font)
                 label_text = " / ".join(type_labels)
-                painter.drawText(screen_rect.adjusted(0, 0, -5, -5), Qt.AlignRight | Qt.AlignBottom, label_text)
+                painter.drawText(screen_rect, Qt.AlignCenter, label_text)
+
+            # Show the exact runtime trigger AABB when requested.
+            if is_selected and is_trigger and brush.get('show_aabb_bounds', False):
+                lo_x, lo_y, lo_z, hi_x, hi_y, hi_z = brush_aabb_bounds(brush)
+                mins = (lo_x, lo_y, lo_z)
+                maxs = (hi_x, hi_y, hi_z)
+                a1_min = mins[axis1_idx]
+                a1_max = maxs[axis1_idx]
+                a2_min = mins[axis2_idx]
+                a2_max = maxs[axis2_idx]
+                aabb_p1 = self.world_to_screen(QPointF(a1_min, a2_min))
+                aabb_p2 = self.world_to_screen(QPointF(a1_max, a2_max))
+                aabb_rect = QRectF(aabb_p1, aabb_p2).normalized()
+                painter.save()
+                painter.setPen(QPen(QColor(255, 140, 0), 1, Qt.DashLine))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(aabb_rect)
+                painter.restore()
 
             # Add mover label
             if is_mover:

@@ -894,16 +894,34 @@ class PropertyEditor(QWidget):
         form = QFormLayout()
         form.setSpacing(8)
 
-        type_combo = _make_combo(['Once', 'Multiple'], brush.get('trigger_type', 'Once'),
-                                 lambda t: self.update_object_prop('trigger_type', t))
+        # Show the runtime AABB used for trigger containment.
+        show_aabb_cb = _make_checkbox(
+            "Show AABB",
+            brush.get('show_aabb_bounds', False),
+            lambda checked: self.update_object_prop(
+                'show_aabb_bounds', checked
+            ),
+            _Style.CHECKBOX
+        )
+        form.addRow(show_aabb_cb)
+        self._widgets['show_aabb_bounds_cb'] = show_aabb_cb
+
+        type_combo = _make_combo(
+            ['Once', 'Multiple'],
+            brush.get('trigger_type', 'Once'),
+            lambda t: self.update_object_prop('trigger_type', t)
+        )
         form.addRow("Trigger Type:", type_combo)
         self._widgets['trigger_type_combo'] = type_combo
 
-        # Activation mode: touch fires on entry; use requires E press while inside
+        # Activation mode: touch fires on entry; use requires E press.
         activation_combo = _make_combo(
             ['touch', 'use'],
             brush.get('trigger_activation', 'touch'),
-            tooltip="touch — fires when player walks inside\nuse — fires when player presses E while inside"
+            tooltip=(
+                "touch — fires when player walks inside\n"
+                "use — fires when player presses E while inside"
+            )
         )
         form.addRow("Activation:", activation_combo)
         self._widgets['trigger_activation_combo'] = activation_combo
@@ -913,10 +931,16 @@ class PropertyEditor(QWidget):
         use_label_input = QLineEdit(brush.get('use_label', ''))
         use_label_input.setPlaceholderText("Activate")
         use_label_input.editingFinished.connect(
-            lambda: self.update_object_prop('use_label', use_label_input.text().strip()))
+            lambda: self.update_object_prop(
+                'use_label',
+                use_label_input.text().strip()
+            )
+        )
+
         is_use_mode = brush.get('trigger_activation', 'touch') == 'use'
         use_label_lbl.setVisible(is_use_mode)
         use_label_input.setVisible(is_use_mode)
+
         form.addRow(use_label_lbl, use_label_input)
         self._widgets['trigger_use_label_lbl'] = use_label_lbl
         self._widgets['trigger_use_label_input'] = use_label_input
@@ -927,59 +951,104 @@ class PropertyEditor(QWidget):
             use_label_lbl.setVisible(show)
             use_label_input.setVisible(show)
 
-        activation_combo.currentTextChanged.connect(_on_activation_changed)
+        activation_combo.currentTextChanged.connect(
+            _on_activation_changed
+        )
 
-        action_combo = _make_combo(['target', 'hurt', 'teleport'],
-                                   brush.get('trigger_action', 'target'),
-                                   tooltip="target — fire I/O outputs\nhurt — damage player\nteleport — move player to PathNode")
+        action_combo = _make_combo(
+            ['target', 'hurt', 'teleport'],
+            brush.get('trigger_action', 'target'),
+            tooltip=(
+                "target — fire I/O outputs\n"
+                "hurt — damage player\n"
+                "teleport — move player to PathNode"
+            )
+        )
         form.addRow("Action:", action_combo)
         self._widgets['trigger_action_combo'] = action_combo
 
         # Target node (teleport only)
         node_lbl = QLabel("Target Node:")
-        node_combo = self._pathnode_combo(brush.get('target_node', ''))
+        node_combo = self._pathnode_combo(
+            brush.get('target_node', '')
+        )
         node_combo.currentTextChanged.connect(
-            lambda t: self.update_object_prop('target_node', '' if t.strip() == '(none)' else t.strip()))
-        is_teleport = brush.get('trigger_action', 'target') == 'teleport'
+            lambda t: self.update_object_prop(
+                'target_node',
+                '' if t.strip() == '(none)' else t.strip()
+            )
+        )
+
+        is_teleport = (
+            brush.get('trigger_action', 'target') == 'teleport'
+        )
         node_lbl.setVisible(is_teleport)
         node_combo.setVisible(is_teleport)
+
         form.addRow(node_lbl, node_combo)
         self._widgets['trigger_target_node_label'] = node_lbl
         self._widgets['trigger_target_node_combo'] = node_combo
 
         def _on_action_changed(txt):
             self.update_object_prop('trigger_action', txt)
+
             show = txt == 'teleport'
             node_lbl.setVisible(show)
             node_combo.setVisible(show)
+
             if txt == 'hurt':
                 self.update_object_prop('hurt', True)
             elif brush.get('trigger_action') == 'hurt':
                 self.update_object_prop('hurt', False)
 
-        action_combo.currentTextChanged.connect(_on_action_changed)
+        action_combo.currentTextChanged.connect(
+            _on_action_changed
+        )
 
         layout.addLayout(form)
 
         # Damage group
         dmg_group = QGroupBox("Damage")
-        dmg_group.setStyleSheet(_Style.group_box("#F08000"))
+        dmg_group.setStyleSheet(
+            _Style.group_box("#F08000")
+        )
+
         dmg_layout = QVBoxLayout(dmg_group)
-        hurt_cb = _make_checkbox("Hurts player on contact", brush.get('hurt', False),
-                                 self.on_hurt_changed, _Style.CHECKBOX)
+
+        hurt_cb = _make_checkbox(
+            "Hurts player on contact",
+            brush.get('hurt', False),
+            self.on_hurt_changed,
+            _Style.CHECKBOX
+        )
         dmg_layout.addWidget(hurt_cb)
         self._widgets['hurt_cb'] = hurt_cb
 
-        dmg_spin = _make_spin(brush.get('hurt_amount', 10), 1, 1000)
+        dmg_spin = _make_spin(
+            brush.get('hurt_amount', 10),
+            1,
+            1000
+        )
         dmg_spin.setEnabled(brush.get('hurt', False))
-        dmg_spin.editingFinished.connect(lambda: self.update_object_prop('hurt_amount', dmg_spin.value()))
-        dmg_layout.addLayout(_hbox(QLabel("Damage Amount:"), dmg_spin, stretch=False))
+        dmg_spin.editingFinished.connect(
+            lambda: self.update_object_prop(
+                'hurt_amount',
+                dmg_spin.value()
+            )
+        )
+        dmg_layout.addLayout(
+            _hbox(
+                QLabel("Damage Amount:"),
+                dmg_spin,
+                stretch=False
+            )
+        )
         self._widgets['damage_spin'] = dmg_spin
 
         layout.addWidget(dmg_group)
         layout.addStretch()
-        return w
 
+        return w
     def _create_mover_tab(self, brush):
         w = QWidget()
         layout = QVBoxLayout(w)

@@ -28,7 +28,7 @@ import numpy as np
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 
-from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX, is_water_brush
+from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX, is_water_brush, brush_aabb_bounds
 from engine import brush_geometry
 from engine import shaders
 from engine.shaders import DEFAULT_SHADERS
@@ -1979,6 +1979,61 @@ class BaseRenderer:
         else:
             gl.glBindVertexArray(self._edge_vao)
             gl.glDrawArrays(gl.GL_LINES, 0, 24)
+        gl.glBindVertexArray(0)
+
+    def draw_aabb_bounds(self, projection, view, brush):
+        """Draw the exact world-space trigger AABB as orange dashed lines."""
+        if 'simple' not in self.shaders:
+            return
+        shader, uniforms = self.shaders['simple'], self.uniforms['simple']
+        gl.glUseProgram(shader)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+
+        lo_x, lo_y, lo_z, hi_x, hi_y, hi_z = brush_aabb_bounds(brush)
+        corners = np.array([
+            [lo_x, lo_y, lo_z], [hi_x, lo_y, lo_z],
+            [hi_x, hi_y, lo_z], [lo_x, hi_y, lo_z],
+            [lo_x, lo_y, hi_z], [hi_x, lo_y, hi_z],
+            [hi_x, hi_y, hi_z], [lo_x, hi_y, hi_z],
+        ], dtype=np.float32)
+        edges = ((0,1),(1,2),(2,3),(3,0),(4,5),(5,6),(6,7),(7,4),(0,4),(1,5),(2,6),(3,7))
+        dash, gap = 8.0, 5.0
+        vertices = []
+        for i0, i1 in edges:
+            a, b = corners[i0], corners[i1]
+            delta = b - a
+            length = float(np.linalg.norm(delta))
+            if length <= 1e-6:
+                continue
+            direction = delta / length
+            cursor = 0.0
+            while cursor < length:
+                end = min(cursor + dash, length)
+                p0, p1 = a + direction * cursor, a + direction * end
+                vertices.extend((float(p0[0]), float(p0[1]), float(p0[2]),
+                                 float(p1[0]), float(p1[1]), float(p1[2])))
+                cursor += dash + gap
+        if not vertices:
+            return
+        data = np.asarray(vertices, dtype=np.float32)
+        vao = getattr(self, '_aabb_vao', None)
+        vbo = getattr(self, '_aabb_vbo', None)
+        if vao is None:
+            vao = self._aabb_vao = gl.glGenVertexArrays(1)
+            vbo = self._aabb_vbo = gl.glGenBuffers(1)
+            gl.glBindVertexArray(vao)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
+            gl.glEnableVertexAttribArray(0)
+            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+            gl.glBindVertexArray(0)
+        gl.glBindVertexArray(vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, data.nbytes, data, gl.GL_DYNAMIC_DRAW)
+        gl.glUniform3f(uniforms['color'], 1.0, 140.0 / 255.0, 0.0)
+        gl.glUniform1f(uniforms['alpha'], 1.0)
+        self._set_line_width(1.0)
+        gl.glDrawArrays(gl.GL_LINES, 0, len(vertices) // 3)
         gl.glBindVertexArray(0)
 
     def draw_face_highlight(self, projection, view, brush, face_name):
