@@ -9,7 +9,7 @@ import os
 import sys
 
 from PyQt5.QtCore import QProcess, Qt
-from PyQt5.QtWidgets import QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QVBoxLayout
+from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QVBoxLayout
 
 
 class BenchmarkDialog(QDialog):
@@ -24,6 +24,14 @@ class BenchmarkDialog(QDialog):
         layout = QVBoxLayout(self)
         self.status_label = QLabel("Running renderer benchmark...")
         layout.addWidget(self.status_label)
+
+        self.additional_tests = QCheckBox(
+            "Additional stress tests (I/O, renderer, CSG)"
+        )
+        self.additional_tests.setToolTip(
+            "Run deliberately heavy workloads for Fio's I/O dispatcher, renderer and CSG geometry."
+        )
+        layout.addWidget(self.additional_tests)
 
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
@@ -50,6 +58,8 @@ class BenchmarkDialog(QDialog):
 
         environment = self.process.processEnvironment()
         environment.insert("PYTHONUNBUFFERED", "1")
+        if self.additional_tests.isChecked():
+            environment.insert("FIO_FULLSCREEN_BENCH_ADDITIONAL", "1")
         self.process.setProcessEnvironment(environment)
 
         self.process.start(
