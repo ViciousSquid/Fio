@@ -108,10 +108,11 @@ def _benchmark_scene(brushes, things, name, **config_overrides):
         renderer = glh.make_renderer()
         try:
             projection, view, eye = glh.camera_matrices(aspect=1.0)
+            options = dict(config_overrides)
             use_batched_positions = bool(
-                config_overrides.pop("batched_thing_positions", False))
+                options.pop("batched_thing_positions", False))
             config = glh.render_config(all_brushes=brushes, all_things=things,
-                                       **config_overrides)
+                                       **options)
             if use_batched_positions:
                 config["thing_positions"] = _thing_xz_positions(things)
 
@@ -193,10 +194,11 @@ def _many_entities():
 
 def _thing_xz_positions(things):
     """One contiguous render-state-like X/Z snapshot for a scene."""
-    return np.ascontiguousarray(
-        [[float(t.pos[0]), float(t.pos[2])] for t in things],
-        dtype=np.float64,
-    )
+    rows = []
+    for thing in things:
+        pos = thing["pos"] if isinstance(thing, dict) else thing.pos
+        rows.append([float(pos[0]), float(pos[2])])
+    return np.ascontiguousarray(rows, dtype=np.float64)
 
 
 def _benchmark_distance_cull():
