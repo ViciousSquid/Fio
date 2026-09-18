@@ -3,6 +3,8 @@
 import os
 import sys
 
+import numpy as np
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from engine.render_cull import (  # noqa: E402
@@ -103,6 +105,86 @@ def test_out_buffer_is_reused_and_cleared():
 
 def test_empty_input_returns_empty():
     assert cull_by_distance([], 0.0, 0.0) == []
+
+
+def test_batched_positions_match_the_scalar_path(monkeypatch):
+    objects = [
+        {"pos": [0.0, 0.0, 0.0]},
+        {"pos": [100.0, 0.0, 25.0]},
+        {"pos": [10000.0, 0.0, 0.0]},
+        {"pos": [-150.0, 0.0, 200.0]},
+    ]
+    positions = np.asarray(
+        [[obj["pos"][0], obj["pos"][2]] for obj in objects],
+        dtype=np.float64,
+    )
+    scalar = cull_by_distance(objects, 10.0, 20.0, 22500.0)
+    batched = cull_by_distance(
+        objects, 10.0, 20.0, 22500.0, positions=positions)
+    assert batched == scalar
+
+
+def test_batched_positions_use_a_contiguous_xz_array_and_skip_scalar_distance(monkeypatch):
+    objects = [
+        _Thing([0.0, 0.0, 0.0]),
+        _Thing([100.0, 0.0, 0.0]),
+        _Thing([1000.0, 0.0, 0.0]),
+    ]
+    positions = np.ascontiguousarray(
+        [[obj.pos[0], obj.pos[2]] for obj in objects],
+        dtype=np.float64,
+    )
+    assert positions.shape == (3, 2)
+    assert positions.flags.c_contiguous
+
+    def fail_scalar(*_args, **_kwargs):
+        raise AssertionError("the batched path called the scalar distance kernel")
+
+    monkeypatch.setattr(
+        "engine.render_cull.within_xz_sq", fail_scalar)
+
+    kept = cull_by_distance(objects, 0.0, 0.0, 125.0, positions=positions)
+    assert kept == objects[:2]
+
+
+def test_batched_keep_predicate_matches_scalar_semantics():
+    far = _Thing([99999.0, 0.0, 0.0])
+    near = _Thing([10.0, 0.0, 0.0])
+    objects = [far, near]
+    positions = np.asarray(
+        [[far.pos[0], far.pos[2]], [near.pos[0], near.pos[2]]],
+        dtype=np.float64,
+    )
+    keep = lambda obj: obj is far
+    assert cull_by_distance(
+        objects, 0.0, 0.0, 100.0, keep=keep, positions=positions
+    ) == cull_by_distance(objects, 0.0, 0.0, 100.0, keep=keep)
+
+
+def test_batched_distance_preserves_inclusive_boundary_and_order():
+    radius = 100.0
+    objects = [
+        {"name": "outside", "pos": [101.0, 0.0, 0.0]},
+        {"name": "edge", "pos": [100.0, 0.0, 0.0]},
+        {"name": "inside", "pos": [25.0, 0.0, 75.0]},
+    ]
+    positions = np.asarray(
+        [[obj["pos"][0], obj["pos"][2]] for obj in objects],
+        dtype=np.float64,
+    )
+    kept = cull_by_distance(
+        objects, 0.0, 0.0, radius * radius, positions=positions)
+    assert kept == objects[1:]
+
+
+def test_batched_positions_require_one_xz_row_per_object():
+    objects = [_Thing([0.0, 0.0, 0.0])]
+    try:
+        cull_by_distance(objects, 0.0, 0.0, 1.0, positions=np.empty((0, 2)))
+    except ValueError as exc:
+        assert "one [x, z] row per object" in str(exc)
+    else:
+        raise AssertionError("a positions/object count mismatch was accepted")
 
 
 def test_order_is_preserved():
