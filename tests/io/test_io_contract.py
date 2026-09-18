@@ -470,6 +470,88 @@ def test_firing_an_undeclared_output_is_reported(monkeypatch):
     assert any(category == "Error" and "do not declare" in message
                for category, message in seen)
 
+def test_io_disabled_source_does_not_fire_output():
+    """An entity with io_enabled=False cannot originate runtime I/O."""
+    seen = []
+
+    mgr = IOManager()
+
+    target = {
+        "name": "target",
+        "id": "target-id",
+        "_io_connections": [],
+    }
+
+    mgr.set_entity_finder(lambda name: target if name == "target" else None)
+    mgr.set_entity_finder_by_id(lambda entity_id: target if entity_id == "target-id" else None)
+
+    source = {
+        "name": "source",
+        "id": "source-id",
+        "io_enabled": False,
+        "_io_connections": [{
+            "output": "OnOpen",
+            "target": "target",
+            "target_id": "target-id",
+            "input": "Enable",
+            "parameter": "",
+            "delay": 0,
+        }],
+    }
+
+    original_execute = mgr._execute_input
+
+def tracking_execute(*args, **kwargs):
+    seen.append(True)
+    return original_execute(*args, **kwargs)
+
+mgr._execute_input = tracking_execute
+
+mgr.fire_output(source, "OnOpen")
+
+assert seen == []
+
+def test_io_disabled_target_does_not_receive_input():
+    """An entity with io_enabled=False cannot receive runtime I/O."""
+    seen = []
+
+    mgr = IOManager()
+
+    source = {
+        "name": "source",
+        "id": "source-id",
+        "_io_connections": [{
+            "output": "OnOpen",
+            "target": "target",
+            "target_id": "target-id",
+            "input": "Enable",
+            "parameter": "",
+            "delay": 0,
+        }],
+    }
+
+    target = {
+        "name": "target",
+        "id": "target-id",
+        "io_enabled": False,
+        "_io_connections": [],
+    }
+
+    mgr.set_entity_finder(lambda name: target if name == "target" else None)
+    mgr.set_entity_finder_by_id(lambda entity_id: target if entity_id == "target-id" else None)
+
+    original_execute = mgr._execute_input
+
+    def tracking_execute(*args, **kwargs):
+        seen.append(True)
+        return original_execute(*args, **kwargs)
+
+    mgr._execute_input = tracking_execute
+
+    mgr.fire_output(source, "OnOpen")
+
+    assert seen == []
+
 
 def test_the_undeclared_output_check_leaves_unknown_types_alone(monkeypatch):
     """A plugin entity with no declarations gets no opinion, as elsewhere."""
@@ -486,3 +568,11 @@ def test_the_undeclared_output_check_leaves_unknown_types_alone(monkeypatch):
 
     mgr.fire_output(Widget(), "OnWhatever")
     assert [s for s in seen if s[0] == "Error"] == []
+
+def test_io_enabled_defaults_to_true():
+    """Entities without the property retain normal I/O participation."""
+    from editor.io_system import io_enabled
+
+    assert io_enabled({"name": "legacy"}) is True
+    assert io_enabled({"name": "enabled", "io_enabled": True}) is True
+    assert io_enabled({"name": "disabled", "io_enabled": False}) is False
