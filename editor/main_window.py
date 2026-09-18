@@ -4622,29 +4622,57 @@ class MainWindow(QMainWindow):
         anywhere until someone noticed the door was not opening.
         """
         try:
-            from editor.io_system import (validate_scene_connections,
+            from editor.io_system import (validate_all_scene_connections,
                                           PROBLEM_MISSING_TARGET)
         except ImportError:
             QMessageBox.warning(self, "Validate Connections",
                                 "The I/O system is unavailable in this build.")
             return
 
-        problems = validate_scene_connections(self.state.brushes, self.state.things)
-
-        all_entities = list(self.state.things) + list(self.state.brushes)
-        total = sum(
-            len(e.properties.get('_io_connections', [])
-                if hasattr(e, 'properties')
-                else e.get('_io_connections', []))
-            for e in all_entities
+        validation = validate_all_scene_connections(
+            self.state.brushes,
+            self.state.things,
         )
 
-        if not problems:
-            QMessageBox.information(
-                self, "Validate Connections",
-                f"All {total} connection(s) are valid. ✔"
-            )
-            return
+        problems = validation['problems']
+        io_count = validation['io_count']
+        pathnode_count = validation['pathnode_count']
+        total = validation['total']
+
+        # Format validation problems.  I/O and PathNode problems use the
+        # same four-item tuple shape, but their connection objects differ.
+        lines = []
+
+        for entity, connection, code, message in problems:
+            if code in (
+                "missing_pathnode_target",
+                "invalid_pathnode_target",
+            ):
+                if isinstance(entity, dict):
+                    properties = entity.get("properties", entity)
+                else:
+                    properties = getattr(entity, "properties", {})
+
+                name = properties.get("name", "<unnamed PathNode>")
+
+                lines.append(
+                    "PathNode '%s': %s" % (name, message)
+                )
+            else:
+                # Existing I/O validation message.
+                lines.append(message)
+
+        QMessageBox.warning(
+            self,
+            "Validate Connections",
+            "%d of %d connection(s) have problems:\n\n%s"
+            % (
+                len(problems),
+                total,
+                "\n".join(lines),
+            ),
+        )
+        return
 
         def _name(entity):
             if hasattr(entity, 'properties'):

@@ -80,6 +80,18 @@ class Thing:
     _pixmap_cache = {}  # Class-level cache for loaded pixmaps
     _counters = {}      # Class-level counter for unique naming
 
+    # Editor property classification.
+    #
+    # Properties listed here are shown on the main Properties tab.
+    # Properties listed in EDITOR_ADVANCED_PROPERTIES are shown on
+    # the Advanced tab.
+    #
+    # Subclasses should explicitly opt properties into Advanced.
+    # Everything else should remain available to the main Properties
+    # editor unless handled by a specialised widget.
+    EDITOR_PRIMARY_PROPERTIES = ()
+    EDITOR_ADVANCED_PROPERTIES = ()
+
     def __init__(self, pos=None, properties=None):
         self.pos = pos if pos is not None else [0, 0, 0]
         self.properties = properties if properties is not None else {}
@@ -328,6 +340,7 @@ class Thing:
 class PlayerStart(Thing):
     """Defines where the player spawns."""
     pixmap_path = "assets/sprites/player.png"
+    EDITOR_PRIMARY_PROPERTIES = ('angle',)
     
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -341,6 +354,14 @@ class PlayerStart(Thing):
 class Light(Thing):
     """Dynamic light source."""
     pixmap_path = "assets/sprites/light.png"
+    EDITOR_PRIMARY_PROPERTIES = (
+    'intensity',
+    'radius',
+    'state',
+    'show_radius',
+    'casts_shadows',
+    'shadow_map_size',
+    )
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -383,6 +404,16 @@ class Light(Thing):
 class Speaker(Thing):
     """Sound emitter entity."""
     pixmap_path = "assets/sprites/speaker.png"
+    EDITOR_PRIMARY_PROPERTIES = (
+        'sound_file',
+        'radius',
+        'global',
+        'show_radius',
+        'volume',
+        'looping',
+        'play_on_start',
+        'state',
+    )
     
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -403,6 +434,15 @@ class Speaker(Thing):
 class Monster(Thing):
     """Enemy entity with subtypes (human, flying)."""
     pixmap_path = "assets/sprites/monsters/human/idle.png"   # fallback
+    EDITOR_PRIMARY_PROPERTIES = (
+        'monster_type',
+        'monster_id',
+        'health',
+        'damage',
+        'awake',
+        'sprite_width',
+        'sprite_height',
+    )
     _subtype_sprites = {}  # cache keyed by full sprite path (includes dead/alive state)
     _icon_cache = {}       # 1.2.6.0: cache for 2D view icons (60×60)
 
@@ -590,40 +630,38 @@ class Monster(Thing):
                 self.properties.get('custom_idle', ''), default_idle, project_root)
 
     def get_instance_pixmap(self):
-        """
-        Return the correct pixmap for the current alive/dead state.
+        """Return the icon matching this gate's current logic type."""
+        logic_type = str(
+            self.properties.get('logic_type', 'AND')
+        ).strip().lower()
 
-        The cache is keyed by the full sprite path returned by get_sprite_path(),
-        which already encodes both monster type AND state (idle vs dead).
-        This means alive and dead sprites are cached independently, so setting
-        'dead' = True on a monster that was previously rendered alive will
-        correctly switch to dead.png on the next frame without a stale cache hit.
-        """
-        sprite_path = self.get_sprite_path()
+        if logic_type not in ('and', 'or', 'xor', 'nand', 'nor'):
+            logic_type = 'and'
 
-        # Return from cache if available
-        if sprite_path in Monster._subtype_sprites:
-            return Monster._subtype_sprites[sprite_path]
+        cache_key = f"LogicGate:{logic_type}"
 
-        # Load from disk
+        if cache_key in self._pixmap_cache:
+            return self._pixmap_cache[cache_key]
+
         try:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
-            abs_path = os.path.join(project_root, sprite_path)
-            if os.path.exists(abs_path):
-                pixmap = QPixmap(abs_path)
+            image_path = os.path.join(
+                project_root,
+                "assets",
+                "sprites",
+                f"logic_{logic_type}.png"
+            )
+
+            if os.path.exists(image_path):
+                pixmap = QPixmap(image_path)
                 if not pixmap.isNull():
-                    Monster._subtype_sprites[sprite_path] = pixmap
+                    self._pixmap_cache[cache_key] = pixmap
                     return pixmap
         except Exception:
             pass
 
-        # Fallback: dark red square so death is still visually obvious
-        if self.properties.get('dead', False):
-            fallback = QPixmap(128, 128)
-            fallback.fill(QColor(128, 0, 0))
-            return fallback
-
+        # Fall back to the generic LogicGate icon.
         return super().get_instance_pixmap()
 
     def get_icon_pixmap(self):
@@ -662,6 +700,12 @@ class Monster(Thing):
 class Pickup(Thing):
     """Collectible item entity."""
     pixmap_path = "assets/sprites/pickup.png"
+    EDITOR_PRIMARY_PROPERTIES = (
+        'item_type',
+        'value',
+        'activation',
+        'collected',
+    )
     
     KEY_SPRITES = {
         'blue_key': 'assets/sprites/bluekey.png',
@@ -787,6 +831,9 @@ class Pickup(Thing):
 
 class Trigger(Thing):
     """Non-visible trigger volume (for point-entity triggers)."""
+    EDITOR_PRIMARY_PROPERTIES = (
+        'action',
+    )
     pixmap_path = None
     
     def __init__(self, pos=None, properties=None):
@@ -797,7 +844,14 @@ class Trigger(Thing):
 
 class Model(Thing):
     """Represents a 3D model placed in the world."""
-    pixmap_path = "assets/sprites/model.png"
+    pixmap_path = "assets/sprites/pickup.png"
+    EDITOR_PRIMARY_PROPERTIES = (
+        'model_path',
+        'scale',
+        'rotation',
+        'no_collision',
+        'collision_size',
+    )
     
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -815,7 +869,26 @@ class Prop(Model):
     the entity so maps serialize through :class:`Thing` without a special
     format and runtimes can opt into the same carry/physics contract.
     """
-    pixmap_path = "assets/sprites/model.png"
+    pixmap_path = "assets/sprites/pickup.png"
+    EDITOR_PRIMARY_PROPERTIES = (
+        'sprite_path',
+        'sprite_size',
+        'mass',
+        'collision_size',
+        'no_collision',
+        'physics_enabled',
+        'gravity',
+        'friction',
+        'linear_damping',
+        'angular_damping',
+        'pickup_enabled',
+        'pickup_reach',
+        'carry_distance',
+        'carry_offset',
+        'drop_velocity',
+        'drop_angular_velocity',
+        'disabled',
+    )
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -869,6 +942,10 @@ class LogicRelay(Thing):
     Can be enabled/disabled. Useful for creating reusable trigger chains.
     """
     pixmap_path = "assets/sprites/logic_relay.png"
+    EDITOR_PRIMARY_PROPERTIES = (
+        'disabled',
+        'fire_once',
+    )
     
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -889,6 +966,10 @@ class LogicGate(Thing):
     Fires OnTrigger when gate condition is met.
     """
     pixmap_path = "assets/sprites/logic_gate.png"
+    EDITOR_PRIMARY_PROPERTIES = (
+        'logic_type',
+        'initial_state',
+    )
     
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -925,6 +1006,12 @@ class LogicTimer(Thing):
     Can be enabled/disabled.
     """
     pixmap_path = "assets/sprites/logic_timer.png"
+    EDITOR_PRIMARY_PROPERTIES = (
+        'interval',
+        'timer_enabled',
+        'start_on',
+        'one_shot',
+    )
     
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -953,6 +1040,10 @@ class LogicCommand(Thing):
     'command' property when the parameter is blank. Example command: "cam 2".
     """
     pixmap_path = "assets/sprites/logic_command.png"
+    EDITOR_PRIMARY_PROPERTIES = (
+        'command',
+        'disabled',
+    )
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -970,6 +1061,14 @@ class LogicCommand(Thing):
 class LevelChanger(Thing):
     """Entity that loads a new level when triggered."""
     pixmap_path = "assets/sprites/levelchanger.png"
+    EDITOR_PRIMARY_PROPERTIES = (
+        'target_map',
+        'delay',
+        'fade_time',
+        'show_radius',
+        'radius',
+        'usable',
+    )
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -1263,6 +1362,16 @@ class Portal(Thing):
     """
 
     pixmap_path = "assets/sprites/portal.png"
+    EDITOR_PRIMARY_PROPERTIES = (
+    'portal_target',
+    'width',
+    'height',
+    'angle',
+    'active',
+    'portal_direction',
+    'color',
+    'show_rim',
+    )
 
     DEFAULT_WIDTH  = 128.0
     DEFAULT_HEIGHT = 256.0

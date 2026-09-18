@@ -770,15 +770,36 @@ class PropertyEditor(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(4, 4, 4, 4)
+
+        # I/O participation
+        io_enabled = thing.properties.get('io_enabled', True)
+        io_cb = _make_checkbox(
+            "I/O Enabled",
+            bool(io_enabled),
+            lambda checked: self.update_object_prop('io_enabled', checked),
+            _Style.CHECKBOX
+        )
+        io_cb.setToolTip(
+            "When disabled, this entity does not send or receive entity I/O events."
+        )
+        layout.addWidget(io_cb)
+        self._widgets['io_enabled_cb'] = io_cb
+
         etype = get_entity_type_for_io(thing)
-        io_editor = IOEditorWidget(entity=thing, entity_type=etype,
-                                   editor_state=self.editor.state, editor=self.editor)
+        io_editor = IOEditorWidget(
+            entity=thing,
+            entity_type=etype,
+            editor_state=self.editor.state,
+            editor=self.editor
+        )
         io_editor.connections_changed.connect(self._on_io_connections_changed)
         layout.addWidget(io_editor)
         self._widgets['io_editor'] = io_editor
+
         inputs = IOInputsWidget()
         inputs.set_entity(etype)
         layout.addWidget(inputs)
+
         return tab
 
     def _on_io_connections_changed(self):
@@ -1347,20 +1368,6 @@ class PropertyEditor(QWidget):
         tab_layout.setSpacing(4)
         form = QFormLayout()
 
-        # I/O participation
-        io_enabled = thing.properties.get('io_enabled', True)
-        io_cb = _make_checkbox(
-            "I/O Enabled",
-            bool(io_enabled),
-            lambda checked: self.update_object_prop('io_enabled', checked),
-            _Style.CHECKBOX
-        )
-        io_cb.setToolTip(
-            "When disabled, this entity does not send or receive entity I/O events."
-        )
-        form.addRow("", io_cb)
-        self._widgets['io_enabled_cb'] = io_cb
-
         if isinstance(thing, Model):
             self.add_model_path_widget(form, thing)
             self.add_vector3_widget(form, thing, 'scale')
@@ -1368,10 +1375,15 @@ class PropertyEditor(QWidget):
 
             # Collision toggle for this model entity
             no_collision = thing.properties.get('no_collision', False)
-            collision_cb = _make_checkbox("Disable collision for this model", no_collision,
-                                           lambda c: self.update_object_prop('no_collision', c),
-                                           _Style.CHECKBOX)
-            collision_cb.setToolTip("If checked, player and monsters will pass through this model")
+            collision_cb = _make_checkbox(
+                "Disable collision for this model",
+                no_collision,
+                lambda c: self.update_object_prop('no_collision', c),
+                _Style.CHECKBOX,
+            )
+            collision_cb.setToolTip(
+                "If checked, player and monsters will pass through this model"
+            )
             form.addRow("", collision_cb)
             self._widgets['model_no_collision_cb'] = collision_cb
 
@@ -1382,13 +1394,17 @@ class PropertyEditor(QWidget):
                 lambda v: self._on_collision_size_changed(v, thing)
             )
             cs_label = QLabel("Collision Size:")
-            cs_label.setToolTip("Custom collision box size (0,0,0 = auto from scale)")
+            cs_label.setToolTip(
+                "Custom collision box size (0,0,0 = auto from scale)"
+            )
             form.addRow(cs_label, cs_widget)
             self._widgets['model_collision_size_inputs'] = cs_inputs
 
             if IO_AVAILABLE:
                 note = QLabel("💡 Use the I/O tab for advanced targeting")
-                note.setStyleSheet("QLabel { color: #88AAFF; font-style: italic; padding: 4px; }")
+                note.setStyleSheet(
+                    "QLabel { color: #88AAFF; font-style: italic; padding: 4px; }"
+                )
                 form.addRow("", note)
 
         if isinstance(thing, Light):
@@ -1404,20 +1420,41 @@ class PropertyEditor(QWidget):
         if isinstance(thing, Pickup):
             self._build_pickup_ui(form, thing)
 
-        # Primary/type-specific fields sit at the top, always visible. The
-        # generic leftover properties now live on the Advanced tab instead.
+        # Explicit primary properties.
+        #
+        # Specialised widgets above handle properties such as model_path,
+        # scale, rotation, colour, etc. The generic iterator handles the
+        # explicitly classified primary properties that do not have a
+        # specialised editor.
+        primary_properties = getattr(
+            thing,
+            'EDITOR_PRIMARY_PROPERTIES',
+            (),
+        )
+
+        if primary_properties:
+            self._iterate_thing_properties(
+                form,
+                thing,
+                property_keys=primary_properties,
+            )
+
         if form.rowCount() > 0:
             tab_layout.addLayout(form)
 
         # Type-specific grouped editors (already visually grouped).
         if isinstance(thing, PathNode):
             self._build_pathnode_group(tab_layout, thing)
+
         if isinstance(thing, LogicCamera):
             self._build_logic_camera_group(tab_layout, thing)
+
         if isinstance(thing, LogicSpawner):
             self._build_spawner_group(tab_layout, thing)
+
         if isinstance(thing, LogicState):
             self._build_keyvalue_group(tab_layout, thing)
+
         if isinstance(thing, Monster):
             self._build_monster_groups(tab_layout, thing)
 
@@ -1425,16 +1462,27 @@ class PropertyEditor(QWidget):
         return w
 
     def _create_thing_advanced_tab(self, thing):
-        """Build the dedicated tab for generic and less frequently used fields.
+        """Build the dedicated Advanced tab from explicitly classified properties.
 
-        Returns None when the entity has no leftover properties, so simple
-        entities keep exactly the tab set they had before.
+        Advanced properties must be explicitly listed by the Thing class in
+        EDITOR_ADVANCED_PROPERTIES. Generic/unclassified properties no longer
+        automatically become Advanced.
         """
+        advanced_properties = getattr(thing, 'EDITOR_ADVANCED_PROPERTIES', ())
+
+        if not advanced_properties:
+            return None
+
         adv_form = QFormLayout()
         adv_form.setSpacing(4)
-        self._iterate_thing_properties(adv_form, thing)
-        n = adv_form.rowCount()
-        if n == 0:
+
+        self._iterate_thing_properties(
+            adv_form,
+            thing,
+            property_keys=advanced_properties,
+        )
+
+        if adv_form.rowCount() == 0:
             return None
 
         w = QWidget()
@@ -1442,10 +1490,16 @@ class PropertyEditor(QWidget):
         tab_layout.setContentsMargins(8, 8, 8, 8)
         tab_layout.setSpacing(4)
 
-        section = CollapsibleSection("Other Properties", expanded=True, count=n)
+        section = CollapsibleSection(
+            "Other Properties",
+            expanded=True,
+            count=adv_form.rowCount(),
+        )
         section.addLayout(adv_form)
+
         tab_layout.addWidget(section)
         tab_layout.addStretch()
+
         return w
 
     def _build_attach_to_mover(self, form, thing, prefix=''):
@@ -1571,122 +1625,349 @@ class PropertyEditor(QWidget):
         self._pickup_key_widgets = []
         self._pickup_sprite_widgets = []
 
-    def _iterate_thing_properties(self, form, thing):
-        is_pickup = isinstance(thing, Pickup)
-        current_item = thing.properties.get('item_type', 'health') if is_pickup else None
+    def _iterate_thing_properties(self, form, thing, property_keys=None):
+        """Add generic Thing properties to a form.
 
-        _MONSTER_ONLY = {'awake', 'damage', 'health', 'monster_type', 'variant',
-                         'triggered', 'wake_on_sight', 'can_hear', 'dead', 'non_hostile', 'sight',
-                         'patrol', 'patrol_target', 'patrol_mode'}
+        When property_keys is supplied, only those explicitly selected
+        properties are rendered. When it is None, the existing behaviour is
+        preserved for entities that have not yet been migrated to explicit
+        editor property classification.
+        """
+        is_pickup = isinstance(thing, Pickup)
+        current_item = (
+            thing.properties.get('item_type', 'health')
+            if is_pickup else None
+        )
+
+        _MONSTER_ONLY = {
+            'awake',
+            'damage',
+            'health',
+            'monster_type',
+            'variant',
+            'triggered',
+            'wake_on_sight',
+            'can_hear',
+            'dead',
+            'non_hostile',
+            'sight',
+            'patrol',
+            'patrol_target',
+            'patrol_mode',
+        }
+
+        allowed_keys = (
+            set(property_keys)
+            if property_keys is not None
+            else None
+        )
 
         for key, value in sorted(thing.properties.items()):
-            if key in ('name', 'id', '_io_connections', 'type', 'io_enabled'):
+            # Explicit property selection.
+            if allowed_keys is not None and key not in allowed_keys:
                 continue
-            if isinstance(thing, Light) and key in ('colour', 'parent_mover', 'parent_offset'):
+
+            # Internal/common properties.
+            if key in ('name', 'id', '_io_connections', 'type'):
                 continue
-            if isinstance(thing, Model) and key in ('model_path', 'scale', 'rotation'):
+
+            # Properties already handled by specialised widgets.
+            if isinstance(thing, Light) and key in (
+                'colour',
+                'parent_mover',
+                'parent_offset',
+            ):
                 continue
-            if isinstance(thing, Portal) and key in ('rotation', 'portal_target', 'parent_mover', 'parent_offset', 'parent_local_pos', 'parent_local_yaw'):
+
+            if isinstance(thing, Model) and key in (
+                'model_path',
+                'scale',
+                'rotation',
+            ):
                 continue
+
+            if isinstance(thing, Portal) and key in (
+                'rotation',
+                'portal_target',
+                'parent_mover',
+                'parent_offset',
+                'parent_local_pos',
+                'parent_local_yaw',
+            ):
+                continue
+
+            # Monster-only properties should not appear on ordinary Things.
             if not isinstance(thing, Monster) and key in _MONSTER_ONLY:
                 continue
-            if isinstance(thing, Monster) and key in ('triggered', 'wake_on_sight', 'can_hear', 'dead', 'non_hostile', 'sight', 'patrol', 'patrol_target', 'patrol_mode', 'variant', 'team'):
+
+            # Monster properties handled by the dedicated Monster UI.
+            if isinstance(thing, Monster) and key in (
+                'triggered',
+                'wake_on_sight',
+                'can_hear',
+                'dead',
+                'non_hostile',
+                'sight',
+                'patrol',
+                'patrol_target',
+                'patrol_mode',
+                'variant',
+                'team',
+            ):
                 continue
-            if isinstance(thing, PathNode) and key in ('radius', 'show_radius', 'affects_type', 'next_node', 'wait_time', 'speed', 'patrol_speed'):
+
+            # PathNode properties handled by its dedicated group.
+            if isinstance(thing, PathNode) and key in (
+                'radius',
+                'show_radius',
+                'affects_type',
+                'next_node',
+                'wait_time',
+                'speed',
+                'patrol_speed',
+            ):
                 continue
-            if isinstance(thing, LogicCamera) and key in ('path_target', 'speed', 'fov_override', 'look_ahead'):
+
+            # LogicCamera properties handled by its dedicated group.
+            if isinstance(thing, LogicCamera) and key in (
+                'path_target',
+                'speed',
+                'fov_override',
+                'look_ahead',
+            ):
                 continue
-            if isinstance(thing, LogicSpawner) and key in ('spawn_type', 'target_node', 'max_spawn', 'spawn_properties'):
+
+            # LogicSpawner properties handled by its dedicated group.
+            if isinstance(thing, LogicSpawner) and key in (
+                'spawn_type',
+                'target_node',
+                'max_spawn',
+                'spawn_properties',
+            ):
                 continue
-            if isinstance(thing, LogicState) and key in ('store_name', 'initial_data', '_runtime_data', 'capacity'):
+
+            # LogicKeyValueStore properties handled by its dedicated group.
+            if isinstance(thing, LogicState) and key in (
+                'store_name',
+                'initial_data',
+                '_runtime_data',
+            ):
                 continue
-            if is_pickup and key in ('key_name', 'custom_sprite', 'respawns', 'respawn_time'):
+
+            # Pickup properties handled by the dedicated Pickup UI.
+            if is_pickup and key in (
+                'key_name',
+                'custom_sprite',
+                'respawns',
+                'respawn_time',
+            ):
                 continue
-            if isinstance(thing, Light) and key == 'show_radius':
-                # Force boolean checkbox, convert string "True"/"False" to bool
-                bool_val = value
-                if isinstance(value, str):
-                    bool_val = value.lower() == 'true'
-                cb = _make_checkbox("Show Radius", bool_val,
-                                    lambda c, k=key: self.update_object_prop(k, c),
-                                    _Style.CHECKBOX)
-                # The checkbox carries its own text, so the row label is empty
-                # — as for every other self-labelling checkbox here.  It used
-                # to pass label_text, which is not assigned until below: a
-                # NameError when show_radius was the first property shown, and
-                # the *previous* property's label on any later pass.
+
+            # Angle gets the normal angle editor rather than a generic field.
+            if key == 'angle':
+                angle = float(value or 0.0)
+
+                angle_combo = QComboBox()
+                angle_combo.addItems([
+                    '0°',
+                    '45°',
+                    '90°',
+                    '135°',
+                    '180°',
+                    '225°',
+                    '270°',
+                    '315°',
+                ])
+
+                nearest = int(round(angle / 45.0)) % 8
+                angle_combo.setCurrentIndex(nearest)
+
+                def _set_angle(index, thing=thing, combo=angle_combo):
+                    new_angle = float(index * 45)
+                    self.update_object_prop('angle', new_angle)
+
+                angle_combo.currentIndexChanged.connect(_set_angle)
+
+                form.addRow(QLabel("Angle:"), angle_combo)
+                self._widgets[f'{thing.properties.get("id", id(thing))}_angle'] = angle_combo
+                continue
+
+            # Monster type.
+            if isinstance(thing, Monster) and key == 'monster_type':
+                combo = QComboBox()
+                combo.addItems([
+                    'zombie',
+                    'goblin',
+                    'orc',
+                    'skeleton',
+                    'custom',
+                ])
+
+                current = str(value or 'zombie')
+                index = combo.findText(current)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+
+                combo.currentTextChanged.connect(
+                    lambda text: self.update_object_prop('monster_type', text)
+                )
+
+                form.addRow(QLabel("Monster Type:"), combo)
+                continue
+
+            # Light state.
+            if isinstance(thing, Light) and key == 'state':
+                cb = _make_checkbox(
+                    "Enabled",
+                    bool(value),
+                    lambda checked: self.update_object_prop('state', checked),
+                    _Style.CHECKBOX,
+                )
                 form.addRow("", cb)
-                self._widgets['light_show_radius_cb'] = cb
                 continue
 
-            label_text = "Visible:" if key == 'show_rim' else key.replace('_', ' ').title() + ":"
+            # Light shadow-map size.
+            if isinstance(thing, Light) and key == 'shadow_map_size':
+                spin = QSpinBox()
+                spin.setRange(64, 4096)
+                spin.setSingleStep(64)
+                spin.setValue(int(value or 512))
 
-            if key == 'angle' and isinstance(thing, Portal):
-                spin = _make_spin(int(float(value)) % 360, 0, 359, suffix="°", step=45)
-                spin.setWrapping(True)
-                spin.setToolTip("Portal facing direction in degrees")
-                spin.valueChanged.connect(lambda v: self.update_object_prop('angle', v))
-                form.addRow(label_text, spin)
-            elif key == 'angle':
-                combo = _make_combo(['0°', '90°', '180°', '270°'],
-                                    f"{int(float(value)) % 360}°",
-                                    lambda t: self.update_object_prop('angle', int(t.replace('°', ''))))
-                form.addRow(label_text, combo)
-            elif isinstance(thing, Monster) and key == 'monster_type':
-                self._build_monster_type_row(form, thing)
-            elif isinstance(thing, Light) and key == 'state':
-                combo = _make_combo(['on', 'off'], value, lambda t: self.update_object_prop(key, t))
-                form.addRow(label_text, combo)
-            elif isinstance(thing, Light) and key == 'shadow_map_size':
-                cur = str(thing.get_shadow_map_size())
-                combo = _make_combo(
-                    ['256', '512', '1024', '2048'], cur,
-                    lambda t: self.update_object_prop('shadow_map_size', int(t)),
-                    tooltip=("Per-face shadow cube-map resolution for this light.\n"
-                             "Higher = sharper shadow edges, but ~4x the VRAM and\n"
-                             "fill cost per step. Only used when 'Casts Shadows' is on."))
-                form.addRow("Shadow Map Size:", combo)
-            elif isinstance(thing, Speaker) and key == 'sound_file':
-                self.add_sound_file_widget(form, thing, key, value)
-            elif isinstance(thing, LogicGate) and key == 'logic_type':
-                combo = _make_combo(['AND', 'OR', 'XOR', 'NAND', 'NOR'], value,
-                                    lambda t: self.update_object_prop(key, t))
-                form.addRow("Logic Type:", combo)
-            elif is_pickup and key == 'item_type':
-                self._build_pickup_item_type_row(form, thing)
-            elif is_pickup and key == 'activation':
-                self._build_pickup_activation_row(form, thing, value)
-            elif is_pickup and key == 'value':
-                self._build_pickup_value_row(form, thing, value)
-            elif isinstance(value, bool):
-                # _make_checkbox wires the `toggled(bool)` signal, so the callback
-                # already receives the new checked state as a bool.  (Comparing it
-                # to Qt.Checked — an int enum == 2 — is always False, which is why
-                # generic bool props like 'casts_shadows' never stayed enabled.)
-                cb = _make_checkbox("", value, lambda c, k=key: self.update_object_prop(k, c), _Style.CHECKBOX)
-                form.addRow(label_text, cb)
-            elif isinstance(value, int):
-                # Full 32-bit range so large-but-valid ints (gold, radii, health
-                # caps) show their real value instead of being pinned at 99999;
-                # _make_spin still clamps anything beyond it so nothing overflows.
-                spin = _make_spin(value, -2147483648, 2147483647)
-                spin.editingFinished.connect(lambda w=spin, k=key: self.update_object_prop(k, w.value()))
-                form.addRow(label_text, spin)
-            elif isinstance(value, float):
-                inp = QLineEdit(str(value))
-                inp.editingFinished.connect(
-                    lambda le=inp, k=key: self.update_object_prop(
-                        k, float(le.text()) if le.text() and le.text().replace('.', '', 1).replace('-', '', 1).isdigit() else 0.0))
-                form.addRow(label_text, inp)
-            else:
-                inp = QLineEdit(str(value))
-                inp.editingFinished.connect(lambda le=inp, k=key: self.update_object_prop(k, le.text()))
-                form.addRow(label_text, inp)
+                spin.valueChanged.connect(
+                    lambda v: self.update_object_prop('shadow_map_size', v)
+                )
 
-        # Sprite + respawn controls (pickup only)
-        if is_pickup:
-            self._build_pickup_sprite_row(form, thing)
-            self._build_pickup_respawn_row(form, thing)
+                form.addRow(QLabel("Shadow Map Size:"), spin)
+                continue
+
+            # Speaker sound file.
+            if isinstance(thing, Speaker) and key == 'sound_file':
+                edit = QLineEdit(str(value or ''))
+                edit.editingFinished.connect(
+                    lambda e=edit: self.update_object_prop(
+                        'sound_file',
+                        e.text(),
+                    )
+                )
+
+                form.addRow(QLabel("Sound File:"), edit)
+                continue
+
+            # Logic gate type.
+            if isinstance(thing, LogicGate) and key == 'logic_type':
+                combo = QComboBox()
+                combo.addItems([
+                    'AND',
+                    'OR',
+                    'NOT',
+                    'NAND',
+                    'NOR',
+                    'XOR',
+                    'XNOR',
+                ])
+
+                current = str(value or 'AND').upper()
+                index = combo.findText(current)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+
+                combo.currentTextChanged.connect(
+                    lambda text: self.update_object_prop(
+                        'logic_type',
+                        text,
+                    )
+                )
+
+                form.addRow(QLabel("Logic Type:"), combo)
+                continue
+
+            # Pickup item type.
+            if is_pickup and key == 'item_type':
+                combo = QComboBox()
+                combo.addItems([
+                    'health',
+                    'ammo',
+                    'weapon',
+                    'key',
+                    'custom',
+                ])
+
+                current = str(value or 'health')
+                index = combo.findText(current)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+
+                combo.currentTextChanged.connect(
+                    lambda text: self.update_object_prop(
+                        'item_type',
+                        text,
+                    )
+                )
+
+                form.addRow(QLabel("Item Type:"), combo)
+                continue
+
+            # Generic booleans.
+            if isinstance(value, bool):
+                cb = _make_checkbox(
+                    key.replace('_', ' ').title(),
+                    value,
+                    lambda checked, k=key: self.update_object_prop(
+                        k,
+                        checked,
+                    ),
+                    _Style.CHECKBOX,
+                )
+                form.addRow("", cb)
+                continue
+
+            # Generic integers.
+            if isinstance(value, int) and not isinstance(value, bool):
+                spin = QSpinBox()
+                spin.setRange(-2147483648, 2147483647)
+                spin.setValue(value)
+
+                spin.valueChanged.connect(
+                    lambda v, k=key: self.update_object_prop(k, v)
+                )
+
+                form.addRow(
+                    QLabel(key.replace('_', ' ').title() + ":"),
+                    spin,
+                )
+                continue
+
+            # Generic floats.
+            if isinstance(value, float):
+                spin = QDoubleSpinBox()
+                spin.setRange(-999999.0, 999999.0)
+                spin.setDecimals(3)
+                spin.setSingleStep(0.1)
+                spin.setValue(value)
+
+                spin.valueChanged.connect(
+                    lambda v, k=key: self.update_object_prop(k, v)
+                )
+
+                form.addRow(
+                    QLabel(key.replace('_', ' ').title() + ":"),
+                    spin,
+                )
+                continue
+
+            # Generic strings / everything else.
+            edit = QLineEdit(str(value) if value is not None else '')
+            edit.editingFinished.connect(
+                lambda e=edit, k=key: self.update_object_prop(
+                    k,
+                    e.text(),
+                )
+            )
+
+            form.addRow(
+                QLabel(key.replace('_', ' ').title() + ":"),
+                edit,
+            )
 
     def _build_monster_type_row(self, form, thing):
         combo = _make_combo(['human', 'flying'], thing.properties.get('monster_type', 'human'))

@@ -511,38 +511,62 @@ def _patch_property_editor():
 
     _orig_iterate = PropertyEditor._iterate_thing_properties
 
-    def _iterate_thing_properties(self, form, thing):
-        specs = owner = ttype = mgr = None
-        try:
-            props = getattr(thing, "properties", None)
-            ttype = props.get("type") if isinstance(props, dict) else None
-            if ttype:
-                mgr = get_manager()
-                specs = mgr.property_schema_for(ttype)
-                owner = mgr.plugin_for_type(ttype)
-        except Exception:
-            specs = owner = None
+def _iterate_thing_properties(self, form, thing, property_keys=None):
+    specs = owner = ttype = mgr = None
 
-        # Plugin-owned entity with a full schema → typed widgets for the whole
-        # panel. Otherwise the stock rows. Either way, plugin-registered extra
-        # fields are appended afterwards, so they work on built-in entities too.
-        rendered = False
-        if specs and owner is not None:
-            try:
-                _render_schema_rows(self, form, thing, specs)
-                rendered = True
-            except Exception as exc:
-                _log(f"schema render failed for '{getattr(thing, 'name', '?')}', "
-                     f"falling back ({exc})")
-        if not rendered:
-            _orig_iterate(self, form, thing)
+    try:
+        props = getattr(thing, "properties", None)
+        ttype = props.get("type") if isinstance(props, dict) else None
 
+        if ttype:
+            mgr = get_manager()
+            specs = mgr.property_schema_for(ttype)
+            owner = mgr.plugin_for_type(ttype)
+    except Exception:
+        specs = owner = None
+
+    # Plugin-owned entity with a full schema gets its schema-driven widgets.
+    # Otherwise use the normal PropertyEditor iterator. Pass property_keys
+    # through so the editor's explicit primary/advanced classification is
+    # preserved even when this plugin shim is installed.
+    rendered = False
+
+    if specs and owner is not None:
         try:
-            extra = mgr.extra_fields_for(ttype) if (mgr and ttype) else []
-            if extra:
-                _append_extra_fields(self, form, thing, extra)
+            # A plugin schema owns the complete rendering of its properties.
+            # Explicit property filtering is therefore not applied here.
+            _render_schema_rows(self, form, thing, specs)
+            rendered = True
         except Exception as exc:
-            _log(f"extra-field render failed ({exc})")
+            _log(
+                f"schema render failed for "
+                f"'{getattr(thing, 'name', '?')}', falling back ({exc})"
+            )
+
+    if not rendered:
+        _orig_iterate(
+            self,
+            form,
+            thing,
+            property_keys=property_keys,
+        )
+
+    try:
+        extra = (
+            mgr.extra_fields_for(ttype)
+            if (mgr and ttype)
+            else []
+        )
+
+        if extra:
+            _append_extra_fields(
+                self,
+                form,
+                thing,
+                extra,
+            )
+    except Exception as exc:
+        _log(f"extra-field render failed ({exc})")
 
     PropertyEditor._iterate_thing_properties = _iterate_thing_properties
 
