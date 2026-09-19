@@ -279,7 +279,7 @@ class BenchmarkDialog(QDialog):
         if label in ("current_world_phase1", "current_world_phase2"):
             base = float(self._requested_duration) if self._requested_duration is not None else self._player_area_sweep_duration()
             return base if label.endswith("phase1") else base * 0.5
-        if label in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
+        if label in ("current_world", "current_world_phase1", "current_world_phase2", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
             if self._requested_duration is not None:
                 return float(self._requested_duration)
             return self._player_area_sweep_duration()
