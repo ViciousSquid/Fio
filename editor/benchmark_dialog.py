@@ -331,7 +331,7 @@ class BenchmarkDialog(QDialog):
                     index += 1
                 data["brushes"] = brushes
                 self._bench.load_live_benchmark_world(self.main_window, data)
-                self._start_measurement(label, duration=0.5)
+                self._start_measurement(label, duration=self._test_duration(label))
             else:
                 raise RuntimeError("unknown live benchmark: %s" % label)
         except Exception:
