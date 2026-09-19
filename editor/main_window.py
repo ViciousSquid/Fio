@@ -153,11 +153,6 @@ class MainWindow(QMainWindow):
         self.load_config()
         self.load_key_bindings()
 
-        # One startup hardware probe shared by features that need to avoid
-        # workloads unsuitable for low-power machines.
-        from engine.shaders import detect_low_power_arm
-        self.low_power_hardware, self.low_power_hardware_reason = detect_low_power_arm()
-
         self.unsaved_changes = False
         self.file_path = None
         self.recent_files = []
