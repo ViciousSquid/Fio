@@ -999,12 +999,12 @@ Git commit: %s
             except Exception:
                 payload = None
 
+        diagnostics = self._read_worker_diagnostics()
         self._cleanup_worker_result_path()
         self._worker_process = None
 
         if not payload or not payload.get("ok"):
             error = (payload or {}).get("error")
-            diagnostics = self._read_worker_diagnostics()
             if not error:
                 error = "worker exited with code %s without producing a valid result" % exit_code
             if diagnostics:
