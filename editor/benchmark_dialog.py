@@ -84,11 +84,17 @@ class BenchmarkDialog(QDialog):
         self.brush_10000 = QCheckBox("Renderer scene: 10,000 brushes")
         self.brush_100000 = QCheckBox("Renderer scene: 100,000 brushes")
         self.io_chain_1000 = QCheckBox("I/O chain: 1,000 entities")
+        self.monsters_100 = QCheckBox("Procedural room: 100 monsters")
+        self.monsters_500 = QCheckBox("Procedural room: 500 monsters")
+        self.monsters_1000 = QCheckBox("Procedural room: 1,000 monsters")
         for checkbox in (
             self.brush_1000,
             self.brush_10000,
             self.brush_100000,
             self.io_chain_1000,
+            self.monsters_100,
+            self.monsters_500,
+            self.monsters_1000,
         ):
             checkbox.setToolTip(
                 "Run this deliberately large workload in addition to the standard stress tests."
@@ -123,6 +129,9 @@ class BenchmarkDialog(QDialog):
             self.brush_10000,
             self.brush_100000,
             self.io_chain_1000,
+            self.monsters_100,
+            self.monsters_500,
+            self.monsters_1000,
         ):
             checkbox.setEnabled(False)
         self.process = QProcess(self)
@@ -150,7 +159,20 @@ class BenchmarkDialog(QDialog):
         if self.io_chain_1000.isChecked():
             environment.insert("FIO_FULLSCREEN_BENCH_IO_CHAIN", "1000")
 
-        if self.additional_tests.isChecked() or brush_counts or self.io_chain_1000.isChecked():
+        monster_counts = []
+        if self.monsters_100.isChecked():
+            monster_counts.append("100")
+        if self.monsters_500.isChecked():
+            monster_counts.append("500")
+        if self.monsters_1000.isChecked():
+            monster_counts.append("1000")
+        if monster_counts:
+            environment.insert(
+                "FIO_FULLSCREEN_BENCH_MONSTERS", ",".join(monster_counts)
+            )
+
+        if (self.additional_tests.isChecked() or brush_counts
+                or self.io_chain_1000.isChecked() or monster_counts):
             environment.insert("FIO_FULLSCREEN_BENCH_ADDITIONAL", "1")
 
         self.process.setProcessEnvironment(environment)
@@ -186,6 +208,9 @@ class BenchmarkDialog(QDialog):
             self.brush_10000,
             self.brush_100000,
             self.io_chain_1000,
+            self.monsters_100,
+            self.monsters_500,
+            self.monsters_1000,
         ):
             checkbox.setEnabled(True)
 
