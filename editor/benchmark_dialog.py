@@ -312,7 +312,11 @@ class BenchmarkDialog(QDialog):
     def _run_live_io_stress(self):
         """Fire the generated relay chain through the live LogicThread I/O manager."""
         import sys as _sys
-        io_manager = getattr(self.main_window.view_3d.logic_thread, "io_manager", None)
+        view = self.main_window.view_3d
+        if not view.play_mode:
+            self.main_window.enter_play_mode()
+            QApplication.processEvents()
+        io_manager = getattr(view.logic_thread, "io_manager", None)
         if io_manager is None:
             raise RuntimeError("live Fio LogicThread has no IOManager")
 
@@ -340,6 +344,9 @@ class BenchmarkDialog(QDialog):
             "  Live I/O: fired OnTrigger through %d LogicRelay entities in %.3f ms"
             % (len(relays), elapsed * 1000.0)
         )
+        if view.play_mode:
+            self.main_window._exit_play_mode()
+            QApplication.processEvents()
 
     def _report_live_result(self, label, metrics):
         width = metrics.get("viewport_width", self.main_window.view_3d.width())
