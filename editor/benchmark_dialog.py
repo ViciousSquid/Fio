@@ -272,14 +272,12 @@ class BenchmarkDialog(QDialog):
             return self._current_world_sweep_duration()
         return {"procedural_100_monsters": 4.0, "procedural_500_monsters": 4.0, "procedural_1000_monsters": 5.0, "live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_apocalypse": 4.0}.get(label, 3.0)
 
-    def _current_world_bounds(self):
-        """Return conservative playable X/Z bounds from actual world geometry.
 
-        Use brush AABBs rather than brush centres so thin perimeter walls do not
-        make the benchmark think their centres are the playable boundary. Ignore
-        triggers, fog volumes, and Big World parked brushes because those are not
-        meaningful limits on where the player can actually move.
-        """
+    PLAYER_AREA_CELL_SIZE = 64.0
+    PLAYER_AREA_MAX_CELLS = 16384
+
+    def _current_world_bounds(self):
+        """Return the geometric bounds used only by the fallback path."""
         from engine.constants import brush_aabb_bounds
         from engine.spatial import authored_hidden
 
@@ -313,50 +311,172 @@ class BenchmarkDialog(QDialog):
             return x - 128.0, x + 128.0, z - 128.0, z + 128.0
 
         return (
-            min(b[0] for b in bounds),
-            max(b[2] for b in bounds),
-            min(b[1] for b in bounds),
-            max(b[3] for b in bounds),
+            min(item[0] for item in bounds),
+            max(item[2] for item in bounds),
+            min(item[1] for item in bounds),
+            max(item[3] for item in bounds),
         )
 
-    def _current_world_sweep_anchor(self, bounds):
-        """Locate a usable PlayerStart, or explicitly request the bounds fallback."""
-        min_x, max_x, min_z, max_z = bounds
-        things = getattr(self.main_window.state, "things", [])
+    def _find_player_start(self):
+        """Return the same first PlayerStart the game uses for spawning."""
+        from editor.things import PlayerStart
 
-        for thing in things:
-            if isinstance(thing, dict):
-                thing_type = thing.get("type", "")
-                pos = thing.get("pos")
-            else:
-                thing_type = thing.__class__.__name__
-                pos = getattr(thing, "pos", None)
-
-            if thing_type != "PlayerStart":
+        for thing in getattr(self.main_window.state, "things", []):
+            if not isinstance(thing, PlayerStart):
                 continue
+            pos = getattr(thing, "pos", None)
             if pos is None or len(pos) < 3:
-                continue
-
+                return None, "PlayerStart has no usable position"
             try:
                 x = float(pos[0])
                 z = float(pos[2])
             except (TypeError, ValueError, IndexError):
-                continue
+                return None, "PlayerStart has invalid coordinates"
             if not (math.isfinite(x) and math.isfinite(z)):
-                continue
+                return None, "PlayerStart has non-finite coordinates"
+            return (x, z), None
 
-            # A start outside the actual benchmark/playable bounds is not
-            # usable. Do not silently clamp it and report a normal player-area
-            # benchmark, because that would hide a malformed map.
-            if not (min_x <= x <= max_x and min_z <= z <= max_z):
-                continue
+        return None, "no usable PlayerStart"
 
-            return x, z, "PlayerStart", False
+    @staticmethod
+    def _clone_benchmark_player(x, y, z, angle):
+        """Create a lightweight Player state for one flood edge."""
+        from engine.player import Player
+        import glm
 
-        return None, None, "bounds fallback (no usable PlayerStart)", True
+        player = Player(float(x), float(z), angle=float(angle), physics_enabled=True)
+        player.pos = glm.vec3(float(x), float(y), float(z))
+        player.velocity = glm.vec3(0.0, 0.0, 0.0)
+        player.on_ground = True
+        player.ground_object = None
+        return player
+
+    def _flood_player_area(self, start_x, start_z):
+        """Flood reachable coarse cells using the real Player collision simulation.
+
+        Every edge is one coarse player-movement step. The probe uses the same
+        Player physics, SpatialGrid and terrain collision as Play Mode.
+        """
+        from engine.physics import SpatialGrid
+        import glm
+
+        view = self.main_window.view_3d
+        state = self.main_window.state
+        logic_thread = getattr(view, "logic_thread", None)
+
+        collision_brushes = list(getattr(state, "brushes", []))
+        if logic_thread is not None:
+            collision_brushes.extend(
+                getattr(logic_thread, "_model_collision_brushes", []) or []
+            )
+
+        grid = SpatialGrid(cell_size=512.0)
+        grid.populate(collision_brushes)
+        terrain = getattr(view, "terrain", None)
+
+        cell_size = float(self.PLAYER_AREA_CELL_SIZE)
+        max_cells = int(self.PLAYER_AREA_MAX_CELLS)
+        move_delta = cell_size / 200.0
+        tolerance = cell_size * 0.35
+
+        origin = self._clone_benchmark_player(start_x, 100.0, start_z, 0.0)
+        settled = False
+        zero_move = glm.vec3(0.0, 0.0, 0.0)
+        for _ in range(12):
+            origin.update(
+                0.1,
+                zero_move,
+                False,
+                False,
+                collision_brushes,
+                terrain=terrain,
+                spatial_grid=grid,
+            )
+            if origin.on_ground or origin.swimming:
+                settled = True
+                break
+
+        if not settled or origin.pos.y <= -1990.0:
+            return None, "player start could not settle onto a playable surface"
+
+        reachable = {(0, 0): (float(origin.pos.x), float(origin.pos.y), float(origin.pos.z))}
+        queue = [(0, 0)]
+        queue_index = 0
+        directions = ((1, 0), (-1, 0), (0, 1), (0, -1))
+
+        while queue_index < len(queue):
+            ix, iz = queue[queue_index]
+            queue_index += 1
+
+            if len(reachable) >= max_cells:
+                return None, (
+                    "playable flood exceeded the %d-cell safety limit before "
+                    "the reachable region was closed" % max_cells
+                )
+
+            current_x, current_y, current_z = reachable[(ix, iz)]
+
+            for dix, diz in directions:
+                key = (ix + dix, iz + diz)
+                if key in reachable:
+                    continue
+
+                target_x = start_x + key[0] * cell_size
+                target_z = start_z + key[1] * cell_size
+                angle = math.atan2(float(dix), float(diz))
+                probe = self._clone_benchmark_player(
+                    current_x, current_y, current_z, angle
+                )
+                probe.update(
+                    move_delta,
+                    glm.vec3(0.0, 0.0, 1.0),
+                    False,
+                    False,
+                    collision_brushes,
+                    terrain=terrain,
+                    spatial_grid=grid,
+                )
+
+                if not (
+                    math.isfinite(float(probe.pos.x))
+                    and math.isfinite(float(probe.pos.y))
+                    and math.isfinite(float(probe.pos.z))
+                ):
+                    continue
+                if probe.pos.y <= -1990.0:
+                    continue
+                if not (probe.on_ground or probe.swimming):
+                    continue
+                if abs(float(probe.pos.x) - target_x) > tolerance:
+                    continue
+                if abs(float(probe.pos.z) - target_z) > tolerance:
+                    continue
+                if probe._check_overlap(collision_brushes):
+                    continue
+
+                reachable[key] = (
+                    float(probe.pos.x),
+                    float(probe.pos.y),
+                    float(probe.pos.z),
+                )
+                queue.append(key)
+
+        xs = [start_x + key[0] * cell_size for key in reachable]
+        zs = [start_z + key[1] * cell_size for key in reachable]
+        half = cell_size * 0.5
+        return {
+            "bounds": (
+                min(xs) - half,
+                max(xs) + half,
+                min(zs) - half,
+                max(zs) + half,
+            ),
+            "cell_size": cell_size,
+            "cell_count": len(reachable),
+        }, None
 
     def _current_world_sweep_duration(self):
-        """Return the prepared local-sweep duration, or a map-scale fallback."""
+        """Return the prepared player-area sweep duration."""
         path = getattr(self, "_current_world_camera_path", None)
         if path is not None:
             return float(path[-1])
