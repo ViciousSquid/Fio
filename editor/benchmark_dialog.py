@@ -633,10 +633,11 @@ Git commit: %s
             self._append("<span style='color:#ff6666;'>Export failed.</span><pre>%s</pre>" % traceback.format_exc())
 
     def _live_stress_timeout_for(self, label):
-        """Return the same-process timeout for a live stress workload."""
-        if label == "monster_apocalypse":
-            return 60.0
-        return 30.0
+        """Return the same-process safety timeout for a live stress workload."""
+        # Live I/O can legitimately take around 44 seconds on low-power
+        # hardware.  Keep the safety ceiling at 60 seconds for every live
+        # stress workload rather than aborting a valid benchmark early.
+        return 60.0
 
     def _start_live_stress_monitor(self, label):
         """Start a non-destructive monitor for the live workload."""
