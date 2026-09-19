@@ -42,7 +42,7 @@ class BenchmarkTests:
             if self._requested_duration is not None:
                 return float(self._requested_duration)
             return self._player_area_sweep_duration()
-        return {"procedural_100_monsters": 4.0, "procedural_500_monsters": 4.0, "procedural_1000_monsters": 5.0, "live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_apocalypse": 4.0}.get(label, 3.0)
+        return {"procedural_50_monsters": 4.0, "procedural_100_monsters": 4.0, "procedural_500_monsters": 4.0, "procedural_1000_monsters": 5.0, "live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_apocalypse": 4.0}.get(label, 3.0)
     
     
     PLAYER_AREA_DEFAULT_RADIUS = 256.0
@@ -315,7 +315,7 @@ class BenchmarkTests:
                     "EditorState; 2D/3D views refreshed." % brush_count
                 )
     
-            elif label in ("procedural_100_monsters", "procedural_500_monsters",
+            elif label in ("procedural_50_monsters", "procedural_100_monsters", "procedural_500_monsters",
                            "procedural_1000_monsters", "monster_apocalypse"):
                 # The apocalypse workload is intentionally a worst-case 1000-monster
                 # + 1000-relay world on a large procedural map. It is capable of
