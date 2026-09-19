@@ -12,7 +12,7 @@ import platform
 import subprocess
 from datetime import datetime, timezone
 
-from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPushButton, QVBoxLayout, QApplication, QFileDialog, QTextBrowser
+from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPushButton, QVBoxLayout, QApplication, QFileDialog, QTextBrowser, QToolButton, QWidget
 from PyQt5.QtCore import QTimer
 import copy
 import time
@@ -95,13 +95,29 @@ class BenchmarkDialog(QDialog):
         self.status_label = QLabel("Ready.")
         layout.addWidget(self.status_label)
 
+        intro_label = QLabel(
+            "<b>Run Benchmark</b> analyses the currently loaded project"
+        )
+        layout.addWidget(intro_label)
+
+        stress_toggle = QToolButton()
+        stress_toggle.setText("or expand the list below for stress testing")
+        stress_toggle.setCheckable(True)
+        stress_toggle.setToolButtonStyle(4)  # QToolButton.ToolButtonTextOnly
+        stress_toggle.setArrowType(0)  # Qt.NoArrow; text provides the affordance.
+        layout.addWidget(stress_toggle)
+
+        self.stress_options = QWidget()
+        stress_layout = QVBoxLayout(self.stress_options)
+        stress_layout.setContentsMargins(12, 0, 0, 0)
+
         self.additional_tests = QCheckBox(
             "Additional stress tests (I/O, renderer, gameplay)"
         )
         self.additional_tests.setToolTip(
             "Run deliberately heavy workloads against the live Fio renderer, procedural world and I/O system."
         )
-        layout.addWidget(self.additional_tests)
+        stress_layout.addWidget(self.additional_tests)
 
         self.brush_1000 = QCheckBox("Renderer scene: 1,000 brushes")
         self.brush_10000 = QCheckBox("Renderer scene: 10,000 brushes")
@@ -124,7 +140,11 @@ class BenchmarkDialog(QDialog):
             checkbox.setToolTip(
                 "Run this deliberately large workload in addition to the standard stress tests."
             )
-            layout.addWidget(checkbox)
+            stress_layout.addWidget(checkbox)
+
+        self.stress_options.setVisible(False)
+        stress_toggle.toggled.connect(self.stress_options.setVisible)
+        layout.addWidget(self.stress_options)
 
         self.output = QTextBrowser()
         self.output.setOpenExternalLinks(False)
