@@ -2281,3 +2281,11 @@ Git commit: %s
         elif label == "live_io_1000" and view.play_mode:
             self.main_window._exit_play_mode()
             QApplication.processEvents()
+
+        # A live stress test reaches this method directly from _tick, so this
+        # method must complete the same two actions as the normal measurement
+        # path: publish the result and advance the queue. Without this, the
+        # dialog remains forever at "collecting results..." even though the
+        # workload itself has completed.
+        self._report_live_result(label, metrics)
+        self._begin_next()
