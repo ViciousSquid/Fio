@@ -238,13 +238,13 @@ class BenchmarkDialog(QDialog):
         """Choose a deterministic measurement duration from map scale.
 
         Approximate traversal speed is 250 world units/sec along the map
-        diagonal, with a 5-second floor and 30-second ceiling. This gives
+        diagonal, with a 5-second floor and 20-second ceiling. This gives
         roughly 15 seconds for a ~3,750-unit diagonal map and avoids making
         the camera artificially fast just to fit a fixed benchmark window.
         """
         min_x, max_x, min_z, max_z = self._current_world_bounds()
         diagonal = math.hypot(max_x - min_x, max_z - min_z)
-        return max(5.0, min(30.0, diagonal / 250.0))
+        return max(5.0, min(20.0, diagonal / 250.0))
 
     def _git_commit(self):
         try:
@@ -391,7 +391,7 @@ class BenchmarkDialog(QDialog):
         )
         self._append(
             "Camera sweep: traversing the loaded map for %.1f s "
-            "(map-scale dependent, 5–30 s)." % duration
+            "(map-scale dependent, 5–20 s)." % duration
         )
 
     def _advance_current_world_sweep(self):
