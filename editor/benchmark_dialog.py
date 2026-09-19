@@ -120,7 +120,7 @@ class BenchmarkDialog(QDialog):
         self._measurement_watchdog_deadline = 0.0
         self._preparation_deadline = 0.0
         self._preparation_timeout_s = 30.0
-        self._measurement_watchdog_extra_s = 30.0
+        self._measurement_watchdog_extra_s = 60.0
         self._original_window_flags = None
         self._original_window_geometry = None
         self._original_window_state = None
