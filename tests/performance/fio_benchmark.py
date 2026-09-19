@@ -19,6 +19,13 @@ import statistics
 import sys
 import time
 
+# This file is intentionally runnable directly (without pytest).  When Python
+# executes a script by path, sys.path starts at tests/performance rather than
+# the repository root, so add the Fio root before importing test helpers.
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 from tests.helpers import gl as glh
 from tests.helpers.worlds import box_brush, make_thing
 from editor.procedural_generator import create_map_data
