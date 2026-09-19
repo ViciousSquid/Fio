@@ -399,6 +399,136 @@ def _run_monster_stress(count):
     return results
 
 
+def _generate_monster_apocalypse():
+    """Generate the optional worst-case Fio stress world.
+
+    This intentionally goes beyond the editor's normal UI limits.  The point
+    is not to represent a sensible game level; it is to find the point where
+    the complete engine becomes overloaded.
+    """
+    data = _generate_procedural_map(monsters=1000, relay_count=1000, seed=0xF10)
+
+    # Push the procedural world to its maximum generator dimensions/room
+    # complexity, while keeping geometry creation in the production generator.
+    # create_map_data() itself accepts these values even though the editor UI
+    # deliberately exposes smaller monster counts and room-size controls.
+    import random
+    random.seed(0xF10)
+    params = {
+        "world_width": 4096,
+        "world_height": 4096,
+        "min_room": 256,
+        "max_room": 640,
+        "room_count": 24,
+        "wall_tex": "default.png",
+        "floor_tex": "default.png",
+        "enable_floors": True,
+        "floor_height": 512,
+        "floor_room_count": 16,
+        "spawn_monsters": True,
+        "monster_count": 1000,
+        "spawn_health": True,
+        "health_count": 64,
+    }
+    data = create_map_data(params)
+
+    # Add a large real I/O graph to the generated world.  The normal benchmark
+    # materializer converts these to actual Thing/OutputConnection instances.
+    things = data["things"]
+    relay_start = len(things)
+    for i in range(1000):
+        things.append({
+            "type": "logicrelay",
+            "pos": [128.0 + (i % 50) * 96.0, 32.0, 128.0 + (i // 50) * 96.0],
+            "properties": {
+                "type": "logicrelay",
+                "name": "ApocalypseRelay_%d" % i,
+                "id": "apocalypse_relay_%d" % i,
+                "fire_once": False,
+                "_io_connections": [],
+            },
+            "io_connections": [],
+        })
+
+    # Chain plus local fan-out: one trigger exercises a long traversal while
+    # each relay also addresses several nearby relays.
+    for i in range(1000):
+        targets = [(i + 1) % 1000, (i + 7) % 1000, (i + 31) % 1000]
+        data["things"][relay_start + i]["properties"]["_io_connections"] = [
+            {
+                "output": "OnTrigger",
+                "target": "ApocalypseRelay_%d" % target,
+                "target_id": "apocalypse_relay_%d" % target,
+                "input": "Trigger",
+                "parameter": "",
+                "delay": 0.0,
+                "fire_once": False,
+            }
+            for target in targets
+            if target != i
+        ]
+
+    return data
+
+
+def _run_monster_apocalypse():
+    """Optional final test: deliberately overload the complete Fio stack."""
+    data = _generate_monster_apocalypse()
+    state = _materialize_generated_map(data)
+    brushes, things = state.brushes, state.things
+
+    results = []
+    for mode, width, height in (
+        ("windowed-sized", 1280, 720),
+        ("fullscreen-sized", 1920, 1080),
+    ):
+        glh.reset_texture_cache()
+        with glh.GLTestContext(width, height) as context:
+            renderer = glh.make_renderer()
+            try:
+                # Very short warmup: this is explicitly a stress-to-failure
+                # test, not a polished benchmark workload.
+                samples = _render_sample_set(
+                    renderer, context, brushes, things, warmup=1, samples=10
+                )
+                mean = statistics.fmean(samples)
+                results.append(_timing_result(
+                    "FINAL_MONSTER_APOCALYPSE_%s" % mode,
+                    "MAX procedural world / 1000 monsters / 1000 relays / dense I/O",
+                    samples,
+                    mode=mode,
+                    monster_count=1000,
+                    brush_count=len(brushes),
+                    entity_count=len(things),
+                    resolution="%dx%d" % (width, height),
+                    average_fps=1.0 / mean if mean else float("inf"),
+                ))
+            finally:
+                try:
+                    renderer.cleanup()
+                except Exception:
+                    pass
+
+    # Also exercise the real editor/play-mode lifecycle on this exact monster
+    # world.  Movement is intentionally short so the final test remains a
+    # bounded benchmark rather than a hang if the machine becomes saturated.
+    start = time.perf_counter()
+    final_pos = _exercise_real_play_mode(data, seconds=2.0)
+    elapsed = time.perf_counter() - start
+    results.append(_timing_result(
+        "FINAL_MONSTER_APOCALYPSE_play_mode",
+        "MAX procedural world / 1000 monsters / 1000 relays / real Play Mode movement",
+        [elapsed],
+        monster_count=1000,
+        brush_count=len(brushes),
+        entity_count=len(things),
+        final_camera_pos=final_pos,
+    ))
+
+    glh.reset_texture_cache()
+    return results
+
+
 def _selected_monster_counts():
     raw = os.environ.get("FIO_FULLSCREEN_BENCH_MONSTERS", "")
     if not raw:
@@ -811,6 +941,9 @@ def run_additional_stress_tests():
 
     for count in _selected_monster_counts():
         results.extend(_run_monster_stress(count))
+
+    if os.environ.get("FIO_FULLSCREEN_BENCH_APOCALYPSE") == "1":
+        results.extend(_run_monster_apocalypse())
 
     return results
 
