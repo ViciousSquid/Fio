@@ -84,6 +84,10 @@ class BenchmarkDialog(QDialog):
         self._results = []
         self._measurement_active = False
         self._measurement_deadline = 0.0
+        self._measurement_watchdog_deadline = 0.0
+        self._preparation_deadline = 0.0
+        self._preparation_timeout_s = 30.0
+        self._measurement_watchdog_extra_s = 30.0
         self._original_window_flags = None
         self._original_window_geometry = None
         self._original_window_state = None
@@ -556,6 +560,8 @@ class BenchmarkDialog(QDialog):
         self._append_test_separator(label)
         self._append("<span style='color:#ffb15a; font-weight:bold;'>START TEST</span> — %s" % label)
         self._append("Reset to baseline; loading isolated workload...")
+        self._preparation_deadline = time.perf_counter() + self._preparation_timeout_s
+        self.status_label.setText("Preparing: %s (30 s preparation limit)" % label)
 
         try:
             if label in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
@@ -573,6 +579,7 @@ class BenchmarkDialog(QDialog):
                 elif label == "editor_windowed_1920":
                     self._enter_benchmark_editor_window_mode(1920, 1080)
                 self._prepare_current_world_sweep()
+                self._check_preparation_budget(label)
                 self._start_measurement(label, duration=self._test_duration(label))
             elif label.startswith("procedural_"):
                 data = self._bench._generate_procedural_map(
@@ -615,6 +622,16 @@ class BenchmarkDialog(QDialog):
         except Exception:
             self._finish_with_error(traceback.format_exc())
 
+    def _check_preparation_budget(self, label):
+        elapsed = time.perf_counter() - self._phase_started
+        if time.perf_counter() > self._preparation_deadline:
+            raise TimeoutError(
+                "%s exceeded the %.0f s preparation limit after %.1f s. The workload was not measured; restoring the original world."
+                % (label, self._preparation_timeout_s, elapsed)
+            )
+        self.status_label.setText("Preparing: %s — %.1f s elapsed (%.0f s limit)" % (label, elapsed, self._preparation_timeout_s))
+        QApplication.processEvents()
+
     def _start_measurement(self, label, duration=1.0):
         # A measurement must be completely initialised before Qt is allowed to
         # re-enter the event loop.  _tick is timer-driven and processEvents()
@@ -623,6 +640,7 @@ class BenchmarkDialog(QDialog):
         self._current = (label, duration)
         self._phase_started = time.perf_counter()
         self._measurement_deadline = time.perf_counter() + float(duration)
+        self._measurement_watchdog_deadline = self._measurement_deadline + self._measurement_watchdog_extra_s
         self._measurement_active = True
         view = self.main_window.view_3d
         view.sysmon.reset_metrics()
@@ -637,6 +655,8 @@ class BenchmarkDialog(QDialog):
 
         try:
             app = QApplication.instance()
+            if time.perf_counter() > self._measurement_watchdog_deadline:
+                raise TimeoutError("%s exceeded its measurement watchdog; the test did not complete reliably." % self._current[0])
             view = self.main_window.view_3d
             if self._current and self._current[0] in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
                 self._advance_current_world_sweep()
@@ -650,6 +670,7 @@ class BenchmarkDialog(QDialog):
             # Qt events and re-enter _tick.
             self._measurement_active = False
             self._timer.stop()
+            self.status_label.setText("Completed: %s — collecting results..." % self._current[0])
             capture = view.sysmon.end_benchmark_capture()
             metrics = self._benchmark_metrics(capture, time.perf_counter() - self._phase_started)
             live_metrics = view.sysmon.get_metrics()
