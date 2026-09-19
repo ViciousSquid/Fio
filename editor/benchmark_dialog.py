@@ -890,10 +890,18 @@ Git commit: %s
             metrics = result.get("sysmon") or {}
             if average_fps is not None:
                 self.output.append(
-                    '<div style="margin-top:10px; padding:8px 0 2px 0; border-top:2px solid #555; white-space:nowrap;">'
-                    '<span style="font-size:25px; font-weight:bold; color:#63d471;">average FPS:</span>'
-                    '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.2f</span>'
-                    '</div>' % float(average_fps)
+                    '<table cellspacing="0" cellpadding="0" style="margin-top:10px; margin-bottom:2px;">'
+                    '<tr>'
+                    '<td width="24" rowspan="2" bgcolor="#63d471"></td>'
+                    '<td height="2" bgcolor="#63d471" style="font-size:2px; line-height:2px;"></td>'
+                    '</tr>'
+                    '<tr>'
+                    '<td style="padding:6px 16px 2px 12px; white-space:nowrap;">'
+                    '<span style="font-size:25px; font-weight:bold; color:#63d471;">Average FPS:</span>'
+                    '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.2f FPS</span>'
+                    '</td>'
+                    '</tr>'
+                    '</table>' % float(average_fps)
                 )
                 self.output.append(
                     '<div style="color:#aaa; padding:4px 0;">frame time %.2f ms &nbsp; • &nbsp; p95 %.2f ms%s</div>'
@@ -1107,41 +1115,9 @@ Git commit: %s
             )
             self._original_play_mode = bool(self.main_window.view_3d.play_mode)
             self._original_unsaved_changes = bool(
-                getattr(self.main_window, "unsaved_changes", False)
-            )
-            camera = self.main_window.view_3d.camera
-            self._original_window_flags = self.main_window.windowFlags()
-            self._original_window_geometry = self.main_window.geometry()
-            self._original_window_state = self.main_window.windowState()
-            self._original_window_fullscreen = self.main_window.isFullScreen()
-
-            self._original_camera = (
-                (float(camera.pos.x), float(camera.pos.y), float(camera.pos.z)),
-                float(camera.yaw),
-                float(camera.pitch),
-                float(camera.fov),
-            )
-
-            self._queue = []
-            repetitions = max(1, int(self._requested_repetitions))
-            self._current_phase_results = []
             for repetition in range(1, repetitions + 1):
                 self._queue.append(("current_world_phase1", repetition))
                 self._queue.append(("current_world_phase2", repetition))
-            if self.additional_tests.isChecked():
-                self._queue.extend([
-                    ("procedural_100_monsters", 100),
-                    ("live_io_1000", 1000),
-                ])
-            if self.io_chain_1000.isChecked():
-                self._queue.append(("live_io_1000", 1000))
-            if self.monsters_100.isChecked():
-                self._queue.append(("procedural_100_monsters", 100))
-            if self.monsters_500.isChecked():
-                self._queue.append(("procedural_500_monsters", 500))
-            if self.monsters_1000.isChecked():
-                self._queue.append(("procedural_1000_monsters", 1000))
-            if self.monster_apocalypse.isChecked():
                 self._queue.append(("monster_apocalypse", 1000))
             if self.borderless_window.isChecked():
                 self._queue.append(("borderless_window", None))
@@ -1378,6 +1354,207 @@ Git commit: %s
             camera.yaw = yaw
             camera.pitch = pitch
 
+
+    def _run_live_stress_test(self, label, value):
+        """Run a stress workload inside this already-running Fio instance.
+
+        Stress tests deliberately use the same MainWindow, EditorState,
+        QtGameView, Play Mode, LogicThread and SysMon as the normal editor
+        benchmark. No subprocess, second MainWindow, test GL context or
+        synthetic renderer is involved.
+        """
+        app = QApplication.instance()
+        if app is None:
+            raise RuntimeError("Fio QApplication is not running")
+
+        bench = self._bench
+        window = self.main_window
+        view = window.view_3d
+        duration = self._test_duration(label)
+
+        self._timer.stop()
+        self._measurement_active = False
+        self.status_label.setText("Preparing live workload: %s" % label)
+        QApplication.processEvents()
+
+        try:
+            if label in ("live_1000_brushes", "live_10000_brushes", "live_100000_brushes"):
+                brush_count = int(value)
+
+                # Use the production benchmark scene generator, but load its
+                # actual brush dictionaries into the live EditorState so the
+                # editor's 2D and 3D views are rendering the generated scene.
+                data = bench._generate_procedural_map(monsters=0, relay_count=32)
+                brushes, _things = bench._make_brush_stress_scene(brush_count)
+
+                # The isolated helper historically spaces duplicate brushes
+                # very far apart. Repack them into a compact grid for the live
+                # editor so the generated geometry is genuinely visible in
+                # the normal 2D/3D workspace instead of being miles apart.
+                repacked = []
+                columns = max(1, int(math.ceil(math.sqrt(brush_count))))
+                spacing = 96.0
+                for index, brush in enumerate(brushes):
+                    clone = copy.deepcopy(brush)
+                    pos = list(clone.get("pos", [0.0, 0.0, 0.0]))
+                    row, column = divmod(index, columns)
+                    pos[0] = float(column) * spacing
+                    pos[2] = float(row) * spacing
+                    clone["pos"] = pos
+                    clone["id"] = "benchmark_live_brush_%d" % index
+                    repacked.append(clone)
+
+                data["brushes"] = repacked
+                bench.load_live_benchmark_world(window, data)
+                QApplication.processEvents()
+
+                self._append(
+                    "  Live brush scene: created %d real brushes in the existing "
+                    "EditorState; 2D/3D views refreshed." % brush_count
+                )
+
+                metrics = bench.run_live_renderer_sample(
+                    window, duration=duration, warmup=0.5
+                )
+                metrics.update({
+                    "brush_count": brush_count,
+                    "entity_count": len(window.state.things),
+                    "benchmark_live": True,
+                })
+                self._report_live_result(label, metrics)
+
+            elif label in (
+                "procedural_100_monsters",
+                "procedural_500_monsters",
+                "procedural_1000_monsters",
+                "monster_apocalypse",
+            ):
+                monster_count = int(value)
+                if label == "monster_apocalypse":
+                    data = bench._generate_monster_apocalypse()
+                else:
+                    data = bench._generate_procedural_map(
+                        monsters=monster_count,
+                        relay_count=32,
+                        seed=getattr(bench, "BENCHMARK_MAP_SEED", 0xF10),
+                    )
+
+                # Load the generated map into the existing editor, then enter
+                # real Play Mode in that same MainWindow. Monster AI, LogicThread,
+                # renderer and SysMon therefore all belong to the user's Fio.
+                bench.load_live_benchmark_world(window, data)
+                QApplication.processEvents()
+
+                preparation = bench.prepare_live_monster_test(window)
+                self._append(
+                    "  Live Play Mode: %d monsters, %d aggro seeds, god_mode=%s."
+                    % (
+                        preparation.get("monster_count", monster_count),
+                        preparation.get("aggro_seeded", 0),
+                        preparation.get("god_mode", False),
+                    )
+                )
+
+                try:
+                    metrics = bench.run_live_renderer_sample(
+                        window, duration=duration, warmup=0.5
+                    )
+                finally:
+                    bench.finish_live_monster_test(window)
+
+                metrics.update({
+                    "monster_count": preparation.get("monster_count", monster_count),
+                    "entity_count": len(window.state.things),
+                    "benchmark_live": True,
+                    "play_mode": True,
+                })
+                self._report_live_result(label, metrics)
+
+            elif label == "live_io_1000":
+                data = bench._generate_procedural_map(
+                    monsters=0,
+                    relay_count=1000,
+                    seed=getattr(bench, "BENCHMARK_MAP_SEED", 0xF10),
+                )
+                bench.load_live_benchmark_world(window, data)
+                QApplication.processEvents()
+
+                if view.play_mode:
+                    window._exit_play_mode()
+                    QApplication.processEvents()
+                window.enter_play_mode()
+                if not view.play_mode:
+                    raise RuntimeError("Fio failed to enter Play Mode for live I/O benchmark")
+
+                io_manager = getattr(view.logic_thread, "io_manager", None)
+                if io_manager is None:
+                    raise RuntimeError("live Fio LogicThread has no IOManager")
+
+                relays = [
+                    thing for thing in window.state.things
+                    if str(thing.properties.get("name", "")).startswith("BenchmarkRelay_")
+                ]
+                if not relays:
+                    raise RuntimeError("live I/O benchmark generated no LogicRelay entities")
+
+                first = min(
+                    relays,
+                    key=lambda thing: int(
+                        str(thing.properties.get("name", "BenchmarkRelay_0")).rsplit("_", 1)[1]
+                    ),
+                )
+
+                import sys as _sys
+                old_limit = _sys.getrecursionlimit()
+                _sys.setrecursionlimit(max(old_limit, 10000))
+                try:
+                    io_manager.reset()
+                    start = time.perf_counter()
+                    io_manager.fire_output(first, "OnTrigger")
+                    io_elapsed = time.perf_counter() - start
+
+                    # Keep the real LogicThread/renderer alive for the FPS
+                    # measurement immediately after the I/O traversal.
+                    metrics = bench.run_live_renderer_sample(
+                        window, duration=duration, warmup=0.5
+                    )
+                finally:
+                    _sys.setrecursionlimit(old_limit)
+                    if view.play_mode:
+                        window._exit_play_mode()
+                        QApplication.processEvents()
+
+                metrics.update({
+                    "entity_count": len(window.state.things),
+                    "io_hops": len(relays),
+                    "hops_per_second": len(relays) / io_elapsed if io_elapsed > 0.0 else 0.0,
+                    "io_elapsed_ms": io_elapsed * 1000.0,
+                    "benchmark_live": True,
+                })
+                self._append(
+                    "  Live I/O: fired OnTrigger through %d LogicRelay entities in %.3f ms."
+                    % (len(relays), io_elapsed * 1000.0)
+                )
+                self._report_live_result(label, metrics)
+
+            else:
+                raise ValueError("unknown live stress benchmark: %s" % label)
+
+        finally:
+            # The normal queue reset restores the original map before the next
+            # test. Ensure a failed live monster test cannot leave Play Mode
+            # running into that reset.
+            if view.play_mode and label.startswith(("procedural_", "monster_")):
+                try:
+                    bench.finish_live_monster_test(window)
+                except Exception:
+                    try:
+                        window._exit_play_mode()
+                    except Exception:
+                        pass
+
+        self._begin_next()
+
     def _begin_next(self):
         if not self._queue:
             self._restore_original()
@@ -1415,10 +1592,10 @@ Git commit: %s
                 self._check_preparation_budget(label)
                 self._start_measurement(label, duration=self._test_duration(label))
             else:
-                # Every deliberately risky workload is process-isolated. The
-                # parent Qt thread only starts the child process and polls it;
-                # it never loads the pathological workload itself.
-                self._start_worker_test(label, value)
+                # Stress workloads are live too: they are loaded into the
+                # already-running MainWindow and measured through its Qt/GL
+                # event loop. No second Fio process is used.
+                self._run_live_stress_test(label, value)
         except Exception:
             self._finish_with_error(traceback.format_exc())
 
@@ -1739,10 +1916,23 @@ Git commit: %s
                 '</table>' % (phase_label, avg_fps)
             )
         else:
-            self.output.append('<div style="margin-top:10px; padding:8px 0 2px 0; border-top:2px solid #555; white-space:nowrap;">'
-                               '<span style="font-size:25px; font-weight:bold; color:#63d471;">average FPS:</span>'
-                               '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.2f</span>'
-                               '</div>' % avg_fps)
+            # Every live FPS result uses the same left-aligned green result
+            # box as Phase 1/2. This keeps the benchmark report visually
+            # consistent regardless of which live workload produced it.
+            self.output.append(
+                '<table cellspacing="0" cellpadding="0" style="margin-top:10px; margin-bottom:2px;">'
+                '<tr>'
+                '<td width="24" rowspan="2" bgcolor="#63d471"></td>'
+                '<td height="2" bgcolor="#63d471" style="font-size:2px; line-height:2px;"></td>'
+                '</tr>'
+                '<tr>'
+                '<td style="padding:6px 16px 2px 12px; white-space:nowrap;">'
+                '<span style="font-size:25px; font-weight:bold; color:#63d471;">Average FPS:</span>'
+                '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.2f FPS</span>'
+                '</td>'
+                '</tr>'
+                '</table>' % avg_fps
+            )
         self.output.append('<div style="color:#aaa; padding:2px 0 4px 0;">Average FPS = 1000 / mean(captured frame time). Wall-clock FPS is reported separately.</div>')
         self.output.append('<div style="border-top:2px solid #63d471; margin:14px 0 8px 0;"></div>')
         self.output.ensureCursorVisible()
