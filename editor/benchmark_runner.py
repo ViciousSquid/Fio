@@ -954,7 +954,7 @@ class BenchmarkRunner:
                 '<td height="2" bgcolor="#63d471" style="font-size:2px; line-height:2px;"></td></tr>'
                 '<tr><td style="padding:6px 16px 2px 12px; white-space:nowrap;">'
                 '<span style="font-size:25px; font-weight:bold; color:#63d471;">Hops/second:</span>'
-                '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.0f hops/second</span>'
+                '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.0f</span>'
                 '</td></tr></table>'
                 '<div style="color:#aaa; padding:4px 0;">%d hops &nbsp; • &nbsp; %.3f ms elapsed</div>'
                 '</div>'
