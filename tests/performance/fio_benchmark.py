@@ -497,8 +497,7 @@ def _generate_monster_apocalypse():
     # materializer converts these to actual Thing/OutputConnection instances.
     things = data["things"]
     relay_start = len(things)
-    for i in range(1000):
-        things.append({
+    for i in range(1000):        things.append({
             "type": "logicrelay",
             "pos": [128.0 + (i % 50) * 96.0, 32.0, 128.0 + (i // 50) * 96.0],
             "properties": {
@@ -884,7 +883,8 @@ def _exercise_real_play_mode(data, seconds=0.75):
 
     window.keys_pressed.add(Qt.Key_W)
     window.keys_pressed.add(Qt.Key_D)
-    deadline = time.perf_counter() + seconds    while time.perf_counter() < deadline:
+    deadline = time.perf_counter() + seconds
+    while time.perf_counter() < deadline:
         window.view_3d.update_loop()
         app.processEvents()
         time.sleep(0.005)
@@ -997,8 +997,7 @@ def _run_brush_count_stress(counts):
                     mean = statistics.fmean(samples)
                     results.append(
                         _timing_result(
-                            "brush_scene_%d_%s" % (brush_count, mode),
-                            "%d normal Fio brushes + %d lights (%d shadowed)"
+                            "brush_scene_%d_%s" % (brush_count, mode),                            "%d normal Fio brushes + %d lights (%d shadowed)"
                             % (
                                 brush_count,
                                 len(things),
