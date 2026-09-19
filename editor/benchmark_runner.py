@@ -763,8 +763,6 @@ class BenchmarkRunner:
         self._timer.start()
     
     
-    @staticmethod
-
     def _restore_original(self):
         """Restore the real MainWindow to the state captured before benchmarking."""
         self._timer.stop()
