@@ -278,13 +278,12 @@ def _generate_procedural_map(monsters=0, relay_count=32, seed=1337):
                 "name": "BenchmarkRelay_%d" % i,
                 "id": "benchmark_relay_%d" % i,
                 "fire_once": False,
-                "_io_connections": [],
             },
             "io_connections": [],
         })
 
     for i in range(relay_count - 1):
-        things[relay_start + i]["properties"]["_io_connections"] = [{
+        things[relay_start + i]["io_connections"] = [{
             "output": "OnTrigger",
             "target": "BenchmarkRelay_%d" % (i + 1),
             "target_id": "benchmark_relay_%d" % (i + 1),
@@ -312,7 +311,7 @@ def _materialize_generated_map(data):
         properties = raw.get("properties", raw)
         name = str(properties.get("name", ""))
         if name.startswith(("BenchmarkRelay_", "ApocalypseRelay_")):
-            generated[name] = properties
+            generated[name] = raw
 
     loaded = {
         str(t.properties.get("name", "")): t
@@ -322,13 +321,13 @@ def _materialize_generated_map(data):
         )
     }
 
-    for name, properties in generated.items():
+    for name, raw in generated.items():
         source = loaded.get(name)
         if source is None:
             raise RuntimeError("generated benchmark relay did not load: %s" % name)
 
         source.properties["_io_connections"] = []
-        for connection in properties.get("_io_connections", []):
+        for connection in raw.get("io_connections", []):
             target_name = connection.get("target", "")
             target = loaded.get(target_name)
             if target is None:
@@ -461,7 +460,6 @@ def _generate_monster_apocalypse():
                 "name": "ApocalypseRelay_%d" % i,
                 "id": "apocalypse_relay_%d" % i,
                 "fire_once": False,
-                "_io_connections": [],
             },
             "io_connections": [],
         })
@@ -470,7 +468,7 @@ def _generate_monster_apocalypse():
     # each relay also addresses several nearby relays.
     for i in range(1000):
         targets = [(i + 1) % 1000, (i + 7) % 1000, (i + 31) % 1000]
-        data["things"][relay_start + i]["properties"]["_io_connections"] = [
+        data["things"][relay_start + i]["io_connections"] = [
             {
                 "output": "OnTrigger",
                 "target": "ApocalypseRelay_%d" % target,
@@ -544,6 +542,110 @@ def _run_monster_apocalypse():
 
     glh.reset_texture_cache()
     return results
+
+
+
+def run_live_renderer_sample(window, duration=1.0, warmup=0.75):
+    """Measure the already-running Fio viewport through its real Qt event loop.
+
+    No second MainWindow, QOpenGLWidget, OpenGL context, or Renderer_F is
+    created. The existing viewport paints normally while the benchmark dialog
+    is open, and SysMon records the frames that actually reached paintGL().
+    """
+    from PyQt5.QtWidgets import QApplication
+
+    view = window.view_3d
+    app = QApplication.instance()
+    if app is None:
+        raise RuntimeError("Fio QApplication is not running")
+
+    view.sysmon.reset_metrics()
+    warmup_deadline = time.perf_counter() + float(warmup)
+    while time.perf_counter() < warmup_deadline:
+        view.update()
+        app.processEvents()
+        time.sleep(0.001)
+
+    view.sysmon.reset_metrics()
+    start = time.perf_counter()
+    deadline = start + float(duration)
+    while time.perf_counter() < deadline:
+        view.update()
+        app.processEvents()
+        time.sleep(0.001)
+
+    # Let the final queued paint reach the same SysMon instance before reading it.
+    view.update()
+    app.processEvents()
+    metrics = view.sysmon.get_metrics()
+    metrics["viewport_width"] = int(view.width())
+    metrics["viewport_height"] = int(view.height())
+    metrics["wall_time_s"] = time.perf_counter() - start
+    return metrics
+
+
+def load_live_benchmark_world(window, data):
+    """Load benchmark content into the existing Fio editor/runtime state."""
+    window.state.load_from_data(data)
+    window.update_all_ui()
+    window.update_views()
+    window.view_3d.update()
+    window.view_top.update()
+    window.view_side.update()
+    window.view_front.update()
+
+
+def run_live_play_sample(window, data, seconds=2.0):
+    """Run real Play Mode in the existing Fio window and measure SysMon."""
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QApplication
+
+    load_live_benchmark_world(window, data)
+    app = QApplication.instance()
+    if app is None:
+        raise RuntimeError("Fio QApplication is not running")
+
+    if window.view_3d.play_mode:
+        window._exit_play_mode()
+        app.processEvents()
+
+    window.enter_play_mode()
+    if not window.view_3d.play_mode:
+        raise RuntimeError("Fio failed to enter Play Mode")
+
+    window.keys_pressed.add(Qt.Key_W)
+    window.keys_pressed.add(Qt.Key_D)
+    try:
+        metrics = run_live_renderer_sample(
+            window,
+            duration=seconds,
+            warmup=0.25,
+        )
+    finally:
+        window.keys_pressed.discard(Qt.Key_W)
+        window.keys_pressed.discard(Qt.Key_D)
+
+    final_pos = getattr(window.view_3d.camera, "pos", None)
+    if final_pos is not None:
+        final_pos = (
+            float(final_pos.x),
+            float(final_pos.y),
+            float(final_pos.z),
+        )
+    metrics["final_camera_pos"] = final_pos
+    window._exit_play_mode()
+    app.processEvents()
+    return metrics
+
+
+def run_live_benchmark_world(window, data, label, duration=1.0):
+    """Load one world into the live Fio instance and benchmark its renderer."""
+    load_live_benchmark_world(window, data)
+    metrics = run_live_renderer_sample(window, duration=duration)
+    metrics["label"] = label
+    metrics["brush_count"] = len(window.state.brushes)
+    metrics["entity_count"] = len(window.state.things)
+    return metrics
 
 
 def _selected_monster_counts():
