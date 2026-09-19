@@ -139,6 +139,21 @@ class SysMon:
         if self.expanded != expanded:
             self.expanded = expanded
 
+    def reset_metrics(self):
+        """Reset the frame-history portion of SysMon for a fresh measurement."""
+        self._ft_buffer.fill(0)
+        self._ft_index = 0
+        self._ft_count = 0
+        self._ft_max = 16.67
+        self._ft_max_age = 0
+        self._fps = 0.0
+        self._vram_cache = (None, None)
+        self._vram_cache_time = 0
+        self._fps_cached_val = -1
+        self._ft_cached_val = -1.0
+        self._stats_cache = {}
+        self._stats_cache_time = 0
+
     def record_frame_time(self, delta_ms):
         """Record a frame time. Uses ring buffer — O(1)."""
         old_val = self._ft_buffer[self._ft_index]
