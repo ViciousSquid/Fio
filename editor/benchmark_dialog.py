@@ -1165,15 +1165,16 @@ Git commit: %s
         self.status_label.setStyleSheet("")
         self.output.clear()
         self._results = []
+        self._queue = []
         self.export_button.setEnabled(False)
         self.export_button.setVisible(False)
         self.status_label.setText("Preparing live Fio benchmark...")
         self._set_controls_enabled(False)
-        # Keep the test selector collapsed while a benchmark is running so
-        # the result pane retains the vertical space needed for live output.
+
         stress_toggle = self.findChild(QToolButton)
         if stress_toggle is not None:
             stress_toggle.setChecked(False)
+
         self._running = True
         self.throbber.setVisible(True)
         self._stop_monitor()
@@ -1182,17 +1183,60 @@ Git commit: %s
             from tests.performance import fio_benchmark as bench
             self._bench = bench
 
-            # This is the actual editor state. We restore it when the benchmark
-            # finishes, rather than creating a second Fio instance.
+            # Snapshot the real running editor. Every benchmark is restored to
+            # this state between tests; no second Fio instance is created.
             self._original_level_data = copy.deepcopy(
                 self.main_window.state.get_level_data()
             )
             self._original_play_mode = bool(self.main_window.view_3d.play_mode)
             self._original_unsaved_changes = bool(
-            for repetition in range(1, repetitions + 1):
-                self._queue.append(("current_world_phase1", repetition))
-                self._queue.append(("current_world_phase2", repetition))
+                getattr(self.main_window, "unsaved_changes", False)
+            )
+
+            camera = self.main_window.view_3d.camera
+            self._original_camera = (
+                (float(camera.pos.x), float(camera.pos.y), float(camera.pos.z)),
+                float(camera.yaw),
+                float(camera.pitch),
+                float(camera.fov),
+            )
+
+            repetitions = max(1, int(self._requested_repetitions or 1))
+            if has_current_map:
+                for repetition in range(1, repetitions + 1):
+                    self._queue.append(("current_world_phase1", repetition))
+                    self._queue.append(("current_world_phase2", repetition))
+
+            # "Additional stress tests" is the bundle selector. Individual
+            # checkboxes can also be selected independently.
+            if self.additional_tests.isChecked():
+                self._queue.extend((
+                    ("live_io_1000", 1000),
+                    ("live_1000_brushes", 1000),
+                    ("live_10000_brushes", 10000),
+                    ("procedural_100_monsters", 100),
+                    ("procedural_500_monsters", 500),
+                    ("procedural_1000_monsters", 1000),
+                    ("monster_apocalypse", 1000),
+                ))
+
+            if self.io_chain_1000.isChecked():
+                self._queue.append(("live_io_1000", 1000))
+            if self.brush_1000.isChecked():
+                self._queue.append(("live_1000_brushes", 1000))
+            if self.brush_10000.isChecked():
+                self._queue.append(("live_10000_brushes", 10000))
+            if self.brush_100000.isChecked():
+                self._queue.append(("live_100000_brushes", 100000))
+            if self.monsters_100.isChecked():
+                self._queue.append(("procedural_100_monsters", 100))
+            if self.monsters_500.isChecked():
+                self._queue.append(("procedural_500_monsters", 500))
+            if self.monsters_1000.isChecked():
+                self._queue.append(("procedural_1000_monsters", 1000))
+            if self.monster_apocalypse.isChecked():
                 self._queue.append(("monster_apocalypse", 1000))
+
             if self.borderless_window.isChecked():
                 self._queue.append(("borderless_window", None))
             if self.fullscreen_window.isChecked():
@@ -1202,20 +1246,19 @@ Git commit: %s
             if self.editor_windowed_1920.isChecked():
                 self._queue.append(("editor_windowed_1920", None))
 
-            if self.brush_1000.isChecked():
-                self._queue.append(("live_1000_brushes", 1000))
-            if self.brush_10000.isChecked():
-                self._queue.append(("live_10000_brushes", 10000))
-            if self.brush_100000.isChecked():
-                self._queue.append(("live_100000_brushes", 100000))
-
             seen = set()
-            self._queue = [item for item in self._queue if not (item[0] in seen or seen.add(item[0]))]
+            self._queue = [
+                item for item in self._queue
+                if not (item[0] in seen or seen.add(item[0]))
+            ]
 
-            self._append("LIVE BENCHMARK: using the existing Fio MainWindow, QtGameView and renderer.")
+            self._append(
+                "LIVE BENCHMARK: using the existing Fio MainWindow, QtGameView "
+                "and renderer. Stress timeout supervision never terminates Fio."
+            )
             self._timer.start()
-            self._stop_monitor()
             self._begin_next()
+
         except Exception:
             self._finish_with_error(traceback.format_exc())
 
