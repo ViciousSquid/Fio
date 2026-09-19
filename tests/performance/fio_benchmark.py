@@ -419,10 +419,20 @@ def _make_brush_stress_scene(brush_count):
 
 
 def _run_monster_stress(count):
-    """Generate a real procedural Fio room populated with N monsters."""
+    """Generate a real procedural Fio room populated with N monsters.
+
+    Frame count is scaled with entity count so large stress workloads remain
+    bounded while still measuring the real renderer.
+    """
     data = _generate_procedural_map(
         monsters=count, relay_count=32, seed=BENCHMARK_MAP_SEED
     )
+    frame_budget = {
+        100: (3, 10),
+        500: (2, 5),
+        1000: (1, 2),
+    }
+    warmup, samples_count = frame_budget.get(count, (1, 2))
     state = _materialize_generated_map(data)
     brushes, things = state.brushes, state.things
     results = []
@@ -436,7 +446,12 @@ def _run_monster_stress(count):
             renderer = glh.make_renderer()
             try:
                 samples, sysmon_metrics = _render_sample_set(
-                    renderer, context, brushes, things, warmup=3, samples=10
+                    renderer,
+                    context,
+                    brushes,
+                    things,
+                    warmup=warmup,
+                    samples=samples_count,
                 )
                 mean = statistics.fmean(samples)
                 results.append(_timing_result(
@@ -986,12 +1001,24 @@ def _run_renderer_stress():
 
 
 def _run_brush_count_stress(counts):
-    """Measure the real renderer against 1K/10K/100K normal Fio brushes."""
+    """Measure the real renderer against 1K/10K/100K normal Fio brushes.
+
+    Large scenes are measured with fewer frames so the benchmark measures the
+    renderer without turning the test harness itself into a multi-minute
+    workload. Scene construction remains part of the isolated workload and
+    remains protected by the worker watchdog.
+    """
     results = []
+    frame_budget = {
+        1000: (3, 10),
+        10000: (2, 3),
+        100000: (1, 1),
+    }
 
     for brush_count in counts:
         glh.reset_texture_cache()
         brushes, things = _make_brush_stress_scene(brush_count)
+        warmup, samples_count = frame_budget.get(brush_count, (1, 1))
 
         for mode, width, height in (
             ("windowed-sized", 1280, 720),
@@ -1005,8 +1032,8 @@ def _run_brush_count_stress(counts):
                         context,
                         brushes,
                         things,
-                        warmup=3,
-                        samples=10,
+                        warmup=warmup,
+                        samples=samples_count,
                     )
                     mean = statistics.fmean(samples)
                     results.append(
