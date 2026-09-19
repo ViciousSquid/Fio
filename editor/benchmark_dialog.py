@@ -101,11 +101,17 @@ class BenchmarkDialog(QDialog):
         layout.addWidget(intro_label)
 
         stress_toggle = QToolButton()
-        stress_toggle.setText("or expand the list below for stress testing")
+        stress_toggle.setText("See tests")
         stress_toggle.setCheckable(True)
-        stress_toggle.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        stress_toggle.setArrowType(Qt.NoArrow)
+        stress_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        stress_toggle.setArrowType(Qt.DownArrow)
+        stress_toggle.setAutoRaise(True)
         layout.addWidget(stress_toggle)
+
+        def update_stress_arrow(expanded):
+            stress_toggle.setArrowType(Qt.UpArrow if expanded else Qt.DownArrow)
+
+        stress_toggle.toggled.connect(update_stress_arrow)
 
         self.stress_options = QWidget()
         stress_layout = QVBoxLayout(self.stress_options)
