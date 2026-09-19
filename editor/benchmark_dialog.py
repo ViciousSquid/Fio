@@ -269,7 +269,7 @@ class BenchmarkDialog(QDialog):
         # Use the prepared local sweep duration so empty regions outside the
         # actual play area cannot stretch the measurement.
         if label in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
-            return self._current_world_sweep_duration()
+            return self._player_area_sweep_duration()
         return {"procedural_100_monsters": 4.0, "procedural_500_monsters": 4.0, "procedural_1000_monsters": 5.0, "live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_apocalypse": 4.0}.get(label, 3.0)
 
 
@@ -475,9 +475,9 @@ class BenchmarkDialog(QDialog):
             "cell_count": len(reachable),
         }, None
 
-    def _current_world_sweep_duration(self):
+    def _player_area_sweep_duration(self):
         """Return the prepared player-area sweep duration."""
-        path = getattr(self, "_current_world_camera_path", None)
+        path = getattr(self, "_player_area_camera_path", None)
         if path is not None:
             return float(path[-1])
 
@@ -1360,11 +1360,11 @@ Git commit: %s
         duration = max(5.0, min(20.0, travel_distance / 250.0))
 
         camera = self.main_window.view_3d.camera
-        self._current_world_camera_path = (
+        self._player_area_camera_path = (
             center_x, center_z, half_x, half_z,
             float(camera.pos.y), float(camera.pitch), duration
         )
-        self._current_world_sweep_metadata = {
+        self._player_area_sweep_metadata = {
             "mode": "player-area",
             "anchor_source": "bounds fallback" if fallback else "PlayerStart",
             "fallback": fallback,
@@ -1392,11 +1392,11 @@ Git commit: %s
             )
 
     def _advance_player_area_sweep(self):
-        path = getattr(self, "_current_world_camera_path", None)
+        path = getattr(self, "_player_area_camera_path", None)
         if path is None:
             return
         center_x, center_z, half_x, half_z, y, pitch, duration = path
-        bounds = getattr(self, "_current_world_sweep_metadata", {}).get("bounds")
+        bounds = getattr(self, "_player_area_sweep_metadata", {}).get("bounds")
         elapsed = time.perf_counter() - self._phase_started
         angle = min(1.0, elapsed / max(duration, 0.001)) * (2.0 * math.pi)
         x = center_x + half_x * math.sin(angle)
@@ -1541,7 +1541,7 @@ Git commit: %s
             metrics.update({"viewport_width": int(view.width()), "viewport_height": int(view.height()), "vram_used_mb": live_metrics.get("vram_used_mb"), "vram_total_mb": live_metrics.get("vram_total_mb"), "visible_brushes": live_metrics.get("visible_brushes", 0), "culled_brushes": live_metrics.get("culled_brushes", 0), "total_brushes": live_metrics.get("total_brushes", 0), "visible_tris": live_metrics.get("visible_tris", 0), "culled_tris": live_metrics.get("culled_tris", 0), "visible_surfaces": live_metrics.get("visible_surfaces", 0), "culled_surfaces": live_metrics.get("culled_surfaces", 0)})
             label = self._current[0]
             if label in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
-                sweep = getattr(self, "_current_world_sweep_metadata", {})
+                sweep = getattr(self, "_player_area_sweep_metadata", {})
                 metrics.update({
                     "camera_sweep_mode": sweep.get("mode", "player-area"),
                     "camera_sweep_anchor": sweep.get("anchor_source", "unknown"),
