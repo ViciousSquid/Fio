@@ -18,6 +18,7 @@ import platform
 import statistics
 import sys
 import time
+import traceback
 
 # This file is intentionally runnable directly (without pytest).  When Python
 # executes a script by path, sys.path starts at tests/performance rather than
@@ -1397,7 +1398,60 @@ def format_results(results, info=None):
     return "\n".join(lines)
 
 
+def _run_worker_test(label):
+    """Run exactly one risky benchmark in an isolated worker process."""
+    if label == "procedural_100_monsters":
+        return _run_monster_stress(100)
+    if label == "procedural_500_monsters":
+        return _run_monster_stress(500)
+    if label == "procedural_1000_monsters":
+        return _run_monster_stress(1000)
+    if label == "live_io_1000":
+        return [_run_io_chain_stress(1000)]
+    if label == "live_1000_brushes":
+        return _run_brush_count_stress((1000,))
+    if label == "live_10000_brushes":
+        return _run_brush_count_stress((10000,))
+    if label == "live_100000_brushes":
+        return _run_brush_count_stress((100000,))
+    if label == "monster_apocalypse":
+        return _run_monster_apocalypse()
+    raise ValueError("unsupported isolated benchmark worker: %s" % label)
+
+
+def _write_worker_result(path, payload):
+    """Atomically publish worker results so the parent never reads a partial JSON file."""
+    temporary = path + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+    os.replace(temporary, path)
+
+
+def _run_worker_main(label, output_path):
+    payload = {
+        "format": "fio-benchmark-worker-v1",
+        "ok": False,
+        "label": label,
+    }
+    try:
+        payload["results"] = _run_worker_test(label)
+        payload["ok"] = True
+    except BaseException:
+        # The parent process can surface this as a failed/aborted individual
+        # test while continuing the rest of the benchmark queue.
+        payload["error"] = traceback.format_exc()
+    _write_worker_result(output_path, payload)
+    return 0 if payload["ok"] else 1
+
+
 def main():
+    worker_label = os.environ.get("FIO_FULLSCREEN_BENCH_WORKER_TEST")
+    worker_output = os.environ.get("FIO_FULLSCREEN_BENCH_WORKER_OUT")
+    if worker_label:
+        if not worker_output:
+            raise RuntimeError("isolated benchmark worker has no output path")
+        raise SystemExit(_run_worker_main(worker_label, worker_output))
+
     additional_tests = (
         os.environ.get("FIO_FULLSCREEN_BENCH_ADDITIONAL") == "1"
     )
