@@ -160,7 +160,7 @@ class BenchmarkDialog(QDialog):
             checkbox.setEnabled(enabled)
 
     def _append(self, text):
-        self.output.appendPlainText(text)
+        self.output.append(text)
         self.output.ensureCursorVisible()
         QApplication.processEvents()
 
@@ -303,7 +303,7 @@ class BenchmarkDialog(QDialog):
                     monsters=int(value), relay_count=32, seed=1337 + int(value)
                 )
                 self._bench.load_live_benchmark_world(self.main_window, data)
-                self._start_measurement(label)
+                self._start_measurement(label, duration=self._test_duration(label))
             elif label == "live_io_1000":
                 data = self._bench._generate_procedural_map(
                     monsters=0, relay_count=1000, seed=0x10
@@ -464,7 +464,7 @@ class BenchmarkDialog(QDialog):
         result.update({"test": label, "entities": len(self.main_window.state.things), "one_percent_low_fps": low_1, "zero_point_one_percent_low_fps": low_01})
         self._results.append(result)
         self.export_button.setEnabled(True)
-        self.output.append('<div style="background:#222; border:1px solid #555; padding:10px; margin:4px 0 10px 0;"><div style="font-size:25px; font-weight:bold; color:#ff9a32;">%.2f FPS</div><div style="font-size:15px; font-weight:bold; color:#eeeeee;">%s</div><div style="color:#aaa;">%dx%d &nbsp; • &nbsp; %.2f ms average frame &nbsp; • &nbsp; %.2f ms p95</div><div style="color:#aaa;">%d frames &nbsp; • &nbsp; %.2f s measured &nbsp; • &nbsp; 1%% low %.2f FPS &nbsp; • &nbsp; 0.1%% low %.2f FPS</div><div style="color:#aaa;">VRAM %s &nbsp; • &nbsp; brushes %d visible / %d culled / %d total &nbsp; • &nbsp; entities %d</div></div>' % (avg_fps, label, width, height, avg_ms, p95_ms, frames, duration, low_1, low_01, self._format_vram(metrics), metrics.get("visible_brushes", 0), metrics.get("culled_brushes", 0), metrics.get("total_brushes", 0), result["entities"]))
+        self.output.append('<div style="background:#222; border:1px solid #555; padding:10px; margin:4px 0 10px 0;"><div style="font-size:25px; font-weight:bold; color:#ff9a32;">%.2f FPS</div><div style="font-size:15px; font-weight:bold; color:#eeeeee;">%s</div><div style="color:#aaa;">%dx%d &nbsp; • &nbsp; %.2f ms average frame &nbsp; • &nbsp; %.2f ms p95</div><div style="color:#aaa;">%d frames &nbsp; • &nbsp; %.2f s measured &nbsp; • &nbsp; 1%% low %.2f FPS &nbsp; • &nbsp; 0.1%% low %.2f FPS</div><div style="color:#aaa;">VRAM %s &nbsp; • &nbsp; brushes %d visible / %d culled / %d total &nbsp; • &nbsp; entities %d</div></div>' % (avg_fps, label, width, height, avg_ms, float(metrics.get("median_frame_time_ms", 0.0)), p95_ms, frames, duration, low_1, low_01, self._format_vram(metrics), metrics.get("visible_brushes", 0), metrics.get("culled_brushes", 0), metrics.get("total_brushes", 0), result["entities"]))
         self.output.ensureCursorVisible()
         QApplication.processEvents()
     @staticmethod
