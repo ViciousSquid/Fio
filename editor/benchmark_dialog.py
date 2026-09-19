@@ -81,6 +81,8 @@ class BenchmarkDialog(QDialog):
         self._running = False
         self._restoring = False
         self._results = []
+        self._measurement_active = False
+        self._measurement_deadline = 0.0
 
         self.setWindowTitle("Fio Benchmark")
         self.resize(900, 650)
@@ -258,6 +260,8 @@ class BenchmarkDialog(QDialog):
 
     def _reset_between_tests(self):
         """Reset the live Fio instance to the original world before each test."""
+        self._timer.stop()
+        self._measurement_active = False
         if self.main_window.view_3d.play_mode:
             self.main_window._exit_play_mode()
             QApplication.processEvents()
@@ -303,6 +307,7 @@ class BenchmarkDialog(QDialog):
                     monsters=int(value), relay_count=32, seed=1337 + int(value)
                 )
                 self._bench.load_live_benchmark_world(self.main_window, data)
+                self._bench.prepare_live_monster_test(self.main_window)
                 self._start_measurement(label, duration=self._test_duration(label))
             elif label == "live_io_1000":
                 data = self._bench._generate_procedural_map(
@@ -313,6 +318,7 @@ class BenchmarkDialog(QDialog):
             elif label == "monster_apocalypse":
                 data = self._bench._generate_monster_apocalypse()
                 self._bench.load_live_benchmark_world(self.main_window, data)
+                self._bench.prepare_live_monster_test(self.main_window, aggro_fraction=0.10)
                 self._start_measurement(label, duration=self._test_duration(label))
             elif label.startswith("live_") and label.endswith("_brushes"):
                 count = int(label.split("_")[1])
@@ -338,20 +344,23 @@ class BenchmarkDialog(QDialog):
             self._finish_with_error(traceback.format_exc())
 
     def _start_measurement(self, label, duration=1.0):
+        # A measurement must be completely initialised before Qt is allowed to
+        # re-enter the event loop.  _tick is timer-driven and processEvents()
+        # below can dispatch it immediately.
+        self._timer.stop()
         self._current = (label, duration)
         self._phase_started = time.perf_counter()
-        # Set the deadline before processing events. processEvents() can
-        # re-enter _tick immediately, so _measurement_deadline must already
-        # exist when the timer is active.
         self._measurement_deadline = time.perf_counter() + float(duration)
-        self.main_window.view_3d.sysmon.reset_metrics()
-        self.main_window.view_3d.update()
+        self._measurement_active = True
+        view = self.main_window.view_3d
+        view.sysmon.reset_metrics()
+        view.sysmon.begin_benchmark_capture()
+        view.update()
         QApplication.processEvents()
-        self.main_window.view_3d.sysmon.begin_benchmark_capture()
         self._timer.start()
 
     def _tick(self):
-        if not self._running:
+        if not self._running or not self._measurement_active:
             return
 
         try:
@@ -363,6 +372,10 @@ class BenchmarkDialog(QDialog):
             if time.perf_counter() < self._measurement_deadline:
                 return
 
+            # Disarm the measurement before any reporting/teardown can pump
+            # Qt events and re-enter _tick.
+            self._measurement_active = False
+            self._timer.stop()
             frame_times = view.sysmon.end_benchmark_capture()
             metrics = self._benchmark_metrics(frame_times, time.perf_counter() - self._phase_started)
             live_metrics = view.sysmon.get_metrics()
@@ -373,29 +386,16 @@ class BenchmarkDialog(QDialog):
                 self._run_live_io_stress()
             self._report_live_result(label, metrics)
 
-            if label == "monster_apocalypse":
-                # Exercise the real game lifecycle on the exact world currently
-                # visible in the editor. This is not a synthetic renderer call.
-                self.main_window.enter_play_mode()
-                if not view.play_mode:
-                    raise RuntimeError("Fio failed to enter Play Mode")
-                from PyQt5.QtCore import Qt
-                self.main_window.keys_pressed.add(Qt.Key_W)
-                self.main_window.keys_pressed.add(Qt.Key_D)
-                play_deadline = time.perf_counter() + 2.0
-                while time.perf_counter() < play_deadline:
-                    view.update()
-                    app.processEvents()
-                    time.sleep(0.001)
-                self.main_window.keys_pressed.discard(Qt.Key_W)
-                self.main_window.keys_pressed.discard(Qt.Key_D)
+            if label.startswith("procedural_") or label == "monster_apocalypse":
+                # Monster tests already ran inside real Play Mode during the
+                # measurement.  God mode kept the player alive while AI,
+                # combat, infighting and monster I/O were active.
                 pos = view.camera.pos
                 self._append(
-                    "  Play Mode: %.3f s, final camera=(%.1f, %.1f, %.1f)"
-                    % (2.0, float(pos.x), float(pos.y), float(pos.z))
+                    "  Play Mode: god_mode=True, AI active, infighting active, final camera=(%.1f, %.1f, %.1f)"
+                    % (float(pos.x), float(pos.y), float(pos.z))
                 )
-                self.main_window._exit_play_mode()
-                app.processEvents()
+                self._bench.finish_live_monster_test(self.main_window)
 
             self._begin_next()
         except Exception:
@@ -513,6 +513,7 @@ class BenchmarkDialog(QDialog):
                 QApplication.processEvents()
 
             self._timer.stop()
+            self._measurement_active = False
             self._running = False
             self._set_controls_enabled(True)
             if failed:
@@ -530,6 +531,7 @@ class BenchmarkDialog(QDialog):
 
     def _finish_with_error(self, details):
         self._timer.stop()
+        self._measurement_active = False
         self._running = False
         self._append(details)
         self._restore_original(failed=True)
