@@ -1454,7 +1454,13 @@ Git commit: %s
             )
 
     def _clamp_player_area_camera(self, desired_x, desired_z):
-        """Clamp a spiral position to a reachable, collision-safe camera point."""
+        """Clamp a spiral position to a reachable, collision-safe camera point.
+
+        The playable flood was generated from the real Player collision system.
+        The flood point in each cell is therefore the safe anchor for that cell;
+        the camera is kept biased toward that safe point, especially at the
+        boundary of the reachable region.
+        """
         path = getattr(self, "_player_area_camera_path", None)
         if path is None:
             return float(desired_x), float(desired_z)
@@ -1468,7 +1474,9 @@ Git commit: %s
 
         anchor_x = float(path["center_x"])
         anchor_z = float(path["center_z"])
-        cell_size = float(getattr(self, "_player_area_cell_size", self.PLAYER_AREA_CELL_SIZE))
+        cell_size = float(
+            getattr(self, "_player_area_cell_size", self.PLAYER_AREA_CELL_SIZE)
+        )
         cells = getattr(self, "_player_area_reachable_cells", None)
         points = getattr(self, "_player_area_reachable_points", None)
         if not cells or not points:
@@ -1477,7 +1485,6 @@ Git commit: %s
         dx = float(desired_x) - anchor_x
         dz = float(desired_z) - anchor_z
         distance = math.hypot(dx, dz)
-
         key = (
             int(round(dx / cell_size)),
             int(round(dz / cell_size)),
@@ -1485,8 +1492,8 @@ Git commit: %s
 
         selected_key = key
         if selected_key not in cells:
-            # Move back toward PlayerStart along the desired radial line until
-            # the spiral re-enters the reachable flood.
+            # Walk back toward PlayerStart along the requested spiral ray until
+            # it re-enters the reachable flood.
             steps = max(1, int(math.ceil(distance / cell_size)))
             selected_key = (0, 0)
             for step in range(1, steps + 1):
@@ -1507,67 +1514,32 @@ Git commit: %s
 
         safe_x = float(safe_point[0])
         safe_z = float(safe_point[2])
-        candidate_x = safe_x
-        candidate_z = safe_z
 
-        if selected_key == key:
-            # Keep the continuous spiral where the whole coarse cell is
-            # reachable, but constrain it around the known-safe flood point.
-            blend = 0.70
-            candidate_x = safe_x + (float(desired_x) - safe_x) * blend
-            candidate_z = safe_z + (float(desired_z) - safe_z) * blend
-
-        # Use the real player collision test along the safe->candidate segment.
-        # This catches wall intersections inside a coarse playable cell.
-        logic_thread = getattr(self.main_window.view_3d, "logic_thread", None)
-        collision_brushes = list(getattr(self.main_window.state, "brushes", []))
-        if logic_thread is not None:
-            collision_brushes.extend(
-                getattr(logic_thread, "_model_collision_brushes", []) or []
+        # Boundary cells are deliberately kept closer to their known-safe
+        # flood point. This preserves a small wall/void margin rather than
+        # running the camera all the way to the coarse cell edge.
+        is_boundary = any(
+            (selected_key[0] + dx, selected_key[1] + dz) not in cells
+            for dx, dz in (
+                (-1, -1), (0, -1), (1, -1),
+                (-1, 0),            (1, 0),
+                (-1, 1),  (0, 1),  (1, 1),
             )
-        terrain = getattr(self.main_window.view_3d, "terrain", None)
-        from engine.physics import SpatialGrid
-        import glm
-
-        grid = SpatialGrid(cell_size=512.0)
-        grid.populate(collision_brushes)
-
-        probe_y = float(safe_point[1])
-        distance_to_candidate = math.hypot(
-            candidate_x - safe_x,
-            candidate_z - safe_z,
         )
-        best_t = 1.0
-        probe = self._clone_benchmark_player(
-            candidate_x, probe_y, candidate_z, 0.0
-        )
-        if probe._check_overlap(collision_brushes):
-            low = 0.0
-            high = 1.0
-            for _ in range(8):
-                mid = (low + high) * 0.5
-                test_x = safe_x + (candidate_x - safe_x) * mid
-                test_z = safe_z + (candidate_z - safe_z) * mid
-                test_probe = self._clone_benchmark_player(
-                    test_x, probe_y, test_z, 0.0
-                )
-                if test_probe._check_overlap(collision_brushes):
-                    high = mid
-                else:
-                    low = mid
-            if distance_to_candidate > 0.0:
-                best_t = max(
-                    0.0,
-                    low - (
-                        float(self.PLAYER_AREA_CAMERA_MARGIN)
-                        / distance_to_candidate
-                    ),
-                )
-            else:
-                best_t = 0.0
+        blend = 0.40 if is_boundary else 0.70
 
-        candidate_x = safe_x + (candidate_x - safe_x) * best_t
-        candidate_z = safe_z + (candidate_z - safe_z) * best_t
+        candidate_x = safe_x + (float(desired_x) - safe_x) * blend
+        candidate_z = safe_z + (float(desired_z) - safe_z) * blend
+
+        # A small explicit inward bias provides the requested safety margin
+        # when the spiral is being clamped to the playable boundary.
+        if is_boundary and distance > 0.0:
+            margin = min(float(self.PLAYER_AREA_CAMERA_MARGIN), distance * 0.25)
+            inward_x = -dx / distance
+            inward_z = -dz / distance
+            candidate_x += inward_x * margin
+            candidate_z += inward_z * margin
+
         return candidate_x, candidate_z
 
     def _advance_player_area_sweep(self):
