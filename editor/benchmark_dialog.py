@@ -1186,7 +1186,31 @@ Git commit: %s
         self._stop_monitor()
 
         try:
+            # benchmark_dialog.py lives in editor/, while fio_benchmark.py lives
+            # under the repository root. Put this Fio checkout first so a
+            # globally installed package named "tests" cannot shadow Fio's
+            # own tests.performance package.
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            if repo_root not in sys.path:
+                sys.path.insert(0, repo_root)
+            else:
+                sys.path.remove(repo_root)
+                sys.path.insert(0, repo_root)
+
+            import importlib
+            importlib.invalidate_caches()
             from tests.performance import fio_benchmark as bench
+
+            expected_benchmark = os.path.abspath(
+                os.path.join(repo_root, "tests", "performance", "fio_benchmark.py")
+            )
+            actual_benchmark = os.path.abspath(getattr(bench, "__file__", ""))
+            if actual_benchmark != expected_benchmark:
+                raise ImportError(
+                    "Fio benchmark module was shadowed: expected %s, imported %s"
+                    % (expected_benchmark, actual_benchmark)
+                )
+
             self._bench = bench
 
             # Snapshot the real running editor. Every benchmark is restored to
