@@ -7,8 +7,6 @@ uses Fio runtime APIs directly and deliberately does not depend on pytest.
 import os
 import sys
 
-from PyQt5.QtCore import QProcess
-from PyQt5.QtGui import QTextCursor
 from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout, QApplication
 from PyQt5.QtCore import QTimer
 import copy
@@ -90,7 +88,7 @@ class BenchmarkDialog(QDialog):
             "Additional stress tests (I/O, renderer, CSG)"
         )
         self.additional_tests.setToolTip(
-            "Run deliberately heavy workloads for Fio's I/O dispatcher, renderer and CSG geometry."
+            "Run deliberately heavy workloads against the live Fio renderer, procedural world and I/O system."
         )
         layout.addWidget(self.additional_tests)
 
@@ -177,6 +175,7 @@ class BenchmarkDialog(QDialog):
             if self.additional_tests.isChecked():
                 self._queue.extend([
                     ("procedural_100_monsters", 100),
+                    ("live_io_1000", 1000),
                 ])
             if self.monsters_100.isChecked():
                 self._queue.append(("procedural_100_monsters", 100))
@@ -220,6 +219,12 @@ class BenchmarkDialog(QDialog):
                 )
                 self._bench.load_live_benchmark_world(self.main_window, data)
                 self._start_measurement(label)
+            elif label == "live_io_1000":
+                data = self._bench._generate_procedural_map(
+                    monsters=0, relay_count=1000, seed=0x10
+                )
+                self._bench.load_live_benchmark_world(self.main_window, data)
+                self._start_measurement(label, duration=0.5)
             elif label == "monster_apocalypse":
                 data = self._bench._generate_monster_apocalypse()
                 self._bench.load_live_benchmark_world(self.main_window, data)
@@ -227,8 +232,6 @@ class BenchmarkDialog(QDialog):
             elif label.startswith("live_") and label.endswith("_brushes"):
                 count = int(label.split("_")[1])
                 data = self._bench._generate_procedural_map(monsters=0, relay_count=32)
-                state = self._bench._materialize_generated_map(data)
-                data["brushes"] = state.brushes
                 # Duplicate actual generated Fio brush records to the requested
                 # size, then load them through the real EditorState.
                 source = list(data["brushes"])
@@ -273,6 +276,9 @@ class BenchmarkDialog(QDialog):
 
             metrics = view.sysmon.get_metrics()
             label = self._current[0]
+
+            if label == "live_io_1000":
+                self._run_live_io_stress()
             self._report_live_result(label, metrics)
 
             if label == "monster_apocalypse":
@@ -302,6 +308,38 @@ class BenchmarkDialog(QDialog):
             self._begin_next()
         except Exception:
             self._finish_with_error(traceback.format_exc())
+
+    def _run_live_io_stress(self):
+        """Fire the generated relay chain through the live LogicThread I/O manager."""
+        import sys as _sys
+        io_manager = getattr(self.main_window.view_3d.logic_thread, "io_manager", None)
+        if io_manager is None:
+            raise RuntimeError("live Fio LogicThread has no IOManager")
+
+        relays = [
+            t for t in self.main_window.state.things
+            if str(t.properties.get("name", "")).startswith("BenchmarkRelay_")
+        ]
+        if not relays:
+            raise RuntimeError("live I/O benchmark found no generated LogicRelay entities")
+
+        first = min(relays, key=lambda t: int(
+            str(t.properties.get("name", "BenchmarkRelay_0")).rsplit("_", 1)[1]
+        ))
+        old_limit = _sys.getrecursionlimit()
+        _sys.setrecursionlimit(max(old_limit, 10000))
+        try:
+            start = time.perf_counter()
+            io_manager.reset()
+            io_manager.fire_output(first, "OnTrigger")
+            elapsed = time.perf_counter() - start
+        finally:
+            _sys.setrecursionlimit(old_limit)
+
+        self._append(
+            "  Live I/O: fired OnTrigger through %d LogicRelay entities in %.3f ms"
+            % (len(relays), elapsed * 1000.0)
+        )
 
     def _report_live_result(self, label, metrics):
         width = metrics.get("viewport_width", self.main_window.view_3d.width())
@@ -373,8 +411,6 @@ class BenchmarkDialog(QDialog):
             self._restore_original()
             return
         super().reject()
-
-    def reject(self):
         if self._running:
             self._finish_with_error("Benchmark cancelled; restoring original world...")
             self._restore_original()
