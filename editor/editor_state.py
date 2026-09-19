@@ -285,11 +285,13 @@ class EditorState:
 
         return serialized
 
-    def _deserialize_brushes(self, brushes_data):
+    def _deserialize_brushes(self, brushes_data, yield_hook=None):
         """Deserialize brushes with I/O connections."""
         result = []
 
-        for brush_data in brushes_data:
+        for index, brush_data in enumerate(brushes_data):
+            if yield_hook is not None and index % 64 == 0:
+                yield_hook()
             brush = brush_data.copy()
 
             # Backfill stable ID for legacy maps
@@ -311,8 +313,12 @@ class EditorState:
 
         return result
 
-    def load_from_data(self, level_data):
-        """Populates the scene from a dictionary."""
+    def load_from_data(self, level_data, *, yield_hook=None, save_undo=True):
+        """Populates the scene from a dictionary.
+
+        ``yield_hook`` is an optional cooperative callback used by long-running
+        imports. Normal editor loads remain unchanged.
+        """
         self._invalidate_entity_caches()
 
         # Handle both old and new format
@@ -320,7 +326,7 @@ class EditorState:
 
         if version >= 2:
             # New format with I/O connections stored separately
-            self.brushes = self._deserialize_brushes(level_data.get('brushes', []))
+            self.brushes = self._deserialize_brushes(level_data.get('brushes', []), yield_hook=yield_hook)
         else:
             # Old format - brushes are plain dicts
             self.brushes = level_data.get('brushes', [])
@@ -346,7 +352,9 @@ class EditorState:
         # Load things
         things_data = level_data.get('things', [])
         new_things = []
-        for t_data in things_data:
+        for index, t_data in enumerate(things_data):
+            if yield_hook is not None and index % 25 == 0:
+                yield_hook()
             if t_data.get('type') == 'Model':
                 model_kwargs = {k: v for k, v in t_data.items() if k != 'type'}
                 new_things.append(Model(**model_kwargs))
@@ -379,7 +387,8 @@ class EditorState:
             # at least once before the first Play in this session.
             self.bake_state.mark_dirty()
 
-        self.save_state()
+        if save_undo:
+            self.save_state()
 
     def _migrate_legacy_target(self, brush):
         """Migrate old 'target' property to I/O connection for brushes."""
