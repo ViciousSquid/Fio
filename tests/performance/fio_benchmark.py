@@ -32,6 +32,11 @@ from editor.procedural_generator import create_map_data
 
 
 WARMUP_FRAMES = 10
+
+# Every benchmark workload that uses the procedural map generator must use
+# this seed.  Changing the workload size may change the number of spawned
+# entities, but the generator receives the same deterministic seed every time.
+BENCHMARK_MAP_SEED = 0xF10
 MEASURED_FRAMES = 30
 
 DEFAULT_RESOLUTIONS = (
@@ -243,7 +248,7 @@ def _measure_scenario(width, height, name, shadows, empty):
                 pass
 
     glh.reset_texture_cache()
-def _generate_procedural_map(monsters=0, relay_count=32, seed=1337):
+def _generate_procedural_map(monsters=0, relay_count=32, seed=BENCHMARK_MAP_SEED):
     """Generate a real Fio map using the same procedural generator as the editor."""
     import random
 
@@ -454,7 +459,7 @@ def _generate_monster_apocalypse():
     is not to represent a sensible game level; it is to find the point where
     the complete engine becomes overloaded.
     """
-    data = _generate_procedural_map(monsters=1000, relay_count=1000, seed=0xF10)
+    data = _generate_procedural_map(monsters=1000, relay_count=1000, seed=BENCHMARK_MAP_SEED)
 
     # Push the procedural world to its maximum generator dimensions/room
     # complexity, while keeping geometry creation in the production generator.
