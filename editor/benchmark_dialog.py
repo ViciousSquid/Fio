@@ -144,6 +144,11 @@ class BenchmarkDialog(QDialog):
 
         self.stress_options.setVisible(False)
         stress_toggle.toggled.connect(self.stress_options.setVisible)
+        self.select_all_button = QPushButton("Select all")
+        self.select_all_button.clicked.connect(self._select_all_stress_tests)
+        self.select_all_button.setVisible(False)
+        stress_toggle.toggled.connect(self.select_all_button.setVisible)
+        layout.addWidget(self.select_all_button)
         layout.addWidget(self.stress_options)
 
         self.output = QTextBrowser()
@@ -165,6 +170,10 @@ class BenchmarkDialog(QDialog):
         self.buttons = QDialogButtonBox(QDialogButtonBox.Close)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
+
+    def _select_all_stress_tests(self):
+        for checkbox in (self.additional_tests, self.brush_1000, self.brush_10000, self.brush_100000, self.io_chain_1000, self.monsters_100, self.monsters_500, self.monsters_1000, self.monster_apocalypse):
+            checkbox.setChecked(True)
 
     def _set_controls_enabled(self, enabled):
         self.run_button.setEnabled(enabled)
