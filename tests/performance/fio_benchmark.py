@@ -21,6 +21,7 @@ import time
 
 from tests.helpers import gl as glh
 from tests.helpers.worlds import box_brush, make_thing
+from editor.procedural_generator import create_map_data
 
 
 WARMUP_FRAMES = 10
@@ -239,55 +240,140 @@ def _measure_scenario(width, height, name, shadows, empty):
     glh.reset_texture_cache()
 
 
+def _generate_procedural_map(monsters=0, relay_count=32, seed=1337):
+    """Generate a real Fio map using the same procedural generator as the editor."""
+    import random
+
+    random.seed(seed)
+    params = {
+        "world_width": 4096,
+        "world_height": 4096,
+        "min_room": 256,
+        "max_room": 640,
+        "room_count": 18,
+        "wall_tex": "wall.jpg",
+        "floor_tex": "floor.jpg",
+        "enable_floors": True,
+        "floor_height": 128,
+        "floor_room_count": 3,
+        "spawn_monsters": monsters > 0,
+        "monster_count": monsters,
+        "spawn_health": False,
+    }
+    data = create_map_data(params)
+
+    # Add actual Fio LogicRelay entities and serialized I/O links to the
+    # generated map. These are consumed by the normal map loader.
+    things = data["things"]
+    relay_start = len(things)
+    for i in range(relay_count):
+        things.append({
+            "type": "logicrelay",
+            "pos": [128.0 + i * 48.0, 32.0, 128.0],
+            "properties": {
+                "type": "logicrelay",
+                "name": "BenchmarkRelay_%d" % i,
+                "id": "benchmark_relay_%d" % i,
+                "fire_once": False,
+                "_io_connections": [],
+            },
+            "io_connections": [],
+        })
+
+    for i in range(relay_count - 1):
+        things[relay_start + i]["properties"]["_io_connections"] = [{
+            "output": "OnTrigger",
+            "target": "BenchmarkRelay_%d" % (i + 1),
+            "target_id": "benchmark_relay_%d" % (i + 1),
+            "input": "Trigger",
+            "parameter": "",
+            "delay": 0.0,
+            "fire_once": False,
+        }]
+
+    return data
+
+
 def _make_renderer_stress_scene():
-    return _make_brush_stress_scene(576)
+    data = _generate_procedural_map(monsters=0, relay_count=32)
+    return data["brushes"], data["things"]
 
 
 def _make_brush_stress_scene(brush_count):
-    """Create exactly N normal Fio box-brush dictionaries."""
-    from editor.things import Light
+    """Create a large real-Fio brush scene starting from procedural geometry."""
+    data = _generate_procedural_map(monsters=0, relay_count=32)
+    source = data["brushes"]
+    if len(source) >= brush_count:
+        return source[:brush_count], data["things"]
 
-    brushes = []
-    columns = int(math.ceil(math.sqrt(brush_count)))
-    spacing = 120.0
-    half = columns // 2
+    brushes = list(source)
+    index = 0
+    while len(brushes) < brush_count:
+        original = dict(source[index % len(source)])
+        original["pos"] = list(original.get("pos", [0, 0, 0]))
+        original["pos"][0] += (index // len(source) + 1) * 5000.0
+        original["id"] = "benchmark_generated_%d" % len(brushes)
+        brushes.append(original)
+        index += 1
+    return brushes, data["things"]
 
-    for index in range(brush_count):
-        x = index % columns
-        z = index // columns
-        brushes.append(
-            box_brush(
-                "stress_brush_%d" % index,
-                ((x - half) * spacing, 0, (z - half) * spacing),
-                (96, 96, 96),
-            )
-        )
 
-    things = []
-    light_count = 32
-    radius = max(1350.0, columns * spacing * 0.45)
+def _run_monster_stress(count):
+    """Generate a real procedural Fio room populated with N monsters."""
+    data = _generate_procedural_map(
+        monsters=count, relay_count=32, seed=1337 + count
+    )
+    brushes, things = data["brushes"], data["things"]
+    results = []
 
-    for i in range(light_count):
-        angle = (i / float(light_count)) * math.tau
-        things.append(
-            make_thing(
-                Light,
-                "stress_light_%d" % i,
-                (
-                    math.cos(angle) * radius * 0.7,
-                    180,
-                    math.sin(angle) * radius * 0.7,
-                ),
-                color=[255, 220, 180],
-                intensity=3.0,
-                radius=1800.0,
-                state="on",
-                casts_shadows=(i < 8),
-            )
-        )
+    for mode, width, height in (
+        ("windowed-sized", 1280, 720),
+        ("fullscreen-sized", 1920, 1080),
+    ):
+        glh.reset_texture_cache()
+        with glh.GLTestContext(width, height) as context:
+            renderer = glh.make_renderer()
+            try:
+                samples = _render_sample_set(
+                    renderer, context, brushes, things, warmup=3, samples=10
+                )
+                mean = statistics.fmean(samples)
+                results.append(_timing_result(
+                    "monster_room_%d_%s" % (count, mode),
+                    "procedural Fio map with %d real Monster entities" % count,
+                    samples,
+                    mode=mode,
+                    monster_count=count,
+                    brush_count=len(brushes),
+                    entity_count=len(things),
+                    resolution="%dx%d" % (width, height),
+                    average_fps=1.0 / mean if mean else float("inf"),
+                ))
+            finally:
+                try:
+                    renderer.cleanup()
+                except Exception:
+                    pass
 
-    return brushes, things
+    glh.reset_texture_cache()
+    return results
 
+
+def _selected_monster_counts():
+    raw = os.environ.get("FIO_FULLSCREEN_BENCH_MONSTERS", "")
+    if not raw:
+        return ()
+    allowed = {100, 500, 1000}
+    counts = []
+    for item in raw.split(","):
+        if not item.strip():
+            continue
+        count = int(item.strip())
+        if count not in allowed:
+            raise ValueError("unsupported monster stress size: %s" % count)
+        if count not in counts:
+            counts.append(count)
+    return tuple(counts)
 
 def _render_sample_set(renderer, context, brushes, things, warmup, samples):
     for _ in range(warmup):
@@ -626,6 +712,9 @@ def run_additional_stress_tests():
     for count in _selected_io_chain_counts():
         results.append(_run_io_chain_stress(count))
 
+    for count in _selected_monster_counts():
+        results.extend(_run_monster_stress(count))
+
     return results
 
 
@@ -656,7 +745,9 @@ def format_results(results, info=None):
         _execution_environment(),
         "",
         "Renderer path: engine.renderer_F.Renderer_F.render_scene",
-        "World data: Fio brush dictionaries + Thing entities",
+        "World data: procedural Fio map generator -> real brushes + Thing entities",
+        "Gameplay data: 32 LogicRelay entities linked by serialized UUID I/O",
+        "Monster stress: procedural generator creates real Monster entities",
         "GPU synchronization: glFinish() per measured frame",
         "",
         "scenario                     resolution       FPS     mean ms   p95 ms   ms/MP",
