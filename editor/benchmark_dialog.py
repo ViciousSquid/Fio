@@ -927,6 +927,9 @@ Git commit: %s
     def _abort_worker_test(self, reason, timed_out=False):
         """Abort one isolated test, record it, then continue the queue."""
         label = self._worker_label or (self._current[0] if self._current else "unknown")
+        diagnostics = self._read_worker_diagnostics()
+        if diagnostics:
+            reason = "%s\n\nWorker diagnostics:\n%s" % (reason, diagnostics)
         self._timer.stop()
         self._measurement_active = False
         self._worker_active = False
