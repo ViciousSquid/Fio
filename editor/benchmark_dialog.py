@@ -20,6 +20,7 @@ import html
 
 from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPushButton, QVBoxLayout, QApplication, QFileDialog, QTextBrowser, QToolButton, QWidget, QScrollArea, QProgressBar
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QFont
 import copy
 import time
 import traceback
@@ -169,8 +170,13 @@ class BenchmarkDialog(QDialog):
             'or choose a stress-test from below to benchmark this<br>'
             'Fio installation against another one.'
         )
-        # Optional: Increase font size slightly to match the provided layout proportions
-        benchmark_description.setStyleSheet("font-size: 15px;") 
+        # Use a real QFont point size rather than CSS px. Qt point sizes are
+        # logical/font metrics and therefore participate in the same High-DPI
+        # scaling used by the rest of the editor (e.g. the Debug Console).
+        # CSS pixel sizes here stay effectively fixed on high-DPI displays.
+        description_font = benchmark_description.font()
+        description_font.setPointSize(11)
+        benchmark_description.setFont(description_font)
         layout.addWidget(benchmark_description)
 
         self.status_label = QLabel("")
@@ -1998,18 +2004,3 @@ Git commit: %s
                 "hops_per_second": hops / elapsed if elapsed > 0.0 else 0.0,
             })
             self._append(
-                "  Live I/O throughput: %.0f hops/s."
-                % metrics["hops_per_second"]
-            )
-
-        if label.startswith(("procedural_", "monster_")):
-            pos = view.camera.pos
-            self._append(
-                "  Play Mode: god_mode=True, AI active, infighting active, "
-                "final camera=(%.1f, %.1f, %.1f)"
-                % (float(pos.x), float(pos.y), float(pos.z))
-            )
-            self._bench.finish_live_monster_test(self.main_window)
-        elif label == "live_io_1000" and view.play_mode:
-            self.main_window._exit_play_mode()
-            QApplication.processEvents()
