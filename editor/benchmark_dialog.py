@@ -1449,6 +1449,263 @@ Git commit: %s
             camera.yaw = yaw
             camera.pitch = pitch
 
+    def _begin_next(self):
+        if not self._queue:
+            self._restore_original()
+            return
+
+        self._reset_between_tests()
+
+        label, value = self._queue.pop(0)
+        self._current = (label, value)
+        self._phase_started = time.perf_counter()
+        self.status_label.setText("Preparing: %s" % label)
+        self._append_test_separator(label)
+        self._append("<span style='color:#ffb15a; font-weight:bold;'>START TEST</span> — %s" % label)
+        self._append("Reset to baseline; loading isolated workload...")
+        self._preparation_deadline = time.perf_counter() + self._preparation_timeout_s
+        self.status_label.setText("Preparing: %s (30 s preparation limit)" % label)
+
+        try:
+            if label in ("current_world", "current_world_phase1", "current_world_phase2", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
+                if label in ("current_world", "current_world_phase1", "current_world_phase2"):
+                    self.main_window.raise_()
+                    self.main_window.activateWindow()
+                    QApplication.processEvents()
+                    QApplication.processEvents()
+                elif label == "borderless_window":
+                    self._enter_benchmark_window_mode("borderless")
+                elif label == "fullscreen_window":
+                    self._enter_benchmark_window_mode("fullscreen")
+                elif label == "editor_windowed_1280":
+                    self._enter_benchmark_editor_window_mode(1280, 720)
+                elif label == "editor_windowed_1920":
+                    self._enter_benchmark_editor_window_mode(1920, 1080)
+                self._prepare_player_area_sweep()
+                self._check_preparation_budget(label)
+                self._start_measurement(label, duration=self._test_duration(label))
+            else:
+                # Every deliberately risky workload is process-isolated. The
+                # parent Qt thread only starts the child process and polls it;
+                # it never loads the pathological workload itself.
+                self._start_worker_test(label, value)
+        except Exception:
+            self._finish_with_error(traceback.format_exc())
+
+    def _check_preparation_budget(self, label):
+        elapsed = time.perf_counter() - self._phase_started
+        self._monitor_beat(label, deadline=self._preparation_deadline)
+        monitor_failed, monitor_reason = self._monitor_failed()
+        if monitor_failed:
+            raise TimeoutError(monitor_reason)
+        if time.perf_counter() > self._preparation_deadline:
+            raise TimeoutError(
+                "%s exceeded the %.0f s preparation limit after %.1f s. The workload was not measured; restoring the original world."
+                % (label, self._preparation_timeout_s, elapsed)
+            )
+        self.status_label.setText("Preparing: %s — %.1f s elapsed (%.0f s limit)" % (label, elapsed, self._preparation_timeout_s))
+        QApplication.processEvents()
+
+    def _start_measurement(self, label, duration=1.0):
+        # A measurement must be completely initialised before Qt is allowed to
+        # re-enter the event loop.  _tick is timer-driven and processEvents()
+        # below can dispatch it immediately.
+        self._timer.stop()
+        self._current = (label, duration)
+        self._phase_started = time.perf_counter()
+        self._measurement_deadline = time.perf_counter() + float(duration)
+        self._measurement_watchdog_deadline = self._measurement_deadline + self._measurement_watchdog_extra_s
+        self._measurement_active = True
+        self._monitor_beat(label, deadline=self._measurement_watchdog_deadline)
+        view = self.main_window.view_3d
+        view.sysmon.reset_metrics()
+        view.sysmon.begin_benchmark_capture()
+        view.update()
+        QApplication.processEvents()
+        self._timer.start()
+
+    def _tick(self):
+        if not self._running:
+            return
+        if self._worker_active:
+            try:
+                self._poll_worker_test()
+            except Exception:
+                self._finish_with_error(traceback.format_exc())
+            return
+        if not self._measurement_active:
+            return
+
+        try:
+            app = QApplication.instance()
+            self._monitor_beat(self._current[0], deadline=self._measurement_watchdog_deadline)
+            monitor_failed, monitor_reason = self._monitor_failed()
+            if monitor_failed:
+                raise TimeoutError(monitor_reason)
+            if time.perf_counter() > self._measurement_watchdog_deadline:
+                raise TimeoutError("%s exceeded its measurement watchdog; the test did not complete reliably." % self._current[0])
+            view = self.main_window.view_3d
+            if self._current and self._current[0] in ("current_world", "current_world_phase1", "current_world_phase2", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
+                if self._current[0] == "current_world_phase2":
+                    self._advance_player_area_rotation()
+                else:
+                    self._advance_player_area_sweep()
+            view.update()
+            app.processEvents()
+
+            if time.perf_counter() < self._measurement_deadline:
+                return
+
+            # Disarm the measurement before any reporting/teardown can pump
+            # Qt events and re-enter _tick.
+            self._measurement_active = False
+            self._timer.stop()
+            self.status_label.setText("Completed: %s — collecting results..." % self._current[0])
+            capture = view.sysmon.end_benchmark_capture()
+            metrics = self._benchmark_metrics(capture, time.perf_counter() - self._phase_started)
+            live_metrics = view.sysmon.get_metrics()
+            metrics.update({"viewport_width": int(view.width()), "viewport_height": int(view.height()), "vram_used_mb": live_metrics.get("vram_used_mb"), "vram_total_mb": live_metrics.get("vram_total_mb"), "visible_brushes": live_metrics.get("visible_brushes", 0), "culled_brushes": live_metrics.get("culled_brushes", 0), "total_brushes": live_metrics.get("total_brushes", 0), "visible_tris": live_metrics.get("visible_tris", 0), "culled_tris": live_metrics.get("culled_tris", 0), "visible_surfaces": live_metrics.get("visible_surfaces", 0), "culled_surfaces": live_metrics.get("culled_surfaces", 0)})
+            label = self._current[0]
+            if label in ("current_world", "current_world_phase1", "current_world_phase2", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
+                if label in ("current_world_phase1", "current_world_phase2"):
+                    phase_number = 1 if label.endswith("phase1") else 2
+                    metrics["benchmark_phase"] = phase_number
+                    metrics["benchmark_repetition"] = int(self._current[1] or 1)
+                    metrics["benchmark_phase_label"] = (
+                        "Phase 1 — PlayerStart orbit"
+                        if phase_number == 1 else
+                        "Phase 2 — PlayerStart 360° rotation"
+                    )
+                sweep = getattr(self, "_player_area_sweep_metadata", {})
+                metrics.update({
+                    "camera_sweep_mode": sweep.get("mode", "player-area"),
+                    "camera_sweep_anchor": sweep.get("anchor_source", "unknown"),
+                    "camera_sweep_fallback": bool(sweep.get("fallback", False)),
+                    "camera_sweep_fallback_reason": sweep.get("fallback_reason"),
+                    "camera_sweep_bounds": sweep.get("bounds"),
+                    "camera_sweep_reachable_cells": sweep.get("reachable_cells"),
+                    "camera_sweep_safe_path_samples": sweep.get("safe_path_samples"),
+                    "camera_sweep_collision_clamped_segments": sweep.get("collision_clamped_segments"),
+                })
+
+            if label == "live_io_1000":
+                self._run_live_io_stress()
+            if label in ("current_world_phase1", "current_world_phase2"):
+                self._current_phase_results.append(metrics)
+                self._report_live_result(label, metrics)
+                self._report_current_world_combined_if_complete()
+            else:
+                self._report_live_result(label, metrics)
+
+            if label.startswith("procedural_") or label == "monster_apocalypse":
+                # Monster tests already ran inside real Play Mode during the
+                # measurement.  God mode kept the player alive while AI,
+                # combat, infighting and monster I/O were active.
+                pos = view.camera.pos
+                self._append(
+                    "  Play Mode: god_mode=True, AI active, infighting active, final camera=(%.1f, %.1f, %.1f)"
+                    % (float(pos.x), float(pos.y), float(pos.z))
+                )
+                self._bench.finish_live_monster_test(self.main_window)
+
+            self._begin_next()
+        except Exception:
+            self._finish_with_error(traceback.format_exc())
+
+    def _run_live_io_stress(self):
+        """Fire the generated relay chain through the live LogicThread I/O manager."""
+        import sys as _sys
+        view = self.main_window.view_3d
+        if not view.play_mode:
+            self.main_window.enter_play_mode()
+            QApplication.processEvents()
+        io_manager = getattr(view.logic_thread, "io_manager", None)
+        if io_manager is None:
+            raise RuntimeError("live Fio LogicThread has no IOManager")
+
+        relays = [
+            t for t in self.main_window.state.things
+            if str(t.properties.get("name", "")).startswith("BenchmarkRelay_")
+        ]
+        if not relays:
+            raise RuntimeError("live I/O benchmark found no generated LogicRelay entities")
+
+        first = min(relays, key=lambda t: int(
+            str(t.properties.get("name", "BenchmarkRelay_0")).rsplit("_", 1)[1]
+        ))
+        old_limit = _sys.getrecursionlimit()
+        _sys.setrecursionlimit(max(old_limit, 10000))
+        try:
+            start = time.perf_counter()
+            io_manager.reset()
+            io_manager.fire_output(first, "OnTrigger")
+            elapsed = time.perf_counter() - start
+        finally:
+            _sys.setrecursionlimit(old_limit)
+
+        self._append(
+            "  Live I/O: fired OnTrigger through %d LogicRelay entities in %.3f ms"
+            % (len(relays), elapsed * 1000.0)
+        )
+        if view.play_mode:
+            self.main_window._exit_play_mode()
+            QApplication.processEvents()
+
+    @staticmethod
+    def _benchmark_metrics(capture, duration):
+        """Calculate live benchmark metrics from the captured frame timings.
+
+        Average FPS is derived from the same captured frame-time sample as
+        Average frame time, matching the standalone renderer benchmarks.
+        ``wall_clock_fps`` is retained separately for presentation throughput.
+        """
+        import numpy as np
+        values = np.asarray(capture.get("frame_times", []), dtype=np.float64)
+        visible = np.asarray(capture.get("visible_tris", []), dtype=np.float64)
+        total = np.asarray(capture.get("total_tris", []), dtype=np.float64)
+        culled = np.asarray(capture.get("culled_tris", []), dtype=np.float64)
+        frame_count = int(values.size)
+        duration = float(duration)
+        if values.size == 0:
+            return {
+                "frame_count": frame_count,
+                "measurement_duration_s": duration,
+                "average_frame_time_ms": 0.0,
+                "median_frame_time_ms": 0.0,
+                "p95_frame_time_ms": 0.0,
+                "p99_frame_time_ms": 0.0,
+                "p999_frame_time_ms": 0.0,
+                "min_frame_time_ms": 0.0,
+                "max_frame_time_ms": 0.0,
+                "average_fps": 0.0,
+                "wall_clock_fps": 0.0,
+                "average_visible_tris": 0.0,
+                "average_total_tris": 0.0,
+                "average_culled_tris": 0.0,
+                "culling_efficiency": 0.0,
+            }
+        avg_ms = float(np.mean(values))
+        avg_visible = float(np.mean(visible)) if visible.size else 0.0
+        avg_total = float(np.mean(total)) if total.size else 0.0
+        avg_culled = float(np.mean(culled)) if culled.size else 0.0
+        efficiency = (avg_culled / avg_total * 100.0) if avg_total > 0.0 else 0.0
+        return {
+            "frame_count": frame_count,
+            "measurement_duration_s": duration,
+            "average_frame_time_ms": avg_ms,
+            "median_frame_time_ms": float(np.percentile(values, 50)),
+            "p95_frame_time_ms": float(np.percentile(values, 95)),
+            "p99_frame_time_ms": float(np.percentile(values, 99)),
+            "p999_frame_time_ms": float(np.percentile(values, 99.9)),
+            "min_frame_time_ms": float(np.min(values)),
+            "max_frame_time_ms": float(np.max(values)),
+            "average_fps": (1000.0 / avg_ms) if avg_ms > 0.0 else 0.0,
+            "wall_clock_fps": (frame_count / duration) if duration > 0.0 else 0.0,
+            "average_visible_tris": avg_visible,
+            "average_total_tris": avg_total,
+            "average_culled_tris": avg_culled,
+            "culling_efficiency": efficiency,
+        }
     def _report_current_world_combined_if_complete(self):
         expected = int(self._requested_repetitions) * 2
         if len(self._current_phase_results) != expected:
