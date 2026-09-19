@@ -221,8 +221,6 @@ class BenchmarkRunner:
 
     def _worker_timeout_for(self, label):
         """Return the hard wall-clock timeout for an isolated stress test."""
-        if label == "monster_apocalypse":
-            return 60.0
         return 30.0
     
 
@@ -525,10 +523,7 @@ class BenchmarkRunner:
             self.brush_10000,
             self.brush_100000,
             self.io_chain_1000,
-            self.monsters_100,
-            self.monsters_500,
-            self.monsters_1000,
-            self.monster_apocalypse,
+            self.monster_capacity,
             self.borderless_window,
             self.fullscreen_window,
             self.editor_windowed_1280,
@@ -1109,10 +1104,7 @@ class BenchmarkRunner:
                     ("live_io_1000", 1000),
                     ("live_1000_brushes", 1000),
                     ("live_10000_brushes", 10000),
-                    ("procedural_100_monsters", 100),
-                    ("procedural_500_monsters", 500),
-                    ("procedural_1000_monsters", 1000),
-                    ("monster_apocalypse", 1000),
+                    ("monster_capacity", None),
                 ))
     
             if self.io_chain_1000.isChecked():
@@ -1123,14 +1115,8 @@ class BenchmarkRunner:
                 self._queue.append(("live_10000_brushes", 10000))
             if self.brush_100000.isChecked():
                 self._queue.append(("live_100000_brushes", 100000))
-            if self.monsters_100.isChecked():
-                self._queue.append(("procedural_100_monsters", 100))
-            if self.monsters_500.isChecked():
-                self._queue.append(("procedural_500_monsters", 500))
-            if self.monsters_1000.isChecked():
-                self._queue.append(("procedural_1000_monsters", 1000))
-            if self.monster_apocalypse.isChecked():
-                self._queue.append(("monster_apocalypse", 1000))
+            if self.monster_capacity.isChecked():
+                self._queue.append(("monster_capacity", None))
     
             if self.borderless_window.isChecked():
                 self._queue.append(("borderless_window", None))
