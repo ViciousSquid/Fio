@@ -139,6 +139,16 @@ class SysMon:
         if self.expanded != expanded:
             self.expanded = expanded
 
+    def begin_benchmark_capture(self):
+        """Start a dedicated frame-time capture for a benchmark measurement."""
+        self._benchmark_frame_times = []
+        self._benchmark_capture = True
+
+    def end_benchmark_capture(self):
+        """Stop benchmark capture and return every captured frame time in ms."""
+        self._benchmark_capture = False
+        return list(self._benchmark_frame_times)
+
     def reset_metrics(self):
         """Reset the frame-history portion of SysMon for a fresh measurement."""
         self._ft_buffer.fill(0)
@@ -147,6 +157,9 @@ class SysMon:
         self._ft_max = 16.67
         self._ft_max_age = 0
         self._fps = 0.0
+        # Benchmark-only frame capture. Empty/disabled during normal runtime.
+        self._benchmark_capture = False
+        self._benchmark_frame_times = []
         self._vram_cache = (None, None)
         self._vram_cache_time = 0
         self._fps_cached_val = -1
