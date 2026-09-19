@@ -80,6 +80,7 @@ class BenchmarkDialog(QDialog):
         self.brush_10000 = QCheckBox("Renderer scene: 10,000 brushes")
         self.brush_100000 = QCheckBox("Renderer scene: 100,000 brushes")
         self.io_chain_1000 = QCheckBox("I/O chain: 1,000 entities")
+        self.monsters_50 = QCheckBox("Procedural room: 50 monsters")
         self.monsters_100 = QCheckBox("Procedural room: 100 monsters")
         self.monsters_500 = QCheckBox("Procedural room: 500 monsters")
         self.monsters_1000 = QCheckBox("Procedural room: 1,000 monsters")
@@ -153,7 +154,7 @@ class BenchmarkDialog(QDialog):
 
 
     def _select_all_stress_tests(self):
-        for checkbox in (self.additional_tests, self.brush_1000, self.brush_10000, self.brush_100000, self.io_chain_1000, self.monsters_100, self.monsters_500, self.monsters_1000, self.monster_apocalypse, self.borderless_window, self.fullscreen_window, self.editor_windowed_1280, self.editor_windowed_1920):
+        for checkbox in (self.additional_tests, self.brush_1000, self.brush_10000, self.brush_100000, self.io_chain_1000, self.monsters_50, self.monsters_100, self.monsters_500, self.monsters_1000, self.monster_apocalypse, self.borderless_window, self.fullscreen_window, self.editor_windowed_1280, self.editor_windowed_1920):
             checkbox.setChecked(True)
     
 
