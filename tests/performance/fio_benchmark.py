@@ -454,7 +454,11 @@ def _make_brush_stress_scene(brush_count, yield_hook=None):
     import copy
     import numpy as np
 
-    data = _generate_procedural_map(monsters=0, relay_count=32)
+    data = _generate_procedural_map(
+        monsters=0,
+        relay_count=32,
+        yield_hook=yield_hook,
+    )
     source = list(data.get("brushes", []))
     if not source:
         raise RuntimeError("procedural benchmark map generated no brushes")
