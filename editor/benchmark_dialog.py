@@ -866,10 +866,58 @@ Git commit: %s
         self._worker_deadline = 0.0
         self._begin_next()
 
+    def _has_current_loaded_map(self):
+        """Return True when the live editor has a current map/scene to benchmark."""
+        if getattr(self.main_window, "file_path", None):
+            return True
+
+        state = self.main_window.state
+        if getattr(state, "brushes", None):
+            return True
+        if getattr(state, "things", None):
+            return True
+        if getattr(state, "terrain_data", None) is not None:
+            return True
+        return False
+
+    def _has_selected_stress_test(self):
+        """Return True when at least one optional benchmark workload is selected."""
+        return any(check.isChecked() for check in (
+            self.additional_tests,
+            self.brush_1000,
+            self.brush_10000,
+            self.brush_100000,
+            self.io_chain_1000,
+            self.monsters_100,
+            self.monsters_500,
+            self.monsters_1000,
+            self.monster_apocalypse,
+            self.borderless_window,
+            self.fullscreen_window,
+            self.editor_windowed_1280,
+            self.editor_windowed_1920,
+        ))
+
     def _start(self):
         if self._running:
             return
 
+        has_current_map = self._has_current_loaded_map()
+        has_selected_tests = self._has_selected_stress_test()
+        if not has_current_map and not has_selected_tests:
+            self.output.clear()
+            self.output.append(
+                '<div style="color:#ff6666; font-size:16px; font-weight:bold; padding:10px;">'
+                'No current loaded map and no tests selected'
+                '</div>'
+            )
+            self.status_label.setText("No current loaded map and no tests selected")
+            self.status_label.setStyleSheet("color:#ff6666; font-weight:bold;")
+            self.throbber.setVisible(False)
+            QApplication.processEvents()
+            return
+
+        self.status_label.setStyleSheet("")
         self.output.clear()
         self._results = []
         self.export_button.setEnabled(False)
