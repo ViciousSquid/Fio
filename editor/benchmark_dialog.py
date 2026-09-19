@@ -10,6 +10,7 @@ import sys
 import json
 import platform
 import subprocess
+import math
 from datetime import datetime, timezone
 
 from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPushButton, QVBoxLayout, QApplication, QFileDialog, QTextBrowser, QToolButton, QWidget
@@ -319,6 +320,54 @@ class BenchmarkDialog(QDialog):
         self.main_window.view_3d.update()
         QApplication.processEvents()
 
+    def _prepare_current_world_sweep(self):
+        """Set up a deterministic camera path through the loaded map."""
+        brushes = getattr(self.main_window.state, "brushes", [])
+        points = []
+        for brush in brushes:
+            pos = getattr(brush, "pos", None)
+            if pos is None and isinstance(brush, dict):
+                pos = brush.get("pos")
+            if pos is not None and len(pos) >= 3:
+                points.append((float(pos[0]), float(pos[2])))
+
+        camera = self.main_window.view_3d.camera
+        if points:
+            min_x = min(p[0] for p in points)
+            max_x = max(p[0] for p in points)
+            min_z = min(p[1] for p in points)
+            max_z = max(p[1] for p in points)
+            center_x = (min_x + max_x) * 0.5
+            center_z = (min_z + max_z) * 0.5
+            half_x = max((max_x - min_x) * 0.42, 32.0)
+            half_z = max((max_z - min_z) * 0.42, 32.0)
+        else:
+            center_x = float(camera.pos.x)
+            center_z = float(camera.pos.z)
+            half_x = half_z = 128.0
+
+        self._current_world_camera_path = (center_x, center_z, half_x, half_z, float(camera.pos.y), float(camera.pitch))
+        self._append("Camera sweep: traversing the loaded map during the measurement.")
+
+    def _advance_current_world_sweep(self):
+        path = getattr(self, "_current_world_camera_path", None)
+        if path is None:
+            return
+        center_x, center_z, half_x, half_z, y, pitch = path
+        elapsed = time.perf_counter() - self._phase_started
+        angle = (elapsed / 1.5) * (2.0 * math.pi)
+        x = center_x + half_x * math.sin(angle)
+        z = center_z + half_z * math.sin(angle + math.pi * 0.5)
+        next_x = center_x + half_x * math.sin(angle + 0.01)
+        next_z = center_z + half_z * math.sin(angle + 0.01 + math.pi * 0.5)
+        yaw = math.degrees(math.atan2(next_z - z, next_x - x))
+
+        camera = self.main_window.view_3d.camera
+        import glm
+        camera.pos = glm.vec3(x, y, z)
+        camera.yaw = yaw
+        camera.pitch = pitch
+
     def _begin_next(self):
         if not self._queue:
             self._restore_original()
@@ -336,6 +385,7 @@ class BenchmarkDialog(QDialog):
 
         try:
             if label == "current_world":
+                self._prepare_current_world_sweep()
                 self._start_measurement(label, duration=self._test_duration(label))
             elif label.startswith("procedural_"):
                 data = self._bench._generate_procedural_map(
@@ -401,6 +451,8 @@ class BenchmarkDialog(QDialog):
         try:
             app = QApplication.instance()
             view = self.main_window.view_3d
+            if self._current and self._current[0] == "current_world":
+                self._advance_current_world_sweep()
             view.update()
             app.processEvents()
 
