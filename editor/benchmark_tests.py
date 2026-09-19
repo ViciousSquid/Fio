@@ -256,6 +256,42 @@ class BenchmarkTests:
     
     
 
+    def _prepare_editor_windowed_map(self):
+        """Load a medium procedural map for the live editor-window benchmarks."""
+        cooperative_yield = lambda: self._live_cooperative_yield("editor_windowed_map")
+        import random
+
+        random.seed(self._bench.BENCHMARK_MAP_SEED)
+        data = self._bench.create_map_data(
+            {
+                "world_width": 2048,
+                "world_height": 2048,
+                "min_room": 192,
+                "max_room": 384,
+                "room_count": 12,
+                "wall_tex": "default.png",
+                "floor_tex": "default.png",
+                "enable_floors": True,
+                "floor_height": 256,
+                "floor_room_count": 3,
+                "spawn_monsters": False,
+                "monster_count": 0,
+                "spawn_health": False,
+            },
+            yield_hook=cooperative_yield,
+        )
+        self._bench.load_live_benchmark_world(
+            self.main_window,
+            data,
+            yield_hook=cooperative_yield,
+        )
+        QApplication.processEvents()
+        self._append(
+            "  Editor window scene: generated a medium procedural 2048x2048 map "
+            "with 12 rooms for the live 3D view."
+        )
+
+
     def _run_live_stress_test(self, label, value):
         """Prepare a live stress test; _tick drives the real workload."""
         bench = self._bench
