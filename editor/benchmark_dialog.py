@@ -349,7 +349,13 @@ class BenchmarkDialog(QDialog):
                 return None, "PlayerStart has invalid coordinates"
             if not (math.isfinite(x) and math.isfinite(z)):
                 return None, "PlayerStart has non-finite coordinates"
-            return (x, z), None
+            try:
+                y = float(pos[1])
+            except (TypeError, ValueError, IndexError):
+                return None, "PlayerStart has invalid coordinates"
+            if not math.isfinite(y):
+                return None, "PlayerStart has non-finite coordinates"
+            return (x, y, z), None
 
         return None, "no usable PlayerStart"
 
@@ -1357,7 +1363,11 @@ Git commit: %s
             anchor_z = (min_z + max_z) * 0.5
             fallback_reason = start_error or "no usable PlayerStart"
         else:
-            anchor_x, anchor_z = float(player_start[0]), float(player_start[1])
+            anchor_x, anchor_y, anchor_z = (
+                float(player_start[0]),
+                float(player_start[1]),
+                float(player_start[2]),
+            )
             fallback_reason = None
 
         map_width = max(0.0, max_x - min_x)
@@ -1380,7 +1390,7 @@ Git commit: %s
             "center_z": anchor_z,
             "half_x": half_x,
             "half_z": half_z,
-            "y": float(camera.pos.y),
+            "y": float(anchor_y if not fallback else camera.pos.y),
             "pitch": float(camera.pitch),
             "duration": duration,
         }
