@@ -253,8 +253,8 @@ def _generate_procedural_map(monsters=0, relay_count=32, seed=1337):
         "min_room": 256,
         "max_room": 640,
         "room_count": 18,
-        "wall_tex": "wall.jpg",
-        "floor_tex": "floor.jpg",
+        "wall_tex": "default.png",
+        "floor_tex": "default.png",
         "enable_floors": True,
         "floor_height": 128,
         "floor_room_count": 3,
@@ -302,6 +302,25 @@ def _materialize_generated_map(data):
 
     state = EditorState()
     state.load_from_data(data)
+
+    # Rebuild the benchmark relay chain through the real Thing API so the
+    # benchmark exercises Fio's OutputConnection objects, not just JSON.
+    relays = sorted(
+        (
+            t for t in state.things
+            if str(t.properties.get("name", "")).startswith("BenchmarkRelay_")
+        ),
+        key=lambda t: int(t.properties["name"].rsplit("_", 1)[1]),
+    )
+    for source, target in zip(relays, relays[1:]):
+        source.properties["_io_connections"] = []
+        source.add_output_connection(
+            output_name="OnTrigger",
+            target_name=target.properties["name"],
+            input_name="Trigger",
+            target_id=target.properties.get("id", ""),
+        )
+
     return state
 
 
