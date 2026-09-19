@@ -297,7 +297,7 @@ def _generate_procedural_map(monsters=0, relay_count=32, seed=BENCHMARK_MAP_SEED
         "monster_count": monsters,
         "spawn_health": False,
     }
-    data = create_map_data(params)
+    data = create_map_data(params, yield_hook=yield_hook)
 
     # Add actual Fio LogicRelay entities and serialized I/O links to the
     # generated map. These are consumed by the normal map loader.
