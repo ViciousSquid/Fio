@@ -142,12 +142,20 @@ class SysMon:
     def begin_benchmark_capture(self):
         """Start a dedicated frame-time capture for a benchmark measurement."""
         self._benchmark_frame_times = []
+        self._benchmark_visible_tris = []
+        self._benchmark_total_tris = []
+        self._benchmark_culled_tris = []
         self._benchmark_capture = True
 
     def end_benchmark_capture(self):
         """Stop benchmark capture and return every captured frame time in ms."""
         self._benchmark_capture = False
-        return list(self._benchmark_frame_times)
+        return {
+            "frame_times": list(self._benchmark_frame_times),
+            "visible_tris": list(self._benchmark_visible_tris),
+            "total_tris": list(self._benchmark_total_tris),
+            "culled_tris": list(self._benchmark_culled_tris),
+        }
 
     def reset_metrics(self):
         """Reset the frame-history portion of SysMon for a fresh measurement."""
@@ -160,6 +168,9 @@ class SysMon:
         # Benchmark-only frame capture. Empty/disabled during normal runtime.
         self._benchmark_capture = False
         self._benchmark_frame_times = []
+        self._benchmark_visible_tris = []
+        self._benchmark_total_tris = []
+        self._benchmark_culled_tris = []
         self._vram_cache = (None, None)
         self._vram_cache_time = 0
         self._fps_cached_val = -1
@@ -186,6 +197,14 @@ class SysMon:
                 self._ft_max_age = int(np.argmax(self._ft_buffer[:count]))
             else:
                 self._ft_max = 16.67
+
+        if getattr(self, "_benchmark_capture", False):
+            visible = int(self.stats.get("visible_tris", 0))
+            culled = int(self.stats.get("culled_tris", 0))
+            self._benchmark_frame_times.append(float(delta_ms))
+            self._benchmark_visible_tris.append(visible)
+            self._benchmark_culled_tris.append(culled)
+            self._benchmark_total_tris.append(visible + culled)
 
     def update_stats(self, visible_brushes=0, culled_brushes=0, total_brushes=0):
         self.stats['visible_brushes'] = visible_brushes
