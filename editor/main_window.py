@@ -351,8 +351,8 @@ class MainWindow(QMainWindow):
         self._current_overlay = overlay_widget
         self._overlay_close_callback = close_callback
 
-    def run_benchmark(self):
-        """Open the renderer benchmark dialog."""
+    def run_benchmark(self, auto_start=False):
+        """Open the renderer benchmark dialog, optionally starting it immediately."""
         from editor.benchmark_dialog import BenchmarkDialog
 
         dialog = BenchmarkDialog(self)
@@ -360,6 +360,11 @@ class MainWindow(QMainWindow):
         dialog.finished.connect(
             lambda _result: setattr(self, "_benchmark_dialog", None)
         )
+        if auto_start:
+            # Let Qt finish constructing/showing the dialog, then invoke the
+            # actual Run Benchmark button path rather than bypassing the UI.
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(0, dialog.run_button.click)
         dialog.exec_()
 
     def update_title(self):
