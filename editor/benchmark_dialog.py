@@ -141,6 +141,8 @@ class BenchmarkDialog(QDialog):
         self.monster_apocalypse = QCheckBox("FINAL TEST: maximum procedural monster apocalypse (1000 monsters + 1000 relays)")
         self.borderless_window = QCheckBox("Window mode: borderless maximized")
         self.fullscreen_window = QCheckBox("Window mode: true fullscreen")
+        self.editor_windowed_1280 = QCheckBox("Editor mode: windowed 1280×720 (3D view pane)")
+        self.editor_windowed_1920 = QCheckBox("Editor mode: windowed 1920×1080 (3D view pane)")
         for checkbox in (
             self.brush_1000,
             self.brush_10000,
@@ -152,6 +154,8 @@ class BenchmarkDialog(QDialog):
             self.monster_apocalypse,
             self.borderless_window,
             self.fullscreen_window,
+            self.editor_windowed_1280,
+            self.editor_windowed_1920,
         ):
             checkbox.setToolTip(
                 "Run this deliberately large workload in addition to the standard stress tests."
@@ -188,7 +192,7 @@ class BenchmarkDialog(QDialog):
         layout.addWidget(self.buttons)
 
     def _select_all_stress_tests(self):
-        for checkbox in (self.additional_tests, self.brush_1000, self.brush_10000, self.brush_100000, self.io_chain_1000, self.monsters_100, self.monsters_500, self.monsters_1000, self.monster_apocalypse, self.borderless_window, self.fullscreen_window):
+        for checkbox in (self.additional_tests, self.brush_1000, self.brush_10000, self.brush_100000, self.io_chain_1000, self.monsters_100, self.monsters_500, self.monsters_1000, self.monster_apocalypse, self.borderless_window, self.fullscreen_window, self.editor_windowed_1280, self.editor_windowed_1920):
             checkbox.setChecked(True)
 
     def _set_controls_enabled(self, enabled):
@@ -220,7 +224,7 @@ class BenchmarkDialog(QDialog):
         # The current-world test is map-scale dependent. A fixed 3-second
         # window is too short to sample culling across a meaningful portion of
         # a large map, while tiny maps do not need a long measurement.
-        if label in ("current_world", "borderless_window", "fullscreen_window"):
+        if label in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
             return self._current_world_sweep_duration()
         return {"procedural_100_monsters": 4.0, "procedural_500_monsters": 4.0, "procedural_1000_monsters": 5.0, "live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_apocalypse": 4.0}.get(label, 3.0)
 
@@ -334,6 +338,10 @@ class BenchmarkDialog(QDialog):
                 self._queue.append(("borderless_window", None))
             if self.fullscreen_window.isChecked():
                 self._queue.append(("fullscreen_window", None))
+            if self.editor_windowed_1280.isChecked():
+                self._queue.append(("editor_windowed_1280", None))
+            if self.editor_windowed_1920.isChecked():
+                self._queue.append(("editor_windowed_1920", None))
 
             if self.brush_1000.isChecked():
                 self._queue.append(("live_1000_brushes", 1000))
@@ -378,6 +386,25 @@ class BenchmarkDialog(QDialog):
         self.main_window.unsaved_changes = self._original_unsaved_changes
         self.main_window.view_3d.update()
         QApplication.processEvents()
+
+    def _enter_benchmark_editor_window_mode(self, width, height):
+        """Run the real editor UI in a normal decorated window and measure its 3D pane."""
+        self._benchmark_window_mode = "editor_windowed"
+        self.hide()
+        window = self.main_window
+        window.showNormal()
+        if self._original_window_flags is not None:
+            window.setWindowFlags(self._original_window_flags)
+        window.resize(int(width), int(height))
+        window.showNormal()
+        window.raise_()
+        window.activateWindow()
+        QApplication.processEvents()
+        QApplication.processEvents()
+        self._append(
+            "Editor presentation: normal window %dx%d; measuring the live 3D view pane (%dx%d)."
+            % (width, height, window.view_3d.width(), window.view_3d.height())
+        )
 
     def _enter_benchmark_window_mode(self, mode):
         """Put the real MainWindow into the requested presentation mode.
@@ -512,11 +539,15 @@ class BenchmarkDialog(QDialog):
         self._append("Reset to baseline; loading isolated workload...")
 
         try:
-            if label in ("current_world", "borderless_window", "fullscreen_window"):
+            if label in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
                 if label == "borderless_window":
                     self._enter_benchmark_window_mode("borderless")
                 elif label == "fullscreen_window":
                     self._enter_benchmark_window_mode("fullscreen")
+                elif label == "editor_windowed_1280":
+                    self._enter_benchmark_editor_window_mode(1280, 720)
+                elif label == "editor_windowed_1920":
+                    self._enter_benchmark_editor_window_mode(1920, 1080)
                 self._prepare_current_world_sweep()
                 self._start_measurement(label, duration=self._test_duration(label))
             elif label.startswith("procedural_"):
@@ -583,7 +614,7 @@ class BenchmarkDialog(QDialog):
         try:
             app = QApplication.instance()
             view = self.main_window.view_3d
-            if self._current and self._current[0] in ("current_world", "borderless_window", "fullscreen_window"):
+            if self._current and self._current[0] in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
                 self._advance_current_world_sweep()
             view.update()
             app.processEvents()
