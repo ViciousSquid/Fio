@@ -286,7 +286,14 @@ class BenchmarkDialog(QDialog):
         path, _ = QFileDialog.getSaveFileName(self, "Export Fio Benchmark Results", default_name, "JSON files (*.json);;All files (*)")
         if not path:
             return
-        payload = {"format": "fio-benchmark-v2", "timestamp_utc": datetime.now(timezone.utc).isoformat(), "environment": _execution_environment(), "platform": platform.platform(), "python": platform.python_version(), "cpu": platform.processor(), "commit": self._git_commit(), "viewport": {"width": self.main_window.view_3d.width(), "height": self.main_window.view_3d.height()}, "results": self._results}
+        version = "unknown"
+        version_path = os.path.join(self.root_dir, "editor", "version.txt")
+        try:
+            with open(version_path, "r", encoding="utf-8") as f:
+                version = f.read().strip()
+        except Exception:
+            pass
+        payload = {"format": "fio-benchmark-v2", "timestamp_utc": datetime.now(timezone.utc).isoformat(), "fio_version": version, "environment": _execution_environment(), "platform": platform.platform(), "python": platform.python_version(), "cpu": platform.processor(), "commit": self._git_commit(), "viewport": {"width": self.main_window.view_3d.width(), "height": self.main_window.view_3d.height()}, "results": self._results}
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
