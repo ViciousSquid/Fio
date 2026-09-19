@@ -502,6 +502,8 @@ class BenchmarkDialog(QDialog):
         self._results.append(result)
         self.export_button.setEnabled(True)
         self.output.append('<div style="background:#222; border:1px solid #555; padding:10px; margin:4px 0 10px 0;"><div style="font-size:25px; font-weight:bold; color:#ff9a32;">%.2f FPS</div><div style="font-size:15px; font-weight:bold; color:#eeeeee;">%s</div><div style="color:#aaa;">%dx%d &nbsp; • &nbsp; %.2f ms average frame &nbsp; • &nbsp; %.2f ms median &nbsp; • &nbsp; %.2f ms p95</div><div style="color:#aaa;">%d frames &nbsp; • &nbsp; %.2f s measured &nbsp; • &nbsp; 1%% low %.2f FPS &nbsp; • &nbsp; 0.1%% low %.2f FPS</div><div style="color:#aaa;">VRAM %s &nbsp; • &nbsp; brushes %d visible / %d culled / %d total &nbsp; • &nbsp; entities %d</div></div>' % (avg_fps, label, width, height, avg_ms, float(metrics.get("median_frame_time_ms", 0.0)), p95_ms, frames, duration, low_1, low_01, self._format_vram(metrics), metrics.get("visible_brushes", 0), metrics.get("culled_brushes", 0), metrics.get("total_brushes", 0), result["entities"]))
+        if label == "current_world":
+            self.output.append('<div style="color:#ffb15a; font-weight:bold; padding:4px 0;">Average visible triangles: %.0f &nbsp; • &nbsp; Average total triangles: %.0f &nbsp; • &nbsp; Average culled triangles: %.0f &nbsp; • &nbsp; Culling efficiency: %.1f%%</div>' % (metrics.get("average_visible_tris", 0.0), metrics.get("average_total_tris", 0.0), metrics.get("average_culled_tris", 0.0), metrics.get("culling_efficiency", 0.0)))
         self.output.ensureCursorVisible()
         QApplication.processEvents()
     @staticmethod
