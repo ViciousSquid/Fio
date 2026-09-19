@@ -286,13 +286,11 @@ class BenchmarkDialog(QDialog):
         return {"procedural_100_monsters": 4.0, "procedural_500_monsters": 4.0, "procedural_1000_monsters": 5.0, "live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_apocalypse": 4.0}.get(label, 3.0)
 
 
-    PLAYER_AREA_CELL_SIZE = 64.0
-    PLAYER_AREA_MAX_CELLS = 16384
-    PLAYER_AREA_CAMERA_MARGIN = 8.0
-    PLAYER_AREA_SPIRAL_TURNS = 1.25
+    PLAYER_AREA_DEFAULT_RADIUS = 256.0
+    PLAYER_AREA_MAX_RADIUS = 2048.0
 
     def _current_world_bounds(self):
-        """Return the geometric bounds used only by the fallback path."""
+        """Return geometric X/Z bounds of the loaded world for choosing an orbit radius."""
         from engine.constants import brush_aabb_bounds
         from engine.spatial import authored_hidden
 
@@ -305,7 +303,6 @@ class BenchmarkDialog(QDialog):
                 continue
             if authored_hidden(brush):
                 continue
-
             try:
                 if brush.get("_collision_mode") == "mesh" and brush.get("_mesh_bounds"):
                     min_b, max_b = brush["_mesh_bounds"]
@@ -333,7 +330,7 @@ class BenchmarkDialog(QDialog):
         )
 
     def _find_player_start(self):
-        """Return the same first PlayerStart the game uses for spawning."""
+        """Return the first usable PlayerStart as (x, y, z, yaw_degrees)."""
         from editor.things import PlayerStart
 
         for thing in getattr(self.main_window.state, "things", []):
@@ -344,169 +341,28 @@ class BenchmarkDialog(QDialog):
                 return None, "PlayerStart has no usable position"
             try:
                 x = float(pos[0])
-                z = float(pos[2])
-            except (TypeError, ValueError, IndexError):
-                return None, "PlayerStart has invalid coordinates"
-            if not (math.isfinite(x) and math.isfinite(z)):
-                return None, "PlayerStart has non-finite coordinates"
-            try:
                 y = float(pos[1])
+                z = float(pos[2])
+                angle = float(thing.properties.get("angle", 0.0))
             except (TypeError, ValueError, IndexError):
-                return None, "PlayerStart has invalid coordinates"
-            if not math.isfinite(y):
-                return None, "PlayerStart has non-finite coordinates"
-            return (x, y, z), None
+                return None, "PlayerStart has invalid coordinates or angle"
+            if not all(math.isfinite(v) for v in (x, y, z, angle)):
+                return None, "PlayerStart has non-finite coordinates or angle"
+            return (x, y, z, angle), None
 
         return None, "no usable PlayerStart"
 
-    @staticmethod
-    def _clone_benchmark_player(x, y, z, angle):
-        """Create a lightweight Player state for one flood edge."""
-        from engine.player import Player
-        import glm
-
-        player = Player(float(x), float(z), angle=float(angle), physics_enabled=True)
-        player.pos = glm.vec3(float(x), float(y), float(z))
-        player.velocity = glm.vec3(0.0, 0.0, 0.0)
-        player.on_ground = True
-        player.ground_object = None
-        return player
-
-    def _flood_player_area(self, start_x, start_z):
-        """Flood reachable coarse cells using the real Player collision simulation.
-
-        Every edge is one coarse player-movement step. The probe uses the same
-        Player physics, SpatialGrid and terrain collision as Play Mode.
-        """
-        from engine.physics import SpatialGrid
-        import glm
-
-        view = self.main_window.view_3d
-        state = self.main_window.state
-        logic_thread = getattr(view, "logic_thread", None)
-
-        collision_brushes = list(getattr(state, "brushes", []))
-        if logic_thread is not None:
-            collision_brushes.extend(
-                getattr(logic_thread, "_model_collision_brushes", []) or []
-            )
-
-        grid = SpatialGrid(cell_size=512.0)
-        grid.populate(collision_brushes)
-        terrain = getattr(view, "terrain", None)
-
-        cell_size = float(self.PLAYER_AREA_CELL_SIZE)
-        max_cells = int(self.PLAYER_AREA_MAX_CELLS)
-        move_delta = cell_size / 200.0
-        tolerance = cell_size * 0.35
-
-        origin = self._clone_benchmark_player(start_x, 100.0, start_z, 0.0)
-        settled = False
-        zero_move = glm.vec3(0.0, 0.0, 0.0)
-        for _ in range(12):
-            origin.update(
-                0.1,
-                zero_move,
-                False,
-                False,
-                collision_brushes,
-                terrain=terrain,
-                spatial_grid=grid,
-            )
-            if origin.on_ground or origin.swimming:
-                settled = True
-                break
-
-        if not settled or origin.pos.y <= -1990.0:
-            return None, "player start could not settle onto a playable surface"
-
-        reachable = {(0, 0): (float(origin.pos.x), float(origin.pos.y), float(origin.pos.z))}
-        queue = [(0, 0)]
-        queue_index = 0
-        directions = ((1, 0), (-1, 0), (0, 1), (0, -1))
-
-        while queue_index < len(queue):
-            ix, iz = queue[queue_index]
-            queue_index += 1
-
-            if len(reachable) >= max_cells:
-                return None, (
-                    "playable flood exceeded the %d-cell safety limit before "
-                    "the reachable region was closed" % max_cells
-                )
-
-            current_x, current_y, current_z = reachable[(ix, iz)]
-
-            for dix, diz in directions:
-                key = (ix + dix, iz + diz)
-                if key in reachable:
-                    continue
-
-                target_x = start_x + key[0] * cell_size
-                target_z = start_z + key[1] * cell_size
-                angle = math.atan2(float(dix), float(diz))
-                probe = self._clone_benchmark_player(
-                    current_x, current_y, current_z, angle
-                )
-                probe.update(
-                    move_delta,
-                    glm.vec3(0.0, 0.0, 1.0),
-                    False,
-                    False,
-                    collision_brushes,
-                    terrain=terrain,
-                    spatial_grid=grid,
-                )
-
-                if not (
-                    math.isfinite(float(probe.pos.x))
-                    and math.isfinite(float(probe.pos.y))
-                    and math.isfinite(float(probe.pos.z))
-                ):
-                    continue
-                if probe.pos.y <= -1990.0:
-                    continue
-                if not (probe.on_ground or probe.swimming):
-                    continue
-                if abs(float(probe.pos.x) - target_x) > tolerance:
-                    continue
-                if abs(float(probe.pos.z) - target_z) > tolerance:
-                    continue
-                if probe._check_overlap(collision_brushes):
-                    continue
-
-                reachable[key] = (
-                    float(probe.pos.x),
-                    float(probe.pos.y),
-                    float(probe.pos.z),
-                )
-                queue.append(key)
-
-        xs = [start_x + key[0] * cell_size for key in reachable]
-        zs = [start_z + key[1] * cell_size for key in reachable]
-        half = cell_size * 0.5
-        return {
-            "bounds": (
-                min(xs) - half,
-                max(xs) + half,
-                min(zs) - half,
-                max(zs) + half,
-            ),
-            "cell_size": cell_size,
-            "cell_count": len(reachable),
-            "cells": set(reachable.keys()),
-            "points": dict(reachable),
-        }, None
-
     def _player_area_sweep_duration(self):
-        """Return the prepared player-area sweep duration."""
+        """Return the prepared PlayerStart orbit duration."""
         path = getattr(self, "_player_area_camera_path", None)
         if path is not None:
             return max(6.0, min(12.0, float(path["duration"])))
 
         min_x, max_x, min_z, max_z = self._current_world_bounds()
-        diagonal = math.hypot(max_x - min_x, max_z - min_z)
-        return max(6.0, min(12.0, diagonal / 250.0))
+        radius = min(self.PLAYER_AREA_MAX_RADIUS, max(self.PLAYER_AREA_DEFAULT_RADIUS,
+                                                        0.25 * max(max_x - min_x, max_z - min_z)))
+        circumference = 2.0 * math.pi * radius
+        return max(6.0, min(12.0, circumference / 250.0))
 
     def _vsync_metadata(self):
         """Return the Fio display VSync setting used by the Qt application."""
@@ -646,18 +502,6 @@ class BenchmarkDialog(QDialog):
                     extra.append(
                         "Reachable flood cells: %s" % self._html_escape(
                             result["camera_sweep_reachable_cells"]
-                        )
-                    )
-                if result.get("camera_sweep_safe_path_samples") is not None:
-                    extra.append(
-                        "Collision-safe path samples: %s" % self._html_escape(
-                            result["camera_sweep_safe_path_samples"]
-                        )
-                    )
-                if result.get("camera_sweep_collision_clamped_segments") is not None:
-                    extra.append(
-                        "Collision-clamped path segments: %s" % self._html_escape(
-                            result["camera_sweep_collision_clamped_segments"]
                         )
                     )
 
@@ -1353,68 +1197,106 @@ Git commit: %s
 
 
     def _prepare_player_area_sweep(self):
-        """Prepare the original PlayerStart-centred orbit. No collision is used."""
+        """Prepare a pure PlayerStart-centred camera orbit; no collision is performed."""
         player_start, start_error = self._find_player_start()
         fallback = player_start is None
 
         min_x, max_x, min_z, max_z = self._current_world_bounds()
+        camera = self.main_window.view_3d.camera
         if fallback:
-            anchor_x = (min_x + max_x) * 0.5
-            anchor_z = (min_z + max_z) * 0.5
+            anchor_x = float(camera.pos.x)
+            anchor_y = float(camera.pos.y)
+            anchor_z = float(camera.pos.z)
+            phase2_start_yaw = float(camera.yaw)
             fallback_reason = start_error or "no usable PlayerStart"
         else:
-            anchor_x, anchor_y, anchor_z = (
-                float(player_start[0]),
-                float(player_start[1]),
-                float(player_start[2]),
-            )
+            anchor_x, anchor_y, anchor_z, phase2_start_yaw = player_start
             fallback_reason = None
 
-        map_width = max(0.0, max_x - min_x)
-        map_depth = max(0.0, max_z - min_z)
-        room_x = max(0.0, min(anchor_x - min_x, max_x - anchor_x))
-        room_z = max(0.0, min(anchor_z - min_z, max_z - anchor_z))
-        half_x = min(map_width * 0.12, room_x * 0.70)
-        half_z = min(map_depth * 0.12, room_z * 0.70)
-        half_x = max(32.0, half_x)
-        half_z = max(32.0, half_z)
-
-        effective_radius = math.sqrt((half_x * half_x + half_z * half_z) * 0.5)
-        travel_distance = 2.0 * math.pi * effective_radius
+        map_span = max(max_x - min_x, max_z - min_z)
+        radius = min(
+            self.PLAYER_AREA_MAX_RADIUS,
+            max(self.PLAYER_AREA_DEFAULT_RADIUS, map_span * 0.25),
+        )
+        travel_distance = 2.0 * math.pi * radius
         duration = max(6.0, min(12.0, travel_distance / 250.0))
 
-        camera = self.main_window.view_3d.camera
         self._player_area_camera_path = {
             "fallback": fallback,
-            "center_x": anchor_x,
-            "center_z": anchor_z,
-            "half_x": half_x,
-            "half_z": half_z,
-            "y": float(anchor_y if not fallback else camera.pos.y),
+            "center_x": float(anchor_x),
+            "center_y": float(anchor_y),
+            "center_z": float(anchor_z),
+            "radius": float(radius),
+            "phase2_start_yaw": float(phase2_start_yaw),
             "pitch": float(camera.pitch),
-            "duration": duration,
+            "duration": float(duration),
         }
         self._player_area_sweep_metadata = {
-            "mode": "player-start orbit" if not fallback else "bounds fallback",
-            "anchor_source": "PlayerStart" if not fallback else "bounds fallback",
+            "mode": "player-start orbit" if not fallback else "camera-position fallback",
+            "anchor_source": "PlayerStart" if not fallback else "camera position fallback",
             "fallback": fallback,
             "fallback_reason": fallback_reason,
             "bounds": (float(min_x), float(max_x), float(min_z), float(max_z)),
             "duration_s": float(duration),
             "travel_distance": float(travel_distance),
+            "collision_disabled": True,
         }
 
         if fallback:
             self._append(
-                "Camera sweep: BOUNDS FALLBACK for %.1f s — %s; collision disabled."
+                "Camera sweep: CAMERA-POSITION FALLBACK for %.1f s — %s; collision disabled."
                 % (duration, fallback_reason)
             )
         else:
             self._append(
                 "Camera sweep: PLAYERSTART ORBIT for %.1f s — PlayerStart at "
-                "(%.1f, %.1f); collision disabled."
-                % (duration, anchor_x, anchor_z)
+                "(%.1f, %.1f, %.1f); collision disabled."
+                % (duration, anchor_x, anchor_y, anchor_z)
             )
+
+    def _advance_player_area_sweep(self):
+        """Orbit around PlayerStart once, looking at PlayerStart, with no collision."""
+        path = getattr(self, "_player_area_camera_path", None)
+        if path is None:
+            return
+        elapsed = time.perf_counter() - self._phase_started
+        duration = float(path["duration"])
+        progress = min(1.0, max(0.0, elapsed / max(duration, 0.001)))
+        angle = progress * 2.0 * math.pi
+        x = path["center_x"] + path["radius"] * math.sin(angle)
+        z = path["center_z"] + path["radius"] * math.cos(angle)
+        yaw = math.degrees(
+            math.atan2(path["center_x"] - x, path["center_z"] - z)
+        )
+        self._set_benchmark_camera(
+            x, z, path["center_y"], yaw, path["pitch"]
+        )
+
+    def _advance_player_area_rotation(self):
+        """Rotate in place at PlayerStart through exactly 360 degrees, no collision."""
+        path = getattr(self, "_player_area_camera_path", None)
+        if path is None:
+            return
+        elapsed = time.perf_counter() - self._phase_started
+        duration = float(self._test_duration("current_world_phase2"))
+        progress = min(1.0, max(0.0, elapsed / max(duration, 0.001)))
+        yaw = path["phase2_start_yaw"] + progress * 360.0
+        self._set_benchmark_camera(
+            path["center_x"], path["center_z"], path["center_y"],
+            yaw, path["pitch"]
+        )
+
+    def _set_benchmark_camera(self, x, z, y, yaw, pitch):
+        camera = self.main_window.view_3d.camera
+        import glm
+        position = glm.vec3(float(x), float(y), float(z))
+        logic_thread = getattr(self.main_window.view_3d, "logic_thread", None)
+        if logic_thread is not None and getattr(self.main_window.view_3d, "use_threading", False):
+            logic_thread.set_editor_camera(position, yaw, pitch, camera.fov)
+        else:
+            camera.pos = position
+            camera.yaw = yaw
+            camera.pitch = pitch
 
     def _advance_player_area_sweep(self):
         """Orbit around PlayerStart without collision/clamping."""
@@ -1468,6 +1350,7 @@ Git commit: %s
 
         label, value = self._queue.pop(0)
         self._current = (label, value)
+        self._current_repetition = value if label in ("current_world_phase1", "current_world_phase2") else None
         self._phase_started = time.perf_counter()
         self.status_label.setText("Preparing: %s" % label)
         self._append_test_separator(label)
@@ -1521,7 +1404,8 @@ Git commit: %s
         # re-enter the event loop.  _tick is timer-driven and processEvents()
         # below can dispatch it immediately.
         self._timer.stop()
-        self._current = (label, duration)
+        repetition = getattr(self, "_current_repetition", None)
+        self._current = (label, float(duration), repetition)
         self._phase_started = time.perf_counter()
         self._measurement_deadline = time.perf_counter() + float(duration)
         self._measurement_watchdog_deadline = self._measurement_deadline + self._measurement_watchdog_extra_s
@@ -1580,7 +1464,7 @@ Git commit: %s
                 if label in ("current_world_phase1", "current_world_phase2"):
                     phase_number = 1 if label.endswith("phase1") else 2
                     metrics["benchmark_phase"] = phase_number
-                    metrics["benchmark_repetition"] = int(self._current[1] or 1)
+                    metrics["benchmark_repetition"] = int(self._current[2] or 1)
                     metrics["benchmark_phase_label"] = (
                         "Phase 1 — PlayerStart orbit"
                         if phase_number == 1 else
@@ -1594,8 +1478,7 @@ Git commit: %s
                     "camera_sweep_fallback_reason": sweep.get("fallback_reason"),
                     "camera_sweep_bounds": sweep.get("bounds"),
                     "camera_sweep_reachable_cells": sweep.get("reachable_cells"),
-                    "camera_sweep_safe_path_samples": sweep.get("safe_path_samples"),
-                    "camera_sweep_collision_clamped_segments": sweep.get("collision_clamped_segments"),
+                    "camera_sweep_collision_disabled": bool(sweep.get("collision_disabled", True)),
                 })
 
             if label == "live_io_1000":
