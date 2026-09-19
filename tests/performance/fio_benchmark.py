@@ -189,7 +189,8 @@ def _measure_scenario(width, height, name, shadows, empty):
     if empty:
         brushes, things = [], []
     else:
-        brushes, things = glh.lit_cube_scene(shadows=shadows)
+        data = _generate_procedural_map(monsters=0, relay_count=32)
+        brushes, things = data["brushes"], data["things"]
 
     with glh.GLTestContext(width, height) as context:
         renderer = glh.make_renderer()
