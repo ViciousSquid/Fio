@@ -730,7 +730,7 @@ def load_live_benchmark_world(window, data, yield_hook=None):
         yield_hook()
 
 
-def prepare_live_monster_test(window, aggro_fraction=0.25):
+def prepare_live_monster_test(window, aggro_fraction=0.25, yield_hook=None):
     """Enter real Play Mode and configure a representative monster combat load.
 
     Monster AI remains fully live: teams make monsters acquire opposing
@@ -777,6 +777,8 @@ def prepare_live_monster_test(window, aggro_fraction=0.25):
         monster.properties["awake"] = True
         monster.properties["wake_on_sight"] = True
         monster.properties["dead"] = False
+        if yield_hook is not None and index % 25 == 0:
+            yield_hook()
 
     # Seed explicit aggro on a subset so infighting starts immediately rather
     # than depending entirely on the player wandering into every sight cone.
@@ -798,6 +800,11 @@ def prepare_live_monster_test(window, aggro_fraction=0.25):
         if candidates:
             candidates.sort(key=lambda item: item[0])
             source.properties["_aggro_target"] = id(candidates[0][1])
+        if yield_hook is not None and index % 10 == 0:
+            yield_hook()
+
+    if yield_hook is not None:
+        yield_hook()
 
     # Keep the player moving through the encounter while god mode prevents
     # combat from ending the measurement.
