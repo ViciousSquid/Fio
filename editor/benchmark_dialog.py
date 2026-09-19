@@ -1198,17 +1198,46 @@ Git commit: %s
                 sys.path.insert(0, repo_root)
 
             import importlib
+            import inspect
+
+            expected_tests_dir = os.path.normcase(
+                os.path.abspath(os.path.join(repo_root, "tests"))
+            )
+            expected_benchmark = os.path.normcase(
+                os.path.abspath(
+                    os.path.join(repo_root, "tests", "performance", "fio_benchmark.py")
+                )
+            )
+
+            # Fio must load its own tests package. A different package named
+            # "tests" may already be cached in this long-lived Python process;
+            # changing sys.path alone cannot replace that module object.
+            for module_name in list(sys.modules):
+                if module_name == "tests" or module_name.startswith("tests."):
+                    del sys.modules[module_name]
+
             importlib.invalidate_caches()
             from tests.performance import fio_benchmark as bench
 
-            expected_benchmark = os.path.abspath(
-                os.path.join(repo_root, "tests", "performance", "fio_benchmark.py")
+            # Always reload the exact module from this checkout so an older
+            # in-memory copy cannot survive a source update.
+            bench = importlib.reload(bench)
+
+            actual_benchmark = os.path.normcase(
+                os.path.abspath(getattr(bench, "__file__", ""))
             )
-            actual_benchmark = os.path.abspath(getattr(bench, "__file__", ""))
+            signature = inspect.signature(bench.load_live_benchmark_world)
+
             if actual_benchmark != expected_benchmark:
                 raise ImportError(
                     "Fio benchmark module was shadowed: expected %s, imported %s"
                     % (expected_benchmark, actual_benchmark)
+                )
+
+            if "yield_hook" not in signature.parameters:
+                raise ImportError(
+                    "Fio benchmark module has the wrong loader signature: %s (%s)"
+                    % (actual_benchmark, signature)
                 )
 
             self._bench = bench
