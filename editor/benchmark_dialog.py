@@ -206,7 +206,45 @@ class BenchmarkDialog(QDialog):
         self.output.append('<div style="border-top:2px solid #ff8a00; margin:14px 0 8px 0; padding-top:8px;"><span style="color:#ffb15a; font-weight:bold;">TEST: %s</span></div>' % label)
 
     def _test_duration(self, label):
-        return {"current_world": 3.0, "procedural_100_monsters": 4.0, "procedural_500_monsters": 4.0, "procedural_1000_monsters": 5.0, "live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_apocalypse": 4.0}.get(label, 3.0)
+        # The current-world test is map-scale dependent. A fixed 3-second
+        # window is too short to sample culling across a meaningful portion of
+        # a large map, while tiny maps do not need a long measurement.
+        if label == "current_world":
+            return self._current_world_sweep_duration()
+        return {"procedural_100_monsters": 4.0, "procedural_500_monsters": 4.0, "procedural_1000_monsters": 5.0, "live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_apocalypse": 4.0}.get(label, 3.0)
+
+    def _current_world_bounds(self):
+        """Return the X/Z bounds of the loaded map from actual brush positions."""
+        brushes = getattr(self.main_window.state, "brushes", [])
+        points = []
+        for brush in brushes:
+            pos = getattr(brush, "pos", None)
+            if pos is None and isinstance(brush, dict):
+                pos = brush.get("pos")
+            if pos is not None and len(pos) >= 3:
+                points.append((float(pos[0]), float(pos[2])))
+
+        if not points:
+            camera = self.main_window.view_3d.camera
+            x = float(camera.pos.x)
+            z = float(camera.pos.z)
+            return x - 128.0, x + 128.0, z - 128.0, z + 128.0
+
+        xs = [p[0] for p in points]
+        zs = [p[1] for p in points]
+        return min(xs), max(xs), min(zs), max(zs)
+
+    def _current_world_sweep_duration(self):
+        """Choose a deterministic measurement duration from map scale.
+
+        Approximate traversal speed is 250 world units/sec along the map
+        diagonal, with a 5-second floor and 30-second ceiling. This gives
+        roughly 15 seconds for a ~3,750-unit diagonal map and avoids making
+        the camera artificially fast just to fit a fixed benchmark window.
+        """
+        min_x, max_x, min_z, max_z = self._current_world_bounds()
+        diagonal = math.hypot(max_x - min_x, max_z - min_z)
+        return max(5.0, min(30.0, diagonal / 250.0))
 
     def _git_commit(self):
         try:
@@ -346,16 +384,23 @@ class BenchmarkDialog(QDialog):
             center_z = float(camera.pos.z)
             half_x = half_z = 128.0
 
-        self._current_world_camera_path = (center_x, center_z, half_x, half_z, float(camera.pos.y), float(camera.pitch))
-        self._append("Camera sweep: traversing the loaded map during the measurement.")
+        duration = self._current_world_sweep_duration()
+        self._current_world_camera_path = (
+            center_x, center_z, half_x, half_z,
+            float(camera.pos.y), float(camera.pitch), duration
+        )
+        self._append(
+            "Camera sweep: traversing the loaded map for %.1f s "
+            "(map-scale dependent, 5–30 s)." % duration
+        )
 
     def _advance_current_world_sweep(self):
         path = getattr(self, "_current_world_camera_path", None)
         if path is None:
             return
-        center_x, center_z, half_x, half_z, y, pitch = path
+        center_x, center_z, half_x, half_z, y, pitch, duration = path
         elapsed = time.perf_counter() - self._phase_started
-        angle = (elapsed / 1.5) * (2.0 * math.pi)
+        angle = min(1.0, elapsed / max(duration, 0.001)) * (2.0 * math.pi)
         x = center_x + half_x * math.sin(angle)
         z = center_z + half_z * math.sin(angle + math.pi * 0.5)
         next_x = center_x + half_x * math.sin(angle + 0.01)
