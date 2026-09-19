@@ -203,6 +203,8 @@ class BenchmarkDialog(QDialog):
             self.monsters_500,
             self.monsters_1000,
             self.monster_apocalypse,
+            self.borderless_window,
+            self.fullscreen_window,
         ):
             checkbox.setEnabled(enabled)
 
