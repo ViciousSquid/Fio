@@ -1572,10 +1572,13 @@ Git commit: %s
         combined_fps = 1000.0 * total_frames / total_frame_time_ms
         total_seconds = total_frame_time_ms / 1000.0
         self._append(
-            '<div style="background:#17231a; border:2px solid #63d471; padding:12px; margin:8px 0 12px 0;">'
-            '<div style="font-size:16px; font-weight:bold; color:#63d471;">Combined Current World Average FPS</div>'
-            '<div style="font-size:28px; font-weight:bold; color:#eeeeee;">%.2f FPS</div>'
-            '<div style="color:#aaa;">Phase 1 + Phase 2 across %d run%s • %.2f seconds • %d captured frames</div>'
+            '<div style="margin:14px 0 10px 0; padding:10px 0; border-top:2px solid #555; border-bottom:2px solid #555;">'
+            '<div style="display:flex; align-items:center; justify-content:flex-start; gap:10px; white-space:nowrap;">'
+            '<span style="display:inline-block; width:7px; height:42px; background:#ff9a32; flex:none;"></span>'
+            '<span style="font-size:25px; font-weight:bold; color:#63d471;">Combined Current World Average FPS:</span>'
+            '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32;">%.2f FPS</span>'
+            '</div>'
+            '<div style="color:#aaa; padding:4px 0 0 17px;">Phase 1 + Phase 2 across %d run%s • %.2f seconds • %d captured frames</div>'
             '</div>' % (
                 combined_fps, int(self._requested_repetitions),
                 "" if int(self._requested_repetitions) == 1 else "s",
@@ -1638,10 +1641,20 @@ Git commit: %s
                                '<span style="color:#eeeeee; font-weight:bold;"> &nbsp; • &nbsp; Average culled triangles: </span><span style="color:#ff9a32; font-weight:bold;">%.0f</span>'
                                '<span style="color:#eeeeee; font-weight:bold;"> &nbsp; • &nbsp; Culling efficiency: </span><span style="color:#ff9a32; font-weight:bold;">%.1f%%</span></div>'
                                % (metrics.get("average_visible_tris", 0.0), metrics.get("average_total_tris", 0.0), metrics.get("average_culled_tris", 0.0), metrics.get("culling_efficiency", 0.0)))
-        self.output.append('<div style="margin-top:10px; padding:8px 0 2px 0; border-top:2px solid #555; white-space:nowrap;">'
-                           '<span style="font-size:25px; font-weight:bold; color:#63d471;">average FPS:</span>'
-                           '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.2f</span>'
-                           '</div>' % avg_fps)
+        if label in ("current_world_phase1", "current_world_phase2"):
+            phase_label = "Phase 1:" if label.endswith("phase1") else "Phase 2:"
+            self.output.append(
+                '<div style="margin-top:10px; padding:8px 0 2px 0; border-top:2px solid #555; text-align:right; white-space:nowrap;">'
+                '<span style="font-size:25px; font-weight:bold; color:#63d471;">%s</span>'
+                '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.2f FPS</span>'
+                '<span style="display:inline-block; width:7px; height:42px; background:#63d471; vertical-align:middle; margin-left:12px;"></span>'
+                '</div>' % (phase_label, avg_fps)
+            )
+        else:
+            self.output.append('<div style="margin-top:10px; padding:8px 0 2px 0; border-top:2px solid #555; white-space:nowrap;">'
+                               '<span style="font-size:25px; font-weight:bold; color:#63d471;">average FPS:</span>'
+                               '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.2f</span>'
+                               '</div>' % avg_fps)
         self.output.append('<div style="color:#aaa; padding:2px 0 4px 0;">Average FPS = 1000 / mean(captured frame time). Wall-clock FPS is reported separately.</div>')
         self.output.append('<div style="border-top:2px solid #63d471; margin:14px 0 8px 0;"></div>')
         self.output.ensureCursorVisible()
