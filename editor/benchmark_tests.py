@@ -317,7 +317,27 @@ class BenchmarkTests:
     
             elif label in ("procedural_100_monsters", "procedural_500_monsters",
                            "procedural_1000_monsters", "monster_apocalypse"):
-                if label != "monster_apocalypse":
+                # The apocalypse workload is intentionally a worst-case 1000-monster
+                # + 1000-relay world on a large procedural map. It is capable of
+                # making a low-power machine unresponsive before the cooperative
+                # yield hook gets another chance to run. Keep it opt-in for live
+                # MainWindow benchmarks, just like the oversized monster tiers.
+                if label == "monster_apocalypse":
+                    allow_apocalypse = os.environ.get(
+                        "FIO_BENCHMARK_ALLOW_LIVE_APOCALYPSE",
+                        "",
+                    ).strip().lower() in ("1", "true", "yes")
+                    if not allow_apocalypse:
+                        self._skip_live_stress(
+                            label,
+                            "monster_apocalypse is disabled for live MainWindow "
+                            "benchmarks because it can make low-power hardware "
+                            "unresponsive during world generation. Set "
+                            "FIO_BENCHMARK_ALLOW_LIVE_APOCALYPSE=1 to run it "
+                            "explicitly on a machine that can handle the workload.",
+                        )
+                        return
+                else:
                     monsters = int(label.split("_")[1])
                     raw_limit = os.environ.get(
                         "FIO_BENCHMARK_MAX_LIVE_MONSTERS",
