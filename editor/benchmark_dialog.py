@@ -13,7 +13,7 @@ import subprocess
 import math
 from datetime import datetime, timezone
 
-from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPushButton, QVBoxLayout, QApplication, QFileDialog, QTextBrowser, QToolButton, QWidget
+from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPushButton, QVBoxLayout, QApplication, QFileDialog, QTextBrowser, QToolButton, QWidget, QScrollArea
 from PyQt5.QtCore import QTimer, Qt
 import copy
 import time
@@ -163,20 +163,26 @@ class BenchmarkDialog(QDialog):
             stress_layout.addWidget(checkbox)
 
         self.stress_options.setVisible(False)
-        stress_toggle.toggled.connect(self.stress_options.setVisible)
+        stress_scroll = QScrollArea()
+        stress_scroll.setWidgetResizable(True)
+        stress_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        stress_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        stress_scroll.setMaximumHeight(220)
+        stress_scroll.setWidget(self.stress_options)
+        stress_toggle.toggled.connect(stress_scroll.setVisible)
         self.select_all_button = QPushButton("Select all")
         self.select_all_button.clicked.connect(self._select_all_stress_tests)
         self.select_all_button.setVisible(False)
         stress_toggle.toggled.connect(self.select_all_button.setVisible)
         layout.addWidget(self.select_all_button)
-        layout.addWidget(self.stress_options)
+        layout.addWidget(stress_scroll)
 
         self.output = QTextBrowser()
         self.output.setOpenExternalLinks(False)
         self.output.setStyleSheet(
             "QTextBrowser { font-family: Consolas, monospace; background: #171717; border: 1px solid #444; }"
         )
-        layout.addWidget(self.output)
+        layout.addWidget(self.output, 1)
 
         self.export_button = QPushButton("Export Results…")
         self.export_button.setEnabled(False)
@@ -209,6 +215,8 @@ class BenchmarkDialog(QDialog):
             self.monster_apocalypse,
             self.borderless_window,
             self.fullscreen_window,
+            self.editor_windowed_1280,
+            self.editor_windowed_1920,
         ):
             checkbox.setEnabled(enabled)
 
@@ -290,6 +298,11 @@ class BenchmarkDialog(QDialog):
         self.export_button.setEnabled(False)
         self.status_label.setText("Preparing live Fio benchmark...")
         self._set_controls_enabled(False)
+        # Keep the test selector collapsed while a benchmark is running so
+        # the result pane retains the vertical space needed for live output.
+        stress_toggle = self.findChild(QToolButton)
+        if stress_toggle is not None:
+            stress_toggle.setChecked(False)
         self._running = True
 
         try:
@@ -390,7 +403,6 @@ class BenchmarkDialog(QDialog):
     def _enter_benchmark_editor_window_mode(self, width, height):
         """Run the real editor UI in a normal decorated window and measure its 3D pane."""
         self._benchmark_window_mode = "editor_windowed"
-        self.hide()
         window = self.main_window
         window.showNormal()
         if self._original_window_flags is not None:
@@ -417,7 +429,6 @@ class BenchmarkDialog(QDialog):
             return
 
         self._benchmark_window_mode = mode
-        self.hide()
         window = self.main_window
 
         if mode == "borderless":
@@ -549,7 +560,6 @@ class BenchmarkDialog(QDialog):
         try:
             if label in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
                 if label == "current_world":
-                    self.hide()
                     self.main_window.raise_()
                     self.main_window.activateWindow()
                     QApplication.processEvents()
