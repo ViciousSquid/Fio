@@ -1796,7 +1796,6 @@ Git commit: %s
             camera.pitch = path["pitch"]
 
     def _begin_next(self):
-    def _begin_next(self):
         if not self._queue:
             self._restore_original()
             return
