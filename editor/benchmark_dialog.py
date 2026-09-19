@@ -1496,8 +1496,8 @@ Git commit: %s
                     "live_10000_brushes": 10000,
                     "live_100000_brushes": 100000,
                 }[label]
-                # Use Fio's vectorised scene builder. Never iterate over the
-                # brush collection in Python just to construct the benchmark.
+                # Use Fio's NumPy-assisted scene builder and load the resulting
+                # level data into the existing EditorState.
                 data = bench._make_brush_stress_scene(brush_count)
                 bench.load_live_benchmark_world(window, data)
                 QApplication.processEvents()
@@ -1552,20 +1552,57 @@ Git commit: %s
                         str(thing.properties.get("name", "BenchmarkRelay_0")).rsplit("_", 1)[1]
                     ),
                 )
+
                 self._append(
                     "  Live I/O: firing OnTrigger through %d real LogicRelay entities..."
                     % len(relays)
                 )
-                import sys as _sys
-                old_limit = _sys.getrecursionlimit()
-                _sys.setrecursionlimit(max(old_limit, 10000))
+
+                import editor.io_system as _io_system
+                old_debug = _io_system.IO_DEBUG_ENABLED
+                old_limit = sys.getrecursionlimit()
+                io_deadline = time.perf_counter() + self._live_stress_timeout_for(label)
+
+                def _yield_live_io():
+                    # Return to Qt periodically so the independent monitor can
+                    # deliver its timeout and the main thread can abort cleanly.
+                    QApplication.processEvents()
+                    if self._live_stress_timeout:
+                        return False
+                    if time.perf_counter() >= io_deadline:
+                        self._live_stress_timeout = True
+                        self._live_stress_timeout_reason = (
+                            "%s exceeded its %.1f s live benchmark timeout. "
+                            "The benchmark was stopped without terminating Fio."
+                            % (label, self._live_stress_timeout_for(label))
+                        )
+                        return False
+                    return True
+
+                _io_system.IO_DEBUG_ENABLED = False
+                sys.setrecursionlimit(max(old_limit, 10000))
                 try:
                     io_manager.reset()
+                    io_manager.set_dispatch_yield_hook(_yield_live_io, interval=16)
                     start = time.perf_counter()
-                    io_manager.fire_output(first, "OnTrigger")
+                    completed = io_manager.fire_output(
+                        first, "OnTrigger", _iterative=True
+                    )
                     self._live_io_elapsed = time.perf_counter() - start
                 finally:
-                    _sys.setrecursionlimit(old_limit)
+                    io_manager.set_dispatch_yield_hook(None)
+                    _io_system.IO_DEBUG_ENABLED = old_debug
+                    sys.setrecursionlimit(old_limit)
+
+                if not completed or self._live_stress_timeout:
+                    self._abort_live_stress(
+                        self._live_stress_timeout_reason or
+                        ("%s exceeded its %.1f s live benchmark timeout. "
+                         "The benchmark was stopped without terminating Fio."
+                         % (label, self._live_stress_timeout_for(label)))
+                    )
+                    return
+
                 self._append(
                     "  Live I/O: completed %d LogicRelay hops in %.3f ms."
                     % (len(relays), self._live_io_elapsed * 1000.0)
