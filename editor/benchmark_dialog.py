@@ -1663,7 +1663,6 @@ while True:
                 raise ValueError("unknown live stress benchmark: %s" % label)
 
         finally:
-            self._stop_live_stress_watchdog()
             if view.play_mode and label.startswith(("procedural_", "monster_")):
                 try:
                     bench.finish_live_monster_test(window)
@@ -1672,6 +1671,7 @@ while True:
                         window._exit_play_mode()
                     except Exception:
                         pass
+            self._stop_live_stress_watchdog()
 
         self._begin_next()
 
