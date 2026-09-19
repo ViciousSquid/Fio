@@ -12,6 +12,7 @@ Run:
 import json
 import os
 import statistics
+import sys
 import time
 
 import pytest
@@ -32,6 +33,48 @@ DEFAULT_RESOLUTIONS = (
     (2560, 1440),
     (2880, 1920),
 )
+
+
+def _execution_environment():
+    """Return the Python process and host architecture/translation mode."""
+    import platform
+    process_arch = platform.machine() or "unknown"
+    host_arch = process_arch
+    translation = "none detected"
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            process_machine = ctypes.c_ushort()
+            native_machine = ctypes.c_ushort()
+            fn = ctypes.windll.kernel32.IsWow64Process2
+            fn.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ushort), ctypes.POINTER(ctypes.c_ushort)]
+            fn.restype = ctypes.c_bool
+            if fn(ctypes.windll.kernel32.GetCurrentProcess(),
+                  ctypes.byref(process_machine), ctypes.byref(native_machine)):
+                names = {0x014C: "x86", 0x8664: "x64", 0xAA64: "ARM64"}
+                process_arch = names.get(process_machine.value, "0x%04X" % process_machine.value)
+                host_arch = names.get(native_machine.value, "0x%04X" % native_machine.value)
+                if process_machine.value and process_machine.value != native_machine.value:
+                    translation = "Microsoft Prism / Windows on ARM emulation"
+        except Exception:
+            pass
+    elif sys.platform == "darwin":
+        try:
+            import ctypes
+            libc = ctypes.CDLL(None)
+            translated = ctypes.c_int(0)
+            size = ctypes.c_size_t(ctypes.sizeof(translated))
+            if libc.sysctlbyname(b"sysctl.proc_translated", ctypes.byref(translated),
+                                 ctypes.byref(size), None, 0) == 0 and translated.value == 1:
+                translation = "Apple Rosetta 2"
+                host_arch = "ARM64"
+        except Exception:
+            pass
+
+    return "Python: %s | Host CPU: %s | Translation: %s" % (
+        process_arch, host_arch, translation
+    )
 
 
 def _resolutions():
@@ -462,6 +505,7 @@ def run_benchmark(additional_tests=False):
 def format_results(results, info=None):
     lines = [
         "Fio renderer benchmark — visual test suite scenarios",
+        _execution_environment(),
         "Rendering path: tests/visual/test_lit_scene.py::_render",
         "",
         "scenario                                      resolution       FPS     mean ms   p95 ms   ms/MP",
