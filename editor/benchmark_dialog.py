@@ -379,7 +379,9 @@ class BenchmarkDialog(QDialog):
             if resolution:
                 metrics.append("Resolution: %s" % resolution)
             if fps is not None:
-                metrics.append("Average FPS: %.2f" % float(fps))
+                metrics.append("Average FPS: %.2f (from captured frame time)" % float(fps))
+            if "wall_clock_fps" in result:
+                metrics.append("Wall-clock FPS: %.2f (captured frames / measurement duration)" % float(result["wall_clock_fps"]))
             if mean_ms is not None:
                 metrics.append("Average frame: %.2f ms" % float(mean_ms))
             if p95_ms is not None:
@@ -1293,20 +1295,59 @@ Git commit: %s
 
     @staticmethod
     def _benchmark_metrics(capture, duration):
+        """Calculate live benchmark metrics from the captured frame timings.
+
+        Average FPS is derived from the same captured frame-time sample as
+        Average frame time, matching the standalone renderer benchmarks.
+        ``wall_clock_fps`` is retained separately for presentation throughput.
+        """
         import numpy as np
         values = np.asarray(capture.get("frame_times", []), dtype=np.float64)
         visible = np.asarray(capture.get("visible_tris", []), dtype=np.float64)
         total = np.asarray(capture.get("total_tris", []), dtype=np.float64)
         culled = np.asarray(capture.get("culled_tris", []), dtype=np.float64)
+        frame_count = int(values.size)
+        duration = float(duration)
         if values.size == 0:
-            return {"frame_count": 0, "measurement_duration_s": float(duration), "average_frame_time_ms": 0.0, "median_frame_time_ms": 0.0, "p95_frame_time_ms": 0.0, "p99_frame_time_ms": 0.0, "p999_frame_time_ms": 0.0, "min_frame_time_ms": 0.0, "max_frame_time_ms": 0.0, "average_fps": 0.0, "average_visible_tris": 0.0, "average_total_tris": 0.0, "average_culled_tris": 0.0, "culling_efficiency": 0.0}
+            return {
+                "frame_count": frame_count,
+                "measurement_duration_s": duration,
+                "average_frame_time_ms": 0.0,
+                "median_frame_time_ms": 0.0,
+                "p95_frame_time_ms": 0.0,
+                "p99_frame_time_ms": 0.0,
+                "p999_frame_time_ms": 0.0,
+                "min_frame_time_ms": 0.0,
+                "max_frame_time_ms": 0.0,
+                "average_fps": 0.0,
+                "wall_clock_fps": 0.0,
+                "average_visible_tris": 0.0,
+                "average_total_tris": 0.0,
+                "average_culled_tris": 0.0,
+                "culling_efficiency": 0.0,
+            }
         avg_ms = float(np.mean(values))
         avg_visible = float(np.mean(visible)) if visible.size else 0.0
         avg_total = float(np.mean(total)) if total.size else 0.0
         avg_culled = float(np.mean(culled)) if culled.size else 0.0
         efficiency = (avg_culled / avg_total * 100.0) if avg_total > 0.0 else 0.0
-        return {"frame_count": int(values.size), "measurement_duration_s": float(duration), "average_frame_time_ms": avg_ms, "median_frame_time_ms": float(np.percentile(values, 50)), "p95_frame_time_ms": float(np.percentile(values, 95)), "p99_frame_time_ms": float(np.percentile(values, 99)), "p999_frame_time_ms": float(np.percentile(values, 99.9)), "min_frame_time_ms": float(np.min(values)), "max_frame_time_ms": float(np.max(values)), "average_fps": float(values.size / duration) if duration > 0 else 0.0, "average_visible_tris": avg_visible, "average_total_tris": avg_total, "average_culled_tris": avg_culled, "culling_efficiency": efficiency}
-
+        return {
+            "frame_count": frame_count,
+            "measurement_duration_s": duration,
+            "average_frame_time_ms": avg_ms,
+            "median_frame_time_ms": float(np.percentile(values, 50)),
+            "p95_frame_time_ms": float(np.percentile(values, 95)),
+            "p99_frame_time_ms": float(np.percentile(values, 99)),
+            "p999_frame_time_ms": float(np.percentile(values, 99.9)),
+            "min_frame_time_ms": float(np.min(values)),
+            "max_frame_time_ms": float(np.max(values)),
+            "average_fps": (1000.0 / avg_ms) if avg_ms > 0.0 else 0.0,
+            "wall_clock_fps": (frame_count / duration) if duration > 0.0 else 0.0,
+            "average_visible_tris": avg_visible,
+            "average_total_tris": avg_total,
+            "average_culled_tris": avg_culled,
+            "culling_efficiency": efficiency,
+        }
     def _report_live_result(self, label, metrics):
         width = metrics.get("viewport_width", self.main_window.view_3d.width())
         height = metrics.get("viewport_height", self.main_window.view_3d.height())
@@ -1326,9 +1367,9 @@ Git commit: %s
         self.output.append('<div style="background:#222; border:1px solid #555; padding:12px; margin:4px 0 10px 0;">'
                            '<div style="font-size:15px; font-weight:bold; color:#eeeeee; margin-bottom:4px;">%s</div>'
                            '<div style="color:#aaa;">%dx%d &nbsp; • &nbsp; %.2f ms average frame &nbsp; • &nbsp; %.2f ms median &nbsp; • &nbsp; %.2f ms p95</div>'
-                           '<div style="color:#aaa;">%d frames &nbsp; • &nbsp; %.2f s measured &nbsp; • &nbsp; 1%% low %.2f FPS &nbsp; • &nbsp; 0.1%% low %.2f FPS</div>'
+                           '<div style="color:#aaa;">%d frames &nbsp; • &nbsp; %.2f s measured &nbsp; • &nbsp; wall-clock %.2f FPS &nbsp; • &nbsp; 1%% low %.2f FPS &nbsp; • &nbsp; 0.1%% low %.2f FPS</div>'
                            '<div style="color:#aaa;">VRAM %s &nbsp; • &nbsp; brushes %d visible / %d culled / %d total &nbsp; • &nbsp; entities %d</div>'
-                           '</div>' % (label, width, height, avg_ms, float(metrics.get("median_frame_time_ms", 0.0)), p95_ms, frames, duration, low_1, low_01, self._format_vram(metrics), metrics.get("visible_brushes", 0), metrics.get("culled_brushes", 0), metrics.get("total_brushes", 0), result["entities"]))
+                           '</div>' % (label, width, height, avg_ms, float(metrics.get("median_frame_time_ms", 0.0)), p95_ms, frames, duration, float(metrics.get("wall_clock_fps", 0.0)), low_1, low_01, self._format_vram(metrics), metrics.get("visible_brushes", 0), metrics.get("culled_brushes", 0), metrics.get("total_brushes", 0), result["entities"]))
         if label in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
             self.output.append('<div style="padding:4px 0;">'
                                '<span style="color:#eeeeee; font-weight:bold;">Average visible triangles: </span><span style="color:#ff9a32; font-weight:bold;">%.0f</span>'
