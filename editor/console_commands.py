@@ -745,7 +745,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">clear</b> — Clear console<br>
 <b style="color:orange;">help</b> — Show this help<br>
 <b style="color:orange;">fps</b> — Toggle FPS display<br>
-<b style="color:orange;">benchmark</b> [seconds] — Open Benchmark and test the current map for the specified duration<br>
+<b style="color:orange;">benchmark</b> [seconds] [repetitions] — Run the Current World orbit + 360° phases<br>
 <b style="color:orange;">map</b> &lt;name&gt; — Load a different map<br>
 <b style="color:cyan;">=== Save / Load (Play Session) ===</b><br>
 <b style="color:orange;">save</b> [name] — Save the current play session (Play Mode only)<br>
