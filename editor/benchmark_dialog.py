@@ -1444,6 +1444,7 @@ Git commit: %s
         self._live_io_elapsed = None
         self._live_stress_timeout = False
         self._live_stress_timeout_reason = ""
+        self._start_live_stress_monitor(label)
 
         try:
             if label in ("live_1000_brushes", "live_10000_brushes", "live_100000_brushes"):
@@ -1530,7 +1531,6 @@ Git commit: %s
             else:
                 raise ValueError("unknown live stress benchmark: %s" % label)
 
-            self._start_live_stress_monitor(label)
             duration = self._test_duration(label)
             self._current = (label, float(duration), None)
             self._phase_started = time.perf_counter()
