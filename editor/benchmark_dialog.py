@@ -7,8 +7,12 @@ does not launch a second Fio process and does not depend on pytest.
 
 import os
 import sys
+import json
+import platform
+import subprocess
+from datetime import datetime, timezone
 
-from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout, QApplication
+from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPushButton, QVBoxLayout, QApplication, QFileDialog, QTextBrowser
 from PyQt5.QtCore import QTimer
 import copy
 import time
@@ -76,6 +80,7 @@ class BenchmarkDialog(QDialog):
         self._original_camera = None
         self._running = False
         self._restoring = False
+        self._results = []
 
         self.setWindowTitle("Fio Benchmark")
         self.resize(900, 650)
@@ -119,13 +124,17 @@ class BenchmarkDialog(QDialog):
             )
             layout.addWidget(checkbox)
 
-        self.output = QPlainTextEdit()
-        self.output.setReadOnly(True)
-        self.output.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.output = QTextBrowser()
+        self.output.setOpenExternalLinks(False)
         self.output.setStyleSheet(
-            "QPlainTextEdit { font-family: Consolas, monospace; }"
+            "QTextBrowser { font-family: Consolas, monospace; background: #171717; border: 1px solid #444; }"
         )
         layout.addWidget(self.output)
+
+        self.export_button = QPushButton("Export Results…")
+        self.export_button.setEnabled(False)
+        self.export_button.clicked.connect(self._export_results)
+        layout.addWidget(self.export_button)
 
         self.run_button = QPushButton("Run Benchmark")
         self.run_button.clicked.connect(self._start)
@@ -155,11 +164,39 @@ class BenchmarkDialog(QDialog):
         self.output.ensureCursorVisible()
         QApplication.processEvents()
 
+    def _append_test_separator(self, label):
+        self.output.append('<div style="border-top:2px solid #ff8a00; margin:14px 0 8px 0; padding-top:8px;"><span style="color:#ffb15a; font-weight:bold;">TEST: %s</span></div>' % label)
+
+    def _test_duration(self, label):
+        return {"current_world": 3.0, "procedural_100_monsters": 4.0, "procedural_500_monsters": 4.0, "procedural_1000_monsters": 5.0, "live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_apocalypse": 4.0}.get(label, 3.0)
+
+    def _git_commit(self):
+        try:
+            return subprocess.check_output(["git", "-C", self.root_dir, "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True, timeout=2).strip()
+        except Exception:
+            return "unknown"
+
+    def _export_results(self):
+        if not self._results:
+            return
+        default_name = "fio_benchmark_%s.json" % datetime.now().strftime("%Y%m%d_%H%M%S")
+        path, _ = QFileDialog.getSaveFileName(self, "Export Fio Benchmark Results", default_name, "JSON files (*.json);;All files (*)")
+        if not path:
+            return
+        payload = {"format": "fio-benchmark-v2", "timestamp_utc": datetime.now(timezone.utc).isoformat(), "environment": _execution_environment(), "platform": platform.platform(), "python": platform.python_version(), "cpu": platform.processor(), "commit": self._git_commit(), "viewport": {"width": self.main_window.view_3d.width(), "height": self.main_window.view_3d.height()}, "results": self._results}
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            self.status_label.setText("Exported benchmark results: %s" % os.path.basename(path))
+        except Exception:
+            self._append("<span style='color:#ff6666;'>Export failed.</span><pre>%s</pre>" % traceback.format_exc())
     def _start(self):
         if self._running:
             return
 
         self.output.clear()
+        self._results = []
+        self.export_button.setEnabled(False)
         self.status_label.setText("Preparing live Fio benchmark...")
         self._set_controls_enabled(False)
         self._running = True
@@ -254,14 +291,13 @@ class BenchmarkDialog(QDialog):
         self._current = (label, value)
         self._phase_started = time.perf_counter()
         self.status_label.setText("Preparing: %s" % label)
-        self._append("")
-        self._append("=" * 78)
-        self._append("START TEST: %s" % label)
+        self._append_test_separator(label)
+        self._append("<span style='color:#ffb15a; font-weight:bold;'>START TEST</span> — %s" % label)
         self._append("Reset to baseline; loading isolated workload...")
 
         try:
             if label == "current_world":
-                self._start_measurement(label)
+                self._start_measurement(label, duration=self._test_duration(label))
             elif label.startswith("procedural_"):
                 data = self._bench._generate_procedural_map(
                     monsters=int(value), relay_count=32, seed=1337 + int(value)
@@ -273,11 +309,11 @@ class BenchmarkDialog(QDialog):
                     monsters=0, relay_count=1000, seed=0x10
                 )
                 self._bench.load_live_benchmark_world(self.main_window, data)
-                self._start_measurement(label, duration=0.5)
+                self._start_measurement(label, duration=self._test_duration(label))
             elif label == "monster_apocalypse":
                 data = self._bench._generate_monster_apocalypse()
                 self._bench.load_live_benchmark_world(self.main_window, data)
-                self._start_measurement(label, duration=2.0)
+                self._start_measurement(label, duration=self._test_duration(label))
             elif label.startswith("live_") and label.endswith("_brushes"):
                 count = int(label.split("_")[1])
                 data = self._bench._generate_procedural_map(monsters=0, relay_count=32)
@@ -311,6 +347,7 @@ class BenchmarkDialog(QDialog):
         self.main_window.view_3d.sysmon.reset_metrics()
         self.main_window.view_3d.update()
         QApplication.processEvents()
+        self.main_window.view_3d.sysmon.begin_benchmark_capture()
         self._timer.start()
 
     def _tick(self):
@@ -326,8 +363,10 @@ class BenchmarkDialog(QDialog):
             if time.perf_counter() < self._measurement_deadline:
                 return
 
-            metrics = view.sysmon.get_metrics()
-            metrics["measurement_duration_s"] = time.perf_counter() - self._phase_started
+            frame_times = view.sysmon.end_benchmark_capture()
+            metrics = self._benchmark_metrics(frame_times, time.perf_counter() - self._phase_started)
+            live_metrics = view.sysmon.get_metrics()
+            metrics.update({"viewport_width": int(view.width()), "viewport_height": int(view.height()), "vram_used_mb": live_metrics.get("vram_used_mb"), "vram_total_mb": live_metrics.get("vram_total_mb"), "visible_brushes": live_metrics.get("visible_brushes", 0), "culled_brushes": live_metrics.get("culled_brushes", 0), "total_brushes": live_metrics.get("total_brushes", 0), "visible_tris": live_metrics.get("visible_tris", 0), "culled_tris": live_metrics.get("culled_tris", 0), "visible_surfaces": live_metrics.get("visible_surfaces", 0), "culled_surfaces": live_metrics.get("culled_surfaces", 0)})
             label = self._current[0]
 
             if label == "live_io_1000":
@@ -401,11 +440,19 @@ class BenchmarkDialog(QDialog):
             self.main_window._exit_play_mode()
             QApplication.processEvents()
 
+    @staticmethod
+    def _benchmark_metrics(frame_times, duration):
+        import numpy as np
+        values = np.asarray(frame_times, dtype=np.float64)
+        if values.size == 0:
+            return {"frame_count": 0, "measurement_duration_s": float(duration), "average_frame_time_ms": 0.0, "median_frame_time_ms": 0.0, "p95_frame_time_ms": 0.0, "p99_frame_time_ms": 0.0, "p999_frame_time_ms": 0.0, "min_frame_time_ms": 0.0, "max_frame_time_ms": 0.0, "average_fps": 0.0}
+        avg_ms = float(np.mean(values))
+        return {"frame_count": int(values.size), "measurement_duration_s": float(duration), "average_frame_time_ms": avg_ms, "median_frame_time_ms": float(np.percentile(values, 50)), "p95_frame_time_ms": float(np.percentile(values, 95)), "p99_frame_time_ms": float(np.percentile(values, 99)), "p999_frame_time_ms": float(np.percentile(values, 99.9)), "min_frame_time_ms": float(np.min(values)), "max_frame_time_ms": float(np.max(values)), "average_fps": float(values.size / duration) if duration > 0 else 0.0}
     def _report_live_result(self, label, metrics):
         width = metrics.get("viewport_width", self.main_window.view_3d.width())
         height = metrics.get("viewport_height", self.main_window.view_3d.height())
+        avg_fps = float(metrics.get("average_fps", 0.0))
         avg_ms = float(metrics.get("average_frame_time_ms", 0.0))
-        avg_fps = 1000.0 / avg_ms if avg_ms > 0.0 else 0.0
         p95_ms = float(metrics.get("p95_frame_time_ms", 0.0))
         p99_ms = float(metrics.get("p99_frame_time_ms", 0.0))
         p999_ms = float(metrics.get("p999_frame_time_ms", 0.0))
@@ -413,25 +460,13 @@ class BenchmarkDialog(QDialog):
         duration = float(metrics.get("measurement_duration_s", 0.0))
         low_1 = 1000.0 / p99_ms if p99_ms > 0.0 else 0.0
         low_01 = 1000.0 / p999_ms if p999_ms > 0.0 else 0.0
-        self._append(
-            "%-30s %4dx%-4d  AVG FPS %7.2f  AVG frame %7.2f ms  p95 %7.2f ms"
-            % (label, width, height, avg_fps, avg_ms, p95_ms)
-        )
-        self._append(
-            "  frames=%d  measured=%.2f s  1%% low=%7.2f FPS  0.1%% low=%7.2f FPS  VRAM=%s"
-            % (frames, duration, low_1, low_01, self._format_vram(metrics))
-        )
-        self._append(
-            "  brushes: visible=%d culled=%d total=%d | entities=%d"
-            % (
-                metrics.get("visible_brushes", 0),
-                metrics.get("culled_brushes", 0),
-                metrics.get("total_brushes", 0),
-                len(self.main_window.state.things),
-            )
-        )
-        self._append("END TEST: %s" % label)
-
+        result = dict(metrics)
+        result.update({"test": label, "entities": len(self.main_window.state.things), "one_percent_low_fps": low_1, "zero_point_one_percent_low_fps": low_01})
+        self._results.append(result)
+        self.export_button.setEnabled(True)
+        self.output.append('<div style="background:#222; border:1px solid #555; padding:10px; margin:4px 0 10px 0;"><div style="font-size:25px; font-weight:bold; color:#ff9a32;">%.2f FPS</div><div style="font-size:15px; font-weight:bold; color:#eeeeee;">%s</div><div style="color:#aaa;">%dx%d &nbsp; • &nbsp; %.2f ms average frame &nbsp; • &nbsp; %.2f ms p95</div><div style="color:#aaa;">%d frames &nbsp; • &nbsp; %.2f s measured &nbsp; • &nbsp; 1%% low %.2f FPS &nbsp; • &nbsp; 0.1%% low %.2f FPS</div><div style="color:#aaa;">VRAM %s &nbsp; • &nbsp; brushes %d visible / %d culled / %d total &nbsp; • &nbsp; entities %d</div></div>' % (avg_fps, label, width, height, avg_ms, p95_ms, frames, duration, low_1, low_01, self._format_vram(metrics), metrics.get("visible_brushes", 0), metrics.get("culled_brushes", 0), metrics.get("total_brushes", 0), result["entities"]))
+        self.output.ensureCursorVisible()
+        QApplication.processEvents()
     @staticmethod
     def _format_vram(metrics):
         used = metrics.get("vram_used_mb")
