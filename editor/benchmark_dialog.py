@@ -615,7 +615,15 @@ class BenchmarkDialog(QDialog):
                 )
                 if result.get("camera_sweep_fallback"):
                     extra.append(
-                        "Sweep fallback: bounds-based (no usable PlayerStart)"
+                        "Sweep fallback: %s" % self._html_escape(
+                            result.get("camera_sweep_fallback_reason", "unknown")
+                        )
+                    )
+                if result.get("camera_sweep_reachable_cells") is not None:
+                    extra.append(
+                        "Reachable flood cells: %s" % self._html_escape(
+                            result["camera_sweep_reachable_cells"]
+                        )
                     )
 
             details_html = ""
@@ -1301,45 +1309,45 @@ Git commit: %s
         if not self.isVisible():
             self.show()
 
+
     def _prepare_current_world_sweep(self):
-        """Prepare a Player-area sweep that never leaves the benchmark region."""
-        bounds = self._current_world_bounds()
-        min_x, max_x, min_z, max_z = bounds
-        anchor_x, anchor_z, anchor_source, fallback = self._current_world_sweep_anchor(
-            bounds
-        )
+        """Prepare a Player-area sweep from the actual reachable region."""
+        player_start, start_error = self._find_player_start()
+        fallback = False
+        fallback_reason = None
 
-        map_width = max(0.0, max_x - min_x)
-        map_depth = max(0.0, max_z - min_z)
+        if player_start is not None:
+            playable, flood_error = self._flood_player_area(
+                player_start[0], player_start[1]
+            )
+        else:
+            playable, flood_error = None, None
 
-        if fallback:
-            # Preserve the original bounds-based benchmark behaviour when the
-            # map does not provide a usable PlayerStart. The centre is the
-            # geometric centre of the playable bounds, never an arbitrary
-            # camera-derived point.
+        if playable is None:
+            fallback = True
+            fallback_reason = start_error or flood_error or "playable flood failed"
+
+            min_x, max_x, min_z, max_z = self._current_world_bounds()
             center_x = (min_x + max_x) * 0.5
             center_z = (min_z + max_z) * 0.5
-            half_x = map_width * 0.42
-            half_z = map_depth * 0.42
+            half_x = max(0.0, (max_x - min_x) * 0.42)
+            half_z = max(0.0, (max_z - min_z) * 0.42)
+            sweep_bounds = (min_x, max_x, min_z, max_z)
+            cell_count = 0
         else:
-            # Player-area semantics: the PlayerStart is the centre of interest,
-            # and the sweep shrinks to the available room around that point.
-            center_x = float(anchor_x)
-            center_z = float(anchor_z)
-            room_x = max(
-                0.0,
-                min(center_x - min_x, max_x - center_x),
-            )
-            room_z = max(
-                0.0,
-                min(center_z - min_z, max_z - center_z),
-            )
-            half_x = min(map_width * 0.12, room_x * 0.70)
-            half_z = min(map_depth * 0.12, room_z * 0.70)
+            min_x, max_x, min_z, max_z = playable["bounds"]
+            cell_count = playable["cell_count"]
+            center_x = float(player_start[0])
+            center_z = float(player_start[1])
 
-        # Final clamp: even if the region calculation above changes later,
-        # sampled camera coordinates are mathematically bounded by the
-        # playable benchmark rectangle.
+            room_x = max(0.0, min(center_x - min_x, max_x - center_x))
+            room_z = max(0.0, min(center_z - min_z, max_z - center_z))
+            map_width = max(0.0, max_x - min_x)
+            map_depth = max(0.0, max_z - min_z)
+            half_x = min(map_width * 0.25, room_x * 0.85)
+            half_z = min(map_depth * 0.25, room_z * 0.85)
+            sweep_bounds = (min_x, max_x, min_z, max_z)
+
         half_x = min(max(0.0, half_x), max(0.0, (max_x - min_x) * 0.5))
         half_z = min(max(0.0, half_z), max(0.0, (max_z - min_z) * 0.5))
         center_x = min(max(center_x, min_x + half_x), max_x - half_x)
@@ -1358,24 +1366,29 @@ Git commit: %s
         )
         self._current_world_sweep_metadata = {
             "mode": "player-area",
-            "anchor_source": anchor_source,
-            "fallback": bool(fallback),
-            "bounds": (
-                float(min_x), float(max_x), float(min_z), float(max_z)
-            ),
+            "anchor_source": "bounds fallback" if fallback else "PlayerStart",
+            "fallback": fallback,
+            "fallback_reason": fallback_reason,
+            "bounds": tuple(float(value) for value in sweep_bounds),
+            "reachable_cells": int(cell_count),
         }
 
         if fallback:
             self._append(
-                "Camera sweep: PLAYER-AREA / bounds fallback for %.1f s — "
-                "no usable PlayerStart; sweep is clamped to playable bounds."
-                % duration
+                "Camera sweep: PLAYER-AREA / FALLBACK for %.1f s — %s; "
+                "using existing bounds-based sweep." % (duration, fallback_reason)
             )
         else:
             self._append(
-                "Camera sweep: PLAYER-AREA for %.1f s — anchored at %s; "
-                "sweep is clamped to playable bounds."
-                % (duration, anchor_source)
+                "Camera sweep: PLAYER-AREA for %.1f s — PlayerStart at "
+                "(%.1f, %.1f); flood reached %d cells; sweep is clamped to "
+                "reachable bounds."
+                % (
+                    duration,
+                    float(player_start[0]),
+                    float(player_start[1]),
+                    int(cell_count),
+                )
             )
 
     def _advance_current_world_sweep(self):
@@ -1389,8 +1402,6 @@ Git commit: %s
         x = center_x + half_x * math.sin(angle)
         z = center_z + half_z * math.sin(angle + math.pi * 0.5)
 
-        # Keep the actual sampled point inside the benchmark region as a final
-        # defence against floating-point drift or future path changes.
         if bounds is not None:
             min_x, max_x, min_z, max_z = bounds
             x = min(max(x, min_x), max_x)
@@ -1409,9 +1420,6 @@ Git commit: %s
         position = glm.vec3(x, y, z)
         logic_thread = getattr(self.main_window.view_3d, "logic_thread", None)
         if logic_thread is not None and getattr(self.main_window.view_3d, "use_threading", False):
-            # The threaded renderer takes the editor camera from LogicThread's
-            # authoritative camera. Updating only QtGameView.camera is
-            # immediately overwritten by the next RenderState snapshot.
             logic_thread.set_editor_camera(position, yaw, pitch, camera.fov)
         else:
             camera.pos = position
@@ -1538,7 +1546,9 @@ Git commit: %s
                     "camera_sweep_mode": sweep.get("mode", "player-area"),
                     "camera_sweep_anchor": sweep.get("anchor_source", "unknown"),
                     "camera_sweep_fallback": bool(sweep.get("fallback", False)),
+                    "camera_sweep_fallback_reason": sweep.get("fallback_reason"),
                     "camera_sweep_bounds": sweep.get("bounds"),
+                    "camera_sweep_reachable_cells": sweep.get("reachable_cells"),
                 })
 
             if label == "live_io_1000":
@@ -1685,7 +1695,8 @@ Git commit: %s
                 % (
                     metrics.get("camera_sweep_mode", "player-area"),
                     metrics.get("camera_sweep_anchor", "unknown"),
-                    " &nbsp; • &nbsp; <b style=\"color:#ff8a00;\">BOUNDS FALLBACK</b>"
+                    " &nbsp; • &nbsp; <b style=\"color:#ff8a00;\">FALLBACK: %s</b>"
+                    % str(metrics.get("camera_sweep_fallback_reason", "unknown"))
                     if metrics.get("camera_sweep_fallback") else "",
                 )
             )
