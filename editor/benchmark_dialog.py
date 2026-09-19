@@ -226,6 +226,9 @@ class BenchmarkDialog(QDialog):
             self.brush_10000,
             self.brush_100000,
             self.io_chain_1000,
+            self.monsters_100,
+            self.monsters_500,
+            self.monsters_1000,
         ):
             checkbox.setEnabled(True)
 
