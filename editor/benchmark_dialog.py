@@ -72,6 +72,7 @@ class BenchmarkDialog(QDialog):
         self._original_level_data = None
         self._original_play_mode = False
         self._running = False
+        self._restoring = False
 
         self.setWindowTitle("Fio Benchmark")
         self.resize(900, 650)
@@ -385,7 +386,10 @@ class BenchmarkDialog(QDialog):
             return "%s / %s MB" % (used, total)
         return "%.1f / %.1f MB" % (used, total)
 
-    def _restore_original(self):
+    def _restore_original(self, failed=False):
+        if self._restoring:
+            return
+        self._restoring = True
         try:
             if self.main_window.view_3d.play_mode:
                 self.main_window._exit_play_mode()
@@ -400,23 +404,35 @@ class BenchmarkDialog(QDialog):
                 self.main_window.view_3d.update()
                 QApplication.processEvents()
 
+            if self._original_play_mode:
+                self.main_window.enter_play_mode()
+                QApplication.processEvents()
+
             self._timer.stop()
             self._running = False
-            self.status_label.setText("Live benchmark complete. Original Fio world restored.")
             self._set_controls_enabled(True)
+            if failed:
+                self.status_label.setText("Live benchmark failed; original Fio world restored.")
+            else:
+                self.status_label.setText("Live benchmark complete. Original Fio world restored.")
         except Exception:
-            self._finish_with_error(traceback.format_exc())
+            self._timer.stop()
+            self._running = False
+            self._set_controls_enabled(True)
+            self.status_label.setText("Live benchmark failed while restoring the original world.")
+            self._append(traceback.format_exc())
+        finally:
+            self._restoring = False
 
     def _finish_with_error(self, details):
         self._timer.stop()
         self._running = False
-        self.status_label.setText("Live benchmark failed.")
-        self._set_controls_enabled(True)
         self._append(details)
+        self._restore_original(failed=True)
 
     def reject(self):
         if self._running:
             self._finish_with_error("Benchmark cancelled; restoring original world...")
-            self._restore_original()
+            self._restore_original(failed=True)
             return
         super().reject()
