@@ -273,34 +273,71 @@ class BenchmarkDialog(QDialog):
         return {"procedural_100_monsters": 4.0, "procedural_500_monsters": 4.0, "procedural_1000_monsters": 5.0, "live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_apocalypse": 4.0}.get(label, 3.0)
 
     def _current_world_bounds(self):
-        """Return the X/Z bounds of the loaded map from actual brush positions."""
-        brushes = getattr(self.main_window.state, "brushes", [])
-        points = []
-        for brush in brushes:
-            pos = getattr(brush, "pos", None)
-            if pos is None and isinstance(brush, dict):
-                pos = brush.get("pos")
-            if pos is not None and len(pos) >= 3:
-                points.append((float(pos[0]), float(pos[2])))
+        """Return conservative playable X/Z bounds from actual world geometry.
 
-        if not points:
+        Use brush AABBs rather than brush centres so thin perimeter walls do not
+        make the benchmark think their centres are the playable boundary. Ignore
+        triggers, fog volumes, and Big World parked brushes because those are not
+        meaningful limits on where the player can actually move.
+        """
+        from engine.constants import brush_aabb_bounds
+        from engine.spatial import authored_hidden
+
+        brushes = getattr(self.main_window.state, "brushes", [])
+        bounds = []
+        for brush in brushes:
+            if not isinstance(brush, dict):
+                continue
+            if brush.get("is_trigger") or brush.get("is_fog"):
+                continue
+            if authored_hidden(brush):
+                continue
+
+            try:
+                if brush.get("_collision_mode") == "mesh" and brush.get("_mesh_bounds"):
+                    min_b, max_b = brush["_mesh_bounds"]
+                    lo_x, lo_z = float(min_b[0]), float(min_b[2])
+                    hi_x, hi_z = float(max_b[0]), float(max_b[2])
+                else:
+                    lo_x, _lo_y, lo_z, hi_x, _hi_y, hi_z = brush_aabb_bounds(brush)
+                    lo_x, lo_z = float(lo_x), float(lo_z)
+                    hi_x, hi_z = float(hi_x), float(hi_z)
+                bounds.append((lo_x, lo_z, hi_x, hi_z))
+            except (KeyError, TypeError, ValueError, IndexError):
+                continue
+
+        if not bounds:
             camera = self.main_window.view_3d.camera
             x = float(camera.pos.x)
             z = float(camera.pos.z)
             return x - 128.0, x + 128.0, z - 128.0, z + 128.0
 
-        xs = [p[0] for p in points]
-        zs = [p[1] for p in points]
-        return min(xs), max(xs), min(zs), max(zs)
+        return (
+            min(b[0] for b in bounds),
+            max(b[2] for b in bounds),
+            min(b[1] for b in bounds),
+            max(b[3] for b in bounds),
+        )
+
+    def _current_world_sweep_anchor(self):
+        """Return the position the player actually starts from when possible."""
+        things = getattr(self.main_window.state, "things", [])
+        for thing in things:
+            if thing.__class__.__name__ != "PlayerStart":
+                continue
+            pos = getattr(thing, "pos", None)
+            if pos is not None and len(pos) >= 3:
+                return float(pos[0]), float(pos[2])
+
+        camera = self.main_window.view_3d.camera
+        return float(camera.pos.x), float(camera.pos.z)
 
     def _current_world_sweep_duration(self):
-        """Choose a deterministic measurement duration from map scale.
+        """Return the prepared local-sweep duration, or a map-scale fallback."""
+        path = getattr(self, "_current_world_camera_path", None)
+        if path is not None:
+            return float(path[-1])
 
-        Approximate traversal speed is 250 world units/sec along the map
-        diagonal, with a 5-second floor and 20-second ceiling. This gives
-        roughly 15 seconds for a ~3,750-unit diagonal map and avoids making
-        the camera artificially fast just to fit a fixed benchmark window.
-        """
         min_x, max_x, min_z, max_z = self._current_world_bounds()
         diagonal = math.hypot(max_x - min_x, max_z - min_z)
         return max(5.0, min(20.0, diagonal / 250.0))
@@ -1107,39 +1144,42 @@ Git commit: %s
             self.show()
 
     def _prepare_current_world_sweep(self):
-        """Set up a deterministic camera path through the loaded map."""
-        brushes = getattr(self.main_window.state, "brushes", [])
-        points = []
-        for brush in brushes:
-            pos = getattr(brush, "pos", None)
-            if pos is None and isinstance(brush, dict):
-                pos = brush.get("pos")
-            if pos is not None and len(pos) >= 3:
-                points.append((float(pos[0]), float(pos[2])))
+        """Set up a conservative camera path inside the playable region."""
+        min_x, max_x, min_z, max_z = self._current_world_bounds()
+        anchor_x, anchor_z = self._current_world_sweep_anchor()
+
+        # Never let the benchmark's orbit leave the geometry-derived bounds.
+        anchor_x = min(max(anchor_x, min_x), max_x)
+        anchor_z = min(max(anchor_z, min_z), max_z)
+
+        map_width = max(0.0, max_x - min_x)
+        map_depth = max(0.0, max_z - min_z)
+        room_x = max(0.0, min(anchor_x - min_x, max_x - anchor_x))
+        room_z = max(0.0, min(anchor_z - min_z, max_z - anchor_z))
+
+        # The old 42% map-wide orbit was intentionally exploratory, but it can
+        # spend a large part of the benchmark in space a player would never
+        # visit. Keep the sweep local to the player start/current play camera,
+        # while still sampling a useful area of the world.
+        half_x = min(map_width * 0.12, room_x * 0.70)
+        half_z = min(map_depth * 0.12, room_z * 0.70)
+
+        # Approximate the ellipse circumference so measurement time tracks the
+        # amount of world actually traversed instead of the whole map extent.
+        effective_radius = math.sqrt(
+            (half_x * half_x + half_z * half_z) * 0.5
+        )
+        travel_distance = 2.0 * math.pi * effective_radius
+        duration = max(5.0, min(20.0, travel_distance / 250.0))
 
         camera = self.main_window.view_3d.camera
-        if points:
-            min_x = min(p[0] for p in points)
-            max_x = max(p[0] for p in points)
-            min_z = min(p[1] for p in points)
-            max_z = max(p[1] for p in points)
-            center_x = (min_x + max_x) * 0.5
-            center_z = (min_z + max_z) * 0.5
-            half_x = max((max_x - min_x) * 0.42, 32.0)
-            half_z = max((max_z - min_z) * 0.42, 32.0)
-        else:
-            center_x = float(camera.pos.x)
-            center_z = float(camera.pos.z)
-            half_x = half_z = 128.0
-
-        duration = self._current_world_sweep_duration()
         self._current_world_camera_path = (
-            center_x, center_z, half_x, half_z,
+            anchor_x, anchor_z, half_x, half_z,
             float(camera.pos.y), float(camera.pitch), duration
         )
         self._append(
-            "Camera sweep: traversing the loaded map for %.1f s "
-            "(map-scale dependent, 5–20 s)." % duration
+            "Camera sweep: local playable-region path for %.1f s, anchored at "
+            "PlayerStart/current camera and kept inside geometry bounds." % duration
         )
 
     def _advance_current_world_sweep(self):
