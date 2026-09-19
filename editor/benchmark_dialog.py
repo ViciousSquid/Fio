@@ -13,8 +13,9 @@ import platform
 import subprocess
 import math
 from datetime import datetime, timezone
+import html
 
-from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPushButton, QVBoxLayout, QApplication, QFileDialog, QTextBrowser, QToolButton, QWidget, QScrollArea
+from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPushButton, QVBoxLayout, QApplication, QFileDialog, QTextBrowser, QToolButton, QWidget, QScrollArea, QProgressBar
 from PyQt5.QtCore import QTimer, Qt
 import copy
 import time
@@ -123,6 +124,17 @@ class BenchmarkDialog(QDialog):
 
         self.status_label = QLabel("Ready.")
         layout.addWidget(self.status_label)
+
+        self.throbber = QProgressBar()
+        self.throbber.setRange(0, 0)
+        self.throbber.setTextVisible(False)
+        self.throbber.setFixedHeight(6)
+        self.throbber.setVisible(False)
+        self.throbber.setStyleSheet(
+            "QProgressBar { border: 0; background: #292929; border-radius: 3px; }"
+            "QProgressBar::chunk { background: #63d471; border-radius: 3px; }"
+        )
+        layout.addWidget(self.throbber)
 
         intro_label = QLabel(
             "<b>Run Benchmark</b> analyses the currently loaded project"
@@ -298,11 +310,146 @@ class BenchmarkDialog(QDialog):
         except Exception:
             return "unknown"
 
+    @staticmethod
+    def _html_escape(value):
+        return html.escape(str(value), quote=True)
+
+    def _benchmark_results_html(self, version):
+        timestamp = datetime.now(timezone.utc).isoformat()
+        environment = self._html_escape(_execution_environment())
+        platform_name = self._html_escape(platform.platform())
+        python_version = self._html_escape(platform.python_version())
+        cpu = self._html_escape(platform.processor() or "unknown")
+        commit = self._html_escape(self._git_commit())
+        version = self._html_escape(version)
+
+        cards = []
+        for result in self._results:
+            label = self._html_escape(result.get("test", "benchmark"))
+            if result.get("aborted"):
+                reason = self._html_escape(result.get("abort_reason", "No reason supplied"))
+                cards.append(
+                    '<section class="result aborted">'
+                    '<h2>%s</h2>'
+                    '<div class="abort">ABORTED — timeout</div>'
+                    '<p>%s</p>'
+                    '</section>' % (label, reason)
+                )
+                continue
+
+            description = self._html_escape(result.get("description", result.get("test", "")))
+            fps = result.get("average_fps")
+            mean_ms = result.get("average_frame_time_ms", result.get("mean_ms"))
+            p95_ms = result.get("p95_frame_time_ms", result.get("p95_ms"))
+            resolution = self._html_escape(result.get("resolution", ""))
+            brushes = result.get("brush_count", result.get("brushes"))
+            entities = result.get("entity_count", result.get("entities"))
+
+            metrics = []
+            if resolution:
+                metrics.append("Resolution: %s" % resolution)
+            if fps is not None:
+                metrics.append("Average FPS: %.2f" % float(fps))
+            if mean_ms is not None:
+                metrics.append("Average frame: %.2f ms" % float(mean_ms))
+            if p95_ms is not None:
+                metrics.append("p95: %.2f ms" % float(p95_ms))
+            if brushes is not None:
+                metrics.append("Brushes: %s" % self._html_escape(brushes))
+            if entities is not None:
+                metrics.append("Entities: %s" % self._html_escape(entities))
+            if "hops_per_second" in result:
+                metrics.append("I/O: %.0f hops/s" % float(result["hops_per_second"]))
+            if "clip_operations_per_second" in result:
+                metrics.append("CSG: %.0f clip operations/s" % float(result["clip_operations_per_second"]))
+
+            fps_html = ""
+            if fps is not None:
+                fps_html = '<div class="fps">%.2f <span>FPS</span></div>' % float(fps)
+
+            extra = []
+            if "average_visible_tris" in result:
+                extra.append("Average visible triangles: %.0f" % float(result["average_visible_tris"]))
+            if "average_total_tris" in result:
+                extra.append("Average total triangles: %.0f" % float(result["average_total_tris"]))
+            if "average_culled_tris" in result:
+                extra.append("Average culled triangles: %.0f" % float(result["average_culled_tris"]))
+            if "culling_efficiency" in result:
+                extra.append("Culling efficiency: %.1f%%" % float(result["culling_efficiency"]))
+            if "one_percent_low_fps" in result:
+                extra.append("1% low: %.2f FPS" % float(result["one_percent_low_fps"]))
+            if "zero_point_one_percent_low_fps" in result:
+                extra.append("0.1% low: %.2f FPS" % float(result["zero_point_one_percent_low_fps"]))
+            if "vram_used_mb" in result or "vram_total_mb" in result:
+                extra.append("VRAM: %s" % self._html_escape(self._format_vram(result)))
+            if "final_camera_pos" in result:
+                extra.append("Final camera position: %s" % self._html_escape(result["final_camera_pos"]))
+
+            details_html = ""
+            if extra:
+                details_html = '<div class="details">%s</div>' % "<br>".join(self._html_escape(item) for item in extra)
+
+            metrics_html = "<span> • </span>".join(self._html_escape(item) for item in metrics)
+            cards.append(
+                '<section class="result">'
+                '<div class="result-head"><div><h2>%s</h2><p>%s</p></div>%s</div>'
+                '<div class="metrics">%s</div>%s'
+                '</section>' % (label, description, fps_html, metrics_html, details_html)
+            )
+
+        return """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fio Benchmark Report</title>
+<style>
+body { margin:0; padding:32px; background:#111; color:#ddd; font-family:Segoe UI,Arial,sans-serif; }
+main { max-width:1100px; margin:0 auto; }
+h1 { margin:0 0 8px; color:#eee; font-size:30px; }
+h2 { margin:0; color:#eee; font-size:18px; }
+p { margin:5px 0 0; color:#aaa; }
+.meta { margin:0 0 24px; padding:16px; background:#191919; border:1px solid #333; line-height:1.7; font-family:Consolas,monospace; font-size:13px; }
+.result { margin:14px 0; padding:18px; background:#1b1b1b; border:1px solid #3a3a3a; border-radius:6px; }
+.result-head { display:flex; justify-content:space-between; gap:20px; align-items:flex-start; }
+.fps { color:#ff9a32; font-size:34px; font-weight:700; white-space:nowrap; }
+.fps span { color:#63d471; font-size:16px; }
+.metrics { margin-top:14px; color:#bbb; line-height:1.8; }
+.details { margin-top:12px; color:#eee; line-height:1.8; }
+.aborted { border-color:#ff8a00; background:#21180f; }
+.abort { margin-top:10px; color:#ff8a00; font-size:24px; font-weight:700; }
+.footer { margin-top:28px; padding-top:14px; border-top:2px solid #63d471; color:#777; font-size:12px; }
+</style>
+</head>
+<body><main>
+<h1>Fio Benchmark Report</h1>
+<div class="meta">
+Fio version: %s<br>
+Generated: %s<br>
+Execution: %s<br>
+Platform: %s<br>
+Python: %s<br>
+CPU: %s<br>
+Git commit: %s
+</div>
+%s
+<div class="footer">Generated by Fio Tools &gt; Benchmark. Worker-process JSON is internal IPC; this file is the user-facing report.</div>
+</main></body>
+</html>""" % (
+            version, self._html_escape(timestamp), environment, platform_name,
+            python_version, cpu, commit, "".join(cards)
+        )
+
     def _export_results(self):
         if not self._results:
             return
-        default_name = "fio_benchmark_%s.json" % datetime.now().strftime("%Y%m%d_%H%M%S")
-        path, _ = QFileDialog.getSaveFileName(self, "Export Fio Benchmark Results", default_name, "JSON files (*.json);;All files (*)")
+        default_name = "fio_benchmark_%s.html" % datetime.now().strftime("%Y%m%d_%H%M%S")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Fio Benchmark Results",
+            default_name,
+            "HTML files (*.html);;All files (*)",
+        )
         if not path:
             return
         version = "unknown"
@@ -312,11 +459,10 @@ class BenchmarkDialog(QDialog):
                 version = f.read().strip()
         except Exception:
             pass
-        payload = {"format": "fio-benchmark-v2", "timestamp_utc": datetime.now(timezone.utc).isoformat(), "fio_version": version, "environment": _execution_environment(), "platform": platform.platform(), "python": platform.python_version(), "cpu": platform.processor(), "commit": self._git_commit(), "viewport": {"width": self.main_window.view_3d.width(), "height": self.main_window.view_3d.height()}, "results": self._results}
         try:
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2)
-            self.status_label.setText("Exported benchmark results: %s" % os.path.basename(path))
+                f.write(self._benchmark_results_html(version))
+            self.status_label.setText("Exported benchmark report: %s" % os.path.basename(path))
         except Exception:
             self._append("<span style='color:#ff6666;'>Export failed.</span><pre>%s</pre>" % traceback.format_exc())
 
@@ -692,6 +838,7 @@ class BenchmarkDialog(QDialog):
         if stress_toggle is not None:
             stress_toggle.setChecked(False)
         self._running = True
+        self.throbber.setVisible(True)
         self._stop_monitor()
 
         try:
@@ -1209,6 +1356,7 @@ class BenchmarkDialog(QDialog):
             self._stop_monitor()
             self._cleanup_worker_result_path()
             self._running = False
+            self.throbber.setVisible(False)
             self._set_controls_enabled(True)
             if failed:
                 self.status_label.setText("Live benchmark failed; original Fio world restored.")
@@ -1231,6 +1379,7 @@ class BenchmarkDialog(QDialog):
         self._stop_monitor()
         self._cleanup_worker_result_path()
         self._running = False
+        self.throbber.setVisible(False)
         self._append(details)
         self._restore_original(failed=True)
 
