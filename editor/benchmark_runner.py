@@ -14,7 +14,7 @@ import time
 import traceback
 
 from PyQt5.QtCore import QThread, Qt, pyqtSignal
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QToolButton
 
 from .benchmark_results import BenchmarkResults
 from .benchmark_tests import BenchmarkTests
@@ -136,7 +136,7 @@ class BenchmarkRunner:
         """Start a non-destructive monitor for the live workload."""
         self._stop_live_stress_monitor()
         timeout_s = self._live_stress_timeout_for(label)
-        monitor = LiveBenchmarkMonitor(label, timeout_s)
+        monitor = LiveBenchmarkMonitor(label, timeout_s, self)
         monitor.timeout.connect(self._on_live_stress_timeout)
         self._live_monitor = monitor
         self._live_stress_timeout = False
