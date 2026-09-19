@@ -407,6 +407,63 @@ def _timing_result(test, description, samples, **extra):
     return result
 
 
+def _exercise_real_play_mode(data, seconds=0.75):
+    """Load generated content into MainWindow, enter real play mode, and move."""
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtWidgets import QApplication
+    from editor.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    window = MainWindow(root_dir)
+    window.state.load_from_data(data)
+    window.update_all_ui()
+    window.show()
+    app.processEvents()
+
+    window.enter_play_mode()
+    if not window.view_3d.play_mode:
+        window.close()
+        raise RuntimeError("Fio failed to enter play mode in benchmark")
+
+    window.keys_pressed.add(Qt.Key_W)
+    window.keys_pressed.add(Qt.Key_D)
+    deadline = time.perf_counter() + seconds
+    while time.perf_counter() < deadline:
+        window.view_3d.update_loop()
+        app.processEvents()
+        time.sleep(0.005)
+    window.keys_pressed.discard(Qt.Key_W)
+    window.keys_pressed.discard(Qt.Key_D)
+
+    final_pos = getattr(window.view_3d.camera, "pos", None)
+    if final_pos is not None:
+        final_pos = (float(final_pos.x), float(final_pos.y), float(final_pos.z))
+
+    window._exit_play_mode()
+    window.close()
+    app.processEvents()
+    return final_pos
+
+
+def _run_play_mode_stress():
+    data = _generate_procedural_map(monsters=100, relay_count=32, seed=4242)
+    start = time.perf_counter()
+    final_pos = _exercise_real_play_mode(data)
+    elapsed = time.perf_counter() - start
+    return {
+        "test": "play_mode_camera",
+        "description": "procedural map -> real Fio state -> Play Mode -> WASD camera/player movement",
+        "runs": 1,
+        "mean_ms": elapsed * 1000.0,
+        "p95_ms": elapsed * 1000.0,
+        "worst_ms": elapsed * 1000.0,
+        "entities": len(data["things"]),
+        "brushes": len(data["brushes"]),
+        "final_camera_pos": final_pos,
+    }
+
+
 def _run_renderer_stress():
     brushes, things = _make_renderer_stress_scene()
     results = []
@@ -703,7 +760,7 @@ def _run_csg_stress():
 
 
 def run_additional_stress_tests():
-    results = [_run_renderer_stress(), _run_io_stress(), _run_csg_stress()]
+    results = [_run_renderer_stress(), _run_io_stress(), _run_csg_stress(), _run_play_mode_stress()]
 
     brush_counts = _selected_brush_counts()
     if brush_counts:
@@ -786,6 +843,11 @@ def format_results(results, info=None):
                 )
             )
 
+            if "final_camera_pos" in result:
+                lines.append(
+                    "    play mode camera final position: %s"
+                    % (result["final_camera_pos"],)
+                )
             if "average_fps" in result:
                 lines.append(
                     "    renderer FPS: %.1f" % result["average_fps"]
