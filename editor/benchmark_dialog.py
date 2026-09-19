@@ -1,8 +1,9 @@
 """Tools > Benchmark dialog.
 
-Runs the benchmark inside the already-running Fio MainWindow. The benchmark
-uses the live QtGameView, renderer, world state, LogicThread and SysMon; it
-does not launch a second Fio process and does not depend on pytest.
+The current-world and window-presentation benchmarks run inside the already-running
+Fio MainWindow. Deliberately risky stress workloads run in an isolated worker
+process so a pathological renderer, world-generation, I/O, or Play Mode test can
+be terminated without wedging the Qt GUI. The benchmark does not depend on pytest.
 """
 
 import os
@@ -19,6 +20,7 @@ import copy
 import time
 import traceback
 import threading
+import tempfile
 
 
 def _execution_environment():
@@ -102,6 +104,14 @@ class BenchmarkDialog(QDialog):
         self._monitor_deadline = 0.0
         self._monitor_timeout = False
         self._monitor_timeout_reason = ""
+        self._worker_process = None
+        self._worker_result_path = None
+        self._worker_label = None
+        self._worker_value = None
+        self._worker_deadline = 0.0
+        self._worker_active = False
+        self._worker_finished = False
+        self._worker_exit_code = None
 
         self.setWindowTitle("Fio Benchmark")
         self.resize(900, 650)
@@ -310,8 +320,8 @@ class BenchmarkDialog(QDialog):
         except Exception:
             self._append("<span style='color:#ff6666;'>Export failed.</span><pre>%s</pre>" % traceback.format_exc())
 
-    def _start_monitor_for_risky_test(self, label, timeout_s):
-        """Start a daemon monitor only for stress tests that may block Qt."""
+    def _start_monitor_for_risky_test(self, label, timeout_s, process):
+        """Supervise an isolated stress worker and terminate it on timeout."""
         self._stop_monitor()
         self._monitor_stop = threading.Event()
         self._monitor_lock = threading.Lock()
@@ -320,23 +330,46 @@ class BenchmarkDialog(QDialog):
         self._monitor_deadline = time.perf_counter() + float(timeout_s)
         self._monitor_timeout = False
         self._monitor_timeout_reason = ""
+        self._worker_finished = False
+        self._worker_exit_code = None
         stop = self._monitor_stop
+        lock = self._monitor_lock
+        deadline = self._monitor_deadline
+
+        def terminate_worker():
+            if process.poll() is not None:
+                return
+            try:
+                process.terminate()
+                process.wait(timeout=1.5)
+            except Exception:
+                try:
+                    process.kill()
+                    process.wait(timeout=1.5)
+                except Exception:
+                    pass
 
         def monitor():
             while not stop.wait(0.25):
                 now = time.perf_counter()
-                with self._monitor_lock:
-                    heartbeat = self._monitor_heartbeat
-                    phase = self._monitor_phase
-                    deadline = self._monitor_deadline
-                if now > deadline or now - heartbeat > 5.0:
-                    with self._monitor_lock:
+                exit_code = process.poll()
+                if exit_code is not None:
+                    with lock:
+                        self._worker_finished = True
+                        self._worker_exit_code = exit_code
+                    return
+                if now > deadline:
+                    reason = (
+                        "%s exceeded the %.1f s hard timeout. The isolated worker "
+                        "was terminated before the benchmark could hang Fio."
+                        % (label, float(timeout_s))
+                    )
+                    terminate_worker()
+                    with lock:
                         self._monitor_timeout = True
-                        self._monitor_timeout_reason = (
-                            "%s exceeded the independent stress-test monitor budget "
-                            "(%.1f s without a benchmark heartbeat)."
-                            % (phase, now - heartbeat)
-                        )
+                        self._monitor_timeout_reason = reason
+                        self._worker_finished = True
+                        self._worker_exit_code = process.poll()
                     return
 
         self._monitor_thread = threading.Thread(
@@ -365,13 +398,284 @@ class BenchmarkDialog(QDialog):
     def _stop_monitor(self):
         stop = self._monitor_stop
         thread = self._monitor_thread
-        self._monitor_stop = None
-        self._monitor_thread = None
-        self._monitor_lock = None
         if stop is not None:
             stop.set()
         if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=0.5)
+            thread.join(timeout=0.75)
+        self._monitor_stop = None
+        self._monitor_thread = None
+        self._monitor_lock = None
+
+    def _worker_timeout_for(self, label):
+        """Return the hard wall-clock timeout for an isolated stress test."""
+        if label == "monster_apocalypse":
+            return 120.0
+        return 60.0
+
+    def _terminate_worker_process(self):
+        process = self._worker_process
+        self._worker_process = None
+        if process is None:
+            return
+        if process.poll() is None:
+            try:
+                process.terminate()
+                process.wait(timeout=1.5)
+            except Exception:
+                try:
+                    process.kill()
+                    process.wait(timeout=1.5)
+                except Exception:
+                    pass
+
+    def _start_worker_test(self, label, value):
+        """Run a risky benchmark in a killable child process."""
+        self._timer.stop()
+        self._measurement_active = False
+        self._worker_active = False
+        self._worker_finished = False
+        self._worker_exit_code = None
+        self._worker_label = label
+        self._worker_value = value
+
+        fd, result_path = tempfile.mkstemp(
+            prefix="fio_benchmark_worker_",
+            suffix=".json",
+        )
+        os.close(fd)
+        try:
+            os.unlink(result_path)
+        except OSError:
+            pass
+        self._worker_result_path = result_path
+
+        env = os.environ.copy()
+        env["FIO_FULLSCREEN_BENCH_WORKER_TEST"] = str(label)
+        env["FIO_FULLSCREEN_BENCH_WORKER_OUT"] = result_path
+        existing_pythonpath = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = (
+            self.root_dir + os.pathsep + existing_pythonpath
+            if existing_pythonpath else self.root_dir
+        )
+        env["PYTHONUNBUFFERED"] = "1"
+
+        script = os.path.join(
+            self.root_dir, "tests", "performance", "fio_benchmark.py"
+        )
+        popen_kwargs = {
+            "cwd": self.root_dir,
+            "env": env,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        if creationflags:
+            popen_kwargs["creationflags"] = creationflags
+        elif os.name != "nt":
+            popen_kwargs["start_new_session"] = True
+
+        timeout_s = self._worker_timeout_for(label)
+        self._worker_deadline = time.perf_counter() + timeout_s
+        try:
+            process = subprocess.Popen(
+                [sys.executable, "-u", script],
+                **popen_kwargs,
+            )
+        except Exception:
+            self._worker_result_path = None
+            raise
+
+        self._worker_process = process
+        self._worker_active = True
+        self._start_monitor_for_risky_test(label, timeout_s, process)
+        self.status_label.setText(
+            "Running isolated worker: %s (%.0f s hard timeout)"
+            % (label, timeout_s)
+        )
+        self._append(
+            "Isolated worker started: PID %d — hard timeout %.0f s."
+            % (int(process.pid), timeout_s)
+        )
+        self._timer.start()
+
+    def _cleanup_worker_result_path(self):
+        path = self._worker_result_path
+        self._worker_result_path = None
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    def _report_worker_result(self, label, payload):
+        """Append results returned by an isolated benchmark worker."""
+        results = payload.get("results", [])
+        if not results:
+            raise RuntimeError(
+                "isolated worker %s returned no benchmark results" % label
+            )
+
+        for result in results:
+            result = dict(result)
+            result["worker_test"] = label
+            self._results.append(result)
+            self.export_button.setEnabled(True)
+
+            average_fps = result.get("average_fps")
+            resolution = result.get("resolution", "")
+            entities = result.get("entity_count", result.get("entities"))
+            brushes = result.get("brush_count", result.get("brushes"))
+            description = result.get("description", label)
+
+            self.output.append(
+                '<div style="background:#222; border:1px solid #555; padding:12px; margin:4px 0 10px 0;">'
+                '<div style="font-size:15px; font-weight:bold; color:#eeeeee; margin-bottom:4px;">%s</div>'
+                '<div style="color:#aaa;">%s%s%s%s</div>'
+                '</div>'
+                % (
+                    result.get("test", label),
+                    description,
+                    (" &nbsp; • &nbsp; " + resolution) if resolution else "",
+                    (" &nbsp; • &nbsp; " + str(brushes) + " brushes") if brushes is not None else "",
+                    (" &nbsp; • &nbsp; " + str(entities) + " entities") if entities is not None else "",
+                )
+            )
+
+            metrics = result.get("sysmon") or {}
+            if average_fps is not None:
+                self.output.append(
+                    '<div style="margin-top:10px; padding:8px 0 2px 0; border-top:2px solid #555; white-space:nowrap;">'
+                    '<span style="font-size:25px; font-weight:bold; color:#63d471;">average FPS:</span>'
+                    '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.2f</span>'
+                    '</div>' % float(average_fps)
+                )
+                self.output.append(
+                    '<div style="color:#aaa; padding:4px 0;">frame time %.2f ms &nbsp; • &nbsp; p95 %.2f ms%s</div>'
+                    % (
+                        float(metrics.get("average_frame_time_ms", result.get("mean_ms", 0.0))),
+                        float(metrics.get("p95_frame_time_ms", result.get("p95_ms", 0.0))),
+                        (" &nbsp; • &nbsp; VRAM " + self._format_vram(metrics)) if metrics else "",
+                    )
+                )
+            if "hops_per_second" in result:
+                self.output.append(
+                    '<div style="color:#aaa; padding:4px 0;">I/O throughput: <b style="color:#ff9a32;">%.0f hops/s</b></div>'
+                    % float(result["hops_per_second"])
+                )
+            if "clip_operations_per_second" in result:
+                self.output.append(
+                    '<div style="color:#aaa; padding:4px 0;">CSG throughput: <b style="color:#ff9a32;">%.0f clip operations/s</b></div>'
+                    % float(result["clip_operations_per_second"])
+                )
+            if "final_camera_pos" in result:
+                self.output.append(
+                    '<div style="color:#aaa; padding:4px 0;">Final camera position: %s</div>'
+                    % (result["final_camera_pos"],)
+                )
+
+        self.output.append('<div style="border-top:2px solid #63d471; margin:14px 0 8px 0;"></div>')
+        self.output.ensureCursorVisible()
+        QApplication.processEvents()
+
+    def _abort_worker_test(self, reason):
+        """Abort one isolated test, record it, then continue the queue."""
+        label = self._worker_label or (self._current[0] if self._current else "unknown")
+        self._timer.stop()
+        self._measurement_active = False
+        self._worker_active = False
+        self._terminate_worker_process()
+        self._stop_monitor()
+
+        result = {
+            "test": label,
+            "worker_test": label,
+            "status": "aborted",
+            "aborted": True,
+            "abort_reason": str(reason),
+        }
+        self._results.append(result)
+        self.export_button.setEnabled(True)
+        self.output.append(
+            '<div style="background:#2a1c10; border:1px solid #ff8a00; padding:12px; margin:4px 0 10px 0;">'
+            '<div style="font-size:15px; font-weight:bold; color:#ffb15a;">%s</div>'
+            '<div style="font-size:25px; font-weight:bold; color:#ff8a00; margin-top:6px;">ABORTED — timeout</div>'
+            '<div style="color:#ddd; margin-top:4px;">%s</div>'
+            '</div>' % (label, str(reason))
+        )
+        self.output.append('<div style="border-top:2px solid #63d471; margin:14px 0 8px 0;"></div>')
+        self._cleanup_worker_result_path()
+        self._worker_label = None
+        self._worker_value = None
+        self._worker_deadline = 0.0
+        self.status_label.setText("Aborted: %s — original Fio world remains intact." % label)
+        QApplication.processEvents()
+        self._begin_next()
+
+    def _poll_worker_test(self):
+        """Poll worker completion from Qt without doing the risky work here."""
+        if not self._worker_active:
+            return
+
+        monitor_failed, monitor_reason = self._monitor_failed()
+        if monitor_failed:
+            self._abort_worker_test(monitor_reason)
+            return
+
+        process = self._worker_process
+        if process is None:
+            self._abort_worker_test("isolated benchmark worker disappeared")
+            return
+
+        exit_code = process.poll()
+        if exit_code is None:
+            elapsed = time.perf_counter() - self._phase_started
+            remaining = max(0.0, self._worker_deadline - time.perf_counter())
+            self.status_label.setText(
+                "Running isolated worker: %s — %.1f s elapsed, %.1f s remaining"
+                % (self._worker_label, elapsed, remaining)
+            )
+            return
+
+        self._worker_finished = True
+        self._worker_exit_code = exit_code
+        result_path = self._worker_result_path
+        label = self._worker_label
+        self._worker_active = False
+        self._timer.stop()
+        self._stop_monitor()
+
+        payload = None
+        if result_path and os.path.exists(result_path):
+            try:
+                with open(result_path, "r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+            except Exception:
+                payload = None
+
+        self._cleanup_worker_result_path()
+        self._worker_process = None
+
+        if not payload or not payload.get("ok"):
+            error = (payload or {}).get("error")
+            if not error:
+                error = "worker exited with code %s without producing a valid result" % exit_code
+            self._worker_label = label
+            self._abort_worker_test(
+                "isolated worker failed: %s" % error
+            )
+            return
+
+        try:
+            self._report_worker_result(label, payload)
+        except Exception:
+            self._worker_label = label
+            self._finish_with_error(traceback.format_exc())
+            return
+
+        self._worker_label = None
+        self._worker_value = None
+        self._worker_deadline = 0.0
+        self._begin_next()
 
     def _start(self):
         if self._running:
@@ -637,8 +941,6 @@ class BenchmarkDialog(QDialog):
         label, value = self._queue.pop(0)
         self._current = (label, value)
         self._phase_started = time.perf_counter()
-        if label not in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
-            self._start_monitor_for_risky_test(label, self._preparation_timeout_s + self._measurement_watchdog_extra_s)
         self.status_label.setText("Preparing: %s" % label)
         self._append_test_separator(label)
         self._append("<span style='color:#ffb15a; font-weight:bold;'>START TEST</span> — %s" % label)
@@ -664,55 +966,11 @@ class BenchmarkDialog(QDialog):
                 self._prepare_current_world_sweep()
                 self._check_preparation_budget(label)
                 self._start_measurement(label, duration=self._test_duration(label))
-            elif label.startswith("procedural_"):
-                data = self._bench._generate_procedural_map(
-                    monsters=int(value), relay_count=32, seed=self._bench.BENCHMARK_MAP_SEED
-                )
-                self._check_preparation_budget(label)
-                self._append("Loading generated world into the live editor...")
-                self._bench.load_live_benchmark_world(self.main_window, data)
-                self._check_preparation_budget(label)
-                self._bench.prepare_live_monster_test(self.main_window)
-                self._check_preparation_budget(label)
-                self._start_measurement(label, duration=self._test_duration(label))
-            elif label == "live_io_1000":
-                data = self._bench._generate_procedural_map(
-                    monsters=0, relay_count=1000, seed=self._bench.BENCHMARK_MAP_SEED
-                )
-                self._check_preparation_budget(label)
-                self._append("Loading generated world into the live editor...")
-                self._bench.load_live_benchmark_world(self.main_window, data)
-                self._check_preparation_budget(label)
-                self._start_measurement(label, duration=self._test_duration(label))
-            elif label == "monster_apocalypse":
-                data = self._bench._generate_monster_apocalypse()
-                self._bench.load_live_benchmark_world(self.main_window, data)
-                self._bench.prepare_live_monster_test(self.main_window, aggro_fraction=0.10)
-                self._start_measurement(label, duration=self._test_duration(label))
-            elif label.startswith("live_") and label.endswith("_brushes"):
-                count = int(label.split("_")[1])
-                data = self._bench._generate_procedural_map(monsters=0, relay_count=32)
-                # Duplicate actual generated Fio brush records to the requested
-                # size, then load them through the real EditorState.
-                source = list(data["brushes"])
-                brushes = list(source)
-                index = 0
-                while len(brushes) < count:
-                    original = dict(source[index % len(source)])
-                    original["pos"] = list(original.get("pos", [0, 0, 0]))
-                    original["pos"][0] += (index // len(source) + 1) * 5000.0
-                    original["id"] = "live_benchmark_%d" % len(brushes)
-                    brushes.append(original)
-                    index += 1
-                    if index % 1000 == 0:
-                        self._check_preparation_budget(label)
-                data["brushes"] = brushes
-                self._check_preparation_budget(label)
-                self._append("Loading generated brush workload into the live editor...")
-                self._bench.load_live_benchmark_world(self.main_window, data)
-                self._start_measurement(label, duration=self._test_duration(label))
             else:
-                raise RuntimeError("unknown live benchmark: %s" % label)
+                # Every deliberately risky workload is process-isolated. The
+                # parent Qt thread only starts the child process and polls it;
+                # it never loads the pathological workload itself.
+                self._start_worker_test(label, value)
         except Exception:
             self._finish_with_error(traceback.format_exc())
 
@@ -749,7 +1007,15 @@ class BenchmarkDialog(QDialog):
         self._timer.start()
 
     def _tick(self):
-        if not self._running or not self._measurement_active:
+        if not self._running:
+            return
+        if self._worker_active:
+            try:
+                self._poll_worker_test()
+            except Exception:
+                self._finish_with_error(traceback.format_exc())
+            return
+        if not self._measurement_active:
             return
 
         try:
@@ -938,7 +1204,10 @@ class BenchmarkDialog(QDialog):
 
             self._timer.stop()
             self._measurement_active = False
+            self._worker_active = False
+            self._terminate_worker_process()
             self._stop_monitor()
+            self._cleanup_worker_result_path()
             self._running = False
             self._set_controls_enabled(True)
             if failed:
@@ -957,7 +1226,10 @@ class BenchmarkDialog(QDialog):
     def _finish_with_error(self, details):
         self._timer.stop()
         self._measurement_active = False
+        self._worker_active = False
+        self._terminate_worker_process()
         self._stop_monitor()
+        self._cleanup_worker_result_path()
         self._running = False
         self._append(details)
         self._restore_original(failed=True)
