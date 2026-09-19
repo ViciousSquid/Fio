@@ -20,7 +20,6 @@ import html
 
 from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPushButton, QVBoxLayout, QApplication, QFileDialog, QTextBrowser, QToolButton, QWidget, QScrollArea, QProgressBar
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QFont
 import copy
 import time
 import traceback
@@ -403,7 +402,6 @@ class BenchmarkDialog(QDialog):
             return (x, y, z, angle), None
 
         return None, "no usable PlayerStart"
-
     def _player_area_sweep_duration(self):
         """Return the prepared PlayerStart orbit duration."""
         path = getattr(self, "_player_area_camera_path", None)
@@ -803,8 +801,7 @@ Git commit: %s
             suffix=".json",
         )
         os.close(fd)
-        try:
-            os.unlink(result_path)
+        try:            os.unlink(result_path)
         except OSError:
             pass
         self._worker_result_path = result_path
@@ -1203,7 +1200,6 @@ Git commit: %s
 
             import importlib
             import inspect
-
             expected_tests_dir = os.path.normcase(
                 os.path.abspath(os.path.join(repo_root, "tests"))
             )
@@ -1255,6 +1251,10 @@ Git commit: %s
             self._original_unsaved_changes = bool(
                 getattr(self.main_window, "unsaved_changes", False)
             )
+            self._original_window_flags = self.main_window.windowFlags()
+            self._original_window_geometry = self.main_window.geometry()
+            self._original_window_state = self.main_window.windowState()
+            self._original_window_fullscreen = self.main_window.isFullScreen()
 
             camera = self.main_window.view_3d.camera
             self._original_camera = (
@@ -1603,8 +1603,7 @@ Git commit: %s
                 # level data into the existing EditorState.
                 cooperative_yield = lambda: self._live_cooperative_yield(label)
                 data = bench._make_brush_stress_scene(
-                    brush_count,
-                    yield_hook=cooperative_yield,
+                    brush_count,                    yield_hook=cooperative_yield,
                 )
                 bench.load_live_benchmark_world(
                     window,
@@ -1839,6 +1838,270 @@ Git commit: %s
         QApplication.processEvents()
         self._timer.start()
 
+
+    @staticmethod
+    def _benchmark_metrics(capture, duration_s):
+        """Reduce a SysMon benchmark capture to stable, reportable metrics."""
+        frame_times = []
+        for value in capture.get("frame_times", []):
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value > 0.0:
+                frame_times.append(value)
+
+        elapsed = max(0.0, float(duration_s))
+        if frame_times:
+            ordered = sorted(frame_times)
+            mean_ms = sum(frame_times) / len(frame_times)
+            p95_index = int(math.ceil(0.95 * len(ordered))) - 1
+            p95_ms = ordered[max(0, min(len(ordered) - 1, p95_index))]
+            average_fps = 1000.0 / mean_ms if mean_ms > 0.0 else 0.0
+            wall_clock_fps = len(frame_times) / elapsed if elapsed > 0.0 else 0.0
+        else:
+            mean_ms = 0.0
+            p95_ms = 0.0
+            average_fps = 0.0
+            wall_clock_fps = 0.0
+
+        visible = [float(v) for v in capture.get("visible_tris", [])]
+        total = [float(v) for v in capture.get("total_tris", [])]
+        culled = [float(v) for v in capture.get("culled_tris", [])]
+
+        avg_visible = sum(visible) / len(visible) if visible else 0.0
+        avg_total = sum(total) / len(total) if total else 0.0
+        avg_culled = sum(culled) / len(culled) if culled else 0.0
+
+        sysmon = {
+            "average_frame_time_ms": mean_ms,
+            "p95_frame_time_ms": p95_ms,
+            "average_visible_tris": avg_visible,
+            "average_total_tris": avg_total,
+            "average_culled_tris": avg_culled,
+            "culling_efficiency": (
+                (avg_culled / avg_total) * 100.0 if avg_total > 0.0 else 0.0
+            ),
+        }
+
+        return {
+            "average_fps": average_fps,
+            "wall_clock_fps": wall_clock_fps,
+            "average_frame_time_ms": mean_ms,
+            "p95_frame_time_ms": p95_ms,
+            "mean_ms": mean_ms,
+            "p95_ms": p95_ms,
+            "sample_count": len(frame_times),
+            "measurement_duration_s": elapsed,
+            "average_visible_tris": avg_visible,
+            "average_total_tris": avg_total,
+            "average_culled_tris": avg_culled,
+            "culling_efficiency": sysmon["culling_efficiency"],
+            "sysmon": sysmon,
+        }
+
+    @staticmethod
+    def _format_vram(metrics):
+        used = metrics.get("vram_used_mb")
+        total = metrics.get("vram_total_mb")
+        if used is None and total is None:
+            return "N/A"
+        if used is None:
+            return "%.0f MB total" % float(total)
+        if total is None:
+            return "%.0f MB used" % float(used)
+        return "%.0f / %.0f MB" % (float(used), float(total))
+
+    def _report_live_result(self, label, metrics):
+        """Record and display a completed live benchmark measurement."""
+        result = dict(metrics)
+        result["test"] = label
+        result["description"] = label.replace("_", " ").title()
+        result["benchmark_live"] = True
+        result["resolution"] = "%dx%d" % (
+            int(metrics.get("viewport_width", self.main_window.view_3d.width())),
+            int(metrics.get("viewport_height", self.main_window.view_3d.height())),
+        )
+        self._results.append(result)
+        self.export_button.setEnabled(True)
+        self.export_button.setVisible(True)
+
+        average_fps = float(result.get("average_fps", 0.0))
+        self.output.append(
+            '<div style="background:#222; border:1px solid #555; padding:12px; margin:4px 0 10px 0;">'
+            '<div style="font-size:15px; font-weight:bold; color:#eeeeee; margin-bottom:4px;">%s</div>'
+            '<div style="color:#aaa;">%s &nbsp; • &nbsp; %s</div>'
+            '<table cellspacing="0" cellpadding="0" style="margin-top:10px; margin-bottom:2px;">'
+            '<tr><td width="24" rowspan="2" bgcolor="#63d471"></td>'
+            '<td height="2" bgcolor="#63d471" style="font-size:2px; line-height:2px;"></td></tr>'
+            '<tr><td style="padding:6px 16px 2px 12px; white-space:nowrap;">'
+            '<span style="font-size:25px; font-weight:bold; color:#63d471;">Average FPS:</span>'
+            '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.2f FPS</span>'
+            '</td></tr></table>'
+            '<div style="color:#aaa; padding:4px 0;">frame time %.2f ms &nbsp; • &nbsp; p95 %.2f ms%s</div>'
+            '</div>'
+            % (
+                self._html_escape(label),
+                self._html_escape(result.get("description", label)),
+                self._html_escape(result.get("resolution", "")),
+                average_fps,
+                float(result.get("average_frame_time_ms", 0.0)),
+                float(result.get("p95_frame_time_ms", 0.0)),
+                (
+                    " &nbsp; • &nbsp; VRAM " + self._format_vram(result)
+                    if result.get("vram_used_mb") is not None or result.get("vram_total_mb") is not None
+                    else ""
+                ),
+            )
+        )
+        self.output.ensureCursorVisible()
+        QApplication.processEvents()
+
+    def _report_current_world_combined_if_complete(self):
+        """Report the combined result after a PlayerStart phase pair."""
+        if len(self._current_phase_results) < 2:
+            return
+
+        phase1 = self._current_phase_results[-2]
+        phase2 = self._current_phase_results[-1]
+        if phase1.get("benchmark_phase") != 1 or phase2.get("benchmark_phase") != 2:
+            return
+        if phase1.get("benchmark_repetition") != phase2.get("benchmark_repetition"):
+            return
+
+        duration = (
+            float(phase1.get("measurement_duration_s", 0.0))
+            + float(phase2.get("measurement_duration_s", 0.0))
+        )
+        samples = (
+            int(phase1.get("sample_count", 0))
+            + int(phase2.get("sample_count", 0))
+        )
+        combined_fps = samples / duration if duration > 0.0 else 0.0
+        result = {
+            "test": "current_world_combined",
+            "description": "Combined PlayerStart benchmark",
+            "benchmark_live": True,
+            "benchmark_phase_label": "Phase 1 orbit + Phase 2 360° rotation",
+            "benchmark_repetition": phase1.get("benchmark_repetition"),
+            "average_fps": combined_fps,
+            "sample_count": samples,
+            "measurement_duration_s": duration,
+            "average_frame_time_ms": (1000.0 / combined_fps if combined_fps > 0.0 else 0.0),
+            "p95_frame_time_ms": max(
+                float(phase1.get("p95_frame_time_ms", 0.0)),
+                float(phase2.get("p95_frame_time_ms", 0.0)),
+            ),
+            "resolution": phase1.get("resolution", ""),
+        }
+        self._results.append(result)
+        self.export_button.setEnabled(True)
+        self.export_button.setVisible(True)
+        self._append(
+            '<div style="background:#222; border:1px solid #555; padding:12px; margin:4px 0 10px 0;">'
+            '<div style="font-size:15px; font-weight:bold; color:#eeeeee;">Combined PlayerStart benchmark</div>'
+            '<div style="color:#aaa; padding:4px 0;">Phase 1 orbit + Phase 2 360° rotation</div>'
+            '<table cellspacing="0" cellpadding="0" style="margin-top:10px;">'
+            '<tr><td width="24" rowspan="2" bgcolor="#63d471"></td>'
+            '<td height="2" bgcolor="#63d471" style="font-size:2px; line-height:2px;"></td></tr>'
+            '<tr><td style="padding:6px 16px 2px 12px; white-space:nowrap;">'
+            '<span style="font-size:25px; font-weight:bold; color:#63d471;">Combined Average FPS:</span>'
+            '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.2f FPS</span>'
+            '</td></tr></table></div>' % combined_fps
+        )
+        QApplication.processEvents()
+
+    def _restore_original(self):
+        """Restore the real MainWindow to the state captured before benchmarking."""
+        self._timer.stop()
+        self._measurement_active = False
+        self._live_stress_active = False
+        self._stop_live_stress_monitor()
+        self._restore_benchmark_window_mode()
+
+        try:
+            if self.main_window.view_3d.play_mode and not self._original_play_mode:
+                self.main_window._exit_play_mode()
+                QApplication.processEvents()
+        except Exception:
+            pass
+
+        try:
+            if self._original_level_data is not None:
+                self.main_window.state.load_from_data(copy.deepcopy(self._original_level_data))
+                self.main_window.update_all_ui()
+                self.main_window.update_views()
+        except Exception:
+            pass
+
+        try:
+            if self._original_camera is not None:
+                position, yaw, pitch, fov = self._original_camera
+                camera = self.main_window.view_3d.camera
+                import glm
+                camera.pos = glm.vec3(*position)
+                camera.yaw = yaw
+                camera.pitch = pitch
+                camera.fov = fov
+        except Exception:
+            pass
+
+        self.main_window.unsaved_changes = self._original_unsaved_changes
+        self.main_window.view_3d.update()
+        QApplication.processEvents()
+
+        self._running = False
+        self.throbber.setVisible(False)
+        self._set_controls_enabled(True)
+        self.status_label.setText("Benchmark complete.")
+        self.export_button.setEnabled(bool(self._results))
+        self.export_button.setVisible(bool(self._results))
+        QApplication.processEvents()
+
+    def _finish_with_error(self, error_text):
+        """Fail the benchmark dialog without killing the live Fio process."""
+        self._timer.stop()
+        self._measurement_active = False
+        self._worker_active = False
+        self._live_stress_active = False
+        self._stop_live_stress_monitor()
+        self._stop_monitor()
+
+        try:
+            self._terminate_worker_process()
+        except Exception:
+            pass
+
+        try:
+            self.main_window.view_3d.sysmon.end_benchmark_capture()
+        except Exception:
+            pass
+
+        label = self._current[0] if self._current else "benchmark"
+        self._results.append({
+            "test": label,
+            "status": "error",
+            "aborted": True,
+            "abort_reason": str(error_text),
+            "benchmark_live": True,
+        })
+        self.export_button.setEnabled(True)
+        self.export_button.setVisible(True)
+        self.output.append(
+            '<div style="background:#2a1010; border:1px solid #ff5555; padding:12px; margin:4px 0 10px 0;">'
+            '<div style="font-size:15px; font-weight:bold; color:#ff7777; font-weight:bold;">Benchmark error</div>'
+            '<pre style="white-space:pre-wrap; color:#ddd; margin-top:8px;">%s</pre>'
+            '</div>' % self._html_escape(error_text)
+        )
+        self.status_label.setText(
+            "Benchmark failed — restoring the original Fio world."
+        )
+        QApplication.processEvents()
+
+        self._restore_original()
+        self.status_label.setText("Benchmark failed; original world restored.")
+        QApplication.processEvents()
+
     def _tick(self):
         if not self._running:
             return
@@ -2003,4 +2266,18 @@ Git commit: %s
                 "io_hops": hops,
                 "hops_per_second": hops / elapsed if elapsed > 0.0 else 0.0,
             })
+            self._append(                "  Live I/O throughput: %.0f hops/s."
+                % metrics["hops_per_second"]
+            )
+
+        if label.startswith(("procedural_", "monster_")):
+            pos = view.camera.pos
             self._append(
+                "  Play Mode: god_mode=True, AI active, infighting active, "
+                "final camera=(%.1f, %.1f, %.1f)"
+                % (float(pos.x), float(pos.y), float(pos.z))
+            )
+            self._bench.finish_live_monster_test(self.main_window)
+        elif label == "live_io_1000" and view.play_mode:
+            self.main_window._exit_play_mode()
+            QApplication.processEvents()
