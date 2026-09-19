@@ -1310,7 +1310,7 @@ Git commit: %s
             self.show()
 
 
-    def _prepare_current_world_sweep(self):
+    def _prepare_player_area_sweep(self):
         """Prepare a Player-area sweep from the actual reachable region."""
         player_start, start_error = self._find_player_start()
         fallback = False
@@ -1391,7 +1391,7 @@ Git commit: %s
                 )
             )
 
-    def _advance_current_world_sweep(self):
+    def _advance_player_area_sweep(self):
         path = getattr(self, "_current_world_camera_path", None)
         if path is None:
             return
@@ -1458,7 +1458,7 @@ Git commit: %s
                     self._enter_benchmark_editor_window_mode(1280, 720)
                 elif label == "editor_windowed_1920":
                     self._enter_benchmark_editor_window_mode(1920, 1080)
-                self._prepare_current_world_sweep()
+                self._prepare_player_area_sweep()
                 self._check_preparation_budget(label)
                 self._start_measurement(label, duration=self._test_duration(label))
             else:
@@ -1523,7 +1523,7 @@ Git commit: %s
                 raise TimeoutError("%s exceeded its measurement watchdog; the test did not complete reliably." % self._current[0])
             view = self.main_window.view_3d
             if self._current and self._current[0] in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
-                self._advance_current_world_sweep()
+                self._advance_player_area_sweep()
             view.update()
             app.processEvents()
 
