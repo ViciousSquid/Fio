@@ -373,20 +373,26 @@ class BenchmarkDialog(QDialog):
                 fps_html = '<div class="fps">%.2f <span>FPS</span></div>' % float(fps)
 
             extra = []
-            if "average_visible_tris" in result:
-                extra.append("Average visible triangles: %.0f" % float(result["average_visible_tris"]))
-            if "average_total_tris" in result:
-                extra.append("Average total triangles: %.0f" % float(result["average_total_tris"]))
-            if "average_culled_tris" in result:
-                extra.append("Average culled triangles: %.0f" % float(result["average_culled_tris"]))
-            if "culling_efficiency" in result:
-                extra.append("Culling efficiency: %.1f%%" % float(result["culling_efficiency"]))
+            sysmon = result.get("sysmon") or {}
+            visible_tris = result.get("average_visible_tris", sysmon.get("average_visible_tris"))
+            total_tris = result.get("average_total_tris", sysmon.get("average_total_tris"))
+            culled_tris = result.get("average_culled_tris", sysmon.get("average_culled_tris"))
+            culling_efficiency = result.get("culling_efficiency", sysmon.get("culling_efficiency"))
+            if visible_tris is not None:
+                extra.append("Average visible triangles: %.0f" % float(visible_tris))
+            if total_tris is not None:
+                extra.append("Average total triangles: %.0f" % float(total_tris))
+            if culled_tris is not None:
+                extra.append("Average culled triangles: %.0f" % float(culled_tris))
+            if culling_efficiency is not None:
+                extra.append("Culling efficiency: %.1f%%" % float(culling_efficiency))
             if "one_percent_low_fps" in result:
                 extra.append("1% low: %.2f FPS" % float(result["one_percent_low_fps"]))
             if "zero_point_one_percent_low_fps" in result:
                 extra.append("0.1% low: %.2f FPS" % float(result["zero_point_one_percent_low_fps"]))
-            if "vram_used_mb" in result or "vram_total_mb" in result:
-                extra.append("VRAM: %s" % self._html_escape(self._format_vram(result)))
+            vram_source = result if ("vram_used_mb" in result or "vram_total_mb" in result) else sysmon
+            if vram_source:
+                extra.append("VRAM: %s" % self._html_escape(self._format_vram(vram_source)))
             if "final_camera_pos" in result:
                 extra.append("Final camera position: %s" % self._html_escape(result["final_camera_pos"]))
 
