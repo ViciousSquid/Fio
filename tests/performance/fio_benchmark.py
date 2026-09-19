@@ -190,7 +190,8 @@ def _measure_scenario(width, height, name, shadows, empty):
         brushes, things = [], []
     else:
         data = _generate_procedural_map(monsters=0, relay_count=32)
-        brushes, things = data["brushes"], data["things"]
+        state = _materialize_generated_map(data)
+        brushes, things = state.brushes, state.things
 
     with glh.GLTestContext(width, height) as context:
         renderer = glh.make_renderer()
@@ -295,17 +296,28 @@ def _generate_procedural_map(monsters=0, relay_count=32, seed=1337):
     return data
 
 
+def _materialize_generated_map(data):
+    """Turn generated JSON-shaped data into the real Fio EditorState objects."""
+    from editor.editor_state import EditorState
+
+    state = EditorState()
+    state.load_from_data(data)
+    return state
+
+
 def _make_renderer_stress_scene():
     data = _generate_procedural_map(monsters=0, relay_count=32)
-    return data["brushes"], data["things"]
+    state = _materialize_generated_map(data)
+    return state.brushes, state.things
 
 
 def _make_brush_stress_scene(brush_count):
     """Create a large real-Fio brush scene starting from procedural geometry."""
     data = _generate_procedural_map(monsters=0, relay_count=32)
-    source = data["brushes"]
+    state = _materialize_generated_map(data)
+    source = state.brushes
     if len(source) >= brush_count:
-        return source[:brush_count], data["things"]
+        return source[:brush_count], state.things
 
     brushes = list(source)
     index = 0
@@ -316,7 +328,7 @@ def _make_brush_stress_scene(brush_count):
         original["id"] = "benchmark_generated_%d" % len(brushes)
         brushes.append(original)
         index += 1
-    return brushes, data["things"]
+    return brushes, state.things
 
 
 def _run_monster_stress(count):
@@ -324,7 +336,8 @@ def _run_monster_stress(count):
     data = _generate_procedural_map(
         monsters=count, relay_count=32, seed=1337 + count
     )
-    brushes, things = data["brushes"], data["things"]
+    state = _materialize_generated_map(data)
+    brushes, things = state.brushes, state.things
     results = []
 
     for mode, width, height in (
