@@ -171,7 +171,14 @@ def _resolutions():
 
 
 def _render(renderer, context, brushes, things):
-    """Render one real Fio frame and synchronise GPU completion."""
+    """Render one real production Renderer_F frame and synchronise GPU completion.
+
+    This standalone renderer microbenchmark intentionally does not enable
+    camera-distance culling. The live Play Mode benchmarks exercise the actual
+    engine culling path, including its contiguous production position snapshot.
+    Keeping culling disabled here prevents the compatibility scalar fallback
+    from becoming part of a renderer-only benchmark by accident.
+    """
     import OpenGL.GL as gl
 
     aspect = float(context.width) / float(max(1, context.height))
@@ -180,6 +187,7 @@ def _render(renderer, context, brushes, things):
     config = glh.render_config(
         all_brushes=brushes,
         all_things=things,
+        camera_distance_cull=False,
     )
 
     context.bind()
