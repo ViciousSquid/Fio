@@ -413,7 +413,7 @@ def _make_brush_stress_scene(brush_count):
 def _run_monster_stress(count):
     """Generate a real procedural Fio room populated with N monsters."""
     data = _generate_procedural_map(
-        monsters=count, relay_count=32, seed=1337 + count
+        monsters=count, relay_count=32, seed=BENCHMARK_MAP_SEED
     )
     state = _materialize_generated_map(data)
     brushes, things = state.brushes, state.things
