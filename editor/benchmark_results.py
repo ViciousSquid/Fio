@@ -7,6 +7,8 @@ import os
 import platform
 import subprocess
 import sys
+import math
+import traceback
 from PyQt5.QtWidgets import QApplication, QFileDialog
 
 def _execution_environment():
