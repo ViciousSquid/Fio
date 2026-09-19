@@ -247,6 +247,7 @@ class BenchmarkRunner:
     
 
     def _monitor_beat(self, phase=None, deadline=None):
+        self._live_watchdog_beat()
         if self._monitor_stop is None or self._monitor_lock is None:
             return
         with self._monitor_lock:
