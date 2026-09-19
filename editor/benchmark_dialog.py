@@ -1298,49 +1298,6 @@ Git commit: %s
             camera.yaw = yaw
             camera.pitch = pitch
 
-    def _advance_player_area_sweep(self):
-        """Orbit around PlayerStart without collision/clamping."""
-        path = getattr(self, "_player_area_camera_path", None)
-        if path is None:
-            return
-        elapsed = time.perf_counter() - self._phase_started
-        duration = float(path["duration"])
-        progress = min(1.0, max(0.0, elapsed / max(duration, 0.001)))
-        angle = progress * 2.0 * math.pi
-        x = path["center_x"] + path["half_x"] * math.sin(angle)
-        z = path["center_z"] + path["half_z"] * math.cos(angle)
-        next_progress = min(1.0, progress + 0.01 / max(duration, 0.001))
-        next_angle = next_progress * 2.0 * math.pi
-        next_x = path["center_x"] + path["half_x"] * math.sin(next_angle)
-        next_z = path["center_z"] + path["half_z"] * math.cos(next_angle)
-        yaw = math.degrees(math.atan2(next_z - z, next_x - x))
-        self._set_benchmark_camera(x, z, path["y"], yaw, path["pitch"])
-
-    def _advance_player_area_rotation(self):
-        """Rotate in place at PlayerStart for exactly one 360-degree turn."""
-        path = getattr(self, "_player_area_camera_path", None)
-        if path is None:
-            return
-        elapsed = time.perf_counter() - self._phase_started
-        duration = float(self._test_duration("current_world_phase2"))
-        progress = min(1.0, max(0.0, elapsed / max(duration, 0.001)))
-        yaw = progress * 360.0
-        self._set_benchmark_camera(
-            path["center_x"], path["center_z"], path["y"], yaw, path["pitch"]
-        )
-
-    def _set_benchmark_camera(self, x, z, y, yaw, pitch):
-        camera = self.main_window.view_3d.camera
-        import glm
-        position = glm.vec3(float(x), float(y), float(z))
-        logic_thread = getattr(self.main_window.view_3d, "logic_thread", None)
-        if logic_thread is not None and getattr(self.main_window.view_3d, "use_threading", False):
-            logic_thread.set_editor_camera(position, yaw, pitch, camera.fov)
-        else:
-            camera.pos = position
-            camera.yaw = yaw
-            camera.pitch = pitch
-
     def _begin_next(self):
         if not self._queue:
             self._restore_original()
