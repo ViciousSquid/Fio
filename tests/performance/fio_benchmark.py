@@ -257,22 +257,42 @@ def _measure_scenario(width, height, name, shadows, empty):
                 pass
 
     glh.reset_texture_cache()
-def _generate_procedural_map(monsters=0, relay_count=32, seed=BENCHMARK_MAP_SEED):
+def _generate_procedural_map(monsters=0, relay_count=32, seed=BENCHMARK_MAP_SEED, live_monster=False):
     """Generate a real Fio map using the same procedural generator as the editor."""
     import random
 
     random.seed(seed)
+    # Live monster benchmarks are deliberately compact. The workload is
+    # supposed to stress Monster/LogicThread/renderer behaviour, not spend the
+    # preparation phase constructing a huge 4096x4096 procedural level and
+    # thousands of unrelated wall brushes. Standalone renderer benchmarks
+    # keep the larger map when live_monster=False.
+    if live_monster:
+        world_width = 2048
+        world_height = 2048
+        room_count = 8
+        max_room = 384
+        enable_floors = False
+        floor_room_count = 0
+    else:
+        world_width = 4096
+        world_height = 4096
+        room_count = 18
+        max_room = 640
+        enable_floors = True
+        floor_room_count = 3
+
     params = {
-        "world_width": 4096,
-        "world_height": 4096,
+        "world_width": world_width,
+        "world_height": world_height,
         "min_room": 256,
-        "max_room": 640,
-        "room_count": 18,
+        "max_room": max_room,
+        "room_count": room_count,
         "wall_tex": "default.png",
         "floor_tex": "default.png",
-        "enable_floors": True,
+        "enable_floors": enable_floors,
         "floor_height": 128,
-        "floor_room_count": 3,
+        "floor_room_count": floor_room_count,
         "spawn_monsters": monsters > 0,
         "monster_count": monsters,
         "spawn_health": False,
