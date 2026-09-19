@@ -293,6 +293,39 @@ def _generate_procedural_map(monsters=0, relay_count=32, seed=1337):
             "fire_once": False,
         }]
 
+    # Route monster combat outputs into real LogicRelay sinks.  These are
+    # deliberately one-hop sinks: every attack/damage event exercises the
+    # production I/O dispatcher without turning the benchmark into an
+    # artificial recursive relay stress test.
+    monsters_in_map = [
+        t for t in things
+        if str(t.get("type", "")).lower() == "monster"
+    ]
+    if monsters_in_map and relay_count:
+        for index, monster in enumerate(monsters_in_map):
+            sink = "BenchmarkRelay_%d" % (index % relay_count)
+            sink_id = "benchmark_relay_%d" % (index % relay_count)
+            monster.setdefault("io_connections", []).extend([
+                {
+                    "output": "OnAttack",
+                    "target": sink,
+                    "target_id": sink_id,
+                    "input": "Trigger",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": False,
+                },
+                {
+                    "output": "OnDamaged",
+                    "target": sink,
+                    "target_id": sink_id,
+                    "input": "Trigger",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": False,
+                },
+            ])
+
     return data
 
 
@@ -593,6 +626,102 @@ def load_live_benchmark_world(window, data):
     window.view_top.update()
     window.view_side.update()
     window.view_front.update()
+
+
+def prepare_live_monster_test(window, aggro_fraction=0.25):
+    """Enter real Play Mode and configure a representative monster combat load.
+
+    Monster AI remains fully live: teams make monsters acquire opposing
+    monsters, a subset receives explicit runtime aggro, and the player is put
+    in god mode so the benchmark can run without the player dying.  The
+    generated monsters also retain their normal OnAttack/OnDamaged/OnDeath I/O.
+    """
+    from PyQt5.QtWidgets import QApplication
+    from PyQt5.QtCore import Qt
+
+    app = QApplication.instance()
+    if app is None:
+        raise RuntimeError("Fio QApplication is not running")
+
+    view = window.view_3d
+    if view.play_mode:
+        window._exit_play_mode()
+        app.processEvents()
+
+    window.enter_play_mode()
+    if not view.play_mode:
+        raise RuntimeError("Fio failed to enter Play Mode for monster benchmark")
+
+    logic = getattr(view, "logic_thread", None)
+    if logic is None:
+        window._exit_play_mode()
+        raise RuntimeError("Fio Play Mode has no LogicThread")
+
+    # God mode protects the benchmark player without disabling monster AI.
+    logic.god_mode = True
+
+    monsters = [
+        t for t in window.state.things
+        if str(t.properties.get("type", "")).lower() == "monster"
+    ]
+    if not monsters:
+        window._exit_play_mode()
+        raise RuntimeError("monster benchmark generated no Monster entities")
+
+    # Split monsters into two opposing factions.  The existing production AI
+    # already understands team-based enemy targeting and infighting.
+    for index, monster in enumerate(monsters):
+        monster.properties["team"] = "benchmark_red" if index % 2 == 0 else "benchmark_blue"
+        monster.properties["awake"] = True
+        monster.properties["wake_on_sight"] = True
+        monster.properties["dead"] = False
+
+    # Seed explicit aggro on a subset so infighting starts immediately rather
+    # than depending entirely on the player wandering into every sight cone.
+    seed_count = max(2, int(len(monsters) * float(aggro_fraction)))
+    seed_count = min(seed_count, len(monsters))
+    for index in range(seed_count):
+        source = monsters[index]
+        source_team = source.properties["team"]
+        sx, sy, sz = [float(v) for v in source.pos]
+        candidates = []
+        for target in monsters:
+            if target is source or target.properties.get("dead", False):
+                continue
+            if target.properties.get("team") == source_team:
+                continue
+            tx, ty, tz = [float(v) for v in target.pos]
+            dx, dy, dz = sx - tx, sy - ty, sz - tz
+            candidates.append((dx * dx + dy * dy + dz * dz, target))
+        if candidates:
+            candidates.sort(key=lambda item: item[0])
+            source.properties["_aggro_target"] = id(candidates[0][1])
+
+    # Keep the player moving through the encounter while god mode prevents
+    # combat from ending the measurement.
+    window.keys_pressed.add(Qt.Key_W)
+    window.keys_pressed.add(Qt.Key_D)
+
+    return {
+        "monster_count": len(monsters),
+        "aggro_seeded": sum(
+            1 for m in monsters if m.properties.get("_aggro_target") is not None
+        ),
+        "god_mode": True,
+        "teams": 2,
+    }
+
+
+def finish_live_monster_test(window):
+    """Stop benchmark player input and leave real Play Mode cleanly."""
+    from PyQt5.QtWidgets import QApplication
+    from PyQt5.QtCore import Qt
+
+    window.keys_pressed.discard(Qt.Key_W)
+    window.keys_pressed.discard(Qt.Key_D)
+    if window.view_3d.play_mode:
+        window._exit_play_mode()
+        QApplication.processEvents()
 
 
 def run_live_play_sample(window, data, seconds=2.0):
