@@ -366,6 +366,7 @@ def _generate_procedural_map(monsters=0, relay_count=32, seed=BENCHMARK_MAP_SEED
     return data
 
 
+# Live benchmark loader deliberately accepts yield_hook so large worlds can be built cooperatively.
 def load_live_benchmark_world(window, data, yield_hook=None):
     """Load benchmark data into the existing Fio editor cooperatively."""
     window.state.load_from_data(
