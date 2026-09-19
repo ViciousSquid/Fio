@@ -163,7 +163,17 @@ class BenchmarkDialog(QDialog):
         self.resize(900, 650)
 
         layout = QVBoxLayout(self)
-        self.status_label = QLabel("Ready.")
+        
+        benchmark_description = QLabel(
+            'Click <span style="color: #2e9d4d;">run benchmark</span> to analyse the currently loaded map<br>'
+            'or choose a stress-test from below to benchmark this<br>'
+            'Fio installation against another one.'
+        )
+        # Optional: Increase font size slightly to match the provided layout proportions
+        benchmark_description.setStyleSheet("font-size: 15px;") 
+        layout.addWidget(benchmark_description)
+
+        self.status_label = QLabel("")
         layout.addWidget(self.status_label)
 
         self.throbber = QProgressBar()
@@ -272,11 +282,6 @@ class BenchmarkDialog(QDialog):
         )
         self.run_button.clicked.connect(self._start)
         layout.addWidget(self.run_button)
-
-        benchmark_description = QLabel(
-            "analyse the <b>currently loaded</b> project"
-        )
-        layout.addWidget(benchmark_description)
 
         self.buttons = QDialogButtonBox(QDialogButtonBox.Close)
         self.buttons.rejected.connect(self.reject)
