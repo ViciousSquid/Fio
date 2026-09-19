@@ -409,8 +409,8 @@ class BenchmarkDialog(QDialog):
     def _worker_timeout_for(self, label):
         """Return the hard wall-clock timeout for an isolated stress test."""
         if label == "monster_apocalypse":
-            return 120.0
-        return 60.0
+            return 60.0
+        return 30.0
 
     def _terminate_worker_process(self):
         process = self._worker_process
