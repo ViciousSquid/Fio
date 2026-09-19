@@ -115,6 +115,8 @@ class BenchmarkDialog(QDialog):
         self._worker_finished = False
         self._worker_exit_code = None
         self._requested_duration = None
+        self._requested_repetitions = 1
+        self._current_phase_results = []
 
         self.setWindowTitle("Fio Benchmark")
         self.resize(900, 650)
@@ -274,6 +276,9 @@ class BenchmarkDialog(QDialog):
         # The current-world path is prepared before the duration is requested.
         # Use the prepared local sweep duration so empty regions outside the
         # actual play area cannot stretch the measurement.
+        if label in ("current_world_phase1", "current_world_phase2"):
+            base = float(self._requested_duration) if self._requested_duration is not None else self._player_area_sweep_duration()
+            return base if label.endswith("phase1") else base * 0.5
         if label in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
             if self._requested_duration is not None:
                 return float(self._requested_duration)
@@ -1187,7 +1192,12 @@ Git commit: %s
                 float(camera.fov),
             )
 
-            self._queue = [("current_world", None)]
+            self._queue = []
+            repetitions = max(1, int(self._requested_repetitions))
+            self._current_phase_results = []
+            for repetition in range(1, repetitions + 1):
+                self._queue.append(("current_world_phase1", repetition))
+                self._queue.append(("current_world_phase2", repetition))
             if self.additional_tests.isChecked():
                 self._queue.extend([
                     ("procedural_100_monsters", 100),
@@ -1337,145 +1347,107 @@ Git commit: %s
 
 
     def _prepare_player_area_sweep(self):
-        """Prepare a PlayerStart-centered outward spiral through playable space."""
+        """Prepare the original PlayerStart-centred orbit. No collision is used."""
         player_start, start_error = self._find_player_start()
-        fallback = False
-        fallback_reason = None
-        playable = None
-        flood_error = None
+        fallback = player_start is None
 
-        if player_start is not None:
-            playable, flood_error = self._flood_player_area(
-                player_start[0], player_start[1]
-            )
-
-        if playable is None:
-            fallback = True
-            fallback_reason = start_error or flood_error or "playable flood failed"
-
-            min_x, max_x, min_z, max_z = self._current_world_bounds()
-            center_x = (min_x + max_x) * 0.5
-            center_z = (min_z + max_z) * 0.5
-            half_x = max(0.0, (max_x - min_x) * 0.42)
-            half_z = max(0.0, (max_z - min_z) * 0.42)
-            sweep_bounds = (min_x, max_x, min_z, max_z)
-            cell_count = 0
-            anchor_x = center_x
-            anchor_z = center_z
-            self._player_area_reachable_cells = None
-            self._player_area_reachable_points = None
-            self._player_area_cell_size = float(self.PLAYER_AREA_CELL_SIZE)
-            radius_end = math.sqrt(half_x * half_x + half_z * half_z)
-        else:
-            min_x, max_x, min_z, max_z = playable["bounds"]
-            cell_count = playable["cell_count"]
-            anchor_x = float(player_start[0])
-            anchor_z = float(player_start[1])
-            sweep_bounds = (min_x, max_x, min_z, max_z)
-            self._player_area_reachable_cells = playable["cells"]
-            self._player_area_reachable_points = playable["points"]
-            self._player_area_cell_size = float(playable["cell_size"])
-
-            radius_end = 0.0
-            for point_x, _point_y, point_z in playable["points"].values():
-                radius_end = max(
-                    radius_end,
-                    math.hypot(
-                        float(point_x) - anchor_x,
-                        float(point_z) - anchor_z,
-                    ),
-                )
-
-            radius_end = max(
-                float(self.PLAYER_AREA_CELL_SIZE),
-                radius_end * 0.90,
-            )
-
-        camera = self.main_window.view_3d.camera
-        y = float(camera.pos.y)
-        pitch = float(camera.pitch)
-
-        turns = float(self.PLAYER_AREA_SPIRAL_TURNS) if not fallback else 1.0
+        min_x, max_x, min_z, max_z = self._current_world_bounds()
         if fallback:
-            # Preserve the previous bounds-based fallback path.
-            effective_radius = math.sqrt(
-                (half_x * half_x + half_z * half_z) * 0.5
-            )
-            travel_distance = 2.0 * math.pi * effective_radius
+            anchor_x = (min_x + max_x) * 0.5
+            anchor_z = (min_z + max_z) * 0.5
+            fallback_reason = start_error or "no usable PlayerStart"
         else:
-            # Approximate the Archimedean spiral path length while preserving
-            # the existing distance / 250 speed model.
-            radius_start = 0.0
-            average_radius = (radius_start + radius_end) * 0.5
-            travel_distance = math.hypot(
-                radius_end - radius_start,
-                2.0 * math.pi * turns * average_radius,
-            )
+            anchor_x, anchor_z = float(player_start[0]), float(player_start[1])
+            fallback_reason = None
 
+        map_width = max(0.0, max_x - min_x)
+        map_depth = max(0.0, max_z - min_z)
+        room_x = max(0.0, min(anchor_x - min_x, max_x - anchor_x))
+        room_z = max(0.0, min(anchor_z - min_z, max_z - anchor_z))
+        half_x = min(map_width * 0.12, room_x * 0.70)
+        half_z = min(map_depth * 0.12, room_z * 0.70)
+        half_x = max(32.0, half_x)
+        half_z = max(32.0, half_z)
+
+        effective_radius = math.sqrt((half_x * half_x + half_z * half_z) * 0.5)
+        travel_distance = 2.0 * math.pi * effective_radius
         duration = max(6.0, min(12.0, travel_distance / 250.0))
 
-        if fallback:
-            self._player_area_camera_path = {
-                "fallback": True,
-                "center_x": anchor_x,
-                "center_z": anchor_z,
-                "half_x": half_x,
-                "half_z": half_z,
-                "y": y,
-                "pitch": pitch,
-                "duration": duration,
-            }
-        else:
-            self._player_area_camera_path = {
-                "fallback": False,
-                "center_x": anchor_x,
-                "center_z": anchor_z,
-                "radius_end": radius_end,
-                "turns": turns,
-                "y": y,
-                "pitch": pitch,
-                "duration": duration,
-            }
-
-        self._prepare_player_area_collision_context()
-        safe_sample_count, collision_clamped_segments = (
-            self._build_player_area_safe_path()
-        ) if not fallback else (0, 0)
-
+        camera = self.main_window.view_3d.camera
+        self._player_area_camera_path = {
+            "fallback": fallback,
+            "center_x": anchor_x,
+            "center_z": anchor_z,
+            "half_x": half_x,
+            "half_z": half_z,
+            "y": float(camera.pos.y),
+            "pitch": float(camera.pitch),
+            "duration": duration,
+        }
         self._player_area_sweep_metadata = {
-            "mode": "player-start spiral" if not fallback else "bounds fallback",
-            "anchor_source": "bounds fallback" if fallback else "PlayerStart",
+            "mode": "player-start orbit" if not fallback else "bounds fallback",
+            "anchor_source": "PlayerStart" if not fallback else "bounds fallback",
             "fallback": fallback,
             "fallback_reason": fallback_reason,
-            "bounds": tuple(float(value) for value in sweep_bounds),
-            "reachable_cells": int(cell_count),
+            "bounds": (float(min_x), float(max_x), float(min_z), float(max_z)),
             "duration_s": float(duration),
             "travel_distance": float(travel_distance),
-            "safe_path_samples": int(safe_sample_count),
-            "collision_clamped_segments": int(collision_clamped_segments),
         }
 
         if fallback:
             self._append(
-                "Camera sweep: BOUNDS FALLBACK for %.1f s — %s; "
-                "using existing bounds-based sweep."
+                "Camera sweep: BOUNDS FALLBACK for %.1f s — %s; collision disabled."
                 % (duration, fallback_reason)
             )
         else:
             self._append(
-                "Camera sweep: PLAYERSTART SPIRAL for %.1f s — PlayerStart at "
-                "(%.1f, %.1f); flood reached %d cells; %d safe path samples; "
-                "%d segments collision-clamped; %g-unit safety margin."
-                % (
-                    duration,
-                    anchor_x,
-                    anchor_z,
-                    int(cell_count),
-                    int(safe_sample_count),
-                    int(collision_clamped_segments),
-                    float(self.PLAYER_AREA_CAMERA_MARGIN),
-                )
+                "Camera sweep: PLAYERSTART ORBIT for %.1f s — PlayerStart at "
+                "(%.1f, %.1f); collision disabled."
+                % (duration, anchor_x, anchor_z)
             )
+
+    def _advance_player_area_sweep(self):
+        """Orbit around PlayerStart without collision/clamping."""
+        path = getattr(self, "_player_area_camera_path", None)
+        if path is None:
+            return
+        elapsed = time.perf_counter() - self._phase_started
+        duration = float(path["duration"])
+        progress = min(1.0, max(0.0, elapsed / max(duration, 0.001)))
+        angle = progress * 2.0 * math.pi
+        x = path["center_x"] + path["half_x"] * math.sin(angle)
+        z = path["center_z"] + path["half_z"] * math.cos(angle)
+        next_progress = min(1.0, progress + 0.01 / max(duration, 0.001))
+        next_angle = next_progress * 2.0 * math.pi
+        next_x = path["center_x"] + path["half_x"] * math.sin(next_angle)
+        next_z = path["center_z"] + path["half_z"] * math.cos(next_angle)
+        yaw = math.degrees(math.atan2(next_z - z, next_x - x))
+        self._set_benchmark_camera(x, z, path["y"], yaw, path["pitch"])
+
+    def _advance_player_area_rotation(self):
+        """Rotate in place at PlayerStart for exactly one 360-degree turn."""
+        path = getattr(self, "_player_area_camera_path", None)
+        if path is None:
+            return
+        elapsed = time.perf_counter() - self._phase_started
+        duration = float(self._test_duration("current_world_phase2"))
+        progress = min(1.0, max(0.0, elapsed / max(duration, 0.001)))
+        yaw = progress * 360.0
+        self._set_benchmark_camera(
+            path["center_x"], path["center_z"], path["y"], yaw, path["pitch"]
+        )
+
+    def _set_benchmark_camera(self, x, z, y, yaw, pitch):
+        camera = self.main_window.view_3d.camera
+        import glm
+        position = glm.vec3(float(x), float(y), float(z))
+        logic_thread = getattr(self.main_window.view_3d, "logic_thread", None)
+        if logic_thread is not None and getattr(self.main_window.view_3d, "use_threading", False):
+            logic_thread.set_editor_camera(position, yaw, pitch, camera.fov)
+        else:
+            camera.pos = position
+            camera.yaw = yaw
+            camera.pitch = pitch
 
     def _prepare_player_area_collision_context(self):
         """Build the static collision context used only during sweep preparation."""
@@ -1811,8 +1783,8 @@ Git commit: %s
         self.status_label.setText("Preparing: %s (30 s preparation limit)" % label)
 
         try:
-            if label in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
-                if label == "current_world":
+            if label in ("current_world", "current_world_phase1", "current_world_phase2", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
+                if label in ("current_world", "current_world_phase1", "current_world_phase2"):
                     self.main_window.raise_()
                     self.main_window.activateWindow()
                     QApplication.processEvents()
@@ -1889,8 +1861,11 @@ Git commit: %s
             if time.perf_counter() > self._measurement_watchdog_deadline:
                 raise TimeoutError("%s exceeded its measurement watchdog; the test did not complete reliably." % self._current[0])
             view = self.main_window.view_3d
-            if self._current and self._current[0] in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
-                self._advance_player_area_sweep()
+            if self._current and self._current[0] in ("current_world", "current_world_phase1", "current_world_phase2", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
+                if self._current[0] == "current_world_phase2":
+                    self._advance_player_area_rotation()
+                else:
+                    self._advance_player_area_sweep()
             view.update()
             app.processEvents()
 
@@ -1907,7 +1882,16 @@ Git commit: %s
             live_metrics = view.sysmon.get_metrics()
             metrics.update({"viewport_width": int(view.width()), "viewport_height": int(view.height()), "vram_used_mb": live_metrics.get("vram_used_mb"), "vram_total_mb": live_metrics.get("vram_total_mb"), "visible_brushes": live_metrics.get("visible_brushes", 0), "culled_brushes": live_metrics.get("culled_brushes", 0), "total_brushes": live_metrics.get("total_brushes", 0), "visible_tris": live_metrics.get("visible_tris", 0), "culled_tris": live_metrics.get("culled_tris", 0), "visible_surfaces": live_metrics.get("visible_surfaces", 0), "culled_surfaces": live_metrics.get("culled_surfaces", 0)})
             label = self._current[0]
-            if label in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
+            if label in ("current_world", "current_world_phase1", "current_world_phase2", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
+                if label in ("current_world_phase1", "current_world_phase2"):
+                    phase_number = 1 if label.endswith("phase1") else 2
+                    metrics["benchmark_phase"] = phase_number
+                    metrics["benchmark_repetition"] = int(self._current[1] or 1)
+                    metrics["benchmark_phase_label"] = (
+                        "Phase 1 — PlayerStart orbit"
+                        if phase_number == 1 else
+                        "Phase 2 — PlayerStart 360° rotation"
+                    )
                 sweep = getattr(self, "_player_area_sweep_metadata", {})
                 metrics.update({
                     "camera_sweep_mode": sweep.get("mode", "player-area"),
@@ -1922,7 +1906,12 @@ Git commit: %s
 
             if label == "live_io_1000":
                 self._run_live_io_stress()
-            self._report_live_result(label, metrics)
+            if label in ("current_world_phase1", "current_world_phase2"):
+                self._current_phase_results.append(metrics)
+                self._report_live_result(label, metrics)
+                self._report_current_world_combined_if_complete()
+            else:
+                self._report_live_result(label, metrics)
 
             if label.startswith("procedural_") or label == "monster_apocalypse":
                 # Monster tests already ran inside real Play Mode during the
@@ -2033,6 +2022,43 @@ Git commit: %s
             "average_culled_tris": avg_culled,
             "culling_efficiency": efficiency,
         }
+    def _report_current_world_combined_if_complete(self):
+        expected = int(self._requested_repetitions) * 2
+        if len(self._current_phase_results) != expected:
+            return
+
+        total_frames = sum(int(r.get("frame_count", 0)) for r in self._current_phase_results)
+        total_frame_time_ms = sum(
+            float(r.get("average_frame_time_ms", 0.0)) * int(r.get("frame_count", 0))
+            for r in self._current_phase_results
+        )
+        if total_frames <= 0 or total_frame_time_ms <= 0.0:
+            return
+
+        combined_fps = 1000.0 * total_frames / total_frame_time_ms
+        total_seconds = total_frame_time_ms / 1000.0
+        self._append(
+            '<div style="background:#17231a; border:2px solid #63d471; padding:12px; margin:8px 0 12px 0;">'
+            '<div style="font-size:16px; font-weight:bold; color:#63d471;">Combined Current World Average FPS</div>'
+            '<div style="font-size:28px; font-weight:bold; color:#eeeeee;">%.2f FPS</div>'
+            '<div style="color:#aaa;">Phase 1 + Phase 2 across %d run%s • %.2f seconds • %d captured frames</div>'
+            '</div>' % (
+                combined_fps, int(self._requested_repetitions),
+                "" if int(self._requested_repetitions) == 1 else "s",
+                total_seconds, total_frames
+            )
+        )
+        self._results.append({
+            "test": "current_world_combined",
+            "description": "Combined Phase 1 + Phase 2 Current World result",
+            "average_fps": combined_fps,
+            "average_frame_time_ms": 1000.0 / combined_fps,
+            "frame_count": total_frames,
+            "measurement_duration_s": total_seconds,
+            "benchmark_combined": True,
+            "benchmark_repetitions": int(self._requested_repetitions),
+        })
+
     def _report_live_result(self, label, metrics):
         width = metrics.get("viewport_width", self.main_window.view_3d.width())
         height = metrics.get("viewport_height", self.main_window.view_3d.height())
@@ -2046,7 +2072,8 @@ Git commit: %s
         low_1 = 1000.0 / p99_ms if p99_ms > 0.0 else 0.0
         low_01 = 1000.0 / p999_ms if p999_ms > 0.0 else 0.0
         result = dict(metrics)
-        result.update({"test": label, "entities": len(self.main_window.state.things), "one_percent_low_fps": low_1, "zero_point_one_percent_low_fps": low_01})
+        display_label = metrics.get("benchmark_phase_label", label)
+        result.update({"test": label, "description": display_label, "entities": len(self.main_window.state.things), "one_percent_low_fps": low_1, "zero_point_one_percent_low_fps": low_01})
         self._results.append(result)
         self.export_button.setEnabled(True)
         self.export_button.setVisible(True)
