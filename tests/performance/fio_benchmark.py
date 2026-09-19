@@ -191,6 +191,7 @@ def _render(renderer, context, brushes, things):
 
 
 def _measure_scenario(width, height, name, shadows, empty):
+    """Measure a renderer scenario and report through Fio's SysMon metrics."""
     glh.reset_texture_cache()
 
     if empty:
@@ -205,22 +206,16 @@ def _measure_scenario(width, height, name, shadows, empty):
         try:
             _render(renderer, context, brushes, things)
 
-            for _ in range(WARMUP_FRAMES):
-                _render(renderer, context, brushes, things)
-
-            samples = []
-            for _ in range(MEASURED_FRAMES):
-                start = time.perf_counter()
-                _render(renderer, context, brushes, things)
-                samples.append(time.perf_counter() - start)
+            samples, sysmon_metrics = _render_sample_set(
+                renderer,
+                context,
+                brushes,
+                things,
+                warmup=WARMUP_FRAMES,
+                samples=MEASURED_FRAMES,
+            )
 
             mean = statistics.fmean(samples)
-            p95 = sorted(samples)[
-                min(
-                    len(samples) - 1,
-                    int(round(0.95 * (len(samples) - 1))),
-                )
-            ]
             pixels = width * height
             megapixels = pixels / 1_000_000.0
 
@@ -231,14 +226,15 @@ def _measure_scenario(width, height, name, shadows, empty):
                 "pixels": pixels,
                 "megapixels": megapixels,
                 "mean_ms": mean * 1000.0,
-                "p95_ms": p95 * 1000.0,
+                "p95_ms": sysmon_metrics["p95_frame_time_ms"],
                 "worst_ms": max(samples) * 1000.0,
-                "average_fps": 1.0 / mean if mean else float("inf"),
+                "average_fps": sysmon_metrics["fps"],
                 "ms_per_megapixel": (
                     mean * 1000.0 / megapixels
                     if megapixels
                     else float("inf")
                 ),
+                "sysmon": sysmon_metrics,
             }
         finally:
             try:
@@ -247,8 +243,6 @@ def _measure_scenario(width, height, name, shadows, empty):
                 pass
 
     glh.reset_texture_cache()
-
-
 def _generate_procedural_map(monsters=0, relay_count=32, seed=1337):
     """Generate a real Fio map using the same procedural generator as the editor."""
     import random
@@ -374,7 +368,7 @@ def _run_monster_stress(count):
         with glh.GLTestContext(width, height) as context:
             renderer = glh.make_renderer()
             try:
-                samples = _render_sample_set(
+                samples, sysmon_metrics = _render_sample_set(
                     renderer, context, brushes, things, warmup=3, samples=10
                 )
                 mean = statistics.fmean(samples)
@@ -387,7 +381,8 @@ def _run_monster_stress(count):
                     brush_count=len(brushes),
                     entity_count=len(things),
                     resolution="%dx%d" % (width, height),
-                    average_fps=1.0 / mean if mean else float("inf"),
+                    average_fps=sysmon_metrics["fps"],
+                    sysmon=sysmon_metrics,
                 ))
             finally:
                 try:
@@ -488,7 +483,7 @@ def _run_monster_apocalypse():
             try:
                 # Very short warmup: this is explicitly a stress-to-failure
                 # test, not a polished benchmark workload.
-                samples = _render_sample_set(
+                samples, sysmon_metrics = _render_sample_set(
                     renderer, context, brushes, things, warmup=1, samples=10
                 )
                 mean = statistics.fmean(samples)
@@ -546,6 +541,11 @@ def _selected_monster_counts():
     return tuple(counts)
 
 def _render_sample_set(renderer, context, brushes, things, warmup, samples):
+    """Render frames and collect the same metrics exposed by Fio SysMon."""
+    from engine.sysmon import SysMon
+
+    sysmon = SysMon(None)
+
     for _ in range(warmup):
         _render(renderer, context, brushes, things)
 
@@ -553,10 +553,30 @@ def _render_sample_set(renderer, context, brushes, things, warmup, samples):
     for _ in range(samples):
         start = time.perf_counter()
         _render(renderer, context, brushes, things)
-        timings.append(time.perf_counter() - start)
-    return timings
+        elapsed = time.perf_counter() - start
+        timings.append(elapsed)
+        sysmon.record_frame_time(elapsed * 1000.0)
 
+    mean = statistics.fmean(timings)
+    sysmon.record_fps(1.0 / mean if mean else 0.0)
 
+    render_stats = getattr(renderer, "render_stats", None)
+    if render_stats is not None:
+        sysmon.update_stats(
+            visible_brushes=getattr(render_stats, "visible_brushes", 0),
+            culled_brushes=getattr(render_stats, "culled_brushes", 0),
+            total_brushes=getattr(render_stats, "total_brushes", len(brushes)),
+        )
+        sysmon.stats["visible_tris"] = int(
+            getattr(render_stats, "visible_tris", 0)
+        )
+        sysmon.stats["culled_tris"] = int(
+            getattr(render_stats, "culled_tris", 0)
+        )
+
+    # The GL context is still current here, so SysMon's native OpenGL VRAM
+    # query measures the actual renderer used for this benchmark.
+    return timings, sysmon.get_metrics()
 def _timing_result(test, description, samples, **extra):
     mean = statistics.fmean(samples)
     p95 = sorted(samples)[
@@ -646,7 +666,7 @@ def _run_renderer_stress():
         with glh.GLTestContext(width, height) as context:
             renderer = glh.make_renderer()
             try:
-                samples = _render_sample_set(
+                samples, sysmon_metrics = _render_sample_set(
                     renderer,
                     context,
                     brushes,
@@ -700,7 +720,7 @@ def _run_brush_count_stress(counts):
             with glh.GLTestContext(width, height) as context:
                 renderer = glh.make_renderer()
                 try:
-                    samples = _render_sample_set(
+                    samples, sysmon_metrics = _render_sample_set(
                         renderer,
                         context,
                         brushes,
@@ -726,9 +746,8 @@ def _run_brush_count_stress(counts):
                             mode=mode,
                             brush_count=brush_count,
                             resolution="%dx%d" % (width, height),
-                            average_fps=(
-                                1.0 / mean if mean else float("inf")
-                            ),
+                            average_fps=sysmon_metrics["fps"],
+                            sysmon=sysmon_metrics,
                         )
                     )
                 finally:
@@ -969,6 +988,20 @@ def run_benchmark(additional_tests=False):
     return results
 
 
+def _format_sysmon_vram(metrics):
+    if not metrics:
+        return "N/A"
+    used = metrics.get("vram_used_mb")
+    total = metrics.get("vram_total_mb")
+    if used is None and total is None:
+        return "N/A"
+    if used is None:
+        return "%sMB free" % total
+    if total is None:
+        return "%sMB" % used
+    return "%s/%sMB" % (used, total)
+
+
 def format_results(results, info=None):
     lines = [
         "Fio performance benchmark",
@@ -979,8 +1012,9 @@ def format_results(results, info=None):
         "Gameplay data: 32 LogicRelay entities linked by serialized UUID I/O",
         "Monster stress: procedural generator creates real Monster entities",
         "GPU synchronization: glFinish() per measured frame",
+        "Performance metrics: Fio SysMon (frame time, FPS, OpenGL VRAM)",
         "",
-        "scenario                     resolution       FPS     mean ms   p95 ms   ms/MP",
+        "scenario                     resolution       FPS     frame ms  p95 ms   VRAM",
     ]
 
     for result in results:
@@ -996,7 +1030,7 @@ def format_results(results, info=None):
                 result["average_fps"],
                 result["mean_ms"],
                 result["p95_ms"],
-                result["ms_per_megapixel"],
+                _format_sysmon_vram(result.get("sysmon")),
             )
         )
 
@@ -1023,7 +1057,20 @@ def format_results(results, info=None):
                 )
             if "average_fps" in result:
                 lines.append(
-                    "    renderer FPS: %.1f" % result["average_fps"]
+                    "    Fio SysMon FPS: %.1f" % result["average_fps"]
+                )
+            if "sysmon" in result:
+                metrics = result["sysmon"]
+                lines.append(
+                    "    Fio SysMon frame time: %.2f ms (p95 %.2f ms)"
+                    % (
+                        metrics.get("average_frame_time_ms", 0.0),
+                        metrics.get("p95_frame_time_ms", 0.0),
+                    )
+                )
+                lines.append(
+                    "    Fio SysMon VRAM: %s"
+                    % _format_sysmon_vram(metrics)
                 )
             if "hops_per_second" in result:
                 lines.append(
