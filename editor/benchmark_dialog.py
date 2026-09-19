@@ -84,6 +84,11 @@ class BenchmarkDialog(QDialog):
         self._results = []
         self._measurement_active = False
         self._measurement_deadline = 0.0
+        self._original_window_flags = None
+        self._original_window_geometry = None
+        self._original_window_state = None
+        self._original_window_fullscreen = False
+        self._benchmark_window_mode = None
 
         self.setWindowTitle("Fio Benchmark")
         self.resize(900, 650)
@@ -134,6 +139,8 @@ class BenchmarkDialog(QDialog):
         self.monsters_500 = QCheckBox("Procedural room: 500 monsters")
         self.monsters_1000 = QCheckBox("Procedural room: 1,000 monsters")
         self.monster_apocalypse = QCheckBox("FINAL TEST: maximum procedural monster apocalypse (1000 monsters + 1000 relays)")
+        self.borderless_window = QCheckBox("Window mode: borderless maximized")
+        self.fullscreen_window = QCheckBox("Window mode: true fullscreen")
         for checkbox in (
             self.brush_1000,
             self.brush_10000,
@@ -143,6 +150,8 @@ class BenchmarkDialog(QDialog):
             self.monsters_500,
             self.monsters_1000,
             self.monster_apocalypse,
+            self.borderless_window,
+            self.fullscreen_window,
         ):
             checkbox.setToolTip(
                 "Run this deliberately large workload in addition to the standard stress tests."
@@ -179,7 +188,7 @@ class BenchmarkDialog(QDialog):
         layout.addWidget(self.buttons)
 
     def _select_all_stress_tests(self):
-        for checkbox in (self.additional_tests, self.brush_1000, self.brush_10000, self.brush_100000, self.io_chain_1000, self.monsters_100, self.monsters_500, self.monsters_1000, self.monster_apocalypse):
+        for checkbox in (self.additional_tests, self.brush_1000, self.brush_10000, self.brush_100000, self.io_chain_1000, self.monsters_100, self.monsters_500, self.monsters_1000, self.monster_apocalypse, self.borderless_window, self.fullscreen_window):
             checkbox.setChecked(True)
 
     def _set_controls_enabled(self, enabled):
@@ -209,7 +218,7 @@ class BenchmarkDialog(QDialog):
         # The current-world test is map-scale dependent. A fixed 3-second
         # window is too short to sample culling across a meaningful portion of
         # a large map, while tiny maps do not need a long measurement.
-        if label == "current_world":
+        if label in ("current_world", "borderless_window", "fullscreen_window"):
             return self._current_world_sweep_duration()
         return {"procedural_100_monsters": 4.0, "procedural_500_monsters": 4.0, "procedural_1000_monsters": 5.0, "live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_apocalypse": 4.0}.get(label, 3.0)
 
@@ -291,7 +300,12 @@ class BenchmarkDialog(QDialog):
                 getattr(self.main_window, "unsaved_changes", False)
             )
             camera = self.main_window.view_3d.camera
-            self._original_camera = (
+            self._original_window_flags = self.main_window.windowFlags()
+        self._original_window_geometry = self.main_window.geometry()
+        self._original_window_state = self.main_window.windowState()
+        self._original_window_fullscreen = self.main_window.isFullScreen()
+
+        self._original_camera = (
                 (float(camera.pos.x), float(camera.pos.y), float(camera.pos.z)),
                 float(camera.yaw),
                 float(camera.pitch),
@@ -314,6 +328,10 @@ class BenchmarkDialog(QDialog):
                 self._queue.append(("procedural_1000_monsters", 1000))
             if self.monster_apocalypse.isChecked():
                 self._queue.append(("monster_apocalypse", 1000))
+            if self.borderless_window.isChecked():
+                self._queue.append(("borderless_window", None))
+            if self.fullscreen_window.isChecked():
+                self._queue.append(("fullscreen_window", None))
 
             if self.brush_1000.isChecked():
                 self._queue.append(("live_1000_brushes", 1000))
@@ -336,6 +354,7 @@ class BenchmarkDialog(QDialog):
         """Reset the live Fio instance to the original world before each test."""
         self._timer.stop()
         self._measurement_active = False
+        self._restore_benchmark_window_mode()
         if self.main_window.view_3d.play_mode:
             self.main_window._exit_play_mode()
             QApplication.processEvents()
@@ -357,6 +376,68 @@ class BenchmarkDialog(QDialog):
         self.main_window.unsaved_changes = self._original_unsaved_changes
         self.main_window.view_3d.update()
         QApplication.processEvents()
+
+    def _enter_benchmark_window_mode(self, mode):
+        """Put the real MainWindow into the requested presentation mode.
+
+        Borderless uses a frameless maximized window; fullscreen uses Qt's
+        actual showFullScreen() state. The benchmark dialog is hidden so it
+        cannot affect the presentation being measured.
+        """
+        if mode not in ("borderless", "fullscreen"):
+            return
+
+        self._benchmark_window_mode = mode
+        self.hide()
+        window = self.main_window
+
+        if mode == "borderless":
+            window.setWindowFlags(window.windowFlags() | Qt.FramelessWindowHint)
+            window.showMaximized()
+        else:
+            window.showFullScreen()
+
+        window.raise_()
+        window.activateWindow()
+        QApplication.processEvents()
+        QApplication.processEvents()
+
+        self._append(
+            "Presentation mode: %s (%dx%d viewport)."
+            % (
+                "borderless maximized window"
+                if mode == "borderless"
+                else "true fullscreen",
+                window.view_3d.width(),
+                window.view_3d.height(),
+            )
+        )
+
+    def _restore_benchmark_window_mode(self):
+        """Restore the MainWindow presentation state captured at benchmark start."""
+        if self._benchmark_window_mode is None and self._original_window_flags is None:
+            return
+
+        window = self.main_window
+        window.showNormal()
+        if self._original_window_flags is not None:
+            window.setWindowFlags(self._original_window_flags)
+        if self._original_window_geometry is not None:
+            window.setGeometry(self._original_window_geometry)
+
+        if self._original_window_fullscreen:
+            window.showFullScreen()
+        elif self._original_window_state is not None and self._original_window_state & Qt.WindowMaximized:
+            window.showMaximized()
+        else:
+            window.showNormal()
+
+        window.raise_()
+        window.activateWindow()
+        QApplication.processEvents()
+        self._benchmark_window_mode = None
+        if not self.isVisible():
+            self.show()
 
     def _prepare_current_world_sweep(self):
         """Set up a deterministic camera path through the loaded map."""
@@ -429,7 +510,11 @@ class BenchmarkDialog(QDialog):
         self._append("Reset to baseline; loading isolated workload...")
 
         try:
-            if label == "current_world":
+            if label in ("current_world", "borderless_window", "fullscreen_window"):
+                if label == "borderless_window":
+                    self._enter_benchmark_window_mode("borderless")
+                elif label == "fullscreen_window":
+                    self._enter_benchmark_window_mode("fullscreen")
                 self._prepare_current_world_sweep()
                 self._start_measurement(label, duration=self._test_duration(label))
             elif label.startswith("procedural_"):
@@ -496,7 +581,7 @@ class BenchmarkDialog(QDialog):
         try:
             app = QApplication.instance()
             view = self.main_window.view_3d
-            if self._current and self._current[0] == "current_world":
+            if self._current and self._current[0] in ("current_world", "borderless_window", "fullscreen_window"):
                 self._advance_current_world_sweep()
             view.update()
             app.processEvents()
@@ -605,7 +690,7 @@ class BenchmarkDialog(QDialog):
         self._results.append(result)
         self.export_button.setEnabled(True)
         self.output.append('<div style="background:#222; border:1px solid #555; padding:10px; margin:4px 0 10px 0;"><div style="font-size:25px; font-weight:bold; color:#ff9a32;">%.2f FPS</div><div style="font-size:15px; font-weight:bold; color:#eeeeee;">%s</div><div style="color:#aaa;">%dx%d &nbsp; • &nbsp; %.2f ms average frame &nbsp; • &nbsp; %.2f ms median &nbsp; • &nbsp; %.2f ms p95</div><div style="color:#aaa;">%d frames &nbsp; • &nbsp; %.2f s measured &nbsp; • &nbsp; 1%% low %.2f FPS &nbsp; • &nbsp; 0.1%% low %.2f FPS</div><div style="color:#aaa;">VRAM %s &nbsp; • &nbsp; brushes %d visible / %d culled / %d total &nbsp; • &nbsp; entities %d</div></div>' % (avg_fps, label, width, height, avg_ms, float(metrics.get("median_frame_time_ms", 0.0)), p95_ms, frames, duration, low_1, low_01, self._format_vram(metrics), metrics.get("visible_brushes", 0), metrics.get("culled_brushes", 0), metrics.get("total_brushes", 0), result["entities"]))
-        if label == "current_world":
+        if label in ("current_world", "borderless_window", "fullscreen_window"):
             self.output.append('<div style="color:#ffb15a; font-weight:bold; padding:4px 0;">Average visible triangles: %.0f &nbsp; • &nbsp; Average total triangles: %.0f &nbsp; • &nbsp; Average culled triangles: %.0f &nbsp; • &nbsp; Culling efficiency: %.1f%%</div>' % (metrics.get("average_visible_tris", 0.0), metrics.get("average_total_tris", 0.0), metrics.get("average_culled_tris", 0.0), metrics.get("culling_efficiency", 0.0)))
         self.output.ensureCursorVisible()
         QApplication.processEvents()
@@ -649,6 +734,7 @@ class BenchmarkDialog(QDialog):
 
             self.main_window.unsaved_changes = self._original_unsaved_changes
             self.main_window.update_title()
+            self._restore_benchmark_window_mode()
 
             if self._original_play_mode:
                 self.main_window.enter_play_mode()
