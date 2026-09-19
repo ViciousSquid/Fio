@@ -257,7 +257,7 @@ def _measure_scenario(width, height, name, shadows, empty):
                 pass
 
     glh.reset_texture_cache()
-def _generate_procedural_map(monsters=0, relay_count=32, seed=BENCHMARK_MAP_SEED, live_monster=False):
+def _generate_procedural_map(monsters=0, relay_count=32, seed=BENCHMARK_MAP_SEED, live_monster=False, yield_hook=None):
     """Generate a real Fio map using the same procedural generator as the editor."""
     import random
 
@@ -304,6 +304,8 @@ def _generate_procedural_map(monsters=0, relay_count=32, seed=BENCHMARK_MAP_SEED
     things = data["things"]
     relay_start = len(things)
     for i in range(relay_count):
+        if yield_hook is not None and i % 25 == 0:
+            yield_hook()
         things.append({
             "type": "logicrelay",
             "pos": [128.0 + i * 48.0, 32.0, 128.0],
@@ -317,6 +319,8 @@ def _generate_procedural_map(monsters=0, relay_count=32, seed=BENCHMARK_MAP_SEED
         })
 
     for i in range(relay_count - 1):
+        if yield_hook is not None and i % 25 == 0:
+            yield_hook()
         things[relay_start + i]["io_connections"] = [{            "output": "OnTrigger",
             "target": "BenchmarkRelay_%d" % (i + 1),
             "target_id": "benchmark_relay_%d" % (i + 1),
@@ -360,6 +364,29 @@ def _generate_procedural_map(monsters=0, relay_count=32, seed=BENCHMARK_MAP_SEED
             ])
 
     return data
+
+
+def load_live_benchmark_world(window, data, yield_hook=None):
+    """Load benchmark data into the existing Fio editor cooperatively."""
+    window.state.load_from_data(
+        data,
+        yield_hook=yield_hook,
+        save_undo=False,
+    )
+    if yield_hook is not None:
+        yield_hook()
+    window.update_all_ui()
+    if yield_hook is not None:
+        yield_hook()
+    window.update_views()
+    if yield_hook is not None:
+        yield_hook()
+    window.view_3d.update()
+    window.view_top.update()
+    window.view_side.update()
+    window.view_front.update()
+    if yield_hook is not None:
+        yield_hook()
 
 
 def _materialize_generated_map(data):
@@ -417,7 +444,7 @@ def _make_renderer_stress_scene():
     return state.brushes, state.things
 
 
-def _make_brush_stress_scene(brush_count):
+def _make_brush_stress_scene(brush_count, yield_hook=None):
     """Create a large real-Fio brush scene for the existing EditorState.
 
     NumPy plans source indices and placement offsets in one batch. The final
@@ -451,11 +478,20 @@ def _make_brush_stress_scene(brush_count):
         brush["id"] = "benchmark_generated_%d" % output_index
         return brush
 
-    data["brushes"] = [
-        clone_brush(source[int(source_index)], float(offset), int(output_index))
-        for output_index, (source_index, offset)
-        in enumerate(zip(source_indices.tolist(), x_offsets.tolist()))
-    ]
+    brushes = []
+    for output_index, (source_index, offset) in enumerate(
+        zip(source_indices.tolist(), x_offsets.tolist())
+    ):
+        if yield_hook is not None and output_index % 64 == 0:
+            yield_hook()
+        brushes.append(
+            clone_brush(
+                source[int(source_index)],
+                float(offset),
+                int(output_index),
+            )
+        )
+    data["brushes"] = brushes
     return data
 
 def _run_monster_stress(count):
@@ -501,14 +537,14 @@ def _run_monster_stress(count):
     return results
 
 
-def _generate_monster_apocalypse():
+def _generate_monster_apocalypse(yield_hook=None):
     """Generate the optional worst-case Fio stress world.
 
     This intentionally goes beyond the editor's normal UI limits.  The point
     is not to represent a sensible game level; it is to find the point where
     the complete engine becomes overloaded.
     """
-    data = _generate_procedural_map(monsters=1000, relay_count=1000, seed=BENCHMARK_MAP_SEED)
+    data = _generate_procedural_map(monsters=1000, relay_count=1000, seed=BENCHMARK_MAP_SEED, yield_hook=yield_hook)
 
     # Push the procedural world to its maximum generator dimensions/room
     # complexity, while keeping geometry creation in the production generator.
@@ -532,13 +568,16 @@ def _generate_monster_apocalypse():
         "spawn_health": True,
         "health_count": 64,
     }
-    data = create_map_data(params)
+    data = create_map_data(params, yield_hook=yield_hook)
 
     # Add a large real I/O graph to the generated world.  The normal benchmark
     # materializer converts these to actual Thing/OutputConnection instances.
     things = data["things"]
     relay_start = len(things)
-    for i in range(1000):        things.append({
+    for i in range(1000):
+        if yield_hook is not None and i % 25 == 0:
+            yield_hook()
+        things.append({
             "type": "logicrelay",
             "pos": [128.0 + (i % 50) * 96.0, 32.0, 128.0 + (i // 50) * 96.0],
             "properties": {
@@ -553,6 +592,8 @@ def _generate_monster_apocalypse():
     # Chain plus local fan-out: one trigger exercises a long traversal while
     # each relay also addresses several nearby relays.
     for i in range(1000):
+        if yield_hook is not None and i % 25 == 0:
+            yield_hook()
         targets = [(i + 1) % 1000, (i + 7) % 1000, (i + 31) % 1000]
         data["things"][relay_start + i]["io_connections"] = [
             {
