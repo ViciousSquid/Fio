@@ -577,7 +577,7 @@ class BenchmarkDialog(QDialog):
         self.output.ensureCursorVisible()
         QApplication.processEvents()
 
-    def _abort_worker_test(self, reason):
+    def _abort_worker_test(self, reason, timed_out=False):
         """Abort one isolated test, record it, then continue the queue."""
         label = self._worker_label or (self._current[0] if self._current else "unknown")
         self._timer.stop()
@@ -598,9 +598,9 @@ class BenchmarkDialog(QDialog):
         self.output.append(
             '<div style="background:#2a1c10; border:1px solid #ff8a00; padding:12px; margin:4px 0 10px 0;">'
             '<div style="font-size:15px; font-weight:bold; color:#ffb15a;">%s</div>'
-            '<div style="font-size:25px; font-weight:bold; color:#ff8a00; margin-top:6px;">ABORTED — timeout</div>'
+            '<div style="font-size:25px; font-weight:bold; color:#ff8a00; margin-top:6px;">%s</div>'
             '<div style="color:#ddd; margin-top:4px;">%s</div>'
-            '</div>' % (label, str(reason))
+            '</div>' % (label, "ABORTED — timeout" if timed_out else "ABORTED — worker failure", str(reason))
         )
         self.output.append('<div style="border-top:2px solid #63d471; margin:14px 0 8px 0;"></div>')
         self._cleanup_worker_result_path()
@@ -618,7 +618,7 @@ class BenchmarkDialog(QDialog):
 
         monitor_failed, monitor_reason = self._monitor_failed()
         if monitor_failed:
-            self._abort_worker_test(monitor_reason)
+            self._abort_worker_test(monitor_reason, timed_out=True)
             return
 
         process = self._worker_process
