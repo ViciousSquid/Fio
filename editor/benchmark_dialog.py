@@ -119,10 +119,6 @@ class BenchmarkDialog(QDialog):
         self.resize(900, 650)
 
         layout = QVBoxLayout(self)
-        self.environment_label = QLabel(_execution_environment())
-        self.environment_label.setStyleSheet("font-weight: bold;")
-        layout.addWidget(self.environment_label)
-
         self.status_label = QLabel("Ready.")
         layout.addWidget(self.status_label)
 
@@ -136,11 +132,6 @@ class BenchmarkDialog(QDialog):
             "QProgressBar::chunk { background: #63d471; border-radius: 3px; }"
         )
         layout.addWidget(self.throbber)
-
-        intro_label = QLabel(
-            "<b>Run Benchmark</b> analyses the currently loaded project"
-        )
-        layout.addWidget(intro_label)
 
         stress_toggle = QToolButton()
         stress_toggle.setText("See tests")
@@ -223,12 +214,25 @@ class BenchmarkDialog(QDialog):
 
         self.export_button = QPushButton("Export HTML Report…")
         self.export_button.setEnabled(False)
+        self.export_button.setVisible(False)
         self.export_button.clicked.connect(self._export_results)
         layout.addWidget(self.export_button)
 
         self.run_button = QPushButton("Run Benchmark")
+        self.run_button.setStyleSheet(
+            "QPushButton { background: #2e9d4d; color: white; font-weight: bold; "
+            "border: 1px solid #3fbd63; padding: 7px 16px; border-radius: 3px; }"
+            "QPushButton:hover { background: #39b85b; }"
+            "QPushButton:pressed { background: #257f3e; }"
+            "QPushButton:disabled { background: #3b5a42; color: #b8c4ba; border-color: #49634f; }"
+        )
         self.run_button.clicked.connect(self._start)
         layout.addWidget(self.run_button)
+
+        benchmark_description = QLabel(
+            "analyse the <b>currently loaded</b> project"
+        )
+        layout.addWidget(benchmark_description)
 
         self.buttons = QDialogButtonBox(QDialogButtonBox.Close)
         self.buttons.rejected.connect(self.reject)
@@ -913,6 +917,7 @@ Git commit: %s
             result["worker_test"] = label
             self._results.append(result)
             self.export_button.setEnabled(True)
+            self.export_button.setVisible(True)
 
             average_fps = result.get("average_fps")
             resolution = result.get("resolution", "")
@@ -1125,6 +1130,7 @@ Git commit: %s
         self.output.clear()
         self._results = []
         self.export_button.setEnabled(False)
+        self.export_button.setVisible(False)
         self.status_label.setText("Preparing live Fio benchmark...")
         self._set_controls_enabled(False)
         # Keep the test selector collapsed while a benchmark is running so
@@ -1681,6 +1687,7 @@ Git commit: %s
         result.update({"test": label, "entities": len(self.main_window.state.things), "one_percent_low_fps": low_1, "zero_point_one_percent_low_fps": low_01})
         self._results.append(result)
         self.export_button.setEnabled(True)
+        self.export_button.setVisible(True)
         self.output.append('<div style="background:#222; border:1px solid #555; padding:12px; margin:4px 0 10px 0;">'
                            '<div style="font-size:15px; font-weight:bold; color:#eeeeee; margin-bottom:4px;">%s</div>'
                            '<div style="color:#aaa;">%dx%d &nbsp; • &nbsp; %.2f ms average frame &nbsp; • &nbsp; %.2f ms median &nbsp; • &nbsp; %.2f ms p95</div>'
