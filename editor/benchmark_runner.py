@@ -564,6 +564,11 @@ class BenchmarkRunner:
         QApplication.processEvents()
     
 
+    def _prepare_editor_window_benchmark_map(self):
+        """Load the shared medium scene used by the editor-window benchmarks."""
+        self._prepare_editor_windowed_map()
+
+
     def _enter_benchmark_editor_window_mode(self, width, height):
         """Run the real editor UI in a normal decorated window and measure its 3D pane."""
         self._benchmark_window_mode = "editor_windowed"
@@ -678,8 +683,10 @@ class BenchmarkRunner:
                     self._enter_benchmark_window_mode("fullscreen")
                 elif label == "editor_windowed_1280":
                     self._enter_benchmark_editor_window_mode(1280, 720)
+                    self._prepare_editor_window_benchmark_map()
                 elif label == "editor_windowed_1920":
                     self._enter_benchmark_editor_window_mode(1920, 1080)
+                    self._prepare_editor_window_benchmark_map()
                 self._prepare_player_area_sweep()
                 self._check_preparation_budget(label)
                 self._start_measurement(label, duration=self._test_duration(label))
