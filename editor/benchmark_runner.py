@@ -819,6 +819,34 @@ class BenchmarkRunner:
         QApplication.processEvents()
     
 
+    def _skip_live_stress(self, label, reason):
+        """Skip a live workload before it can make the existing Fio instance unresponsive."""
+        self._timer.stop()
+        self._measurement_active = False
+        self._live_stress_active = False
+        self._stop_live_stress_monitor()
+        self._results.append({
+            "test": label,
+            "status": "skipped",
+            "skipped": True,
+            "skip_reason": str(reason),
+            "benchmark_live": True,
+        })
+        self.export_button.setEnabled(True)
+        self.export_button.setVisible(True)
+        self.output.append(
+            '<div style="background:#211b10; border:1px solid #d9a441; '
+            'padding:12px; margin:4px 0 10px 0;">'
+            '<div style="font-size:15px; font-weight:bold; color:#ffd27a;">%s</div>'
+            '<div style="font-size:25px; font-weight:bold; color:#d9a441; margin-top:6px;">'
+            'SKIPPED — safety limit</div>'
+            '<div style="color:#ddd; margin-top:4px;">%s</div>'
+            '</div>' % (self._html_escape(label), self._html_escape(reason))
+        )
+        self.status_label.setText("Skipped: %s — Fio remains responsive." % label)
+        QApplication.processEvents()
+        self._begin_next()
+
     def _abort_live_stress(self, reason):
         """Abort a live test without terminating the Fio process."""
         label = self._live_stress_label or (
