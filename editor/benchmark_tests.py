@@ -4,6 +4,7 @@ The workloads still operate on the real Fio MainWindow.
 """
 
 import math
+import os
 import sys
 import time
 
@@ -11,6 +12,10 @@ from PyQt5.QtWidgets import QApplication
 
 
 class BenchmarkTests:
+    # Keep the ordinary live monster tiers from making a low-power editor
+    # unresponsive. The limit is configurable for faster machines.
+    LIVE_MONSTER_SAFE_LIMIT = 64
+
     PLAYER_AREA_DEFAULT_RADIUS = 256.0
     PLAYER_AREA_MAX_RADIUS = 2048.0
 
@@ -312,13 +317,31 @@ class BenchmarkTests:
     
             elif label in ("procedural_100_monsters", "procedural_500_monsters",
                            "procedural_1000_monsters", "monster_apocalypse"):
+                if label != "monster_apocalypse":
+                    monsters = int(label.split("_")[1])
+                    raw_limit = os.environ.get(
+                        "FIO_BENCHMARK_MAX_LIVE_MONSTERS",
+                        str(self.LIVE_MONSTER_SAFE_LIMIT),
+                    ).strip()
+                    try:
+                        live_monster_limit = max(1, int(raw_limit))
+                    except ValueError:
+                        live_monster_limit = self.LIVE_MONSTER_SAFE_LIMIT
+                    if monsters > live_monster_limit:
+                        self._skip_live_stress(
+                            label,
+                            "%s requests %d live monsters, above the safety limit of %d. "
+                            "Fio was left running; set FIO_BENCHMARK_MAX_LIVE_MONSTERS=%d "
+                            "to override this limit on a machine that can handle the workload."
+                            % (label, monsters, live_monster_limit, monsters),
+                        )
+                        return
                 cooperative_yield = lambda: self._live_cooperative_yield(label)
                 if label == "monster_apocalypse":
                     data = bench._generate_monster_apocalypse(
                         yield_hook=cooperative_yield,
                     )
                 else:
-                    monsters = int(label.split("_")[1])
                     data = bench._generate_procedural_map(
                         monsters=monsters,
                         relay_count=32,
