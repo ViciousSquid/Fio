@@ -13,6 +13,48 @@ from PyQt5.QtGui import QTextCursor
 from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout
 
 
+def _execution_environment():
+    """Return a human-readable Python/CPU execution mode."""
+    import platform
+
+    process_arch = platform.machine() or "unknown"
+    host_arch = process_arch
+    translation = "none detected"
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            process = ctypes.windll.kernel32.GetCurrentProcess()
+            process_machine = ctypes.c_ushort()
+            native_machine = ctypes.c_ushort()
+            fn = ctypes.windll.kernel32.IsWow64Process2
+            fn.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ushort), ctypes.POINTER(ctypes.c_ushort)]
+            fn.restype = ctypes.c_bool
+            if fn(process, ctypes.byref(process_machine), ctypes.byref(native_machine)):
+                names = {0x014C: "x86", 0x8664: "x64", 0xAA64: "ARM64"}
+                process_arch = names.get(process_machine.value, "0x%04X" % process_machine.value)
+                host_arch = names.get(native_machine.value, "0x%04X" % native_machine.value)
+                if process_machine.value and process_machine.value != native_machine.value:
+                    translation = "Microsoft Prism / Windows on ARM emulation"
+        except Exception:
+            pass
+    elif sys.platform == "darwin":
+        try:
+            import ctypes
+            libc = ctypes.CDLL(None)
+            translated = ctypes.c_int(0)
+            size = ctypes.c_size_t(ctypes.sizeof(translated))
+            if libc.sysctlbyname(b"sysctl.proc_translated", ctypes.byref(translated), ctypes.byref(size), None, 0) == 0 and translated.value == 1:
+                translation = "Apple Rosetta 2"
+                host_arch = "ARM64"
+        except Exception:
+            pass
+
+    return "Python: %s | Host CPU: %s | Translation: %s" % (
+        process_arch, host_arch, translation
+    )
+
+
 class BenchmarkDialog(QDialog):
     def __init__(self, root_dir, parent=None):
         super().__init__(parent)
@@ -23,6 +65,10 @@ class BenchmarkDialog(QDialog):
         self.resize(900, 650)
 
         layout = QVBoxLayout(self)
+        self.environment_label = QLabel(_execution_environment())
+        self.environment_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(self.environment_label)
+
         self.status_label = QLabel("Ready.")
         layout.addWidget(self.status_label)
 
