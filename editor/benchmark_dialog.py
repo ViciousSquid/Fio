@@ -327,6 +327,7 @@ class BenchmarkDialog(QDialog):
                 return
 
             metrics = view.sysmon.get_metrics()
+            metrics["measurement_duration_s"] = time.perf_counter() - self._phase_started
             label = self._current[0]
 
             if label == "live_io_1000":
@@ -403,17 +404,22 @@ class BenchmarkDialog(QDialog):
     def _report_live_result(self, label, metrics):
         width = metrics.get("viewport_width", self.main_window.view_3d.width())
         height = metrics.get("viewport_height", self.main_window.view_3d.height())
+        avg_ms = float(metrics.get("average_frame_time_ms", 0.0))
+        avg_fps = 1000.0 / avg_ms if avg_ms > 0.0 else 0.0
+        p95_ms = float(metrics.get("p95_frame_time_ms", 0.0))
+        p99_ms = float(metrics.get("p99_frame_time_ms", 0.0))
+        p999_ms = float(metrics.get("p999_frame_time_ms", 0.0))
+        frames = int(metrics.get("frame_count", 0))
+        duration = float(metrics.get("measurement_duration_s", 0.0))
+        low_1 = 1000.0 / p99_ms if p99_ms > 0.0 else 0.0
+        low_01 = 1000.0 / p999_ms if p999_ms > 0.0 else 0.0
         self._append(
-            "%-30s %4dx%-4d  FPS %7.2f  frame %7.2f ms  p95 %7.2f ms  VRAM %s"
-            % (
-                label,
-                width,
-                height,
-                metrics.get("fps", 0.0),
-                metrics.get("average_frame_time_ms", 0.0),
-                metrics.get("p95_frame_time_ms", 0.0),
-                self._format_vram(metrics),
-            )
+            "%-30s %4dx%-4d  AVG FPS %7.2f  AVG frame %7.2f ms  p95 %7.2f ms"
+            % (label, width, height, avg_fps, avg_ms, p95_ms)
+        )
+        self._append(
+            "  frames=%d  measured=%.2f s  1%% low=%7.2f FPS  0.1%% low=%7.2f FPS  VRAM=%s"
+            % (frames, duration, low_1, low_01, self._format_vram(metrics))
         )
         self._append(
             "  brushes: visible=%d culled=%d total=%d | entities=%d"
@@ -424,6 +430,7 @@ class BenchmarkDialog(QDialog):
                 len(self.main_window.state.things),
             )
         )
+        self._append("END TEST: %s" % label)
 
     @staticmethod
     def _format_vram(metrics):
