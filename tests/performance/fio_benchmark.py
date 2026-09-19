@@ -1454,11 +1454,26 @@ def _run_worker_test(label):
     raise ValueError("unsupported isolated benchmark worker: %s" % label)
 
 
+def _json_default(value):
+    """Convert NumPy scalar/array values in benchmark metrics to JSON types."""
+    try:
+        import numpy as np
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+    except ImportError:
+        pass
+    raise TypeError(
+        "Object of type %s is not JSON serializable" % type(value).__name__
+    )
+
+
 def _write_worker_result(path, payload):
     """Atomically publish worker results so the parent never reads a partial JSON file."""
     temporary = path + ".tmp"
     with open(temporary, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
+        json.dump(payload, handle, indent=2, default=_json_default)
     os.replace(temporary, path)
 
 
