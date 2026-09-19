@@ -280,6 +280,8 @@ class BenchmarkDialog(QDialog):
 
     PLAYER_AREA_CELL_SIZE = 64.0
     PLAYER_AREA_MAX_CELLS = 16384
+    PLAYER_AREA_CAMERA_MARGIN = 8.0
+    PLAYER_AREA_SPIRAL_TURNS = 1.25
 
     def _current_world_bounds(self):
         """Return the geometric bounds used only by the fallback path."""
@@ -478,17 +480,19 @@ class BenchmarkDialog(QDialog):
             ),
             "cell_size": cell_size,
             "cell_count": len(reachable),
+            "cells": set(reachable.keys()),
+            "points": dict(reachable),
         }, None
 
     def _player_area_sweep_duration(self):
         """Return the prepared player-area sweep duration."""
         path = getattr(self, "_player_area_camera_path", None)
         if path is not None:
-            return float(path[-1])
+            return max(6.0, min(12.0, float(path["duration"])))
 
         min_x, max_x, min_z, max_z = self._current_world_bounds()
         diagonal = math.hypot(max_x - min_x, max_z - min_z)
-        return max(5.0, min(20.0, diagonal / 250.0))
+        return max(6.0, min(12.0, diagonal / 250.0))
 
     def _vsync_metadata(self):
         """Return the Fio display VSync setting used by the Qt application."""
@@ -1318,17 +1322,17 @@ Git commit: %s
 
 
     def _prepare_player_area_sweep(self):
-        """Prepare a Player-area sweep from the actual reachable region."""
+        """Prepare a PlayerStart-centered outward spiral through playable space."""
         player_start, start_error = self._find_player_start()
         fallback = False
         fallback_reason = None
+        playable = None
+        flood_error = None
 
         if player_start is not None:
             playable, flood_error = self._flood_player_area(
                 player_start[0], player_start[1]
             )
-        else:
-            playable, flood_error = None, None
 
         if playable is None:
             fallback = True
@@ -1341,97 +1345,282 @@ Git commit: %s
             half_z = max(0.0, (max_z - min_z) * 0.42)
             sweep_bounds = (min_x, max_x, min_z, max_z)
             cell_count = 0
+            anchor_x = center_x
+            anchor_z = center_z
+            self._player_area_reachable_cells = None
+            self._player_area_reachable_points = None
+            self._player_area_cell_size = float(self.PLAYER_AREA_CELL_SIZE)
+            radius_end = math.sqrt(half_x * half_x + half_z * half_z)
         else:
             min_x, max_x, min_z, max_z = playable["bounds"]
             cell_count = playable["cell_count"]
-            center_x = float(player_start[0])
-            center_z = float(player_start[1])
-
-            room_x = max(0.0, min(center_x - min_x, max_x - center_x))
-            room_z = max(0.0, min(center_z - min_z, max_z - center_z))
-            map_width = max(0.0, max_x - min_x)
-            map_depth = max(0.0, max_z - min_z)
-            half_x = min(map_width * 0.25, room_x * 0.85)
-            half_z = min(map_depth * 0.25, room_z * 0.85)
+            anchor_x = float(player_start[0])
+            anchor_z = float(player_start[1])
             sweep_bounds = (min_x, max_x, min_z, max_z)
+            self._player_area_reachable_cells = playable["cells"]
+            self._player_area_reachable_points = playable["points"]
+            self._player_area_cell_size = float(playable["cell_size"])
 
-        half_x = min(max(0.0, half_x), max(0.0, (max_x - min_x) * 0.5))
-        half_z = min(max(0.0, half_z), max(0.0, (max_z - min_z) * 0.5))
-        center_x = min(max(center_x, min_x + half_x), max_x - half_x)
-        center_z = min(max(center_z, min_z + half_z), max_z - half_z)
+            radius_end = 0.0
+            for point_x, _point_y, point_z in playable["points"].values():
+                radius_end = max(
+                    radius_end,
+                    math.hypot(
+                        float(point_x) - anchor_x,
+                        float(point_z) - anchor_z,
+                    ),
+                )
 
-        effective_radius = math.sqrt(
-            (half_x * half_x + half_z * half_z) * 0.5
-        )
-        travel_distance = 2.0 * math.pi * effective_radius
-        duration = max(5.0, min(20.0, travel_distance / 250.0))
+            radius_end = max(
+                float(self.PLAYER_AREA_CELL_SIZE),
+                radius_end * 0.90,
+            )
 
         camera = self.main_window.view_3d.camera
-        self._player_area_camera_path = (
-            center_x, center_z, half_x, half_z,
-            float(camera.pos.y), float(camera.pitch), duration
-        )
+        y = float(camera.pos.y)
+        pitch = float(camera.pitch)
+
+        turns = float(self.PLAYER_AREA_SPIRAL_TURNS) if not fallback else 1.0
+        if fallback:
+            # Preserve the previous bounds-based fallback path.
+            effective_radius = math.sqrt(
+                (half_x * half_x + half_z * half_z) * 0.5
+            )
+            travel_distance = 2.0 * math.pi * effective_radius
+        else:
+            # Approximate the Archimedean spiral path length while preserving
+            # the existing distance / 250 speed model.
+            radius_start = 0.0
+            average_radius = (radius_start + radius_end) * 0.5
+            travel_distance = math.hypot(
+                radius_end - radius_start,
+                2.0 * math.pi * turns * average_radius,
+            )
+
+        duration = max(6.0, min(12.0, travel_distance / 250.0))
+
+        if fallback:
+            self._player_area_camera_path = {
+                "fallback": True,
+                "center_x": anchor_x,
+                "center_z": anchor_z,
+                "half_x": half_x,
+                "half_z": half_z,
+                "y": y,
+                "pitch": pitch,
+                "duration": duration,
+            }
+        else:
+            self._player_area_camera_path = {
+                "fallback": False,
+                "center_x": anchor_x,
+                "center_z": anchor_z,
+                "radius_end": radius_end,
+                "turns": turns,
+                "y": y,
+                "pitch": pitch,
+                "duration": duration,
+            }
+
         self._player_area_sweep_metadata = {
-            "mode": "player-area",
+            "mode": "player-start spiral" if not fallback else "bounds fallback",
             "anchor_source": "bounds fallback" if fallback else "PlayerStart",
             "fallback": fallback,
             "fallback_reason": fallback_reason,
             "bounds": tuple(float(value) for value in sweep_bounds),
             "reachable_cells": int(cell_count),
+            "duration_s": float(duration),
+            "travel_distance": float(travel_distance),
         }
 
         if fallback:
             self._append(
-                "Camera sweep: PLAYER-AREA / FALLBACK for %.1f s — %s; "
-                "using existing bounds-based sweep." % (duration, fallback_reason)
+                "Camera sweep: BOUNDS FALLBACK for %.1f s — %s; "
+                "using existing bounds-based sweep."
+                % (duration, fallback_reason)
             )
         else:
             self._append(
-                "Camera sweep: PLAYER-AREA for %.1f s — PlayerStart at "
-                "(%.1f, %.1f); flood reached %d cells; sweep is clamped to "
-                "reachable bounds."
+                "Camera sweep: PLAYERSTART SPIRAL for %.1f s — PlayerStart at "
+                "(%.1f, %.1f); flood reached %d cells; spiral is clamped to "
+                "reachable collision space with a %.0f-unit safety margin."
                 % (
                     duration,
-                    float(player_start[0]),
-                    float(player_start[1]),
+                    anchor_x,
+                    anchor_z,
                     int(cell_count),
+                    float(self.PLAYER_AREA_CAMERA_MARGIN),
                 )
             )
+
+    def _clamp_player_area_camera(self, desired_x, desired_z):
+        """Clamp a spiral position to a reachable, collision-safe camera point."""
+        path = getattr(self, "_player_area_camera_path", None)
+        if path is None:
+            return float(desired_x), float(desired_z)
+
+        if path.get("fallback"):
+            min_x, max_x, min_z, max_z = self._player_area_sweep_metadata["bounds"]
+            return (
+                min(max(float(desired_x), min_x), max_x),
+                min(max(float(desired_z), min_z), max_z),
+            )
+
+        anchor_x = float(path["center_x"])
+        anchor_z = float(path["center_z"])
+        cell_size = float(getattr(self, "_player_area_cell_size", self.PLAYER_AREA_CELL_SIZE))
+        cells = getattr(self, "_player_area_reachable_cells", None)
+        points = getattr(self, "_player_area_reachable_points", None)
+        if not cells or not points:
+            return anchor_x, anchor_z
+
+        dx = float(desired_x) - anchor_x
+        dz = float(desired_z) - anchor_z
+        distance = math.hypot(dx, dz)
+
+        key = (
+            int(round(dx / cell_size)),
+            int(round(dz / cell_size)),
+        )
+
+        selected_key = key
+        if selected_key not in cells:
+            # Move back toward PlayerStart along the desired radial line until
+            # the spiral re-enters the reachable flood.
+            steps = max(1, int(math.ceil(distance / cell_size)))
+            selected_key = (0, 0)
+            for step in range(1, steps + 1):
+                scale = max(0.0, 1.0 - (float(step) / float(steps)))
+                probe_x = anchor_x + dx * scale
+                probe_z = anchor_z + dz * scale
+                probe_key = (
+                    int(round((probe_x - anchor_x) / cell_size)),
+                    int(round((probe_z - anchor_z) / cell_size)),
+                )
+                if probe_key in cells:
+                    selected_key = probe_key
+                    break
+
+        safe_point = points.get(selected_key)
+        if safe_point is None:
+            return anchor_x, anchor_z
+
+        safe_x = float(safe_point[0])
+        safe_z = float(safe_point[2])
+        candidate_x = safe_x
+        candidate_z = safe_z
+
+        if selected_key == key:
+            # Keep the continuous spiral where the whole coarse cell is
+            # reachable, but constrain it around the known-safe flood point.
+            blend = 0.70
+            candidate_x = safe_x + (float(desired_x) - safe_x) * blend
+            candidate_z = safe_z + (float(desired_z) - safe_z) * blend
+
+        # Use the real player collision test along the safe->candidate segment.
+        # This catches wall intersections inside a coarse playable cell.
+        logic_thread = getattr(self.main_window.view_3d, "logic_thread", None)
+        collision_brushes = list(getattr(self.main_window.state, "brushes", []))
+        if logic_thread is not None:
+            collision_brushes.extend(
+                getattr(logic_thread, "_model_collision_brushes", []) or []
+            )
+        terrain = getattr(self.main_window.view_3d, "terrain", None)
+        from engine.physics import SpatialGrid
+        import glm
+
+        grid = SpatialGrid(cell_size=512.0)
+        grid.populate(collision_brushes)
+
+        probe_y = float(safe_point[1])
+        distance_to_candidate = math.hypot(
+            candidate_x - safe_x,
+            candidate_z - safe_z,
+        )
+        best_t = 1.0
+        probe = self._clone_benchmark_player(
+            candidate_x, probe_y, candidate_z, 0.0
+        )
+        if probe._check_overlap(collision_brushes):
+            low = 0.0
+            high = 1.0
+            for _ in range(8):
+                mid = (low + high) * 0.5
+                test_x = safe_x + (candidate_x - safe_x) * mid
+                test_z = safe_z + (candidate_z - safe_z) * mid
+                test_probe = self._clone_benchmark_player(
+                    test_x, probe_y, test_z, 0.0
+                )
+                if test_probe._check_overlap(collision_brushes):
+                    high = mid
+                else:
+                    low = mid
+            if distance_to_candidate > 0.0:
+                best_t = max(
+                    0.0,
+                    low - (
+                        float(self.PLAYER_AREA_CAMERA_MARGIN)
+                        / distance_to_candidate
+                    ),
+                )
+            else:
+                best_t = 0.0
+
+        candidate_x = safe_x + (candidate_x - safe_x) * best_t
+        candidate_z = safe_z + (candidate_z - safe_z) * best_t
+        return candidate_x, candidate_z
 
     def _advance_player_area_sweep(self):
         path = getattr(self, "_player_area_camera_path", None)
         if path is None:
             return
-        center_x, center_z, half_x, half_z, y, pitch, duration = path
-        bounds = getattr(self, "_player_area_sweep_metadata", {}).get("bounds")
+
         elapsed = time.perf_counter() - self._phase_started
-        angle = min(1.0, elapsed / max(duration, 0.001)) * (2.0 * math.pi)
-        x = center_x + half_x * math.sin(angle)
-        z = center_z + half_z * math.sin(angle + math.pi * 0.5)
+        duration = float(path["duration"])
+        progress = min(1.0, max(0.0, elapsed / max(duration, 0.001)))
 
-        if bounds is not None:
-            min_x, max_x, min_z, max_z = bounds
-            x = min(max(x, min_x), max_x)
-            z = min(max(z, min_z), max_z)
+        if path.get("fallback"):
+            angle = progress * (2.0 * math.pi)
+            x = path["center_x"] + path["half_x"] * math.sin(angle)
+            z = path["center_z"] + path["half_z"] * math.cos(angle)
+        else:
+            angle = progress * (2.0 * math.pi * float(path["turns"]))
+            radius = float(path["radius_end"]) * progress
+            x = path["center_x"] + radius * math.sin(angle)
+            z = path["center_z"] + radius * math.cos(angle)
+            x, z = self._clamp_player_area_camera(x, z)
 
-        next_x = center_x + half_x * math.sin(angle + 0.01)
-        next_z = center_z + half_z * math.sin(angle + 0.01 + math.pi * 0.5)
-        if bounds is not None:
-            min_x, max_x, min_z, max_z = bounds
-            next_x = min(max(next_x, min_x), max_x)
-            next_z = min(max(next_z, min_z), max_z)
+        if path.get("fallback"):
+            bounds = self._player_area_sweep_metadata.get("bounds")
+            if bounds is not None:
+                min_x, max_x, min_z, max_z = bounds
+                x = min(max(x, min_x), max_x)
+                z = min(max(z, min_z), max_z)
+
+        next_progress = min(1.0, progress + 0.01 / max(duration, 0.001))
+        if path.get("fallback"):
+            next_angle = next_progress * (2.0 * math.pi)
+            next_x = path["center_x"] + path["half_x"] * math.sin(next_angle)
+            next_z = path["center_z"] + path["half_z"] * math.cos(next_angle)
+        else:
+            next_angle = next_progress * (2.0 * math.pi * float(path["turns"]))
+            next_radius = float(path["radius_end"]) * next_progress
+            next_x = path["center_x"] + next_radius * math.sin(next_angle)
+            next_z = path["center_z"] + next_radius * math.cos(next_angle)
+            next_x, next_z = self._clamp_player_area_camera(next_x, next_z)
+
         yaw = math.degrees(math.atan2(next_z - z, next_x - x))
 
         camera = self.main_window.view_3d.camera
         import glm
-        position = glm.vec3(x, y, z)
+        position = glm.vec3(float(x), path["y"], float(z))
         logic_thread = getattr(self.main_window.view_3d, "logic_thread", None)
         if logic_thread is not None and getattr(self.main_window.view_3d, "use_threading", False):
-            logic_thread.set_editor_camera(position, yaw, pitch, camera.fov)
+            logic_thread.set_editor_camera(position, yaw, path["pitch"], camera.fov)
         else:
             camera.pos = position
             camera.yaw = yaw
-            camera.pitch = pitch
+            camera.pitch = path["pitch"]
 
     def _begin_next(self):
         if not self._queue:
