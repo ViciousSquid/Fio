@@ -291,7 +291,6 @@ class BenchmarkTests:
     def _run_monster_capacity_probe(self, bench, window, view):
         """Find the highest live monster count that remains responsive."""
         timeout_s = self._live_stress_timeout_for("monster_capacity")
-        deadline = time.perf_counter() + timeout_s
         last_good = 0
         first_bad = None
         candidate = 16
@@ -302,6 +301,11 @@ class BenchmarkTests:
         )
 
         def probe(count):
+            # Each candidate gets its own full responsiveness budget. This is
+            # deliberately one Fio process: the watchdog only observes the
+            # existing process and never creates another engine instance.
+            self._start_live_stress_monitor("monster_capacity")
+            probe_deadline = time.perf_counter() + timeout_s
             window.state.clear_scene()
             window.update_all_ui()
             window.update_views()
@@ -310,8 +314,15 @@ class BenchmarkTests:
             QApplication.processEvents()
 
             def yield_hook():
+                self._live_watchdog_beat()
+                if self._live_stress_timeout:
+                    raise TimeoutError(
+                        self._live_stress_timeout_reason
+                        or "monster capacity watchdog timeout"
+                    )
                 QApplication.processEvents()
-                if time.perf_counter() >= deadline:
+                self._live_watchdog_beat()
+                if time.perf_counter() >= probe_deadline:
                     raise TimeoutError(
                         "monster capacity probe at %d monsters exceeded the %.0f s "
                         "responsiveness limit" % (count, timeout_s)
@@ -326,11 +337,21 @@ class BenchmarkTests:
             )
             bench.load_live_benchmark_world(window, data, yield_hook=yield_hook)
             QApplication.processEvents()
-            bench.prepare_live_monster_test(window)
+            bench.prepare_live_monster_test(
+                window,
+                yield_hook=yield_hook,
+            )
             QApplication.processEvents()
+            self._live_watchdog_beat()
 
-            stable_until = min(deadline, time.perf_counter() + 2.0)
+            stable_until = min(probe_deadline, time.perf_counter() + 2.0)
             while time.perf_counter() < stable_until:
+                self._live_watchdog_beat()
+                if self._live_stress_timeout:
+                    raise TimeoutError(
+                        self._live_stress_timeout_reason
+                        or "monster capacity watchdog timeout"
+                    )
                 QApplication.processEvents()
                 view.update()
                 time.sleep(0.01)
