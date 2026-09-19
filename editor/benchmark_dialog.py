@@ -319,18 +319,41 @@ class BenchmarkDialog(QDialog):
             max(b[3] for b in bounds),
         )
 
-    def _current_world_sweep_anchor(self):
-        """Return the position the player actually starts from when possible."""
+    def _current_world_sweep_anchor(self, bounds):
+        """Locate a usable PlayerStart, or explicitly request the bounds fallback."""
+        min_x, max_x, min_z, max_z = bounds
         things = getattr(self.main_window.state, "things", [])
-        for thing in things:
-            if thing.__class__.__name__ != "PlayerStart":
-                continue
-            pos = getattr(thing, "pos", None)
-            if pos is not None and len(pos) >= 3:
-                return float(pos[0]), float(pos[2])
 
-        camera = self.main_window.view_3d.camera
-        return float(camera.pos.x), float(camera.pos.z)
+        for thing in things:
+            if isinstance(thing, dict):
+                thing_type = thing.get("type", "")
+                pos = thing.get("pos")
+            else:
+                thing_type = thing.__class__.__name__
+                pos = getattr(thing, "pos", None)
+
+            if thing_type != "PlayerStart":
+                continue
+            if pos is None or len(pos) < 3:
+                continue
+
+            try:
+                x = float(pos[0])
+                z = float(pos[2])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if not (math.isfinite(x) and math.isfinite(z)):
+                continue
+
+            # A start outside the actual benchmark/playable bounds is not
+            # usable. Do not silently clamp it and report a normal player-area
+            # benchmark, because that would hide a malformed map.
+            if not (min_x <= x <= max_x and min_z <= z <= max_z):
+                continue
+
+            return x, z, "PlayerStart", False
+
+        return None, None, "bounds fallback (no usable PlayerStart)", True
 
     def _current_world_sweep_duration(self):
         """Return the prepared local-sweep duration, or a map-scale fallback."""
@@ -1144,28 +1167,49 @@ Git commit: %s
             self.show()
 
     def _prepare_current_world_sweep(self):
-        """Set up a conservative camera path inside the playable region."""
-        min_x, max_x, min_z, max_z = self._current_world_bounds()
-        anchor_x, anchor_z = self._current_world_sweep_anchor()
-
-        # Never let the benchmark's orbit leave the geometry-derived bounds.
-        anchor_x = min(max(anchor_x, min_x), max_x)
-        anchor_z = min(max(anchor_z, min_z), max_z)
+        """Prepare a Player-area sweep that never leaves the benchmark region."""
+        bounds = self._current_world_bounds()
+        min_x, max_x, min_z, max_z = bounds
+        anchor_x, anchor_z, anchor_source, fallback = self._current_world_sweep_anchor(
+            bounds
+        )
 
         map_width = max(0.0, max_x - min_x)
         map_depth = max(0.0, max_z - min_z)
-        room_x = max(0.0, min(anchor_x - min_x, max_x - anchor_x))
-        room_z = max(0.0, min(anchor_z - min_z, max_z - anchor_z))
 
-        # The old 42% map-wide orbit was intentionally exploratory, but it can
-        # spend a large part of the benchmark in space a player would never
-        # visit. Keep the sweep local to the player start/current play camera,
-        # while still sampling a useful area of the world.
-        half_x = min(map_width * 0.12, room_x * 0.70)
-        half_z = min(map_depth * 0.12, room_z * 0.70)
+        if fallback:
+            # Preserve the original bounds-based benchmark behaviour when the
+            # map does not provide a usable PlayerStart. The centre is the
+            # geometric centre of the playable bounds, never an arbitrary
+            # camera-derived point.
+            center_x = (min_x + max_x) * 0.5
+            center_z = (min_z + max_z) * 0.5
+            half_x = map_width * 0.42
+            half_z = map_depth * 0.42
+        else:
+            # Player-area semantics: the PlayerStart is the centre of interest,
+            # and the sweep shrinks to the available room around that point.
+            center_x = float(anchor_x)
+            center_z = float(anchor_z)
+            room_x = max(
+                0.0,
+                min(center_x - min_x, max_x - center_x),
+            )
+            room_z = max(
+                0.0,
+                min(center_z - min_z, max_z - center_z),
+            )
+            half_x = min(map_width * 0.12, room_x * 0.70)
+            half_z = min(map_depth * 0.12, room_z * 0.70)
 
-        # Approximate the ellipse circumference so measurement time tracks the
-        # amount of world actually traversed instead of the whole map extent.
+        # Final clamp: even if the region calculation above changes later,
+        # sampled camera coordinates are mathematically bounded by the
+        # playable benchmark rectangle.
+        half_x = min(max(0.0, half_x), max(0.0, (max_x - min_x) * 0.5))
+        half_z = min(max(0.0, half_z), max(0.0, (max_z - min_z) * 0.5))
+        center_x = min(max(center_x, min_x + half_x), max_x - half_x)
+        center_z = min(max(center_z, min_z + half_z), max_z - half_z)
+
         effective_radius = math.sqrt(
             (half_x * half_x + half_z * half_z) * 0.5
         )
@@ -1174,25 +1218,55 @@ Git commit: %s
 
         camera = self.main_window.view_3d.camera
         self._current_world_camera_path = (
-            anchor_x, anchor_z, half_x, half_z,
+            center_x, center_z, half_x, half_z,
             float(camera.pos.y), float(camera.pitch), duration
         )
-        self._append(
-            "Camera sweep: local playable-region path for %.1f s, anchored at "
-            "PlayerStart/current camera and kept inside geometry bounds." % duration
-        )
+        self._current_world_sweep_metadata = {
+            "mode": "player-area",
+            "anchor_source": anchor_source,
+            "fallback": bool(fallback),
+            "bounds": (
+                float(min_x), float(max_x), float(min_z), float(max_z)
+            ),
+        }
+
+        if fallback:
+            self._append(
+                "Camera sweep: PLAYER-AREA / bounds fallback for %.1f s — "
+                "no usable PlayerStart; sweep is clamped to playable bounds."
+                % duration
+            )
+        else:
+            self._append(
+                "Camera sweep: PLAYER-AREA for %.1f s — anchored at %s; "
+                "sweep is clamped to playable bounds."
+                % (duration, anchor_source)
+            )
 
     def _advance_current_world_sweep(self):
         path = getattr(self, "_current_world_camera_path", None)
         if path is None:
             return
         center_x, center_z, half_x, half_z, y, pitch, duration = path
+        bounds = getattr(self, "_current_world_sweep_metadata", {}).get("bounds")
         elapsed = time.perf_counter() - self._phase_started
         angle = min(1.0, elapsed / max(duration, 0.001)) * (2.0 * math.pi)
         x = center_x + half_x * math.sin(angle)
         z = center_z + half_z * math.sin(angle + math.pi * 0.5)
+
+        # Keep the actual sampled point inside the benchmark region as a final
+        # defence against floating-point drift or future path changes.
+        if bounds is not None:
+            min_x, max_x, min_z, max_z = bounds
+            x = min(max(x, min_x), max_x)
+            z = min(max(z, min_z), max_z)
+
         next_x = center_x + half_x * math.sin(angle + 0.01)
         next_z = center_z + half_z * math.sin(angle + 0.01 + math.pi * 0.5)
+        if bounds is not None:
+            min_x, max_x, min_z, max_z = bounds
+            next_x = min(max(next_x, min_x), max_x)
+            next_z = min(max(next_z, min_z), max_z)
         yaw = math.degrees(math.atan2(next_z - z, next_x - x))
 
         camera = self.main_window.view_3d.camera
