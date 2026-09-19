@@ -821,8 +821,7 @@ Git commit: %s
                 # Keep the report bounded if a native component floods stderr.
                 if len(data) > 12000:
                     data = data[-12000:]
-                    data = "[...truncated...]
-" + data
+                    data = "[...truncated...]\n" + data
                 chunks.append("%s:\n%s" % (label, data))
         return "\n\n".join(chunks)
 
