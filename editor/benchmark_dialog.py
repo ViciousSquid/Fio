@@ -466,6 +466,7 @@ Execution: %s<br>
 VSync: <strong>%s</strong> (swap interval %d)<br>
 VSync source: %s<br>
 Platform: %s<br>
+<span style="color:#aaa;">Live editor/window tests use this VSync setting. Isolated stress workers use independent GL test contexts, so their renderer FPS is not capped by the editor's presentation VSync.</span>
 Python: %s<br>
 CPU: %s<br>
 Git commit: %s
