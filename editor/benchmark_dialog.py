@@ -301,11 +301,11 @@ class BenchmarkDialog(QDialog):
             )
             camera = self.main_window.view_3d.camera
             self._original_window_flags = self.main_window.windowFlags()
-        self._original_window_geometry = self.main_window.geometry()
-        self._original_window_state = self.main_window.windowState()
-        self._original_window_fullscreen = self.main_window.isFullScreen()
+            self._original_window_geometry = self.main_window.geometry()
+            self._original_window_state = self.main_window.windowState()
+            self._original_window_fullscreen = self.main_window.isFullScreen()
 
-        self._original_camera = (
+            self._original_camera = (
                 (float(camera.pos.x), float(camera.pos.y), float(camera.pos.z)),
                 float(camera.yaw),
                 float(camera.pitch),
