@@ -74,6 +74,10 @@ class BenchmarkRunner:
         self._live_stress_deadline = 0.0
         self._live_stress_timeout = False
         self._live_stress_timeout_reason = ""
+        self._live_watchdog_thread = None
+        self._live_watchdog_stop = None
+        self._live_watchdog_lock = threading.Lock()
+        self._live_watchdog_heartbeat = 0.0
         self._live_io_elapsed = None
         self._requested_duration = None
         self._requested_repetitions = 1
@@ -106,16 +110,69 @@ class BenchmarkRunner:
     
 
     def _start_live_stress_monitor(self, label):
-        """Arm the live workload timeout on the existing Qt tick."""
+        """Start same-process watchdog supervision for a live workload."""
+        self._stop_live_stress_monitor()
         timeout_s = self._live_stress_timeout_for(label)
         self._live_stress_timeout = False
         self._live_stress_timeout_reason = ""
         self._live_stress_deadline = time.perf_counter() + timeout_s
+        with self._live_watchdog_lock:
+            self._live_watchdog_heartbeat = time.perf_counter()
+
+        stop = threading.Event()
+        self._live_watchdog_stop = stop
+
+        def monitor():
+            while not stop.wait(0.25):
+                now = time.perf_counter()
+                with self._live_watchdog_lock:
+                    heartbeat = self._live_watchdog_heartbeat
+                    deadline = self._live_stress_deadline
+                if deadline <= 0.0:
+                    return
+                if now >= deadline:
+                    self._live_stress_timeout = True
+                    self._live_stress_timeout_reason = (
+                        "%s exceeded its %.1f s live benchmark timeout. "
+                        "Fio was not terminated; the live workload was marked failed."
+                        % (label, timeout_s)
+                    )
+                    return
+                # A stale heartbeat means the monitored Fio thread has stopped
+                # servicing the benchmark. Do not try to touch Qt from here.
+                if now - heartbeat >= timeout_s:
+                    self._live_stress_timeout = True
+                    self._live_stress_timeout_reason = (
+                        "%s stopped responding for %.1f s. "
+                        "The same Fio process remains running."
+                        % (label, timeout_s)
+                    )
+                    return
+
+        self._live_watchdog_thread = threading.Thread(
+            target=monitor,
+            name="FioLiveBenchmarkWatchdog",
+            daemon=True,
+        )
+        self._live_watchdog_thread.start()
 
 
     def _stop_live_stress_monitor(self):
-        """Disarm the live workload timeout."""
+        """Stop same-process watchdog supervision."""
         self._live_stress_deadline = 0.0
+        stop = self._live_watchdog_stop
+        thread = self._live_watchdog_thread
+        if stop is not None:
+            stop.set()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=0.75)
+        self._live_watchdog_stop = None
+        self._live_watchdog_thread = None
+
+
+    def _live_watchdog_beat(self):
+        with self._live_watchdog_lock:
+            self._live_watchdog_heartbeat = time.perf_counter()
     
 
     def _on_live_stress_timeout(self, reason):
