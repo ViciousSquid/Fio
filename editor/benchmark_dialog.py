@@ -1,8 +1,7 @@
 """Tools > Benchmark dialog.
 
-Runs the same opt-in pytest benchmark used by the test suite in a child
-process, keeping the editor responsive and ensuring the GUI reports the exact
-same measurements as command-line benchmark runs.
+Runs Fio's standalone performance benchmark in a child process. The benchmark
+uses Fio runtime APIs directly and deliberately does not depend on pytest.
 """
 
 import os
@@ -34,7 +33,8 @@ def _execution_environment():
                 names = {0x014C: "x86", 0x8664: "x64", 0xAA64: "ARM64"}
                 process_arch = names.get(process_machine.value, "0x%04X" % process_machine.value)
                 host_arch = names.get(native_machine.value, "0x%04X" % native_machine.value)
-                if process_machine.value and process_machine.value != native_machine.value:
+                if (native_machine.value == 0xAA64 and
+                        process_machine.value in (0x014C, 0x8664)):
                     translation = "Microsoft Prism / Windows on ARM emulation"
         except Exception:
             pass
@@ -157,14 +157,7 @@ class BenchmarkDialog(QDialog):
 
         self.process.start(
             sys.executable,
-            [
-                "-m",
-                "pytest",
-                "tests/performance/test_fullscreen_resolution_benchmark.py",
-                "--run-benchmarks",
-                "-s",
-                "-q",
-            ],
+            ["tests/performance/fio_benchmark.py"],
         )
 
     def _read_output(self):
