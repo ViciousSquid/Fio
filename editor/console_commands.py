@@ -1,5 +1,6 @@
 import os
 import json
+import math
 from PyQt5.QtWidgets import QMessageBox
 
 from editor.debug_console import debug_log
@@ -744,7 +745,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">clear</b> — Clear console<br>
 <b style="color:orange;">help</b> — Show this help<br>
 <b style="color:orange;">fps</b> — Toggle FPS display<br>
-<b style="color:orange;">benchmark</b> — Open Benchmark and test the current map<br>
+<b style="color:orange;">benchmark</b> [seconds] — Open Benchmark and test the current map for the specified duration<br>
 <b style="color:orange;">map</b> &lt;name&gt; — Load a different map<br>
 <b style="color:cyan;">=== Save / Load (Play Session) ===</b><br>
 <b style="color:orange;">save</b> [name] — Save the current play session (Play Mode only)<br>
@@ -1856,11 +1857,29 @@ entity to drive them from the I/O system.</i><br>
         debug_log("Info", f"FPS display {'ON' if show else 'OFF'}")
 
     def cmd_benchmark(self, args):
-        """benchmark — Open the Benchmark window and immediately test the current map."""
-        if args.strip():
-            debug_log("Warning", "benchmark: arguments are ignored")
+        """benchmark [seconds] — Open Benchmark and immediately test the current map."""
+        duration = None
+        raw = args.strip()
+
+        if raw:
+            parts = raw.split()
+            if len(parts) != 1:
+                debug_log("Error", "Usage: benchmark [seconds]")
+                return
+            try:
+                duration = float(parts[0])
+            except ValueError:
+                debug_log("Error", "Usage: benchmark [seconds]")
+                return
+            if not math.isfinite(duration) or duration <= 0.0:
+                debug_log("Error", "benchmark: duration must be greater than 0 seconds")
+                return
+
         try:
-            self.main_window.run_benchmark(auto_start=True)
+            self.main_window.run_benchmark(
+                auto_start=True,
+                duration=duration,
+            )
         except Exception as exc:
             debug_log("Error", f"benchmark: could not open benchmark window: {exc}")
 
