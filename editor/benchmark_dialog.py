@@ -187,17 +187,15 @@ class BenchmarkDialog(QDialog):
             self.brush_10000,
             self.brush_100000,
             self.io_chain_1000,
-            self.monsters_100,
-            self.monsters_500,
-            self.monsters_1000,
-            self.monster_apocalypse,
+            self.monster_capacity,
             self.borderless_window,
             self.fullscreen_window,
             self.editor_windowed_1280,
             self.editor_windowed_1920,
         ):
             checkbox.setEnabled(enabled)
-    
+        if getattr(self.main_window, "low_power_hardware", False):
+            self.monster_capacity.setEnabled(False)
 
     def _append(self, text):
         self.output.append(text)
