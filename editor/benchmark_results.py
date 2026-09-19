@@ -371,7 +371,7 @@ class BenchmarkResults:
         QApplication.processEvents()
     
 
-    def _benchmark_metrics(capture, duration_s):
+    def _benchmark_metrics(self, capture, duration_s):
         """Reduce a SysMon benchmark capture to stable, reportable metrics."""
         frame_times = []
         for value in capture.get("frame_times", []):
