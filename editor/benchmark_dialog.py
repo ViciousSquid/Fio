@@ -85,7 +85,7 @@ class BenchmarkDialog(QDialog):
         layout.addWidget(self.status_label)
 
         self.additional_tests = QCheckBox(
-            "Additional stress tests (I/O, renderer, CSG)"
+            "Additional stress tests (I/O, renderer, gameplay)"
         )
         self.additional_tests.setToolTip(
             "Run deliberately heavy workloads against the live Fio renderer, procedural world and I/O system."
@@ -177,6 +177,8 @@ class BenchmarkDialog(QDialog):
                     ("procedural_100_monsters", 100),
                     ("live_io_1000", 1000),
                 ])
+            if self.io_chain_1000.isChecked():
+                self._queue.append(("live_io_1000", 1000))
             if self.monsters_100.isChecked():
                 self._queue.append(("procedural_100_monsters", 100))
             if self.monsters_500.isChecked():
@@ -413,11 +415,6 @@ class BenchmarkDialog(QDialog):
         self._append(details)
 
     def reject(self):
-        if self._running:
-            self._finish_with_error("Benchmark cancelled; restoring original world...")
-            self._restore_original()
-            return
-        super().reject()
         if self._running:
             self._finish_with_error("Benchmark cancelled; restoring original world...")
             self._restore_original()
