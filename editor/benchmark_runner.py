@@ -13,37 +13,11 @@ import threading
 import time
 import traceback
 
-from PyQt5.QtCore import QThread, Qt, pyqtSignal
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QToolButton
 
 from .benchmark_results import BenchmarkResults
 from .benchmark_tests import BenchmarkTests
-
-
-class LiveBenchmarkMonitor(QThread):
-    """Watch a live benchmark without touching Fio/Qt engine objects."""
-
-    timeout = pyqtSignal(str)
-
-    def __init__(self, label, timeout_s, parent=None):
-        super().__init__(parent)
-        self.label = str(label)
-        self.timeout_s = float(timeout_s)
-        self._cancel = threading.Event()
-
-    def cancel(self):
-        self._cancel.set()
-
-    def run(self):
-        deadline = time.monotonic() + self.timeout_s
-        while not self._cancel.wait(0.10):
-            if time.monotonic() >= deadline:
-                self.timeout.emit(
-                    "%s exceeded its %.1f s live benchmark timeout. "
-                    "The benchmark was stopped without terminating Fio."
-                    % (self.label, self.timeout_s)
-                )
-                return
 
 
 class BenchmarkRunner:
@@ -93,7 +67,6 @@ class BenchmarkRunner:
         self._worker_active = False
         self._worker_finished = False
         self._worker_exit_code = None
-        self._live_monitor = None
         self._live_stress_active = False
         self._live_stress_phase = ""
         self._live_stress_label = None
@@ -133,26 +106,16 @@ class BenchmarkRunner:
     
 
     def _start_live_stress_monitor(self, label):
-        """Start a non-destructive monitor for the live workload."""
-        self._stop_live_stress_monitor()
+        """Arm the live workload timeout on the existing Qt tick."""
         timeout_s = self._live_stress_timeout_for(label)
-        monitor = LiveBenchmarkMonitor(label, timeout_s, self)
-        monitor.timeout.connect(self._on_live_stress_timeout)
-        self._live_monitor = monitor
         self._live_stress_timeout = False
         self._live_stress_timeout_reason = ""
         self._live_stress_deadline = time.perf_counter() + timeout_s
-        monitor.start()
-    
+
 
     def _stop_live_stress_monitor(self):
-        monitor = self._live_monitor
-        self._live_monitor = None
-        if monitor is None:
-            return
-        monitor.cancel()
-        if monitor is not QThread.currentThread():
-            monitor.wait(750)
+        """Disarm the live workload timeout."""
+        self._live_stress_deadline = 0.0
     
 
     def _on_live_stress_timeout(self, reason):
@@ -1166,6 +1129,27 @@ class BenchmarkRunner:
             except Exception:
                 self._finish_with_error(traceback.format_exc())
             return
+
+        # Live stress tests use the existing Qt benchmark tick for timeout
+        # supervision.  No additional QThread is needed for a simple wall-clock
+        # deadline, avoiding native thread lifetime/signal races.
+        if (
+            self._live_stress_active
+            and self._live_stress_deadline > 0.0
+            and time.perf_counter() >= self._live_stress_deadline
+            and not self._live_stress_timeout
+        ):
+            label = self._live_stress_label or (
+                self._current[0] if self._current else "live benchmark"
+            )
+            timeout_s = self._live_stress_timeout_for(label)
+            self._live_stress_timeout = True
+            self._live_stress_timeout_reason = (
+                "%s exceeded its %.1f s live benchmark timeout. "
+                "The benchmark was stopped without terminating Fio."
+                % (label, timeout_s)
+            )
+
         if not self._measurement_active:
             return
     
