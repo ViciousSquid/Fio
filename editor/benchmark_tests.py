@@ -12,10 +12,6 @@ from PyQt5.QtWidgets import QApplication
 
 
 class BenchmarkTests:
-    # Keep the ordinary live monster tiers from making a low-power editor
-    # unresponsive. The limit is configurable for faster machines.
-    LIVE_MONSTER_SAFE_LIMIT = 64
-
     PLAYER_AREA_DEFAULT_RADIUS = 256.0
     PLAYER_AREA_MAX_RADIUS = 2048.0
 
@@ -42,7 +38,7 @@ class BenchmarkTests:
             if self._requested_duration is not None:
                 return float(self._requested_duration)
             return self._player_area_sweep_duration()
-        return {"procedural_50_monsters": 4.0, "procedural_100_monsters": 4.0, "procedural_500_monsters": 4.0, "procedural_1000_monsters": 5.0, "live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_apocalypse": 4.0}.get(label, 3.0)
+        return {"live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_capacity": 3.0}.get(label, 3.0)
     
     
     PLAYER_AREA_DEFAULT_RADIUS = 256.0
