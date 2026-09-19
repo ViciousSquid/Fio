@@ -1,7 +1,8 @@
 """Tools > Benchmark dialog.
 
-Runs Fio's standalone performance benchmark in a child process. The benchmark
-uses Fio runtime APIs directly and deliberately does not depend on pytest.
+Runs the benchmark inside the already-running Fio MainWindow. The benchmark
+uses the live QtGameView, renderer, world state, LogicThread and SysMon; it
+does not launch a second Fio process and does not depend on pytest.
 """
 
 import os
