@@ -519,9 +519,17 @@ class BenchmarkDialog(QDialog):
 
         camera = self.main_window.view_3d.camera
         import glm
-        camera.pos = glm.vec3(x, y, z)
-        camera.yaw = yaw
-        camera.pitch = pitch
+        position = glm.vec3(x, y, z)
+        logic_thread = getattr(self.main_window.view_3d, "logic_thread", None)
+        if logic_thread is not None and getattr(self.main_window.view_3d, "use_threading", False):
+            # The threaded renderer takes the editor camera from LogicThread's
+            # authoritative camera. Updating only QtGameView.camera is
+            # immediately overwritten by the next RenderState snapshot.
+            logic_thread.set_editor_camera(position, yaw, pitch, camera.fov)
+        else:
+            camera.pos = position
+            camera.yaw = yaw
+            camera.pitch = pitch
 
     def _begin_next(self):
         if not self._queue:
