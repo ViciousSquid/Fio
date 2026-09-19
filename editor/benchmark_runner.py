@@ -946,23 +946,26 @@ class BenchmarkRunner:
             self.export_button.setEnabled(True)
             self.export_button.setVisible(True)
             self.output.append(
-                '<div style="padding:12px 0 22px 38px;">'
-                '<div style="font-size:27px; font-weight:bold; color:#2db34a; '
-                'padding-bottom:13px; border-bottom:3px solid #2db34a; '
-                'width:347px; white-space:nowrap;">'
-                '%d hops took <span style="color:#ff7f20;">%.3f ms</span>'
-                '</div>'
-                '<table cellspacing="0" cellpadding="0" '
-                'style="margin-top:0;">'
-                '<tr><td width="347" height="84" bgcolor="#2db34a" '
-                'style="padding:0 0 0 58px; white-space:nowrap;">'
-                '<span style="font-size:56px; line-height:1; '
-                'font-weight:bold; color:#ff7f20;">%.0f</span>'
-                '<span style="font-size:28px; font-weight:bold; '
-                'color:#2db34a; margin-left:13px;">hops/second</span>'
+                '<div style="background:#222; border:1px solid #555; padding:12px; margin:4px 0 10px 0;">'
+                '<div style="font-size:15px; font-weight:bold; color:#eeeeee; margin-bottom:4px;">%s</div>'
+                '<div style="color:#aaa;">%s &nbsp; • &nbsp; %s</div>'
+                '<table cellspacing="0" cellpadding="0" style="margin-top:10px; margin-bottom:2px;">'
+                '<tr><td width="24" rowspan="2" bgcolor="#63d471"></td>'
+                '<td height="2" bgcolor="#63d471" style="font-size:2px; line-height:2px;"></td></tr>'
+                '<tr><td style="padding:6px 16px 2px 12px; white-space:nowrap;">'
+                '<span style="font-size:25px; font-weight:bold; color:#63d471;">Hops/second:</span>'
+                '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.0f hops/second</span>'
                 '</td></tr></table>'
+                '<div style="color:#aaa; padding:4px 0;">%d hops &nbsp; • &nbsp; %.3f ms elapsed</div>'
                 '</div>'
-                % (hops, elapsed_ms, hops_per_second)
+                % (
+                    self._html_escape(label),
+                    self._html_escape(metrics.get("description", label)),
+                    "live logic throughput",
+                    hops_per_second,
+                    hops,
+                    elapsed_ms,
+                )
             )
             self.output.ensureCursorVisible()
             QApplication.processEvents()
