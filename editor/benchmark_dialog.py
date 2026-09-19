@@ -114,6 +114,7 @@ class BenchmarkDialog(QDialog):
         self._worker_active = False
         self._worker_finished = False
         self._worker_exit_code = None
+        self._requested_duration = None
 
         self.setWindowTitle("Fio Benchmark")
         self.resize(900, 650)
@@ -274,6 +275,8 @@ class BenchmarkDialog(QDialog):
         # Use the prepared local sweep duration so empty regions outside the
         # actual play area cannot stretch the measurement.
         if label in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
+            if self._requested_duration is not None:
+                return float(self._requested_duration)
             return self._player_area_sweep_duration()
         return {"procedural_100_monsters": 4.0, "procedural_500_monsters": 4.0, "procedural_1000_monsters": 5.0, "live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_apocalypse": 4.0}.get(label, 3.0)
 
