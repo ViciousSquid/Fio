@@ -292,6 +292,132 @@ class BenchmarkTests:
         )
 
 
+    def _run_monster_capacity_probe(self, bench, window, view):
+        """Find the highest live monster count that remains responsive."""
+        timeout_s = self._live_stress_timeout_for("monster_capacity")
+        deadline = time.perf_counter() + timeout_s
+        last_good = 0
+        first_bad = None
+        candidate = 16
+
+        self._append(
+            "  Monster capacity: probing the live MainWindow until a workload "
+            "exceeds the %.0f s responsiveness limit." % timeout_s
+        )
+
+        def probe(count):
+            window.state.clear_scene()
+            window.update_all_ui()
+            window.update_views()
+            view.sysmon.reset_metrics()
+            view.update()
+            QApplication.processEvents()
+
+            def yield_hook():
+                QApplication.processEvents()
+                if time.perf_counter() >= deadline:
+                    raise TimeoutError(
+                        "monster capacity probe at %d monsters exceeded the %.0f s "
+                        "responsiveness limit" % (count, timeout_s)
+                    )
+
+            data = bench._generate_procedural_map(
+                monsters=count,
+                relay_count=32,
+                seed=bench.BENCHMARK_MAP_SEED,
+                live_monster=True,
+                yield_hook=yield_hook,
+            )
+            bench.load_live_benchmark_world(window, data, yield_hook=yield_hook)
+            QApplication.processEvents()
+            bench.prepare_live_monster_test(window)
+            QApplication.processEvents()
+
+            stable_until = min(deadline, time.perf_counter() + 2.0)
+            while time.perf_counter() < stable_until:
+                QApplication.processEvents()
+                view.update()
+                time.sleep(0.01)
+
+        try:
+            while first_bad is None and candidate <= 4096:
+                self._append("  Testing %d live monsters..." % candidate)
+                try:
+                    probe(candidate)
+                    last_good = candidate
+                    self._append("  PASS — %d monsters remained responsive." % candidate)
+                    candidate *= 2
+                except (TimeoutError, MemoryError):
+                    first_bad = candidate
+                    self._append("  LIMIT — %d monsters exceeded the responsiveness limit." % candidate)
+                finally:
+                    try:
+                        if view.play_mode:
+                            bench.finish_live_monster_test(window)
+                    except Exception:
+                        pass
+                    QApplication.processEvents()
+
+            if first_bad is None:
+                first_bad = candidate
+
+            low = last_good + 1
+            high = first_bad - 1
+            while low <= high:
+                mid = (low + high) // 2
+                self._append("  Binary search: testing %d monsters..." % mid)
+                try:
+                    probe(mid)
+                    last_good = mid
+                    low = mid + 1
+                    self._append("  PASS — %d monsters." % mid)
+                except (TimeoutError, MemoryError):
+                    high = mid - 1
+                    self._append("  FAIL — %d monsters." % mid)
+                finally:
+                    try:
+                        if view.play_mode:
+                            bench.finish_live_monster_test(window)
+                    except Exception:
+                        pass
+                    QApplication.processEvents()
+
+            self._timer.stop()
+            self._measurement_active = False
+            self._live_stress_active = False
+            self._stop_live_stress_monitor()
+            self._results.append({
+                "test": "monster_capacity",
+                "status": "passed",
+                "benchmark_live": True,
+                "monster_capacity": int(last_good),
+                "timeout_seconds": float(timeout_s),
+            })
+            self.export_button.setEnabled(True)
+            self.export_button.setVisible(True)
+            self.output.append(
+                '<div style="background:#222; border:1px solid #555; padding:12px; margin:4px 0 10px 0;">'
+                '<div style="font-size:15px; font-weight:bold; color:#eeeeee;">Monster capacity</div>'
+                '<div style="color:#aaa; margin-top:4px;">Live MainWindow / real LogicThread / real renderer</div>'
+                '<table cellspacing="0" cellpadding="0" style="margin-top:10px;">'
+                '<tr><td width="24" rowspan="2" bgcolor="#63d471"></td>'
+                '<td height="2" bgcolor="#63d471"></td></tr>'
+                '<tr><td style="padding:6px 16px 2px 12px; white-space:nowrap;">'
+                '<span style="font-size:25px; font-weight:bold; color:#63d471;">Maximum live monsters:</span>'
+                '<span style="font-size:42px; font-weight:bold; color:#ff9a32; margin-left:12px;">%d</span>'
+                '</td></tr></table>'
+                '<div style="color:#aaa; padding:4px 0;">Highest tested count that remained responsive within %.0f s.</div>'
+                '</div>' % (last_good, timeout_s)
+            )
+            self.status_label.setText("Monster capacity: %d live monsters." % last_good)
+            QApplication.processEvents()
+            self._begin_next()
+        except Exception:
+            self._live_stress_active = False
+            self._stop_live_stress_monitor()
+            raise
+
+
     def _run_live_stress_test(self, label, value):
         """Prepare a live stress test; _tick drives the real workload."""
         bench = self._bench
@@ -351,72 +477,10 @@ class BenchmarkTests:
                     "EditorState; 2D/3D views refreshed." % brush_count
                 )
     
-            elif label in ("procedural_50_monsters", "procedural_100_monsters", "procedural_500_monsters",
-                           "procedural_1000_monsters", "monster_apocalypse"):
-                # The apocalypse workload is intentionally a worst-case 1000-monster
-                # + 1000-relay world on a large procedural map. It is capable of
-                # making a low-power machine unresponsive before the cooperative
-                # yield hook gets another chance to run. Keep it opt-in for live
-                # MainWindow benchmarks, just like the oversized monster tiers.
-                if label == "monster_apocalypse":
-                    allow_apocalypse = os.environ.get(
-                        "FIO_BENCHMARK_ALLOW_LIVE_APOCALYPSE",
-                        "",
-                    ).strip().lower() in ("1", "true", "yes")
-                    if not allow_apocalypse:
-                        self._skip_live_stress(
-                            label,
-                            "monster_apocalypse is disabled for live MainWindow "
-                            "benchmarks because it can make low-power hardware "
-                            "unresponsive during world generation. Set "
-                            "FIO_BENCHMARK_ALLOW_LIVE_APOCALYPSE=1 to run it "
-                            "explicitly on a machine that can handle the workload.",
-                        )
-                        return
-                else:
-                    monsters = int(label.split("_")[1])
-                    raw_limit = os.environ.get(
-                        "FIO_BENCHMARK_MAX_LIVE_MONSTERS",
-                        str(self.LIVE_MONSTER_SAFE_LIMIT),
-                    ).strip()
-                    try:
-                        live_monster_limit = max(1, int(raw_limit))
-                    except ValueError:
-                        live_monster_limit = self.LIVE_MONSTER_SAFE_LIMIT
-                    if monsters > live_monster_limit:
-                        self._skip_live_stress(
-                            label,
-                            "%s requests %d live monsters, above the safety limit of %d. "
-                            "Fio was left running; set FIO_BENCHMARK_MAX_LIVE_MONSTERS=%d "
-                            "to override this limit on a machine that can handle the workload."
-                            % (label, monsters, live_monster_limit, monsters),
-                        )
-                        return
-                cooperative_yield = lambda: self._live_cooperative_yield(label)
-                if label == "monster_apocalypse":
-                    data = bench._generate_monster_apocalypse(
-                        yield_hook=cooperative_yield,
-                    )
-                else:
-                    data = bench._generate_procedural_map(
-                        monsters=monsters,
-                        relay_count=32,
-                        seed=bench.BENCHMARK_MAP_SEED,
-                        live_monster=True,
-                        yield_hook=cooperative_yield,
-                    )
-                bench.load_live_benchmark_world(
-                    window,
-                    data,
-                    yield_hook=cooperative_yield,
-                )
-                QApplication.processEvents()
-                bench.prepare_live_monster_test(window)
-                QApplication.processEvents()
-                self._append(
-                    "  Play Mode: live MainWindow instance, real LogicThread/AI/renderer."
-                )
-    
+            elif label == "monster_capacity":
+                self._run_monster_capacity_probe(bench, window, view)
+                return
+
             elif label == "live_io_1000":
                 cooperative_yield = lambda: self._live_cooperative_yield(label)
                 data = bench._generate_procedural_map(
