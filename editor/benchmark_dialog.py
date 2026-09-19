@@ -1502,10 +1502,9 @@ Git commit: %s
         return probe
 
     def _player_area_segment_clear(self, start_x, start_z, end_x, end_z, probe_y):
-        """Test whether the real Player collision model can traverse a segment."""
+        """Validate the actual straight camera segment against collision."""
         import glm
 
-        brushes = self._player_area_collision_brushes or []
         grid = self._player_area_collision_grid
         if grid is None:
             return False
@@ -1514,39 +1513,26 @@ Git commit: %s
         dz = float(end_z) - float(start_z)
         distance = math.hypot(dx, dz)
         if distance < 0.001:
-            probe = self._player_area_probe(start_x, probe_y, start_z)
+            steps = 1
+        else:
+            # The probe itself has an 8-unit radius. Four-unit samples mean a
+            # wall cannot fit entirely between consecutive collision checks.
+            steps = max(1, int(math.ceil(distance / 4.0)))
+
+        for index in range(steps + 1):
+            t = float(index) / float(steps)
+            x = float(start_x) + dx * t
+            z = float(start_z) + dz * t
+            probe = self._player_area_probe(x, probe_y, z)
             half = probe._half
-            pmin = probe.pos - half
-            pmax = probe.pos + half
-            colliders = grid.get_potential_colliders(pmin, pmax)
-            return not probe._check_overlap(colliders)
+            colliders = grid.get_potential_colliders(
+                probe.pos - half,
+                probe.pos + half,
+            )
+            if probe._check_overlap(colliders):
+                return False
 
-        probe = self._player_area_probe(start_x, probe_y, start_z)
-        probe.velocity = glm.vec3(dx, 0.0, dz)
-
-        half = probe._half
-        min_x = min(start_x, end_x) - half.x - 1.0
-        max_x = max(start_x, end_x) + half.x + 1.0
-        min_z = min(start_z, end_z) - half.z - 1.0
-        max_z = max(start_z, end_z) + half.z + 1.0
-        colliders = grid.get_potential_colliders(
-            glm.vec3(min_x, probe_y - half.y, min_z),
-            glm.vec3(max_x, probe_y + half.y, max_z),
-        )
-
-        # Use the engine's actual axis collision movement.  on_ground=False
-        # deliberately prevents the camera probe from climbing "step" geometry.
-        probe._move_with_collision(1.0, colliders, axis="x")
-        probe._move_with_collision(1.0, colliders, axis="z")
-
-        remaining = math.hypot(
-            float(end_x) - float(probe.pos.x),
-            float(end_z) - float(probe.pos.z),
-        )
-        if remaining > 0.75:
-            return False
-
-        return not probe._check_overlap(colliders)
+        return True
 
     def _player_area_safe_segment(self, start_x, start_z, end_x, end_z, probe_y):
         """Return the furthest collision-safe point along a desired segment."""
