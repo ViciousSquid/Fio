@@ -1358,10 +1358,10 @@ Git commit: %s
     def _run_live_stress_test(self, label, value):
         """Run a stress workload inside this already-running Fio instance.
 
-        Stress tests deliberately use the same MainWindow, EditorState,
-        QtGameView, Play Mode, LogicThread and SysMon as the normal editor
-        benchmark. No subprocess, second MainWindow, test GL context or
-        synthetic renderer is involved.
+        Stress tests use the same MainWindow, EditorState, QtGameView, Play
+        Mode, LogicThread and SysMon as the normal editor benchmark. No
+        subprocess, second MainWindow, test GL context, or synthetic renderer
+        is involved.
         """
         app = QApplication.instance()
         if app is None:
@@ -1380,17 +1380,11 @@ Git commit: %s
         try:
             if label in ("live_1000_brushes", "live_10000_brushes", "live_100000_brushes"):
                 brush_count = int(value)
-
-                # Use the production benchmark scene generator, but load its
-                # actual brush dictionaries into the live EditorState so the
-                # editor's 2D and 3D views are rendering the generated scene.
                 data = bench._generate_procedural_map(monsters=0, relay_count=32)
                 brushes, _things = bench._make_brush_stress_scene(brush_count)
 
-                # The isolated helper historically spaces duplicate brushes
-                # very far apart. Repack them into a compact grid for the live
-                # editor so the generated geometry is genuinely visible in
-                # the normal 2D/3D workspace instead of being miles apart.
+                # Pack generated brushes into a compact grid so they are
+                # genuinely visible in the normal 2D/3D editor workspace.
                 repacked = []
                 columns = max(1, int(math.ceil(math.sqrt(brush_count))))
                 spacing = 96.0
@@ -1407,7 +1401,6 @@ Git commit: %s
                 data["brushes"] = repacked
                 bench.load_live_benchmark_world(window, data)
                 QApplication.processEvents()
-
                 self._append(
                     "  Live brush scene: created %d real brushes in the existing "
                     "EditorState; 2D/3D views refreshed." % brush_count
@@ -1439,12 +1432,10 @@ Git commit: %s
                         seed=getattr(bench, "BENCHMARK_MAP_SEED", 0xF10),
                     )
 
-                # Load the generated map into the existing editor, then enter
-                # real Play Mode in that same MainWindow. Monster AI, LogicThread,
-                # renderer and SysMon therefore all belong to the user's Fio.
+                # Load the generated world into the existing editor, then
+                # enter real Play Mode in that same MainWindow.
                 bench.load_live_benchmark_world(window, data)
                 QApplication.processEvents()
-
                 preparation = bench.prepare_live_monster_test(window)
                 self._append(
                     "  Live Play Mode: %d monsters, %d aggro seeds, god_mode=%s."
@@ -1512,9 +1503,6 @@ Git commit: %s
                     start = time.perf_counter()
                     io_manager.fire_output(first, "OnTrigger")
                     io_elapsed = time.perf_counter() - start
-
-                    # Keep the real LogicThread/renderer alive for the FPS
-                    # measurement immediately after the I/O traversal.
                     metrics = bench.run_live_renderer_sample(
                         window, duration=duration, warmup=0.5
                     )
@@ -1541,9 +1529,6 @@ Git commit: %s
                 raise ValueError("unknown live stress benchmark: %s" % label)
 
         finally:
-            # The normal queue reset restores the original map before the next
-            # test. Ensure a failed live monster test cannot leave Play Mode
-            # running into that reset.
             if view.play_mode and label.startswith(("procedural_", "monster_")):
                 try:
                     bench.finish_live_monster_test(window)
@@ -1592,9 +1577,8 @@ Git commit: %s
                 self._check_preparation_budget(label)
                 self._start_measurement(label, duration=self._test_duration(label))
             else:
-                # Stress workloads are live too: they are loaded into the
-                # already-running MainWindow and measured through its Qt/GL
-                # event loop. No second Fio process is used.
+                # Stress workloads are live too: load them into the existing
+                # MainWindow and measure the real Qt/OpenGL viewport.
                 self._run_live_stress_test(label, value)
         except Exception:
             self._finish_with_error(traceback.format_exc())
@@ -1829,19 +1813,18 @@ Git commit: %s
         combined_fps = 1000.0 * total_frames / total_frame_time_ms
         total_seconds = total_frame_time_ms / 1000.0
         self._append(
-            '<table align="right" cellspacing="0" cellpadding="0" style="margin-top:14px; margin-bottom:10px;">'
+            '<table cellspacing="0" cellpadding="0" style="margin-top:14px; margin-bottom:2px;">'
             '<tr>'
-            '<td height="2" bgcolor="#ff9a32" style="font-size:2px; line-height:2px;"></td>'
-            '<td width="24" rowspan="2" bgcolor="#ff9a32"></td>'
+            '<td width="24" rowspan="2" bgcolor="#63d471"></td>'
+            '<td height="2" bgcolor="#63d471" style="font-size:2px; line-height:2px;"></td>'
             '</tr>'
             '<tr>'
-            '<td style="padding:6px 12px 2px 16px; white-space:nowrap; text-align:right;">'
+            '<td style="padding:6px 16px 2px 12px; white-space:nowrap;">'
             '<span style="font-size:25px; font-weight:bold; color:#63d471;">Combined Average FPS:</span>'
             '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.2f FPS</span>'
             '</td>'
             '</tr>'
-            '</table>'
-            '<br style="clear:both;">' % (combined_fps,)
+            '</table>' % (combined_fps,)
         )
         self._results.append({
             "test": "current_world_combined",
@@ -1916,9 +1899,6 @@ Git commit: %s
                 '</table>' % (phase_label, avg_fps)
             )
         else:
-            # Every live FPS result uses the same left-aligned green result
-            # box as Phase 1/2. This keeps the benchmark report visually
-            # consistent regardless of which live workload produced it.
             self.output.append(
                 '<table cellspacing="0" cellpadding="0" style="margin-top:10px; margin-bottom:2px;">'
                 '<tr>'
