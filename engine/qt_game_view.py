@@ -651,6 +651,7 @@ class QtGameView(QOpenGLWidget):
             self.fps = self.frame_count / fps_elapsed
             self.frame_count = 0
             self.last_fps_time = current_time
+        self.sysmon.record_fps(self.fps)
         self.sysmon.record_frame_time(delta * 1000.0)
         self._process_sound_queue()
         self._process_console_command_queue()
