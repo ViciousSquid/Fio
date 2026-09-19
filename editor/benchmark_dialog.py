@@ -209,6 +209,9 @@ class BenchmarkDialog(QDialog):
             if self.brush_100000.isChecked():
                 self._queue.append(("live_100000_brushes", 100000))
 
+            seen = set()
+            self._queue = [item for item in self._queue if not (item[0] in seen or seen.add(item[0]))]
+
             self._append("LIVE BENCHMARK: using the existing Fio MainWindow, QtGameView and renderer.")
             self._append("The editor/3D view remains running behind this dialog.")
             self._timer.start()
@@ -216,15 +219,45 @@ class BenchmarkDialog(QDialog):
         except Exception:
             self._finish_with_error(traceback.format_exc())
 
+    def _reset_between_tests(self):
+        """Reset the live Fio instance to the original world before each test."""
+        if self.main_window.view_3d.play_mode:
+            self.main_window._exit_play_mode()
+            QApplication.processEvents()
+        if self._original_level_data is not None:
+            self.main_window.state.load_from_data(copy.deepcopy(self._original_level_data))
+            self.main_window.update_all_ui()
+            self.main_window.update_views()
+            self.main_window.view_3d.sysmon.reset_metrics()
+            self.main_window.view_3d.update()
+            QApplication.processEvents()
+        if self._original_camera is not None:
+            position, yaw, pitch, fov = self._original_camera
+            camera = self.main_window.view_3d.camera
+            import glm
+            camera.pos = glm.vec3(*position)
+            camera.yaw = yaw
+            camera.pitch = pitch
+            camera.fov = fov
+        self.main_window.unsaved_changes = self._original_unsaved_changes
+        self.main_window.view_3d.update()
+        QApplication.processEvents()
+
     def _begin_next(self):
         if not self._queue:
             self._restore_original()
             return
 
+        self._reset_between_tests()
+
         label, value = self._queue.pop(0)
         self._current = (label, value)
         self._phase_started = time.perf_counter()
-        self.status_label.setText("Running: %s" % label)
+        self.status_label.setText("Preparing: %s" % label)
+        self._append("")
+        self._append("=" * 78)
+        self._append("START TEST: %s" % label)
+        self._append("Reset to baseline; loading isolated workload...")
 
         try:
             if label == "current_world":
