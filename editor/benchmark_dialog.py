@@ -405,8 +405,8 @@ class BenchmarkDialog(QDialog):
             # Qt events and re-enter _tick.
             self._measurement_active = False
             self._timer.stop()
-            frame_times = view.sysmon.end_benchmark_capture()
-            metrics = self._benchmark_metrics(frame_times, time.perf_counter() - self._phase_started)
+            capture = view.sysmon.end_benchmark_capture()
+            metrics = self._benchmark_metrics(capture, time.perf_counter() - self._phase_started)
             live_metrics = view.sysmon.get_metrics()
             metrics.update({"viewport_width": int(view.width()), "viewport_height": int(view.height()), "vram_used_mb": live_metrics.get("vram_used_mb"), "vram_total_mb": live_metrics.get("vram_total_mb"), "visible_brushes": live_metrics.get("visible_brushes", 0), "culled_brushes": live_metrics.get("culled_brushes", 0), "total_brushes": live_metrics.get("total_brushes", 0), "visible_tris": live_metrics.get("visible_tris", 0), "culled_tris": live_metrics.get("culled_tris", 0), "visible_surfaces": live_metrics.get("visible_surfaces", 0), "culled_surfaces": live_metrics.get("culled_surfaces", 0)})
             label = self._current[0]
@@ -470,13 +470,21 @@ class BenchmarkDialog(QDialog):
             QApplication.processEvents()
 
     @staticmethod
-    def _benchmark_metrics(frame_times, duration):
+    def _benchmark_metrics(capture, duration):
         import numpy as np
-        values = np.asarray(frame_times, dtype=np.float64)
+        values = np.asarray(capture.get("frame_times", []), dtype=np.float64)
+        visible = np.asarray(capture.get("visible_tris", []), dtype=np.float64)
+        total = np.asarray(capture.get("total_tris", []), dtype=np.float64)
+        culled = np.asarray(capture.get("culled_tris", []), dtype=np.float64)
         if values.size == 0:
-            return {"frame_count": 0, "measurement_duration_s": float(duration), "average_frame_time_ms": 0.0, "median_frame_time_ms": 0.0, "p95_frame_time_ms": 0.0, "p99_frame_time_ms": 0.0, "p999_frame_time_ms": 0.0, "min_frame_time_ms": 0.0, "max_frame_time_ms": 0.0, "average_fps": 0.0}
+            return {"frame_count": 0, "measurement_duration_s": float(duration), "average_frame_time_ms": 0.0, "median_frame_time_ms": 0.0, "p95_frame_time_ms": 0.0, "p99_frame_time_ms": 0.0, "p999_frame_time_ms": 0.0, "min_frame_time_ms": 0.0, "max_frame_time_ms": 0.0, "average_fps": 0.0, "average_visible_tris": 0.0, "average_total_tris": 0.0, "average_culled_tris": 0.0, "culling_efficiency": 0.0}
         avg_ms = float(np.mean(values))
-        return {"frame_count": int(values.size), "measurement_duration_s": float(duration), "average_frame_time_ms": avg_ms, "median_frame_time_ms": float(np.percentile(values, 50)), "p95_frame_time_ms": float(np.percentile(values, 95)), "p99_frame_time_ms": float(np.percentile(values, 99)), "p999_frame_time_ms": float(np.percentile(values, 99.9)), "min_frame_time_ms": float(np.min(values)), "max_frame_time_ms": float(np.max(values)), "average_fps": float(values.size / duration) if duration > 0 else 0.0}
+        avg_visible = float(np.mean(visible)) if visible.size else 0.0
+        avg_total = float(np.mean(total)) if total.size else 0.0
+        avg_culled = float(np.mean(culled)) if culled.size else 0.0
+        efficiency = (avg_culled / avg_total * 100.0) if avg_total > 0.0 else 0.0
+        return {"frame_count": int(values.size), "measurement_duration_s": float(duration), "average_frame_time_ms": avg_ms, "median_frame_time_ms": float(np.percentile(values, 50)), "p95_frame_time_ms": float(np.percentile(values, 95)), "p99_frame_time_ms": float(np.percentile(values, 99)), "p999_frame_time_ms": float(np.percentile(values, 99.9)), "min_frame_time_ms": float(np.min(values)), "max_frame_time_ms": float(np.max(values)), "average_fps": float(values.size / duration) if duration > 0 else 0.0, "average_visible_tris": avg_visible, "average_total_tris": avg_total, "average_culled_tris": avg_culled, "culling_efficiency": efficiency}
+
     def _report_live_result(self, label, metrics):
         width = metrics.get("viewport_width", self.main_window.view_3d.width())
         height = metrics.get("viewport_height", self.main_window.view_3d.height())
