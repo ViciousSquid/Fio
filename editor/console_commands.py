@@ -1857,28 +1857,41 @@ entity to drive them from the I/O system.</i><br>
         debug_log("Info", f"FPS display {'ON' if show else 'OFF'}")
 
     def cmd_benchmark(self, args):
-        """benchmark [seconds] — Open Benchmark and immediately test the current map."""
-        duration = None
+        """benchmark [seconds] [repetitions] — benchmark the current map."""
         raw = args.strip()
+        duration = None
+        repetitions = 1
+        parts = raw.split()
 
-        if raw:
-            parts = raw.split()
-            if len(parts) != 1:
-                debug_log("Error", "Usage: benchmark [seconds]")
-                return
+        if len(parts) > 2:
+            debug_log("Error", "Usage: benchmark [seconds] [repetitions]")
+            return
+
+        if parts:
             try:
                 duration = float(parts[0])
             except ValueError:
-                debug_log("Error", "Usage: benchmark [seconds]")
+                debug_log("Error", "Usage: benchmark [seconds] [repetitions]")
                 return
             if not math.isfinite(duration) or duration <= 0.0:
                 debug_log("Error", "benchmark: duration must be greater than 0 seconds")
+                return
+
+        if len(parts) == 2:
+            try:
+                repetitions = int(parts[1])
+            except ValueError:
+                debug_log("Error", "benchmark: repetitions must be a positive integer")
+                return
+            if repetitions <= 0:
+                debug_log("Error", "benchmark: repetitions must be a positive integer")
                 return
 
         try:
             self.main_window.run_benchmark(
                 auto_start=True,
                 duration=duration,
+                repetitions=repetitions,
             )
         except Exception as exc:
             debug_log("Error", f"benchmark: could not open benchmark window: {exc}")
