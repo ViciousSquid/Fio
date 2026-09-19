@@ -1522,6 +1522,7 @@ Git commit: %s
                         monsters=monsters,
                         relay_count=32,
                         seed=bench.BENCHMARK_MAP_SEED,
+                        live_monster=True,
                     )
                 bench.load_live_benchmark_world(window, data)
                 QApplication.processEvents()
