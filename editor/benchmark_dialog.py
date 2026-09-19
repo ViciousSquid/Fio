@@ -71,6 +71,8 @@ class BenchmarkDialog(QDialog):
         self._phase_started = 0.0
         self._original_level_data = None
         self._original_play_mode = False
+        self._original_unsaved_changes = False
+        self._original_camera = None
         self._running = False
         self._restoring = False
 
@@ -171,6 +173,16 @@ class BenchmarkDialog(QDialog):
                 self.main_window.state.get_level_data()
             )
             self._original_play_mode = bool(self.main_window.view_3d.play_mode)
+            self._original_unsaved_changes = bool(
+                getattr(self.main_window, "unsaved_changes", False)
+            )
+            camera = self.main_window.view_3d.camera
+            self._original_camera = (
+                (float(camera.pos.x), float(camera.pos.y), float(camera.pos.z)),
+                float(camera.yaw),
+                float(camera.pitch),
+                float(camera.fov),
+            )
 
             self._queue = [("current_world", None)]
             if self.additional_tests.isChecked():
@@ -403,6 +415,19 @@ class BenchmarkDialog(QDialog):
                 self.main_window.update_views()
                 self.main_window.view_3d.update()
                 QApplication.processEvents()
+
+            if self._original_camera is not None:
+                position, yaw, pitch, fov = self._original_camera
+                camera = self.main_window.view_3d.camera
+                import glm
+                camera.pos = glm.vec3(*position)
+                camera.yaw = yaw
+                camera.pitch = pitch
+                camera.fov = fov
+                self.main_window.view_3d.update()
+
+            self.main_window.unsaved_changes = self._original_unsaved_changes
+            self.main_window.update_title()
 
             if self._original_play_mode:
                 self.main_window.enter_play_mode()
