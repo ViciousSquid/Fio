@@ -482,6 +482,21 @@ class BenchmarkDialog(QDialog):
                 extra.append("VRAM: %s" % self._html_escape(self._format_vram(vram_source)))
             if "final_camera_pos" in result:
                 extra.append("Final camera position: %s" % self._html_escape(result["final_camera_pos"]))
+            if result.get("camera_sweep_mode"):
+                extra.append(
+                    "Camera sweep: %s" % self._html_escape(
+                        result["camera_sweep_mode"]
+                    )
+                )
+                extra.append(
+                    "Sweep anchor: %s" % self._html_escape(
+                        result.get("camera_sweep_anchor", "unknown")
+                    )
+                )
+                if result.get("camera_sweep_fallback"):
+                    extra.append(
+                        "Sweep fallback: bounds-based (no usable PlayerStart)"
+                    )
 
             details_html = ""
             if extra:
@@ -1397,6 +1412,14 @@ Git commit: %s
             live_metrics = view.sysmon.get_metrics()
             metrics.update({"viewport_width": int(view.width()), "viewport_height": int(view.height()), "vram_used_mb": live_metrics.get("vram_used_mb"), "vram_total_mb": live_metrics.get("vram_total_mb"), "visible_brushes": live_metrics.get("visible_brushes", 0), "culled_brushes": live_metrics.get("culled_brushes", 0), "total_brushes": live_metrics.get("total_brushes", 0), "visible_tris": live_metrics.get("visible_tris", 0), "culled_tris": live_metrics.get("culled_tris", 0), "visible_surfaces": live_metrics.get("visible_surfaces", 0), "culled_surfaces": live_metrics.get("culled_surfaces", 0)})
             label = self._current[0]
+            if label in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
+                sweep = getattr(self, "_current_world_sweep_metadata", {})
+                metrics.update({
+                    "camera_sweep_mode": sweep.get("mode", "player-area"),
+                    "camera_sweep_anchor": sweep.get("anchor_source", "unknown"),
+                    "camera_sweep_fallback": bool(sweep.get("fallback", False)),
+                    "camera_sweep_bounds": sweep.get("bounds"),
+                })
 
             if label == "live_io_1000":
                 self._run_live_io_stress()
@@ -1534,6 +1557,19 @@ Git commit: %s
                            '<div style="color:#aaa;">VRAM %s &nbsp; • &nbsp; brushes %d visible / %d culled / %d total &nbsp; • &nbsp; entities %d</div>'
                            '</div>' % (label, width, height, avg_ms, float(metrics.get("median_frame_time_ms", 0.0)), p95_ms, frames, duration, float(metrics.get("wall_clock_fps", 0.0)), low_1, low_01, self._format_vram(metrics), metrics.get("visible_brushes", 0), metrics.get("culled_brushes", 0), metrics.get("total_brushes", 0), result["entities"]))
         if label in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
+            sweep_line = (
+                '<div style="padding:4px 0; color:#aaa;">'
+                '<b style="color:#eeeeee;">Camera sweep:</b> %s'
+                ' &nbsp; • &nbsp; <b style="color:#eeeeee;">anchor:</b> %s%s'
+                '</div>'
+                % (
+                    metrics.get("camera_sweep_mode", "player-area"),
+                    metrics.get("camera_sweep_anchor", "unknown"),
+                    " &nbsp; • &nbsp; <b style=\"color:#ff8a00;\">BOUNDS FALLBACK</b>"
+                    if metrics.get("camera_sweep_fallback") else "",
+                )
+            )
+            self.output.append(sweep_line)
             self.output.append('<div style="padding:4px 0;">'
                                '<span style="color:#eeeeee; font-weight:bold;">Average visible triangles: </span><span style="color:#ff9a32; font-weight:bold;">%.0f</span>'
                                '<span style="color:#eeeeee; font-weight:bold;"> &nbsp; • &nbsp; Average total triangles: </span><span style="color:#ff9a32; font-weight:bold;">%.0f</span>'
