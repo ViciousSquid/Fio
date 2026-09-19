@@ -1478,6 +1478,29 @@ Git commit: %s
             camera.pitch = pitch
 
 
+    def _live_cooperative_yield(self, label):
+        """Yield from long live-test batches without leaving the Qt thread."""
+        self._monitor_beat(label, deadline=self._preparation_deadline)
+        monitor_failed, monitor_reason = self._monitor_failed()
+        if monitor_failed:
+            raise TimeoutError(monitor_reason)
+        if time.perf_counter() > self._preparation_deadline:
+            elapsed = time.perf_counter() - self._phase_started
+            raise TimeoutError(
+                "%s exceeded the %.0f s preparation limit after %.1f s."
+                % (label, self._preparation_timeout_s, elapsed)
+            )
+        self.status_label.setText(
+            "Preparing: %s — %.1f s elapsed (%.0f s limit)"
+            % (
+                label,
+                time.perf_counter() - self._phase_started,
+                self._preparation_timeout_s,
+            )
+        )
+        QApplication.processEvents()
+
+
     def _run_live_stress_test(self, label, value):
         """Prepare a live stress test; _tick drives the real workload."""
         bench = self._bench
@@ -1504,8 +1527,16 @@ Git commit: %s
                 }[label]
                 # Use Fio's NumPy-assisted scene builder and load the resulting
                 # level data into the existing EditorState.
-                data = bench._make_brush_stress_scene(brush_count)
-                bench.load_live_benchmark_world(window, data)
+                cooperative_yield = lambda: self._live_cooperative_yield(label)
+                data = bench._make_brush_stress_scene(
+                    brush_count,
+                    yield_hook=cooperative_yield,
+                )
+                bench.load_live_benchmark_world(
+                    window,
+                    data,
+                    yield_hook=cooperative_yield,
+                )
                 QApplication.processEvents()
                 self._append(
                     "  Live brush scene: created %d real brushes in the existing "
@@ -1514,8 +1545,11 @@ Git commit: %s
 
             elif label in ("procedural_100_monsters", "procedural_500_monsters",
                            "procedural_1000_monsters", "monster_apocalypse"):
+                cooperative_yield = lambda: self._live_cooperative_yield(label)
                 if label == "monster_apocalypse":
-                    data = bench._generate_monster_apocalypse()
+                    data = bench._generate_monster_apocalypse(
+                        yield_hook=cooperative_yield,
+                    )
                 else:
                     monsters = int(label.split("_")[1])
                     data = bench._generate_procedural_map(
@@ -1523,8 +1557,13 @@ Git commit: %s
                         relay_count=32,
                         seed=bench.BENCHMARK_MAP_SEED,
                         live_monster=True,
+                        yield_hook=cooperative_yield,
                     )
-                bench.load_live_benchmark_world(window, data)
+                bench.load_live_benchmark_world(
+                    window,
+                    data,
+                    yield_hook=cooperative_yield,
+                )
                 QApplication.processEvents()
                 bench.prepare_live_monster_test(window)
                 QApplication.processEvents()
@@ -1533,12 +1572,18 @@ Git commit: %s
                 )
 
             elif label == "live_io_1000":
+                cooperative_yield = lambda: self._live_cooperative_yield(label)
                 data = bench._generate_procedural_map(
                     monsters=0,
                     relay_count=1000,
                     seed=bench.BENCHMARK_MAP_SEED,
+                    yield_hook=cooperative_yield,
                 )
-                bench.load_live_benchmark_world(window, data)
+                bench.load_live_benchmark_world(
+                    window,
+                    data,
+                    yield_hook=cooperative_yield,
+                )
                 QApplication.processEvents()
                 if not view.play_mode:
                     window.enter_play_mode()
