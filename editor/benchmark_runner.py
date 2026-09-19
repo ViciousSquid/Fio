@@ -1244,7 +1244,7 @@ class BenchmarkRunner:
             else:
                 self._report_live_result(label, metrics)
     
-            if label.startswith("procedural_") or label == "monster_apocalypse":
+            if label == "monster_capacity":
                 # Monster tests already ran inside real Play Mode during the
                 # measurement.  God mode kept the player alive while AI,
                 # combat, infighting and monster I/O were active.
