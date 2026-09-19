@@ -13,7 +13,7 @@ import subprocess
 from datetime import datetime, timezone
 
 from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPushButton, QVBoxLayout, QApplication, QFileDialog, QTextBrowser, QToolButton, QWidget
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, Qt
 import copy
 import time
 import traceback
@@ -103,8 +103,8 @@ class BenchmarkDialog(QDialog):
         stress_toggle = QToolButton()
         stress_toggle.setText("or expand the list below for stress testing")
         stress_toggle.setCheckable(True)
-        stress_toggle.setToolButtonStyle(4)  # QToolButton.ToolButtonTextOnly
-        stress_toggle.setArrowType(0)  # Qt.NoArrow; text provides the affordance.
+        stress_toggle.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        stress_toggle.setArrowType(Qt.NoArrow)
         layout.addWidget(stress_toggle)
 
         self.stress_options = QWidget()
