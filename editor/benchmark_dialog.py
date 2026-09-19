@@ -9,7 +9,11 @@ import sys
 
 from PyQt5.QtCore import QProcess
 from PyQt5.QtGui import QTextCursor
-from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout
+from PyQt5.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout, QApplication
+from PyQt5.QtCore import QTimer
+import copy
+import time
+import traceback
 
 
 def _execution_environment():
@@ -56,10 +60,20 @@ def _execution_environment():
 
 
 class BenchmarkDialog(QDialog):
-    def __init__(self, root_dir, parent=None):
-        super().__init__(parent)
-        self.root_dir = os.path.abspath(root_dir)
-        self.process = None
+    def __init__(self, main_window):
+        super().__init__(main_window)
+        self.main_window = main_window
+        self.root_dir = os.path.abspath(main_window.root_dir)
+        self._timer = QTimer(self)
+        self._timer.setInterval(20)
+        self._timer.timeout.connect(self._tick)
+        self._bench = None
+        self._queue = []
+        self._current = None
+        self._phase_started = 0.0
+        self._original_level_data = None
+        self._original_play_mode = False
+        self._running = False
 
         self.setWindowTitle("Fio Benchmark")
         self.resize(900, 650)
@@ -119,127 +133,250 @@ class BenchmarkDialog(QDialog):
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
 
+    def _set_controls_enabled(self, enabled):
+        self.run_button.setEnabled(enabled)
+        self.additional_tests.setEnabled(enabled)
+        for checkbox in (
+            self.brush_1000,
+            self.brush_10000,
+            self.brush_100000,
+            self.io_chain_1000,
+            self.monsters_100,
+            self.monsters_500,
+            self.monsters_1000,
+            self.monster_apocalypse,
+        ):
+            checkbox.setEnabled(enabled)
+
+    def _append(self, text):
+        self.output.appendPlainText(text)
+        self.output.ensureCursorVisible()
+        QApplication.processEvents()
+
     def _start(self):
-        if self.process is not None and self.process.state() != QProcess.NotRunning:
+        if self._running:
             return
+
         self.output.clear()
-        self.status_label.setText("Running renderer benchmark...")
-        self.run_button.setEnabled(False)
-        self.additional_tests.setEnabled(False)
-        for checkbox in (
-            self.brush_1000,
-            self.brush_10000,
-            self.brush_100000,
-            self.io_chain_1000,
-            self.monsters_100,
-            self.monsters_500,
-            self.monsters_1000,
-        ):
-            checkbox.setEnabled(False)
-        self.process = QProcess(self)
-        self.process.setWorkingDirectory(self.root_dir)
-        self.process.setProcessChannelMode(QProcess.MergedChannels)
-        self.process.readyReadStandardOutput.connect(self._read_output)
-        self.process.finished.connect(self._finished)
-        self.process.errorOccurred.connect(self._error)
+        self.status_label.setText("Preparing live Fio benchmark...")
+        self._set_controls_enabled(False)
+        self._running = True
 
-        environment = self.process.processEnvironment()
-        environment.insert("PYTHONUNBUFFERED", "1")
+        try:
+            from tests.performance import fio_benchmark as bench
+            self._bench = bench
 
-        brush_counts = []
-        if self.brush_1000.isChecked():
-            brush_counts.append("1000")
-        if self.brush_10000.isChecked():
-            brush_counts.append("10000")
-        if self.brush_100000.isChecked():
-            brush_counts.append("100000")
-        if brush_counts:
-            environment.insert(
-                "FIO_FULLSCREEN_BENCH_BRUSH_STRESS", ",".join(brush_counts)
+            # This is the actual editor state. We restore it when the benchmark
+            # finishes, rather than creating a second Fio instance.
+            self._original_level_data = copy.deepcopy(
+                self.main_window.state.get_level_data()
             )
+            self._original_play_mode = bool(self.main_window.view_3d.play_mode)
 
-        if self.io_chain_1000.isChecked():
-            environment.insert("FIO_FULLSCREEN_BENCH_IO_CHAIN", "1000")
+            self._queue = [("current_world", None)]
+            if self.additional_tests.isChecked():
+                self._queue.extend([
+                    ("procedural_100_monsters", 100),
+                ])
+            if self.monsters_100.isChecked():
+                self._queue.append(("procedural_100_monsters", 100))
+            if self.monsters_500.isChecked():
+                self._queue.append(("procedural_500_monsters", 500))
+            if self.monsters_1000.isChecked():
+                self._queue.append(("procedural_1000_monsters", 1000))
+            if self.monster_apocalypse.isChecked():
+                self._queue.append(("monster_apocalypse", 1000))
 
-        monster_counts = []
-        if self.monsters_100.isChecked():
-            monster_counts.append("100")
-        if self.monsters_500.isChecked():
-            monster_counts.append("500")
-        if self.monsters_1000.isChecked():
-            monster_counts.append("1000")
-        if monster_counts:
-            environment.insert(
-                "FIO_FULLSCREEN_BENCH_MONSTERS", ",".join(monster_counts)
-            )
+            if self.brush_1000.isChecked():
+                self._queue.append(("live_1000_brushes", 1000))
+            if self.brush_10000.isChecked():
+                self._queue.append(("live_10000_brushes", 10000))
+            if self.brush_100000.isChecked():
+                self._queue.append(("live_100000_brushes", 100000))
 
-        if self.monster_apocalypse.isChecked():
-            environment.insert("FIO_FULLSCREEN_BENCH_APOCALYPSE", "1")
+            self._append("LIVE BENCHMARK: using the existing Fio MainWindow, QtGameView and renderer.")
+            self._append("The editor/3D view remains running behind this dialog.")
+            self._timer.start()
+            self._begin_next()
+        except Exception:
+            self._finish_with_error(traceback.format_exc())
 
-        if (self.additional_tests.isChecked() or brush_counts
-                or self.io_chain_1000.isChecked() or monster_counts
-                or self.monster_apocalypse.isChecked()):
-            environment.insert("FIO_FULLSCREEN_BENCH_ADDITIONAL", "1")
-
-        self.process.setProcessEnvironment(environment)
-
-        self.process.start(
-            sys.executable,
-            ["tests/performance/fio_benchmark.py"],
-        )
-
-    def _read_output(self):
-        if self.process is None:
+    def _begin_next(self):
+        if not self._queue:
+            self._restore_original()
             return
-        data = bytes(self.process.readAllStandardOutput()).decode(
-            "utf-8", errors="replace"
-        )
-        if data:
-            self.output.moveCursor(QTextCursor.End)
-            self.output.insertPlainText(data)
-            self.output.ensureCursorVisible()
 
-    def _finished(self, exit_code, exit_status):
-        self._read_output()
-        if exit_code == 0:
-            self.status_label.setText("Benchmark complete.")
-        else:
-            self.status_label.setText(
-                "Benchmark finished with exit code %d." % exit_code
+        label, value = self._queue.pop(0)
+        self._current = (label, value)
+        self._phase_started = time.perf_counter()
+        self.status_label.setText("Running: %s" % label)
+
+        try:
+            if label == "current_world":
+                self._start_measurement(label)
+            elif label.startswith("procedural_"):
+                data = self._bench._generate_procedural_map(
+                    monsters=int(value), relay_count=32, seed=1337 + int(value)
+                )
+                self._bench.load_live_benchmark_world(self.main_window, data)
+                self._start_measurement(label)
+            elif label == "monster_apocalypse":
+                data = self._bench._generate_monster_apocalypse()
+                self._bench.load_live_benchmark_world(self.main_window, data)
+                self._start_measurement(label, duration=2.0)
+            elif label.startswith("live_") and label.endswith("_brushes"):
+                count = int(label.split("_")[1])
+                data = self._bench._generate_procedural_map(monsters=0, relay_count=32)
+                state = self._bench._materialize_generated_map(data)
+                data["brushes"] = state.brushes
+                # Duplicate actual generated Fio brush records to the requested
+                # size, then load them through the real EditorState.
+                source = list(data["brushes"])
+                brushes = list(source)
+                index = 0
+                while len(brushes) < count:
+                    original = dict(source[index % len(source)])
+                    original["pos"] = list(original.get("pos", [0, 0, 0]))
+                    original["pos"][0] += (index // len(source) + 1) * 5000.0
+                    original["id"] = "live_benchmark_%d" % len(brushes)
+                    brushes.append(original)
+                    index += 1
+                data["brushes"] = brushes
+                self._bench.load_live_benchmark_world(self.main_window, data)
+                self._start_measurement(label, duration=0.5)
+            else:
+                raise RuntimeError("unknown live benchmark: %s" % label)
+        except Exception:
+            self._finish_with_error(traceback.format_exc())
+
+    def _start_measurement(self, label, duration=1.0):
+        self._current = (label, duration)
+        self._phase_started = time.perf_counter()
+        self.main_window.view_3d.sysmon.reset_metrics()
+        self.main_window.view_3d.update()
+        QApplication.processEvents()
+        self._measurement_deadline = time.perf_counter() + float(duration)
+        self._timer.start()
+
+    def _tick(self):
+        if not self._running:
+            return
+
+        try:
+            app = QApplication.instance()
+            view = self.main_window.view_3d
+            view.update()
+            app.processEvents()
+
+            if time.perf_counter() < self._measurement_deadline:
+                return
+
+            metrics = view.sysmon.get_metrics()
+            label = self._current[0]
+            self._report_live_result(label, metrics)
+
+            if label == "monster_apocalypse":
+                # Exercise the real game lifecycle on the exact world currently
+                # visible in the editor. This is not a synthetic renderer call.
+                self.main_window.enter_play_mode()
+                if not view.play_mode:
+                    raise RuntimeError("Fio failed to enter Play Mode")
+                from PyQt5.QtCore import Qt
+                self.main_window.keys_pressed.add(Qt.Key_W)
+                self.main_window.keys_pressed.add(Qt.Key_D)
+                play_deadline = time.perf_counter() + 2.0
+                while time.perf_counter() < play_deadline:
+                    view.update()
+                    app.processEvents()
+                    time.sleep(0.001)
+                self.main_window.keys_pressed.discard(Qt.Key_W)
+                self.main_window.keys_pressed.discard(Qt.Key_D)
+                pos = view.camera.pos
+                self._append(
+                    "  Play Mode: %.3f s, final camera=(%.1f, %.1f, %.1f)"
+                    % (2.0, float(pos.x), float(pos.y), float(pos.z))
+                )
+                self.main_window._exit_play_mode()
+                app.processEvents()
+
+            self._begin_next()
+        except Exception:
+            self._finish_with_error(traceback.format_exc())
+
+    def _report_live_result(self, label, metrics):
+        width = metrics.get("viewport_width", self.main_window.view_3d.width())
+        height = metrics.get("viewport_height", self.main_window.view_3d.height())
+        self._append(
+            "%-30s %4dx%-4d  FPS %7.2f  frame %7.2f ms  p95 %7.2f ms  VRAM %s"
+            % (
+                label,
+                width,
+                height,
+                metrics.get("fps", 0.0),
+                metrics.get("average_frame_time_ms", 0.0),
+                metrics.get("p95_frame_time_ms", 0.0),
+                self._format_vram(metrics),
             )
-        self.run_button.setEnabled(True)
-        self.additional_tests.setEnabled(True)
-        for checkbox in (
-            self.brush_1000,
-            self.brush_10000,
-            self.brush_100000,
-            self.io_chain_1000,
-            self.monsters_100,
-            self.monsters_500,
-            self.monsters_1000,
-        ):
-            checkbox.setEnabled(True)
-
-    def _error(self, error):
-        self._read_output()
-        self.status_label.setText(
-            "Could not start benchmark: %s" % error
         )
-        self.run_button.setEnabled(True)
-        self.additional_tests.setEnabled(True)
-        for checkbox in (
-            self.brush_1000,
-            self.brush_10000,
-            self.brush_100000,
-            self.io_chain_1000,
-            self.monsters_100,
-            self.monsters_500,
-            self.monsters_1000,
-        ):
-            checkbox.setEnabled(True)
+        self._append(
+            "  brushes: visible=%d culled=%d total=%d | entities=%d"
+            % (
+                metrics.get("visible_brushes", 0),
+                metrics.get("culled_brushes", 0),
+                metrics.get("total_brushes", 0),
+                len(self.main_window.state.things),
+            )
+        )
+
+    @staticmethod
+    def _format_vram(metrics):
+        used = metrics.get("vram_used_mb")
+        total = metrics.get("vram_total_mb")
+        if used is None and total is None:
+            return "N/A"
+        if used is None or total is None:
+            return "%s / %s MB" % (used, total)
+        return "%.1f / %.1f MB" % (used, total)
+
+    def _restore_original(self):
+        try:
+            if self.main_window.view_3d.play_mode:
+                self.main_window._exit_play_mode()
+                QApplication.processEvents()
+
+            if self._original_level_data is not None:
+                self.main_window.state.load_from_data(
+                    copy.deepcopy(self._original_level_data)
+                )
+                self.main_window.update_all_ui()
+                self.main_window.update_views()
+                self.main_window.view_3d.update()
+                QApplication.processEvents()
+
+            self._timer.stop()
+            self._running = False
+            self.status_label.setText("Live benchmark complete. Original Fio world restored.")
+            self._set_controls_enabled(True)
+        except Exception:
+            self._finish_with_error(traceback.format_exc())
+
+    def _finish_with_error(self, details):
+        self._timer.stop()
+        self._running = False
+        self.status_label.setText("Live benchmark failed.")
+        self._set_controls_enabled(True)
+        self._append(details)
 
     def reject(self):
-        if self.process is not None and self.process.state() != QProcess.NotRunning:
-            self.process.kill()
-            self.process.waitForFinished(1000)
+        if self._running:
+            self._finish_with_error("Benchmark cancelled; restoring original world...")
+            self._restore_original()
+            return
+        super().reject()
+
+    def reject(self):
+        if self._running:
+            self._finish_with_error("Benchmark cancelled; restoring original world...")
+            self._restore_original()
+            return
         super().reject()
