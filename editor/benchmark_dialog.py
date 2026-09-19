@@ -465,6 +465,7 @@ p { margin:5px 0 0; color:#aaa; }
 Fio version: %s<br>
 Generated: %s<br>
 Execution: %s<br>
+Average FPS definition: 1000 / mean(captured frame time)<br>
 VSync: <strong>%s</strong> (swap interval %d)<br>
 VSync source: %s<br>
 <div style="margin:8px 0; padding:8px; color:#aaa; background:#151515; border-left:3px solid #63d471;">Live editor/window tests use this VSync setting. Isolated stress workers use independent GL test contexts, so their renderer FPS is not capped by the editor's presentation VSync.</div>
@@ -1381,6 +1382,7 @@ Git commit: %s
                            '<span style="font-size:25px; font-weight:bold; color:#63d471;">average FPS:</span>'
                            '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.2f</span>'
                            '</div>' % avg_fps)
+        self.output.append('<div style="color:#aaa; padding:2px 0 4px 0;">Average FPS = 1000 / mean(captured frame time). Wall-clock FPS is reported separately.</div>')
         self.output.append('<div style="border-top:2px solid #63d471; margin:14px 0 8px 0;"></div>')
         self.output.ensureCursorVisible()
         QApplication.processEvents()
