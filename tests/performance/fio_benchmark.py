@@ -496,7 +496,8 @@ def _run_monster_apocalypse():
                     brush_count=len(brushes),
                     entity_count=len(things),
                     resolution="%dx%d" % (width, height),
-                    average_fps=1.0 / mean if mean else float("inf"),
+                    average_fps=sysmon_metrics["fps"],
+                    sysmon=sysmon_metrics,
                 ))
             finally:
                 try:
@@ -692,7 +693,8 @@ def _run_renderer_stress():
                         mode=mode,
                         brush_count=len(brushes),
                         resolution="%dx%d" % (width, height),
-                        average_fps=1.0 / mean if mean else float("inf"),
+                        average_fps=sysmon_metrics["fps"],
+                        sysmon=sysmon_metrics,
                     )
                 )
             finally:
@@ -1022,7 +1024,7 @@ def format_results(results, info=None):
             continue
 
         lines.append(
-            "%-28s %4dx%-4d %8.1f %10.2f %8.2f %8.3f"
+            "%-28s %4dx%-4d %8.1f %10.2f %8.2f %12s"
             % (
                 result["scenario"],
                 result["width"],
