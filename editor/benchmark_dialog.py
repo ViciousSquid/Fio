@@ -18,6 +18,7 @@ from PyQt5.QtCore import QTimer, Qt
 import copy
 import time
 import traceback
+import threading
 
 
 def _execution_environment():
@@ -93,6 +94,14 @@ class BenchmarkDialog(QDialog):
         self._original_window_state = None
         self._original_window_fullscreen = False
         self._benchmark_window_mode = None
+        self._monitor_thread = None
+        self._monitor_stop = None
+        self._monitor_lock = None
+        self._monitor_heartbeat = 0.0
+        self._monitor_phase = ""
+        self._monitor_deadline = 0.0
+        self._monitor_timeout = False
+        self._monitor_timeout_reason = ""
 
         self.setWindowTitle("Fio Benchmark")
         self.resize(900, 650)
@@ -300,6 +309,70 @@ class BenchmarkDialog(QDialog):
             self.status_label.setText("Exported benchmark results: %s" % os.path.basename(path))
         except Exception:
             self._append("<span style='color:#ff6666;'>Export failed.</span><pre>%s</pre>" % traceback.format_exc())
+
+    def _start_monitor_for_risky_test(self, label, timeout_s):
+        """Start a daemon monitor only for stress tests that may block Qt."""
+        self._stop_monitor()
+        self._monitor_stop = threading.Event()
+        self._monitor_lock = threading.Lock()
+        self._monitor_heartbeat = time.perf_counter()
+        self._monitor_phase = str(label)
+        self._monitor_deadline = time.perf_counter() + float(timeout_s)
+        self._monitor_timeout = False
+        self._monitor_timeout_reason = ""
+        stop = self._monitor_stop
+
+        def monitor():
+            while not stop.wait(0.25):
+                now = time.perf_counter()
+                with self._monitor_lock:
+                    heartbeat = self._monitor_heartbeat
+                    phase = self._monitor_phase
+                    deadline = self._monitor_deadline
+                if now > deadline or now - heartbeat > 5.0:
+                    with self._monitor_lock:
+                        self._monitor_timeout = True
+                        self._monitor_timeout_reason = (
+                            "%s exceeded the independent stress-test monitor budget "
+                            "(%.1f s without a benchmark heartbeat)."
+                            % (phase, now - heartbeat)
+                        )
+                    return
+
+        self._monitor_thread = threading.Thread(
+            target=monitor,
+            name="FioBenchmarkMonitor",
+            daemon=True,
+        )
+        self._monitor_thread.start()
+
+    def _monitor_beat(self, phase=None, deadline=None):
+        if self._monitor_stop is None or self._monitor_lock is None:
+            return
+        with self._monitor_lock:
+            self._monitor_heartbeat = time.perf_counter()
+            if phase is not None:
+                self._monitor_phase = str(phase)
+            if deadline is not None:
+                self._monitor_deadline = float(deadline)
+
+    def _monitor_failed(self):
+        if self._monitor_lock is None:
+            return False, ""
+        with self._monitor_lock:
+            return bool(self._monitor_timeout), self._monitor_timeout_reason
+
+    def _stop_monitor(self):
+        stop = self._monitor_stop
+        thread = self._monitor_thread
+        self._monitor_stop = None
+        self._monitor_thread = None
+        self._monitor_lock = None
+        if stop is not None:
+            stop.set()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=0.5)
+
     def _start(self):
         if self._running:
             return
@@ -315,6 +388,7 @@ class BenchmarkDialog(QDialog):
         if stress_toggle is not None:
             stress_toggle.setChecked(False)
         self._running = True
+        self._stop_monitor()
 
         try:
             from tests.performance import fio_benchmark as bench
@@ -379,6 +453,7 @@ class BenchmarkDialog(QDialog):
 
             self._append("LIVE BENCHMARK: using the existing Fio MainWindow, QtGameView and renderer.")
             self._timer.start()
+            self._stop_monitor()
             self._begin_next()
         except Exception:
             self._finish_with_error(traceback.format_exc())
@@ -562,6 +637,8 @@ class BenchmarkDialog(QDialog):
         label, value = self._queue.pop(0)
         self._current = (label, value)
         self._phase_started = time.perf_counter()
+        if label not in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
+            self._start_monitor_for_risky_test(label, self._preparation_timeout_s + self._measurement_watchdog_extra_s)
         self.status_label.setText("Preparing: %s" % label)
         self._append_test_separator(label)
         self._append("<span style='color:#ffb15a; font-weight:bold;'>START TEST</span> — %s" % label)
@@ -641,6 +718,10 @@ class BenchmarkDialog(QDialog):
 
     def _check_preparation_budget(self, label):
         elapsed = time.perf_counter() - self._phase_started
+        self._monitor_beat(label, deadline=self._preparation_deadline)
+        monitor_failed, monitor_reason = self._monitor_failed()
+        if monitor_failed:
+            raise TimeoutError(monitor_reason)
         if time.perf_counter() > self._preparation_deadline:
             raise TimeoutError(
                 "%s exceeded the %.0f s preparation limit after %.1f s. The workload was not measured; restoring the original world."
@@ -659,6 +740,7 @@ class BenchmarkDialog(QDialog):
         self._measurement_deadline = time.perf_counter() + float(duration)
         self._measurement_watchdog_deadline = self._measurement_deadline + self._measurement_watchdog_extra_s
         self._measurement_active = True
+        self._monitor_beat(label, deadline=self._measurement_watchdog_deadline)
         view = self.main_window.view_3d
         view.sysmon.reset_metrics()
         view.sysmon.begin_benchmark_capture()
@@ -672,6 +754,10 @@ class BenchmarkDialog(QDialog):
 
         try:
             app = QApplication.instance()
+            self._monitor_beat(self._current[0], deadline=self._measurement_watchdog_deadline)
+            monitor_failed, monitor_reason = self._monitor_failed()
+            if monitor_failed:
+                raise TimeoutError(monitor_reason)
             if time.perf_counter() > self._measurement_watchdog_deadline:
                 raise TimeoutError("%s exceeded its measurement watchdog; the test did not complete reliably." % self._current[0])
             view = self.main_window.view_3d
@@ -852,6 +938,7 @@ class BenchmarkDialog(QDialog):
 
             self._timer.stop()
             self._measurement_active = False
+            self._stop_monitor()
             self._running = False
             self._set_controls_enabled(True)
             if failed:
@@ -870,6 +957,7 @@ class BenchmarkDialog(QDialog):
     def _finish_with_error(self, details):
         self._timer.stop()
         self._measurement_active = False
+        self._stop_monitor()
         self._running = False
         self._append(details)
         self._restore_original(failed=True)
