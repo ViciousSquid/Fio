@@ -304,23 +304,44 @@ def _materialize_generated_map(data):
     state = EditorState()
     state.load_from_data(data)
 
-    # Rebuild the benchmark relay chain through the real Thing API so the
+    # Rebuild generated relay graphs through the real Thing API so the
     # benchmark exercises Fio's OutputConnection objects, not just JSON.
-    relays = sorted(
-        (
-            t for t in state.things
-            if str(t.properties.get("name", "")).startswith("BenchmarkRelay_")
-        ),
-        key=lambda t: int(t.properties["name"].rsplit("_", 1)[1]),
-    )
-    for source, target in zip(relays, relays[1:]):
-        source.properties["_io_connections"] = []
-        source.add_output_connection(
-            output_name="OnTrigger",
-            target_name=target.properties["name"],
-            input_name="Trigger",
-            target_id=target.properties.get("id", ""),
+    raw_things = data.get("things", [])
+    generated = {}
+    for raw in raw_things:
+        properties = raw.get("properties", raw)
+        name = str(properties.get("name", ""))
+        if name.startswith(("BenchmarkRelay_", "ApocalypseRelay_")):
+            generated[name] = properties
+
+    loaded = {
+        str(t.properties.get("name", "")): t
+        for t in state.things
+        if str(t.properties.get("name", "")).startswith(
+            ("BenchmarkRelay_", "ApocalypseRelay_")
         )
+    }
+
+    for name, properties in generated.items():
+        source = loaded.get(name)
+        if source is None:
+            raise RuntimeError("generated benchmark relay did not load: %s" % name)
+
+        source.properties["_io_connections"] = []
+        for connection in properties.get("_io_connections", []):
+            target_name = connection.get("target", "")
+            target = loaded.get(target_name)
+            if target is None:
+                raise RuntimeError(
+                    "generated benchmark relay target did not load: %s -> %s"
+                    % (name, target_name)
+                )
+            source.add_output_connection(
+                output_name=connection.get("output", "OnTrigger"),
+                target_name=target.properties["name"],
+                input_name=connection.get("input", "Trigger"),
+                target_id=target.properties.get("id", ""),
+            )
 
     return state
 
@@ -595,6 +616,18 @@ def _timing_result(test, description, samples, **extra):
         "worst_ms": max(samples) * 1000.0,
     }
     result.update(extra)
+
+    # When SysMon data is supplied, it is the authoritative renderer result.
+    # The raw stopwatch timings remain useful for diagnostics, but the reported
+    # FPS/frame-time values come from the same metric object Fio displays.
+    metrics = result.get("sysmon")
+    if metrics:
+        result["average_fps"] = metrics.get("fps", result.get("average_fps"))
+        result["mean_ms"] = metrics.get(
+            "average_frame_time_ms", result["mean_ms"]
+        )
+        result["p95_ms"] = metrics.get("p95_frame_time_ms", result["p95_ms"])
+
     return result
 
 
