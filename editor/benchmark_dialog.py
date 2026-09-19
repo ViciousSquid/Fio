@@ -85,6 +85,18 @@ class BenchmarkDialog(QDialog):
             "Incrementally tests the live Fio engine and finds the highest monster count "
             "that completes without exceeding the benchmark responsiveness timeout."
         )
+        if getattr(self.main_window, "low_power_hardware", False):
+            reason = getattr(
+                self.main_window,
+                "low_power_hardware_reason",
+                "low-power hardware detected",
+            )
+            self.monster_capacity.setEnabled(False)
+            self.monster_capacity.setToolTip(
+                "Disabled: %s. Monster capacity testing is intended for "
+                "systems with enough headroom for an adaptive stress test."
+                % reason
+            )
         self.borderless_window = QCheckBox("Window mode: borderless maximized")
         self.fullscreen_window = QCheckBox("Window mode: true fullscreen")
         self.editor_windowed_1280 = QCheckBox("Editor mode: windowed 1280×720 (3D view pane)")
@@ -151,8 +163,20 @@ class BenchmarkDialog(QDialog):
 
 
     def _select_all_stress_tests(self):
-        for checkbox in (self.additional_tests, self.brush_1000, self.brush_10000, self.brush_100000, self.io_chain_1000, self.monster_capacity, self.borderless_window, self.fullscreen_window, self.editor_windowed_1280, self.editor_windowed_1920):
-            checkbox.setChecked(True)
+        for checkbox in (
+            self.additional_tests,
+            self.brush_1000,
+            self.brush_10000,
+            self.brush_100000,
+            self.io_chain_1000,
+            self.monster_capacity,
+            self.borderless_window,
+            self.fullscreen_window,
+            self.editor_windowed_1280,
+            self.editor_windowed_1920,
+        ):
+            if checkbox.isEnabled():
+                checkbox.setChecked(True)
     
 
     def _set_controls_enabled(self, enabled):
