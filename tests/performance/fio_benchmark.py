@@ -398,24 +398,45 @@ def _make_renderer_stress_scene():
 
 
 def _make_brush_stress_scene(brush_count):
-    """Create a large real-Fio brush scene starting from procedural geometry."""
+    """Create a large real-Fio brush scene for the existing EditorState.
+
+    NumPy plans source indices and placement offsets in one batch. The final
+    object materialisation is necessarily Python because EditorState stores
+    authored brushes as dictionaries with stable per-brush identity.
+    """
+    import copy
+    import numpy as np
+
     data = _generate_procedural_map(monsters=0, relay_count=32)
-    state = _materialize_generated_map(data)
-    source = state.brushes
+    source = list(data.get("brushes", []))
+    if not source:
+        raise RuntimeError("procedural benchmark map generated no brushes")
+
+    brush_count = int(brush_count)
     if len(source) >= brush_count:
-        return source[:brush_count], state.things
+        data["brushes"] = source[:brush_count]
+        return data
 
-    brushes = list(source)
-    index = 0
-    while len(brushes) < brush_count:
-        original = dict(source[index % len(source)])
-        original["pos"] = list(original.get("pos", [0, 0, 0]))
-        original["pos"][0] += (index // len(source) + 1) * 5000.0
-        original["id"] = "benchmark_generated_%d" % len(brushes)
-        brushes.append(original)
-        index += 1
-    return brushes, state.things
+    source_count = len(source)
+    indices = np.arange(brush_count, dtype=np.int64)
+    source_indices = indices % source_count
+    batch_indices = indices // source_count
+    x_offsets = (batch_indices + 1).astype(np.float64) * 5000.0
 
+    def clone_brush(source_brush, offset, output_index):
+        brush = copy.deepcopy(source_brush)
+        position = list(brush.get("pos", [0, 0, 0]))
+        position[0] = float(position[0]) + float(offset)
+        brush["pos"] = position
+        brush["id"] = "benchmark_generated_%d" % output_index
+        return brush
+
+    data["brushes"] = [
+        clone_brush(source[int(source_index)], float(offset), int(output_index))
+        for output_index, (source_index, offset)
+        in enumerate(zip(source_indices.tolist(), x_offsets.tolist()))
+    ]
+    return data
 
 def _run_monster_stress(count):
     """Generate a real procedural Fio room populated with N monsters."""
