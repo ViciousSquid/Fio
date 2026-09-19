@@ -426,8 +426,8 @@ class BenchmarkDialog(QDialog):
         """Put the real MainWindow into the requested presentation mode.
 
         Borderless uses a frameless maximized window; fullscreen uses Qt's
-        actual showFullScreen() state. The benchmark dialog is hidden so it
-        cannot affect the presentation being measured.
+        actual showFullScreen() state. The benchmark dialog remains visible
+        above the live MainWindow and does not change the measured 3D viewport.
         """
         if mode not in ("borderless", "fullscreen"):
             return
@@ -585,14 +585,21 @@ class BenchmarkDialog(QDialog):
                 data = self._bench._generate_procedural_map(
                     monsters=int(value), relay_count=32, seed=self._bench.BENCHMARK_MAP_SEED
                 )
+                self._check_preparation_budget(label)
+                self._append("Loading generated world into the live editor...")
                 self._bench.load_live_benchmark_world(self.main_window, data)
+                self._check_preparation_budget(label)
                 self._bench.prepare_live_monster_test(self.main_window)
+                self._check_preparation_budget(label)
                 self._start_measurement(label, duration=self._test_duration(label))
             elif label == "live_io_1000":
                 data = self._bench._generate_procedural_map(
                     monsters=0, relay_count=1000, seed=self._bench.BENCHMARK_MAP_SEED
                 )
+                self._check_preparation_budget(label)
+                self._append("Loading generated world into the live editor...")
                 self._bench.load_live_benchmark_world(self.main_window, data)
+                self._check_preparation_budget(label)
                 self._start_measurement(label, duration=self._test_duration(label))
             elif label == "monster_apocalypse":
                 data = self._bench._generate_monster_apocalypse()
@@ -614,7 +621,11 @@ class BenchmarkDialog(QDialog):
                     original["id"] = "live_benchmark_%d" % len(brushes)
                     brushes.append(original)
                     index += 1
+                    if index % 1000 == 0:
+                        self._check_preparation_budget(label)
                 data["brushes"] = brushes
+                self._check_preparation_budget(label)
+                self._append("Loading generated brush workload into the live editor...")
                 self._bench.load_live_benchmark_world(self.main_window, data)
                 self._start_measurement(label, duration=self._test_duration(label))
             else:
