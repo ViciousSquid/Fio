@@ -637,6 +637,18 @@ class BenchmarkDialog(QDialog):
                             result["camera_sweep_reachable_cells"]
                         )
                     )
+                if result.get("camera_sweep_safe_path_samples") is not None:
+                    extra.append(
+                        "Collision-safe path samples: %s" % self._html_escape(
+                            result["camera_sweep_safe_path_samples"]
+                        )
+                    )
+                if result.get("camera_sweep_collision_clamped_segments") is not None:
+                    extra.append(
+                        "Collision-clamped path segments: %s" % self._html_escape(
+                            result["camera_sweep_collision_clamped_segments"]
+                        )
+                    )
 
             details_html = ""
             if extra:
@@ -1904,6 +1916,8 @@ Git commit: %s
                     "camera_sweep_fallback_reason": sweep.get("fallback_reason"),
                     "camera_sweep_bounds": sweep.get("bounds"),
                     "camera_sweep_reachable_cells": sweep.get("reachable_cells"),
+                    "camera_sweep_safe_path_samples": sweep.get("safe_path_samples"),
+                    "camera_sweep_collision_clamped_segments": sweep.get("collision_clamped_segments"),
                 })
 
             if label == "live_io_1000":
