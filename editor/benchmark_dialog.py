@@ -252,7 +252,7 @@ class BenchmarkDialog(QDialog):
             self._queue = [item for item in self._queue if not (item[0] in seen or seen.add(item[0]))]
 
             self._append("LIVE BENCHMARK: using the existing Fio MainWindow, QtGameView and renderer.")
-            self._append("The editor/3D view remains running behind this dialog.")
+            self._append("NaN")
             self._timer.start()
             self._begin_next()
         except Exception:
@@ -311,7 +311,7 @@ class BenchmarkDialog(QDialog):
                 self._start_measurement(label, duration=self._test_duration(label))
             elif label == "live_io_1000":
                 data = self._bench._generate_procedural_map(
-                    monsters=0, relay_count=1000, seed=0x10
+                    monsters=0, relay_count=1000, seed=self._bench.BENCHMARK_MAP_SEED
                 )
                 self._bench.load_live_benchmark_world(self.main_window, data)
                 self._start_measurement(label, duration=self._test_duration(label))
