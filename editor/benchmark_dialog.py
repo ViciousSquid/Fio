@@ -87,6 +87,7 @@ class BenchmarkDialog(QDialog):
         self.monsters_100 = QCheckBox("Procedural room: 100 monsters")
         self.monsters_500 = QCheckBox("Procedural room: 500 monsters")
         self.monsters_1000 = QCheckBox("Procedural room: 1,000 monsters")
+        self.monster_apocalypse = QCheckBox("FINAL TEST: maximum procedural monster apocalypse (1000 monsters + 1000 relays)")
         for checkbox in (
             self.brush_1000,
             self.brush_10000,
@@ -95,6 +96,7 @@ class BenchmarkDialog(QDialog):
             self.monsters_100,
             self.monsters_500,
             self.monsters_1000,
+            self.monster_apocalypse,
         ):
             checkbox.setToolTip(
                 "Run this deliberately large workload in addition to the standard stress tests."
@@ -171,8 +173,12 @@ class BenchmarkDialog(QDialog):
                 "FIO_FULLSCREEN_BENCH_MONSTERS", ",".join(monster_counts)
             )
 
+        if self.monster_apocalypse.isChecked():
+            environment.insert("FIO_FULLSCREEN_BENCH_APOCALYPSE", "1")
+
         if (self.additional_tests.isChecked() or brush_counts
-                or self.io_chain_1000.isChecked() or monster_counts):
+                or self.io_chain_1000.isChecked() or monster_counts
+                or self.monster_apocalypse.isChecked()):
             environment.insert("FIO_FULLSCREEN_BENCH_ADDITIONAL", "1")
 
         self.process.setProcessEnvironment(environment)
