@@ -220,7 +220,7 @@ class GridMap:
 # ----------------------------------------------------------------------
 # Geometry generation with nodraw optimization
 # ----------------------------------------------------------------------
-def generate_brushes_from_grid(grid_map, wall_tex, floor_tex):
+def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None)
     brushes = []
     min_wx = 0
     max_wx = grid_map.w * CELL_SIZE
@@ -548,7 +548,7 @@ def random_point_in_room(room, min_dist_from_wall=0):
     z = random.uniform(min_z, max_z)
     return x, z
 
-def create_map_data(params):
+def create_map_data(params, yield_hook=None)
     world_width = params.get('world_width', 4096)
     world_height = params.get('world_height', 4096)
     grid_w = world_width // CELL_SIZE
@@ -596,7 +596,7 @@ def create_map_data(params):
                                       floor_height + UPPER_FLOOR_HEADROOM)
             mezzanine_rooms.append(idx)
 
-    brushes = generate_brushes_from_grid(grid, params['wall_tex'], params['floor_tex'])
+    brushes = generate_brushes_from_grid(grid, params['wall_tex'], params['floor_tex'], yield_hook=yield_hook)
 
     # Add the staircases and upper-floor platforms for the chosen rooms.
     upper_floor_infos = []
