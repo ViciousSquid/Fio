@@ -447,6 +447,9 @@ class IOManager:
         finally:
             self._dispatch_queue = None
             self._dispatch_events_since_yield = 0
+
+        return completed
+
     def _fire_output_one(self, source_entity, output_name: str, value: str = None, activator_id_override: str = None):
         """
         Fire an output from an entity (thing), triggering all connected inputs.
