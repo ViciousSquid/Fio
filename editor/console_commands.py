@@ -80,6 +80,7 @@ class ConsoleCommandHandler:
             'buddha': self.cmd_buddha,
             'clear': self.cmd_clear,
             'fps': self.cmd_fps,
+            'benchmark': self.cmd_benchmark,
             'map': self.cmd_map,
 
             # Save / load a play session
@@ -743,6 +744,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">clear</b> — Clear console<br>
 <b style="color:orange;">help</b> — Show this help<br>
 <b style="color:orange;">fps</b> — Toggle FPS display<br>
+<b style="color:orange;">benchmark</b> — Open Benchmark and test the current map<br>
 <b style="color:orange;">map</b> &lt;name&gt; — Load a different map<br>
 <b style="color:cyan;">=== Save / Load (Play Session) ===</b><br>
 <b style="color:orange;">save</b> [name] — Save the current play session (Play Mode only)<br>
@@ -1852,6 +1854,15 @@ entity to drive them from the I/O system.</i><br>
         self.main_window.save_config()
         self.main_window.view_3d.update()
         debug_log("Info", f"FPS display {'ON' if show else 'OFF'}")
+
+    def cmd_benchmark(self, args):
+        """benchmark — Open the Benchmark window and immediately test the current map."""
+        if args.strip():
+            debug_log("Warning", "benchmark: arguments are ignored")
+        try:
+            self.main_window.run_benchmark(auto_start=True)
+        except Exception as exc:
+            debug_log("Error", f"benchmark: could not open benchmark window: {exc}")
 
     def cmd_map(self, args):
         if not args:
