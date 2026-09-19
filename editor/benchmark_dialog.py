@@ -219,7 +219,7 @@ class BenchmarkDialog(QDialog):
         )
         layout.addWidget(self.output, 1)
 
-        self.export_button = QPushButton("Export Results…")
+        self.export_button = QPushButton("Export HTML Report…")
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self._export_results)
         layout.addWidget(self.export_button)
@@ -328,12 +328,17 @@ class BenchmarkDialog(QDialog):
             label = self._html_escape(result.get("test", "benchmark"))
             if result.get("aborted"):
                 reason = self._html_escape(result.get("abort_reason", "No reason supplied"))
+                status_text = (
+                    "ABORTED — timeout"
+                    if "timeout" in str(result.get("abort_reason", "")).lower()
+                    else "ABORTED — worker failure"
+                )
                 cards.append(
                     '<section class="result aborted">'
                     '<h2>%s</h2>'
-                    '<div class="abort">ABORTED — timeout</div>'
+                    '<div class="abort">%s</div>'
                     '<p>%s</p>'
-                    '</section>' % (label, reason)
+                    '</section>' % (label, self._html_escape(status_text), reason)
                 )
                 continue
 
@@ -1365,6 +1370,7 @@ Git commit: %s
         except Exception:
             self._timer.stop()
             self._running = False
+            self.throbber.setVisible(False)
             self._set_controls_enabled(True)
             self.status_label.setText("Live benchmark failed while restoring the original world.")
             self._append(traceback.format_exc())
