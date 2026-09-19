@@ -108,6 +108,10 @@ class BenchmarkDialog(QDialog):
         self._monitor_timeout_reason = ""
         self._worker_process = None
         self._worker_result_path = None
+        self._worker_stdout_path = None
+        self._worker_stderr_path = None
+        self._worker_stdout_handle = None
+        self._worker_stderr_handle = None
         self._worker_label = None
         self._worker_value = None
         self._worker_deadline = 0.0
@@ -720,6 +724,19 @@ Git commit: %s
             pass
         self._worker_result_path = result_path
 
+        stdout_fd, stdout_path = tempfile.mkstemp(
+            prefix="fio_benchmark_worker_",
+            suffix=".stdout.log",
+        )
+        stderr_fd, stderr_path = tempfile.mkstemp(
+            prefix="fio_benchmark_worker_",
+            suffix=".stderr.log",
+        )
+        os.close(stdout_fd)
+        os.close(stderr_fd)
+        self._worker_stdout_path = stdout_path
+        self._worker_stderr_path = stderr_path
+
         env = os.environ.copy()
         env["FIO_FULLSCREEN_BENCH_WORKER_TEST"] = str(label)
         env["FIO_FULLSCREEN_BENCH_WORKER_OUT"] = result_path
@@ -733,11 +750,28 @@ Git commit: %s
         script = os.path.join(
             self.root_dir, "tests", "performance", "fio_benchmark.py"
         )
+        try:
+            self._worker_stdout_handle = open(
+                self._worker_stdout_path, "w", encoding="utf-8", buffering=1
+            )
+            self._worker_stderr_handle = open(
+                self._worker_stderr_path, "w", encoding="utf-8", buffering=1
+            )
+        except Exception:
+            for path in (self._worker_stdout_path, self._worker_stderr_path):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            self._worker_stdout_path = None
+            self._worker_stderr_path = None
+            raise
+
         popen_kwargs = {
             "cwd": self.root_dir,
             "env": env,
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
+            "stdout": self._worker_stdout_handle,
+            "stderr": self._worker_stderr_handle,
         }
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         if creationflags:
@@ -769,6 +803,29 @@ Git commit: %s
         )
         self._timer.start()
 
+    def _read_worker_diagnostics(self):
+        """Return captured worker stdout/stderr without hiding native crashes."""
+        chunks = []
+        for label, path in (
+            ("stdout", self._worker_stdout_path),
+            ("stderr", self._worker_stderr_path),
+        ):
+            if not path:
+                continue
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                    data = handle.read().strip()
+            except OSError:
+                data = ""
+            if data:
+                # Keep the report bounded if a native component floods stderr.
+                if len(data) > 12000:
+                    data = data[-12000:]
+                    data = "[...truncated...]
+" + data
+                chunks.append("%s:\n%s" % (label, data))
+        return "\n\n".join(chunks)
+
     def _cleanup_worker_result_path(self):
         path = self._worker_result_path
         self._worker_result_path = None
@@ -777,6 +834,24 @@ Git commit: %s
                 os.unlink(path)
             except OSError:
                 pass
+
+        for attr in ("_worker_stdout_handle", "_worker_stderr_handle"):
+            handle = getattr(self, attr, None)
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
+        for attr in ("_worker_stdout_path", "_worker_stderr_path"):
+            log_path = getattr(self, attr, None)
+            setattr(self, attr, None)
+            if log_path:
+                try:
+                    os.unlink(log_path)
+                except OSError:
+                    pass
 
     def _report_worker_result(self, label, payload):
         """Append results returned by an isolated benchmark worker."""
@@ -929,8 +1004,11 @@ Git commit: %s
 
         if not payload or not payload.get("ok"):
             error = (payload or {}).get("error")
+            diagnostics = self._read_worker_diagnostics()
             if not error:
                 error = "worker exited with code %s without producing a valid result" % exit_code
+            if diagnostics:
+                error = "%s\n\nWorker diagnostics:\n%s" % (error, diagnostics)
             self._worker_label = label
             self._abort_worker_test(
                 "isolated worker failed: %s" % error
