@@ -206,6 +206,7 @@ class BenchmarkDialog(QDialog):
         stress_scroll.setMaximumHeight(220)
         stress_scroll.setWidget(self.stress_options)
         stress_toggle.toggled.connect(stress_scroll.setVisible)
+        stress_scroll.setVisible(False)
         self.select_all_button = QPushButton("Select all")
         self.select_all_button.clicked.connect(self._select_all_stress_tests)
         self.select_all_button.setVisible(False)
