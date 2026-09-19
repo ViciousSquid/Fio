@@ -351,11 +351,12 @@ class MainWindow(QMainWindow):
         self._current_overlay = overlay_widget
         self._overlay_close_callback = close_callback
 
-    def run_benchmark(self, auto_start=False):
+    def run_benchmark(self, auto_start=False, duration=None):
         """Open the renderer benchmark dialog, optionally starting it immediately."""
         from editor.benchmark_dialog import BenchmarkDialog
 
         dialog = BenchmarkDialog(self)
+        dialog._requested_duration = duration
         self._benchmark_dialog = dialog
         dialog.finished.connect(
             lambda _result: setattr(self, "_benchmark_dialog", None)
