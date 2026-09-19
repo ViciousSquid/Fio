@@ -271,10 +271,13 @@ class BenchmarkDialog(QDialog):
     def _start_measurement(self, label, duration=1.0):
         self._current = (label, duration)
         self._phase_started = time.perf_counter()
+        # Set the deadline before processing events. processEvents() can
+        # re-enter _tick immediately, so _measurement_deadline must already
+        # exist when the timer is active.
+        self._measurement_deadline = time.perf_counter() + float(duration)
         self.main_window.view_3d.sysmon.reset_metrics()
         self.main_window.view_3d.update()
         QApplication.processEvents()
-        self._measurement_deadline = time.perf_counter() + float(duration)
         self._timer.start()
 
     def _tick(self):
