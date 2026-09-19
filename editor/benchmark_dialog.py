@@ -1572,18 +1572,19 @@ Git commit: %s
         combined_fps = 1000.0 * total_frames / total_frame_time_ms
         total_seconds = total_frame_time_ms / 1000.0
         self._append(
-            '<div style="margin:14px 0 10px 0; padding:10px 0; border-top:2px solid #555; border-bottom:2px solid #555;">'
-            '<div style="display:flex; align-items:center; justify-content:flex-start; gap:10px; white-space:nowrap;">'
-            '<span style="display:inline-block; width:7px; height:42px; background:#ff9a32; flex:none;"></span>'
-            '<span style="font-size:25px; font-weight:bold; color:#63d471;">Combined Current World Average FPS:</span>'
-            '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32;">%.2f FPS</span>'
-            '</div>'
-            '<div style="color:#aaa; padding:4px 0 0 17px;">Phase 1 + Phase 2 across %d run%s • %.2f seconds • %d captured frames</div>'
-            '</div>' % (
-                combined_fps, int(self._requested_repetitions),
-                "" if int(self._requested_repetitions) == 1 else "s",
-                total_seconds, total_frames
-            )
+            '<table align="right" cellspacing="0" cellpadding="0" style="margin-top:14px; margin-bottom:10px;">'
+            '<tr>'
+            '<td height="2" bgcolor="#ff9a32" style="font-size:2px; line-height:2px;"></td>'
+            '<td width="24" rowspan="2" bgcolor="#ff9a32"></td>'
+            '</tr>'
+            '<tr>'
+            '<td style="padding:6px 12px 2px 16px; white-space:nowrap; text-align:right;">'
+            '<span style="font-size:25px; font-weight:bold; color:#63d471;">Combined Average FPS:</span>'
+            '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.2f FPS</span>'
+            '</td>'
+            '</tr>'
+            '</table>'
+            '<br style="clear:both;">' % (combined_fps,)
         )
         self._results.append({
             "test": "current_world_combined",
@@ -1644,11 +1645,18 @@ Git commit: %s
         if label in ("current_world_phase1", "current_world_phase2"):
             phase_label = "Phase 1:" if label.endswith("phase1") else "Phase 2:"
             self.output.append(
-                '<div style="margin-top:10px; padding:8px 0 2px 0; border-top:2px solid #555; text-align:right; white-space:nowrap;">'
+                '<table cellspacing="0" cellpadding="0" style="margin-top:10px; margin-bottom:2px;">'
+                '<tr>'
+                '<td width="24" rowspan="2" bgcolor="#63d471"></td>'
+                '<td height="2" bgcolor="#63d471" style="font-size:2px; line-height:2px;"></td>'
+                '</tr>'
+                '<tr>'
+                '<td style="padding:6px 16px 2px 12px; white-space:nowrap;">'
                 '<span style="font-size:25px; font-weight:bold; color:#63d471;">%s</span>'
                 '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.2f FPS</span>'
-                '<span style="display:inline-block; width:7px; height:42px; background:#63d471; vertical-align:middle; margin-left:12px;"></span>'
-                '</div>' % (phase_label, avg_fps)
+                '</td>'
+                '</tr>'
+                '</table>' % (phase_label, avg_fps)
             )
         else:
             self.output.append('<div style="margin-top:10px; padding:8px 0 2px 0; border-top:2px solid #555; white-space:nowrap;">'
@@ -1659,6 +1667,7 @@ Git commit: %s
         self.output.append('<div style="border-top:2px solid #63d471; margin:14px 0 8px 0;"></div>')
         self.output.ensureCursorVisible()
         QApplication.processEvents()
+        
     @staticmethod
     def _format_vram(metrics):
         used = metrics.get("vram_used_mb")
