@@ -1425,6 +1425,11 @@ Git commit: %s
                 "duration": duration,
             }
 
+        self._prepare_player_area_collision_context()
+        safe_sample_count, collision_clamped_segments = (
+            self._build_player_area_safe_path()
+        ) if not fallback else (0, 0)
+
         self._player_area_sweep_metadata = {
             "mode": "player-start spiral" if not fallback else "bounds fallback",
             "anchor_source": "bounds fallback" if fallback else "PlayerStart",
@@ -1434,6 +1439,8 @@ Git commit: %s
             "reachable_cells": int(cell_count),
             "duration_s": float(duration),
             "travel_distance": float(travel_distance),
+            "safe_path_samples": int(safe_sample_count),
+            "collision_clamped_segments": int(collision_clamped_segments),
         }
 
         if fallback:
@@ -1445,25 +1452,134 @@ Git commit: %s
         else:
             self._append(
                 "Camera sweep: PLAYERSTART SPIRAL for %.1f s — PlayerStart at "
-                "(%.1f, %.1f); flood reached %d cells; spiral is clamped to "
-                "reachable collision space with a %.0f-unit safety margin."
+                "(%.1f, %.1f); flood reached %d cells; %d safe path samples; "
+                "%d segments collision-clamped; %g-unit safety margin."
                 % (
                     duration,
                     anchor_x,
                     anchor_z,
                     int(cell_count),
+                    int(safe_sample_count),
+                    int(collision_clamped_segments),
                     float(self.PLAYER_AREA_CAMERA_MARGIN),
                 )
             )
 
-    def _clamp_player_area_camera(self, desired_x, desired_z):
-        """Clamp a spiral position to a reachable, collision-safe camera point.
+    def _prepare_player_area_collision_context(self):
+        """Build the static collision context used only during sweep preparation."""
+        from engine.physics import SpatialGrid
 
-        The playable flood was generated from the real Player collision system.
-        The flood point in each cell is therefore the safe anchor for that cell;
-        the camera is kept biased toward that safe point, especially at the
-        boundary of the reachable region.
-        """
+        view = self.main_window.view_3d
+        state = self.main_window.state
+        logic_thread = getattr(view, "logic_thread", None)
+
+        brushes = list(getattr(state, "brushes", []))
+        if logic_thread is not None:
+            brushes.extend(
+                getattr(logic_thread, "_model_collision_brushes", []) or []
+            )
+
+        grid = SpatialGrid(cell_size=512.0)
+        grid.populate(brushes)
+        self._player_area_collision_brushes = brushes
+        self._player_area_collision_grid = grid
+
+    def _player_area_probe(self, x, y, z):
+        """Create a small Player-sized collision probe for camera safety checks."""
+        from engine.player import Player
+        import glm
+
+        margin = float(self.PLAYER_AREA_CAMERA_MARGIN)
+        probe = Player(float(x), float(z), angle=0.0, physics_enabled=True)
+        probe.width = margin * 2.0
+        probe.depth = margin * 2.0
+        probe.height = margin * 2.0
+        probe._half = glm.vec3(margin, margin, margin)
+        probe.pos = glm.vec3(float(x), float(y), float(z))
+        probe.velocity = glm.vec3(0.0, 0.0, 0.0)
+        probe.on_ground = False
+        probe.ground_object = None
+        return probe
+
+    def _player_area_segment_clear(self, start_x, start_z, end_x, end_z, probe_y):
+        """Test whether the real Player collision model can traverse a segment."""
+        import glm
+
+        brushes = self._player_area_collision_brushes or []
+        grid = self._player_area_collision_grid
+        if grid is None:
+            return False
+
+        dx = float(end_x) - float(start_x)
+        dz = float(end_z) - float(start_z)
+        distance = math.hypot(dx, dz)
+        if distance < 0.001:
+            probe = self._player_area_probe(start_x, probe_y, start_z)
+            half = probe._half
+            pmin = probe.pos - half
+            pmax = probe.pos + half
+            colliders = grid.get_potential_colliders(pmin, pmax)
+            return not probe._check_overlap(colliders)
+
+        probe = self._player_area_probe(start_x, probe_y, start_z)
+        probe.velocity = glm.vec3(dx, 0.0, dz)
+
+        half = probe._half
+        min_x = min(start_x, end_x) - half.x - 1.0
+        max_x = max(start_x, end_x) + half.x + 1.0
+        min_z = min(start_z, end_z) - half.z - 1.0
+        max_z = max(start_z, end_z) + half.z + 1.0
+        colliders = grid.get_potential_colliders(
+            glm.vec3(min_x, probe_y - half.y, min_z),
+            glm.vec3(max_x, probe_y + half.y, max_z),
+        )
+
+        # Use the engine's actual axis collision movement.  on_ground=False
+        # deliberately prevents the camera probe from climbing "step" geometry.
+        probe._move_with_collision(1.0, colliders, axis="x")
+        probe._move_with_collision(1.0, colliders, axis="z")
+
+        remaining = math.hypot(
+            float(end_x) - float(probe.pos.x),
+            float(end_z) - float(probe.pos.z),
+        )
+        if remaining > 0.75:
+            return False
+
+        return not probe._check_overlap(colliders)
+
+    def _player_area_safe_segment(self, start_x, start_z, end_x, end_z, probe_y):
+        """Return the furthest collision-safe point along a desired segment."""
+        if self._player_area_segment_clear(
+            start_x, start_z, end_x, end_z, probe_y
+        ):
+            return float(end_x), float(end_z), False
+
+        dx = float(end_x) - float(start_x)
+        dz = float(end_z) - float(start_z)
+        distance = math.hypot(dx, dz)
+        if distance < 0.001:
+            return float(start_x), float(start_z), True
+
+        low = 0.0
+        high = 1.0
+        for _ in range(10):
+            mid = (low + high) * 0.5
+            mid_x = float(start_x) + dx * mid
+            mid_z = float(start_z) + dz * mid
+            if self._player_area_segment_clear(
+                start_x, start_z, mid_x, mid_z, probe_y
+            ):
+                low = mid
+            else:
+                high = mid
+
+        safe_x = float(start_x) + dx * low
+        safe_z = float(start_z) + dz * low
+        return safe_x, safe_z, True
+
+    def _clamp_player_area_camera(self, desired_x, desired_z):
+        """Clamp a spiral position to the coarse playable flood."""
         path = getattr(self, "_player_area_camera_path", None)
         if path is None:
             return float(desired_x), float(desired_z)
@@ -1495,8 +1611,6 @@ Git commit: %s
 
         selected_key = key
         if selected_key not in cells:
-            # Walk back toward PlayerStart along the requested spiral ray until
-            # it re-enters the reachable flood.
             steps = max(1, int(math.ceil(distance / cell_size)))
             selected_key = (0, 0)
             for step in range(1, steps + 1):
@@ -1518,12 +1632,9 @@ Git commit: %s
         safe_x = float(safe_point[0])
         safe_z = float(safe_point[2])
 
-        # Boundary cells are deliberately kept closer to their known-safe
-        # flood point. This preserves a small wall/void margin rather than
-        # running the camera all the way to the coarse cell edge.
         is_boundary = any(
-            (selected_key[0] + dx, selected_key[1] + dz) not in cells
-            for dx, dz in (
+            (selected_key[0] + ox, selected_key[1] + oz) not in cells
+            for ox, oz in (
                 (-1, -1), (0, -1), (1, -1),
                 (-1, 0),            (1, 0),
                 (-1, 1),  (0, 1),  (1, 1),
@@ -1534,16 +1645,80 @@ Git commit: %s
         candidate_x = safe_x + (float(desired_x) - safe_x) * blend
         candidate_z = safe_z + (float(desired_z) - safe_z) * blend
 
-        # A small explicit inward bias provides the requested safety margin
-        # when the spiral is being clamped to the playable boundary.
         if is_boundary and distance > 0.0:
             margin = min(float(self.PLAYER_AREA_CAMERA_MARGIN), distance * 0.25)
-            inward_x = -dx / distance
-            inward_z = -dz / distance
-            candidate_x += inward_x * margin
-            candidate_z += inward_z * margin
+            candidate_x -= (dx / distance) * margin
+            candidate_z -= (dz / distance) * margin
 
         return candidate_x, candidate_z
+
+    def _build_player_area_safe_path(self):
+        """Precompute a collision-safe version of the spiral before measurement."""
+        path = getattr(self, "_player_area_camera_path", None)
+        if not path or path.get("fallback"):
+            self._player_area_safe_path = None
+            return 0, 0
+
+        duration = float(path["duration"])
+        sample_count = max(300, min(600, int(math.ceil(duration * 50.0)) + 1))
+        points = []
+
+        anchor_x = float(path["center_x"])
+        anchor_z = float(path["center_z"])
+        radius_end = float(path["radius_end"])
+        turns = float(path["turns"])
+
+        start_point = self._player_area_reachable_points.get((0, 0))
+        if start_point is None:
+            self._player_area_safe_path = None
+            return 0, 0
+
+        previous_x = float(start_point[0])
+        previous_z = float(start_point[2])
+        previous_y = float(start_point[1])
+        points.append((previous_x, previous_z))
+
+        clamped_segments = 0
+
+        for index in range(1, sample_count):
+            progress = float(index) / float(sample_count - 1)
+            angle = progress * (2.0 * math.pi * turns)
+            radius = radius_end * progress
+            desired_x = anchor_x + radius * math.sin(angle)
+            desired_z = anchor_z + radius * math.cos(angle)
+            target_x, target_z = self._clamp_player_area_camera(
+                desired_x, desired_z
+            )
+
+            cell_size = float(self._player_area_cell_size)
+            target_key = (
+                int(round((target_x - anchor_x) / cell_size)),
+                int(round((target_z - anchor_z) / cell_size)),
+            )
+            target_point = self._player_area_reachable_points.get(target_key)
+            probe_y = (
+                float(target_point[1])
+                if target_point is not None
+                else previous_y
+            )
+
+            safe_x, safe_z, was_clamped = self._player_area_safe_segment(
+                previous_x,
+                previous_z,
+                target_x,
+                target_z,
+                probe_y,
+            )
+            if was_clamped:
+                clamped_segments += 1
+
+            points.append((safe_x, safe_z))
+            previous_x = safe_x
+            previous_z = safe_z
+            previous_y = probe_y
+
+        self._player_area_safe_path = points
+        return len(points), clamped_segments
 
     def _advance_player_area_sweep(self):
         path = getattr(self, "_player_area_camera_path", None)
@@ -1559,11 +1734,21 @@ Git commit: %s
             x = path["center_x"] + path["half_x"] * math.sin(angle)
             z = path["center_z"] + path["half_z"] * math.cos(angle)
         else:
-            angle = progress * (2.0 * math.pi * float(path["turns"]))
-            radius = float(path["radius_end"]) * progress
-            x = path["center_x"] + radius * math.sin(angle)
-            z = path["center_z"] + radius * math.cos(angle)
-            x, z = self._clamp_player_area_camera(x, z)
+            safe_path = self._player_area_safe_path
+            if not safe_path:
+                x = path["center_x"]
+                z = path["center_z"]
+            else:
+                scaled = progress * float(len(safe_path) - 1)
+                lower = int(math.floor(scaled))
+                upper = min(lower + 1, len(safe_path) - 1)
+                blend = scaled - float(lower)
+                x = safe_path[lower][0] + (
+                    safe_path[upper][0] - safe_path[lower][0]
+                ) * blend
+                z = safe_path[lower][1] + (
+                    safe_path[upper][1] - safe_path[lower][1]
+                ) * blend
 
         if path.get("fallback"):
             bounds = self._player_area_sweep_metadata.get("bounds")
@@ -1572,17 +1757,30 @@ Git commit: %s
                 x = min(max(x, min_x), max_x)
                 z = min(max(z, min_z), max_z)
 
-        next_progress = min(1.0, progress + 0.01 / max(duration, 0.001))
+        next_progress = min(
+            1.0,
+            progress + 0.01 / max(duration, 0.001),
+        )
         if path.get("fallback"):
             next_angle = next_progress * (2.0 * math.pi)
             next_x = path["center_x"] + path["half_x"] * math.sin(next_angle)
             next_z = path["center_z"] + path["half_z"] * math.cos(next_angle)
         else:
-            next_angle = next_progress * (2.0 * math.pi * float(path["turns"]))
-            next_radius = float(path["radius_end"]) * next_progress
-            next_x = path["center_x"] + next_radius * math.sin(next_angle)
-            next_z = path["center_z"] + next_radius * math.cos(next_angle)
-            next_x, next_z = self._clamp_player_area_camera(next_x, next_z)
+            safe_path = self._player_area_safe_path
+            if not safe_path:
+                next_x = x
+                next_z = z
+            else:
+                scaled = next_progress * float(len(safe_path) - 1)
+                lower = int(math.floor(scaled))
+                upper = min(lower + 1, len(safe_path) - 1)
+                blend = scaled - float(lower)
+                next_x = safe_path[lower][0] + (
+                    safe_path[upper][0] - safe_path[lower][0]
+                ) * blend
+                next_z = safe_path[lower][1] + (
+                    safe_path[upper][1] - safe_path[lower][1]
+                ) * blend
 
         yaw = math.degrees(math.atan2(next_z - z, next_x - x))
 
@@ -1597,6 +1795,7 @@ Git commit: %s
             camera.yaw = yaw
             camera.pitch = path["pitch"]
 
+    def _begin_next(self):
     def _begin_next(self):
         if not self._queue:
             self._restore_original()
