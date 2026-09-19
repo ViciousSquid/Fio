@@ -355,7 +355,7 @@ class MainWindow(QMainWindow):
         """Open the renderer benchmark dialog."""
         from editor.benchmark_dialog import BenchmarkDialog
 
-        dialog = BenchmarkDialog(self.root_dir, self)
+        dialog = BenchmarkDialog(self)
         self._benchmark_dialog = dialog
         dialog.finished.connect(
             lambda _result: setattr(self, "_benchmark_dialog", None)
