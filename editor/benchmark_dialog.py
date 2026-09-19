@@ -265,9 +265,9 @@ class BenchmarkDialog(QDialog):
         self.output.append('<div style="border-top:2px solid #ff8a00; margin:14px 0 8px 0; padding-top:8px;"><span style="color:#ffb15a; font-weight:bold;">TEST: %s</span></div>' % label)
 
     def _test_duration(self, label):
-        # The current-world test is map-scale dependent. A fixed 3-second
-        # window is too short to sample culling across a meaningful portion of
-        # a large map, while tiny maps do not need a long measurement.
+        # The current-world path is prepared before the duration is requested.
+        # Use the prepared local sweep duration so empty regions outside the
+        # actual play area cannot stretch the measurement.
         if label in ("current_world", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
             return self._current_world_sweep_duration()
         return {"procedural_100_monsters": 4.0, "procedural_500_monsters": 4.0, "procedural_1000_monsters": 5.0, "live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_apocalypse": 4.0}.get(label, 3.0)
