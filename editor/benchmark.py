@@ -1108,15 +1108,22 @@ class BenchmarkRunner:
                 '<span style="font-size:25px; font-weight:bold; color:#63d471;">Seconds:</span>'
                 '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.3f</span>'
                 '</td></tr></table>'
-                '<div style="color:#aaa; padding:4px 0;">%d hops &nbsp; • &nbsp; %.0f hops/second</div>'
+                '<table cellspacing="0" cellpadding="0" style="margin-top:4px; margin-bottom:2px;">'
+                '<tr><td width="24" rowspan="2" bgcolor="#63d471"></td>'
+                '<td height="2" bgcolor="#63d471" style="font-size:2px; line-height:2px;"></td></tr>'
+                '<tr><td style="padding:6px 16px 2px 12px; white-space:nowrap;">'
+                '<span style="font-size:25px; font-weight:bold; color:#63d471;">Hops per second:</span>'
+                '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.0f</span>'
+                '</td></tr></table>'
+                '<div style="color:#aaa; padding:4px 0;">%d hops</div>'
                 '</div>'
                 % (
                     self._html_escape(label),
                     self._html_escape(metrics.get("description", label)),
                     "live logic throughput",
                     elapsed_s,
-                    hops,
                     hops_per_second,
+                    hops,
                 )
             )
             self.output.ensureCursorVisible()
