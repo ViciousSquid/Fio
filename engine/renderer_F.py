@@ -558,6 +558,7 @@ class Renderer_F(BaseRenderer):
         self.render_stats.total_brushes = len(brushes)
         self._begin_geo_frame()
         self._frame_lights_uploaded.clear()
+        self._light_ubo_key = None
         self._current_shader = None
         if current_mode == RENDER_MODE_WIREFRAME:
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
