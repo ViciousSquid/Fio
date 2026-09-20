@@ -151,6 +151,9 @@ class BenchmarkManager(QDialog):
         actions.addWidget(self.run_button)
 
         self.close_button = QPushButton("Close")
+        self.close_button.setToolTip(
+            "Close the manager; a running benchmark is cancelled first."
+        )
         self.close_button.clicked.connect(self.close_manager)
         actions.addWidget(self.close_button)
 
@@ -503,8 +506,12 @@ class BenchmarkManager(QDialog):
             handle.write(report)
 
     def close_manager(self):
+        self.close()
+
+    def closeEvent(self, event):
         if self.running:
             self._send({"action": "cancel"})
+            self.running = False
 
         self.socket_timer.stop()
         self.watchdog_timer.stop()
@@ -514,7 +521,7 @@ class BenchmarkManager(QDialog):
         except OSError:
             pass
         self._sock = None
-        self.close()
+        event.accept()
 
 
 def main():
