@@ -1038,6 +1038,12 @@ class QtGameView(QOpenGLWidget):
             self._render_config["all_things"] = render_state.all_things
         else:
             self._render_config["all_things"] = self.editor.state.things
+        if render_state and hasattr(render_state, 'all_lights'):
+            self._render_config["all_lights"] = render_state.all_lights
+        else:
+            # Editor/non-threaded fallback: Renderer_F maintains a cached
+            # light collection keyed to the Thing-list identity/size.
+            self._render_config["all_lights"] = None
 
         # The render-state position buffer is a derived snapshot of
         # authoritative Thing.pos values. It is aligned with things_to_render
