@@ -149,6 +149,7 @@ class OBJLoader:
         
         if mtl_text is None:
             print(f"[OBJLoader] MTL not found: {mtl_path}")
+            self._discover_base_color_texture(obj_path)
             return
         
         current_mtl = None
@@ -191,6 +192,51 @@ class OBJLoader:
                         .replace('/', os.sep)
                     )
                     mtl['mtl_dir'] = mtl_dir  # Store MTL directory for texture path resolution
+
+    def _discover_base_color_texture(self, obj_path: str) -> None:
+        """Discover a conventional base-colour texture when an MTL is missing.
+
+        Some exported OBJ assets contain UVs and a texture set but omit the
+        companion MTL file. Fio only needs the base-colour map for its current
+        OBJ material path, so look for <model>_BaseColor.png in the model
+        directory and its immediate subdirectories.
+        """
+        obj_dir = os.path.dirname(obj_path) or '.'
+        stem = os.path.splitext(os.path.basename(obj_path))[0].lower()
+        expected = f"{stem}_basecolor.png"
+
+        candidates = []
+        try:
+            entries = os.listdir(obj_dir)
+        except OSError:
+            entries = []
+
+        for entry in entries:
+            entry_path = os.path.join(obj_dir, entry)
+            if os.path.isfile(entry_path) and entry.lower() == expected:
+                candidates.append(entry_path)
+            elif os.path.isdir(entry_path):
+                try:
+                    for child in os.listdir(entry_path):
+                        child_path = os.path.join(entry_path, child)
+                        if os.path.isfile(child_path) and child.lower() == expected:
+                            candidates.append(child_path)
+                except OSError:
+                    continue
+
+        if not candidates:
+            return
+
+        texture_path = os.path.normpath(candidates[0])
+        self.materials['default'] = {
+            'diffuse': (1.0, 1.0, 1.0),
+            'color': (1.0, 1.0, 1.0),
+            'ambient': (0.2, 0.2, 0.2),
+            'specular': (0.0, 0.0, 0.0),
+            'texture': os.path.basename(texture_path),
+            'mtl_dir': os.path.dirname(texture_path),
+        }
+        print(f"[OBJLoader] Using discovered base-color texture: {texture_path}")
 
 
 class OBJ:
