@@ -86,6 +86,9 @@ class BenchmarkRunner:
         self._requested_duration = None
         self._requested_repetitions = 1
         self._current_phase_results = []
+        self._monster_chaos_overlay = None
+        self._monster_chaos_aggro_injected = False
+        self._monster_chaos_fighters = []
         self.tests = BenchmarkTests(self)
         self.results = BenchmarkResults(self)
 
@@ -470,6 +473,7 @@ class BenchmarkRunner:
             self.brush_100000,
             self.io_chain_1000,
             self.monster_capacity,
+            self.monster_chaos_witness,
             self.borderless_window,
             self.fullscreen_window,
             self.editor_windowed_1280,
@@ -479,6 +483,9 @@ class BenchmarkRunner:
 
     def _reset_between_tests(self):
         """Restore the real Fio instance between tests."""
+        self._remove_monster_chaos_overlay()
+        self._monster_chaos_aggro_injected = False
+        self._monster_chaos_fighters = []
         self._timer.stop()
         self._measurement_active = False
         self._restore_benchmark_window_mode()
@@ -753,6 +760,9 @@ class BenchmarkRunner:
 
     def _restore_original(self):
         """Restore the real MainWindow to the state captured before benchmarking."""
+        self._remove_monster_chaos_overlay()
+        self._monster_chaos_aggro_injected = False
+        self._monster_chaos_fighters = []
         self._timer.stop()
         self._measurement_active = False
         self._live_stress_active = False
@@ -801,6 +811,9 @@ class BenchmarkRunner:
 
     def _finish_with_error(self, error_text):
         """Fail the live benchmark and restore the original Fio world."""
+        self._remove_monster_chaos_overlay()
+        self._monster_chaos_aggro_injected = False
+        self._monster_chaos_fighters = []
         self._timer.stop()
         self._measurement_active = False
         self._worker_active = False
@@ -869,6 +882,9 @@ class BenchmarkRunner:
 
     def _abort_live_stress(self, reason):
         """Abort a live test without terminating the Fio process."""
+        self._remove_monster_chaos_overlay()
+        self._monster_chaos_aggro_injected = False
+        self._monster_chaos_fighters = []
         label = self._live_stress_label or (
             self._current[0] if self._current else "unknown"
         )
@@ -921,7 +937,81 @@ class BenchmarkRunner:
         self._stop_live_stress_monitor()
         metrics = dict(metrics)
         metrics["benchmark_live"] = True
-    
+
+        if label == "monster_chaos_witness":
+            self._remove_monster_chaos_overlay()
+            chaos_info = dict(getattr(self, "_monster_chaos_info", {}) or {})
+            monsters = [
+                thing for thing in self.main_window.state.things
+                if str(thing.properties.get("type", "")).lower() == "monster"
+            ]
+            alive = sum(
+                1 for monster in monsters
+                if not monster.properties.get("dead", False)
+            )
+            aggro_count = len(self._monster_chaos_fighters)
+            metrics.update({
+                "test": label,
+                "status": "passed",
+                "description": (
+                    "10-second live monster chaos witness: seed 43, "
+                    "25 procedural human monsters converging on a PathNode, "
+                    "followed by seeded random infighting."
+                ),
+                "seed": "43",
+                "monster_count": len(monsters),
+                "pathnode_name": chaos_info.get(
+                    "pathnode_name", "ChaosPathNode"
+                ),
+                "aggro_count": aggro_count,
+                "aggro_delay_s": float(
+                    getattr(self, "_monster_chaos_aggro_delay", 2.0)
+                ),
+                "witness_duration_s": 10.0,
+                "alive_monsters": alive,
+                "dead_monsters": max(0, len(monsters) - alive),
+            })
+            if view.play_mode:
+                self._bench.finish_live_monster_test(self.main_window)
+            self._results.append(metrics)
+            self.export_button.setEnabled(True)
+            self.export_button.setVisible(True)
+            self._append(
+                '<div style="background:#222; border:1px solid #555; padding:12px; '
+                'margin:4px 0 10px 0;">'
+                '<div style="font-size:15px; font-weight:bold; color:#eeeeee;">'
+                'Monster chaos witness</div>'
+                '<div style="color:#aaa; margin-top:4px;">'
+                'Seed 43 &nbsp; • &nbsp; 25 monsters &nbsp; • &nbsp; PathNode %s'
+                '</div>'
+                '<table cellspacing="0" cellpadding="0" style="margin-top:10px;">'
+                '<tr><td width="24" rowspan="2" bgcolor="#63d471"></td>'
+                '<td height="2" bgcolor="#63d471" style="font-size:2px;"></td></tr>'
+                '<tr><td style="padding:6px 16px 2px 12px;">'
+                '<span style="font-size:25px; font-weight:bold; color:#63d471;">'
+                'Infighting:</span>'
+                '<span style="font-size:36px; font-weight:bold; color:#ff9a32; '
+                'margin-left:10px;">%d fighters</span>'
+                '</td></tr></table>'
+                '<div style="color:#aaa; padding:4px 0;">'
+                '%d alive &nbsp; • &nbsp; %d dead &nbsp; • &nbsp; '
+                '10.0 second witness'
+                '</div></div>'
+                % (
+                    self._html_escape(
+                        chaos_info.get("pathnode_name", "ChaosPathNode")
+                    ),
+                    aggro_count,
+                    alive,
+                    max(0, len(monsters) - alive),
+                )
+            )
+            QApplication.processEvents()
+            self._monster_chaos_aggro_injected = False
+            self._monster_chaos_fighters = []
+            self._begin_next()
+            return
+
         if label == "live_io_1000":
             hops = len([
                 thing for thing in self.main_window.state.things
@@ -1157,6 +1247,169 @@ class BenchmarkRunner:
             self._finish_with_error(traceback.format_exc())
     
 
+    def _show_monster_chaos_overlay(self, seconds):
+        """Display the temporary bottom-right witness countdown."""
+        from PyQt5.QtWidgets import QLabel
+
+        view = self.main_window.view_3d
+        self._remove_monster_chaos_overlay()
+
+        overlay = QLabel(view)
+        overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        overlay.setAlignment(Qt.AlignCenter)
+        overlay.setStyleSheet(
+            "QLabel {"
+            "background: rgba(23,23,23,225);"
+            "border: 2px solid #63d471;"
+            "border-radius: 4px;"
+            "color: #ff9a32;"
+            "padding: 5px 10px;"
+            "}"
+        )
+        overlay.setFixedSize(154, 92)
+        overlay.show()
+        overlay.raise_()
+        self._monster_chaos_overlay = overlay
+        self._update_monster_chaos_overlay(seconds)
+
+    def _update_monster_chaos_overlay(self, seconds):
+        overlay = self._monster_chaos_overlay
+        view = self.main_window.view_3d
+        if overlay is None:
+            return
+
+        remaining = max(0.0, float(seconds))
+        title = (
+            "INFIGHTING"
+            if self._monster_chaos_aggro_injected
+            else "MONSTER CHAOS"
+        )
+        overlay.setText(
+            "<div style='font-size:12px; font-weight:bold; color:#63d471;'>%s</div>"
+            "<div style='font-size:40px; line-height:42px; font-weight:bold; color:#ff9a32;'>%.1f</div>"
+            "<div style='font-size:11px; color:#aaaaaa;'>seconds</div>"
+            % (title, remaining)
+        )
+        overlay.move(
+            max(0, view.width() - overlay.width() - 16),
+            max(0, view.height() - overlay.height() - 16),
+        )
+        overlay.raise_()
+
+    def _remove_monster_chaos_overlay(self):
+        overlay = self._monster_chaos_overlay
+        self._monster_chaos_overlay = None
+        if overlay is None:
+            return
+        try:
+            overlay.hide()
+            overlay.deleteLater()
+        except Exception:
+            pass
+
+    def _inject_monster_chaos_aggro(self):
+        """Give a random subset direct monster targets once the mob has converged."""
+        import random
+
+        monsters = [
+            thing for thing in self.main_window.state.things
+            if str(thing.properties.get("type", "")).lower() == "monster"
+            and not thing.properties.get("dead", False)
+        ]
+        if len(monsters) < 4:
+            return 0
+
+        rng = random.Random("43")
+        fighter_count = min(8, max(4, len(monsters) // 3))
+        fighters = rng.sample(monsters, fighter_count)
+        rng.shuffle(fighters)
+
+        for source in fighters:
+            source.properties.pop("target_name", None)
+            source.properties["awake"] = True
+            source.properties["_aggro_target"] = None
+
+        for index, source in enumerate(fighters):
+            target = fighters[(index + 1) % len(fighters)]
+            source.properties["_aggro_target"] = id(target)
+
+        self._monster_chaos_fighters = fighters
+        self._monster_chaos_aggro_injected = True
+        self._append(
+            "  INFIGHTING! Injected %d seeded random monster-vs-monster "
+            "aggro targets."
+            % len(fighters)
+        )
+        return len(fighters)
+
+    def _maintain_monster_chaos_aggro(self):
+        """Retarget a surviving chaos fighter when its previous opponent dies."""
+        import random
+
+        fighters = [
+            thing for thing in self._monster_chaos_fighters
+            if thing in self.main_window.state.things
+            and not thing.properties.get("dead", False)
+        ]
+        self._monster_chaos_fighters = fighters
+        if len(fighters) < 2:
+            return
+
+        rng = random.Random("43-retarget")
+        for source in fighters:
+            target = None
+            aggro_id = source.properties.get("_aggro_target")
+            if aggro_id is not None:
+                for candidate in fighters:
+                    if id(candidate) == aggro_id:
+                        target = candidate
+                        break
+            if target is None or target is source:
+                candidates = [
+                    candidate for candidate in fighters if candidate is not source
+                ]
+                if candidates:
+                    target = rng.choice(candidates)
+                    source.properties["_aggro_target"] = id(target)
+
+    def _tick_monster_chaos_witness(self, now, app, view):
+        elapsed = max(0.0, now - self._phase_started)
+
+        if (
+            not self._monster_chaos_aggro_injected
+            and elapsed >= getattr(self, "_monster_chaos_aggro_delay", 2.0)
+        ):
+            self._inject_monster_chaos_aggro()
+
+        if self._monster_chaos_aggro_injected:
+            self._maintain_monster_chaos_aggro()
+
+        remaining = max(0.0, self._measurement_deadline - now)
+        self._update_monster_chaos_overlay(remaining)
+
+        if now - self._last_sysmon_sample >= 1.0:
+            self._last_sysmon_sample = now
+            self._sysmon_samples.append(self._read_sysmon_metrics(view))
+
+        view.update()
+        app.processEvents()
+
+        if now < self._measurement_deadline:
+            return
+
+        self._measurement_active = False
+        self._timer.stop()
+        elapsed = max(0.0, now - self._phase_started)
+        live_metrics = self._read_sysmon_metrics(view)
+        metrics = self._benchmark_metrics(
+            live_metrics, elapsed, self._sysmon_samples
+        )
+        metrics.update({
+            "viewport_width": int(view.width()),
+            "viewport_height": int(view.height()),
+        })
+        self._finish_live_stress_result("monster_chaos_witness", metrics)
+
     def _tick(self):
         if not self._running or self._worker_active or not self._measurement_active:
             return
@@ -1175,6 +1428,10 @@ class BenchmarkRunner:
                     self._live_stress_timeout_reason or
                     "live benchmark exceeded its cooperative time budget"
                 )
+                return
+
+            if self._current and self._current[0] == "monster_chaos_witness":
+                self._tick_monster_chaos_witness(now, app, view)
                 return
 
             if self._current and self._current[0] in (
@@ -1917,6 +2174,71 @@ class BenchmarkTests:
             elif label == "monster_capacity":
                 self._run_monster_capacity_probe(bench, window, view)
                 return
+
+            elif label == "monster_chaos_witness":
+                cooperative_yield = lambda: self._live_cooperative_yield(label)
+                data, chaos_info = bench.make_monster_chaos_witness_world(
+                    seed="43",
+                    monster_count=25,
+                    yield_hook=cooperative_yield,
+                )
+                bench.load_live_benchmark_world(
+                    window,
+                    data,
+                    yield_hook=cooperative_yield,
+                )
+                QApplication.processEvents()
+
+                window.raise_()
+                window.activateWindow()
+                QApplication.processEvents()
+
+                if not view.play_mode:
+                    window.enter_play_mode()
+                    QApplication.processEvents()
+                if not view.play_mode:
+                    raise RuntimeError(
+                        "Fio failed to enter Play Mode for monster chaos witness"
+                    )
+
+                logic = getattr(view, "logic_thread", None)
+                if logic is None:
+                    raise RuntimeError(
+                        "Monster chaos witness has no live LogicThread"
+                    )
+                logic.god_mode = True
+
+                self._monster_chaos_aggro_injected = False
+                self._monster_chaos_fighters = []
+                self._monster_chaos_aggro_delay = 2.0
+                self._monster_chaos_info = dict(chaos_info)
+                self._show_monster_chaos_overlay(10.0)
+                self._append(
+                    "  Monster chaos witness: seed 43, 25 procedural monsters, "
+                    "PathNode '%s'. All monsters are converging; infighting "
+                    "will be injected after %.1f seconds."
+                    % (
+                        self._html_escape(
+                            self._monster_chaos_info.get(
+                                "pathnode_name", "ChaosPathNode"
+                            )
+                        ),
+                        self._monster_chaos_aggro_delay,
+                    )
+                )
+
+                self._current = ("monster_chaos_witness", 10.0, None)
+                self._phase_started = time.perf_counter()
+                self._measurement_deadline = self._phase_started + 10.0
+                self._measurement_watchdog_deadline = (
+                    self._phase_started + self._live_stress_timeout_for(label)
+                )
+                self._measurement_active = True
+                self._sysmon_samples = []
+                self._last_sysmon_sample = 0.0
+                view.update()
+                QApplication.processEvents()
+                self._timer.start()
 
             elif label == "live_io_1000":
                 cooperative_yield = lambda: self._live_cooperative_yield(label)
@@ -2966,6 +3288,7 @@ class _BenchmarkDialogProxy:
         self.brush_100000 = _HeadlessCheckBox()
         self.io_chain_1000 = _HeadlessCheckBox()
         self.monster_capacity = _HeadlessCheckBox()
+        self.monster_chaos_witness = _HeadlessCheckBox()
         self.borderless_window = _HeadlessCheckBox()
         self.fullscreen_window = _HeadlessCheckBox()
         self.editor_windowed_1280 = _HeadlessCheckBox()
@@ -2990,6 +3313,7 @@ class _BenchmarkDialogProxy:
             "brush_100000",
             "io_chain_1000",
             "monster_capacity",
+            "monster_chaos_witness",
             "borderless_window",
             "fullscreen_window",
             "editor_windowed_1280",
@@ -3005,6 +3329,7 @@ class _BenchmarkDialogProxy:
         self.brush_100000.setChecked("live_100000_brushes" in selected)
         self.io_chain_1000.setChecked("live_io_1000" in selected)
         self.monster_capacity.setChecked("monster_capacity" in selected)
+        self.monster_chaos_witness.setChecked("monster_chaos_witness" in selected)
         self.borderless_window.setChecked("borderless_window" in selected)
         self.fullscreen_window.setChecked("fullscreen_window" in selected)
         self.editor_windowed_1280.setChecked("editor_windowed_1280" in selected)
