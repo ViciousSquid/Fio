@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from engine.render_cull import (  # noqa: E402
     CAMERA_RENDER_CULL_DISTANCE, CAMERA_RENDER_CULL_DISTANCE_SQ,
-    camera_xz, cull_by_distance, pos_of, within_xz_sq,
+    camera_xz, cull_by_distance, pos_of, sort_by_distance, within_xz_sq,
 )
 
 
@@ -174,6 +174,43 @@ def test_batched_distance_preserves_inclusive_boundary_and_order():
     kept = cull_by_distance(
         objects, 0.0, 0.0, radius * radius, positions=positions)
     assert kept == objects[1:]
+
+
+def test_batched_positions_out_tracks_selected_rows():
+    objects = [
+        {"name": "far", "pos": [500.0, 0.0, 0.0]},
+        {"name": "near-a", "pos": [10.0, 0.0, 20.0]},
+        {"name": "near-b", "pos": [-20.0, 0.0, 5.0]},
+    ]
+    positions = np.asarray(
+        [[o["pos"][0], o["pos"][2]] for o in objects], dtype=np.float64)
+    out_positions = np.empty((3, 2), dtype=np.float64)
+    kept = cull_by_distance(
+        objects, 0.0, 0.0, 1000.0,
+        positions=positions, positions_out=out_positions)
+    assert kept == objects
+    np.testing.assert_array_equal(
+        out_positions[:2],
+        positions[:2],
+    )
+
+
+def test_vectorized_depth_sort_matches_python_order():
+    objects = [
+        {"pos": [float(i), 0.0, float((i * 7) % 23)]}
+        for i in range(25)
+    ]
+    positions = np.asarray(
+        [[o["pos"][0], o["pos"][2]] for o in objects], dtype=np.float64)
+    expected = list(objects)
+    expected.sort(
+        key=lambda o: -(
+            (o["pos"][0] - 3.0) ** 2 +
+            (o["pos"][2] + 2.0) ** 2
+        )
+    )
+    actual = sort_by_distance(objects, positions, 3.0, -2.0)
+    assert actual == expected
 
 
 def test_batched_positions_require_one_xz_row_per_object():
