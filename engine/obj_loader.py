@@ -16,7 +16,7 @@ class OBJLoader:
         self.texcoords: List[Tuple[float, float]] = []
         self.normals: List[Tuple[float, float, float]] = []
         self.faces: List[dict] = []
-        self.materials: dict = []
+        self.materials: dict = {}
     
     @staticmethod
     def _resolve_index(value: str, length: int) -> int:
@@ -140,6 +140,7 @@ class OBJLoader:
             return
         
         current_mtl = None
+        loaded_materials = 0
         for line in mtl_text.splitlines():
             line = line.strip()
             if not line or line.startswith('#'):
@@ -160,6 +161,7 @@ class OBJLoader:
                     'specular': (0.0, 0.0, 0.0),
                     'texture': None
                 }
+                loaded_materials += 1
             elif current_mtl:
                 mtl = self.materials[current_mtl]
                 if keyword == 'Kd' and len(parts) >= 4:
@@ -174,6 +176,11 @@ class OBJLoader:
                     if texture:
                         mtl['texture'] = texture
                         mtl['mtl_dir'] = mtl_dir
+
+        print(
+            f"[OBJLoader] Loaded MTL: {mtl_path} "
+            f"({loaded_materials} material{'s' if loaded_materials != 1 else ''})"
+        )
 
     @staticmethod
     def _parse_texture_map(parts: List[str]) -> Optional[str]:
