@@ -21,7 +21,9 @@ from editor.things import Thing, Light, PathNode, Portal, Pickup, Monster, Logic
 # applies the pair to the MAIN camera pass only -- never to the shadow or portal
 # passes, which keep using the full scene. See _camera_distance_cull below.
 from engine.render_cull import (
-    camera_xz as _cull_camera_xz, cull_by_distance as _cull_by_distance)
+    camera_xz as _cull_camera_xz,
+    cull_by_distance as _cull_by_distance,
+    sort_by_distance as _sort_by_distance)
 
 # Beyond this distance from the camera a portal's virtual view is not rendered
 # (the aperture just shows its fade/rim). Portals are still discovered for I/O
@@ -60,6 +62,15 @@ class Renderer_F(BaseRenderer):
         # Reused by render_scene so model discovery does not allocate a new
         # list or perform a second Python walk over the visible Thing set.
         self._model_render_buf = []
+
+        # Persistent numeric buffers for the camera distance-cull output.
+        # They stay aligned with the returned brush/Thing lists, so later
+        # classification and depth sorting never have to recover positions from
+        # Python objects.
+        self._cull_brush_pos_buf = np.empty((0, 2), dtype=np.float64)
+        self._cull_thing_pos_buf = np.empty((0, 2), dtype=np.float64)
+        self._last_cull_brush_positions = None
+        self._last_cull_thing_positions = None
 
     # ------------------------------------------------------------------
     # Matrix helpers – cached on the brush dict itself
@@ -461,44 +472,62 @@ class Renderer_F(BaseRenderer):
         kept so lighting, shadow and portal rendering are wholly unaffected."""
         return isinstance(t, Light) or (Portal is not None and isinstance(t, Portal))
 
-    def _camera_distance_cull(self, brushes, things, camera_pos, thing_positions=None):
+    def _camera_distance_cull(self, brushes, things, camera_pos,
+                              brush_positions=None, thing_positions=None):
         """Broad-phase distance cull for the MAIN camera pass.
 
-        The radius is :attr:`view_distance` — the live camera setting the editor
-        spinbox and ``r_viewdistance`` write, not a fixed constant, so pulling
-        the far plane in narrows this pass on the very next frame.
-        :data:`engine.render_cull.CAMERA_RENDER_CULL_DISTANCE` remains that
-        setting's default value.
-
-        Returns ``(brushes, things)`` filtered to those within the cull radius on
-        the XZ plane, reusing two persistent scratch buffers so nothing new is
-        allocated per frame. Lights and portals are always retained, and anything
-        without a readable position is kept (fail-open). The caller passes the
-        results to ``_sort_objects`` only, leaving the original ``brushes`` /
-        ``things`` lists (used by the shadow and portal passes) untouched.
-
-        This is a *visibility* decision and only that: an object dropped here is
-        still loaded, still simulated and still lighting and shadowing the rest
-        of the scene. Nothing about the world's resident set is this pass's to
-        change.
+        Numeric [x, z] snapshots are propagated alongside the object lists. The
+        distance arithmetic therefore runs in NumPy for both brushes and Things,
+        while the Python list remains only the reference container.
         """
+        self._last_cull_brush_positions = brush_positions
+        self._last_cull_thing_positions = thing_positions
         if camera_pos is None:
             return brushes, things
+
         cx, cz = _cull_camera_xz(camera_pos)
         limit_sq = self.view_distance.distance_sq
-        bbuf = getattr(self, "_cull_brush_buf", None)
-        if bbuf is None:
-            bbuf = self._cull_brush_buf = []
-        tbuf = getattr(self, "_cull_thing_buf", None)
-        if tbuf is None:
-            tbuf = self._cull_thing_buf = []
-        brushes = _cull_by_distance(brushes, cx, cz, limit_sq, out=bbuf)
+
+        brush_out_pos = None
+        if brush_positions is not None:
+            count = len(brushes)
+            capacity = int(self._cull_brush_pos_buf.shape[0])
+            if count > capacity:
+                new_capacity = max(count, 16 if capacity == 0 else capacity * 2)
+                self._cull_brush_pos_buf = np.empty(
+                    (new_capacity, 2), dtype=np.float64)
+            brush_out_pos = self._cull_brush_pos_buf[:count]
+
+        thing_out_pos = None
+        if thing_positions is not None:
+            count = len(things)
+            capacity = int(self._cull_thing_pos_buf.shape[0])
+            if count > capacity:
+                new_capacity = max(count, 16 if capacity == 0 else capacity * 2)
+                self._cull_thing_pos_buf = np.empty(
+                    (new_capacity, 2), dtype=np.float64)
+            thing_out_pos = self._cull_thing_pos_buf[:count]
+
+        brushes = _cull_by_distance(
+            brushes, cx, cz, limit_sq,
+            out=self._cull_brush_buf,
+            positions=brush_positions,
+            positions_out=brush_out_pos,
+        )
         things = _cull_by_distance(
             things, cx, cz, limit_sq,
-            out=tbuf, keep=self._cull_keep_thing,
-            positions=thing_positions[:len(things)] if thing_positions is not None else None,
+            out=self._cull_thing_buf,
+            keep=self._cull_keep_thing,
+            positions=thing_positions,
+            positions_out=thing_out_pos,
         )
+
+        self._last_cull_brush_positions = (
+            brush_out_pos[:len(brushes)] if brush_out_pos is not None else None)
+        self._last_cull_thing_positions = (
+            thing_out_pos[:len(things)] if thing_out_pos is not None else None)
         return brushes, things
+
 
     def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config, clear=True):
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
@@ -546,20 +575,31 @@ class Renderer_F(BaseRenderer):
         # brush whose centre is out of range but whose near end is in shot from
         # blinking out while it is being built.
         cull_brushes, cull_things = brushes, things
+        cull_brush_positions = config.get('brush_positions')
+        cull_thing_positions = config.get('thing_positions')
         if config.get('camera_distance_cull', config.get('play_mode', False)):
             cull_brushes, cull_things = self._camera_distance_cull(
                 brushes, things, camera_pos,
-                thing_positions=config.get('thing_positions'),
+                brush_positions=cull_brush_positions,
+                thing_positions=cull_thing_positions,
             )
+            cull_brush_positions = self._last_cull_brush_positions
+            cull_thing_positions = self._last_cull_thing_positions
+
         models_to_render = self._model_render_buf
         models_to_render.clear()
-        opaque_brushes, transparent_brushes, sprite_things, fog_volumes, water_brushes, glass_brushes, glow_brushes = \
-            self._sort_objects(
-                cull_brushes,
-                cull_things,
-                config,
-                model_out=models_to_render,
-            )
+        sort_result = self._sort_objects(
+            cull_brushes,
+            cull_things,
+            config,
+            model_out=models_to_render,
+            brush_positions=cull_brush_positions,
+            thing_positions=cull_thing_positions,
+            collect_sort_positions=True,
+        )
+        (opaque_brushes, transparent_brushes, sprite_things,
+         fog_volumes, water_brushes, glass_brushes, glow_brushes,
+         sort_positions) = sort_result
         textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
 
         # _sort_objects classified the same visible Thing set and kept model
@@ -668,14 +708,20 @@ class Renderer_F(BaseRenderer):
             self.draw_glow_brushes(projection, view, camera_pos, glow_brushes, lights, config)
         if models_to_render:
             self.draw_models(projection, view, camera_pos, models_to_render, lights, config)
-        if transparent_brushes:
-            transparent_brushes.sort(key=lambda b: -self._distance_sq(b.get('pos', [0,0,0]), camera_pos))
-        if water_brushes:
-            water_brushes.sort(key=lambda b: -self._distance_sq(b.get('pos', [0,0,0]), camera_pos))
-        if glass_brushes:
-            glass_brushes.sort(key=lambda b: -self._distance_sq(b.get('pos', [0,0,0]), camera_pos))
-        if final_sprites:
-            final_sprites.sort(key=lambda s: -self._distance_sq(s['pos'] if isinstance(s, dict) else s.pos, camera_pos))
+        if camera_pos is not None:
+            cx, cz = _cull_camera_xz(camera_pos)
+            if transparent_brushes:
+                transparent_brushes = _sort_by_distance(
+                    transparent_brushes, sort_positions['transparent'], cx, cz)
+            if water_brushes:
+                water_brushes = _sort_by_distance(
+                    water_brushes, sort_positions['water'], cx, cz)
+            if glass_brushes:
+                glass_brushes = _sort_by_distance(
+                    glass_brushes, sort_positions['glass'], cx, cz)
+            if final_sprites:
+                final_sprites = _sort_by_distance(
+                    final_sprites, sort_positions['sprites'], cx, cz)
         if not config.get('play_mode', False):
             self.draw_path_node_cubes(projection, view, things)
         self.draw_portal_wireframes(projection, view, things, config.get('play_mode', False))
