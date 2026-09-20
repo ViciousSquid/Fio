@@ -164,7 +164,7 @@ MAX_LIGHTS_TERRAIN = 8
 LIGHT_UBO_BINDING = 2
 
 _LIGHT_DECL_RE = re.compile(
-    r"struct\\s+Light\\s*\\{.*?\\};\\s*uniform\\s+Light\\s+lights\\s*\\[\\s*(\\d+)\\s*\\]\\s*;",
+    r"struct\s+Light\s*\{.*?\};\s*uniform\s+Light\s+lights\s*\[\s*(\d+)\s*\]\s*;",
     re.DOTALL,
 )
 
@@ -199,12 +199,12 @@ def light_ubo_source(source):
 
     # Preserve the old field semantics at each use site while giving the UBO a
     # tightly predictable std140 layout (four vec4/ivec4 slots per light).
-    result = re.sub(r"lights\\[([^]]+)\\]\\.position\\b", r"lights[\1].position.xyz", result)
-    result = re.sub(r"lights\\[([^]]+)\\]\\.color\\b", r"lights[\1].color.xyz", result)
-    result = re.sub(r"lights\\[([^]]+)\\]\\.intensity\\b", r"lights[\1].params.x", result)
-    result = re.sub(r"lights\\[([^]]+)\\]\\.radius\\b", r"lights[\1].params.y", result)
+    result = re.sub(r"lights\[([^]]+)\]\.position\b", r"lights[\1].position.xyz", result)
+    result = re.sub(r"lights\[([^]]+)\]\.color\b", r"lights[\1].color.xyz", result)
+    result = re.sub(r"lights\[([^]]+)\]\.intensity\b", r"lights[\1].params.x", result)
+    result = re.sub(r"lights\[([^]]+)\]\.radius\b", r"lights[\1].params.y", result)
     result = re.sub(
-        r"lights\\[([^]]+)\\]\\.shadowIndex\\b",
+        r"lights\[([^]]+)\]\.shadowIndex\b",
         r"int(lights[\1].indices.x)",
         result,
     )
