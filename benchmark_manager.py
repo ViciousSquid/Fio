@@ -51,7 +51,7 @@ TESTS = (
 
 class BenchmarkManager(QDialog):
     STARTUP_TIMEOUT = 300.0
-    INACTIVITY_TIMEOUT = 60.0
+    INACTIVITY_TIMEOUT = 120.0
     ABSOLUTE_TIMEOUT = 900.0
 
     def __init__(self, args):
