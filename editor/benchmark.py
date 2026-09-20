@@ -785,7 +785,7 @@ class BenchmarkRunner:
         self._live_stress_active = False
         self._stop_live_stress_monitor()
     
-try:
+        try:
             if self.main_window.view_3d.play_mode:
                 if label.startswith(("procedural_", "monster_")):
                     self._bench.finish_live_monster_test(self.main_window)
