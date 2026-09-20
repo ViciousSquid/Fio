@@ -208,6 +208,7 @@ class OBJ:
         self.groups = []
         self.materials = {}
         self.cpu_vertices = None  # np.array of shape (N, 3) for 2D view projection
+        self.cpu_triangles = []   # triangle indices into cpu_vertices
         self.origin_offset = np.zeros(3, dtype=np.float32)
         self.centered_for_import = False
         self.source_bounds = None
@@ -311,6 +312,7 @@ class OBJ:
             # Triangulate if needed (fan triangulation for n-gons)
             for i in range(1, len(face_verts) - 1):
                 # Triangle: 0, i, i+1
+                triangle_start = len(cpu_verts)
                 for idx in [0, i, i + 1]:
                     v_idx, vt_idx, vn_idx = face_verts[idx]
                     
@@ -334,7 +336,7 @@ class OBJ:
                     
                     vertices.extend([vx, vy, vz, nx, ny, nz, u, v])
                     cpu_verts.append((vx, vy, vz))
-                
+                self.cpu_triangles.append((triangle_start, triangle_start + 1, triangle_start + 2))
                 material_groups[mat_name]['count'] += 3
                 current_group_start += 3
         
