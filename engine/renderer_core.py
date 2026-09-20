@@ -165,7 +165,7 @@ class ShaderLoader:
     def compile_shader_program(self, vertex_file, fragment_file, geometry_file=None):
         try:
             vertex_src = self._read_source(vertex_file)
-            fragment_src = self._read_source(fragment_file)
+            fragment_src = shaders.light_ubo_source(self._read_source(fragment_file))
             vs = compileShader(vertex_src, gl.GL_VERTEX_SHADER)
             fs = compileShader(fragment_src, gl.GL_FRAGMENT_SHADER)
             if geometry_file:
@@ -181,6 +181,7 @@ class ShaderLoader:
 
     def compile_from_source(self, vertex_src, fragment_src):
         try:
+            fragment_src = shaders.light_ubo_source(fragment_src)
             vs = compileShader(vertex_src, gl.GL_VERTEX_SHADER)
             fs = compileShader(fragment_src, gl.GL_FRAGMENT_SHADER)
             return compileProgram(vs, fs, validate=False)
@@ -300,6 +301,18 @@ class BaseRenderer:
         self._model_instance_data = np.empty((0, 28), dtype=np.float32)
         self._model_instanced_vaos = set()
 
+        # Shared std140 light UBO. One upload feeds every lighting shader.
+        self._light_ubo = None
+        self._light_ubo_capacity = 0
+        self._light_ubo_key = None
+        self._light_ubo_dtype = np.dtype([
+            ('position', '<f4', (4,)),
+            ('color', '<f4', (4,)),
+            ('params', '<f4', (4,)),
+            ('indices', '<i4', (4,)),
+        ])
+        self._light_ubo_data = np.zeros(self.MAX_LIGHTS, dtype=self._light_ubo_dtype)
+
         # Depth cube-map shadow-mapping state (created lazily once GL is ready).
         self._shadow_fbo = None
         self._shadow_cubemaps = []          # texture ids, one cube-map per shadow slot
@@ -322,16 +335,8 @@ class BaseRenderer:
         # monster (draw_sprites runs once per visible monster per frame).
         self._sprite_tex_key_cache = {}
 
-        # PERF: precomputed GLSL uniform names for each light slot. Building
-        # these f-strings on the hot path meant up to MAX_LIGHTS*5 string
-        # allocations per shader per frame inside _upload_lights_once; the
-        # names never change, so build them once here.
-        self._light_uniform_names = [
-            ('lights[%d].position' % i, 'lights[%d].color' % i,
-             'lights[%d].intensity' % i, 'lights[%d].radius' % i,
-             'lights[%d].shadowIndex' % i)
-            for i in range(self.MAX_LIGHTS)
-        ]
+        # Light data now travels through the shared std140 UBO; no per-slot
+        # uniform-name table is needed on the render path.
 
         # PERF: cache of texture-name -> "textures/<name>" cache-key path.
         # draw_textured_brushes_optimized resolves this for every drawn face
@@ -503,7 +508,10 @@ class BaseRenderer:
             # terrain
             try:
                 terrain_vs = compileShader(TERRAIN_VERTEX_SHADER, gl.GL_VERTEX_SHADER)
-                terrain_fs = compileShader(TERRAIN_FRAGMENT_SHADER, gl.GL_FRAGMENT_SHADER)
+                terrain_fs = compileShader(
+                    shaders.light_ubo_source(TERRAIN_FRAGMENT_SHADER),
+                    gl.GL_FRAGMENT_SHADER,
+                )
                 terrain_program = compileProgram(terrain_vs, terrain_fs, validate=False)
                 self.shaders['terrain'] = terrain_program
                 self.uniforms['terrain'] = UniformCache(terrain_program)
@@ -513,11 +521,6 @@ class BaseRenderer:
                     'biomeWeights', 'terrainHeightScale'
                 ])
                 self.uniforms['terrain'].preload(self.ENV_UNIFORMS)
-                for i in range(self.MAX_LIGHTS):
-                    self.uniforms['terrain'].preload([
-                        f'lights[{i}].position', f'lights[{i}].color',
-                        f'lights[{i}].intensity', f'lights[{i}].radius'
-                    ])
                 print("Terrain shader loaded")
             except Exception as e:
                 print(f"Terrain shader error: {e}")
@@ -529,6 +532,7 @@ class BaseRenderer:
             else:
                 self._compile_standard_shaders()
 
+            self._configure_light_ubo_programs()
             print("Base renderer shaders compiled successfully.")
         except Exception as e:
             print(f"FATAL: Shader Error in BaseRenderer: {e}")
@@ -635,9 +639,6 @@ layout (location = 9) in vec4 iNormal2;
         uniforms = self.uniforms[shader_name]
         uniforms.preload(['projection', 'view', 'model', 'object_color', 'alpha', 'active_lights'])
         uniforms.preload(self.ENV_UNIFORMS)
-        for i in range(self.MAX_LIGHTS):
-            uniforms.preload([f'lights[{i}].position', f'lights[{i}].color',
-                              f'lights[{i}].intensity', f'lights[{i}].radius'])
 
     def _preload_water_uniforms(self):
         uniforms = self.uniforms['water']
@@ -832,12 +833,25 @@ layout (location = 9) in vec4 iNormal2;
         self._ensure_terrain_textures(terrain)
         if not terrain.shader_program:
             self.setup_terrain_shader(terrain)
-        active_lights_count = len(lights) if lights else 0
+        terrain_lights = list(lights) if lights else []
+        max_terrain_lights = shaders.MAX_LIGHTS_TERRAIN
+        if len(terrain_lights) > max_terrain_lights:
+            cx, cy, cz = self._camera_xyz(camera_pos)
+            terrain_lights.sort(
+                key=lambda light: (
+                    (float(light.pos[0]) - cx) ** 2 +
+                    (float(light.pos[1]) - cy) ** 2 +
+                    (float(light.pos[2]) - cz) ** 2
+                )
+            )
+            terrain_lights = terrain_lights[:max_terrain_lights]
+        self._upload_lights_once('terrain', terrain_lights)
+        active_lights_count = len(terrain_lights)
         gl.glDisable(gl.GL_CULL_FACE)
         if hasattr(terrain, 'get_tri_count'):
             self.render_stats.visible_tris += terrain.get_tri_count()
         terrain.update_and_render(
-            projection, view, camera_pos, frustum_planes, lights, active_lights_count,
+            projection, view, camera_pos, frustum_planes, terrain_lights, active_lights_count,
             shadow_cubemaps=(self._shadow_cubemaps if self.shadows_enabled else None),
             shadow_index_map=self._light_shadow_index,
             shadow_unit_base=self.SHADOW_TEXTURE_UNIT_BASE,
@@ -1797,39 +1811,107 @@ layout (location = 9) in vec4 iNormal2;
             return (float(camera_pos.x), float(camera_pos.y), float(camera_pos.z))
         return (float(camera_pos[0]), float(camera_pos[1]), float(camera_pos[2]))
 
+    def _configure_light_ubo_program(self, shader_name):
+        """Bind a compiled lighting shader's std140 block to the shared slot."""
+        program = self.shaders.get(shader_name)
+        if not program:
+            return False
+        block_index = gl.glGetUniformBlockIndex(program, 'FioLightBlock')
+        invalid = getattr(gl, 'GL_INVALID_INDEX', 0xFFFFFFFF)
+        if block_index == invalid:
+            return False
+        gl.glUniformBlockBinding(program, block_index, shaders.LIGHT_UBO_BINDING)
+        return True
+
+    def _configure_light_ubo_programs(self):
+        for name in ('lit', 'textured', 'lit_instanced', 'textured_instanced',
+                     'water', 'terrain'):
+            self._configure_light_ubo_program(name)
+        self._ensure_light_ubo(self.MAX_LIGHTS)
+
+    def _ensure_light_ubo(self, capacity):
+        capacity = max(1, int(capacity))
+        if self._light_ubo is None:
+            self._light_ubo = gl.glGenBuffers(1)
+        if capacity > self._light_ubo_capacity:
+            self._light_ubo_capacity = max(self.MAX_LIGHTS, capacity)
+            self._light_ubo_data = np.zeros(self._light_ubo_capacity,
+                                            dtype=self._light_ubo_dtype)
+            gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
+            gl.glBufferData(
+                gl.GL_UNIFORM_BUFFER,
+                self._light_ubo_data.nbytes,
+                None,
+                gl.GL_DYNAMIC_DRAW,
+            )
+        gl.glBindBufferBase(
+            gl.GL_UNIFORM_BUFFER,
+            shaders.LIGHT_UBO_BINDING,
+            self._light_ubo,
+        )
+
+    def _upload_light_ubo(self, lights, count):
+        """Pack the active light slice once and upload it to the shared UBO."""
+        count = min(int(count), self.MAX_LIGHTS)
+        self._ensure_light_ubo(count)
+        if count <= 0:
+            return
+
+        key = tuple(id(light) for light in lights[:count])
+        if self._light_ubo_key == key:
+            return
+
+        active = self._light_ubo_data[:count]
+        active['position'].fill(0.0)
+        active['color'].fill(0.0)
+        active['params'].fill(0.0)
+        active['indices'].fill(0)
+
+        shadow_index_map = self._light_shadow_index
+        for i, light in enumerate(lights[:count]):
+            pos = light.pos
+            color = light.get_color()
+            active['position'][i, :3] = pos
+            active['position'][i, 3] = 1.0
+            active['color'][i, :3] = color
+            active['color'][i, 3] = 1.0
+            active['params'][i, 0] = light.get_intensity()
+            active['params'][i, 1] = light.get_radius()
+            active['indices'][i, 0] = shadow_index_map.get(id(light), -1)
+
+        gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
+        gl.glBufferSubData(
+            gl.GL_UNIFORM_BUFFER,
+            0,
+            active[:count],
+        )
+        self._light_ubo_key = key
+
+    # --------------------------------------------------------------------------
+    # Light upload
+    # --------------------------------------------------------------------------
     def _upload_lights_once(self, shader_name, lights):
         if shader_name not in self.uniforms:
             return
-        # Fog and ambient ride along with the light upload: every lighting pass
-        # already calls this immediately after binding its program, and it must
-        # happen *before* the same-lights early-out below, or a frame that
-        # reuses last frame's light list would also reuse last frame's fog.
+
+        # Fog/ambient remain regular uniforms because they are not shared light
+        # state.
         self._upload_env_uniforms(shader_name)
         cap = self._shader_light_cap(shader_name)
-        # Skip if this shader already received this exact light list this
-        # frame (portal passes may use a different list, so key on ids).
-        key = tuple(map(id, lights[:cap]))
-        if self._frame_lights_uploaded.get(shader_name) == key:
-            return
-        self._frame_lights_uploaded[shader_name] = key
-        uniforms = self.uniforms[shader_name]
         num_lights = min(len(lights), cap)
-        gl.glUniform1i(uniforms['active_lights'], num_lights)
-        shadow_index_map = self._light_shadow_index
-        light_names = self._light_uniform_names
-        for i in range(num_lights):
-            light = lights[i]
-            n_pos, n_col, n_int, n_rad, n_shadow = light_names[i]
-            gl.glUniform3fv(uniforms[n_pos], 1, light.pos)
-            gl.glUniform3fv(uniforms[n_col], 1, light.get_color())
-            gl.glUniform1f(uniforms[n_int], light.get_intensity())
-            gl.glUniform1f(uniforms[n_rad], light.get_radius())
-            loc = uniforms[n_shadow]
-            if loc != -1:
-                gl.glUniform1i(loc, shadow_index_map.get(id(light), -1))
-        # Bind the depth cube-maps so the shadow test can sample them.
-        self._bind_shadow_maps(uniforms)
 
+        # Bind the shared block for this program even when the light list itself
+        # is unchanged. The UBO contents are uploaded only when the light IDs
+        # change for the frame/pass.
+        self._ensure_light_ubo(num_lights)
+        gl.glBindBufferBase(
+            gl.GL_UNIFORM_BUFFER,
+            shaders.LIGHT_UBO_BINDING,
+            self._light_ubo,
+        )
+        self._frame_lights_uploaded[shader_name] = tuple(map(id, lights[:cap]))
+        gl.glUniform1i(self.uniforms[shader_name]['active_lights'], num_lights)
+        self._upload_light_ubo(lights, num_lights)
     # --------------------------------------------------------------------------
     # Depth cube-map shadow mapping
     # --------------------------------------------------------------------------
@@ -3841,6 +3923,11 @@ layout (location = 9) in vec4 iNormal2;
             self._model_instance_vbo = None
             self._model_instance_capacity = 0
             self._model_instanced_vaos.clear()
+        if self._light_ubo:
+            gl.glDeleteBuffers(1, [self._light_ubo])
+            self._light_ubo = None
+            self._light_ubo_capacity = 0
+            self._light_ubo_key = None
         # Portal resources
         if self._portal_quad_vao:
             gl.glDeleteVertexArrays(1, [self._portal_quad_vao])
