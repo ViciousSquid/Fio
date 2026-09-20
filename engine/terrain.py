@@ -483,6 +483,13 @@ class Terrain:
             self.shader_program = 0
             return
         
+        block_index = gl.glGetUniformBlockIndex(
+            self.shader_program, 'FioLightBlock')
+        invalid = getattr(gl, 'GL_INVALID_INDEX', 0xFFFFFFFF)
+        if block_index != invalid:
+            gl.glUniformBlockBinding(
+                self.shader_program, block_index, shaders.LIGHT_UBO_BINDING)
+
         self.uniforms = {
             'projection':        gl.glGetUniformLocation(self.shader_program, 'projection'),
             'view':              gl.glGetUniformLocation(self.shader_program, 'view'),
@@ -1011,10 +1018,6 @@ class Terrain:
             for name in env_uniforms:
                 if name not in self.uniforms:
                     self.uniforms[name] = gl.glGetUniformLocation(self.shader_program, name)
-        for i in range(8):
-            key = f'lights[{i}].shadowIndex'
-            if key not in self.uniforms:
-                self.uniforms[key] = gl.glGetUniformLocation(self.shader_program, key)
         for i in range(shaders.MAX_SHADOW_LIGHTS):
             key = f'shadowMaps[{i}]'
             if key not in self.uniforms:
@@ -1072,38 +1075,9 @@ class Terrain:
                 else:
                     gl.glUniform3f(loc, *value)
         
-        # The terrain fragment shader holds fewer lights than the main renderer's
-        # budget. Without this clamp a scene with more lights than that indexes
-        # uniforms that were never declared, so the surplus writes are silently
-        # dropped (or KeyError on the lookup). Send the nearest few to the camera
-        # instead, which is what the terrain actually needs -- distant lights
-        # contribute nothing at this range. The number is the shader's own, so
-        # resizing the array cannot leave this clamp behind.
-        from engine.shaders import MAX_LIGHTS_TERRAIN as MAX_TERRAIN_LIGHTS
-        if active_lights_count > MAX_TERRAIN_LIGHTS:
-            cx, cy, cz = float(camera_pos[0]), float(camera_pos[1]), float(camera_pos[2])
-            lights = sorted(
-                lights[:active_lights_count],
-                key=lambda l: (
-                    (float(l.pos[0]) - cx) ** 2 +
-                    (float(l.pos[1]) - cy) ** 2 +
-                    (float(l.pos[2]) - cz) ** 2
-                )
-            )
-            active_lights_count = MAX_TERRAIN_LIGHTS
-
+        # The renderer has already selected the terrain light subset and
+        # packed it into the shared std140 light UBO.
         gl.glUniform1i(self.uniforms['active_lights'], active_lights_count)
-        shadow_index_map = shadow_index_map or {}
-        for i in range(active_lights_count):
-            light = lights[i]
-            base = f'lights[{i}]'
-            gl.glUniform3fv(self.uniforms[f'{base}.position'], 1, light.pos)
-            gl.glUniform3fv(self.uniforms[f'{base}.color'],    1, light.get_color())
-            gl.glUniform1f(self.uniforms[f'{base}.intensity'],    light.get_intensity())
-            gl.glUniform1f(self.uniforms[f'{base}.radius'],       light.get_radius())
-            sidx_loc = self.uniforms.get(f'{base}.shadowIndex', -1)
-            if sidx_loc is not None and sidx_loc != -1:
-                gl.glUniform1i(sidx_loc, shadow_index_map.get(id(light), -1))
 
         # Bind depth cube-maps so terrain receives point-light shadows.
         #
