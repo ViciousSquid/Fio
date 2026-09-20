@@ -69,6 +69,85 @@ class BenchmarkManager(QDialog):
 
         self.setWindowTitle("Fio Benchmark Manager")
         self.resize(900, 700)
+        self.setStyleSheet(
+            """
+            QDialog {
+                background: #171717;
+                color: #eeeeee;
+            }
+            QLabel {
+                color: #dddddd;
+            }
+            QToolButton {
+                color: #63d471;
+                background: transparent;
+                border: none;
+                font-weight: bold;
+                padding: 4px;
+            }
+            QToolButton:hover {
+                color: #ff9a32;
+            }
+            QCheckBox {
+                color: #dddddd;
+                spacing: 8px;
+                padding: 3px;
+            }
+            QCheckBox:hover {
+                color: #ff9a32;
+            }
+            QCheckBox::indicator {
+                width: 15px;
+                height: 15px;
+            }
+            QCheckBox::indicator:unchecked {
+                background: #202020;
+                border: 1px solid #666666;
+            }
+            QCheckBox::indicator:checked {
+                background: #63d471;
+                border: 1px solid #63d471;
+            }
+            QScrollArea {
+                background: #171717;
+                border: 1px solid #444444;
+            }
+            QProgressBar {
+                background: #202020;
+                border: 1px solid #444444;
+                height: 10px;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                background: #ff9a32;
+            }
+            QPushButton {
+                background: #202020;
+                color: #eeeeee;
+                border: 1px solid #555555;
+                padding: 7px 14px;
+                border-radius: 2px;
+            }
+            QPushButton:hover {
+                border: 1px solid #ff9a32;
+                color: #ff9a32;
+            }
+            QPushButton:pressed {
+                background: #2a2a2a;
+            }
+            QPushButton:disabled {
+                color: #666666;
+                border-color: #333333;
+            }
+            QTextBrowser {
+                background: #171717;
+                color: #dddddd;
+                border: 1px solid #444444;
+                selection-background-color: #ff9a32;
+                selection-color: #111111;
+            }
+            """
+        )
 
         root = QVBoxLayout(self)
 
@@ -289,8 +368,8 @@ class BenchmarkManager(QDialog):
             self._test_started_at = time.monotonic()
             self.status.setText("Running: %s" % self.current_test)
             self._append(
-                '<div style="border-top:2px solid #ff8a00; margin:14px 0 8px 0; '
-                'padding-top:8px;"><b>TEST: %s</b></div>'
+                '<div style="border-top:2px solid #ff9a32; margin:14px 0 8px 0; '
+                'padding-top:8px;"><b style="color:#ff9a32;">TEST: %s</b></div>'
                 % html.escape(self.current_test)
             )
 
@@ -319,8 +398,10 @@ class BenchmarkManager(QDialog):
             self.export_button.setEnabled(bool(self.results))
             self.status.setText("Benchmark complete.")
             self._append(
-                '<div style="margin-top:12px; padding:10px; border:1px solid #555;">'
-                '<b>Benchmark complete.</b> %d result(s) recorded.'
+                '<div style="margin-top:12px; padding:10px; background:#1f241f; '
+                'border:1px solid #63d471; color:#eeeeee;">'
+                '<span style="color:#63d471; font-weight:bold;">Benchmark complete.</span> '
+                '%d result(s) recorded.'
                 '</div>' % len(self.results)
             )
 
