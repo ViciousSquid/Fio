@@ -467,9 +467,12 @@ def _make_brush_stress_scene(brush_count, yield_hook=None):
     import math
     import numpy as np
 
+    # Brush stress is a brush/editor workload. Do not inject the LogicRelay
+    # graph used by the I/O benchmarks; those entities add unrelated Thing/I/O
+    # work and make the brush test misleading.
     data = _generate_procedural_map(
         monsters=0,
-        relay_count=32,
+        relay_count=0,
         yield_hook=yield_hook,
     )
     source = list(data.get("brushes", []))
