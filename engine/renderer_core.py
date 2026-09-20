@@ -322,9 +322,14 @@ class BaseRenderer:
         self._shadow_slot_owner = [None] * self.MAX_SHADOW_LIGHTS   # id(light) per slot
         self._shadow_slot_sig = [None] * self.MAX_SHADOW_LIGHTS     # last-rendered signature
 
+        # Cached editor-mode light collection. Threaded/play mode supplies
+        # an authoritative all_lights list through RenderState; this fallback
+        # avoids rescanning every Thing on every editor frame.
+        self._light_collection_key = None
+        self._light_collection = []
+
         # Per‑frame caches
-        self._frame_lights = []
-        # shader_name -> tuple of light ids uploaded this frame; cleared at
+        self._frame_lights = []        # shader_name -> tuple of light ids uploaded this frame; cleared at
         # the start of every render_scene() so animated lights stay fresh.
         self._frame_lights_uploaded = {}
         self._current_shader = None
@@ -1843,10 +1848,17 @@ layout (location = 9) in vec4 iNormal2;
         )
 
     def _upload_light_ubo(self, lights, count):
-        """Pack the active light slice once and upload it to the shared UBO."""
+        """Pack the active light slice with NumPy and upload it once per render pass.
+
+        render_scene() clears _light_ubo_key at the start of each pass, so
+        moving lights and animated light properties are repacked before the
+        first lighting draw. The ID key only suppresses duplicate uploads
+        for subsequent lighting shader passes in the same render_scene().
+        """
         count = min(int(count), self.MAX_LIGHTS)
         self._ensure_light_ubo(count)
         if count <= 0:
+            self._light_ubo_key = ()
             return
 
         key = tuple(id(light) for light in lights[:count])
@@ -1854,29 +1866,33 @@ layout (location = 9) in vec4 iNormal2;
             return
 
         active = self._light_ubo_data[:count]
-        active['position'].fill(0.0)
-        active['color'].fill(0.0)
-        active['params'].fill(0.0)
-        active['indices'].fill(0)
+        active[...] = 0
+        active_lights = lights[:count]
 
-        shadow_index_map = self._light_shadow_index
-        for i, light in enumerate(lights[:count]):
-            pos = light.pos
-            color = light.get_color()
-            active['position'][i, :3] = pos
-            active['position'][i, 3] = 1.0
-            active['color'][i, :3] = color
-            active['color'][i, 3] = 1.0
-            active['params'][i, 0] = light.get_intensity()
-            active['params'][i, 1] = light.get_radius()
-            active['indices'][i, 0] = shadow_index_map.get(id(light), -1)
+        # Light counts are capped at 64 (16 on the low-power shader path).
+        # Object values are gathered once; contiguous std140 packing is then
+        # handled by NumPy rather than a Python loop over every UBO field.
+        positions = np.asarray([light.pos for light in active_lights], dtype=np.float32)
+        colors = np.asarray([light.get_color() for light in active_lights], dtype=np.float32)
+        params = np.asarray(
+            [[light.get_intensity(), light.get_radius()] for light in active_lights],
+            dtype=np.float32,
+        )
+        shadow_indices = np.fromiter(
+            (self._light_shadow_index.get(id(light), -1) for light in active_lights),
+            dtype=np.int32,
+            count=count,
+        )
+
+        active['position'][:, :3] = positions
+        active['position'][:, 3] = 1.0
+        active['color'][:, :3] = colors
+        active['color'][:, 3] = 1.0
+        active['params'][:, :2] = params
+        active['indices'][:, 0] = shadow_indices
 
         gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
-        gl.glBufferSubData(
-            gl.GL_UNIFORM_BUFFER,
-            0,
-            active[:count],
-        )
+        gl.glBufferSubData(gl.GL_UNIFORM_BUFFER, 0, active[:count])
         self._light_ubo_key = key
 
     # --------------------------------------------------------------------------
