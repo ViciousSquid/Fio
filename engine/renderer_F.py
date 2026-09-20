@@ -595,6 +595,22 @@ class Renderer_F(BaseRenderer):
         return brushes, things
 
 
+    def _get_active_lights(self, things, config):
+        """Return active Light objects without rescanning the full Thing set in play mode."""
+        lights = config.get('all_lights')
+        if lights is None:
+            # Non-threaded editor fallback. The Thing collection normally stays
+            # stable while editing, so rebuild only when its identity/size changes.
+            key = (id(things), len(things))
+            if key != self._light_collection_key:
+                self._light_collection = [t for t in things if isinstance(t, Light)]
+                self._light_collection_key = key
+            lights = self._light_collection
+
+        # State can change through I/O without changing the light collection.
+        return [light for light in lights
+                if light.properties.get('state', 'on') == 'on']
+
     def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config, clear=True):
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
         gl.glEnable(gl.GL_DEPTH_TEST)
@@ -677,7 +693,7 @@ class Renderer_F(BaseRenderer):
         # Things out of sprite_things, so the billboard pass needs no second
         # Python scan or object-id set.
         final_sprites = sprite_things
-        lights = [t for t in things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
+        lights = self._get_active_lights(things, config)
         self._frame_lights = lights
 
         # --- Depth cube-map shadow pass -------------------------------------
@@ -743,7 +759,7 @@ class Renderer_F(BaseRenderer):
 
                         _t_opaque, _solid = self._split_opaque(_opaque)
                         _t_brush_mode = cfg.get('brush_display_mode', 'Textured')
-                        _lights = [t for t in all_th if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
+                        _lights = self._get_active_lights(all_th, cfg)
                         if _t_brush_mode in ('Textured', 'Solid Lit'):
                             self.draw_textured_brushes_optimized(proj, vw, cam, _t_opaque, _lights, cfg)
                             self.draw_lit_brushes_optimized(proj, vw, cam, _solid, _lights, cfg)
