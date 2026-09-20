@@ -105,6 +105,19 @@ class BenchmarkRunner:
                     pass
         raise AttributeError(name)
 
+    def _append_test_separator(self, label):
+        """Append the Fio-styled separator shown at the start of each test."""
+        self.output.append(
+            '<div style="border-top:2px solid #ff9a32; margin:14px 0 8px 0; '
+            'padding-top:8px;">'
+            '<span style="color:#63d471; font-size:15px; font-weight:bold;">TEST:</span> '
+            '<span style="color:#ff9a32; font-weight:bold;">%s</span>'
+            '</div>'
+            % self._html_escape(label)
+        )
+        self.output.ensureCursorVisible()
+        QApplication.processEvents()
+
     def _live_stress_timeout_for(self, label):
         """Return the manager-side timeout used for descriptive messages.
 
