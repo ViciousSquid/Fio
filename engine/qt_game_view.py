@@ -1046,6 +1046,10 @@ class QtGameView(QOpenGLWidget):
             getattr(render_state, "visible_thing_positions", None)
             if render_state is not None else None
         )
+        self._render_config["brush_positions"] = (
+            getattr(render_state, "visible_brush_positions", None)
+            if render_state is not None else None
+        )
         self.update_instance_textures(things_to_render)
 
         # Plugin render hooks. Guarded by has_listeners so an unhooked frame
