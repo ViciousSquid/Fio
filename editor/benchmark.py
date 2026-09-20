@@ -1905,9 +1905,6 @@ class BenchmarkTests:
                     "  Live brush scene: created %d real brushes with varied dimensions."
                     % brush_count
                 )
-    
-                return
-
             elif label == "monster_chaos_witness":
                 cooperative_yield = lambda: self._live_cooperative_yield(label)
                 data, chaos_info = bench.make_monster_chaos_witness_world(
