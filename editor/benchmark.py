@@ -992,7 +992,7 @@ class BenchmarkRunner:
                 "test": label,
                 "status": "passed",
                 "description": (
-                    "10-second live monster chaos witness: seed 43, "
+                    "15-second live monster chaos witness: seed 43, "
                     "50 mixed human/flying monsters in two hostile teams starting on opposite sides and converging on a central PathNode, "
                     "followed by seeded random infighting."
                 ),
@@ -1008,7 +1008,7 @@ class BenchmarkRunner:
                 "aggro_delay_s": float(
                     getattr(self, "_monster_chaos_aggro_delay", 2.0)
                 ),
-                "witness_duration_s": 10.0,
+                "witness_duration_s": 15.0,
                 "alive_monsters": alive,
                 "dead_monsters": max(0, len(monsters) - alive),
             })
@@ -1039,7 +1039,7 @@ class BenchmarkRunner:
                 '</td></tr></table>'
                 '<div style="color:#aaa; padding:4px 0;">'
                 '%d alive &nbsp; • &nbsp; %d dead &nbsp; • &nbsp; '
-                '10.0 second witness'
+                '15.0 second witness'
                 '</div></div>'
                 % (
                     self._html_escape(
@@ -1627,7 +1627,7 @@ class BenchmarkTests:
             "live_1000_brushes": 3.0,
             "live_10000_brushes": 3.0,
             "live_100000_brushes": 2.0,
-            "monster_chaos_witness": 10.0,
+            "monster_chaos_witness": 15.0,
         }.get(label, 3.0)
     
     
