@@ -881,17 +881,10 @@ class BaseRenderer:
 
                 self.render_stats.visible_tris += (obj.vertex_count // 3)
 
-                pos = thing.pos
-                scale = thing.properties.get('scale', 1.0)
-                if isinstance(scale, (int, float)):
-                    scale = [scale, scale, scale]
-                rot = thing.properties.get('rotation', [0, 0, 0])
-
-                mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
-                mat = glm.rotate(mat, glm.radians(rot[1]), glm.vec3(0, 1, 0))
-                mat = glm.rotate(mat, glm.radians(rot[0]), glm.vec3(1, 0, 0))
-                mat = glm.rotate(mat, glm.radians(rot[2]), glm.vec3(0, 0, 1))
-                mat = glm.scale(mat, glm.vec3(*scale))
+                mat = self._thing_model_matrix(thing)
+                model_ptr = glm.value_ptr(mat)
+                normal_mat = self._compute_normal_matrix(mat)
+                normal_ptr = glm.value_ptr(normal_mat)
                 gl.glBindVertexArray(obj.vao)
                 manual_texture = thing.properties.get('texture')
 
@@ -942,12 +935,10 @@ class BaseRenderer:
                             else:
                                 tex_id = self.load_texture(use_texture, 'textures')
                             gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                            gl.glUniformMatrix4fv(self.uniforms['textured']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
-                            # Upload normal matrix for correct lighting
-                            normal_mat = self._compute_normal_matrix(mat)
+                            gl.glUniformMatrix4fv(self.uniforms['textured']['model'], 1, gl.GL_FALSE, model_ptr)
                             normal_mat_loc = self.uniforms['textured'].get('normalMatrix', -1)
                             if normal_mat_loc >= 0:
-                                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
+                                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normal_ptr)
                         elif lit_shader:
                             if current_shader != lit_shader:
                                 gl.glUseProgram(lit_shader)
@@ -959,12 +950,10 @@ class BaseRenderer:
                             color = material.get('color', [0.8,0.8,0.8])
                             gl.glUniform3fv(self.uniforms['lit']['object_color'], 1, color)
                             gl.glUniform1f(self.uniforms['lit']['alpha'], 1.0)
-                            gl.glUniformMatrix4fv(self.uniforms['lit']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
-                            # Upload normal matrix for correct lighting
-                            normal_mat = self._compute_normal_matrix(mat)
+                            gl.glUniformMatrix4fv(self.uniforms['lit']['model'], 1, gl.GL_FALSE, model_ptr)
                             normal_mat_loc = self.uniforms['lit'].get('normalMatrix', -1)
                             if normal_mat_loc >= 0:
-                                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
+                                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normal_ptr)
                         # Draw the group - indexed or non-indexed
                         if group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
                             gl.glDrawElements(gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
@@ -1015,12 +1004,10 @@ class BaseRenderer:
                         else:
                             tex_id = self.load_texture(tex_name, 'textures')
                         gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                        gl.glUniformMatrix4fv(self.uniforms['textured']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
-                        # Upload normal matrix for correct lighting
-                        normal_mat = self._compute_normal_matrix(mat)
+                        gl.glUniformMatrix4fv(self.uniforms['textured']['model'], 1, gl.GL_FALSE, model_ptr)
                         normal_mat_loc = self.uniforms['textured'].get('normalMatrix', -1)
                         if normal_mat_loc >= 0:
-                            gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
+                            gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normal_ptr)
                     elif lit_shader:
                         if current_shader != lit_shader:
                             gl.glUseProgram(lit_shader)
@@ -1032,12 +1019,10 @@ class BaseRenderer:
                         col = thing.properties.get('color', [0.8, 0.8, 0.8])
                         gl.glUniform3fv(self.uniforms['lit']['object_color'], 1, col)
                         gl.glUniform1f(self.uniforms['lit']['alpha'], 1.0)
-                        gl.glUniformMatrix4fv(self.uniforms['lit']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
-                        # Upload normal matrix for correct lighting
-                        normal_mat = self._compute_normal_matrix(mat)
+                        gl.glUniformMatrix4fv(self.uniforms['lit']['model'], 1, gl.GL_FALSE, model_ptr)
                         normal_mat_loc = self.uniforms['lit'].get('normalMatrix', -1)
                         if normal_mat_loc >= 0:
-                            gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
+                            gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normal_ptr)
                     gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
                 self.render_stats.draw_calls += 1
 
@@ -1410,41 +1395,78 @@ class BaseRenderer:
     # --------------------------------------------------------------------------
     # Helpers for sorting and matrix utilities
     # --------------------------------------------------------------------------
-    def _sort_objects(self, brushes, things, config, model_out=None):
-        opaque, transparent, sprites, fog, water, glass, glow = [], [], [], [], [], [], []
-        is_play, show_sprites = config.get('play_mode', False), config.get('show_sprites_in_play_mode', False)
+    @staticmethod
+    def _thing_render_kind(thing):
+        """Cache the type-derived render category of a Thing."""
+        props = getattr(thing, 'properties', {})
+        key = (type(thing), bool(props.get('sprite_path')))
+        cached = getattr(thing, '_render_kind_cache', None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
 
-        for brush in brushes:
+        if isinstance(thing, Pickup):
+            kind = 'pickup'
+        elif isinstance(thing, (Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger)):
+            kind = 'entity_sprite'
+        elif key[1]:
+            kind = 'sprite'
+        else:
+            kind = 'ordinary'
+
+        thing._render_kind_cache = (key, kind)
+        return kind
+
+    def _sort_objects(self, brushes, things, config, model_out=None,
+                      brush_positions=None, thing_positions=None,
+                      collect_sort_positions=False):
+        opaque, transparent, sprites, fog, water, glass, glow = [], [], [], [], [], [], []
+        is_play = config.get('play_mode', False)
+        show_sprites = config.get('show_sprites_in_play_mode', False)
+
+        if collect_sort_positions:
+            transparent_pos, water_pos = [], []
+            glass_pos, sprite_pos = [], []
+        else:
+            transparent_pos = water_pos = glass_pos = sprite_pos = None
+
+        for i, brush in enumerate(brushes):
             if brush.get('hidden'):
                 continue
-            # Hoist the shader lookup: it was fetched up to three times per
-            # brush per frame for the Fog/Glass/Glow branches below.
             shader = brush.get('shader')
+            pos = brush_positions[i] if brush_positions is not None else None
             if is_water_brush(brush):
                 water.append(brush)
+                if water_pos is not None:
+                    water_pos.append(pos)
             elif brush.get('is_fog') or shader == 'Fog':
                 fog.append(brush)
             elif shader == 'Glass':
                 glass.append(brush)
+                if glass_pos is not None:
+                    glass_pos.append(pos)
             elif shader == 'Glow':
                 glow.append(brush)
             elif brush.get('is_trigger'):
                 if not is_play:
                     transparent.append(brush)
+                    if transparent_pos is not None:
+                        transparent_pos.append(pos)
             else:
                 opaque.append(brush)
 
-        # Keep model discovery in this same object walk.  Renderer_F uses
-        # model_out to render visible 3D models; doing a second pass over
-        # sprite_things every frame was needless Python work.
-        for t in things:
+        for i, t in enumerate(things):
+            pos = thing_positions[i] if thing_positions is not None else None
             if PathNode is not None and isinstance(t, PathNode):
                 continue
             if Portal is not None and isinstance(t, Portal):
                 sprites.append(t)
+                if sprite_pos is not None:
+                    sprite_pos.append(pos)
                 continue
             if isinstance(t, dict) and 'monster_type' in t:
                 sprites.append(t)
+                if sprite_pos is not None:
+                    sprite_pos.append(pos)
                 continue
             if not isinstance(t, Thing):
                 continue
@@ -1454,27 +1476,30 @@ class BaseRenderer:
             model_visible = bool(model_path and not props.get('hidden', False))
             if model_out is not None and model_visible:
                 model_out.append(t)
-                # The caller that supplied model_out will render this as 3D
-                # geometry. Do not also put it through the billboard path.
                 continue
 
-            if isinstance(t, Pickup):
-                sprites.append(t)
-            elif isinstance(t, (Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger)):
+            kind = self._thing_render_kind(t)
+            if kind == 'pickup' or kind == 'entity_sprite':
                 sprites.append(t)
             elif model_path:
-                # Preserve the historical behaviour for callers that do not
-                # request model_out (for example portal virtual scenes).
                 sprites.append(t)
-            elif props.get('sprite_path'):
-                # Props may deliberately be camera-facing billboards.
+            elif kind == 'sprite':
                 sprites.append(t)
-            elif not is_play:
-                # Editor mode historically displays ordinary Things as sprites.
+            elif not is_play or show_sprites:
                 sprites.append(t)
-            elif show_sprites:
-                sprites.append(t)
-        return opaque, transparent, sprites, fog, water, glass, glow
+
+            if sprite_pos is not None and sprites and sprites[-1] is t:
+                sprite_pos.append(pos)
+
+        result = (opaque, transparent, sprites, fog, water, glass, glow)
+        if collect_sort_positions:
+            return result + ({
+                'transparent': transparent_pos,
+                'water': water_pos,
+                'glass': glass_pos,
+                'sprites': sprite_pos,
+            },)
+        return result
 
     def _split_opaque(self, brushes):
         textured, solid = [], []
@@ -1484,6 +1509,27 @@ class BaseRenderer:
             else:
                 solid.append(b)
         return textured, solid
+
+    def _thing_model_matrix(self, thing):
+        """Return a cached model matrix for a model-carrying Thing."""
+        props = getattr(thing, 'properties', {})
+        pos = thing.pos
+        rot = props.get('rotation', [0, 0, 0])
+        scale = props.get('scale', 1.0)
+        scale_key = (scale, scale, scale) if isinstance(scale, (int, float)) else tuple(scale)
+        key = (pos[0], pos[1], pos[2], tuple(rot), scale_key)
+        if getattr(thing, '_render_model_mat_key', None) == key:
+            return thing._render_model_mat_cache
+
+        scale_vec = (scale, scale, scale) if isinstance(scale, (int, float)) else scale
+        mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
+        mat = glm.rotate(mat, glm.radians(rot[1]), glm.vec3(0, 1, 0))
+        mat = glm.rotate(mat, glm.radians(rot[0]), glm.vec3(1, 0, 0))
+        mat = glm.rotate(mat, glm.radians(rot[2]), glm.vec3(0, 0, 1))
+        mat = glm.scale(mat, glm.vec3(*scale_vec))
+        thing._render_model_mat_key = key
+        thing._render_model_mat_cache = mat
+        return mat
 
     def _brush_model_matrix(self, brush):
         pos = brush.get('pos', [0, 0, 0])
