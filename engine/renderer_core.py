@@ -883,7 +883,7 @@ class BaseRenderer:
 
                 mat = self._thing_model_matrix(thing)
                 model_ptr = glm.value_ptr(mat)
-                normal_mat = self._compute_normal_matrix(mat)
+                normal_mat = thing._render_model_nmat_cache
                 normal_ptr = glm.value_ptr(normal_mat)
                 gl.glBindVertexArray(obj.vao)
                 manual_texture = thing.properties.get('texture')
@@ -1703,8 +1703,13 @@ class BaseRenderer:
         mat = glm.rotate(mat, glm.radians(rot[0]), glm.vec3(1, 0, 0))
         mat = glm.rotate(mat, glm.radians(rot[2]), glm.vec3(0, 0, 1))
         mat = glm.scale(mat, glm.vec3(*scale_vec))
+        try:
+            normal = glm.transpose(glm.inverse(glm.mat3(mat)))
+        except Exception:
+            normal = self._identity_mat3
         thing._render_model_mat_key = key
         thing._render_model_mat_cache = mat
+        thing._render_model_nmat_cache = normal
         return mat
 
     def _bind_shadow_maps(self, uniforms):
