@@ -488,6 +488,7 @@ class BenchmarkRunner:
         self._monster_chaos_fighters = []
         self._timer.stop()
         self._measurement_active = False
+        self._live_stress_active = False
         self._restore_benchmark_window_mode()
         if self.main_window.view_3d.play_mode:
             self.main_window._exit_play_mode()
@@ -933,6 +934,7 @@ class BenchmarkRunner:
         """Finish a live stress measurement and cleanly leave Play Mode."""
         view = self.main_window.view_3d
         self._measurement_active = False
+        self._live_stress_active = False
         self._timer.stop()
         self._stop_live_stress_monitor()
         metrics = dict(metrics)
