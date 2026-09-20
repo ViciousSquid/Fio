@@ -1146,10 +1146,10 @@ class BenchmarkRunner:
             self.output.clear()
             self.output.append(
                 '<div style="color:#ff6666; font-size:16px; font-weight:bold; padding:10px;">'
-                'No current loaded map and no tests selected'
+                'No current project loaded and no tests selected'
                 '</div>'
             )
-            self.status_label.setText("No current loaded map and no tests selected")
+            self.status_label.setText("No current project loaded and no tests selected")
             self.status_label.setStyleSheet("color:#ff6666; font-weight:bold;")
             self.throbber.setVisible(False)
             QApplication.processEvents()
@@ -1267,6 +1267,7 @@ class BenchmarkRunner:
                     ("live_io_1000", 1000),
                     ("live_1000_brushes", 1000),
                     ("live_10000_brushes", 10000),
+                    ("monster_chaos_witness", 50),
                 ))
     
             if self.io_chain_1000.isChecked():
@@ -1277,6 +1278,8 @@ class BenchmarkRunner:
                 self._queue.append(("live_10000_brushes", 10000))
             if self.brush_100000.isChecked():
                 self._queue.append(("live_100000_brushes", 100000))
+            if self.monster_chaos_witness.isChecked():
+                self._queue.append(("monster_chaos_witness", 50))
     
             if self.borderless_window.isChecked():
                 self._queue.append(("borderless_window", None))
