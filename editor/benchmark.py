@@ -970,11 +970,14 @@ class BenchmarkRunner:
                 "status": "passed",
                 "description": (
                     "10-second live monster chaos witness: seed 43, "
-                    "50 mixed human/flying monsters in two hostile teams converging on a PathNode, "
+                    "50 mixed human/flying monsters in two hostile teams starting on opposite sides and converging on a central PathNode, "
                     "followed by seeded random infighting."
                 ),
                 "seed": "43",
                 "monster_count": len(monsters),
+                "human_count": int(chaos_info.get("human_count", 0)),
+                "flying_count": int(chaos_info.get("flying_count", 0)),
+                "team_counts": dict(chaos_info.get("team_counts", {})),
                 "pathnode_name": chaos_info.get(
                     "pathnode_name", "ChaosPathNode"
                 ),
