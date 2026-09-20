@@ -887,12 +887,12 @@ class BaseRenderer:
                                 gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
                                 gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
                                 self._upload_lights_once('textured', lights)
-                                if not config.get('play_mode', False):
-                                    gl.glUniform3f(self.uniforms['textured']['uAmbient'], 0.25, 0.25, 0.25)
                                 gl.glActiveTexture(gl.GL_TEXTURE0)
                                 gl.glUniform1i(u['texture_diffuse'], 0)
                                 # Models use their own UVs — clear any brush
                                 # face transform left in the shared uniforms.
+                                if u.get('tex_scale', -1) != -1:
+                                    gl.glUniform2f(u['tex_scale'], 1.0, 1.0)
                                 if u.get('tex_angle', -1) != -1:
                                     gl.glUniform1f(u['tex_angle'], 0.0)
                                 if u.get('tex_shift', -1) != -1:
@@ -935,8 +935,6 @@ class BaseRenderer:
                                 gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
                                 gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
                                 self._upload_lights_once('lit', lights)
-                                if not config.get('play_mode', False):
-                                    gl.glUniform3f(self.uniforms['lit']['uAmbient'], 0.25, 0.25, 0.25)
                             color = material.get('color', [0.8,0.8,0.8])
                             gl.glUniform3fv(self.uniforms['lit']['object_color'], 1, color)
                             gl.glUniform1f(self.uniforms['lit']['alpha'], 1.0)
@@ -963,12 +961,12 @@ class BaseRenderer:
                             gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
                             gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
                             self._upload_lights_once('textured', lights)
-                                if not config.get('play_mode', False):
-                                    gl.glUniform3f(self.uniforms['textured']['uAmbient'], 0.25, 0.25, 0.25)
                             gl.glActiveTexture(gl.GL_TEXTURE0)
                             gl.glUniform1i(u['texture_diffuse'], 0)
                             # Models use their own UVs — clear any brush face
                             # transform left in the shared uniforms.
+                            if u.get('tex_scale', -1) != -1:
+                                gl.glUniform2f(u['tex_scale'], 1.0, 1.0)
                             if u.get('tex_angle', -1) != -1:
                                 gl.glUniform1f(u['tex_angle'], 0.0)
                             if u.get('tex_shift', -1) != -1:
@@ -1010,8 +1008,6 @@ class BaseRenderer:
                             gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
                             gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
                             self._upload_lights_once('lit', lights)
-                                if not config.get('play_mode', False):
-                                    gl.glUniform3f(self.uniforms['lit']['uAmbient'], 0.25, 0.25, 0.25)
                         col = thing.properties.get('color', [0.8, 0.8, 0.8])
                         gl.glUniform3fv(self.uniforms['lit']['object_color'], 1, col)
                         gl.glUniform1f(self.uniforms['lit']['alpha'], 1.0)
