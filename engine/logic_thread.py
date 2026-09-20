@@ -3369,6 +3369,7 @@ class LogicThread(threading.Thread):
         write_state.culled_brushes = culled_count
 
         visible_things = []
+        all_lights = []
         visible_thing_positions = write_state.ensure_visible_thing_positions(
             len(self.things))
         visible_thing_count = 0
@@ -3386,6 +3387,9 @@ class LogicThread(threading.Thread):
             visible_thing_positions[visible_thing_count, 1] = float(pos[2])
             visible_thing_count += 1
 
+            if Light is not None and isinstance(thing, Light):
+                all_lights.append(thing)
+
             if isinstance(thing, MonsterThing):
                 visible_things.append(thing.get_render_snapshot())
             else:
@@ -3394,6 +3398,7 @@ class LogicThread(threading.Thread):
         write_state.visible_things = visible_things
         write_state.visible_thing_position_count = visible_thing_count
         write_state.all_things = list(self.things)
+        write_state.all_lights = all_lights
         write_state.timestamp = time.perf_counter()
 
         # ── Player 2 render state ─────────────────────────────────────────────
