@@ -80,7 +80,7 @@ class BenchmarkRunner:
         self._live_stress_timeout_reason = ""
         self._live_watchdog_thread = None
         self._live_watchdog_stop = None
-                        self._live_io_elapsed = None
+        self._live_io_elapsed = None
         self._sysmon_samples = []
         self._last_sysmon_sample = 0.0
         self._requested_duration = None
