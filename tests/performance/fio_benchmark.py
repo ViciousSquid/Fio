@@ -892,9 +892,9 @@ def make_monster_chaos_witness_world(seed="43", monster_count=25, yield_hook=Non
     ring_radii = (105.0, 145.0, 175.0)
     index = 0
     for ring_index, ring_size in enumerate(ring_sizes):
-        phase = rng.uniform(0.0, math.tau)
+        phase = rng.uniform(0.0, 2.0 * math.pi)
         for ring_pos in range(ring_size):
-            angle = phase + (math.tau * ring_pos / ring_size)
+            angle = phase + (2.0 * math.pi * ring_pos / ring_size)
             # A small deterministic jitter avoids a perfectly mechanical
             # formation while preserving the room-safe radius.
             radius = ring_radii[ring_index] + rng.uniform(-8.0, 8.0)
@@ -902,7 +902,7 @@ def make_monster_chaos_witness_world(seed="43", monster_count=25, yield_hook=Non
             wz = pz + math.sin(angle) * radius
 
             monster = monsters[index]
-            monster["pos"] = [wx, FLOOR_SURFACE + 96.0, wz]
+            monster["pos"] = [wx, py, wz]
             props = monster.setdefault("properties", {})
             props.update({
                 "monster_type": "human",
