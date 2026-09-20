@@ -163,7 +163,9 @@ class BenchmarkManager(QDialog):
             QProgressBar {
                 background: #202020;
                 border: 1px solid #444444;
-                height: 10px;
+                height: 3px;
+                min-height: 3px;
+                max-height: 3px;
                 text-align: center;
             }
             QProgressBar::chunk {
