@@ -446,13 +446,16 @@ def _make_renderer_stress_scene():
 
 
 def _make_brush_stress_scene(brush_count, yield_hook=None):
-    """Create a large real-Fio brush scene for the existing EditorState.
+    """Create a visible field of real Fio brushes with varied dimensions.
 
-    NumPy plans source indices and placement offsets in one batch. The final
-    object materialisation is necessarily Python because EditorState stores
-    authored brushes as dictionaries with stable per-brush identity.
+    The brushes stay spatially bounded so the generated workload remains
+    visible in the editor instead of marching hundreds of thousands of units
+    away from the camera.  The source map still supplies real Fio brush
+    dictionaries/textures, while deterministic scaling makes the generated
+    brushes visibly different sizes.
     """
     import copy
+    import math
     import numpy as np
 
     data = _generate_procedural_map(
@@ -465,40 +468,127 @@ def _make_brush_stress_scene(brush_count, yield_hook=None):
         raise RuntimeError("procedural benchmark map generated no brushes")
 
     brush_count = int(brush_count)
-    if len(source) >= brush_count:
-        data["brushes"] = source[:brush_count]
+    if brush_count <= 0:
+        data["brushes"] = []
         return data
 
+    # Keep the authored scene and its PlayerStart together.  The generated
+    # source map is shifted so its first brush field is centred on PlayerStart.
+    player_start = next(
+        (
+            thing for thing in data.get("things", [])
+            if str(thing.get("type", "")).lower() == "playerstart"
+        ),
+        None,
+    )
+    target_x = float((player_start or {}).get("pos", [0.0, 0.0, 0.0])[0])
+    target_z = float((player_start or {}).get("pos", [0.0, 0.0, 0.0])[2])
+
+    brush_centres = []
+    min_x = min_z = float("inf")
+    max_x = max_z = float("-inf")
+    for brush in source:
+        pos = brush.get("pos") or [0.0, 0.0, 0.0]
+        size = brush.get("size") or [64.0, 64.0, 64.0]
+        hx = abs(float(size[0])) * 0.5
+        hz = abs(float(size[2])) * 0.5
+        bx = float(pos[0])
+        bz = float(pos[2])
+        min_x = min(min_x, bx - hx)
+        max_x = max(max_x, bx + hx)
+        min_z = min(min_z, bz - hz)
+        max_z = max(max_z, bz + hz)
+
+    source_centre_x = (min_x + max_x) * 0.5
+    source_centre_z = (min_z + max_z) * 0.5
+    scene_shift = (
+        target_x - source_centre_x,
+        target_z - source_centre_z,
+    )
+
     source_count = len(source)
+    tile_count = int(math.ceil(float(brush_count) / float(source_count)))
+    grid_dim = int(math.ceil(math.sqrt(tile_count)))
+    source_width = max(512.0, max_x - min_x)
+    source_depth = max(512.0, max_z - min_z)
+    tile_spacing_x = source_width + 256.0
+    tile_spacing_z = source_depth + 256.0
+
     indices = np.arange(brush_count, dtype=np.int64)
     source_indices = indices % source_count
-    batch_indices = indices // source_count
-    x_offsets = (batch_indices + 1).astype(np.float64) * 5000.0
+    tile_indices = indices // source_count
+    tile_x = (tile_indices % grid_dim).astype(np.float64)
+    tile_z = (tile_indices // grid_dim).astype(np.float64)
+    tile_x -= (grid_dim - 1) * 0.5
+    tile_z -= (grid_dim - 1) * 0.5
 
-    def clone_brush(source_brush, offset, output_index):
-        brush = copy.deepcopy(source_brush)
-        position = list(brush.get("pos", [0, 0, 0]))
-        position[0] = float(position[0]) + float(offset)
-        brush["pos"] = position
-        brush["id"] = "benchmark_generated_%d" % output_index
-        return brush
+    # Deliberately vary all three dimensions.  The pattern is deterministic,
+    # avoids degenerate boxes, and is obvious in both orthographic and 3D views.
+    size_patterns = np.asarray(
+        (
+            (0.55, 0.75, 0.85),
+            (0.80, 1.15, 0.65),
+            (1.20, 0.70, 1.10),
+            (1.45, 1.00, 0.80),
+            (0.70, 1.45, 1.25),
+            (1.30, 0.85, 1.40),
+            (0.95, 1.30, 0.75),
+            (1.55, 0.65, 1.20),
+        ),
+        dtype=np.float64,
+    )
 
     brushes = []
-    for output_index, (source_index, offset) in enumerate(
-        zip(source_indices.tolist(), x_offsets.tolist())
+    for output_index, (
+        source_index, tile_offset_x, tile_offset_z
+    ) in enumerate(
+        zip(
+            source_indices.tolist(),
+            tile_x.tolist(),
+            tile_z.tolist(),
+        )
     ):
         if yield_hook is not None and output_index % 64 == 0:
             yield_hook()
-        brushes.append(
-            clone_brush(
-                source[int(source_index)],
-                float(offset),
-                int(output_index),
-            )
+
+        brush = copy.deepcopy(source[int(source_index)])
+        position = list(brush.get("pos", [0.0, 0.0, 0.0]))
+        size = np.asarray(
+            brush.get("size", [64.0, 64.0, 64.0]),
+            dtype=np.float64,
         )
+        scale = size_patterns[output_index % len(size_patterns)]
+
+        position[0] = (
+            float(position[0])
+            + scene_shift[0]
+            + float(tile_offset_x * tile_spacing_x)
+        )
+        position[2] = (
+            float(position[2])
+            + scene_shift[1]
+            + float(tile_offset_z * tile_spacing_z)
+        )
+        size = np.maximum(np.abs(size) * scale, 8.0)
+
+        brush["pos"] = [
+            float(position[0]),
+            float(position[1]),
+            float(position[2]),
+        ]
+        brush["size"] = [float(v) for v in size]
+        brush["id"] = "benchmark_generated_%d" % output_index
+        brushes.append(brush)
+
+    # Keep all non-brush entities aligned with the shifted first scene tile.
+    for thing in data.get("things", []):
+        pos = thing.get("pos")
+        if pos and len(pos) >= 3:
+            pos[0] = float(pos[0]) + scene_shift[0]
+            pos[2] = float(pos[2]) + scene_shift[1]
+
     data["brushes"] = brushes
     return data
-
 def _run_monster_stress(count):
     """Generate a real procedural Fio room populated with N monsters."""
     data = _generate_procedural_map(
