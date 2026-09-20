@@ -52,6 +52,9 @@ class RenderState:
         self.visible_brushes = []
         self.all_brushes = []
         self.visible_things = []
+        # Authoritative Light objects for renderer lighting; avoids scanning
+        # the full Thing set every render frame.
+        self.all_lights = []
         # Reusable numeric views aligned with the published render-object lists.
         # These are snapshots derived from authoritative transforms.
         self.visible_brush_positions = np.empty((0, 2), dtype=np.float64)
@@ -150,6 +153,7 @@ class RenderState:
         self.visible_brushes = []
         self.all_brushes = []
         self.visible_things = []
+        self.all_lights = []
         self.visible_brush_position_count = 0
         self.visible_thing_position_count = 0
         self.collected_keys = set()
