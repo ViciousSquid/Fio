@@ -708,7 +708,7 @@ class BenchmarkRunner:
     
 
     def _finish_with_error(self, error_text):
-        """Fail the benchmark dialog without killing the live Fio process."""
+        """Fail the live benchmark and restore the original Fio world."""
         self._timer.stop()
         self._measurement_active = False
         self._worker_active = False
@@ -946,7 +946,7 @@ class BenchmarkRunner:
     
         try:
             # Keep the benchmark module loaded only on explicit Tools > Benchmark use.
-            # under the repository root. Put this Fio checkout first so a
+            # The repository root is first so a
             # globally installed package named "tests" cannot shadow Fio's
             # own tests.performance package.
             repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
