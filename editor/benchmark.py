@@ -110,6 +110,14 @@ class BenchmarkRunner:
                     pass
         raise AttributeError(name)
 
+    def _append_test_end_separator(self):
+        """Append the full-width orange separator between benchmark tests."""
+        self.output.append(
+            '<div style="width:100%; border-top:2px solid #ff9a32; margin:14px 0 8px 0;"></div>'
+        )
+        self.output.ensureCursorVisible()
+        QApplication.processEvents()
+
     def _append_test_separator(self, label):
         """Append the Fio-styled separator shown at the start of each test."""
         self.output.append(
@@ -371,7 +379,7 @@ class BenchmarkRunner:
             '<div style="color:#ddd; margin-top:4px;">%s</div>'
             '</div>' % (label, "ABORTED — timeout" if timed_out else "ABORTED — worker failure", str(reason))
         )
-        self.output.append('<div style="border-top:2px solid #63d471; margin:14px 0 8px 0;"></div>')
+        self._append_test_end_separator()
         self._cleanup_worker_result_path()
         self._worker_label = None
         self._worker_value = None
@@ -1045,6 +1053,7 @@ class BenchmarkRunner:
             QApplication.processEvents()
             self._monster_chaos_aggro_injected = False
             self._monster_chaos_fighters = []
+            self._append_test_end_separator()
             self._begin_next()
             return
 
@@ -1112,6 +1121,7 @@ class BenchmarkRunner:
             )
             self.output.ensureCursorVisible()
             QApplication.processEvents()
+            self._append_test_end_separator()
             self._begin_next()
             return
     
@@ -2654,9 +2664,7 @@ class BenchmarkResults:
             'Average FPS = 1000 / mean SysMon frame time. Wall-clock FPS is reported separately.'
             '</div>'
         )
-        self.output.append(
-            '<div style="border-top:2px solid #63d471; margin:14px 0 8px 0;"></div>'
-        )
+        self._append_test_end_separator()
         self.output.ensureCursorVisible()
         QApplication.processEvents()
 
