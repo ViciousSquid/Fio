@@ -484,7 +484,6 @@ def _make_brush_stress_scene(brush_count, yield_hook=None):
     target_x = float((player_start or {}).get("pos", [0.0, 0.0, 0.0])[0])
     target_z = float((player_start or {}).get("pos", [0.0, 0.0, 0.0])[2])
 
-    brush_centres = []
     min_x = min_z = float("inf")
     max_x = max_z = float("-inf")
     for brush in source:
@@ -589,6 +588,8 @@ def _make_brush_stress_scene(brush_count, yield_hook=None):
 
     data["brushes"] = brushes
     return data
+
+
 def _run_monster_stress(count):
     """Generate a real procedural Fio room populated with N monsters."""
     data = _generate_procedural_map(
