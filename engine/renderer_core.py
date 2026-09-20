@@ -589,16 +589,16 @@ layout (location = 9) in vec4 iNormal2;
         def make_vertex(source):
             if not source:
                 raise ValueError('missing model vertex shader source')
-            source = source.replace('uniform mat4 model;\\n', '')
-            source = source.replace('uniform mat3 normalMatrix;\\n', '')
+            source = source.replace('uniform mat4 model;\n', '')
+            source = source.replace('uniform mat3 normalMatrix;\n', '')
             if 'out vec3 FragPos;' not in source:
                 raise ValueError('unexpected model vertex shader interface')
             source = source.replace('out vec3 FragPos;', instance_attrs + 'out vec3 FragPos;', 1)
             source = source.replace(
                 'void main() {',
-                'void main() {\\n'
-                '    mat4 instanceModel = mat4(iModel0, iModel1, iModel2, iModel3);\\n'
-                '    mat3 instanceNormal = mat3(iNormal0.xyz, iNormal1.xyz, iNormal2.xyz);\\n',
+                'void main() {\n'
+                '    mat4 instanceModel = mat4(iModel0, iModel1, iModel2, iModel3);\n'
+                '    mat3 instanceNormal = mat3(iNormal0.xyz, iNormal1.xyz, iNormal2.xyz);\n',
                 1,
             )
             source = source.replace('model * vec4(aPos, 1.0)', 'instanceModel * vec4(aPos, 1.0)')
