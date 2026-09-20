@@ -830,6 +830,16 @@ class BaseRenderer:
         print(f"Failed to load model: {filename}")
         return None
 
+    def get_loaded_model(self, filename):
+        """Return a model already loaded by this renderer without touching GL."""
+        if not filename:
+            return None
+        normalized_filename = os.path.normpath(
+            str(filename).replace('/', os.sep).replace('\\', os.sep)
+        )
+        cache_key = os.path.normcase(normalized_filename)
+        return self.loaded_models.get(cache_key)
+
     def draw_models(self, projection, view, camera_pos, models, lights, config):
             if not models:
                 return

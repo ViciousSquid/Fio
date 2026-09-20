@@ -2090,14 +2090,14 @@ class View2D(QWidget):
         if not model_path:
             return None
 
-        # Use the renderer as the single model cache/loader. Do not require an
-        # exact string match against loaded_models: model paths can differ only
-        # by slash direction or absolute/relative spelling on Windows.
+        # 2D is a QPainter view, not the renderer's OpenGL context. Never load
+        # a model here: OBJ/GLB loading creates VAOs/VBOs and must happen in the
+        # 3D view's current GL context. The 3D renderer loads it on its next frame.
         if not hasattr(self.main_window, 'view_3d') or not self.main_window.view_3d.renderer:
             return None
 
         renderer = self.main_window.view_3d.renderer
-        obj = renderer.load_model(model_path)
+        obj = renderer.get_loaded_model(model_path)
         if not obj or not obj.is_loaded:
             return None
         if not obj or not hasattr(obj, 'cpu_vertices') or obj.cpu_vertices is None or len(obj.cpu_vertices) == 0:
@@ -2158,9 +2158,6 @@ class View2D(QWidget):
     def _draw_model_wireframe(self, painter, model_thing, ax_map, ax1, ax2):
         """Draws the projected wireframe of a 3D model in the 2D view."""
         model_path = model_thing.properties.get('model_path')
-        if model_path and hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.renderer:
-            renderer = self.main_window.view_3d.renderer
-            renderer.load_model(model_path)
 
         coords = self._compute_model_screen_coords(model_thing, ax_map, ax1, ax2)
 
@@ -2182,7 +2179,7 @@ class View2D(QWidget):
         # edges AND crashes when vertex_count % 3 != 0.
         obj = None
         if model_path and hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.renderer:
-            obj = self.main_window.view_3d.renderer.load_model(model_path)
+            obj = self.main_window.view_3d.renderer.get_loaded_model(model_path)
         cpu_triangles = getattr(obj, 'cpu_triangles', None)
 
         if cpu_triangles:
@@ -4247,7 +4244,7 @@ class View2D(QWidget):
             is_hit = False
             
             # Standard Thing Hit Test
-            if isinstance(thing, Model) and thing.properties.get('model_path'):
+            if thing.properties.get('model_path'):
                 # Advanced Model Hit Test: Check Bounding Box of projected vertices
                 coords = self._compute_model_screen_coords(thing, ax_map, ax1, ax2)
                 if coords:

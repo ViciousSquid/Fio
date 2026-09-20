@@ -556,9 +556,8 @@ class Renderer_F(BaseRenderer):
         # classification path happens to be active in the current render mode.
         models_to_render = [
             thing for thing in cull_things
-            if isinstance(thing, Thing)
-            and thing.properties.get('model_path')
-            and not thing.properties.get('hidden', False)
+            if getattr(thing, 'properties', {}).get('model_path')
+            and not getattr(thing, 'properties', {}).get('hidden', False)
         ]
         model_ids = {id(thing) for thing in models_to_render}
         final_sprites = [
