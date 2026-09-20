@@ -598,13 +598,12 @@ layout (location = 9) in vec4 iNormal2;
                 'void main() {',
                 'void main() {\\n'
                 '    mat4 instanceModel = mat4(iModel0, iModel1, iModel2, iModel3);\\n'
-                '    mat3 instanceNormal = mat3(iNormal0.xyz, iNormal1.xyz, iNormal2.xyz);',
+                '    mat3 instanceNormal = mat3(iNormal0.xyz, iNormal1.xyz, iNormal2.xyz);\\n',
                 1,
             )
             source = source.replace('model * vec4(aPos, 1.0)', 'instanceModel * vec4(aPos, 1.0)')
             source = source.replace('normalMatrix * aNormal', 'instanceNormal * aNormal')
             return source
-
         try:
             self.shaders['lit_instanced'] = self.shader_loader.compile_from_source(
                 make_vertex(lit_vert), lit_frag)
