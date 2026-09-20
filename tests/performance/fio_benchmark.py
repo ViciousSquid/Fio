@@ -913,20 +913,24 @@ def make_monster_chaos_witness_world(seed="43", monster_count=50, yield_hook=Non
     # Randomly use the base sprite set or the available alternate skin.
     variants = ("<None>", "variant1")
 
-    # Put the teams on opposite sides of the single room. The PathNode sits
-    # at the room centre, so both sides converge on the same destination.
+    # Put the teams on opposite sides of the single room, but keep every
+    # spawn well inside the room's central open area.  The previous layout
+    # scattered the 25-monster teams close enough to the wall/collision
+    # boundary that production pathfinding could choose a route which ended
+    # up reporting the central PathNode as blocked by a wall.  Use a compact
+    # 5x5 staging grid with a clear straight corridor to the centre instead.
     team_positions = {
         "benchmark_red": [],
         "benchmark_blue": [],
     }
     for row in range(25):
-        z_offset = ((row % 5) - 2) * 32.0 + rng.uniform(-8.0, 8.0)
-        x_offset = (row // 5) * 5.0 + rng.uniform(-6.0, 6.0)
+        z_offset = ((row % 5) - 2) * 40.0 + rng.uniform(-4.0, 4.0)
+        x_offset = ((row // 5) - 2) * 6.0 + rng.uniform(-3.0, 3.0)
         team_positions["benchmark_red"].append(
-            [px - 105.0 + x_offset, z_offset]
+            [px - 80.0 + x_offset, z_offset]
         )
         team_positions["benchmark_blue"].append(
-            [px + 105.0 - x_offset, z_offset]
+            [px + 80.0 - x_offset, z_offset]
         )
 
     team_indices = {"benchmark_red": 0, "benchmark_blue": 0}
