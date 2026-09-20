@@ -1346,9 +1346,14 @@ class BenchmarkRunner:
         fighters = rng.sample(monsters, fighter_count)
         rng.shuffle(fighters)
 
+        # Release every monster from the PathNode target override. The
+        # production AI can then use team-based enemy targeting for the full
+        # mob, while the seeded subset gets direct deterministic aggro.
+        for monster in monsters:
+            monster.properties.pop("target_name", None)
+            monster.properties["awake"] = True
+
         for source in fighters:
-            source.properties.pop("target_name", None)
-            source.properties["awake"] = True
             source.properties["_aggro_target"] = None
 
         for index, source in enumerate(fighters):
