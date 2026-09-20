@@ -293,6 +293,13 @@ class BaseRenderer:
 
         self._model_matrix = glm.mat4(1.0)
 
+        # GPU-instanced model data. One persistent VBO is shared by all model
+        # VAOs; each instance carries a model matrix and normal matrix (112 B).
+        self._model_instance_vbo = None
+        self._model_instance_capacity = 0
+        self._model_instance_data = np.empty((0, 28), dtype=np.float32)
+        self._model_instanced_vaos = set()
+
         # Depth cube-map shadow-mapping state (created lazily once GL is ready).
         self._shadow_fbo = None
         self._shadow_cubemaps = []          # texture ids, one cube-map per shadow slot
@@ -543,6 +550,7 @@ class BaseRenderer:
         self.uniforms['textured'] = UniformCache(tex_shader)
         self._preload_lit_uniforms('textured')
         self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'tex_angle', 'tex_shift', 'normalMatrix'])
+        self._compile_instanced_model_shaders(lit_vert, lit_frag, tex_vert, tex_frag)
 
     def _compile_standard_shaders(self):
         lit_shader = self.shader_loader.compile_shader_program('lit.vert', 'lit.frag')
@@ -556,6 +564,72 @@ class BaseRenderer:
         self.uniforms['textured'] = UniformCache(tex_shader)
         self._preload_lit_uniforms('textured')
         self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'tex_angle', 'tex_shift', 'normalMatrix'])
+        lit_vert = DEFAULT_SHADERS.get('lit.vert', '')
+        lit_frag = DEFAULT_SHADERS.get('lit.frag', '')
+        tex_vert = DEFAULT_SHADERS.get('textured.vert', '')
+        tex_frag = DEFAULT_SHADERS.get('textured.frag', '')
+        self._compile_instanced_model_shaders(lit_vert, lit_frag, tex_vert, tex_frag)
+
+    def _compile_instanced_model_shaders(self, lit_vert, lit_frag, tex_vert, tex_frag):
+        """Compile GL 3.3 model shaders whose transforms come from instanced attributes."""
+        instance_attrs = """layout (location = 3) in vec4 iModel0;
+layout (location = 4) in vec4 iModel1;
+layout (location = 5) in vec4 iModel2;
+layout (location = 6) in vec4 iModel3;
+layout (location = 7) in vec4 iNormal0;
+layout (location = 8) in vec4 iNormal1;
+layout (location = 9) in vec4 iNormal2;
+
+"""
+
+        def make_vertex(source):
+            if not source:
+                raise ValueError('missing model vertex shader source')
+            source = source.replace('uniform mat4 model;
+', '')
+            source = source.replace('uniform mat3 normalMatrix;
+', '')
+            if 'out vec3 FragPos;' not in source:
+                raise ValueError('unexpected model vertex shader interface')
+            source = source.replace('out vec3 FragPos;', instance_attrs + 'out vec3 FragPos;', 1)
+            source = source.replace(
+                'void main() {',
+                'void main() {
+'
+                '    mat4 instanceModel = mat4(iModel0, iModel1, iModel2, iModel3);
+'
+                '    mat3 instanceNormal = mat3(iNormal0.xyz, iNormal1.xyz, iNormal2.xyz);',
+                1,
+            )
+            source = source.replace('model * vec4(aPos, 1.0)', 'instanceModel * vec4(aPos, 1.0)')
+            source = source.replace('normalMatrix * aNormal', 'instanceNormal * aNormal')
+            return source
+
+        try:
+            self.shaders['lit_instanced'] = self.shader_loader.compile_from_source(
+                make_vertex(lit_vert), lit_frag)
+            self.uniforms['lit_instanced'] = UniformCache(self.shaders['lit_instanced'])
+            self._preload_lit_uniforms('lit_instanced')
+
+            self.shaders['textured_instanced'] = self.shader_loader.compile_from_source(
+                make_vertex(tex_vert), tex_frag)
+            self.uniforms['textured_instanced'] = UniformCache(self.shaders['textured_instanced'])
+            self._preload_lit_uniforms('textured_instanced')
+            self.uniforms['textured_instanced'].preload(
+                ['texture_diffuse', 'tex_scale', 'tex_angle', 'tex_shift', 'normalMatrix'])
+            print('[BaseRenderer] GPU model instancing shaders compiled successfully.')
+        except Exception as exc:
+            # The ordinary model shaders remain authoritative if an older/quirky
+            # driver rejects the instanced attribute interface.
+            for name in ('lit_instanced', 'textured_instanced'):
+                self.uniforms.pop(name, None)
+                program = self.shaders.pop(name, None)
+                if program:
+                    try:
+                        gl.glDeleteProgram(program)
+                    except Exception:
+                        pass
+            print(f'[BaseRenderer] GPU model instancing disabled: {exc}')
 
     def _preload_lit_uniforms(self, shader_name):
         uniforms = self.uniforms[shader_name]
@@ -861,176 +935,295 @@ class BaseRenderer:
             self.loaded_models[filename] = model
         return model
 
-    def draw_models(self, projection, view, camera_pos, models, lights, config):
-            if not models:
-                return
+    def _ensure_model_instance_buffer(self, count):
+        if count <= 0:
+            return
+        if self._model_instance_vbo is None:
+            self._model_instance_vbo = gl.glGenBuffers(1)
+        if count > self._model_instance_capacity:
+            capacity = max(16, self._model_instance_capacity)
+            while capacity < count:
+                capacity *= 2
+            self._model_instance_capacity = capacity
+            self._model_instance_data = np.empty((capacity, 28), dtype=np.float32)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._model_instance_vbo)
+            gl.glBufferData(
+                gl.GL_ARRAY_BUFFER,
+                self._model_instance_data.nbytes,
+                None,
+                gl.GL_DYNAMIC_DRAW,
+            )
 
-            lit_shader = self.shaders.get('lit')
-            textured_shader = self.shaders.get('textured')
-            current_shader = None
-            cull_was_enabled = gl.glIsEnabled(gl.GL_CULL_FACE)
-            gl.glDisable(gl.GL_CULL_FACE)
+    def _ensure_model_instance_vao(self, vao):
+        key = int(vao)
+        if key in self._model_instanced_vaos:
+            return
+        if self._model_instance_vbo is None:
+            self._ensure_model_instance_buffer(1)
+        gl.glBindVertexArray(vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._model_instance_vbo)
+        stride = 28 * 4
+        offsets = (0, 16, 32, 48, 64, 80, 96)
+        for location, offset in zip(range(3, 10), offsets):
+            gl.glVertexAttribPointer(
+                location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(offset))
+            gl.glEnableVertexAttribArray(location)
+            gl.glVertexAttribDivisor(location, 1)
+        gl.glBindVertexArray(0)
+        self._model_instanced_vaos.add(key)
 
-            for thing in models:
-                model_file = thing.properties.get('model_path')
-                if not model_file:
-                    continue
-                obj = self.load_model(model_file)
-                if not obj or not obj.is_loaded:
-                    continue
+    def _fill_model_instance_buffer(self, things):
+        count = len(things)
+        self._ensure_model_instance_buffer(count)
+        out = self._model_instance_data[:count]
+        for i, thing in enumerate(things):
+            mat = self._thing_model_matrix(thing)
+            model_np = getattr(thing, '_render_model_mat_np_cache', None)
+            normal_np = getattr(thing, '_render_model_nmat_np_cache', None)
+            if model_np is None or normal_np is None:
+                normal = getattr(thing, '_render_model_nmat_cache', self._identity_mat3)
+                model_np = np.array([
+                    mat[0][0], mat[0][1], mat[0][2], mat[0][3],
+                    mat[1][0], mat[1][1], mat[1][2], mat[1][3],
+                    mat[2][0], mat[2][1], mat[2][2], mat[2][3],
+                    mat[3][0], mat[3][1], mat[3][2], mat[3][3],
+                ], dtype=np.float32)
+                normal_np = np.array([
+                    normal[0][0], normal[0][1], normal[0][2], 0.0,
+                    normal[1][0], normal[1][1], normal[1][2], 0.0,
+                    normal[2][0], normal[2][1], normal[2][2], 0.0,
+                ], dtype=np.float32)
+                thing._render_model_mat_np_cache = model_np
+                thing._render_model_nmat_np_cache = normal_np
+            out[i, :16] = model_np
+            out[i, 16:28] = normal_np
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._model_instance_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, out)
 
-                self.render_stats.visible_tris += (obj.vertex_count // 3)
+    def _model_texture_id(self, tex_name, material=None, manual=False):
+        if not tex_name:
+            return 0
+        resolved_path = self._resolve_model_texture_path(
+            material or {'texture': tex_name}, tex_name)
+        use_direct = bool(
+            resolved_path and os.path.exists(resolved_path) and
+            (not manual or not resolved_path.startswith('assets'))
+        )
+        if not use_direct:
+            return self.load_texture(tex_name, 'textures')
+        tex_cache_name = f'model_tex:{resolved_path}'
+        tex_id = self.texture_manager.get(tex_cache_name)
+        if tex_id is not None:
+            return tex_id
+        try:
+            from PIL import Image
+            img = Image.open(resolved_path).convert('RGBA')
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+            tex_id = gl.glGenTextures(1)
+            self.texture_manager[tex_cache_name] = tex_id
+            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+            gl.glTexImage2D(
+                gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, img.width, img.height, 0,
+                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, img.tobytes())
+            gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
+            return tex_id
+        except Exception as exc:
+            print(f'[Renderer] Model texture load failed for {resolved_path}: {exc}')
+            return self.load_texture(tex_name, 'textures')
 
-                mat = self._thing_model_matrix(thing)
-                model_ptr = glm.value_ptr(mat)
-                normal_mat = thing._render_model_nmat_cache
-                normal_ptr = glm.value_ptr(normal_mat)
-                gl.glBindVertexArray(obj.vao)
-                manual_texture = thing.properties.get('texture')
+    def _prepare_model_shader(self, shader_name, projection, view, lights, current_shader):
+        program = self.shaders.get(shader_name)
+        if not program:
+            return current_shader
+        if current_shader != shader_name:
+            gl.glUseProgram(program)
+            u = self.uniforms[shader_name]
+            gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+            gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+            self._upload_lights_once(shader_name, lights)
+            if shader_name.startswith('textured'):
+                gl.glActiveTexture(gl.GL_TEXTURE0)
+                gl.glUniform1i(u['texture_diffuse'], 0)
+                if u.get('tex_scale', -1) != -1:
+                    gl.glUniform2f(u['tex_scale'], 1.0, 1.0)
+                if u.get('tex_angle', -1) != -1:
+                    gl.glUniform1f(u['tex_angle'], 0.0)
+                if u.get('tex_shift', -1) != -1:
+                    gl.glUniform2f(u['tex_shift'], 0.0, 0.0)
+            current_shader = shader_name
+        return current_shader
 
-                if obj.groups and not manual_texture:
-                    for group in obj.groups:
-                        mat_name = group['material']
-                        material = obj.materials.get(mat_name, {'color': [0.8,0.8,0.8], 'texture': None})
-                        use_texture = material.get('texture')
-                        if use_texture and textured_shader:
-                            if current_shader != textured_shader:
-                                gl.glUseProgram(textured_shader)
-                                current_shader = textured_shader
-                                u = self.uniforms['textured']
-                                gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-                                gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-                                self._upload_lights_once('textured', lights)
-                                gl.glActiveTexture(gl.GL_TEXTURE0)
-                                gl.glUniform1i(u['texture_diffuse'], 0)
-                                # Models use their own UVs — clear any brush
-                                # face transform left in the shared uniforms.
-                                if u.get('tex_scale', -1) != -1:
-                                    gl.glUniform2f(u['tex_scale'], 1.0, 1.0)
-                                if u.get('tex_angle', -1) != -1:
-                                    gl.glUniform1f(u['tex_angle'], 0.0)
-                                if u.get('tex_shift', -1) != -1:
-                                    gl.glUniform2f(u['tex_shift'], 0.0, 0.0)
-                            # Resolve texture path relative to MTL directory first
-                            resolved_path = self._resolve_model_texture_path(material, use_texture)
-                            if resolved_path and os.path.exists(resolved_path):
-                                # Load from resolved absolute path
-                                tex_cache_name = f"model_tex:{resolved_path}"
-                                if tex_cache_name in self.texture_manager:
-                                    tex_id = self.texture_manager[tex_cache_name]
-                                else:
-                                    from PIL import Image
-                                    img = Image.open(resolved_path).convert("RGBA")
-                                    img = img.transpose(Image.FLIP_TOP_BOTTOM)
-                                    tex_id = gl.glGenTextures(1)
-                                    self.texture_manager[tex_cache_name] = tex_id
-                                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                                    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
-                                    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
-                                    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)
-                                    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
-                                    gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, img.width, img.height, 0,
-                                                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, img.tobytes())
-                                    gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
-                            else:
-                                tex_id = self.load_texture(use_texture, 'textures')
-                            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                            gl.glUniformMatrix4fv(self.uniforms['textured']['model'], 1, gl.GL_FALSE, model_ptr)
-                            normal_mat_loc = self.uniforms['textured'].get('normalMatrix', -1)
-                            if normal_mat_loc >= 0:
-                                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normal_ptr)
-                        elif lit_shader:
-                            if current_shader != lit_shader:
-                                gl.glUseProgram(lit_shader)
-                                current_shader = lit_shader
-                                u = self.uniforms['lit']
-                                gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-                                gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-                                self._upload_lights_once('lit', lights)
-                            color = material.get('color', [0.8,0.8,0.8])
-                            gl.glUniform3fv(self.uniforms['lit']['object_color'], 1, color)
-                            gl.glUniform1f(self.uniforms['lit']['alpha'], 1.0)
-                            gl.glUniformMatrix4fv(self.uniforms['lit']['model'], 1, gl.GL_FALSE, model_ptr)
-                            normal_mat_loc = self.uniforms['lit'].get('normalMatrix', -1)
-                            if normal_mat_loc >= 0:
-                                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normal_ptr)
-                        # Draw the group - indexed or non-indexed
-                        if group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
-                            gl.glDrawElements(gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
-                                            ctypes.c_void_p(group['start'] * 4))
-                        else:
-                            gl.glDrawArrays(gl.GL_TRIANGLES, group['start'], group['count'])
-                else:
-                    tex_name = manual_texture
-                    target_shader = textured_shader if tex_name else lit_shader
-                    if target_shader == textured_shader:
-                        if current_shader != textured_shader:
-                            gl.glUseProgram(textured_shader)
-                            current_shader = textured_shader
-                            u = self.uniforms['textured']
-                            gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-                            gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-                            self._upload_lights_once('textured', lights)
-                            gl.glActiveTexture(gl.GL_TEXTURE0)
-                            gl.glUniform1i(u['texture_diffuse'], 0)
-                            # Models use their own UVs — clear any brush face
-                            # transform left in the shared uniforms.
-                            if u.get('tex_scale', -1) != -1:
-                                gl.glUniform2f(u['tex_scale'], 1.0, 1.0)
-                            if u.get('tex_angle', -1) != -1:
-                                gl.glUniform1f(u['tex_angle'], 0.0)
-                            if u.get('tex_shift', -1) != -1:
-                                gl.glUniform2f(u['tex_shift'], 0.0, 0.0)
-                        resolved_path = self._resolve_model_texture_path({'texture': tex_name}, tex_name)
-                        if resolved_path and os.path.exists(resolved_path) and not resolved_path.startswith('assets'):
-                            # Load from resolved absolute path
-                            tex_cache_name = f"model_tex:{resolved_path}"
-                            if tex_cache_name in self.texture_manager:
-                                tex_id = self.texture_manager[tex_cache_name]
-                            else:
-                                from PIL import Image
-                                img = Image.open(resolved_path).convert("RGBA")
-                                img = img.transpose(Image.FLIP_TOP_BOTTOM)
-                                tex_id = gl.glGenTextures(1)
-                                self.texture_manager[tex_cache_name] = tex_id
-                                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
-                                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
-                                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)
-                                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
-                                gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, img.width, img.height, 0,
-                                            gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, img.tobytes())
-                                gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
-                        else:
-                            tex_id = self.load_texture(tex_name, 'textures')
-                        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                        gl.glUniformMatrix4fv(self.uniforms['textured']['model'], 1, gl.GL_FALSE, model_ptr)
-                        normal_mat_loc = self.uniforms['textured'].get('normalMatrix', -1)
-                        if normal_mat_loc >= 0:
-                            gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normal_ptr)
-                    elif lit_shader:
-                        if current_shader != lit_shader:
-                            gl.glUseProgram(lit_shader)
-                            current_shader = lit_shader
-                            u = self.uniforms['lit']
-                            gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-                            gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-                            self._upload_lights_once('lit', lights)
-                        col = thing.properties.get('color', [0.8, 0.8, 0.8])
-                        gl.glUniform3fv(self.uniforms['lit']['object_color'], 1, col)
-                        gl.glUniform1f(self.uniforms['lit']['alpha'], 1.0)
-                        gl.glUniformMatrix4fv(self.uniforms['lit']['model'], 1, gl.GL_FALSE, model_ptr)
-                        normal_mat_loc = self.uniforms['lit'].get('normalMatrix', -1)
-                        if normal_mat_loc >= 0:
-                            gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normal_ptr)
-                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
-                self.render_stats.draw_calls += 1
+    def _draw_model_batch_instanced(self, batch, projection, view, lights, current_shader):
+        shader_name = batch['shader'] + '_instanced'
+        current_shader = self._prepare_model_shader(
+            shader_name, projection, view, lights, current_shader)
+        if current_shader != shader_name:
+            return current_shader
 
-            gl.glBindVertexArray(0)
-            if cull_was_enabled:
-                gl.glEnable(gl.GL_CULL_FACE)
+        obj = batch['obj']
+        things = batch['things']
+        u = self.uniforms[shader_name]
+        if batch['shader'] == 'textured':
+            gl.glBindTexture(gl.GL_TEXTURE_2D, batch.get('texture_id', 0))
+        else:
+            color = batch.get('color', (0.8, 0.8, 0.8))
+            gl.glUniform3fv(u['object_color'], 1, color)
+            gl.glUniform1f(u['alpha'], 1.0)
+
+        self._fill_model_instance_buffer(things)
+        self._ensure_model_instance_vao(obj.vao)
+        gl.glBindVertexArray(obj.vao)
+        group = batch.get('group')
+        if group is not None:
+            if group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
+                gl.glDrawElementsInstanced(
+                    gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
+                    ctypes.c_void_p(group['start'] * 4), len(things))
             else:
-                gl.glDisable(gl.GL_CULL_FACE)
+                gl.glDrawArraysInstanced(
+                    gl.GL_TRIANGLES, group['start'], group['count'], len(things))
+        else:
+            gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, obj.vertex_count, len(things))
+        self.render_stats.draw_calls += 1
+        self.render_stats.batched_draws += 1
+        return current_shader
+
+    def _draw_model_batch_single(self, batch, projection, view, lights, current_shader):
+        shader_name = batch['shader']
+        current_shader = self._prepare_model_shader(
+            shader_name, projection, view, lights, current_shader)
+        if current_shader != shader_name:
+            return current_shader
+
+        obj = batch['obj']
+        thing = batch['things'][0]
+        mat = self._thing_model_matrix(thing)
+        normal_mat = getattr(thing, '_render_model_nmat_cache', self._identity_mat3)
+        u = self.uniforms[shader_name]
+        if shader_name == 'textured':
+            gl.glBindTexture(gl.GL_TEXTURE_2D, batch.get('texture_id', 0))
+        else:
+            color = batch.get('color', (0.8, 0.8, 0.8))
+            gl.glUniform3fv(u['object_color'], 1, color)
+            gl.glUniform1f(u['alpha'], 1.0)
+        gl.glUniformMatrix4fv(u['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
+        normal_loc = u.get('normalMatrix', -1)
+        if normal_loc >= 0:
+            gl.glUniformMatrix3fv(normal_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
+        gl.glBindVertexArray(obj.vao)
+        group = batch.get('group')
+        if group is not None:
+            if group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
+                gl.glDrawElements(gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
+                                  ctypes.c_void_p(group['start'] * 4))
+            else:
+                gl.glDrawArrays(gl.GL_TRIANGLES, group['start'], group['count'])
+        else:
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
+        self.render_stats.draw_calls += 1
+        return current_shader
+
+    def draw_models(self, projection, view, camera_pos, models, lights, config):
+        if not models:
+            return
+
+        lit_shader = self.shaders.get('lit')
+        textured_shader = self.shaders.get('textured')
+        if not lit_shader and not textured_shader:
+            return
+
+        cull_was_enabled = gl.glIsEnabled(gl.GL_CULL_FACE)
+        gl.glDisable(gl.GL_CULL_FACE)
+
+        # Build material/mesh batches once. Identical model geometry and material
+        # state shares one instanced draw instead of one GL draw per Thing.
+        batches = {}
+        for thing in models:
+            props = getattr(thing, 'properties', {})
+            model_file = props.get('model_path')
+            if not model_file:
+                continue
+            obj = self.load_model(model_file)
+            if not obj or not obj.is_loaded:
+                continue
+
+            self.render_stats.visible_tris += obj.vertex_count // 3
+            manual_texture = props.get('texture')
+
+            if obj.groups and not manual_texture:
+                for group in obj.groups:
+                    material = obj.materials.get(
+                        group['material'],
+                        {'color': [0.8, 0.8, 0.8], 'texture': None})
+                    use_texture = material.get('texture')
+                    shader_kind = (
+                        'textured' if use_texture and textured_shader
+                        else 'lit' if lit_shader else None)
+                    if not shader_kind:
+                        continue
+                    color = tuple(material.get('color', [0.8, 0.8, 0.8]))
+                    key = (
+                        id(obj), group.get('start', 0), group.get('count', 0),
+                        bool(group.get('indexed', False)), shader_kind,
+                        str(use_texture) if shader_kind == 'textured' else color,
+                    )
+                    batch = batches.get(key)
+                    if batch is None:
+                        batch = {
+                            'obj': obj, 'group': group, 'things': [],
+                            'shader': shader_kind, 'material': material,
+                            'texture_name': use_texture, 'color': color,
+                        }
+                        batches[key] = batch
+                    batch['things'].append(thing)
+            else:
+                tex_name = manual_texture
+                shader_kind = (
+                    'textured' if tex_name and textured_shader
+                    else 'lit' if lit_shader else None)
+                if not shader_kind:
+                    continue
+                color = tuple(props.get('color', [0.8, 0.8, 0.8]))
+                key = (
+                    id(obj), 0, obj.vertex_count, False, shader_kind,
+                    str(tex_name) if shader_kind == 'textured' else color,
+                )
+                batch = batches.get(key)
+                if batch is None:
+                    batch = {
+                        'obj': obj, 'group': None, 'things': [],
+                        'shader': shader_kind, 'material': None,
+                        'texture_name': tex_name, 'color': color,
+                    }
+                    batches[key] = batch
+                batch['things'].append(thing)
+
+        current_shader = None
+        for batch in batches.values():
+            tex_name = batch.get('texture_name')
+            if tex_name:
+                batch['texture_id'] = self._model_texture_id(
+                    tex_name, batch.get('material'),
+                    manual=bool(batch.get('material') is None))
+
+            things = batch['things']
+            instanced_shader = self.shaders.get(batch['shader'] + '_instanced')
+            if len(things) >= 2 and instanced_shader:
+                current_shader = self._draw_model_batch_instanced(
+                    batch, projection, view, lights, current_shader)
+            else:
+                current_shader = self._draw_model_batch_single(
+                    batch, projection, view, lights, current_shader)
+
+        gl.glBindVertexArray(0)
+        if cull_was_enabled:
+            gl.glEnable(gl.GL_CULL_FACE)
+        else:
+            gl.glDisable(gl.GL_CULL_FACE)
 
     def set_instance_textures(self, textures):
         self.instance_textures = textures
@@ -1547,7 +1740,7 @@ class BaseRenderer:
         for uniform storage.
         """
         cap = _SHADER_LIGHT_CAPS.get(shader_name, self.MAX_LIGHTS)
-        if self.lowpower_mode and shader_name in ('lit', 'textured'):
+        if self.lowpower_mode and shader_name in ('lit', 'textured', 'lit_instanced', 'textured_instanced'):
             cap = min(cap, shaders.MAX_LIGHTS_ARM)
         return cap
 
@@ -1710,6 +1903,19 @@ class BaseRenderer:
         thing._render_model_mat_key = key
         thing._render_model_mat_cache = mat
         thing._render_model_nmat_cache = normal
+        # Numpy copies are generated only when the transform changes; the
+        # instanced renderer can then copy cached arrays into one GPU batch.
+        thing._render_model_mat_np_cache = np.array([
+            mat[0][0], mat[0][1], mat[0][2], mat[0][3],
+            mat[1][0], mat[1][1], mat[1][2], mat[1][3],
+            mat[2][0], mat[2][1], mat[2][2], mat[2][3],
+            mat[3][0], mat[3][1], mat[3][2], mat[3][3],
+        ], dtype=np.float32)
+        thing._render_model_nmat_np_cache = np.array([
+            normal[0][0], normal[0][1], normal[0][2], 0.0,
+            normal[1][0], normal[1][1], normal[1][2], 0.0,
+            normal[2][0], normal[2][1], normal[2][2], 0.0,
+        ], dtype=np.float32)
         return mat
 
     def _bind_shadow_maps(self, uniforms):
@@ -3630,6 +3836,11 @@ class BaseRenderer:
             gl.glDeleteBuffers(1, [self._water_surface_vbo])
         if self._water_surface_ebo:
             gl.glDeleteBuffers(1, [self._water_surface_ebo])
+        if self._model_instance_vbo:
+            gl.glDeleteBuffers(1, [self._model_instance_vbo])
+            self._model_instance_vbo = None
+            self._model_instance_capacity = 0
+            self._model_instanced_vaos.clear()
         # Portal resources
         if self._portal_quad_vao:
             gl.glDeleteVertexArrays(1, [self._portal_quad_vao])
