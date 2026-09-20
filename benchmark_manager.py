@@ -50,7 +50,7 @@ TESTS = (
 
 
 class BenchmarkManager(QDialog):
-    STARTUP_TIMEOUT = 15.0
+    STARTUP_TIMEOUT = 300.0
     INACTIVITY_TIMEOUT = 60.0
     ABSOLUTE_TIMEOUT = 900.0
 
