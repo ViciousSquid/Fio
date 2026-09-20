@@ -1887,10 +1887,31 @@ class BenchmarkTests:
                     data,
                     yield_hook=cooperative_yield,
                 )
+
+                # Frame a representative portion of the generated brush field
+                # in every editor view.  This keeps the workload visible in the
+                # 2D orthographic panes as well as the live 3D viewport instead
+                # of depending on whatever camera position the user had before
+                # the benchmark started.
+                player_start = next(
+                    (
+                        thing for thing in data.get("things", [])
+                        if str(thing.get("type", "")).lower() == "playerstart"
+                    ),
+                    None,
+                )
+                focus_pos = (
+                    player_start.get("pos", [0.0, 0.0, 0.0])
+                    if player_start is not None
+                    else [0.0, 0.0, 0.0]
+                )
+                window.focus_on_bounds(focus_pos, 1024.0)
+
                 QApplication.processEvents()
                 self._append(
-                    "  Live brush scene: created %d real brushes in the existing "
-                    "EditorState; 2D/3D views refreshed." % brush_count
+                    "  Live brush scene: created %d real brushes with varied "
+                    "dimensions; 2D/3D views centred on the brush field."
+                    % brush_count
                 )
     
             elif label == "monster_capacity":
