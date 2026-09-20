@@ -775,12 +775,30 @@ class BaseRenderer:
     # --------------------------------------------------------------------------
     def load_model(self, filename):
         """Load a 3D model (OBJ or GLB)."""
-        if filename in self.loaded_models:
-            return self.loaded_models[filename]
+        if not filename:
+            return None
 
-        full_path = os.path.join('assets', 'models', filename)
+        # Keep cache keys stable when a path comes from QFileDialog, a map,
+        # or a package and uses different slash/absolute-path spellings.
+        original_filename = str(filename)
+        normalized_filename = os.path.normpath(
+            original_filename.replace('/', os.sep).replace('\\', os.sep)
+        )
+        cache_key = os.path.normcase(normalized_filename)
+        if cache_key in self.loaded_models:
+            return self.loaded_models[cache_key]
+
+        full_path = normalized_filename
+        if not os.path.isabs(full_path):
+            candidate = os.path.join('assets', 'models', full_path)
+            if os.path.exists(candidate):
+                full_path = candidate
+            elif os.path.exists(original_filename):
+                full_path = original_filename
+
         if not os.path.exists(full_path):
-            full_path = filename
+            print(f"Failed to load model: {filename}")
+            return None
 
         if not os.path.exists(full_path):
             print(f"Failed to load model: {filename}")
@@ -789,7 +807,7 @@ class BaseRenderer:
         print(f"Loading model: {full_path}")
 
         # Determine format by extension
-        ext = os.path.splitext(filename)[1].lower()
+        ext = os.path.splitext(full_path)[1].lower()
 
         if ext == '.glb':
             if GLB is None:
@@ -806,7 +824,7 @@ class BaseRenderer:
             return None
 
         if model.is_loaded:
-            self.loaded_models[filename] = model
+            self.loaded_models[cache_key] = model
             return model
 
         print(f"Failed to load model: {filename}")

@@ -2087,23 +2087,24 @@ class View2D(QWidget):
         """Helper to compute screen coordinates for a model's wireframe.
         Returns (pts_x, pts_y) numpy arrays, or None if failed."""
         model_path = model_thing.properties.get('model_path')
-        if not model_path: return None
+        if not model_path:
+            return None
 
-        # Access loaded model from renderer via main window reference
+        # Use the renderer as the single model cache/loader. Do not require an
+        # exact string match against loaded_models: model paths can differ only
+        # by slash direction or absolute/relative spelling on Windows.
         if not hasattr(self.main_window, 'view_3d') or not self.main_window.view_3d.renderer:
             return None
-            
+
         renderer = self.main_window.view_3d.renderer
-        
-        if model_path not in renderer.loaded_models:
+        obj = renderer.load_model(model_path)
+        if not obj or not obj.is_loaded:
             return None
-            
-        obj = renderer.loaded_models.get(model_path)
         if not obj or not hasattr(obj, 'cpu_vertices') or obj.cpu_vertices is None or len(obj.cpu_vertices) == 0:
             return None
 
         # Optimization: Too many vertices check
-        if len(obj.cpu_vertices) > 2000:
+        if len(obj.cpu_vertices) > 50000:
             return None # Treat as box fallback elsewhere
 
         # Transform parameters
@@ -2159,8 +2160,7 @@ class View2D(QWidget):
         model_path = model_thing.properties.get('model_path')
         if model_path and hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.renderer:
             renderer = self.main_window.view_3d.renderer
-            if model_path not in renderer.loaded_models:
-                renderer.load_model(model_path)
+            renderer.load_model(model_path)
 
         coords = self._compute_model_screen_coords(model_thing, ax_map, ax1, ax2)
 
@@ -2182,7 +2182,7 @@ class View2D(QWidget):
         # edges AND crashes when vertex_count % 3 != 0.
         obj = None
         if model_path and hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.renderer:
-            obj = self.main_window.view_3d.renderer.loaded_models.get(model_path)
+            obj = self.main_window.view_3d.renderer.load_model(model_path)
         cpu_triangles = getattr(obj, 'cpu_triangles', None)
 
         if cpu_triangles:
