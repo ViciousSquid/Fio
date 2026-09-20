@@ -379,7 +379,29 @@ class Renderer_F(BaseRenderer):
                     else:
                         scale_x, scale_y = 1.0, 1.0
                     gl.glUniform2f(tex_scale_loc, scale_x, scale_y)
-                gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
+                try:
+                    gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
+                except Exception as exc:
+                    if '1282' in str(exc) or 'invalid operation' in str(exc).lower():
+                        print(
+                            '[Renderer_F] textured-brush GL_INVALID_OPERATION state: '
+                            f'program={gl.glGetIntegerv(gl.GL_CURRENT_PROGRAM)}, '
+                            f'vao={gl.glGetIntegerv(gl.GL_VERTEX_ARRAY_BINDING)}, '
+                            f'array_buffer={gl.glGetIntegerv(gl.GL_ARRAY_BUFFER_BINDING)}, '
+                            f'element_buffer={gl.glGetIntegerv(gl.GL_ELEMENT_ARRAY_BUFFER_BINDING)}, '
+                            f'tf_active={bool(gl.glGetBooleanv(gl.GL_TRANSFORM_FEEDBACK_ACTIVE))}, '
+                            f'tf_paused={bool(gl.glGetBooleanv(gl.GL_TRANSFORM_FEEDBACK_PAUSED))}, '
+                            f'rasterizer_discard={bool(gl.glGetBooleanv(gl.GL_RASTERIZER_DISCARD))}'
+                        )
+                        for _attrib in (0, 1, 2):
+                            print(
+                                f'[Renderer_F] attrib{_attrib}: '
+                                f'enabled={bool(gl.glGetVertexAttribiv(_attrib, gl.GL_VERTEX_ATTRIB_ARRAY_ENABLED))}, '
+                                f'buffer={gl.glGetVertexAttribiv(_attrib, gl.GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING)}, '
+                                f'stride={gl.glGetVertexAttribiv(_attrib, gl.GL_VERTEX_ATTRIB_ARRAY_STRIDE)}, '
+                                f'type=0x{int(gl.glGetVertexAttribiv(_attrib, gl.GL_VERTEX_ATTRIB_ARRAY_TYPE)):x}'
+                            )
+                    raise
                 self.render_stats.draw_calls += 1
 
         # ---- Angled brushes: one draw per convex face --------------------
