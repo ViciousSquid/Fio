@@ -1039,6 +1039,7 @@ class BenchmarkRunner:
             ])
             elapsed = float(self._live_io_elapsed or 0.0)
             metrics.update({
+                "io_elapsed_s": elapsed,
                 "io_elapsed_ms": elapsed * 1000.0,
                 "io_hops": hops,
                 "hops_per_second": hops / elapsed if elapsed > 0.0 else 0.0,
@@ -1062,6 +1063,7 @@ class BenchmarkRunner:
         if label == "live_io_1000":
             # I/O is a throughput benchmark, not a rendering benchmark.
             # Report hops, elapsed time and throughput instead of an FPS card.
+            elapsed_s = float(metrics.get("io_elapsed_s", 0.0))
             elapsed_ms = float(metrics.get("io_elapsed_ms", 0.0))
             hops = int(metrics.get("io_hops", 0))
             hops_per_second = float(metrics.get("hops_per_second", 0.0))
@@ -1078,18 +1080,18 @@ class BenchmarkRunner:
                 '<tr><td width="24" rowspan="2" bgcolor="#63d471"></td>'
                 '<td height="2" bgcolor="#63d471" style="font-size:2px; line-height:2px;"></td></tr>'
                 '<tr><td style="padding:6px 16px 2px 12px; white-space:nowrap;">'
-                '<span style="font-size:25px; font-weight:bold; color:#63d471;">Hops/second:</span>'
-                '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.0f</span>'
+                '<span style="font-size:25px; font-weight:bold; color:#63d471;">Seconds:</span>'
+                '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%.3f</span>'
                 '</td></tr></table>'
-                '<div style="color:#aaa; padding:4px 0;">%d hops &nbsp; • &nbsp; %.3f ms elapsed</div>'
+                '<div style="color:#aaa; padding:4px 0;">%d hops &nbsp; • &nbsp; %.0f hops/second</div>'
                 '</div>'
                 % (
                     self._html_escape(label),
                     self._html_escape(metrics.get("description", label)),
                     "live logic throughput",
-                    hops_per_second,
+                    elapsed_s,
                     hops,
-                    elapsed_ms,
+                    hops_per_second,
                 )
             )
             self.output.ensureCursorVisible()
