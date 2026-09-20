@@ -460,7 +460,8 @@ class Terrain:
     def _init_shader(self):
         try:
             vertex_code = shaders.DEFAULT_SHADERS['terrain.vert']
-            fragment_code = shaders.DEFAULT_SHADERS['terrain.frag']
+            fragment_code = shaders.light_ubo_source(
+                shaders.DEFAULT_SHADERS['terrain.frag'])
             vertex_shader = compileShader(vertex_code, gl.GL_VERTEX_SHADER)
             fragment_shader = compileShader(fragment_code, gl.GL_FRAGMENT_SHADER)
             self.shader_program = compileProgram(vertex_shader, fragment_shader, validate=False)
@@ -503,13 +504,6 @@ class Terrain:
             'biomeWeights':      gl.glGetUniformLocation(self.shader_program, 'biomeWeights'),
             'terrainHeightScale': gl.glGetUniformLocation(self.shader_program, 'terrainHeightScale'),
         }
-        for i in range(8):
-            base = f'lights[{i}]'
-            self.uniforms[f'{base}.position']  = gl.glGetUniformLocation(self.shader_program, f'{base}.position')
-            self.uniforms[f'{base}.color']     = gl.glGetUniformLocation(self.shader_program, f'{base}.color')
-            self.uniforms[f'{base}.intensity'] = gl.glGetUniformLocation(self.shader_program, f'{base}.intensity')
-            self.uniforms[f'{base}.radius']    = gl.glGetUniformLocation(self.shader_program, f'{base}.radius')
-            self.uniforms[f'{base}.shadowIndex'] = gl.glGetUniformLocation(self.shader_program, f'{base}.shadowIndex')
         # Depth cube-map samplers for point-light shadows.
         for i in range(shaders.MAX_SHADOW_LIGHTS):
             self.uniforms[f'shadowMaps[{i}]'] = gl.glGetUniformLocation(self.shader_program, f'shadowMaps[{i}]')
