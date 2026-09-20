@@ -1206,7 +1206,6 @@ class QtGameView(QOpenGLWidget):
                 pass
             else:
                 # Keep SysMon triangle counters synchronized with the renderer pass.
-                # Benchmark capture samples these values on the following update tick.
                 visible_tris = int(getattr(self.renderer.render_stats, "visible_tris", 0))
                 brush_tris = len(self.editor.state.brushes) * 12
                 terrain = getattr(self.editor, "terrain", None)
