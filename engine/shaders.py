@@ -1,5 +1,6 @@
 import os
 import platform
+import re
 import sys
 
 SHADER_DIR = os.path.join(os.path.dirname(__file__), 'shaders')
@@ -155,6 +156,59 @@ MAX_LIGHTS_ARM = 16
 # renderer clamps `active_lights` to match (see BaseRenderer._shader_light_cap).
 MAX_LIGHTS_WATER = 8
 MAX_LIGHTS_TERRAIN = 8
+
+# GL 3.3 UBO binding used by every lighting shader.  The binding is assigned
+# from Python with glUniformBlockBinding rather than using a GLSL 4.2-style
+# explicit binding qualifier, keeping this portable to the engine's GL 3.3
+# target.
+LIGHT_UBO_BINDING = 2
+
+_LIGHT_DECL_RE = re.compile(
+    r"struct\\s+Light\\s*\\{.*?\\};\\s*uniform\\s+Light\\s+lights\\s*\\[\\s*(\\d+)\\s*\\]\\s*;",
+    re.DOTALL,
+)
+
+
+def light_ubo_source(source):
+    """Rewrite a legacy Light[] fragment shader to the shared std140 UBO.
+
+    The original shader interface is intentionally accepted here so the source
+    files remain readable and the same transform applies to loose shaders,
+    fallback strings, ARM variants and instanced variants alike.
+    """
+    if not source or 'uniform Light lights[' not in source:
+        return source
+
+    match = _LIGHT_DECL_RE.search(source)
+    if match is None:
+        return source
+
+    count = int(match.group(1))
+    block = (
+        "struct Light {\n"
+        "    highp vec4 position;\n"
+        "    vec4 color;\n"
+        "    vec4 params;       // x=intensity, y=radius\n"
+        "    ivec4 indices;     // x=shadow index\n"
+        "};\n"
+        "layout(std140) uniform FioLightBlock {\n"
+        f"    Light lights[{count}];\n"
+        "};"
+    )
+    result = _LIGHT_DECL_RE.sub(block, source, count=1)
+
+    # Preserve the old field semantics at each use site while giving the UBO a
+    # tightly predictable std140 layout (four vec4/ivec4 slots per light).
+    result = re.sub(r"lights\\[([^]]+)\\]\\.position\\b", r"lights[\1].position.xyz", result)
+    result = re.sub(r"lights\\[([^]]+)\\]\\.color\\b", r"lights[\1].color.xyz", result)
+    result = re.sub(r"lights\\[([^]]+)\\]\\.intensity\\b", r"lights[\1].params.x", result)
+    result = re.sub(r"lights\\[([^]]+)\\]\\.radius\\b", r"lights[\1].params.y", result)
+    result = re.sub(
+        r"lights\\[([^]]+)\\]\\.shadowIndex\\b",
+        r"int(lights[\1].indices.x)",
+        result,
+    )
+    return result
 
 SHADOW_GLSL = """
 #define MAX_SHADOW_LIGHTS 4
