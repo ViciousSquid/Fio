@@ -1583,6 +1583,13 @@ class BenchmarkTests:
             if self._requested_duration is not None:
                 return float(self._requested_duration)
             return self._player_area_sweep_duration()
+        return {
+            "live_io_1000": 2.0,
+            "live_1000_brushes": 3.0,
+            "live_10000_brushes": 3.0,
+            "live_100000_brushes": 2.0,
+            "monster_chaos_witness": 10.0,
+        }.get(label, 3.0)
     
     
     PLAYER_AREA_DEFAULT_RADIUS = 256.0
