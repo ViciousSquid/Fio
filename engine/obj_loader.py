@@ -228,7 +228,7 @@ class OBJLoader:
             return
 
         texture_path = os.path.normpath(candidates[0])
-        self.materials['default'] = {
+        material = {
             'diffuse': (1.0, 1.0, 1.0),
             'color': (1.0, 1.0, 1.0),
             'ambient': (0.2, 0.2, 0.2),
@@ -236,6 +236,21 @@ class OBJLoader:
             'texture': os.path.basename(texture_path),
             'mtl_dir': os.path.dirname(texture_path),
         }
+
+        # The OBJ can still contain usemtl entries even when its companion MTL
+        # is missing. Give every referenced material the discovered texture so
+        # those groups do not fall back to the untextured material path.
+        material_names = {
+            face.get('material')
+            for face in self.faces
+            if face.get('material')
+        }
+        if material_names:
+            for material_name in material_names:
+                self.materials[material_name] = material.copy()
+        else:
+            self.materials['default'] = material
+
         print(f"[OBJLoader] Using discovered base-color texture: {texture_path}")
 
 
