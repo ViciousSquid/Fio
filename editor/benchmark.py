@@ -721,7 +721,7 @@ class BenchmarkRunner:
         except Exception:
             pass
     
-label = self._current[0] if self._current else "benchmark"
+        label = self._current[0] if self._current else "benchmark"
         self._results.append({
             "test": label,
             "status": "error",
