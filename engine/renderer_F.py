@@ -488,6 +488,11 @@ class Renderer_F(BaseRenderer):
         cx, cz = _cull_camera_xz(camera_pos)
         limit_sq = self.view_distance.distance_sq
 
+        if brush_positions is not None:
+            brush_positions = brush_positions[:len(brushes)]
+        if thing_positions is not None:
+            thing_positions = thing_positions[:len(things)]
+
         brush_out_pos = None
         if brush_positions is not None:
             count = len(brushes)
@@ -577,6 +582,10 @@ class Renderer_F(BaseRenderer):
         cull_brushes, cull_things = brushes, things
         cull_brush_positions = config.get('brush_positions')
         cull_thing_positions = config.get('thing_positions')
+        if cull_brush_positions is not None:
+            cull_brush_positions = cull_brush_positions[:len(cull_brushes)]
+        if cull_thing_positions is not None:
+            cull_thing_positions = cull_thing_positions[:len(cull_things)]
         if config.get('camera_distance_cull', config.get('play_mode', False)):
             cull_brushes, cull_things = self._camera_distance_cull(
                 brushes, things, camera_pos,
