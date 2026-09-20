@@ -538,10 +538,9 @@ class BenchmarkRunner:
     def _clear_live_benchmark_scene(self, label="", yield_hook=None):
         """Clear authored scene data and derived live runtime state before a stress test.
 
-        Stress tests measure the live 3D/runtime path. Rebuilding the editor's
-        scene hierarchy and all three orthographic views while clearing the
-        previous map is unrelated UI work and can dominate preparation before
-        the new workload even exists.
+        The live stress path remains the real Fio editor path: clearing a
+        scene also rebuilds the scene hierarchy and all orthographic views so
+        the next workload starts from the same editor state a user would see.
         """
         window = self.main_window
         view = window.view_3d
