@@ -573,8 +573,6 @@ class BenchmarkRunner:
         window.activateWindow()
         QApplication.processEvents()
         self._benchmark_window_mode = None
-        if not self.isVisible():
-            self.show()
     
     
 
