@@ -822,24 +822,28 @@ def load_live_benchmark_world(window, data, yield_hook=None):
 
 
 
-def make_monster_chaos_witness_world(seed="43", monster_count=25, yield_hook=None):
-    """Build the deterministic medium world used by the live chaos witness."""
+def make_monster_chaos_witness_world(seed="43", monster_count=50, yield_hook=None):
+    """Build the deterministic single-room world used by the live chaos witness."""
     import random
 
     random.seed(seed)
+    monster_count = int(monster_count)
+    if monster_count != 50:
+        raise ValueError("chaos witness requires exactly 50 monsters")
+
     params = {
         "world_width": 2048,
         "world_height": 2048,
         "min_room": 384,
         "max_room": 512,
-        "room_count": 12,
+        "room_count": 1,
         "wall_tex": "default.png",
         "floor_tex": "default.png",
         "enable_floors": False,
         "floor_height": 128,
         "floor_room_count": 0,
         "spawn_monsters": True,
-        "monster_count": int(monster_count),
+        "monster_count": monster_count,
         "spawn_health": False,
     }
     data = create_map_data(params, yield_hook=yield_hook)
@@ -878,45 +882,60 @@ def make_monster_chaos_witness_world(seed="43", monster_count=25, yield_hook=Non
         thing for thing in data.get("things", [])
         if str(thing.get("type", "")).lower() == "monster"
     ]
-    if len(monsters) != int(monster_count):
+    if len(monsters) != monster_count:
         raise RuntimeError(
             "chaos witness generated %d monsters, expected %d"
-            % (len(monsters), int(monster_count))
+            % (len(monsters), monster_count)
         )
 
-    # Keep the encounter in the large generated start room so the player can
-    # watch the entire fight from the PlayerStart.  Three rings leave the
-    # centre clear while keeping every monster well inside the room footprint.
+    # Guarantee two hostile teams, each containing 15 human + 10 flying
+    # monsters. Shuffle their order so the two factions are spatially mixed.
+    monster_specs = (
+        [("benchmark_red", "human")] * 15
+        + [("benchmark_blue", "human")] * 15
+        + [("benchmark_red", "flying")] * 10
+        + [("benchmark_blue", "flying")] * 10
+    )
     rng = random.Random(seed)
-    ring_sizes = (8, 8, 9)
-    ring_radii = (105.0, 145.0, 175.0)
+    rng.shuffle(monster_specs)
+
+    # Randomly use the base sprite set or the available variant1 skin.
+    variants = ("<None>", "variant1")
+
+    # Keep the encounter inside the single generated room. Four rings give
+    # the 50 monsters enough separation while keeping the whole fight visible.
+    ring_sizes = (10, 12, 12, 16)
+    ring_radii = (72.0, 108.0, 144.0, 180.0)
     index = 0
     for ring_index, ring_size in enumerate(ring_sizes):
         phase = rng.uniform(0.0, 2.0 * math.pi)
         for ring_pos in range(ring_size):
             angle = phase + (2.0 * math.pi * ring_pos / ring_size)
-            # A small deterministic jitter avoids a perfectly mechanical
-            # formation while preserving the room-safe radius.
-            radius = ring_radii[ring_index] + rng.uniform(-8.0, 8.0)
+            radius = ring_radii[ring_index] + rng.uniform(-7.0, 7.0)
             wx = px + math.cos(angle) * radius
             wz = pz + math.sin(angle) * radius
 
             monster = monsters[index]
             monster["pos"] = [wx, py, wz]
+            team, monster_type = monster_specs[index]
             props = monster.setdefault("properties", {})
             props.update({
-                "monster_type": "human",
+                "monster_type": monster_type,
                 "health": 120,
                 "damage": 12,
                 "awake": True,
                 "wake_on_sight": True,
                 "dead": False,
-                "team": "",
+                "team": team,
+                "variant": rng.choice(variants),
                 "patrol": True,
                 "patrol_target": pathnode_name,
                 "patrol_mode": "once",
-                "target_name": pathnode_name,
             })
+            # Start with the PathNode as the movement destination. The witness
+            # later clears this override from selected fighters so they switch
+            # into direct monster-vs-monster combat.
+            props["target_name"] = pathnode_name
             index += 1
 
             if yield_hook is not None and index % 8 == 0:
@@ -927,11 +946,16 @@ def make_monster_chaos_witness_world(seed="43", monster_count=25, yield_hook=Non
 
     return data, {
         "seed": str(seed),
-        "monster_count": int(monster_count),
+        "monster_count": monster_count,
+        "human_count": sum(1 for _, mtype in monster_specs if mtype == "human"),
+        "flying_count": sum(1 for _, mtype in monster_specs if mtype == "flying"),
+        "team_counts": {
+            team: sum(1 for monster_team, _ in monster_specs if monster_team == team)
+            for team in ("benchmark_red", "benchmark_blue")
+        },
         "pathnode_name": pathnode_name,
         "pathnode_pos": [px, py, pz],
     }
-
 
 def prepare_live_monster_test(window, aggro_fraction=0.25, yield_hook=None):
     """Enter real Play Mode and configure a representative monster combat load.
