@@ -3294,8 +3294,17 @@ class LogicThread(threading.Thread):
             else:
                 visible_mask = keep
 
-            all_brushes = row_refs[keep].tolist()
-            visible_brushes = row_refs[visible_mask].tolist()
+            all_indices = np.flatnonzero(keep)
+            visible_indices = np.flatnonzero(visible_mask)
+            all_brushes = row_refs[all_indices].tolist()
+            visible_brushes = row_refs[visible_indices].tolist()
+            brush_positions = write_state.ensure_visible_brush_positions(
+                len(visible_brushes))
+            if len(visible_indices):
+                np.take(centers[:, 0], visible_indices,
+                        out=brush_positions[:len(visible_indices), 0])
+                np.take(centers[:, 2], visible_indices,
+                        out=brush_positions[:len(visible_indices), 1])
             culled_count = total_count - len(visible_brushes)
         else:
             # ---- General path (editor mode / cache miss) --------------------
@@ -3334,12 +3343,27 @@ class LogicThread(threading.Thread):
 
             if self.culling_enabled and refs:
                 visible_mask = self._aabb_in_frustum_batch(frustum_planes, centers, halves)
-                visible_brushes = [ref for ref, vis in zip(refs, visible_mask) if vis]
+                visible_indices = np.flatnonzero(visible_mask)
+                visible_brushes = [refs[int(i)] for i in visible_indices]
                 culled_count += len(refs) - len(visible_brushes)
+                brush_positions = write_state.ensure_visible_brush_positions(
+                    len(visible_brushes))
+                if len(visible_indices):
+                    center_array = np.asarray(centers, dtype=np.float64)
+                    np.take(center_array[:, 0], visible_indices,
+                            out=brush_positions[:len(visible_indices), 0])
+                    np.take(center_array[:, 2], visible_indices,
+                            out=brush_positions[:len(visible_indices), 1])
             else:
                 visible_brushes = refs
+                brush_positions = write_state.ensure_visible_brush_positions(
+                    len(visible_brushes))
+                if visible_brushes:
+                    center_array = np.asarray(centers, dtype=np.float64)
+                    brush_positions[:len(visible_brushes)] = center_array[:, (0, 2)]
 
         write_state.visible_brushes = visible_brushes
+        write_state.visible_brush_position_count = len(visible_brushes)
         write_state.all_brushes = all_brushes
         write_state.total_brushes = total_count
         write_state.culled_brushes = culled_count
