@@ -595,9 +595,17 @@ class BenchmarkRunner:
                     except Exception:
                         pass
 
-        # Do not rebuild the scene hierarchy or orthographic views here.
-        # They are editor UI overhead and are not part of any live stress
-        # workload. The real 3D viewport is enough to publish the empty state.
+        # Rebuild the real editor UI and all orthographic views. The brush
+        # stress benchmark deliberately exercises the same editor machinery
+        # used by normal Fio editing, not a reduced 3D-only path.
+        if yield_hook is not None:
+            yield_hook()
+        window.update_all_ui()
+        if yield_hook is not None:
+            yield_hook()
+        window.update_views()
+        if yield_hook is not None:
+            yield_hook()
         view.update()
         QApplication.processEvents()
         if yield_hook is not None:
@@ -1883,25 +1891,16 @@ class BenchmarkTests:
                 }[label]
                 # Use Fio's NumPy-assisted scene builder and load the resulting
                 # level data into the existing EditorState.
-                self._append("  Preparation stage: building %d brushes..." % brush_count)
-                cooperative_yield()
                 data = bench._make_brush_stress_scene(
                     brush_count,                    yield_hook=cooperative_yield,
                 )
-                self._append("  Preparation stage: loading %d brushes into EditorState..." % brush_count)
-                cooperative_yield()
                 bench.load_live_benchmark_world(
                     window,
                     data,
                     yield_hook=cooperative_yield,
                 )
-                self._append("  Preparation stage: EditorState loaded; starting measurement...")
-                cooperative_yield()
-
-                # Do not call MainWindow.focus_on_bounds() here. It rebuilds
-                # all three orthographic views and recentres their scene state;
-                # that UI work is outside the live brush workload and can make
-                # preparation appear hung even after the real EditorState is loaded.
+                # Do not recenter the camera here; the scene itself must remain
+                # visible through the real 2D and 3D editor views during preparation.
                 QApplication.processEvents()
                 self._append(
                     "  Live brush scene: created %d real brushes with varied dimensions."
