@@ -1305,7 +1305,35 @@ class MainWindow(QMainWindow):
         new_model = Model(pos=[0, 0, 0])
         new_model.properties['model_path'] = filepath.replace('\\', '/') # Ensure forward slashes
         new_model.properties['rotation'] = rotation
-        new_model.properties['scale'] = scale
+
+        # Downloaded OBJs are commonly authored in real-world units and can be
+        # only a few Fio units across. Fio's world is much larger (TILE_SIZE is
+        # 50), so an otherwise valid imported mesh can become effectively
+        # invisible in the editor at the default camera distance. When the Asset
+        # Browser supplies the neutral [1,1,1] scale, give unusually small OBJs a
+        # sensible initial scene scale. Existing authored maps and explicit
+        # non-unit scales are left untouched.
+        initial_scale = list(scale) if isinstance(scale, (list, tuple)) else scale
+        if (
+            str(filepath).lower().endswith('.obj')
+            and isinstance(initial_scale, (list, tuple))
+            and len(initial_scale) == 3
+            and all(float(v) == 1.0 for v in initial_scale)
+        ):
+            try:
+                from engine.obj_loader import OBJLoader
+                loader = OBJLoader()
+                if loader.load(filepath) and loader.vertices:
+                    verts = np.asarray(loader.vertices, dtype=np.float32)
+                    extent = float(np.max(verts.max(axis=0) - verts.min(axis=0)))
+                    if 0.0 < extent < TILE_SIZE * 0.2:
+                        fit_target = TILE_SIZE * 0.5
+                        fit = min(fit_target / extent, 25.0)
+                        initial_scale = [fit, fit, fit]
+            except Exception:
+                pass
+
+        new_model.properties['scale'] = initial_scale
         
         # Set a default name based on filename
         model_name = os.path.splitext(os.path.basename(filepath))[0]
