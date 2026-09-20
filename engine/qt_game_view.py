@@ -651,7 +651,6 @@ class QtGameView(QOpenGLWidget):
             self.fps = self.frame_count / fps_elapsed
             self.frame_count = 0
             self.last_fps_time = current_time
-        self.sysmon.record_fps(self.fps)
         self.sysmon.record_frame_time(delta * 1000.0)
         self._process_sound_queue()
         self._process_console_command_queue()
@@ -1205,16 +1204,6 @@ class QtGameView(QOpenGLWidget):
             if total == 0 and actual_total > 0:
                 pass
             else:
-                # Keep SysMon triangle counters synchronized with the renderer pass.
-                visible_tris = int(getattr(self.renderer.render_stats, "visible_tris", 0))
-                brush_tris = len(self.editor.state.brushes) * 12
-                terrain = getattr(self.editor, "terrain", None)
-                terrain_total_tris = int(terrain.get_tri_count()) if terrain is not None else 0
-                total_tris = brush_tris + terrain_total_tris
-                self.sysmon.stats["visible_tris"] = visible_tris
-                self.sysmon.stats["culled_tris"] = max(0, total_tris - visible_tris)
-                self.sysmon.stats["visible_surfaces"] = visible
-                self.sysmon.stats["culled_surfaces"] = render_state.culled_brushes
                 self.sysmon.update_stats(
                     visible_brushes=visible,
                     culled_brushes=render_state.culled_brushes,
