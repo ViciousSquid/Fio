@@ -888,8 +888,7 @@ def make_monster_chaos_witness_world(seed="43", monster_count=50, yield_hook=Non
             % (len(monsters), monster_count)
         )
 
-    # Guarantee two hostile teams, each containing 15 human + 10 flying
-    # monsters. Shuffle their order so the two factions are spatially mixed.
+    # Two hostile mixed teams: 15 human + 10 flying on each side.
     monster_specs = (
         [("benchmark_red", "human")] * 15
         + [("benchmark_blue", "human")] * 15
@@ -899,47 +898,55 @@ def make_monster_chaos_witness_world(seed="43", monster_count=50, yield_hook=Non
     rng = random.Random(seed)
     rng.shuffle(monster_specs)
 
-    # Randomly use the base sprite set or the available variant1 skin.
+    # Randomly use the base sprite set or the available alternate skin.
     variants = ("<None>", "variant1")
 
-    # Keep the encounter inside the single generated room. Four rings give
-    # the 50 monsters enough separation while keeping the whole fight visible.
-    ring_sizes = (10, 12, 12, 16)
-    ring_radii = (72.0, 108.0, 144.0, 180.0)
-    index = 0
-    for ring_index, ring_size in enumerate(ring_sizes):
-        phase = rng.uniform(0.0, 2.0 * math.pi)
-        for ring_pos in range(ring_size):
-            angle = phase + (2.0 * math.pi * ring_pos / ring_size)
-            radius = ring_radii[ring_index] + rng.uniform(-7.0, 7.0)
-            wx = px + math.cos(angle) * radius
-            wz = pz + math.sin(angle) * radius
+    # Put the teams on opposite sides of the single room. The PathNode sits
+    # at the room centre, so both sides converge on the same destination.
+    team_positions = {
+        "benchmark_red": [],
+        "benchmark_blue": [],
+    }
+    for row in range(25):
+        z_offset = ((row % 5) - 2) * 32.0 + rng.uniform(-8.0, 8.0)
+        x_offset = (row // 5) * 5.0 + rng.uniform(-6.0, 6.0)
+        team_positions["benchmark_red"].append(
+            [px - 105.0 + x_offset, z_offset]
+        )
+        team_positions["benchmark_blue"].append(
+            [px + 105.0 - x_offset, z_offset]
+        )
 
-            monster = monsters[index]
-            monster["pos"] = [wx, py, wz]
-            team, monster_type = monster_specs[index]
-            props = monster.setdefault("properties", {})
-            props.update({
-                "monster_type": monster_type,
-                "health": 120,
-                "damage": 12,
-                "awake": True,
-                "wake_on_sight": True,
-                "dead": False,
-                "team": team,
-                "variant": rng.choice(variants),
-                "patrol": True,
-                "patrol_target": pathnode_name,
-                "patrol_mode": "once",
-            })
-            # Start with the PathNode as the movement destination. The witness
-            # later clears this override from selected fighters so they switch
-            # into direct monster-vs-monster combat.
-            props["target_name"] = pathnode_name
-            index += 1
+    team_indices = {"benchmark_red": 0, "benchmark_blue": 0}
+    for index, monster in enumerate(monsters):
+        team, monster_type = monster_specs[index]
+        position_index = team_indices[team]
+        team_indices[team] += 1
+        x_offset, z_offset = team_positions[team][position_index]
 
-            if yield_hook is not None and index % 8 == 0:
-                yield_hook()
+        monster["pos"] = [
+            x_offset,
+            py + (32.0 if monster_type == "flying" else 0.0),
+            pz + z_offset,
+        ]
+        props = monster.setdefault("properties", {})
+        props.update({
+            "monster_type": monster_type,
+            "health": 120,
+            "damage": 12,
+            "awake": True,
+            "wake_on_sight": True,
+            "dead": False,
+            "team": team,
+            "variant": rng.choice(variants),
+            "patrol": True,
+            "patrol_target": pathnode_name,
+            "patrol_mode": "once",
+            "target_name": pathnode_name,
+        })
+
+        if yield_hook is not None and index % 8 == 0:
+            yield_hook()
 
     if yield_hook is not None:
         yield_hook()
