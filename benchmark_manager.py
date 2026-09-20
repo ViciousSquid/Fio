@@ -202,8 +202,17 @@ class BenchmarkManager(QDialog):
         options_layout.insertWidget(0, additional)
 
         options.setVisible(False)
+        options.setStyleSheet(
+            "QWidget { background: #171717; color: #dddddd; }"
+            "QCheckBox { background: #171717; color: #dddddd; }"
+        )
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(
+            "QScrollArea { background: #171717; border: 1px solid #444444; }"
+            "QScrollArea > QWidget { background: #171717; }"
+        )
+        scroll.viewport().setStyleSheet("background: #171717;")
         scroll.setWidget(options)
         scroll.setMaximumHeight(260)
         root.addWidget(scroll)
