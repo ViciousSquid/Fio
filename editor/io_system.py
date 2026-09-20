@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Callable, Optional, Set
 from enum import Enum
 import time
-from collections import deque
 
 # Import debug logger - with fallback to print if not available
 try:
@@ -307,13 +306,6 @@ class IOManager:
         # activator simply has none.
         self._activator_entity = None
         self._activator_id: str = ""
-        # Optional cooperative dispatch used by live benchmarks and other
-        # callers that must keep the owning Qt event loop responsive.
-        # Normal fire_output() remains recursive unless _iterative=True.
-        self._dispatch_queue = None
-        self._dispatch_yield_hook = None
-        self._dispatch_yield_interval = 32
-        self._dispatch_events_since_yield = 0
     
     def set_logic_thread(self, logic_thread):
         """Set reference to logic thread."""
@@ -385,72 +377,7 @@ class IOManager:
         self._activator_entity = None
         self._activator_id = ""
     
-    def set_dispatch_yield_hook(self, hook: Optional[Callable] = None, interval: int = 32):
-        """Configure an optional cooperative yield hook for iterative I/O dispatch.
-
-        ``hook`` is called from the owner thread every ``interval`` dispatched
-        outputs. Returning False aborts the current iterative traversal cleanly.
-        Normal runtime I/O does not use this facility.
-        """
-        self._dispatch_yield_hook = hook
-        self._dispatch_yield_interval = max(1, int(interval))
-        self._dispatch_events_since_yield = 0
-
-    def fire_output(self, source_entity, output_name: str, value: str = None, _iterative: bool = False):
-        """Fire an output, optionally using a non-recursive cooperative queue.
-
-        The default path is unchanged. ``_iterative=True`` is intended for
-        unusually deep chains such as live benchmark workloads where recursive
-        dispatch would monopolise the Qt thread and prevent supervision.
-        """
-        if self._dispatch_queue is not None:
-            source_id = self._get_entity_id(source_entity)
-            activator_id = self._activator_id or source_id
-            self._dispatch_queue.append(
-                (source_entity, output_name, value, activator_id)
-            )
-            return True
-
-        if not _iterative:
-            return self._fire_output_one(source_entity, output_name, value)
-
-        self._dispatch_queue = deque()
-        self._dispatch_queue.append(
-            (
-                source_entity,
-                output_name,
-                value,
-                self._activator_id or self._get_entity_id(source_entity),
-            )
-        )
-        self._dispatch_events_since_yield = 0
-        completed = True
-        try:
-            while self._dispatch_queue:
-                source, queued_output, queued_value, activator_id = self._dispatch_queue.popleft()
-                self._fire_output_one(
-                    source,
-                    queued_output,
-                    queued_value,
-                    activator_id_override=activator_id,
-                )
-                self._dispatch_events_since_yield += 1
-                if (
-                    self._dispatch_yield_hook is not None
-                    and self._dispatch_events_since_yield >= self._dispatch_yield_interval
-                ):
-                    self._dispatch_events_since_yield = 0
-                    if self._dispatch_yield_hook() is False:
-                        completed = False
-                        self._dispatch_queue.clear()
-                        break
-        finally:
-            self._dispatch_queue = None
-            self._dispatch_events_since_yield = 0
-
-        return completed
-
-    def _fire_output_one(self, source_entity, output_name: str, value: str = None, activator_id_override: str = None):
+    def fire_output(self, source_entity, output_name: str, value: str = None):
         """
         Fire an output from an entity (thing), triggering all connected inputs.
 
@@ -467,8 +394,7 @@ class IOManager:
         # A chain that is already running keeps its activator; one starting here
         # takes this entity as its own.  Read before dispatch, because dispatch
         # rebinds it for the duration of each hop.
-        activator_id = (activator_id_override if activator_id_override is not None
-                         else self._activator_id or source_id)
+        activator_id = self._activator_id or source_id
 
         # The mirror of the stale-declaration problem: an output the code fires
         # but no type declares is undiscoverable — it works perfectly for anyone
