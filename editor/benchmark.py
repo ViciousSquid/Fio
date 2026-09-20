@@ -2525,6 +2525,17 @@ class _HeadlessToggle:
         self.checked = bool(checked)
 
 
+def _json_default(value):
+    """Convert NumPy scalar values emitted by SysMon into JSON-native values."""
+    item = getattr(value, "item", None)
+    if callable(item):
+        return item()
+    raise TypeError(
+        "Object of type %s is not JSON serializable"
+        % type(value).__name__
+    )
+
+
 class BenchmarkHost:
     """Expose the live benchmark runner to an external supervisor."""
 
@@ -2574,7 +2585,14 @@ class BenchmarkHost:
         return self._token
 
     def send(self, message):
-        payload = (json.dumps(message, separators=(",", ":")) + "\n").encode("utf-8")
+        payload = (
+            json.dumps(
+                message,
+                separators=(",", ":"),
+                default=_json_default,
+            )
+            + "\n"
+        ).encode("utf-8")
         with self._client_lock:
             client = self._client
             if client is None:
