@@ -2,9 +2,9 @@
 
 Two things that were written down in more than one place and had drifted apart:
 
-* the renderer's light budget (32) and the light array its shaders declared (8),
-  so a scene with more than eight lights made ``lit.frag`` index past the end of
-  its array — undefined behaviour, and 24 of the "32" lights never worked;
+* the renderer's light budget and the light array its shaders declared had
+  previously drifted apart, so a scene with more lights than the shader array
+  could index past the end of the array;
 * "is this machine low-power?", detected separately by the renderer and the
   Settings window, and defaulting to *yes* on every machine regardless.
 """
@@ -87,9 +87,18 @@ def test_water_and_terrain_are_capped_to_what_they_declare():
     assert caps['terrain'] == array_size(shaders.DEFAULT_SHADERS['terrain.frag'])
 
 
-def test_terrain_clamps_against_the_shader_constant_not_a_literal():
-    source = read_source('engine', 'terrain.py')
-    assert 'MAX_LIGHTS_TERRAIN as MAX_TERRAIN_LIGHTS' in source
+def test_terrain_light_subset_uses_the_shader_constant():
+    source = read_source('engine', 'renderer_core.py')
+    assert 'max_terrain_lights = shaders.MAX_LIGHTS_TERRAIN' in source
+
+
+def test_light_shader_sources_are_rewritten_to_the_shared_ubo():
+    source = shaders.light_ubo_source(shaders.DEFAULT_SHADERS['lit.frag'])
+    assert 'layout(std140) uniform FioLightBlock' in source
+    assert 'uniform Light lights[' not in source
+    assert '.position.xyz' in source
+    assert '.params.x' in source
+    assert 'int(lights[' in source
 
 
 # ---------------------------------------------------------------------------
