@@ -1451,21 +1451,25 @@ class BaseRenderer:
 
             props = getattr(t, 'properties', {})
             model_path = props.get('model_path')
-            if model_out is not None and model_path and not props.get('hidden', False):
+            model_visible = bool(model_path and not props.get('hidden', False))
+            if model_out is not None and model_visible:
                 model_out.append(t)
+                # The caller that supplied model_out will render this as 3D
+                # geometry. Do not also put it through the billboard path.
+                continue
 
             if isinstance(t, Pickup):
                 sprites.append(t)
             elif isinstance(t, (Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger)):
                 sprites.append(t)
             elif model_path:
-                # Models are 3D geometry. Keep them in the sprite classification
-                # too because the existing renderer paths rely on that grouping.
+                # Preserve the historical behaviour for callers that do not
+                # request model_out (for example portal virtual scenes).
                 sprites.append(t)
             elif props.get('sprite_path'):
                 # Props may deliberately be camera-facing billboards.
                 sprites.append(t)
-            elif not is_play and True:
+            elif not is_play:
                 # Editor mode historically displays ordinary Things as sprites.
                 sprites.append(t)
             elif show_sprites:
