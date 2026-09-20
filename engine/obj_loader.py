@@ -183,7 +183,13 @@ class OBJLoader:
                     mtl['specular'] = (float(parts[1]), float(parts[2]), float(parts[3]))
                 elif keyword in ('map_Kd', 'map_Ka') and len(parts) > 1:
                     # Join all remaining parts to handle spaces in filenames
-                    mtl['texture'] = ' '.join(parts[1:])
+                    mtl['texture'] = (
+                        ' '.join(parts[1:])
+                        .strip()
+                        .strip('"')
+                        .replace('\\', os.sep)
+                        .replace('/', os.sep)
+                    )
                     mtl['mtl_dir'] = mtl_dir  # Store MTL directory for texture path resolution
 
 
