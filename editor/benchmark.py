@@ -474,7 +474,6 @@ class BenchmarkRunner:
             self.brush_10000,
             self.brush_100000,
             self.io_chain_1000,
-            self.monster_capacity,
             self.monster_chaos_witness,
             self.borderless_window,
             self.fullscreen_window,
@@ -1232,7 +1231,6 @@ class BenchmarkRunner:
                     ("live_io_1000", 1000),
                     ("live_1000_brushes", 1000),
                     ("live_10000_brushes", 10000),
-                    ("monster_capacity", None),
                 ))
     
             if self.io_chain_1000.isChecked():
@@ -1243,8 +1241,6 @@ class BenchmarkRunner:
                 self._queue.append(("live_10000_brushes", 10000))
             if self.brush_100000.isChecked():
                 self._queue.append(("live_100000_brushes", 100000))
-            if self.monster_capacity.isChecked():
-                self._queue.append(("monster_capacity", None))
     
             if self.borderless_window.isChecked():
                 self._queue.append(("borderless_window", None))
@@ -1587,7 +1583,6 @@ class BenchmarkTests:
             if self._requested_duration is not None:
                 return float(self._requested_duration)
             return self._player_area_sweep_duration()
-        return {"live_io_1000": 2.0, "live_1000_brushes": 3.0, "live_10000_brushes": 3.0, "live_100000_brushes": 2.0, "monster_capacity": 3.0}.get(label, 3.0)
     
     
     PLAYER_AREA_DEFAULT_RADIUS = 256.0
@@ -1837,305 +1832,6 @@ class BenchmarkTests:
         )
 
 
-    def _stage_live_monsters(self, monster_data, window, view):
-        """Add real Monster entities incrementally while watching SysMon."""
-        from editor.things import Thing
-
-        monsters = list(monster_data)
-        if not monsters:
-            return
-
-        # Start with a small pause between entities.  If the live frame time
-        # rises sharply after an insertion, increase the pause before adding
-        # another monster.  This smooths the workload instead of dumping a
-        # large population into the live scene in one frame.
-        delay = 0.02
-        previous = self._read_sysmon_metrics(view)
-        previous_count = 0
-
-        self._append(
-            "  Staging %d Monster entities incrementally; monitoring SysMon."
-            % len(monsters)
-        )
-
-        for index, raw in enumerate(monsters, 1):
-            monster = Thing.from_dict(copy.deepcopy(raw))
-            if monster is None:
-                raise RuntimeError(
-                    "failed to construct benchmark Monster entity %d" % index
-                )
-
-            window.state.things.append(monster)
-            view._instance_tex_hash = None
-            view.update()
-            QApplication.processEvents()
-            self._settle_live_scene(delay)
-
-            current = self._read_sysmon_metrics(view)
-            previous_frame = float(
-                previous.get("average_frame_time_ms", 0.0) or 0.0
-            )
-            current_frame = float(
-                current.get("average_frame_time_ms", 0.0) or 0.0
-            )
-            frame_increase = current_frame - previous_frame
-            sharp_increase = (
-                previous_frame > 0.0
-                and frame_increase > max(8.0, previous_frame * 0.30)
-            )
-
-            if sharp_increase:
-                new_delay = min(0.15, max(0.025, delay * 1.5))
-                if new_delay > delay:
-                    delay = new_delay
-                    self._append(
-                        "  SysMon frame time rose %.2f ms while creating "
-                        "monster %d; slowing insertion to %.0f ms."
-                        % (frame_increase, index, delay * 1000.0)
-                    )
-            elif (
-                not sharp_increase
-                and index - previous_count >= 16
-                and delay > 0.02
-            ):
-                delay = max(0.02, delay * 0.9)
-                previous_count = index
-
-            previous = current
-
-        # Refresh editor-facing scene state once after the incremental build.
-        invalidate = getattr(window.state, "_invalidate_entity_caches", None)
-        if callable(invalidate):
-            invalidate()
-        window.update_all_ui()
-        window.update_views()
-        view.update()
-        QApplication.processEvents()
-        self._settle_live_scene()
-
-    def _run_monster_capacity_probe(self, bench, window, view):
-        """Find a conservative live monster capacity using SysMon degradation."""
-        candidate = 16
-        last_good = 0
-        baseline = None
-        degradation_count = None
-        degradation_reason = None
-        max_candidate = 8192
-        preparation_budget = 30.0
-        settle_seconds = 2.0
-
-        self._append(
-            "  Monster capacity: increasing live monsters until SysMon reports "
-            "substantial performance degradation; no failing workload is "
-            "deliberately pushed beyond that point."
-        )
-
-        def probe(count):
-            started = time.perf_counter()
-            self._clear_live_benchmark_scene("%d monsters" % count)
-
-            def yield_hook():
-                QApplication.processEvents()
-                if time.perf_counter() - started > preparation_budget:
-                    raise TimeoutError(
-                        "preparing %d monsters exceeded the %.0f s cooperative "
-                        "benchmark budget" % (count, preparation_budget)
-                    )
-
-            data = bench._generate_procedural_map(
-                monsters=count,
-                relay_count=32,
-                seed=bench.BENCHMARK_MAP_SEED,
-                live_monster=True,
-                yield_hook=yield_hook,
-            )
-
-            monster_data = [
-                thing for thing in data.get("things", [])
-                if str(thing.get("type", "")).lower() == "monster"
-            ]
-            base_data = copy.deepcopy(data)
-            base_data["things"] = [
-                thing for thing in base_data.get("things", [])
-                if str(thing.get("type", "")).lower() != "monster"
-            ]
-
-            bench.load_live_benchmark_world(
-                window,
-                base_data,
-                yield_hook=yield_hook,
-            )
-            QApplication.processEvents()
-            self._settle_live_scene()
-            self._stage_live_monsters(monster_data, window, view)
-            bench.prepare_live_monster_test(
-                window,
-                yield_hook=yield_hook,
-            )
-            QApplication.processEvents()
-
-            settle_until = time.perf_counter() + settle_seconds
-            while time.perf_counter() < settle_until:
-                view.update()
-                QApplication.processEvents()
-                time.sleep(0.01)
-
-            return self._read_sysmon_metrics(view)
-
-        def degraded(metrics):
-            nonlocal baseline
-            if baseline is None:
-                baseline = dict(metrics)
-                return False
-
-            baseline_fps = float(baseline.get("fps", 0.0) or 0.0)
-            current_fps = float(metrics.get("fps", 0.0) or 0.0)
-            baseline_frame = float(
-                baseline.get("average_frame_time_ms", 0.0) or 0.0
-            )
-            current_frame = float(
-                metrics.get("average_frame_time_ms", 0.0) or 0.0
-            )
-            baseline_p95 = float(
-                baseline.get("p95_frame_time_ms", 0.0) or 0.0
-            )
-            current_p95 = float(
-                metrics.get("p95_frame_time_ms", 0.0) or 0.0
-            )
-            baseline_tps = float(baseline.get("tps", 0.0) or 0.0)
-            current_tps = float(metrics.get("tps", 0.0) or 0.0)
-
-            if (
-                baseline_frame > 0.0
-                and current_frame > max(baseline_frame * 2.0, baseline_frame + 25.0)
-            ):
-                return True
-            if (
-                baseline_p95 > 0.0
-                and current_p95 > max(baseline_p95 * 2.0, baseline_p95 + 50.0)
-            ):
-                return True
-            if (
-                baseline_fps > 5.0
-                and current_fps > 0.0
-                and current_fps < baseline_fps * 0.5
-            ):
-                return True
-            if (
-                baseline_tps > 5.0
-                and current_tps > 0.0
-                and current_tps < baseline_tps * 0.75
-            ):
-                return True
-            return False
-
-        try:
-            while candidate <= max_candidate:
-                self._append("  Testing %d live monsters..." % candidate)
-                try:
-                    metrics = probe(candidate)
-                except (TimeoutError, MemoryError) as exc:
-                    degradation_count = candidate
-                    degradation_reason = str(exc)
-                    self._append(
-                        "  STOP — preparation became too expensive at %d monsters."
-                        % candidate
-                    )
-                    break
-
-                if degraded(metrics):
-                    degradation_count = candidate
-                    degradation_reason = (
-                        "SysMon performance degraded substantially versus the "
-                        "healthy baseline."
-                    )
-                    self._append(
-                        "  STOP — SysMon degradation detected at %d monsters."
-                        % candidate
-                    )
-                    break
-
-                last_good = candidate
-                self._append(
-                    "  PASS — %d monsters remained within the SysMon "
-                    "responsiveness envelope." % candidate
-                )
-                try:
-                    bench.finish_live_monster_test(window)
-                except Exception:
-                    pass
-                QApplication.processEvents()
-                candidate *= 2
-
-            if last_good == 0 and degradation_count is None:
-                last_good = max_candidate
-
-            try:
-                if view.play_mode:
-                    bench.finish_live_monster_test(window)
-            except Exception:
-                pass
-            QApplication.processEvents()
-
-            result = {
-                "test": "monster_capacity",
-                "status": "passed",
-                "benchmark_live": True,
-                "monster_capacity": int(last_good),
-                "capacity_type": "highest_tested_responsive",
-                "degradation_at": (
-                    int(degradation_count) if degradation_count is not None else None
-                ),
-                "degradation_reason": degradation_reason,
-                "sysmon_responsive_baseline": baseline,
-            }
-            self._results.append(result)
-            self.export_button.setEnabled(True)
-            self.export_button.setVisible(True)
-            self._append(
-                '<div style="background:#222; border:1px solid #555; padding:12px; '
-                'margin:4px 0 10px 0;">'
-                '<div style="font-size:15px; font-weight:bold; color:#eeeeee; margin-bottom:4px;">'
-                'Monster capacity</div>'
-                '<div style="color:#aaa;">Live MainWindow &nbsp; • &nbsp; real LogicThread &nbsp; • &nbsp; real renderer &nbsp; • &nbsp; SysMon</div>'
-                '<table cellspacing="0" cellpadding="0" style="margin-top:10px; margin-bottom:2px;">'
-                '<tr>'
-                '<td width="24" rowspan="2" bgcolor="#63d471"></td>'
-                '<td height="2" bgcolor="#63d471" style="font-size:2px; line-height:2px;"></td>'
-                '</tr>'
-                '<tr>'
-                '<td style="padding:6px 16px 2px 12px; white-space:nowrap;">'
-                '<span style="font-size:25px; font-weight:bold; color:#63d471;">Monsters:</span>'
-                '<span style="font-size:42px; line-height:1; font-weight:bold; color:#ff9a32; margin-left:12px;">%d</span>'
-                '</td>'
-                '</tr>'
-                '</table>'
-                '<div style="color:#aaa; padding:4px 0;">%s</div>'
-                '</div>'
-                % (
-                    last_good,
-                    (
-                        "SysMon degradation detected at %d monsters."
-                        % degradation_count
-                        if degradation_count is not None
-                        else "No substantial SysMon degradation detected in the tested range."
-                    ),
-                )
-            )
-            self.status_label.setText(
-                "Monster capacity: %d responsive monsters."
-                % last_good
-            )
-            QApplication.processEvents()
-            self._begin_next()
-        except Exception:
-            try:
-                if view.play_mode:
-                    bench.finish_live_monster_test(window)
-            except Exception:
-                pass
-            raise
-
     def _run_live_stress_test(self, label, value):
         """Prepare a live stress test; _tick drives the real workload."""
         bench = self._bench
@@ -2202,8 +1898,6 @@ class BenchmarkTests:
                     % brush_count
                 )
     
-            elif label == "monster_capacity":
-                self._run_monster_capacity_probe(bench, window, view)
                 return
 
             elif label == "monster_chaos_witness":
@@ -3299,7 +2993,6 @@ class _BenchmarkDialogProxy:
         self.brush_10000 = _HeadlessCheckBox()
         self.brush_100000 = _HeadlessCheckBox()
         self.io_chain_1000 = _HeadlessCheckBox()
-        self.monster_capacity = _HeadlessCheckBox()
         self.monster_chaos_witness = _HeadlessCheckBox()
         self.borderless_window = _HeadlessCheckBox()
         self.fullscreen_window = _HeadlessCheckBox()
@@ -3324,7 +3017,6 @@ class _BenchmarkDialogProxy:
             "brush_10000",
             "brush_100000",
             "io_chain_1000",
-            "monster_capacity",
             "monster_chaos_witness",
             "borderless_window",
             "fullscreen_window",
@@ -3340,7 +3032,6 @@ class _BenchmarkDialogProxy:
         self.brush_10000.setChecked("live_10000_brushes" in selected)
         self.brush_100000.setChecked("live_100000_brushes" in selected)
         self.io_chain_1000.setChecked("live_io_1000" in selected)
-        self.monster_capacity.setChecked("monster_capacity" in selected)
         self.monster_chaos_witness.setChecked("monster_chaos_witness" in selected)
         self.borderless_window.setChecked("borderless_window" in selected)
         self.fullscreen_window.setChecked("fullscreen_window" in selected)
