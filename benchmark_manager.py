@@ -112,6 +112,54 @@ class BenchmarkManager(QDialog):
                 background: #171717;
                 border: 1px solid #444444;
             }
+            QScrollBar:vertical {
+                background: #202020;
+                width: 12px;
+                margin: 0;
+                border: none;
+            }
+            QScrollBar::handle:vertical {
+                background: #555555;
+                min-height: 24px;
+                border-radius: 2px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #ff9a32;
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                background: #202020;
+                height: 0;
+                border: none;
+            }
+            QScrollBar::add-page:vertical,
+            QScrollBar::sub-page:vertical {
+                background: #202020;
+            }
+            QScrollBar:horizontal {
+                background: #202020;
+                height: 12px;
+                margin: 0;
+                border: none;
+            }
+            QScrollBar::handle:horizontal {
+                background: #555555;
+                min-width: 24px;
+                border-radius: 2px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #ff9a32;
+            }
+            QScrollBar::add-line:horizontal,
+            QScrollBar::sub-line:horizontal {
+                background: #202020;
+                width: 0;
+                border: none;
+            }
+            QScrollBar::add-page:horizontal,
+            QScrollBar::sub-page:horizontal {
+                background: #202020;
+            }
             QProgressBar {
                 background: #202020;
                 border: 1px solid #444444;
