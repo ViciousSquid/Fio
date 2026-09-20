@@ -2273,7 +2273,7 @@ class BenchmarkResults:
             "frame_time_source": "SysMon",
         }
 
-    def _format_vram(metrics):
+    def _format_vram(self, metrics):
         used = metrics.get("vram_used_mb")
         total = metrics.get("vram_total_mb")
         if used is None and total is None:
