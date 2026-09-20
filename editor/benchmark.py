@@ -1173,8 +1173,6 @@ class BenchmarkRunner:
         finally:
             if callable(done_current):
                 done_current()
-48589
-
 import math
 import os
 import sys
@@ -2377,8 +2375,6 @@ class BenchmarkResults:
         QApplication.processEvents()
     
 
-
-from __future__ import annotations
 
 import json
 import os
