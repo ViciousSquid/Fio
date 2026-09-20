@@ -139,44 +139,6 @@ class SysMon:
         if self.expanded != expanded:
             self.expanded = expanded
 
-    def begin_benchmark_capture(self):
-        """Start a dedicated frame-time capture for a benchmark measurement."""
-        self._benchmark_frame_times = []
-        self._benchmark_visible_tris = []
-        self._benchmark_total_tris = []
-        self._benchmark_culled_tris = []
-        self._benchmark_capture = True
-
-    def end_benchmark_capture(self):
-        """Stop benchmark capture and return every captured frame time in ms."""
-        self._benchmark_capture = False
-        return {
-            "frame_times": list(self._benchmark_frame_times),
-            "visible_tris": list(self._benchmark_visible_tris),
-            "total_tris": list(self._benchmark_total_tris),
-            "culled_tris": list(self._benchmark_culled_tris),
-        }
-
-    def reset_metrics(self):
-        """Reset the frame-history portion of SysMon for a fresh measurement."""
-        self._ft_buffer.fill(0)
-        self._ft_index = 0
-        self._ft_count = 0
-        self._ft_max = 16.67
-        self._ft_max_age = 0
-        self._fps = 0.0
-        # Benchmark-only frame capture. Empty/disabled during normal runtime.
-        self._benchmark_capture = False
-        self._benchmark_frame_times = []
-        self._benchmark_visible_tris = []
-        self._benchmark_total_tris = []
-        self._benchmark_culled_tris = []
-        self._vram_cache = (None, None)
-        self._vram_cache_time = 0
-        self._fps_cached_val = -1
-        self._ft_cached_val = -1.0
-        self._stats_cache = {}
-        self._stats_cache_time = 0
 
     def record_frame_time(self, delta_ms):
         """Record a frame time. Uses ring buffer — O(1)."""
@@ -198,13 +160,6 @@ class SysMon:
             else:
                 self._ft_max = 16.67
 
-        if getattr(self, "_benchmark_capture", False):
-            visible = int(self.stats.get("visible_tris", 0))
-            culled = int(self.stats.get("culled_tris", 0))
-            self._benchmark_frame_times.append(float(delta_ms))
-            self._benchmark_visible_tris.append(visible)
-            self._benchmark_culled_tris.append(culled)
-            self._benchmark_total_tris.append(visible + culled)
 
     def update_stats(self, visible_brushes=0, culled_brushes=0, total_brushes=0):
         self.stats['visible_brushes'] = visible_brushes
@@ -259,6 +214,52 @@ class SysMon:
 
 
     # ------------------------------------------------------------------
+    def get_metrics(self):
+        """Return a machine-readable snapshot of the metrics displayed by SysMon."""
+        count = int(self._ft_count)
+        if count:
+            frame_times = np.asarray(self._ft_buffer[:count], dtype=np.float64)
+            current_frame_ms = float(
+                self._ft_buffer[(self._ft_index - 1) % self.GRAPH_POINTS]
+            )
+            average_frame_ms = float(np.mean(frame_times))
+            p95_frame_ms = float(np.percentile(frame_times, 95))
+        else:
+            current_frame_ms = 0.0
+            average_frame_ms = 0.0
+            p95_frame_ms = 0.0
+
+        vram_used_mb, vram_total_mb = self._get_vram_info()
+        logic_thread = getattr(self.parent, "logic_thread", None)
+        renderer = getattr(self.parent, "renderer", None)
+        editor = getattr(self.parent, "editor", None)
+
+        return {
+            "fps": float(self._fps),
+            "frame_time_ms": current_frame_ms,
+            "average_frame_time_ms": average_frame_ms,
+            "p95_frame_time_ms": p95_frame_ms,
+            "vram_used_mb": vram_used_mb,
+            "vram_total_mb": vram_total_mb,
+            "visible_brushes": int(self.stats.get("visible_brushes", 0)),
+            "culled_brushes": int(self.stats.get("culled_brushes", 0)),
+            "total_brushes": int(self.stats.get("total_brushes", 0)),
+            "visible_tris": int(self.stats.get("visible_tris", 0)),
+            "culled_tris": int(self.stats.get("culled_tris", 0)),
+            "visible_surfaces": int(self.stats.get("visible_surfaces", 0)),
+            "culled_surfaces": int(self.stats.get("culled_surfaces", 0)),
+            "tps": float(getattr(logic_thread, "actual_tps", 0.0) or 0.0),
+            "things": int(
+                len(getattr(getattr(editor, "state", None), "things", []) or [])
+            ),
+            "draw_calls": int(
+                getattr(
+                    getattr(renderer, "render_stats", None), "draw_calls", 0
+                ) or 0
+            ),
+        }
+
+
     # Mouse interaction
     # ------------------------------------------------------------------
 
