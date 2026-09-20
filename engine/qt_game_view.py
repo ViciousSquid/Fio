@@ -1199,16 +1199,14 @@ class QtGameView(QOpenGLWidget):
                         _components.overlay(_targets), _components.version)
         if render_state:
             visible = len(render_state.visible_brushes)
-            total = render_state.total_brushes
             actual_total = len(self.editor.state.brushes)
-            if total == 0 and actual_total > 0:
-                pass
-            else:
-                self.sysmon.update_stats(
-                    visible_brushes=visible,
-                    culled_brushes=render_state.culled_brushes,
-                    total_brushes=total
-                )
+            total = actual_total if actual_total > 0 else render_state.total_brushes
+            culled = max(0, total - visible)
+            self.sysmon.update_stats(
+                visible_brushes=visible,
+                culled_brushes=culled,
+                total_brushes=total
+            )
         # 3D world is done; plugins may add their own passes here (still in the
         # GL context, before the 2D overlay painter opens).
         if _pmgr is not None and _pmgr.has_listeners("render.post_scene"):
