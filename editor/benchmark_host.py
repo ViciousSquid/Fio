@@ -250,6 +250,10 @@ class BenchmarkHost:
             if self.runner._running:
                 self.send({"event": "error", "error": "benchmark already running"})
                 return
+            # Tell the external manager that supervision has begun before
+            # entering any potentially long live preparation step.
+            self._last_running = True
+            self.send({"event": "run_started"})
             self._start(command.get("config") or {})
             return
 
