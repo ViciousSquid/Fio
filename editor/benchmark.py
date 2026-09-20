@@ -503,6 +503,87 @@ class BenchmarkRunner:
         self.main_window.view_3d.update()
         QApplication.processEvents()
 
+    BENCHMARK_SCENE_SETTLE_SECONDS = 1.0
+
+    def _settle_live_scene(self, seconds=None):
+        """Pump Qt while allowing the live renderer/LogicThread to settle."""
+        duration = (
+            self.BENCHMARK_SCENE_SETTLE_SECONDS
+            if seconds is None
+            else float(seconds)
+        )
+        deadline = time.perf_counter() + max(0.0, duration)
+        app = QApplication.instance()
+        while time.perf_counter() < deadline:
+            if app is not None:
+                app.processEvents()
+            time.sleep(0.01)
+
+    def _clear_live_benchmark_scene(self, label=""):
+        """Clear authored scene data and derived live runtime state before a stress test."""
+        window = self.main_window
+        view = window.view_3d
+
+        if view.play_mode:
+            window._exit_play_mode()
+            QApplication.processEvents()
+
+        # Clear the live terrain object as well as EditorState.  clear_scene()
+        # only clears terrain_data; leaving MainWindow.terrain alive would let
+        # the previous map remain visible/renderable during the next test.
+        clear_terrain = getattr(window, "_clear_terrain", None)
+        if callable(clear_terrain):
+            clear_terrain()
+
+        window.state.clear_scene()
+
+        # Drop benchmark-visible caches that are keyed to the previous scene.
+        view._io_conn_cache = None
+        view._io_conn_scene_ver = None
+        view._instance_tex_hash = None
+        if getattr(view, "renderer", None) is not None:
+            try:
+                view.renderer.set_instance_textures({})
+            except Exception:
+                pass
+
+        logic = getattr(view, "logic_thread", None)
+        if logic is not None:
+            try:
+                logic.notify_visibility_changed()
+            except Exception:
+                pass
+            try:
+                logic._model_collision_brushes = []
+                logic._refresh_collision_brushes_cache()
+            except Exception:
+                pass
+
+        # Clear the currently displayed render snapshot.  The LogicThread's
+        # write buffer is left alone and will publish a fresh snapshot from the
+        # now-empty EditorState on its next tick.
+        game_state = getattr(view, "game_state", None)
+        if game_state is not None:
+            lock = getattr(game_state, "_render_state_lock", None)
+            if lock is not None:
+                with lock:
+                    try:
+                        game_state._read_state.reset()
+                        game_state._has_new_frame = False
+                    except Exception:
+                        pass
+
+        window.update_all_ui()
+        window.update_views()
+        view.update()
+        QApplication.processEvents()
+
+        self._append(
+            "  Cleared the live scene and renderer/runtime scene caches"
+            + (" before %s." % label if label else ".")
+        )
+        self._settle_live_scene()
+
     def _prepare_editor_window_benchmark_map(self):
         """Load the shared medium scene used by the editor-window benchmarks."""
         self._prepare_editor_windowed_map()
@@ -1487,11 +1568,7 @@ class BenchmarkTests:
 
         def probe(count):
             started = time.perf_counter()
-            window.state.clear_scene()
-            window.update_all_ui()
-            window.update_views()
-            view.update()
-            QApplication.processEvents()
+            self._clear_live_benchmark_scene("%d monsters" % count)
 
             def yield_hook():
                 QApplication.processEvents()
@@ -1514,6 +1591,7 @@ class BenchmarkTests:
                 yield_hook=yield_hook,
             )
             QApplication.processEvents()
+            self._settle_live_scene()
             bench.prepare_live_monster_test(
                 window,
                 yield_hook=yield_hook,
@@ -1700,22 +1778,9 @@ class BenchmarkTests:
         self._start_live_stress_monitor(label)
     
         try:
-            # Every live stress test gets a genuinely fresh editor scene.
-            # Do not merely replace EditorState's lists: clear_scene() also
-            # invalidates the I/O/entity caches and resets the scene-owned
-            # runtime state before the next generated workload is loaded.
-            # This prevents entities/geometry from a previous stress test
-            # surviving into the next one (especially the 1000-relay I/O test
-            # immediately before the monster workloads).
-            window.state.clear_scene()
-            window.update_all_ui()
-            window.update_views()
-            view.update()
-            QApplication.processEvents()
-            self._append(
-                "  Created a fresh empty benchmark map before loading %s."
-                % label
-            )
+            # Every live stress test starts from a genuinely empty live
+            # scene, including terrain and derived renderer/runtime state.
+            self._clear_live_benchmark_scene(label)
     
             if label in ("live_1000_brushes", "live_10000_brushes", "live_100000_brushes"):
                 brush_count = {
