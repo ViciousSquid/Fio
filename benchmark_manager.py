@@ -42,7 +42,7 @@ TESTS = (
     ("live_10000_brushes", "Renderer scene: 10,000 brushes"),
     ("live_100000_brushes", "Renderer scene: 100,000 brushes"),
     ("monster_capacity", "Monster capacity: find maximum live monsters before timeout"),
-    ("monster_chaos_witness", "Monster chaos: 25 monsters / 10-second live witness"),
+    ("monster_chaos_witness", "Monster chaos: 50 monsters / 10-second live witness"),
     ("borderless_window", "Window mode: borderless maximized"),
     ("fullscreen_window", "Window mode: true fullscreen"),
     ("editor_windowed_1280", "Editor mode: windowed 1280×720 (3D view pane)"),
