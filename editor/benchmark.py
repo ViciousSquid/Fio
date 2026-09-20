@@ -32,6 +32,7 @@ class BenchmarkRunner:
         self._phase_started = 0.0
         self._original_level_data = None
         self._original_play_mode = False
+        self._original_notarget = False
         self._original_unsaved_changes = False
         self._original_camera = None
         self._running = False
@@ -495,6 +496,9 @@ class BenchmarkRunner:
         if self.main_window.view_3d.play_mode:
             self.main_window._exit_play_mode()
             QApplication.processEvents()
+        logic = getattr(self.main_window.view_3d, "logic_thread", None)
+        if logic is not None:
+            logic.notarget = self._original_notarget
         if self._original_level_data is not None:
             self.main_window.state.load_from_data(copy.deepcopy(self._original_level_data))
             self.main_window.update_all_ui()
@@ -509,6 +513,9 @@ class BenchmarkRunner:
             camera.yaw = yaw
             camera.pitch = pitch
             camera.fov = fov
+        logic = getattr(self.main_window.view_3d, "logic_thread", None)
+        if logic is not None:
+            logic.notarget = self._original_notarget
         self.main_window.unsaved_changes = self._original_unsaved_changes
         self.main_window.view_3d.update()
         QApplication.processEvents()
@@ -897,6 +904,10 @@ class BenchmarkRunner:
         self._stop_live_stress_monitor()
     
         try:
+            if label == "monster_chaos_witness":
+                logic = getattr(self.main_window.view_3d, "logic_thread", None)
+                if logic is not None:
+                    logic.notarget = self._original_notarget
             if self.main_window.view_3d.play_mode:
                 if label.startswith(("procedural_", "monster_")):
                     self._bench.finish_live_monster_test(self.main_window)
@@ -975,6 +986,9 @@ class BenchmarkRunner:
                 "alive_monsters": alive,
                 "dead_monsters": max(0, len(monsters) - alive),
             })
+            logic = getattr(view, "logic_thread", None)
+            if logic is not None:
+                logic.notarget = self._original_notarget
             if view.play_mode:
                 self._bench.finish_live_monster_test(self.main_window)
             self._results.append(metrics)
@@ -1182,6 +1196,10 @@ class BenchmarkRunner:
                 self.main_window.state.get_level_data()
             )
             self._original_play_mode = bool(self.main_window.view_3d.play_mode)
+            logic = getattr(self.main_window.view_3d, "logic_thread", None)
+            self._original_notarget = bool(
+                getattr(logic, "notarget", False)
+            )
             self._original_unsaved_changes = bool(
                 getattr(self.main_window, "unsaved_changes", False)
             )
@@ -2212,6 +2230,7 @@ class BenchmarkTests:
                         "Monster chaos witness has no live LogicThread"
                     )
                 logic.god_mode = True
+                logic.notarget = True
 
                 self._monster_chaos_aggro_injected = False
                 self._monster_chaos_fighters = []
