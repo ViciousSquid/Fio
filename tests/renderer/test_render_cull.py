@@ -189,10 +189,13 @@ def test_batched_positions_out_tracks_selected_rows():
         objects, 0.0, 0.0, 1000.0,
         positions=positions, positions_out=out_positions)
     assert kept == objects
-    np.testing.assert_array_equal(
-        out_positions[:2],
-        positions[:2],
-    )
+    np.testing.assert_array_equal(out_positions[:3], positions)
+
+    kept = cull_by_distance(
+        objects, 0.0, 0.0, 500.0 * 500.0 - 1.0,
+        positions=positions, positions_out=out_positions)
+    assert kept == objects[1:]
+    np.testing.assert_array_equal(out_positions[:2], positions[1:])
 
 
 def test_vectorized_depth_sort_matches_python_order():
