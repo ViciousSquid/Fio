@@ -455,10 +455,12 @@ class BenchmarkManager(QDialog):
             self.export_button.setEnabled(bool(self.results))
             self.status.setText("Benchmark complete.")
             self._append(
-                '<div style="margin-top:12px; padding:10px; background:#1f241f; '
+                '<div style="margin-top:12px; padding:14px 16px; background:#1f241f; '
                 'border:1px solid #63d471; color:#eeeeee;">'
-                '<span style="color:#63d471; font-weight:bold;">Benchmark complete.</span> '
-                '%d result(s) recorded.'
+                '<div style="color:#63d471; font-size:22px; font-weight:bold; '
+                'line-height:1.2; margin-bottom:6px;">Benchmark complete.</div>'
+                '<div style="color:#eeeeee; font-size:14px; font-weight:bold;">'
+                '%d result(s) recorded.</div>'
                 '</div>' % len(self.results)
             )
 
