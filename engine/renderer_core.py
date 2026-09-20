@@ -844,6 +844,20 @@ class BaseRenderer:
                 mat = glm.rotate(mat, glm.radians(rot[2]), glm.vec3(0, 0, 1))
                 mat = glm.scale(mat, glm.vec3(*scale))
 
+                # OBJ import can repair a clearly broken mesh pivot. Apply the
+                # correction in model-local space so entity position/rotation/
+                # scale remain the authoritative transform.
+                origin_offset = getattr(obj, 'origin_offset', None)
+                if origin_offset is not None and np.any(np.abs(origin_offset) > 0.0):
+                    mat = glm.translate(
+                        mat,
+                        glm.vec3(
+                            -float(origin_offset[0]),
+                            -float(origin_offset[1]),
+                            -float(origin_offset[2]),
+                        ),
+                    )
+
                 gl.glBindVertexArray(obj.vao)
                 manual_texture = thing.properties.get('texture')
 
@@ -1860,20 +1874,29 @@ class BaseRenderer:
         if not texture_name:
             return None
 
+        # Normalise separators from MTL files authored on another platform.
+        texture_name = (
+            str(texture_name)
+            .strip()
+            .strip('"')
+            .replace('\\', os.sep)
+            .replace('/', os.sep)
+        )
+
         # 1. Try relative to the MTL file's directory (most correct for MTL refs)
         mtl_dir = material.get('mtl_dir', '')
         if mtl_dir:
-            resolved = os.path.join(mtl_dir, texture_name)
+            resolved = os.path.normpath(os.path.join(mtl_dir, texture_name))
             if os.path.exists(resolved):
                 return resolved
 
         # 2. Try assets/textures/ (global fallback)
-        resolved = os.path.join('assets', 'textures', texture_name)
+        resolved = os.path.normpath(os.path.join('assets', 'textures', texture_name))
         if os.path.exists(resolved):
             return resolved
 
         # 3. Try assets/models/ (legacy fallback)
-        resolved = os.path.join('assets', 'models', texture_name)
+        resolved = os.path.normpath(os.path.join('assets', 'models', texture_name))
         if os.path.exists(resolved):
             return resolved
 

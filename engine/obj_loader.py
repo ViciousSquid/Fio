@@ -18,6 +18,25 @@ class OBJLoader:
         self.faces: List[dict] = []
         self.materials: dict = {}
     
+    @staticmethod
+    def _resolve_index(value: str, length: int) -> int:
+        """Resolve a 1-based OBJ index, including OBJ's negative-index form."""
+        if not value:
+            return -1
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return -1
+
+        if index > 0:
+            index -= 1
+        elif index < 0:
+            index = length + index
+        else:
+            return -1
+
+        return index if 0 <= index < length else -1
+
     def load(self, filepath: str) -> bool:
         """
         Load model from filesystem path.
@@ -73,9 +92,18 @@ class OBJLoader:
                 for fp in parts[1:]:
                     # Parse "v/vt/vn" format
                     indices = fp.split('/')
-                    v_idx = int(indices[0]) - 1 if indices[0] else 0
-                    vt_idx = int(indices[1]) - 1 if len(indices) > 1 and indices[1] else -1
-                    vn_idx = int(indices[2]) - 1 if len(indices) > 2 and indices[2] else -1
+                    v_idx = self._resolve_index(
+                        indices[0] if indices else '',
+                        len(self.vertices),
+                    )
+                    vt_idx = self._resolve_index(
+                        indices[1] if len(indices) > 1 else '',
+                        len(self.texcoords),
+                    )
+                    vn_idx = self._resolve_index(
+                        indices[2] if len(indices) > 2 else '',
+                        len(self.normals),
+                    )
                     face['vertices'].append((v_idx, vt_idx, vn_idx))
                 self.faces.append(face)
             elif keyword == 'usemtl' and len(parts) > 1:
@@ -94,7 +122,10 @@ class OBJLoader:
         """Resolve MTL path relative to OBJ location and load."""
         # Derive MTL path from OBJ directory
         obj_dir = os.path.dirname(obj_path)
-        mtl_path = os.path.join(obj_dir, mtl_name)
+        # OBJ files are commonly moved between Windows and POSIX systems, so
+        # accept either path separator when resolving companion assets.
+        normalized_name = str(mtl_name).strip().strip('"').replace('\\', os.sep).replace('/', os.sep)
+        mtl_path = os.path.normpath(os.path.join(obj_dir, normalized_name))
         mtl_dir = os.path.dirname(mtl_path)  # Directory containing the MTL file
         
         mtl_text = None
@@ -136,6 +167,7 @@ class OBJLoader:
                 current_mtl = parts[1]
                 self.materials[current_mtl] = {
                     'diffuse': (0.8, 0.8, 0.8),
+                    'color': (0.8, 0.8, 0.8),
                     'ambient': (0.2, 0.2, 0.2),
                     'specular': (0.0, 0.0, 0.0),
                     'texture': None
@@ -144,6 +176,7 @@ class OBJLoader:
                 mtl = self.materials[current_mtl]
                 if keyword == 'Kd' and len(parts) >= 4:
                     mtl['diffuse'] = (float(parts[1]), float(parts[2]), float(parts[3]))
+                    mtl['color'] = mtl['diffuse']
                 elif keyword == 'Ka' and len(parts) >= 4:
                     mtl['ambient'] = (float(parts[1]), float(parts[2]), float(parts[3]))
                 elif keyword == 'Ks' and len(parts) >= 4:
@@ -169,18 +202,34 @@ class OBJ:
         self.groups = []
         self.materials = {}
         self.cpu_vertices = None  # np.array of shape (N, 3) for 2D view projection
+        self.origin_offset = np.zeros(3, dtype=np.float32)
+        self.centered_for_import = False
+        self.source_bounds = None
         
         loader = OBJLoader()
         if not loader.load(filepath):
             print(f"[OBJ] Failed to load: {filepath}")
             return
         
+        self.source_bounds = self._repair_import_origin(loader)
         self.materials = loader.materials
         self._build_gl_buffers(loader)
 
         # Report the imported model bounds so models that load successfully
         # but do not appear in the scene can be diagnosed for scale/origin
         # problems without changing their geometry or transform.
+        if self.source_bounds is not None:
+            source_min, source_max = self.source_bounds
+            print(
+                f"[OBJ] Source bounds: min={source_min.tolist()} "
+                f"max={source_max.tolist()}"
+            )
+        if self.centered_for_import:
+            print(
+                f"[OBJ] Recentred mesh by offset="
+                f"{self.origin_offset.tolist()}"
+            )
+
         if self.cpu_vertices is not None and len(self.cpu_vertices):
             mins = self.cpu_vertices.min(axis=0)
             maxs = self.cpu_vertices.max(axis=0)
@@ -196,6 +245,42 @@ class OBJ:
         self.is_loaded = True
         print(f"[OBJ] Loaded {self.vertex_count} vertices from {filepath}")
     
+    def _repair_import_origin(self, loader: OBJLoader):
+        """Repair obviously broken imported pivots while preserving normal pivots.
+
+        Downloaded OBJ files frequently contain mesh coordinates that are far
+        from their object origin. Fio places a model entity at its origin, so
+        an extreme offset can make an otherwise valid model appear to be
+        missing. Only axes whose bounding-box centre is clearly detached from
+        the mesh are corrected; ordinary base/side pivots are left untouched.
+        """
+        if not loader.vertices:
+            return None
+
+        source_vertices = np.asarray(loader.vertices, dtype=np.float32)
+        source_min = source_vertices.min(axis=0)
+        source_max = source_vertices.max(axis=0)
+        source_centre = (source_min + source_max) * 0.5
+        half_extent = (source_max - source_min) * 0.5
+
+        # A normal pivot can sit at the base or on one side of a mesh. Treat an
+        # axis as a bad export pivot only when the mesh centre is more than four
+        # half-extents away from the origin and at least two world units away.
+        threshold = np.maximum(half_extent * 4.0, 2.0)
+        offset = np.where(
+            np.abs(source_centre) > threshold,
+            source_centre,
+            0.0,
+        ).astype(np.float32)
+
+        if np.any(np.abs(offset) > 0.0):
+            corrected = source_vertices - offset
+            loader.vertices = [tuple(vertex) for vertex in corrected]
+            self.origin_offset = offset
+            self.centered_for_import = True
+
+        return source_min, source_max
+
     def _build_gl_buffers(self, loader: OBJLoader):
         """Build OpenGL VAO/VBO from parsed OBJ data."""
         import ctypes
