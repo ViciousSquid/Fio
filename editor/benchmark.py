@@ -1549,6 +1549,82 @@ class BenchmarkTests:
         )
 
 
+    def _stage_live_monsters(self, monster_data, window, view):
+        """Add real Monster entities incrementally while watching SysMon."""
+        from editor.things import Thing
+
+        monsters = list(monster_data)
+        if not monsters:
+            return
+
+        # Start with a small pause between entities.  If the live frame time
+        # rises sharply after an insertion, increase the pause before adding
+        # another monster.  This smooths the workload instead of dumping a
+        # large population into the live scene in one frame.
+        delay = 0.02
+        previous = self._read_sysmon_metrics(view)
+        previous_count = 0
+
+        self._append(
+            "  Staging %d Monster entities incrementally; monitoring SysMon."
+            % len(monsters)
+        )
+
+        for index, raw in enumerate(monsters, 1):
+            monster = Thing.from_dict(copy.deepcopy(raw))
+            if monster is None:
+                raise RuntimeError(
+                    "failed to construct benchmark Monster entity %d" % index
+                )
+
+            window.state.things.append(monster)
+            view._instance_tex_hash = None
+            view.update()
+            QApplication.processEvents()
+            self._settle_live_scene(delay)
+
+            current = self._read_sysmon_metrics(view)
+            previous_frame = float(
+                previous.get("average_frame_time_ms", 0.0) or 0.0
+            )
+            current_frame = float(
+                current.get("average_frame_time_ms", 0.0) or 0.0
+            )
+            frame_increase = current_frame - previous_frame
+            sharp_increase = (
+                previous_frame > 0.0
+                and frame_increase > max(8.0, previous_frame * 0.30)
+            )
+
+            if sharp_increase:
+                new_delay = min(0.15, max(0.025, delay * 1.5))
+                if new_delay > delay:
+                    delay = new_delay
+                    self._append(
+                        "  SysMon frame time rose %.2f ms while creating "
+                        "monster %d; slowing insertion to %.0f ms."
+                        % (frame_increase, index, delay * 1000.0)
+                    )
+            elif (
+                not sharp_increase
+                and index - previous_count >= 16
+                and delay > 0.02
+            ):
+                delay = max(0.02, delay * 0.9)
+                previous_count = index
+
+            previous = current
+
+        # Refresh editor-facing scene state once after the incremental build.
+        invalidate = getattr(window.state, "_invalidate_entity_caches", None)
+        if callable(invalidate):
+            invalidate()
+        window.update_all_ui()
+        window.update_views()
+        view.update()
+        QApplication.processEvents()
+        self._settle_live_scene()
+
     def _run_monster_capacity_probe(self, bench, window, view):
         """Find a conservative live monster capacity using SysMon degradation."""
         candidate = 16
@@ -1585,13 +1661,25 @@ class BenchmarkTests:
                 live_monster=True,
                 yield_hook=yield_hook,
             )
+
+            monster_data = [
+                thing for thing in data.get("things", [])
+                if str(thing.get("type", "")).lower() == "monster"
+            ]
+            base_data = copy.deepcopy(data)
+            base_data["things"] = [
+                thing for thing in base_data.get("things", [])
+                if str(thing.get("type", "")).lower() != "monster"
+            ]
+
             bench.load_live_benchmark_world(
                 window,
-                data,
+                base_data,
                 yield_hook=yield_hook,
             )
             QApplication.processEvents()
             self._settle_live_scene()
+            self._stage_live_monsters(monster_data, window, view)
             bench.prepare_live_monster_test(
                 window,
                 yield_hook=yield_hook,
