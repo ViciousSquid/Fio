@@ -63,6 +63,11 @@ class Renderer_F(BaseRenderer):
         # list or perform a second Python walk over the visible Thing set.
         self._model_render_buf = []
 
+        # Reusable object-reference buffers for the camera distance cull.
+        # Keeping these on the renderer avoids rebuilding the result lists.
+        self._cull_brush_buf = []
+        self._cull_thing_buf = []
+
         # Persistent numeric buffers for the camera distance-cull output.
         # They stay aligned with the returned brush/Thing lists, so later
         # classification and depth sorting never have to recover positions from
