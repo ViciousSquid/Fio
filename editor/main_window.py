@@ -4771,6 +4771,20 @@ class MainWindow(QMainWindow):
             if hasattr(self, '_play_button_sync_timer'):
                 self._play_button_sync_timer.stop()
 
+            # Stop the external benchmark manager and IPC host with the editor.
+            manager_process = getattr(self, '_benchmark_manager_process', None)
+            if manager_process is not None and manager_process.poll() is None:
+                try:
+                    manager_process.terminate()
+                except Exception:
+                    pass
+            benchmark_host = getattr(self, '_benchmark_host', None)
+            if benchmark_host is not None:
+                try:
+                    benchmark_host.shutdown()
+                except Exception:
+                    pass
+
             # Cleanup extracted package temp dir
             if hasattr(self, '_package_temp_dir') and self._package_temp_dir:
                 import shutil
