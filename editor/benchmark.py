@@ -970,7 +970,7 @@ class BenchmarkRunner:
                 "status": "passed",
                 "description": (
                     "10-second live monster chaos witness: seed 43, "
-                    "25 procedural human monsters converging on a PathNode, "
+                    "50 mixed human/flying monsters in two hostile teams converging on a PathNode, "
                     "followed by seeded random infighting."
                 ),
                 "seed": "43",
@@ -1000,7 +1000,7 @@ class BenchmarkRunner:
                 '<div style="font-size:15px; font-weight:bold; color:#eeeeee;">'
                 'Monster chaos witness</div>'
                 '<div style="color:#aaa; margin-top:4px;">'
-                'Seed 43 &nbsp; • &nbsp; 25 monsters &nbsp; • &nbsp; PathNode %s'
+                'Seed 43 &nbsp; • &nbsp; 50 monsters &nbsp; • &nbsp; 30 human / 20 flying &nbsp; • &nbsp; PathNode %s'
                 '</div>'
                 '<table cellspacing="0" cellpadding="0" style="margin-top:10px;">'
                 '<tr><td width="24" rowspan="2" bgcolor="#63d471"></td>'
@@ -2202,7 +2202,7 @@ class BenchmarkTests:
                 cooperative_yield = lambda: self._live_cooperative_yield(label)
                 data, chaos_info = bench.make_monster_chaos_witness_world(
                     seed="43",
-                    monster_count=25,
+                    monster_count=50,
                     yield_hook=cooperative_yield,
                 )
                 bench.load_live_benchmark_world(
@@ -2238,7 +2238,7 @@ class BenchmarkTests:
                 self._monster_chaos_info = dict(chaos_info)
                 self._show_monster_chaos_overlay(10.0)
                 self._append(
-                    "  Monster chaos witness: seed 43, 25 procedural monsters, "
+                    "  Monster chaos witness: seed 43, 50 mixed monsters (30 human / 20 flying) in two hostile teams, "
                     "PathNode '%s'. All monsters are converging; infighting "
                     "will be injected after %.1f seconds."
                     % (
