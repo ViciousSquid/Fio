@@ -357,7 +357,7 @@ class MainWindow(QMainWindow):
         import subprocess
         import sys
 
-        from editor.benchmark_host import BenchmarkHost
+        from editor.benchmark import BenchmarkHost
 
         host = getattr(self, "_benchmark_host", None)
         if host is None:
