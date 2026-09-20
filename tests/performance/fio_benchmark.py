@@ -821,6 +821,118 @@ def load_live_benchmark_world(window, data, yield_hook=None):
         yield_hook()
 
 
+
+def make_monster_chaos_witness_world(seed="43", monster_count=25, yield_hook=None):
+    """Build the deterministic medium world used by the live chaos witness."""
+    import random
+
+    random.seed(seed)
+    params = {
+        "world_width": 2048,
+        "world_height": 2048,
+        "min_room": 384,
+        "max_room": 512,
+        "room_count": 12,
+        "wall_tex": "default.png",
+        "floor_tex": "default.png",
+        "enable_floors": False,
+        "floor_height": 128,
+        "floor_room_count": 0,
+        "spawn_monsters": True,
+        "monster_count": int(monster_count),
+        "spawn_health": False,
+    }
+    data = create_map_data(params, yield_hook=yield_hook)
+
+    player_start = next(
+        (
+            thing for thing in data.get("things", [])
+            if str(thing.get("type", "")).lower() == "playerstart"
+        ),
+        None,
+    )
+    if player_start is None:
+        raise RuntimeError("chaos witness procedural map has no PlayerStart")
+
+    px, py, pz = [float(v) for v in player_start.get("pos", [0.0, 96.0, 0.0])]
+
+    pathnode_name = "ChaosPathNode"
+    data["things"].append({
+        "type": "path_node",
+        "pos": [px, py, pz],
+        "properties": {
+            "type": "path_node",
+            "name": pathnode_name,
+            "id": "chaos_pathnode",
+            "radius": 64.0,
+            "show_radius": True,
+            "affects_type": "both",
+            "next_node": "",
+            "wait_time": 0.0,
+            "speed": 1.0,
+        },
+        "io_connections": [],
+    })
+
+    monsters = [
+        thing for thing in data.get("things", [])
+        if str(thing.get("type", "")).lower() == "monster"
+    ]
+    if len(monsters) != int(monster_count):
+        raise RuntimeError(
+            "chaos witness generated %d monsters, expected %d"
+            % (len(monsters), int(monster_count))
+        )
+
+    # Keep the encounter in the large generated start room so the player can
+    # watch the entire fight from the PlayerStart.  Three rings leave the
+    # centre clear while keeping every monster well inside the room footprint.
+    rng = random.Random(seed)
+    ring_sizes = (8, 8, 9)
+    ring_radii = (105.0, 145.0, 175.0)
+    index = 0
+    for ring_index, ring_size in enumerate(ring_sizes):
+        phase = rng.uniform(0.0, math.tau)
+        for ring_pos in range(ring_size):
+            angle = phase + (math.tau * ring_pos / ring_size)
+            # A small deterministic jitter avoids a perfectly mechanical
+            # formation while preserving the room-safe radius.
+            radius = ring_radii[ring_index] + rng.uniform(-8.0, 8.0)
+            wx = px + math.cos(angle) * radius
+            wz = pz + math.sin(angle) * radius
+
+            monster = monsters[index]
+            monster["pos"] = [wx, FLOOR_SURFACE + 96.0, wz]
+            props = monster.setdefault("properties", {})
+            props.update({
+                "monster_type": "human",
+                "health": 120,
+                "damage": 12,
+                "awake": True,
+                "wake_on_sight": True,
+                "dead": False,
+                "team": "",
+                "patrol": True,
+                "patrol_target": pathnode_name,
+                "patrol_mode": "once",
+                "target_name": pathnode_name,
+            })
+            index += 1
+
+            if yield_hook is not None and index % 8 == 0:
+                yield_hook()
+
+    if yield_hook is not None:
+        yield_hook()
+
+    return data, {
+        "seed": str(seed),
+        "monster_count": int(monster_count),
+        "pathnode_name": pathnode_name,
+        "pathnode_pos": [px, py, pz],
+    }
+
+
 def prepare_live_monster_test(window, aggro_fraction=0.25, yield_hook=None):
     """Enter real Play Mode and configure a representative monster combat load.
 
