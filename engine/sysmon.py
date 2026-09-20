@@ -173,8 +173,25 @@ class SysMon:
         except (TypeError, ValueError):
             self._fps = 0.0
 
+    def reset_metrics(self):
+        """Reset the frame/metric state used by benchmark measurements."""
+        self._ft_buffer.fill(0.0)
+        self._ft_index = 0
+        self._ft_count = 0
+        self._ft_max = 16.67
+        self._ft_max_age = 0
+        self._fps = 0.0
+        for key in self.stats:
+            self.stats[key] = 0
+        self._stats_cache = {}
+        self._stats_cache_time = 0.0
+
     def get_metrics(self):
-        """Return a machine-readable snapshot of the metrics displayed by SysMon."""
+        """Return a machine-readable snapshot without adding work to the frame path.
+
+        Benchmark-only metrics are derived here when requested rather than being
+        maintained from QtGameView's per-frame/render hot paths.
+        """
         count = int(self._ft_count)
         if count:
             frame_times = np.asarray(self._ft_buffer[:count], dtype=np.float64)
@@ -193,8 +210,38 @@ class SysMon:
         renderer = getattr(self.parent, "renderer", None)
         editor = getattr(self.parent, "editor", None)
 
+        visible_tris = int(self.stats.get("visible_tris", 0))
+        culled_tris = int(self.stats.get("culled_tris", 0))
+        visible_surfaces = int(self.stats.get("visible_surfaces", 0))
+        culled_surfaces = int(self.stats.get("culled_surfaces", 0))
+
+        if renderer is not None:
+            render_stats = getattr(renderer, "render_stats", None)
+            if render_stats is not None:
+                visible_tris = int(
+                    getattr(render_stats, "visible_tris", visible_tris) or 0
+                )
+
+        if editor is not None:
+            state = getattr(editor, "state", None)
+            brushes = getattr(state, "brushes", []) if state is not None else []
+            total_tris = len(brushes) * 12
+            terrain = getattr(editor, "terrain", None)
+            if terrain is not None:
+                try:
+                    total_tris += int(terrain.get_tri_count())
+                except (AttributeError, TypeError, ValueError):
+                    pass
+            culled_tris = max(0, total_tris - visible_tris)
+            visible_surfaces = int(self.stats.get("visible_brushes", 0))
+            culled_surfaces = int(self.stats.get("culled_brushes", 0))
+
+        fps = float(self._fps)
+        if fps <= 0.0 and average_frame_ms > 0.0:
+            fps = 1000.0 / average_frame_ms
+
         return {
-            "fps": float(self._fps),
+            "fps": fps,
             "frame_time_ms": current_frame_ms,
             "average_frame_time_ms": average_frame_ms,
             "p95_frame_time_ms": p95_frame_ms,
@@ -203,10 +250,10 @@ class SysMon:
             "visible_brushes": int(self.stats.get("visible_brushes", 0)),
             "culled_brushes": int(self.stats.get("culled_brushes", 0)),
             "total_brushes": int(self.stats.get("total_brushes", 0)),
-            "visible_tris": int(self.stats.get("visible_tris", 0)),
-            "culled_tris": int(self.stats.get("culled_tris", 0)),
-            "visible_surfaces": int(self.stats.get("visible_surfaces", 0)),
-            "culled_surfaces": int(self.stats.get("culled_surfaces", 0)),
+            "visible_tris": visible_tris,
+            "culled_tris": culled_tris,
+            "visible_surfaces": visible_surfaces,
+            "culled_surfaces": culled_surfaces,
             "tps": float(getattr(logic_thread, "actual_tps", 0.0) or 0.0),
             "things": int(
                 len(getattr(getattr(editor, "state", None), "things", []) or [])
