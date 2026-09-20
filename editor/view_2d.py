@@ -2182,7 +2182,7 @@ class View2D(QWidget):
             obj = self.main_window.view_3d.renderer.get_loaded_model(model_path)
         cpu_triangles = getattr(obj, 'cpu_triangles', None)
 
-        if cpu_triangles:
+        if cpu_triangles is not None and len(cpu_triangles):
             for tri in cpu_triangles:
                 i0, i1, i2 = tri
                 # Guard against malformed index data
