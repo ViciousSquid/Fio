@@ -613,7 +613,9 @@ class BenchmarkManager(QDialog):
             for key in (
                 "average_fps", "min_fps", "max_fps",
                 "io_elapsed_ms", "io_hops", "hops_per_second",
-                "monster_capacity", "viewport_width", "viewport_height",
+                "monster_capacity", "monster_count", "aggro_count",
+                "alive_monsters", "dead_monsters", "witness_duration_s",
+                "seed", "pathnode_name", "viewport_width", "viewport_height",
                 "visible_brushes", "culled_brushes", "total_brushes",
             ):
                 if key in result:
