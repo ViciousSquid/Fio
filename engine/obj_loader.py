@@ -177,6 +177,22 @@ class OBJ:
         
         self.materials = loader.materials
         self._build_gl_buffers(loader)
+
+        # Report the imported model bounds so models that load successfully
+        # but do not appear in the scene can be diagnosed for scale/origin
+        # problems without changing their geometry or transform.
+        if self.cpu_vertices is not None and len(self.cpu_vertices):
+            mins = self.cpu_vertices.min(axis=0)
+            maxs = self.cpu_vertices.max(axis=0)
+            centre = (mins + maxs) * 0.5
+            size = maxs - mins
+            print(
+                f"[OBJ] Bounds: min={mins.tolist()} "
+                f"max={maxs.tolist()} "
+                f"size={size.tolist()} "
+                f"centre={centre.tolist()}"
+            )
+
         self.is_loaded = True
         print(f"[OBJ] Loaded {self.vertex_count} vertices from {filepath}")
     
