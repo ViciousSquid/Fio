@@ -774,19 +774,35 @@ class BaseRenderer:
     # Models
     # --------------------------------------------------------------------------
     def load_model(self, filename):
-        """Load a 3D model (OBJ or GLB)."""
+        """Load a 3D model (OBJ or GLB).
+
+        The normal render-time case is an already-loaded model. Keep that path
+        to a single dictionary lookup; path normalisation and filesystem work
+        belong exclusively to cache misses.
+        """
         if not filename:
             return None
 
-        # Keep cache keys stable when a path comes from QFileDialog, a map,
-        # or a package and uses different slash/absolute-path spellings.
+        # HOT PATH: model_path values are normally identical strings frame to
+        # frame, so this is the entire lookup on the common render path.
+        model = self.loaded_models.get(filename)
+        if model is not None:
+            return model
+
+        # Cache miss only: normalise alternate slash/absolute-path spellings
+        # so editor/package/file-dialog paths still collapse to one resource.
         original_filename = str(filename)
         normalized_filename = os.path.normpath(
             original_filename.replace('/', os.sep).replace('\\', os.sep)
         )
         cache_key = os.path.normcase(normalized_filename)
-        if cache_key in self.loaded_models:
-            return self.loaded_models[cache_key]
+
+        model = self.loaded_models.get(cache_key)
+        if model is not None:
+            # Alias this exact authored path so subsequent frames stay on the
+            # one-dictionary-lookup path above.
+            self.loaded_models[filename] = model
+            return model
 
         full_path = normalized_filename
         if not os.path.isabs(full_path):
@@ -795,10 +811,6 @@ class BaseRenderer:
                 full_path = candidate
             elif os.path.exists(original_filename):
                 full_path = original_filename
-
-        if not os.path.exists(full_path):
-            print(f"Failed to load model: {filename}")
-            return None
 
         if not os.path.exists(full_path):
             print(f"Failed to load model: {filename}")
@@ -825,6 +837,7 @@ class BaseRenderer:
 
         if model.is_loaded:
             self.loaded_models[cache_key] = model
+            self.loaded_models[filename] = model
             return model
 
         print(f"Failed to load model: {filename}")
@@ -834,11 +847,19 @@ class BaseRenderer:
         """Return a model already loaded by this renderer without touching GL."""
         if not filename:
             return None
+
+        model = self.loaded_models.get(filename)
+        if model is not None:
+            return model
+
         normalized_filename = os.path.normpath(
             str(filename).replace('/', os.sep).replace('\\', os.sep)
         )
         cache_key = os.path.normcase(normalized_filename)
-        return self.loaded_models.get(cache_key)
+        model = self.loaded_models.get(cache_key)
+        if model is not None:
+            self.loaded_models[filename] = model
+        return model
 
     def draw_models(self, projection, view, camera_pos, models, lights, config):
             if not models:
@@ -1389,7 +1410,7 @@ class BaseRenderer:
     # --------------------------------------------------------------------------
     # Helpers for sorting and matrix utilities
     # --------------------------------------------------------------------------
-    def _sort_objects(self, brushes, things, config):
+    def _sort_objects(self, brushes, things, config, model_out=None):
         opaque, transparent, sprites, fog, water, glass, glow = [], [], [], [], [], [], []
         is_play, show_sprites = config.get('play_mode', False), config.get('show_sprites_in_play_mode', False)
 
@@ -1413,31 +1434,42 @@ class BaseRenderer:
             else:
                 opaque.append(brush)
 
-        if not is_play:
-            sprites = [t for t in things if (isinstance(t, Thing) or (isinstance(t, dict) and 'monster_type' in t))
-                       and not (PathNode is not None and isinstance(t, PathNode))]
-        else:
-            for t in things:
-                if PathNode is not None and isinstance(t, PathNode):
-                    continue
-                if Portal is not None and isinstance(t, Portal):
-                    sprites.append(t)
-                    continue
-                if isinstance(t, dict) and 'monster_type' in t:
-                    sprites.append(t)
-                elif isinstance(t, Thing):
-                    if isinstance(t, Pickup):
-                        sprites.append(t)
-                    elif isinstance(t, (Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger)):
-                        sprites.append(t)
-                    elif getattr(t, 'properties', {}).get('model_path'):
-                        # Always render models in play mode (3D geometry, not just editor sprites)
-                        sprites.append(t)
-                    elif getattr(t, 'properties', {}).get('sprite_path'):
-                        # Props may deliberately be camera-facing billboards.
-                        sprites.append(t)
-                    elif show_sprites:
-                        sprites.append(t)
+        # Keep model discovery in this same object walk.  Renderer_F uses
+        # model_out to render visible 3D models; doing a second pass over
+        # sprite_things every frame was needless Python work.
+        for t in things:
+            if PathNode is not None and isinstance(t, PathNode):
+                continue
+            if Portal is not None and isinstance(t, Portal):
+                sprites.append(t)
+                continue
+            if isinstance(t, dict) and 'monster_type' in t:
+                sprites.append(t)
+                continue
+            if not isinstance(t, Thing):
+                continue
+
+            props = getattr(t, 'properties', {})
+            model_path = props.get('model_path')
+            if model_out is not None and model_path and not props.get('hidden', False):
+                model_out.append(t)
+
+            if isinstance(t, Pickup):
+                sprites.append(t)
+            elif isinstance(t, (Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger)):
+                sprites.append(t)
+            elif model_path:
+                # Models are 3D geometry. Keep them in the sprite classification
+                # too because the existing renderer paths rely on that grouping.
+                sprites.append(t)
+            elif props.get('sprite_path'):
+                # Props may deliberately be camera-facing billboards.
+                sprites.append(t)
+            elif not is_play and True:
+                # Editor mode historically displays ordinary Things as sprites.
+                sprites.append(t)
+            elif show_sprites:
+                sprites.append(t)
         return opaque, transparent, sprites, fog, water, glass, glow
 
     def _split_opaque(self, brushes):
