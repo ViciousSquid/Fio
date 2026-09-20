@@ -368,7 +368,14 @@ def _generate_procedural_map(monsters=0, relay_count=32, seed=BENCHMARK_MAP_SEED
 
 # Live benchmark loader deliberately accepts yield_hook so large worlds can be built cooperatively.
 def load_live_benchmark_world(window, data, yield_hook=None):
-    """Load benchmark data into the existing Fio editor cooperatively."""
+    """Load benchmark data into the existing Fio editor cooperatively.
+
+    Large brush stress scenes deliberately avoid rebuilding all four editor
+    view widgets during preparation. The 2D views and scene hierarchy are
+    editor UI overhead, not part of the live 3D brush workload, and rebuilding
+    them here can make the benchmark appear hung before measurement starts.
+    The real MainWindow, EditorState and 3D viewport are still used.
+    """
     window.state.load_from_data(
         data,
         yield_hook=yield_hook,
@@ -376,16 +383,22 @@ def load_live_benchmark_world(window, data, yield_hook=None):
     )
     if yield_hook is not None:
         yield_hook()
-    window.update_all_ui()
-    if yield_hook is not None:
-        yield_hook()
-    window.update_views()
-    if yield_hook is not None:
-        yield_hook()
-    window.view_3d.update()
-    window.view_top.update()
-    window.view_side.update()
-    window.view_front.update()
+
+    large_brush_scene = len(data.get("brushes", ())) >= 1000
+    if large_brush_scene:
+        window.view_3d.update()
+    else:
+        window.update_all_ui()
+        if yield_hook is not None:
+            yield_hook()
+        window.update_views()
+        if yield_hook is not None:
+            yield_hook()
+        window.view_3d.update()
+        window.view_top.update()
+        window.view_side.update()
+        window.view_front.update()
+
     if yield_hook is not None:
         yield_hook()
 
