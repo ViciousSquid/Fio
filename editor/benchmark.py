@@ -89,6 +89,7 @@ class BenchmarkRunner:
         self._monster_chaos_overlay = None
         self._monster_chaos_aggro_injected = False
         self._monster_chaos_fighters = []
+        self._monster_chaos_aggro_count = 0
         self.tests = BenchmarkTests(self)
         self.results = BenchmarkResults(self)
 
@@ -486,6 +487,7 @@ class BenchmarkRunner:
         self._remove_monster_chaos_overlay()
         self._monster_chaos_aggro_injected = False
         self._monster_chaos_fighters = []
+        self._monster_chaos_aggro_count = 0
         self._timer.stop()
         self._measurement_active = False
         self._live_stress_active = False
@@ -951,7 +953,7 @@ class BenchmarkRunner:
                 1 for monster in monsters
                 if not monster.properties.get("dead", False)
             )
-            aggro_count = len(self._monster_chaos_fighters)
+            aggro_count = int(getattr(self, "_monster_chaos_aggro_count", 0))
             metrics.update({
                 "test": label,
                 "status": "passed",
@@ -1336,6 +1338,7 @@ class BenchmarkRunner:
             source.properties["_aggro_target"] = id(target)
 
         self._monster_chaos_fighters = fighters
+        self._monster_chaos_aggro_count = len(fighters)
         self._monster_chaos_aggro_injected = True
         self._append(
             "  INFIGHTING! Injected %d seeded random monster-vs-monster "
