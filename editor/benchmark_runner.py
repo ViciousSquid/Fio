@@ -40,8 +40,11 @@ class BenchmarkRunner:
         self._measurement_deadline = 0.0
         self._measurement_watchdog_deadline = 0.0
         self._preparation_deadline = 0.0
-        self._preparation_timeout_s = 30.0
-        self._measurement_watchdog_extra_s = 60.0
+        # The external benchmark manager is the hard timeout boundary.
+        # These large in-process values are only defensive guards for a
+        # responsive Fio process; they must not decide whether Fio is killed.
+        self._preparation_timeout_s = 300.0
+        self._measurement_watchdog_extra_s = 3600.0
         self._original_window_flags = None
         self._original_window_geometry = None
         self._original_window_state = None
@@ -102,78 +105,26 @@ class BenchmarkRunner:
         raise AttributeError(name)
 
     def _live_stress_timeout_for(self, label):
-        """Return the same-process safety timeout for a live stress workload."""
-        # Live I/O can legitimately take around 44 seconds on low-power
-        # hardware.  Keep the safety ceiling at 60 seconds for every live
-        # stress workload rather than aborting a valid benchmark early.
+        """Return the manager-side timeout used for descriptive messages.
+
+        Fio itself does not terminate or fail the process on this deadline.
+        The external benchmark manager owns the hard supervision boundary.
+        """
         return 60.0
-    
 
     def _start_live_stress_monitor(self, label):
-        """Start same-process watchdog supervision for a live workload."""
-        self._stop_live_stress_monitor()
-        timeout_s = self._live_stress_timeout_for(label)
+        """Compatibility no-op: process supervision is external now."""
         self._live_stress_timeout = False
         self._live_stress_timeout_reason = ""
-        self._live_stress_deadline = time.perf_counter() + timeout_s
-        with self._live_watchdog_lock:
-            self._live_watchdog_heartbeat = time.perf_counter()
-
-        stop = threading.Event()
-        self._live_watchdog_stop = stop
-
-        def monitor():
-            while not stop.wait(0.25):
-                now = time.perf_counter()
-                with self._live_watchdog_lock:
-                    heartbeat = self._live_watchdog_heartbeat
-                    deadline = self._live_stress_deadline
-                if deadline <= 0.0:
-                    return
-                if now >= deadline:
-                    self._live_stress_timeout = True
-                    self._live_stress_timeout_reason = (
-                        "%s exceeded its %.1f s live benchmark timeout. "
-                        "Fio was not terminated; the live workload was marked failed."
-                        % (label, timeout_s)
-                    )
-                    return
-                # A stale heartbeat means the monitored Fio thread has stopped
-                # servicing the benchmark. Do not try to touch Qt from here.
-                if now - heartbeat >= timeout_s:
-                    self._live_stress_timeout = True
-                    self._live_stress_timeout_reason = (
-                        "%s stopped responding for %.1f s. "
-                        "The same Fio process remains running."
-                        % (label, timeout_s)
-                    )
-                    return
-
-        self._live_watchdog_thread = threading.Thread(
-            target=monitor,
-            name="FioLiveBenchmarkWatchdog",
-            daemon=True,
-        )
-        self._live_watchdog_thread.start()
-
+        self._live_stress_deadline = 0.0
 
     def _stop_live_stress_monitor(self):
-        """Stop same-process watchdog supervision."""
+        """Compatibility no-op: the external manager supervises Fio."""
         self._live_stress_deadline = 0.0
-        stop = self._live_watchdog_stop
-        thread = self._live_watchdog_thread
-        if stop is not None:
-            stop.set()
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=0.75)
-        self._live_watchdog_stop = None
-        self._live_watchdog_thread = None
-
 
     def _live_watchdog_beat(self):
-        with self._live_watchdog_lock:
-            self._live_watchdog_heartbeat = time.perf_counter()
-    
+        """Compatibility no-op; the manager observes the real process."""
+        return
 
     def _on_live_stress_timeout(self, reason):
         if not self._live_stress_active:
@@ -187,95 +138,18 @@ class BenchmarkRunner:
     
 
     def _start_monitor_for_risky_test(self, label, timeout_s, process):
-        """Supervise an isolated stress worker and terminate it on timeout."""
-        self._stop_monitor()
-        self._monitor_stop = threading.Event()
-        self._monitor_lock = threading.Lock()
-        self._monitor_heartbeat = time.perf_counter()
-        self._monitor_phase = str(label)
-        self._monitor_deadline = time.perf_counter() + float(timeout_s)
-        self._monitor_timeout = False
-        self._monitor_timeout_reason = ""
-        self._worker_finished = False
-        self._worker_exit_code = None
-        stop = self._monitor_stop
-        lock = self._monitor_lock
-        deadline = self._monitor_deadline
-    
-        def terminate_worker():
-            if process.poll() is not None:
-                return
-            try:
-                process.terminate()
-                process.wait(timeout=1.5)
-            except Exception:
-                try:
-                    process.kill()
-                    process.wait(timeout=1.5)
-                except Exception:
-                    pass
-    
-        def monitor():
-            while not stop.wait(0.25):
-                now = time.perf_counter()
-                exit_code = process.poll()
-                if exit_code is not None:
-                    with lock:
-                        self._worker_finished = True
-                        self._worker_exit_code = exit_code
-                    return
-                if now > deadline:
-                    reason = (
-                        "%s exceeded the %.1f s hard timeout. The isolated worker "
-                        "was terminated before the benchmark could hang Fio."
-                        % (label, float(timeout_s))
-                    )
-                    terminate_worker()
-                    with lock:
-                        self._monitor_timeout = True
-                        self._monitor_timeout_reason = reason
-                        self._worker_finished = True
-                        self._worker_exit_code = process.poll()
-                    return
-    
-        self._monitor_thread = threading.Thread(
-            target=monitor,
-            name="FioBenchmarkMonitor",
-            daemon=True,
-        )
-        self._monitor_thread.start()
-    
+        """Legacy worker supervision hook; no longer used for live tests."""
+        return
 
     def _monitor_beat(self, phase=None, deadline=None):
-        self._live_watchdog_beat()
-        if self._monitor_stop is None or self._monitor_lock is None:
-            return
-        with self._monitor_lock:
-            self._monitor_heartbeat = time.perf_counter()
-            if phase is not None:
-                self._monitor_phase = str(phase)
-            if deadline is not None:
-                self._monitor_deadline = float(deadline)
-    
+        """Compatibility no-op; timeout supervision belongs to the manager."""
+        return
 
     def _monitor_failed(self):
-        if self._monitor_lock is None:
-            return False, ""
-        with self._monitor_lock:
-            return bool(self._monitor_timeout), self._monitor_timeout_reason
-    
+        return False, ""
 
     def _stop_monitor(self):
-        stop = self._monitor_stop
-        thread = self._monitor_thread
-        if stop is not None:
-            stop.set()
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=0.75)
-        self._monitor_stop = None
-        self._monitor_thread = None
-        self._monitor_lock = None
-    
+        return
 
     def _worker_timeout_for(self, label):
         """Return the hard wall-clock timeout for an isolated stress test."""
@@ -721,7 +595,9 @@ class BenchmarkRunner:
         self._append("<span style='color:#ffb15a; font-weight:bold;'>START TEST</span> — %s" % label)
         self._append("Reset to baseline; loading live workload...")
         self._preparation_deadline = time.perf_counter() + self._preparation_timeout_s
-        self.status_label.setText("Preparing: %s (30 s preparation limit)" % label)
+        self.status_label.setText(
+            "Preparing: %s (external manager supervises this process)" % label
+        )
     
         try:
             if label in ("current_world", "current_world_phase1", "current_world_phase2", "borderless_window", "fullscreen_window", "editor_windowed_1280", "editor_windowed_1920"):
