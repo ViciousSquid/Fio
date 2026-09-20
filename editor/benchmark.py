@@ -721,12 +721,7 @@ class BenchmarkRunner:
         except Exception:
             pass
     
-        try:
-            self.main_window.view_3d.sysmon.end_benchmark_capture()
-        except Exception:
-            pass
-    
-        label = self._current[0] if self._current else "benchmark"
+label = self._current[0] if self._current else "benchmark"
         self._results.append({
             "test": label,
             "status": "error",
@@ -790,12 +785,7 @@ class BenchmarkRunner:
         self._live_stress_active = False
         self._stop_live_stress_monitor()
     
-        try:
-            self.main_window.view_3d.sysmon.end_benchmark_capture()
-        except Exception:
-            pass
-    
-        try:
+try:
             if self.main_window.view_3d.play_mode:
                 if label.startswith(("procedural_", "monster_")):
                     self._bench.finish_live_monster_test(self.main_window)
