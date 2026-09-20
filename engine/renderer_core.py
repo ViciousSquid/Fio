@@ -1737,11 +1737,95 @@ class BaseRenderer:
                 gl.glUniform1i(loc, base + i)
         gl.glActiveTexture(gl.GL_TEXTURE0)
 
-    def _collect_shadow_casters(self, brushes, models, lx, ly, lz, reach):
-        """Return the brushes/models within *reach* of a light plus a hashable
-        signature of their transforms (used to detect when a cube-map is stale).
-        Filtering once per light — rather than once per cube face — also cuts the
-        non-cached path's CPU work by 6x."""
+    def _prepare_shadow_caster_batch(self, brushes, models):
+        """Build one numeric caster snapshot shared by every shadow light."""
+        if brushes:
+            brush_positions = np.asarray(
+                [b.get('pos', (0.0, 0.0, 0.0)) for b in brushes],
+                dtype=np.float64,
+            )
+            brush_sizes = np.asarray(
+                [b.get('size', (64.0, 64.0, 64.0)) for b in brushes],
+                dtype=np.float64,
+            )
+            brush_radii = 0.5 * np.max(brush_sizes, axis=1)
+            brush_keys = [
+                (
+                    tuple(b.get('pos', (0.0, 0.0, 0.0))),
+                    tuple(b.get('size', (64.0, 64.0, 64.0))),
+                    b.get('_rot_angle'),
+                    tuple(b.get('rot_axis')) if b.get('rot_axis') else None,
+                )
+                for b in brushes
+            ]
+        else:
+            brush_positions = np.empty((0, 3), dtype=np.float64)
+            brush_radii = np.empty((0,), dtype=np.float64)
+            brush_keys = []
+
+        if models:
+            model_positions = np.asarray(
+                [tuple(t.pos) for t in models],
+                dtype=np.float64,
+            )
+            model_keys = []
+            for t in models:
+                props = t.properties
+                scale = props.get('scale', 1.0)
+                scale_key = scale if isinstance(scale, (int, float)) else tuple(scale)
+                model_keys.append(
+                    (
+                        tuple(t.pos),
+                        props.get('model_path'),
+                        tuple(props.get('rotation', (0, 0, 0))),
+                        scale_key,
+                    )
+                )
+        else:
+            model_positions = np.empty((0, 3), dtype=np.float64)
+            model_keys = []
+
+        return (
+            brush_positions, brush_radii, brush_keys,
+            model_positions, model_keys,
+        )
+
+    def _collect_shadow_casters(self, brushes, models, lx, ly, lz, reach,
+                                batch=None):
+        """Return casters within reach, using one NumPy distance pass per light."""
+        if batch is not None:
+            (brush_positions, brush_radii, brush_keys,
+             model_positions, model_keys) = batch
+
+            in_brushes = []
+            if len(brushes):
+                dx = brush_positions[:, 0] - lx
+                dy = brush_positions[:, 1] - ly
+                dz = brush_positions[:, 2] - lz
+                limit = reach + brush_radii
+                visible = (dx * dx + dy * dy + dz * dz) <= (limit * limit)
+                indices = np.flatnonzero(visible)
+                in_brushes = [brushes[int(i)] for i in indices]
+                bkeys = tuple(brush_keys[int(i)] for i in indices)
+            else:
+                bkeys = ()
+
+            in_models = []
+            if len(models):
+                dx = model_positions[:, 0] - lx
+                dy = model_positions[:, 1] - ly
+                dz = model_positions[:, 2] - lz
+                visible = (dx * dx + dy * dy + dz * dz) <= (reach * reach * 4.0)
+                indices = np.flatnonzero(visible)
+                in_models = [models[int(i)] for i in indices]
+                mkeys = tuple(model_keys[int(i)] for i in indices)
+            else:
+                mkeys = ()
+
+            return in_brushes, in_models, (bkeys, mkeys)
+
+        # Legacy/API-compatible scalar path for callers that don't provide the
+        # shared batch snapshot.
         in_brushes, bkeys = [], []
         for b in brushes:
             pos = b.get('pos', (0, 0, 0))
@@ -1752,9 +1836,9 @@ class BaseRenderer:
             if (dx * dx + dy * dy + dz * dz) > limit * limit:
                 continue
             in_brushes.append(b)
-            axis = b.get('rot_axis')
             bkeys.append((pos[0], pos[1], pos[2], size[0], size[1], size[2],
-                          b.get('_rot_angle'), tuple(axis) if axis else None))
+                          b.get('_rot_angle'),
+                          tuple(b.get('rot_axis')) if b.get('rot_axis') else None))
 
         in_models, mkeys = [], []
         reach4_sq = reach * reach * 4.0
@@ -1771,6 +1855,7 @@ class BaseRenderer:
                           tuple(props.get('rotation', (0, 0, 0))), scale_key))
 
         return in_brushes, in_models, (tuple(bkeys), tuple(mkeys))
+
 
     def render_shadow_maps(self, shadow_lights, brushes, things, config, camera_pos=None):
         """Refresh the depth cube-map for each shadow-casting point light.
@@ -1832,6 +1917,10 @@ class BaseRenderer:
         caster_models = [t for t in things
                          if isinstance(t, Thing) and t.properties.get('model_path')]
 
+        # Build numeric caster positions once; every dirty light reuses them.
+        caster_batch = self._prepare_shadow_caster_batch(
+            caster_brushes, caster_models)
+
         to_render = []   # (light, slot, in_brushes, in_models)
         for l in lights:
             slot = light_slot.get(id(l))
@@ -1840,7 +1929,8 @@ class BaseRenderer:
             lx, ly, lz = float(l.pos[0]), float(l.pos[1]), float(l.pos[2])
             radius = max(float(l.get_radius()), 1.0)
             in_brushes, in_models, caster_keys = self._collect_shadow_casters(
-                caster_brushes, caster_models, lx, ly, lz, radius)
+                caster_brushes, caster_models, lx, ly, lz, radius,
+                batch=caster_batch)
             sig = (round(lx, 3), round(ly, 3), round(lz, 3), round(radius, 3), caster_keys)
             self._light_shadow_index[id(l)] = slot
             if self._shadow_slot_sig[slot] == sig:
