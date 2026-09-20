@@ -266,7 +266,9 @@ def sort_by_distance(objects: Sequence, positions, cx: float, cz: float,
     if count < 2:
         return list(objects)
 
-    if positions is None or count < min_numpy_count:
+    pos = None if positions is None else np.asarray(positions)
+    if (positions is None or count < min_numpy_count or
+            pos is None or pos.dtype == object):
         result = list(objects)
 
         def _key(obj):
@@ -281,7 +283,6 @@ def sort_by_distance(objects: Sequence, positions, cx: float, cz: float,
         result.sort(key=_key)
         return result
 
-    pos = np.asarray(positions)
     if pos.ndim != 2 or pos.shape[0] != count or pos.shape[1] != 2:
         raise ValueError(
             "distance-sort positions must have shape (%d, 2), got %r" %
@@ -290,7 +291,5 @@ def sort_by_distance(objects: Sequence, positions, cx: float, cz: float,
     dx = pos[:, 0] - cx
     dz = pos[:, 1] - cz
     distances = dx * dx + dz * dz
-    order = np.argsort(distances, kind="stable")
-    if reverse:
-        order = order[::-1]
+    order = np.argsort(-distances if reverse else distances, kind="stable")
     return [objects[int(index)] for index in order]
