@@ -535,8 +535,14 @@ class BenchmarkRunner:
                 app.processEvents()
             time.sleep(0.01)
 
-    def _clear_live_benchmark_scene(self, label=""):
-        """Clear authored scene data and derived live runtime state before a stress test."""
+    def _clear_live_benchmark_scene(self, label="", yield_hook=None):
+        """Clear authored scene data and derived live runtime state before a stress test.
+
+        Stress tests measure the live 3D/runtime path. Rebuilding the editor's
+        scene hierarchy and all three orthographic views while clearing the
+        previous map is unrelated UI work and can dominate preparation before
+        the new workload even exists.
+        """
         window = self.main_window
         view = window.view_3d
 
@@ -589,10 +595,13 @@ class BenchmarkRunner:
                     except Exception:
                         pass
 
-        window.update_all_ui()
-        window.update_views()
+        # Do not rebuild the scene hierarchy or orthographic views here.
+        # They are editor UI overhead and are not part of any live stress
+        # workload. The real 3D viewport is enough to publish the empty state.
         view.update()
         QApplication.processEvents()
+        if yield_hook is not None:
+            yield_hook()
 
         self._append(
             "  Cleared the live scene and renderer/runtime scene caches"
@@ -1861,7 +1870,10 @@ class BenchmarkTests:
         try:
             # Every live stress test starts from a genuinely empty live
             # scene, including terrain and derived renderer/runtime state.
-            self._clear_live_benchmark_scene(label)
+            cooperative_yield = lambda: self._live_cooperative_yield(label)
+            self._clear_live_benchmark_scene(label, yield_hook=cooperative_yield)
+            self._append("  Preparation stage: generating live workload...")
+            cooperative_yield()
     
             if label in ("live_1000_brushes", "live_10000_brushes", "live_100000_brushes"):
                 brush_count = {
@@ -1871,15 +1883,20 @@ class BenchmarkTests:
                 }[label]
                 # Use Fio's NumPy-assisted scene builder and load the resulting
                 # level data into the existing EditorState.
-                cooperative_yield = lambda: self._live_cooperative_yield(label)
+                self._append("  Preparation stage: building %d brushes..." % brush_count)
+                cooperative_yield()
                 data = bench._make_brush_stress_scene(
                     brush_count,                    yield_hook=cooperative_yield,
                 )
+                self._append("  Preparation stage: loading %d brushes into EditorState..." % brush_count)
+                cooperative_yield()
                 bench.load_live_benchmark_world(
                     window,
                     data,
                     yield_hook=cooperative_yield,
                 )
+                self._append("  Preparation stage: EditorState loaded; starting measurement...")
+                cooperative_yield()
 
                 # Do not call MainWindow.focus_on_bounds() here. It rebuilds
                 # all three orthographic views and recentres their scene state;
