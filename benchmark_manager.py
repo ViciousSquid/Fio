@@ -41,7 +41,6 @@ TESTS = (
     ("live_1000_brushes", "Renderer scene: 1,000 brushes"),
     ("live_10000_brushes", "Renderer scene: 10,000 brushes"),
     ("live_100000_brushes", "Renderer scene: 100,000 brushes"),
-    ("monster_capacity", "Monster capacity: find maximum live monsters before timeout"),
     ("monster_chaos_witness", "Monster chaos: 50 monsters / 10-second live witness"),
     ("borderless_window", "Window mode: borderless maximized"),
     ("fullscreen_window", "Window mode: true fullscreen"),
@@ -613,7 +612,6 @@ class BenchmarkManager(QDialog):
             for key in (
                 "average_fps", "min_fps", "max_fps",
                 "io_elapsed_ms", "io_hops", "hops_per_second",
-                "monster_capacity", "monster_count", "human_count",
                 "flying_count", "team_counts", "aggro_count",
                 "alive_monsters", "dead_monsters", "witness_duration_s",
                 "seed", "pathnode_name", "viewport_width", "viewport_height",
