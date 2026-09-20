@@ -53,6 +53,10 @@ class Renderer_F(BaseRenderer):
         self._current_shader = None
         self._frame_lights_uploaded = {}
 
+        # OpenGL diagnostics are deliberately opt-in. Keep GL state probing out
+        # of the normal textured-brush hot path.
+        self.debug_gl_state = False
+
         # Texture batch cache for draw_textured_brushes_optimized.
         # Key: tuple of (brush_id, sorted_tex_items) per brush.
         # Storing None initially forces a build on the first frame.
@@ -228,6 +232,55 @@ class Renderer_F(BaseRenderer):
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glBindVertexArray(0)
 
+    def _debug_textured_brush_gl_state(self):
+        """Print the VAO/program state used by the textured-brush pass.
+
+        This is an opt-in diagnostic path only. It is intentionally called once
+        before the face submission loop rather than from the per-face hot path.
+        """
+        print(
+            '[Renderer_F] textured-brush GL state: '
+            f'program={int(gl.glGetIntegerv(gl.GL_CURRENT_PROGRAM))}, '
+            f'vao={int(gl.glGetIntegerv(gl.GL_VERTEX_ARRAY_BINDING))}, '
+            f'array_buffer={int(gl.glGetIntegerv(gl.GL_ARRAY_BUFFER_BINDING))}, '
+            f'element_buffer={int(gl.glGetIntegerv(gl.GL_ELEMENT_ARRAY_BUFFER_BINDING))}, '
+            f'tf_active={bool(int(gl.glGetBooleanv(gl.GL_TRANSFORM_FEEDBACK_ACTIVE)))}, '
+            f'tf_paused={bool(int(gl.glGetBooleanv(gl.GL_TRANSFORM_FEEDBACK_PAUSED)))}, '
+            f'rasterizer_discard={bool(int(gl.glGetBooleanv(gl.GL_RASTERIZER_DISCARD)))}'
+        )
+
+        def _scalar(value):
+            return int(np.asarray(value).reshape(-1)[0])
+
+        for attrib in (0, 1, 2):
+            enabled = _scalar(
+                gl.glGetVertexAttribiv(
+                    attrib, gl.GL_VERTEX_ATTRIB_ARRAY_ENABLED
+                )
+            )
+            buffer = _scalar(
+                gl.glGetVertexAttribiv(
+                    attrib, gl.GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING
+                )
+            )
+            stride = _scalar(
+                gl.glGetVertexAttribiv(
+                    attrib, gl.GL_VERTEX_ATTRIB_ARRAY_STRIDE
+                )
+            )
+            attr_type = _scalar(
+                gl.glGetVertexAttribiv(
+                    attrib, gl.GL_VERTEX_ATTRIB_ARRAY_TYPE
+                )
+            )
+            print(
+                f'[Renderer_F] attrib{attrib}: '
+                f'enabled={bool(enabled)}, '
+                f'buffer={buffer}, '
+                f'stride={stride}, '
+                f'type=0x{attr_type:x}'
+            )
+
     def draw_textured_brushes_optimized(self, projection, view, camera_pos, brushes, lights, config):
         if not brushes or 'textured' not in self.shaders:
             return
@@ -311,6 +364,9 @@ class Renderer_F(BaseRenderer):
         # can't reveal their (dark) back-faces. Cube batches first (GL_FRONT).
         self._portal_begin_cull(is_geo=False)
 
+        if self.debug_gl_state:
+            self._debug_textured_brush_gl_state()
+
         current_tex = None
         # PERF: a brush appears in this loop once per textured face (up to six
         # times), and each visit re-derived the same two uniform pointers. The
@@ -379,29 +435,7 @@ class Renderer_F(BaseRenderer):
                     else:
                         scale_x, scale_y = 1.0, 1.0
                     gl.glUniform2f(tex_scale_loc, scale_x, scale_y)
-                try:
-                    gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
-                except Exception as exc:
-                    if '1282' in str(exc) or 'invalid operation' in str(exc).lower():
-                        print(
-                            '[Renderer_F] textured-brush GL_INVALID_OPERATION state: '
-                            f'program={gl.glGetIntegerv(gl.GL_CURRENT_PROGRAM)}, '
-                            f'vao={gl.glGetIntegerv(gl.GL_VERTEX_ARRAY_BINDING)}, '
-                            f'array_buffer={gl.glGetIntegerv(gl.GL_ARRAY_BUFFER_BINDING)}, '
-                            f'element_buffer={gl.glGetIntegerv(gl.GL_ELEMENT_ARRAY_BUFFER_BINDING)}, '
-                            f'tf_active={bool(gl.glGetBooleanv(gl.GL_TRANSFORM_FEEDBACK_ACTIVE))}, '
-                            f'tf_paused={bool(gl.glGetBooleanv(gl.GL_TRANSFORM_FEEDBACK_PAUSED))}, '
-                            f'rasterizer_discard={bool(gl.glGetBooleanv(gl.GL_RASTERIZER_DISCARD))}'
-                        )
-                        for _attrib in (0, 1, 2):
-                            print(
-                                f'[Renderer_F] attrib{_attrib}: '
-                                f'enabled={bool(gl.glGetVertexAttribiv(_attrib, gl.GL_VERTEX_ATTRIB_ARRAY_ENABLED))}, '
-                                f'buffer={gl.glGetVertexAttribiv(_attrib, gl.GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING)}, '
-                                f'stride={gl.glGetVertexAttribiv(_attrib, gl.GL_VERTEX_ATTRIB_ARRAY_STRIDE)}, '
-                                f'type=0x{int(gl.glGetVertexAttribiv(_attrib, gl.GL_VERTEX_ATTRIB_ARRAY_TYPE)):x}'
-                            )
-                    raise
+                gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
                 self.render_stats.draw_calls += 1
 
         # ---- Angled brushes: one draw per convex face --------------------
