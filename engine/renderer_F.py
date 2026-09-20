@@ -57,6 +57,10 @@ class Renderer_F(BaseRenderer):
         self._tex_batch_cache     = None   # (defaultdict(list), geo_brush_list) | None
         self._tex_batch_cache_key = None   # last key tuple | None
 
+        # Reused by render_scene so model discovery does not allocate a new
+        # list or perform a second Python walk over the visible Thing set.
+        self._model_render_buf = []
+
     # ------------------------------------------------------------------
     # Matrix helpers – cached on the brush dict itself
     # ------------------------------------------------------------------
@@ -547,23 +551,21 @@ class Renderer_F(BaseRenderer):
                 brushes, things, camera_pos,
                 thing_positions=config.get('thing_positions'),
             )
+        models_to_render = self._model_render_buf
+        models_to_render.clear()
         opaque_brushes, transparent_brushes, sprite_things, fog_volumes, water_brushes, glass_brushes, glow_brushes = \
-            self._sort_objects(cull_brushes, cull_things, config)
+            self._sort_objects(
+                cull_brushes,
+                cull_things,
+                config,
+                model_out=models_to_render,
+            )
         textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
 
-        # Models are 3D geometry, not sprites. Discover them directly from the
-        # visible Thing set so model rendering cannot depend on which sprite
-        # classification path happens to be active in the current render mode.
-        models_to_render = [
-            thing for thing in cull_things
-            if getattr(thing, 'properties', {}).get('model_path')
-            and not getattr(thing, 'properties', {}).get('hidden', False)
-        ]
-        model_ids = {id(thing) for thing in models_to_render}
-        final_sprites = [
-            thing for thing in sprite_things
-            if id(thing) not in model_ids
-        ]
+        # _sort_objects classified the same visible Thing set and kept model
+        # Things out of sprite_things, so the billboard pass needs no second
+        # Python scan or object-id set.
+        final_sprites = sprite_things
         lights = [t for t in things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
         self._frame_lights = lights
 
