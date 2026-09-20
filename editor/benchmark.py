@@ -1843,8 +1843,6 @@ class BenchmarkTests:
                 self._phase_started + self._live_stress_timeout_for(label)
             )
             self._measurement_active = True
-            view.sysmon.reset_metrics()
-            view.sysmon.begin_benchmark_capture()
             view.update()
             QApplication.processEvents()
             self._timer.start()
