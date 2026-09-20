@@ -945,7 +945,7 @@ class BenchmarkRunner:
         self._stop_monitor()
     
         try:
-            # benchmark_dialog.py lives in editor/, while fio_benchmark.py lives
+            # Keep the benchmark module loaded only on explicit Tools > Benchmark use.
             # under the repository root. Put this Fio checkout first so a
             # globally installed package named "tests" cannot shadow Fio's
             # own tests.performance package.
@@ -1709,7 +1709,6 @@ class BenchmarkTests:
             window.state.clear_scene()
             window.update_all_ui()
             window.update_views()
-            view.sysmon.reset_metrics()
             view.update()
             QApplication.processEvents()
             self._append(
