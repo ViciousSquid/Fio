@@ -550,12 +550,21 @@ class Renderer_F(BaseRenderer):
         opaque_brushes, transparent_brushes, sprite_things, fog_volumes, water_brushes, glass_brushes, glow_brushes = \
             self._sort_objects(cull_brushes, cull_things, config)
         textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
-        models_to_render, final_sprites = [], []
-        for thing in sprite_things:
-            if isinstance(thing, Thing) and thing.properties.get('model_path'):
-                models_to_render.append(thing)
-            else:
-                final_sprites.append(thing)
+
+        # Models are 3D geometry, not sprites. Discover them directly from the
+        # visible Thing set so model rendering cannot depend on which sprite
+        # classification path happens to be active in the current render mode.
+        models_to_render = [
+            thing for thing in cull_things
+            if isinstance(thing, Thing)
+            and thing.properties.get('model_path')
+            and not thing.properties.get('hidden', False)
+        ]
+        model_ids = {id(thing) for thing in models_to_render}
+        final_sprites = [
+            thing for thing in sprite_things
+            if id(thing) not in model_ids
+        ]
         lights = [t for t in things if isinstance(t, Light) and t.properties.get('state', 'on') == 'on']
         self._frame_lights = lights
 

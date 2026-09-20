@@ -2244,7 +2244,7 @@ class View2D(QWidget):
             draw_rect = None
 
             # --- MODEL RENDERING ---
-            if isinstance(thing, Model) and thing.properties.get('model_path'):
+            if thing.properties.get('model_path'):
                 self._draw_model_wireframe(painter, thing, ax_map, ax1, ax2)
                 # Selection box for models
                 draw_rect = QRectF(s_pos.x() - 16, s_pos.y() - 16, 32, 32)
