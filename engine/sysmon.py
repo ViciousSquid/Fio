@@ -174,47 +174,6 @@ class SysMon:
             self._fps = 0.0
 
     def get_metrics(self):
-        """Return a machine-readable snapshot of the metrics SysMon displays.
-
-        This is intentionally the same data path used by the on-screen monitor:
-        frame timing comes from the SysMon ring buffer and VRAM comes from the
-        active OpenGL context. Call this while a GL context is current when
-        VRAM data is required.
-        """
-        count = int(self._ft_count)
-        if count:
-            frame_times = np.asarray(self._ft_buffer[:count], dtype=np.float64)
-            current_frame_ms = float(
-                self._ft_buffer[(self._ft_index - 1) % self.GRAPH_POINTS]
-            )
-            average_frame_ms = float(np.mean(frame_times))
-            p95_frame_ms = float(np.percentile(frame_times, 95))
-        else:
-            current_frame_ms = 0.0
-            average_frame_ms = 0.0
-            p95_frame_ms = 0.0
-
-        vram_used_mb, vram_total_mb = self._get_vram_info()
-
-        return {
-            'fps': float(self._fps),
-            'frame_time_ms': current_frame_ms,
-            'average_frame_time_ms': average_frame_ms,
-            'p95_frame_time_ms': p95_frame_ms,
-            'vram_used_mb': vram_used_mb,
-            'vram_total_mb': vram_total_mb,
-            'visible_brushes': int(self.stats.get('visible_brushes', 0)),
-            'culled_brushes': int(self.stats.get('culled_brushes', 0)),
-            'total_brushes': int(self.stats.get('total_brushes', 0)),
-            'visible_tris': int(self.stats.get('visible_tris', 0)),
-            'culled_tris': int(self.stats.get('culled_tris', 0)),
-            'visible_surfaces': int(self.stats.get('visible_surfaces', 0)),
-            'culled_surfaces': int(self.stats.get('culled_surfaces', 0)),
-        }
-
-
-    # ------------------------------------------------------------------
-    def get_metrics(self):
         """Return a machine-readable snapshot of the metrics displayed by SysMon."""
         count = int(self._ft_count)
         if count:
