@@ -107,7 +107,7 @@ class OBJLoader:
                     face['vertices'].append((v_idx, vt_idx, vn_idx))
                 self.faces.append(face)
             elif keyword == 'usemtl' and len(parts) > 1:
-                current_material = parts[1]
+                current_material = ' '.join(parts[1:])
             elif keyword == 'mtllib' and len(parts) > 1:
                 # Join all remaining parts to handle spaces in filenames
                 mtl_lib_name = ' '.join(parts[1:])
@@ -143,7 +143,7 @@ class OBJLoader:
             try:
                 from engine.resource_manager import ResourceManager
                 rm = ResourceManager()
-                mtl_text = rm.get_text_asset(mtl_path)
+                mtl_text = rm.get_text_asset(mtl_path.replace(os.sep, '/'))
             except ImportError:
                 pass
         
@@ -164,7 +164,7 @@ class OBJLoader:
             keyword = parts[0]
             
             if keyword == 'newmtl' and len(parts) > 1:
-                current_mtl = parts[1]
+                current_mtl = ' '.join(parts[1:])
                 self.materials[current_mtl] = {
                     'diffuse': (0.8, 0.8, 0.8),
                     'color': (0.8, 0.8, 0.8),
@@ -215,9 +215,8 @@ class OBJ:
         self.materials = loader.materials
         self._build_gl_buffers(loader)
 
-        # Report the imported model bounds so models that load successfully
-        # but do not appear in the scene can be diagnosed for scale/origin
-        # problems without changing their geometry or transform.
+        # Report the source bounds and any import-time pivot repair so models
+        # that load successfully but do not appear in the scene stay diagnosable.
         if self.source_bounds is not None:
             source_min, source_max = self.source_bounds
             print(
@@ -226,7 +225,7 @@ class OBJ:
             )
         if self.centered_for_import:
             print(
-                f"[OBJ] Recentred mesh by offset="
+                f"[OBJ] Recentered mesh by offset="
                 f"{self.origin_offset.tolist()}"
             )
 
