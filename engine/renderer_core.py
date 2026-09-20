@@ -497,7 +497,6 @@ class BaseRenderer:
                                             'distortionStrength', 'causticStrength', 'glassOpacity',
                                             'refractionIndex', 'roughness', 'normalMatrix'])
             self.uniforms['glass'].preload(self.ENV_UNIFORMS)
-
             # fog – use ARM‑optimised fragment shader (works everywhere)
             fog_vert = DEFAULT_SHADERS.get('fog.vert', '')
             fog_frag = DEFAULT_SHADERS.get('fog_arm.frag', DEFAULT_SHADERS.get('fog.frag', ''))
@@ -997,8 +996,7 @@ layout (location = 9) in vec4 iNormal2;
                     mat[2][0], mat[2][1], mat[2][2], mat[2][3],
                     mat[3][0], mat[3][1], mat[3][2], mat[3][3],
                 ], dtype=np.float32)
-                normal_np = np.array([
-                    normal[0][0], normal[0][1], normal[0][2], 0.0,
+                normal_np = np.array([                    normal[0][0], normal[0][1], normal[0][2], 0.0,
                     normal[1][0], normal[1][1], normal[1][2], 0.0,
                     normal[2][0], normal[2][1], normal[2][2], 0.0,
                 ], dtype=np.float32)
@@ -1497,7 +1495,6 @@ layout (location = 9) in vec4 iNormal2;
         roughness_loc = uniforms['roughness']
         normal_mat_loc = uniforms.get('normalMatrix', -1)
         if normal_mat_loc is None: normal_mat_loc = -1
-
         gl.glBindVertexArray(self.vaos['cube'])
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
@@ -1907,6 +1904,12 @@ layout (location = 9) in vec4 iNormal2;
         self._frame_lights_uploaded[shader_name] = tuple(map(id, lights[:cap]))
         gl.glUniform1i(self.uniforms[shader_name]['active_lights'], num_lights)
         self._upload_light_ubo(lights, num_lights)
+
+        # Keep sampler2D and samplerCube uniforms on distinct texture units.
+        # This is one shader-pass operation, never part of the per-draw loop.
+        if shader_name in ('lit', 'textured', 'lit_instanced',
+                           'textured_instanced', 'terrain'):
+            self._bind_shadow_maps(self.uniforms[shader_name])
     # --------------------------------------------------------------------------
     # Depth cube-map shadow mapping
     # --------------------------------------------------------------------------
@@ -1996,19 +1999,24 @@ layout (location = 9) in vec4 iNormal2;
         return mat
 
     def _bind_shadow_maps(self, uniforms):
-        """Bind every depth cube-map to its reserved texture unit and point the
-        matching ``shadowMaps[i]`` sampler at it.  Unused slots are still bound
-        so the samplers stay valid; the shaders simply never sample a slot whose
-        ``shadowIndex`` no light references."""
-        if not self._shadow_cubemaps:
-            return
+        """Bind shadow samplers to dedicated texture units.
+
+        Lighting shaders contain both sampler2D and samplerCube uniforms.
+        OpenGL requires sampler uniforms of different types to reference
+        different texture units at draw time, even when no shadowing light
+        is active. Keep the cube samplers on their reserved units and bind
+        texture 0 when shadow resources are unavailable.
+        """
         base = self.SHADOW_TEXTURE_UNIT_BASE
-        for i, cm in enumerate(self._shadow_cubemaps):
+        cubemaps = self._shadow_cubemaps
+        for i in range(self.MAX_SHADOW_LIGHTS):
             loc = uniforms[f'shadowMaps[{i}]']
-            if loc != -1:
-                gl.glActiveTexture(gl.GL_TEXTURE0 + base + i)
-                gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
-                gl.glUniform1i(loc, base + i)
+            if loc == -1:
+                continue
+            gl.glActiveTexture(gl.GL_TEXTURE0 + base + i)
+            cm = cubemaps[i] if i < len(cubemaps) else 0
+            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
+            gl.glUniform1i(loc, base + i)
         gl.glActiveTexture(gl.GL_TEXTURE0)
 
     def _prepare_shadow_caster_batch(self, brushes, models):
@@ -2497,8 +2505,7 @@ layout (location = 9) in vec4 iNormal2;
             length = float(np.linalg.norm(delta))
             if length <= 1e-6:
                 continue
-            direction = delta / length
-            cursor = 0.0
+            direction = delta / length            cursor = 0.0
             while cursor < length:
                 end = min(cursor + dash, length)
                 p0, p1 = a + direction * cursor, a + direction * end
@@ -2997,8 +3004,7 @@ layout (location = 9) in vec4 iNormal2;
         if 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
-        gl.glUseProgram(shader)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUseProgram(shader)        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
         pos_vec = glm.vec3(*position) if isinstance(position, (list, tuple)) else position
         base = glm.scale(glm.translate(self._identity_mat4, pos_vec), glm.vec3(32.0))
@@ -3497,8 +3503,7 @@ layout (location = 9) in vec4 iNormal2;
             return None
         key = brush_geometry.geometry_signature(brush)
         mesh = self._geo_mesh_cache.get(id(brush))
-        if mesh is not None and mesh.key == key:
-            mesh.frame = self._geo_mesh_frame
+        if mesh is not None and mesh.key == key:            mesh.frame = self._geo_mesh_frame
             return mesh
         new = None
         convex = brush_geometry.get_convex(brush)
