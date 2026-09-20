@@ -191,8 +191,9 @@ class BenchmarkManager(QDialog):
             sock.setblocking(False)
         except OSError as exc:
             sock.close()
-            self.status.setText("Could not connect to Fio benchmark host.")
+            self.status.setText("Could not connect to Fio benchmark host; retrying…")
             self.output.append(html.escape(str(exc)))
+            QTimer.singleShot(1000, self.connect_to_host)
             return
 
         self._sock = sock
@@ -204,6 +205,19 @@ class BenchmarkManager(QDialog):
         self._append(
             "LIVE BENCHMARK MANAGER: supervising the existing Fio process "
             "from a separate Python process."
+        )
+
+    def _disconnect(self, reason):
+        self._sock = None
+        if self.running:
+            self._kill_fio(reason)
+            return
+        self._connected = False
+        self.run_button.setEnabled(False)
+        self.status.setText(reason)
+        self._append(
+            '<div style="color:#ffb15a; padding:6px 0;">%s</div>'
+            % html.escape(reason)
         )
 
     def poll_socket(self):
