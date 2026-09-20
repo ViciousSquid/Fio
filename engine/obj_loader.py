@@ -16,7 +16,7 @@ class OBJLoader:
         self.texcoords: List[Tuple[float, float]] = []
         self.normals: List[Tuple[float, float, float]] = []
         self.faces: List[dict] = []
-        self.materials: dict = {}
+        self.materials: dict = []
     
     @staticmethod
     def _resolve_index(value: str, length: int) -> int:
@@ -42,7 +42,6 @@ class OBJLoader:
         Load model from filesystem path.
         Falls back to ResourceManager for package mode.
         """
-        # Try direct file read first (editor mode)
         text = None
         if os.path.exists(filepath):
             try:
@@ -51,7 +50,6 @@ class OBJLoader:
             except (IOError, UnicodeDecodeError):
                 pass
         
-        # Fallback to ResourceManager (package mode)
         if text is None:
             try:
                 from engine.resource_manager import ResourceManager
@@ -65,8 +63,6 @@ class OBJLoader:
             return False
         
         lines = text.splitlines()
-        
-        # Parse OBJ data
         current_material = None
         mtl_lib_name = None
         
@@ -90,7 +86,6 @@ class OBJLoader:
             elif keyword == 'f' and len(parts) >= 4:
                 face = {'vertices': [], 'material': current_material}
                 for fp in parts[1:]:
-                    # Parse "v/vt/vn" format
                     indices = fp.split('/')
                     v_idx = self._resolve_index(
                         indices[0] if indices else '',
@@ -109,10 +104,8 @@ class OBJLoader:
             elif keyword == 'usemtl' and len(parts) > 1:
                 current_material = ' '.join(parts[1:])
             elif keyword == 'mtllib' and len(parts) > 1:
-                # Join all remaining parts to handle spaces in filenames
                 mtl_lib_name = ' '.join(parts[1:])
         
-        # Load companion MTL if referenced
         if mtl_lib_name:
             self._load_mtl(filepath, mtl_lib_name)
         
@@ -120,17 +113,12 @@ class OBJLoader:
     
     def _load_mtl(self, obj_path: str, mtl_name: str) -> None:
         """Resolve MTL path relative to OBJ location and load."""
-        # Derive MTL path from OBJ directory
         obj_dir = os.path.dirname(obj_path)
-        # OBJ files are commonly moved between Windows and POSIX systems, so
-        # accept either path separator when resolving companion assets.
         normalized_name = str(mtl_name).strip().strip('"').replace('\\', os.sep).replace('/', os.sep)
         mtl_path = os.path.normpath(os.path.join(obj_dir, normalized_name))
-        mtl_dir = os.path.dirname(mtl_path)  # Directory containing the MTL file
+        mtl_dir = os.path.dirname(mtl_path)
         
         mtl_text = None
-        
-        # Try direct file read first
         if os.path.exists(mtl_path):
             try:
                 with open(mtl_path, 'r', encoding='utf-8') as f:
@@ -138,7 +126,6 @@ class OBJLoader:
             except (IOError, UnicodeDecodeError):
                 pass
         
-        # Fallback to ResourceManager
         if mtl_text is None:
             try:
                 from engine.resource_manager import ResourceManager
@@ -183,15 +170,48 @@ class OBJLoader:
                 elif keyword == 'Ks' and len(parts) >= 4:
                     mtl['specular'] = (float(parts[1]), float(parts[2]), float(parts[3]))
                 elif keyword in ('map_Kd', 'map_Ka') and len(parts) > 1:
-                    # Join all remaining parts to handle spaces in filenames
-                    mtl['texture'] = (
-                        ' '.join(parts[1:])
-                        .strip()
-                        .strip('"')
-                        .replace('\\', os.sep)
-                        .replace('/', os.sep)
-                    )
-                    mtl['mtl_dir'] = mtl_dir  # Store MTL directory for texture path resolution
+                    texture = self._parse_texture_map(parts[1:])
+                    if texture:
+                        mtl['texture'] = texture
+                        mtl['mtl_dir'] = mtl_dir
+
+    @staticmethod
+    def _parse_texture_map(parts: List[str]) -> Optional[str]:
+        """Extract the texture filename while ignoring MTL map options."""
+        if not parts:
+            return None
+
+        options_with_args = {
+            '-blendu': 1,
+            '-blendv': 1,
+            '-boost': 1,
+            '-mm': 2,
+            '-o': 3,
+            '-s': 3,
+            '-t': 3,
+            '-texres': 1,
+            '-clamp': 1,
+            '-bm': 1,
+            '-imfchan': 1,
+            '-type': 1,
+        }
+
+        i = 0
+        while i < len(parts):
+            token = parts[i]
+            if not token.startswith('-'):
+                return ' '.join(parts[i:]).strip().strip('"').replace('\\', os.sep).replace('/', os.sep)
+
+            option = token.lower()
+            arg_count = options_with_args.get(option)
+            if arg_count is None:
+                # Unknown map option: skip the option itself and continue.
+                i += 1
+                continue
+
+            i += 1 + arg_count
+
+        return None
 
     def _discover_base_color_texture(self, obj_path: str) -> None:
         """Discover a conventional base-colour texture when an MTL is missing.
@@ -237,9 +257,6 @@ class OBJLoader:
             'mtl_dir': os.path.dirname(texture_path),
         }
 
-        # The OBJ can still contain usemtl entries even when its companion MTL
-        # is missing. Give every referenced material the discovered texture so
-        # those groups do not fall back to the untextured material path.
         material_names = {
             face.get('material')
             for face in self.faces
@@ -268,8 +285,8 @@ class OBJ:
         self.vertex_count = 0
         self.groups = []
         self.materials = {}
-        self.cpu_vertices = None  # np.array of shape (N, 3) for 2D view projection
-        self.cpu_triangles = []   # triangle indices into cpu_vertices
+        self.cpu_vertices = None
+        self.cpu_triangles = []
         self.origin_offset = np.zeros(3, dtype=np.float32)
         self.centered_for_import = False
         self.source_bounds = None
@@ -283,8 +300,6 @@ class OBJ:
         self.materials = loader.materials
         self._build_gl_buffers(loader)
 
-        # Report the source bounds and any import-time pivot repair so models
-        # that load successfully but do not appear in the scene stay diagnosable.
         if self.source_bounds is not None:
             source_min, source_max = self.source_bounds
             print(
@@ -330,9 +345,6 @@ class OBJ:
         source_centre = (source_min + source_max) * 0.5
         half_extent = (source_max - source_min) * 0.5
 
-        # A normal pivot can sit at the base or on one side of a mesh. Treat an
-        # axis as a bad export pivot only when the mesh centre is more than four
-        # half-extents away from the origin and at least two world units away.
         threshold = np.maximum(half_extent * 4.0, 2.0)
         offset = np.where(
             np.abs(source_centre) > threshold,
@@ -352,11 +364,8 @@ class OBJ:
         """Build OpenGL VAO/VBO from parsed OBJ data."""
         import ctypes
         
-        # Build interleaved vertex data: position(3) + normal(3) + texcoord(2)
         vertices = []
-        cpu_verts = []  # List of (x,y,z) tuples for 2D projection
-        
-        # Group faces by material
+        cpu_verts = []
         material_groups = {}
         current_group_start = 0
         
@@ -370,26 +379,21 @@ class OBJ:
                 }
             
             face_verts = face['vertices']
-            # Triangulate if needed (fan triangulation for n-gons)
             for i in range(1, len(face_verts) - 1):
-                # Triangle: 0, i, i+1
                 triangle_start = len(cpu_verts)
                 for idx in [0, i, i + 1]:
                     v_idx, vt_idx, vn_idx = face_verts[idx]
                     
-                    # Position
                     if 0 <= v_idx < len(loader.vertices):
                         vx, vy, vz = loader.vertices[v_idx]
                     else:
                         vx, vy, vz = 0.0, 0.0, 0.0
                     
-                    # Normal
                     if 0 <= vn_idx < len(loader.normals):
                         nx, ny, nz = loader.normals[vn_idx]
                     else:
                         nx, ny, nz = 0.0, 1.0, 0.0
                     
-                    # Texcoord
                     if 0 <= vt_idx < len(loader.texcoords):
                         u, v = loader.texcoords[vt_idx]
                     else:
@@ -403,7 +407,6 @@ class OBJ:
         
         self.vertex_count = len(cpu_verts)
         
-        # Build groups list for material-based rendering
         self.groups = []
         for mat_name, group_info in material_groups.items():
             if group_info['count'] > 0:
@@ -413,14 +416,12 @@ class OBJ:
                     'count': group_info['count']
                 })
         
-        # Store cpu_vertices as (N, 3) numpy array for 2D view projection
         self.cpu_vertices = np.array(cpu_verts, dtype=np.float32)
         
         if not vertices:
             print(f"[OBJ] No vertices generated for {self.filepath}")
             return
         
-        # Create GL buffers
         vertex_data = np.array(vertices, dtype=np.float32)
         
         self.vao = gl.glGenVertexArrays(1)
@@ -430,15 +431,12 @@ class OBJ:
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo)
         gl.glBufferData(gl.GL_ARRAY_BUFFER, vertex_data.nbytes, vertex_data, gl.GL_STATIC_DRAW)
         
-        # Position attribute (location 0)
         gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(0))
         gl.glEnableVertexAttribArray(0)
         
-        # Normal attribute (location 1)
         gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(12))
         gl.glEnableVertexAttribArray(1)
         
-        # Texcoord attribute (location 2)
         gl.glVertexAttribPointer(2, 2, gl.GL_FLOAT, gl.GL_FALSE, 32, ctypes.c_void_p(24))
         gl.glEnableVertexAttribArray(2)
         
