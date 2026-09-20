@@ -1510,27 +1510,6 @@ class BaseRenderer:
                 solid.append(b)
         return textured, solid
 
-    def _thing_model_matrix(self, thing):
-        """Return a cached model matrix for a model-carrying Thing."""
-        props = getattr(thing, 'properties', {})
-        pos = thing.pos
-        rot = props.get('rotation', [0, 0, 0])
-        scale = props.get('scale', 1.0)
-        scale_key = (scale, scale, scale) if isinstance(scale, (int, float)) else tuple(scale)
-        key = (pos[0], pos[1], pos[2], tuple(rot), scale_key)
-        if getattr(thing, '_render_model_mat_key', None) == key:
-            return thing._render_model_mat_cache
-
-        scale_vec = (scale, scale, scale) if isinstance(scale, (int, float)) else scale
-        mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
-        mat = glm.rotate(mat, glm.radians(rot[1]), glm.vec3(0, 1, 0))
-        mat = glm.rotate(mat, glm.radians(rot[0]), glm.vec3(1, 0, 0))
-        mat = glm.rotate(mat, glm.radians(rot[2]), glm.vec3(0, 0, 1))
-        mat = glm.scale(mat, glm.vec3(*scale_vec))
-        thing._render_model_mat_key = key
-        thing._render_model_mat_cache = mat
-        return mat
-
     def _brush_model_matrix(self, brush):
         pos = brush.get('pos', [0, 0, 0])
         size = brush.get('size', [64, 64, 64])
@@ -1708,17 +1687,24 @@ class BaseRenderer:
             self._shadow_cubemaps = []
 
     def _thing_model_matrix(self, thing):
-        """Model matrix for a model-carrying Thing, matching draw_models()."""
+        """Return a cached model matrix for a model-carrying Thing."""
+        props = getattr(thing, 'properties', {})
         pos = thing.pos
-        scale = thing.properties.get('scale', 1.0)
-        if isinstance(scale, (int, float)):
-            scale = [scale, scale, scale]
-        rot = thing.properties.get('rotation', [0, 0, 0])
+        rot = props.get('rotation', [0, 0, 0])
+        scale = props.get('scale', 1.0)
+        scale_key = (scale, scale, scale) if isinstance(scale, (int, float)) else tuple(scale)
+        key = (pos[0], pos[1], pos[2], tuple(rot), scale_key)
+        if getattr(thing, '_render_model_mat_key', None) == key:
+            return thing._render_model_mat_cache
+
+        scale_vec = (scale, scale, scale) if isinstance(scale, (int, float)) else scale
         mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
         mat = glm.rotate(mat, glm.radians(rot[1]), glm.vec3(0, 1, 0))
         mat = glm.rotate(mat, glm.radians(rot[0]), glm.vec3(1, 0, 0))
         mat = glm.rotate(mat, glm.radians(rot[2]), glm.vec3(0, 0, 1))
-        mat = glm.scale(mat, glm.vec3(*scale))
+        mat = glm.scale(mat, glm.vec3(*scale_vec))
+        thing._render_model_mat_key = key
+        thing._render_model_mat_cache = mat
         return mat
 
     def _bind_shadow_maps(self, uniforms):
