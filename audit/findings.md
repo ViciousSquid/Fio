@@ -143,6 +143,8 @@ The destination is right. Most of the journey is in the main branch.
 3. **REG-02** — use-trigger prompt latency.
 4. **RISK-REPO-1** — `origin/2.5.0.0_canary` is an orphan commit with no shared
    ancestry with either 2.4.2 or the 559-commit branch, so `git blame`/`bisect`
-   do not cross the boundary. The full history is tagged locally as
-   `2.5.0.0_canary-full-history`; **pushing that tag is refused by the egress
-   policy (HTTP 403)**, so it needs pushing from a normal clone to survive.
+   do not cross the boundary. `audit/commit_manifest.txt` preserves all 559
+   commits as metadata, but **the commit objects exist only in the audit
+   working copy** — pushing the tag is refused by the egress policy (HTTP 403)
+   and a bundle is 108 MB. If you still have a clone with the history, tag and
+   push it from there; otherwise it is lost when this session ends.

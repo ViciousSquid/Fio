@@ -129,7 +129,19 @@ Consequences:
   so the two are not simply "history vs squash" — they diverged.
 * Force-pushing either over the other loses real work.
 
-The 559-commit history is preserved locally as tag
-`2.5.0.0_canary-full-history`. **Pushing that tag is refused by the egress
-policy (HTTP 403)**, so it exists only in this working copy; it needs pushing
-from a clone with ordinary credentials if it is to survive.
+The 559-commit history is tagged locally as `2.5.0.0_canary-full-history`.
+**Pushing that tag is refused by the egress policy (HTTP 403)** — four attempts,
+all denied before any object transfer — so the commit *objects* exist only in
+the audit working copy and will be lost when it is reclaimed. A bundle of them
+is 108 MB, too large to hand over through this session.
+
+What is preserved instead: `audit/commit_manifest.txt` records all 559 commits
+with sha, ISO date, subject and files changed, and is committed to the
+repository. That keeps the audit in `audit/commit_chunks/` verifiable and the
+development record durable, but it is metadata, not the objects.
+
+**To preserve the objects**, push the tag from a clone that still has the
+history (the machine the branch was developed on almost certainly does):
+
+    git tag -a 2.5.0.0_canary-full-history <the 3a78157 commit> -m "..."
+    git push origin refs/tags/2.5.0.0_canary-full-history
