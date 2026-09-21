@@ -132,6 +132,19 @@ class PropSession:
         ]
         self.logic.current_hud_message = "[E] Drop"
         if use_pressed or p.pop("_drop_requested", False):
+            # A gameplay plugin may consume the drop (for example, a Tidy
+            # receptacle placement) while the core Prop still owns pickup,
+            # carrying and the eventual ordinary drop.
+            interceptor = getattr(self.logic, "_prop_drop_interceptor", None)
+            if interceptor is not None:
+                try:
+                    if interceptor(prop):
+                        return
+                except Exception:
+                    # A broken plugin must not prevent the core prop from
+                    # dropping normally.
+                    pass
+
             self.held = None
             if self.physics is not None:
                 self.physics.set_kinematic(prop, False)
