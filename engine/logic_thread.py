@@ -2536,7 +2536,7 @@ class LogicThread(threading.Thread):
             self._trigger_use_pending = False
             self._poll_triggers(use_key_pressed=use_pending)
 
-        def _apply_player_damage(self, damage):
+    def _apply_player_damage(self, damage):
         with self._player_damage_lock:
             if self.god_mode:
                 return
