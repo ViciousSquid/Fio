@@ -520,7 +520,9 @@ class PhysicsWorld:
             new_y = float(pos[1]) + body.velocity[1] * dt
             floor = self._floor_y(body)
             if floor is not None and new_y <= floor:
-                pos[1] = floor
+                # entity.pos is the model origin, not necessarily the
+                # collision-box centre. Place the body's bottom on the floor.
+                pos[1] = floor - body.offset[1] + body.size[1] * 0.5
                 body.velocity[1] = 0.0
             else:
                 pos[1] = new_y
