@@ -8,6 +8,8 @@ owner of pickup, carry, drop and physics behaviour.
 
 from __future__ import annotations
 
+import os
+
 from plugins.api import FioPlugin, TickContext, io_def, prop
 
 from .entities import TidyGoal, TidyReceptacle
@@ -21,7 +23,25 @@ class TidyPlugin(FioPlugin):
     category = "Tidy"
     enabled = False
 
+    def _load_demo_map(self, main_window):
+        if not main_window.check_unsaved_changes():
+            return
+        path = os.path.join(os.path.dirname(__file__), "Tidy_Test.json")
+        if not os.path.isfile(path):
+            main_window.show_toast(
+                "Tidy demo map is missing from the plugin.",
+                is_error=True,
+            )
+            return
+        main_window.load_level_file(path)
+
     def register(self, api):
+        api.register_menu_action(
+            "Load Demo map",
+            self._load_demo_map,
+            "Load the bundled Tidy demonstration map",
+        )
+
         # Tidyable objects are ordinary core Props. The plugin only adds its
         # metadata to the Prop property panel.
         api.register_extra_fields(
