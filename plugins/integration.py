@@ -366,20 +366,23 @@ def _build_plugins_menu(MainWindow):
     for plugin in mgr.plugins:
         sub = menu.addMenu(plugin.name)
 
-        # Plugin-owned actions sit at the very top. These remain available
-        # while the plugin is disabled so an action such as "Load Demo map"
-        # can itself load a level that auto-enables the plugin.
-        actions = [(label, callback, tooltip)
-                   for pl, label, callback, tooltip in mgr.menu_actions()
-                   if pl is plugin]
-        for label, callback, tooltip in actions:
+        # Plugin-owned actions sit at the very top and are only available
+        # while that plugin is enabled.
+        plugin_actions = []
+        for label, callback, tooltip in [
+            (label, callback, tooltip)
+            for pl, label, callback, tooltip in mgr.menu_actions()
+            if pl is plugin
+        ]:
             act = sub.addAction(label)
+            act.setEnabled(mgr.is_enabled(plugin))
             if tooltip:
                 act.setToolTip(tooltip)
             act.triggered.connect(
                 lambda _checked=False, p=plugin, cb=callback:
                 _run_plugin_menu_action(MainWindow, p, cb))
-        if actions:
+            plugin_actions.append(act)
+        if plugin_actions:
             sub.addSeparator()
 
         # Enable/disable toggle (checked = on).
@@ -387,7 +390,8 @@ def _build_plugins_menu(MainWindow):
         toggle.setCheckable(True)
         toggle.setChecked(mgr.is_enabled(plugin))
         toggle.toggled.connect(
-            lambda checked, p=plugin: _toggle_plugin(MainWindow, p, checked))
+            lambda checked, p=plugin, acts=plugin_actions:
+            _toggle_plugin(MainWindow, p, checked, acts))
         sub.addSeparator()
 
         # Placement entries for this plugin's entities.
@@ -418,15 +422,22 @@ def _build_plugins_menu(MainWindow):
 
 def _run_plugin_menu_action(MainWindow, plugin, callback):
     """Invoke a plugin-owned editor menu action safely."""
+    if not getattr(plugin, "enabled", False):
+        return
     try:
         callback(MainWindow)
     except Exception as exc:
         _log(f"plugin menu action failed for '{plugin.name}': {exc}")
 
 
-def _toggle_plugin(MainWindow, plugin, enabled):
+def _toggle_plugin(MainWindow, plugin, enabled, menu_actions=None):
     from plugins.manager import get_manager
     get_manager().set_enabled(plugin, enabled)
+    for action in menu_actions or ():
+        try:
+            action.setEnabled(bool(enabled))
+        except Exception:
+            pass
     _persist_disabled(MainWindow)
     if hasattr(MainWindow, "show_toast"):
         state = "enabled" if enabled else "disabled"
