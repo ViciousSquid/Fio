@@ -4300,8 +4300,10 @@ class MainWindow(QMainWindow):
             self._package_temp_dir = temp_dir
             temp_dir = None  # Prevent cleanup in finally block
 
-            # Update UI state
-            self.file_path = filePath
+            # Update UI state.  file_path deliberately stays None (set above):
+            # it is what save_level() writes to, and writing a map over the
+            # .fiopak replaces the archive -- and every asset in it -- with a
+            # JSON file.  The first save must go through Save As.
             self.unsaved_changes = False
             self.update_title()
             self.set_selected_object(None)
@@ -4398,7 +4400,6 @@ class MainWindow(QMainWindow):
             temp_dir = None  # Prevent cleanup in finally block
 
             # Update UI state
-            self.file_path = file_path
             self.unsaved_changes = False
             self.update_title()
             self.set_selected_object(None)
