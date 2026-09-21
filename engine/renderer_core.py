@@ -844,6 +844,11 @@ layout (location = 9) in vec4 iNormal2;
                 )
             )
             terrain_lights = terrain_lights[:max_terrain_lights]
+        # _upload_lights_once() updates regular uniforms, so the terrain program
+        # must be current before that upload. update_and_render() binds it again
+        # for the actual draw, but it is too late for the uniform writes above.
+        gl.glUseProgram(terrain.shader_program)
+        self._current_shader = terrain.shader_program
         self._upload_lights_once('terrain', terrain_lights)
         active_lights_count = len(terrain_lights)
         gl.glDisable(gl.GL_CULL_FACE)
@@ -2245,6 +2250,8 @@ layout (location = 9) in vec4 iNormal2;
         cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
         blend_was = bool(gl.glIsEnabled(gl.GL_BLEND))
 
+        prev_program = int(gl.glGetIntegerv(gl.GL_CURRENT_PROGRAM))
+        prev_shader = self._current_shader
         shader = self.shaders['depth_cube']
         u = self.uniforms['depth_cube']
         gl.glUseProgram(shader)
@@ -2347,7 +2354,8 @@ layout (location = 9) in vec4 iNormal2;
         gl.glViewport(int(prev_vp[0]), int(prev_vp[1]), int(prev_vp[2]), int(prev_vp[3]))
         if scissor_was:
             gl.glEnable(gl.GL_SCISSOR_TEST)
-        self._current_shader = None
+        gl.glUseProgram(prev_program)
+        self._current_shader = prev_shader
 
     def _resolve_model_texture_path(self, material, texture_name):
         """
