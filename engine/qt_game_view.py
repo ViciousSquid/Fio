@@ -13,7 +13,7 @@ from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
 from engine.camera import Camera
 from editor.things import (
-    Thing, Light, PlayerStart, Monster, Pickup, Speaker,
+    Thing, Light, PlayerStart, Monster, Pickup, Prop, Speaker,
     LogicGate, LogicRelay, LogicTimer, LevelChanger, Portal
 )
 from engine.player import Player
@@ -1750,6 +1750,8 @@ class QtGameView(QOpenGLWidget):
                     parts.append((id(t), t.properties.get('logic_type', 'and')))
                 elif isinstance(t, Pickup):
                     parts.append((id(t), t.properties.get('item_type', ''), t.properties.get('key_name', ''), t.properties.get('custom_sprite', '')))
+                elif isinstance(t, Prop):
+                    parts.append((id(t), t.properties.get('render_mode', 'model'), t.properties.get('sprite_path', '')))
                 else:
                     parts.append(id(t))
             return hash(tuple(parts))
@@ -1793,6 +1795,20 @@ class QtGameView(QOpenGLWidget):
                         self.sprite_textures[tex_key] = tid
                 if tex_key in self.sprite_textures:
                     instance_textures[id(thing)] = self.sprite_textures[tex_key]
+            elif isinstance(thing, Prop):
+                if str(thing.properties.get('render_mode', 'model')).lower() == 'billboard':
+                    sprite_path = str(thing.properties.get('sprite_path', '') or '')
+                    if sprite_path:
+                        tex_key = f"propsprite__{sprite_path.replace('/', '__').replace('.', '_')}"
+                        if tex_key not in self.sprite_textures:
+                            rel_path = sprite_path.replace('assets/', '', 1)
+                            dirname = os.path.dirname(rel_path)
+                            filename = os.path.basename(rel_path)
+                            tid = self.load_texture(filename, dirname)
+                            if tid:
+                                self.sprite_textures[tex_key] = tid
+                        if tex_key in self.sprite_textures:
+                            instance_textures[id(thing)] = self.sprite_textures[tex_key]
             elif isinstance(thing, Pickup):
                 if thing.is_key():
                     key_name = thing.get_key_name()
