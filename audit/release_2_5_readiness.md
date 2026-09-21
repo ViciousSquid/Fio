@@ -6,8 +6,10 @@ workflow being Tools → Play Game Package → fullscreen Play, with Editor mode
 a setting. Android and `player/` are future work and are **not** assessed as
 blockers. 2.4 `.fiopak` compatibility is explicitly not required.
 
-Four conditions remain. One is fixed here; three are decisions or validation
-that cannot be made from the repository alone.
+Four conditions were found. **Two are fixed** (R1, R2). The remaining two are
+validation that cannot be done from the repository alone: nothing launches the
+compiled artifact, and the GL floor has never been checked on the reference
+machine.
 
 ---
 
@@ -44,7 +46,7 @@ the pre-fix code.
 
 ---
 
-## R2 — Desktop import ignores a package's bundled plugins
+## R2 — Desktop import ignores a package's bundled plugins — **FIXED**
 
 The documented contract (wiki, *.fiopak archive*) is that Fio bundles plugin
 code into the archive, "making packages self-contained rather than dependent on
@@ -70,13 +72,32 @@ contract is written for: a package carrying a plugin the destination Fio does
 not have. Its entities load as unresolved records — preserved, per the 2.5
 unknown-entity policy, but not functional.
 
-**Not wired blind, because there is a real design question first.** Plugin
-loading is process-wide and there is no unload path. Calling
-`load_package_plugins` on the extraction would leave that package's `plugins/`
-on `sys.path` for the life of the session, so importing a second package would
-run with the first one's plugins still resolvable. That needs a decision —
-session-scoped plugin roots, or an unload, or restricting package plugins to
-kiosk launch — not a one-line call.
+**Fixed.** Both import paths now call it, before the map is parsed —
+`Thing.from_dict` resolves an entity's class at parse time, so a plugin
+arriving afterwards leaves every one of its entities an unresolved record.
+
+It was not a one-line call. `load_package_plugins` could not have worked if
+something had called it: `discover_and_load` returns immediately once the
+manager has loaded, which it always has by the time the editor opens a package;
+and adding the package root to `sys.path` does nothing, because `plugins` is
+already imported and its `__path__` is what decides where `plugins.<name>` is
+found. Extending that `__path__` is what makes the bundled package importable —
+and it is narrower than `sys.path`, so the session-state worry that held this
+back turned out to be avoidable rather than merely acceptable: the change is
+scoped to one package and there is nothing global to undo.
+
+The collision question is settled by rule rather than by hope: a plugin name
+already loaded is kept and the package's copy ignored, so a second package
+cannot replace classes the session holds live objects for. That guard is new —
+the existing one keyed on the package *directory*, which is a different
+question, and a package can carry a plugin under a differently-spelled
+directory. `sorted()` over `pkgutil.iter_modules` also only ever worked by
+accident: it compares finder objects first, which tie only when there is a
+single root.
+
+Covered by `tests/persistence/test_package_plugins.py`, including the one that
+matters — a package's entity type resolving to a real class afterwards — and
+mutation-verified at all three points.
 
 ---
 
