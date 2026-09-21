@@ -3643,6 +3643,7 @@ class PropertyEditor(QWidget):
         if is_trigger:
             self.current_object.setdefault('trigger_type', 'Once')
             self.current_object.setdefault('trigger_filters', ['player'])
+            self.current_object.setdefault('trigger_poll_interval', 1.0)
             self.current_object.setdefault('textures', {})
             for face in ['top', 'bottom', 'north', 'south', 'east', 'west']:
                 self.current_object['textures'][face] = 'trigger.jpg'
