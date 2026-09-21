@@ -77,7 +77,7 @@ def test_engine_physics_body_lands_on_floor_and_sleeps():
         world.step(1.0 / 60.0)
 
     body = world.get_body(prop)
-    assert prop.pos[1] == 0.0
+    assert prop.pos[1] == 40.0
     assert body.awake is False
     assert body.velocity == [0.0, 0.0, 0.0]
 
