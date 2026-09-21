@@ -1,0 +1,1481 @@
+{
+ "version": 3,
+ "brushes": [
+  {
+   "pos": [
+    0,
+    -32,
+    0
+   ],
+   "size": [
+    1408,
+    64,
+    1408
+   ],
+   "textures": {
+    "north": "Dev/512.jpg",
+    "south": "Dev/512.jpg",
+    "east": "Dev/512.jpg",
+    "west": "Dev/512.jpg",
+    "top": "Dev/512.jpg",
+    "down": "Dev/512.jpg"
+   },
+   "is_trigger": false,
+   "id": "d4d617df-1e94-484f-a7a4-a01393fe80e8"
+  },
+  {
+   "pos": [
+    0,
+    544,
+    0
+   ],
+   "size": [
+    1408,
+    64,
+    1408
+   ],
+   "textures": {
+    "north": "Dev/512.jpg",
+    "south": "Dev/512.jpg",
+    "east": "Dev/512.jpg",
+    "west": "Dev/512.jpg",
+    "top": "Dev/512.jpg",
+    "down": "Dev/512.jpg"
+   },
+   "is_trigger": false,
+   "id": "6104c0e8-ab03-41e6-832e-0212ea7869d4"
+  },
+  {
+   "pos": [
+    0,
+    256,
+    672
+   ],
+   "size": [
+    1408,
+    512,
+    64
+   ],
+   "textures": {
+    "north": "Dev/512.jpg",
+    "south": "Dev/512.jpg",
+    "east": "Dev/512.jpg",
+    "west": "Dev/512.jpg",
+    "top": "Dev/512.jpg",
+    "down": "Dev/512.jpg"
+   },
+   "is_trigger": false,
+   "id": "56dc5b0f-cada-4566-b663-1c595a0e4a9e"
+  },
+  {
+   "pos": [
+    0,
+    256,
+    -672
+   ],
+   "size": [
+    1408,
+    512,
+    64
+   ],
+   "textures": {
+    "north": "Dev/512.jpg",
+    "south": "Dev/512.jpg",
+    "east": "Dev/512.jpg",
+    "west": "Dev/512.jpg",
+    "top": "Dev/512.jpg",
+    "down": "Dev/512.jpg"
+   },
+   "is_trigger": false,
+   "id": "df17c847-50d7-4043-81a0-3db29fc2a8f0"
+  },
+  {
+   "pos": [
+    672,
+    256,
+    0
+   ],
+   "size": [
+    64,
+    512,
+    1280
+   ],
+   "textures": {
+    "north": "Dev/512.jpg",
+    "south": "Dev/512.jpg",
+    "east": "Dev/512.jpg",
+    "west": "Dev/512.jpg",
+    "top": "Dev/512.jpg",
+    "down": "Dev/512.jpg"
+   },
+   "is_trigger": false,
+   "id": "6434a55e-f296-4df6-b406-1ccb63d47c05"
+  },
+  {
+   "pos": [
+    -672,
+    256,
+    0
+   ],
+   "size": [
+    64,
+    512,
+    1280
+   ],
+   "textures": {
+    "north": "Dev/512.jpg",
+    "south": "Dev/512.jpg",
+    "east": "Dev/512.jpg",
+    "west": "Dev/512.jpg",
+    "top": "Dev/512.jpg",
+    "down": "Dev/512.jpg"
+   },
+   "is_trigger": false,
+   "id": "1af9ad49-c72d-4722-a956-425d678ffad4"
+  },
+  {
+   "pos": [
+    0,
+    108,
+    -600
+   ],
+   "size": [
+    400,
+    24,
+    60
+   ],
+   "textures": {
+    "north": "Dev/512.jpg",
+    "south": "Dev/512.jpg",
+    "east": "Dev/512.jpg",
+    "west": "Dev/512.jpg",
+    "top": "Dev/512.jpg",
+    "down": "Dev/512.jpg"
+   },
+   "is_trigger": false,
+   "id": "c0010102-60c9-497c-8dcc-288f385015bb"
+  }
+ ],
+ "things": [
+  {
+   "type": "playerstart",
+   "pos": [
+    0,
+    40,
+    520
+   ],
+   "properties": {
+    "angle": 180,
+    "type": "playerstart",
+    "name": "PlayerStart_1",
+    "id": "52cf6d09-2599-4cd1-b46e-2e869bc93821"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "light",
+   "pos": [
+    0,
+    432,
+    0
+   ],
+   "properties": {
+    "intensity": 1.1,
+    "radius": 2000,
+    "state": "on",
+    "type": "light",
+    "name": "Light_1",
+    "id": "caed68a1-2aac-4a6c-a780-458ca7ef3f4c",
+    "colour": [
+     255,
+     255,
+     255
+    ],
+    "show_radius": false,
+    "casts_shadows": false,
+    "parent_mover": "",
+    "parent_offset": [
+     0,
+     0,
+     0
+    ]
+   },
+   "io_connections": []
+  },
+  {
+   "type": "tidyreceptacle",
+   "pos": [
+    0,
+    132,
+    -600
+   ],
+   "properties": {
+    "name": "Shelf",
+    "accepts": "any",
+    "capacity": 48,
+    "slot_cols": 12,
+    "slot_spacing": [
+     30,
+     44,
+     0
+    ],
+    "slot_offset": [
+     0,
+     6,
+     0
+    ],
+    "reach": 180,
+    "type": "tidyreceptacle",
+    "id": "13802323-7cc3-4904-8a47-2659dc8ea8d7",
+    "disabled": false
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -225,
+    12,
+    -50
+   ],
+   "properties": {
+    "name": "Book_1",
+    "type": "prop",
+    "id": "7f442965-539a-4a85-82a9-37d9e2dbd07f",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_08.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -135,
+    12,
+    -50
+   ],
+   "properties": {
+    "name": "Book_2",
+    "type": "prop",
+    "id": "455206e7-69e1-447b-b6ce-b4603dd3106f",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -45,
+    12,
+    -50
+   ],
+   "properties": {
+    "name": "Book_3",
+    "type": "prop",
+    "id": "61279c42-bd4d-4644-9b91-39af8c80caba",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_03.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    45,
+    12,
+    -50
+   ],
+   "properties": {
+    "name": "Book_4",
+    "type": "prop",
+    "id": "af214761-8b22-4a1a-a20b-70225c81534e",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_07.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    135,
+    12,
+    -50
+   ],
+   "properties": {
+    "name": "Book_5",
+    "type": "prop",
+    "id": "4cc70f96-d052-49f1-95c2-33e8a64ab404",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_04.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    225,
+    12,
+    -50
+   ],
+   "properties": {
+    "name": "Book_6",
+    "type": "prop",
+    "id": "49e9d916-852b-4b20-8c36-a9ed098fbcc0",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_09.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -225,
+    12,
+    40
+   ],
+   "properties": {
+    "name": "Book_7",
+    "type": "prop",
+    "id": "39d4378a-ed34-4594-8abe-82a06af99f34",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_07.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -135,
+    12,
+    40
+   ],
+   "properties": {
+    "name": "Book_8",
+    "type": "prop",
+    "id": "eaee738e-2a19-4766-b7ca-3048f4a2c648",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_08.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -45,
+    12,
+    40
+   ],
+   "properties": {
+    "name": "Book_9",
+    "type": "prop",
+    "id": "a7fd5733-ffeb-461e-b96d-fc9293695485",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_04.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    45,
+    12,
+    40
+   ],
+   "properties": {
+    "name": "Book_10",
+    "type": "prop",
+    "id": "e980361f-b20e-4620-a8ca-06f89ecd127b",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_09.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    135,
+    12,
+    40
+   ],
+   "properties": {
+    "name": "Book_11",
+    "type": "prop",
+    "id": "a2de95d6-1b3d-4ba1-8d20-9cb7ddc123f8",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_02.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    225,
+    12,
+    40
+   ],
+   "properties": {
+    "name": "Book_12",
+    "type": "prop",
+    "id": "141fb0fa-e8af-42a4-a924-865e0c04054a",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -225,
+    12,
+    130
+   ],
+   "properties": {
+    "name": "Book_13",
+    "type": "prop",
+    "id": "0f9b5708-90b4-4550-94c1-6904c897a171",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_05.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -135,
+    12,
+    130
+   ],
+   "properties": {
+    "name": "Book_14",
+    "type": "prop",
+    "id": "27420ac1-6f2d-47f4-8887-31bc3318d833",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_08.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -45,
+    12,
+    130
+   ],
+   "properties": {
+    "name": "Book_15",
+    "type": "prop",
+    "id": "3ad8692d-ca4a-45df-96dc-1a4dfd00500e",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_01.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    45,
+    12,
+    130
+   ],
+   "properties": {
+    "name": "Book_16",
+    "type": "prop",
+    "id": "2c160fad-f485-4334-adf7-14df8c3acd5a",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_03.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    135,
+    12,
+    130
+   ],
+   "properties": {
+    "name": "Book_17",
+    "type": "prop",
+    "id": "993aaaba-c7b2-4f22-b521-44ab09a51d41",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_04.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    225,
+    12,
+    130
+   ],
+   "properties": {
+    "name": "Book_18",
+    "type": "prop",
+    "id": "c15f7aeb-14f0-4286-b44a-27af60bc3d91",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_03.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -225,
+    12,
+    220
+   ],
+   "properties": {
+    "name": "Book_19",
+    "type": "prop",
+    "id": "4b25f5e2-9882-4111-aac6-698e885c3a8a",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_11.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -135,
+    12,
+    220
+   ],
+   "properties": {
+    "name": "Book_20",
+    "type": "prop",
+    "id": "c2aadf40-3f7c-4869-9ec9-276ba931ea5a",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_08.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -45,
+    12,
+    220
+   ],
+   "properties": {
+    "name": "Book_21",
+    "type": "prop",
+    "id": "4ea46ee1-aa26-41a6-a0f8-d98e452d739a",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    45,
+    12,
+    220
+   ],
+   "properties": {
+    "name": "Book_22",
+    "type": "prop",
+    "id": "55943628-b7dc-4279-b519-56cb79a50e2e",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    135,
+    12,
+    220
+   ],
+   "properties": {
+    "name": "Book_23",
+    "type": "prop",
+    "id": "a14dd96b-5c13-46ae-84a8-4204a65c1a96",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_04.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    225,
+    12,
+    220
+   ],
+   "properties": {
+    "name": "Book_24",
+    "type": "prop",
+    "id": "8a5d67ce-867b-474b-ac0a-ccf43949c4c5",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -225,
+    12,
+    310
+   ],
+   "properties": {
+    "name": "Book_25",
+    "type": "prop",
+    "id": "0f4a24fa-f177-4fa0-821f-9ad605b9d78c",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_06.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -135,
+    12,
+    310
+   ],
+   "properties": {
+    "name": "Book_26",
+    "type": "prop",
+    "id": "e8856838-8bce-47bd-a5ae-d774cb357c56",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -45,
+    12,
+    310
+   ],
+   "properties": {
+    "name": "Book_27",
+    "type": "prop",
+    "id": "0b78b8aa-396c-4167-bbdc-dac87d6764c7",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    45,
+    12,
+    310
+   ],
+   "properties": {
+    "name": "Book_28",
+    "type": "prop",
+    "id": "77dce366-1eaa-472c-b7eb-57a3f4fd70b2",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_07.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    135,
+    12,
+    310
+   ],
+   "properties": {
+    "name": "Book_29",
+    "type": "prop",
+    "id": "7fb0e105-5407-45d2-8fad-f5c2e0c6b94e",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_01.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    225,
+    12,
+    310
+   ],
+   "properties": {
+    "name": "Book_30",
+    "type": "prop",
+    "id": "29327c2c-121f-4379-bbef-905ecca5bc8f",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_07.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -225,
+    12,
+    400
+   ],
+   "properties": {
+    "name": "Book_31",
+    "type": "prop",
+    "id": "d3003192-5e31-4864-be85-f2548b0bc0f6",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_06.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -135,
+    12,
+    400
+   ],
+   "properties": {
+    "name": "Book_32",
+    "type": "prop",
+    "id": "072889fb-6bf7-478a-8502-f5a519853287",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_01.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -45,
+    12,
+    400
+   ],
+   "properties": {
+    "name": "Book_33",
+    "type": "prop",
+    "id": "3c60d9da-80b8-489e-9927-563b5a91e407",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    45,
+    12,
+    400
+   ],
+   "properties": {
+    "name": "Book_34",
+    "type": "prop",
+    "id": "a8d1eb3c-e9d5-4491-a936-ababcc48d101",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_12.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    135,
+    12,
+    400
+   ],
+   "properties": {
+    "name": "Book_35",
+    "type": "prop",
+    "id": "4e816f12-eda6-4908-9709-17bb266e8988",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_06.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    225,
+    12,
+    400
+   ],
+   "properties": {
+    "name": "Book_36",
+    "type": "prop",
+    "id": "8ad408d5-4cda-46d3-a027-13e702eb2e2f",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_12.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -225,
+    12,
+    490
+   ],
+   "properties": {
+    "name": "Book_37",
+    "type": "prop",
+    "id": "7a1d937c-4b00-438b-a20a-a505f86d1085",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -135,
+    12,
+    490
+   ],
+   "properties": {
+    "name": "Book_38",
+    "type": "prop",
+    "id": "0e1be42d-2cd4-489d-8a6f-4bc8fb828d5b",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_05.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    -45,
+    12,
+    490
+   ],
+   "properties": {
+    "name": "Book_39",
+    "type": "prop",
+    "id": "5b61a062-1451-4bbc-916f-2175addf5ec2",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_09.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    45,
+    12,
+    490
+   ],
+   "properties": {
+    "name": "Book_40",
+    "type": "prop",
+    "id": "59fc264a-070a-4b22-ad5c-772a1e1d3d2d",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_09.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    135,
+    12,
+    490
+   ],
+   "properties": {
+    "name": "Book_41",
+    "type": "prop",
+    "id": "49bd0314-a385-4264-a5a7-aa97e0af962f",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_09.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "prop",
+   "pos": [
+    225,
+    12,
+    490
+   ],
+   "properties": {
+    "name": "Book_42",
+    "type": "prop",
+    "id": "be20e0c8-405b-4946-a846-ca33ee6adf12",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_01.png",
+    "no_collision": true,
+    "disabled": false,
+    "tidy_category": "book"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "tidygoal",
+   "pos": [
+    0,
+    60,
+    580
+   ],
+   "properties": {
+    "name": "TidyGoal",
+    "target": "all",
+    "category": "any",
+    "type": "tidygoal",
+    "id": "7562eb46-6cac-41b9-99cf-72c1b6b2994f",
+    "show_hud": true,
+    "disabled": false
+   },
+   "io_connections": [
+    {
+     "output": "OnComplete",
+     "target": "Shelf",
+     "input": "Disable",
+     "parameter": "",
+     "delay": 0,
+     "fire_once": false,
+     "target_id": "13802323-7cc3-4904-8a47-2659dc8ea8d7"
+    }
+   ]
+  }
+ ]
+}
