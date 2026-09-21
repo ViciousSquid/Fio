@@ -837,19 +837,48 @@ class LogicThread(threading.Thread):
             return None
 
         ext = os.path.splitext(model_path)[1].lower()
-        if ext == '.glb':
-            try:
+        try:
+            if ext == '.glb':
                 from .glb_loader import GLBLoader
                 loader = GLBLoader()
                 loader._filepath_hint = full_path
                 if loader.load(full_path):
                     verts = loader.get_flattened_vertices()
-                    if verts:
-                        min_v = [min(v[i] for v in verts) for i in range(3)]
-                        max_v = [max(v[i] for v in verts) for i in range(3)]
-                        return min_v, max_v
-            except Exception as e:
-                debug_log("Collision", f"Failed to compute GLB bounds for {model_path}: {e}")
+                else:
+                    verts = None
+            elif ext == '.obj':
+                # OBJ collision only needs CPU geometry.  Do not instantiate the
+                # OpenGL-backed OBJ model on the logic thread.
+                from .obj_loader import OBJLoader
+                loader = OBJLoader()
+                if loader.load(full_path):
+                    source_vertices = np.asarray(loader.vertices, dtype=np.float32)
+                    if source_vertices.size == 0:
+                        verts = None
+                    else:
+                        source_min = source_vertices.min(axis=0)
+                        source_max = source_vertices.max(axis=0)
+                        source_centre = (source_min + source_max) * 0.5
+                        half_extent = (source_max - source_min) * 0.5
+                        threshold = np.maximum(half_extent * 4.0, 2.0)
+                        offset = np.where(
+                            np.abs(source_centre) > threshold,
+                            source_centre,
+                            0.0,
+                        ).astype(np.float32)
+                        corrected = source_vertices - offset
+                        verts = corrected.tolist()
+                else:
+                    verts = None
+            else:
+                return None
+
+            if verts:
+                min_v = [min(v[i] for v in verts) for i in range(3)]
+                max_v = [max(v[i] for v in verts) for i in range(3)]
+                return min_v, max_v
+        except Exception as e:
+            debug_log("Collision", f"Failed to compute {ext.upper()} bounds for {model_path}: {e}")
         return None
 
     def toggle_model_collision(self, enabled: bool = None) -> bool:
