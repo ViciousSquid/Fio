@@ -34,7 +34,7 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None):
         **({'trigger_filters': filters} if filters is not None else {}),
     })]
     logic._trigger_brush_by_bid = dict(logic._trigger_brushes)
-    logic._trigger_entities_inside = {}
+    logic._trigger_contacts = {}
     logic._nonplayer_trigger_contacts = {}
     logic._trigger_poll_elapsed = 0.0
     logic._trigger_use_pending = False
@@ -74,6 +74,10 @@ def test_trigger_defaults_to_player_only():
 
     assert logic._events == [('enter', 'player')]
     assert logic.player_in_triggers == {1}
+
+    # A second identical broad-phase sample is unchanged and must not emit I/O.
+    logic._poll_triggers()
+    assert logic._events == [('enter', 'player')]
 
 
 def test_trigger_can_target_props_and_monsters_in_any_combination():
