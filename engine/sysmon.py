@@ -174,7 +174,7 @@ class SysMon:
             self._fps = 0.0
 
     def reset_metrics(self):
-        """Reset the collected frame and runtime metric history."""
+        """Reset the frame/metric state used by benchmark measurements."""
         self._ft_buffer.fill(0.0)
         self._ft_index = 0
         self._ft_count = 0
@@ -187,10 +187,10 @@ class SysMon:
         self._stats_cache_time = 0.0
 
     def get_metrics(self):
-        """Return a machine-readable snapshot of current runtime metrics.
+        """Return a machine-readable snapshot without adding work to the frame path.
 
-        Values are derived on demand from the same lightweight counters SysMon
-        already maintains for normal runtime diagnostics.
+        Benchmark-only metrics are derived here when requested rather than being
+        maintained from QtGameView's per-frame/render hot paths.
         """
         count = int(self._ft_count)
         if count:
