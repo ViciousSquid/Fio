@@ -366,6 +366,22 @@ def _build_plugins_menu(MainWindow):
     for plugin in mgr.plugins:
         sub = menu.addMenu(plugin.name)
 
+        # Plugin-owned actions sit at the very top. These remain available
+        # while the plugin is disabled so an action such as "Load Demo map"
+        # can itself load a level that auto-enables the plugin.
+        actions = [(label, callback, tooltip)
+                   for pl, label, callback, tooltip in mgr.menu_actions()
+                   if pl is plugin]
+        for label, callback, tooltip in actions:
+            act = sub.addAction(label)
+            if tooltip:
+                act.setToolTip(tooltip)
+            act.triggered.connect(
+                lambda _checked=False, p=plugin, cb=callback:
+                _run_plugin_menu_action(MainWindow, p, cb))
+        if actions:
+            sub.addSeparator()
+
         # Enable/disable toggle (checked = on).
         toggle = sub.addAction("Enabled")
         toggle.setCheckable(True)
