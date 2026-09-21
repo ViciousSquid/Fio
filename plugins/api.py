@@ -62,11 +62,13 @@ from typing import Any, Callable, List, Optional, Tuple, Type
 #:
 #: * 1.2.0 — the open-ended extension surface: :class:`plugins.host.PluginHost`,
 #:   the engine event bus, and the ``connect(host)`` hook.
-#: * 1.3.0 — render hooks (``render.*`` events), swappable-renderer registration
+#: * 1.3.0 — render hooks, swappable-renderer registration, and editor-UI extensions.
+#: * 1.4.0 — optional editor Tools actions and console-command registration.
+#: *  
 #:   (``register_renderer``), editor-UI extensions (extra property fields on any
 #:   entity, custom property tabs), and the ``FIO_NO_PLUGINS`` kill-switch.
-API_VERSION = "1.3.0"
-API_VERSION_INFO = (1, 3, 0)
+API_VERSION = "1.4.0"
+API_VERSION_INFO = (1, 4, 0)
 
 
 def version_tuple(value: str) -> tuple:
@@ -499,6 +501,14 @@ class EditorAPI:
         except Exception:
             return False
         return register_renderer(name, cls)
+
+    def register_tools_action(self, label: str, callback: Callable, tooltip: str = "") -> None:
+        """Register a Tools-menu action for an editor/developer plugin."""
+        self._manager._record_tools_action(self._plugin, label, callback, tooltip)
+
+    def register_console_command(self, name: str, callback: Callable, help_text: str = "") -> None:
+        """Register a plugin-owned debug console command."""
+        self._manager._register_console_command(self._plugin, name, callback, help_text)
 
     # -- global store -------------------------------------------------------
     @property

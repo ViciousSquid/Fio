@@ -244,7 +244,7 @@ class BenchmarkRunner:
         env["PYTHONUNBUFFERED"] = "1"
     
         script = os.path.join(
-            self.root_dir, "tests", "performance", "fio_benchmark.py"
+            self.root_dir, "plugins", "benchmark", "fio_benchmark.py"
         )
         try:
             self._worker_stdout_handle = open(
@@ -2521,4 +2521,3 @@ class _BenchmarkDialogProxy:
         self.fullscreen_window.setChecked("fullscreen_window" in selected)
         self.editor_windowed_1280.setChecked("editor_windowed_1280" in selected)
         self.editor_windowed_1920.setChecked("editor_windowed_1920" in selected)
-

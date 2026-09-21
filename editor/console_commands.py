@@ -89,7 +89,6 @@ class ConsoleCommandHandler:
             'buddha': self.cmd_buddha,
             'clear': self.cmd_clear,
             'fps': self.cmd_fps,
-            'benchmark': self.cmd_benchmark,
             'map': self.cmd_map,
 
             # Save / load a play session
@@ -208,7 +207,9 @@ class ConsoleCommandHandler:
             view_3d = getattr(self.main_window, 'view_3d', None)
             lt = getattr(view_3d, 'logic_thread', None) if view_3d else None
             play = bool(getattr(view_3d, 'play_mode', False))
-            handled, reply = mgr.dispatch_console_command(cmd, args, lt, play_mode=play)
+            handled, reply = mgr.dispatch_console_command(
+                cmd, args, lt, main_window=self.main_window, play_mode=play
+            )
             if handled and reply:
                 debug_log("Info", str(reply))
             return handled
@@ -753,7 +754,6 @@ class ConsoleCommandHandler:
 <b style="color:orange;">clear</b> — Clear console<br>
 <b style="color:orange;">help</b> — Show this help<br>
 <b style="color:orange;">fps</b> — Toggle FPS display<br>
-<b style="color:orange;">benchmark</b> [seconds] [repetitions] — Run the Current World orbit + 360° phases<br>
 <b style="color:orange;">map</b> &lt;name&gt; — Load a different map<br>
 <b style="color:cyan;">=== Save / Load (Play Session) ===</b><br>
 <b style="color:orange;">save</b> [name] — Save the current play session (Play Mode only)<br>
@@ -1973,46 +1973,6 @@ entity to drive them from the I/O system.</i><br>
         self.main_window.save_config()
         self.main_window.view_3d.update()
         debug_log("Info", f"FPS display {'ON' if show else 'OFF'}")
-
-    def cmd_benchmark(self, args):
-        """benchmark [seconds] [repetitions] — benchmark the current map."""
-        raw = args.strip()
-        duration = None
-        repetitions = 1
-        parts = raw.split()
-
-        if len(parts) > 2:
-            debug_log("Error", "Usage: benchmark [seconds] [repetitions]")
-            return
-
-        if parts:
-            try:
-                duration = float(parts[0])
-            except ValueError:
-                debug_log("Error", "Usage: benchmark [seconds] [repetitions]")
-                return
-            if not math.isfinite(duration) or duration <= 0.0:
-                debug_log("Error", "benchmark: duration must be greater than 0 seconds")
-                return
-
-        if len(parts) == 2:
-            try:
-                repetitions = int(parts[1])
-            except ValueError:
-                debug_log("Error", "benchmark: repetitions must be a positive integer")
-                return
-            if repetitions <= 0:
-                debug_log("Error", "benchmark: repetitions must be a positive integer")
-                return
-
-        try:
-            self.main_window.run_benchmark(
-                auto_start=True,
-                duration=duration,
-                repetitions=repetitions,
-            )
-        except Exception as exc:
-            debug_log("Error", f"benchmark: could not open benchmark window: {exc}")
 
     def cmd_map(self, args):
         if not args:

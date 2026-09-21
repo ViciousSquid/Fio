@@ -123,6 +123,8 @@ class PluginManager:
         # property tabs. Both keyed/filtered by normalised entity type.
         self._extra_fields: dict = {}       # type -> list[PropertySpec]
         self._property_tabs: list = []      # list[(label, factory, type_or_None)]
+        self._tools_actions: list = []
+        self._console_commands: dict = {}
         # Disabled plugin names (by directory or plugin.name). Populated from
         # the FIO_DISABLED_PLUGINS env var, comma-separated.
         self._disabled = {
@@ -287,6 +289,46 @@ class PluginManager:
                 self.set_enabled(plugin, False)
 
     # -- property schema ----------------------------------------------------
+    def _record_tools_action(self, plugin, label: str, callback, tooltip: str = "") -> None:
+        if callable(callback):
+            self._tools_actions.append((plugin, str(label), callback, str(tooltip or "")))
+
+    def tools_actions(self):
+        return list(self._tools_actions)
+
+    def _register_console_command(self, plugin, name: str, callback, help_text: str = "") -> None:
+        key = str(name).strip().lower()
+        if key and callable(callback):
+            self._console_commands[key] = (plugin, callback, str(help_text or ""))
+
+    def has_console_command(self, name: str) -> bool:
+        entry = self._console_commands.get(str(name).strip().lower())
+        return bool(entry and self.is_enabled(entry[0]))
+
+    def console_commands(self):
+        return {
+            name: {"plugin": plugin, "help": help_text}
+            for name, (plugin, _callback, help_text) in self._console_commands.items()
+            if self.is_enabled(plugin)
+        }
+
+    def dispatch_console_command(self, name: str, args: str, logic=None,
+                                 main_window=None, play_mode: bool = False):
+        entry = self._console_commands.get(str(name).strip().lower())
+        if entry is None:
+            return False, None
+        plugin, callback, _help_text = entry
+        if not self.is_enabled(plugin):
+            return False, None
+        try:
+            return True, callback(args, main_window, logic, bool(play_mode))
+        except Exception:
+            self._log(
+                f"console command '{name}' failed for '{plugin.name}':\n"
+                f"{traceback.format_exc()}"
+            )
+            return True, None
+
     def _record_property_schema(self, entity_type: str, specs):
         """Store a typed property schema for *entity_type* (normalised key)."""
         if not specs:

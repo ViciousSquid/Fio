@@ -197,15 +197,6 @@ class MainWindow(QMainWindow):
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
 
-        # Tools > Benchmark launches a separate manager process. The live
-        # workloads still execute against this actual MainWindow/QtGameView,
-        # while the manager remains alive if this process becomes unresponsive.
-        self.benchmark_action = QAction("Benchmark...", self)
-        self.benchmark_action.setToolTip(
-            "Open the external benchmark manager")
-        self.benchmark_action.triggered.connect(self.run_benchmark)
-        self.tools_menu.insertAction(self.logic_graph_action, self.benchmark_action)
-
         self.update_recent_files_menu()
         self.setup_package_actions() 
         self.update_title()
@@ -351,60 +342,6 @@ class MainWindow(QMainWindow):
         self.properties_dock.setWidget(overlay_widget)
         self._current_overlay = overlay_widget
         self._overlay_close_callback = close_callback
-
-    def run_benchmark(self, auto_start=False, duration=None, repetitions=1):
-        """Launch the external benchmark manager for this live Fio process."""
-        import subprocess
-        import sys
-
-        from editor.benchmark import BenchmarkHost
-
-        host = getattr(self, "_benchmark_host", None)
-        if host is None:
-            host = BenchmarkHost(self)
-            self._benchmark_host = host
-
-        process = getattr(self, "_benchmark_manager_process", None)
-        if process is not None and process.poll() is None:
-            try:
-                self._benchmark_host.send({
-                    "event": "manager_already_running"
-                })
-            except Exception:
-                pass
-            return
-
-        manager_path = os.path.join(self.root_dir, "benchmark_manager.py")
-        command = [
-            sys.executable,
-            manager_path,
-            "--host", host.host,
-            "--port", str(host.port),
-            "--token", host.token,
-            "--pid", str(os.getpid()),
-            "--root", self.root_dir,
-            "--repetitions", str(max(1, int(repetitions or 1))),
-        ]
-        if duration is not None:
-            command.extend(["--duration", str(float(duration))])
-        if auto_start:
-            command.append("--auto-start")
-
-        creationflags = 0
-        if sys.platform.startswith("win"):
-            creationflags = (
-                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            )
-
-        self._benchmark_manager_process = subprocess.Popen(
-            command,
-            cwd=self.root_dir,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=creationflags,
-        )
 
     def update_title(self):
         """Updates window title with filename and dirty status."""
@@ -4798,20 +4735,6 @@ class MainWindow(QMainWindow):
                 self.autosave_timer.stop()
             if hasattr(self, '_play_button_sync_timer'):
                 self._play_button_sync_timer.stop()
-
-            # Stop the external benchmark manager and IPC host with the editor.
-            manager_process = getattr(self, '_benchmark_manager_process', None)
-            if manager_process is not None and manager_process.poll() is None:
-                try:
-                    manager_process.terminate()
-                except Exception:
-                    pass
-            benchmark_host = getattr(self, '_benchmark_host', None)
-            if benchmark_host is not None:
-                try:
-                    benchmark_host.shutdown()
-                except Exception:
-                    pass
 
             # Cleanup extracted package temp dir
             if hasattr(self, '_package_temp_dir') and self._package_temp_dir:

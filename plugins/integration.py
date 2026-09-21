@@ -58,6 +58,7 @@ def apply():
     _patch_editor_state()
     _patch_view_2d()
     _patch_editor_menu()
+    _patch_plugin_tools_menu()
     _patch_property_editor()
 
 
@@ -481,6 +482,59 @@ def _place_plugin_entity(MainWindow, plugin, cls, label):
             MainWindow.show_toast(f"Added {label} at origin — drag it into place")
     except Exception as exc:
         _log(f"menu placement failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# editor.ui.Ui_MainWindow — plugin-declared developer Tools actions
+# ---------------------------------------------------------------------------
+
+def _patch_plugin_tools_menu():
+    try:
+        from editor.ui import Ui_MainWindow
+    except Exception as exc:
+        _log(f"Tools-menu patch skipped ({exc})")
+        return
+
+    if getattr(Ui_MainWindow, "_fio_plugin_tools_patched", False):
+        return
+
+    _orig_create_menu_bar = Ui_MainWindow.create_menu_bar
+
+    def create_menu_bar(self, MainWindow):
+        _orig_create_menu_bar(self, MainWindow)
+        try:
+            from PyQt5.QtWidgets import QAction
+            from plugins.manager import get_manager
+
+            mgr = get_manager()
+            records = mgr.tools_actions()
+            if not records:
+                return
+
+            installed = []
+            for plugin, label, callback, tooltip in records:
+                action = QAction(label, MainWindow)
+                if tooltip:
+                    action.setToolTip(tooltip)
+                action.triggered.connect(
+                    lambda _checked=False, p=plugin, cb=callback, mw=MainWindow:
+                    cb(mw) if mgr.is_enabled(p) else None
+                )
+                self.tools_menu.insertAction(self.logic_graph_action, action)
+                installed.append((plugin, action))
+
+            def refresh_visibility():
+                for plugin, action in installed:
+                    action.setVisible(mgr.is_enabled(plugin))
+
+            refresh_visibility()
+            self.tools_menu.aboutToShow.connect(refresh_visibility)
+            MainWindow._fio_plugin_tools_actions = installed
+        except Exception as exc:
+            _log(f"plugin Tools action setup failed: {exc}")
+
+    Ui_MainWindow.create_menu_bar = create_menu_bar
+    Ui_MainWindow._fio_plugin_tools_patched = True
 
 
 # ---------------------------------------------------------------------------
