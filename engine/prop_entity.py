@@ -80,10 +80,39 @@ class Prop(_ModelBase):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties['type'] = 'prop'
+        # Read before the defaults are applied: self.properties IS the dict
+        # that was passed in, so setdefault below would otherwise make every
+        # record look as though it had authored a render_mode.
+        authored_render_mode = 'render_mode' in self.properties
         for key, value in PROP_DEFAULTS.items():
             # Copy mutable defaults so instances never share a list.
             self.properties.setdefault(
                 key, list(value) if isinstance(value, list) else value)
+        if not authored_render_mode:
+            self.properties['render_mode'] = self._implied_render_mode()
+
+    def _implied_render_mode(self):
+        """The representation this prop's authored assets imply.
+
+        ``render_mode`` is authoritative, and a record that states one is never
+        second-guessed. A record that states none needs a default that can
+        actually draw something, and a fixed one cannot: PROP_DEFAULTS ships a
+        ``sprite_path`` but no ``model_path``, so defaulting to ``'model'``
+        produced a prop classified as a model with no model to draw -- it
+        reached neither the model list nor the sprite list and was rendered by
+        nothing at all. That is what the editor's "add Prop" action created.
+
+        So the default follows the assets: a model when one is set, otherwise
+        the billboard whose texture is always present. Resolved once here
+        rather than in the renderer, which keeps ``render_mode`` a single
+        authoritative property everywhere downstream and adds no per-frame
+        branch to a hot path.
+        """
+        if self.properties.get('model_path'):
+            return 'model'
+        if self.properties.get('sprite_path'):
+            return 'billboard'
+        return PROP_DEFAULTS['render_mode']
 
     def get_sprite_path(self):
         """Return the authored billboard texture path, if this prop has one."""

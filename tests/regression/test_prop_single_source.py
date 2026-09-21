@@ -46,8 +46,36 @@ def test_headless_player_gets_the_same_contract_without_pyqt():
         "from engine.prop_entity import Prop, PROP_DEFAULTS, EDITOR_TIER\n"
         "import plugins.entitybase as eb\n"
         "p = Prop(pos=[0, 0, 0])\n"
-        "ok = all(p.properties[k] == v for k, v in PROP_DEFAULTS.items())\n"
+        # render_mode is derived from the authored assets rather than taken
+        # literally from PROP_DEFAULTS, so it is checked separately below --
+        # the point of this test is that the headless tier derives it exactly
+        # as the editor tier does.
+        "fixed = {k: v for k, v in PROP_DEFAULTS.items() if k != 'render_mode'}\n"
+        "ok = all(p.properties[k] == v for k, v in fixed.items())\n"
         "print(EDITOR_TIER, eb.Prop is Prop, issubclass(Prop, eb.Model), ok,"
-        " 'PyQt5' in sys.modules)"
+        " p.properties['render_mode'], 'PyQt5' in sys.modules)"
     )
-    assert out == "False True True True False"
+    assert out == "False True True True billboard False"
+
+
+def test_the_implied_render_mode_is_the_same_on_both_tiers():
+    """A derived default is still part of the one shared contract."""
+    editor_tier = _run(
+        "from engine.prop_entity import Prop\n"
+        "print(Prop(pos=[0, 0, 0]).properties['render_mode'],"
+        " Prop(pos=[0, 0, 0], properties={'model_path': 'm.obj'})"
+        ".properties['render_mode'])"
+    )
+    headless = _run(
+        "import sys\n"
+        "class Block:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name.split('.')[0] in ('PyQt5', 'OpenGL'):\n"
+        "            raise ModuleNotFoundError(name)\n"
+        "sys.meta_path.insert(0, Block())\n"
+        "from engine.prop_entity import Prop\n"
+        "print(Prop(pos=[0, 0, 0]).properties['render_mode'],"
+        " Prop(pos=[0, 0, 0], properties={'model_path': 'm.obj'})"
+        ".properties['render_mode'])"
+    )
+    assert editor_tier == headless == "billboard model"
