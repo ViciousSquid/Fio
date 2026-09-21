@@ -1063,7 +1063,7 @@ class PropertyEditor(QWidget):
         dmg_layout = QVBoxLayout(dmg_group)
 
         hurt_cb = _make_checkbox(
-            "Hurts player on contact",
+            "Hurts on contact",
             brush.get('hurt', False),
             self.on_hurt_changed,
             _Style.CHECKBOX
