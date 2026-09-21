@@ -25,23 +25,11 @@ class BenchmarkPlugin(FioPlugin):
         self._main_window = None
 
     def register(self, api):
-        api.register_tools_action(
-            "Benchmark...",
-            self._open_from_tools,
-            "Run benchmarks against the live Fio runtime",
-        )
         api.register_console_command(
             "benchmark",
             self._console_command,
             "benchmark [seconds] [repetitions] — benchmark the current map",
         )
-
-    def _open_from_tools(self, main_window):
-        try:
-            self._launch(main_window)
-        except Exception as exc:
-            from editor.debug_console import debug_log
-            debug_log("Error", f"benchmark: could not open benchmark window: {exc}")
 
     def _console_command(self, args, main_window, logic, play_mode):
         from editor.debug_console import debug_log
@@ -141,6 +129,33 @@ class BenchmarkPlugin(FioPlugin):
     def on_enabled_changed(self, enabled):
         if not enabled:
             self._stop()
+            return
+
+        # The Plugins menu is the user-facing entry point for optional
+        # developer plugins. When Benchmark is enabled there, immediately open
+        # its manager using the existing editor MainWindow.
+        try:
+            from PyQt5.QtWidgets import QApplication
+
+            main_window = QApplication.activeWindow()
+            if main_window is None:
+                for widget in QApplication.topLevelWidgets():
+                    if hasattr(widget, "view_3d") and hasattr(widget, "root_dir"):
+                        main_window = widget
+                        break
+            if main_window is None:
+                return
+
+            self._launch(main_window)
+        except Exception as exc:
+            try:
+                from editor.debug_console import debug_log
+                debug_log(
+                    "Error",
+                    f"benchmark: could not open benchmark window: {exc}",
+                )
+            except Exception:
+                pass
 
     def _stop(self, *_args):
         process = self._process
