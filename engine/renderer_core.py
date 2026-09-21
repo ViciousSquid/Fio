@@ -2521,7 +2521,8 @@ layout (location = 9) in vec4 iNormal2;
             length = float(np.linalg.norm(delta))
             if length <= 1e-6:
                 continue
-            direction = delta / length            cursor = 0.0
+            direction = delta / length
+            cursor = 0.0
             while cursor < length:
                 end = min(cursor + dash, length)
                 p0, p1 = a + direction * cursor, a + direction * end
