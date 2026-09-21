@@ -908,6 +908,7 @@ class PropertyEditor(QWidget):
 
     def _create_trigger_tab(self, brush):
         brush.setdefault('trigger_filters', ['player'])
+        brush.setdefault('trigger_poll_interval', 1.0)
 
         w = QWidget()
         layout = QVBoxLayout(w)
@@ -946,6 +947,32 @@ class PropertyEditor(QWidget):
         )
         form.addRow("Activation:", activation_combo)
         self._widgets['trigger_activation_combo'] = activation_combo
+
+        poll_interval_values = {
+            '1.0 s': 1.0,
+            '0.5 s': 0.5,
+            '0.25 s': 0.25,
+        }
+        current_poll_interval = float(
+            brush.get('trigger_poll_interval', 1.0)
+        )
+        poll_interval_text = min(
+            poll_interval_values,
+            key=lambda text: abs(poll_interval_values[text] - current_poll_interval)
+        )
+        poll_interval_combo = _make_combo(
+            list(poll_interval_values),
+            poll_interval_text,
+            lambda text: self.update_object_prop(
+                'trigger_poll_interval',
+                poll_interval_values[text]
+            ),
+        )
+        poll_interval_combo.setToolTip(
+            'How often this trigger checks for activation'
+        )
+        form.addRow("Poll interval:", poll_interval_combo)
+        self._widgets['trigger_poll_interval_combo'] = poll_interval_combo
 
         # Use Label: custom HUD prompt shown when activation == 'use'
         use_label_lbl = QLabel("Use Label:")
