@@ -48,6 +48,10 @@ class SpatialGrid:
             # after its cell came back.
             if authored_hidden(brush) or brush.get('is_fog'):
                 continue
+            # Physics-enabled Props are dynamic bodies. Their collision is
+            # resolved by PropSession rather than the static world grid.
+            if brush.get('_dynamic_prop'):
+                continue
             if is_water_brush(brush):
                 self.water_brushes.append(brush)
                 continue
