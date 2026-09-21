@@ -212,3 +212,55 @@ user's document.
   is not obviously safe. Not observed to fail, and these are developer tools,
   but they are the only place in Fio that writes simulation state from the UI
   thread without a handoff.
+
+---
+
+## 9. Trigger volume semantics — the authored contract
+
+Settled during the audit, because the batched rewrite had quietly introduced a
+second trigger shape.
+
+**A use trigger's authored volume is a sphere.** `use_radius` is the exact
+activation radius in every direction: what a mapper writing `use_radius = 128`
+means, and what 2.4.2 implemented (`glm.distance(player, trigger) < use_radius`).
+
+The vectorised broad phase bounds each use trigger with an axis-aligned box of
+the same radius, because that is what a batched AABB pass can do cheaply. That
+box is an **acceleration structure, not a trigger shape**. It fully contains
+the sphere, so it can only ever admit candidates; it must never decide. Commit
+483 left it deciding, which made a button usable from up to `sqrt(3)` times its
+authored radius on the diagonal (REG-09).
+
+The pipeline is therefore:
+
+1. batched AABB/grid pass nominates candidates,
+2. `LogicThread.use_trigger_contains(distance_sq, use_radius)` — one squared
+   distance test, no square roots, vectorises — decides,
+3. the facing dot narrows further.
+
+`use_trigger_contains` is a single `@staticmethod` used by both the per-tick
+prompt pass and the firing pass, so what the player is offered and what
+pressing E does cannot drift apart. Pinned by
+`test_the_prompt_and_the_firing_test_agree_at_the_boundary`, which drives the
+real play path at |d| = 85 and |d| = 113 against a radius of 100 and asserts
+the two agree in both directions.
+
+No sphere-vs-box choice is exposed anywhere: there is one authored volume with
+one meaning.
+
+### Touch triggers are a different thing, deliberately
+
+A touch trigger is not authored with a radius. It is a **brush the mapper
+draws** in the editor and it carries a `size`, tested with
+`brush_aabb_bounds`. It was a box at 2.4.2 and it remains one.
+
+Converting drawn brush volumes to spheres would change the shape of every
+existing touch trigger in every existing map — the opposite of the
+compatibility the sphere contract exists to protect. The rule that unifies both
+cases is not "every trigger is a sphere" but:
+
+> **The authored volume is whatever the mapper authored.** A radius means a
+> sphere; a drawn box means that box. The spatial structures underneath are
+> implementation details and never a second semantics.
+
+That is why REG-09 was a bug: a radius had silently acquired a box's shape.

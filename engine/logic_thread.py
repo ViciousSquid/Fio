@@ -2253,6 +2253,30 @@ class LogicThread(threading.Thread):
         self._trigger_use_prompt = ""
         self._refresh_use_triggers()
 
+    @staticmethod
+    def use_trigger_contains(distance_sq, use_radius):
+        """Whether something at *distance_sq* is inside a use trigger's volume.
+
+        **Fio's authored use volume is a sphere.** ``use_radius`` is the exact
+        activation radius in every direction, which is what a mapper writing
+        ``use_radius = 128`` means and what 2.4.2 implemented
+        (``glm.distance(player, trigger) < use_radius``).
+
+        The spatial broad phase bounds a use trigger with an axis-aligned box
+        of the same radius because that is what a batched pass can do cheaply.
+        That box is an **acceleration structure, not a second trigger shape**:
+        it fully contains the sphere, so it can only ever admit candidates, and
+        this predicate is the only thing that decides. Letting the box decide
+        made a button usable from up to sqrt(3) times its authored radius on
+        the diagonal.
+
+        Squared throughout -- no square roots, and it vectorises, so the
+        prompt pass and the firing pass share one definition rather than
+        keeping two that can drift apart.
+        """
+        radius = np.asarray(use_radius, dtype=np.float64)
+        return distance_sq < radius * radius
+
     def _refresh_use_triggers(self):
         """The use-activated subset of the trigger list, in trigger order.
 
@@ -2312,12 +2336,7 @@ class LogicThread(threading.Thread):
 
         offset = centres - origin
         distance_sq = np.einsum('ij,ij->i', offset, offset)
-        # A sphere of use_radius, which is what 2.4.2 tested. The poll's broad
-        # phase uses an axis-aligned box of the same radius because that is
-        # what a batched AABB pass can do cheaply; taking the box as the answer
-        # let a button be used from up to sqrt(3) times its authored radius
-        # diagonally.
-        in_range = distance_sq < radii * radii
+        in_range = self.use_trigger_contains(distance_sq, radii)
         if not in_range.any():
             return ""
 
@@ -2603,13 +2622,11 @@ class LogicThread(threading.Thread):
             )
             offset = center - positions[0]
             distance_sq = float(np.dot(offset, offset))
-            # The broad phase bounded this trigger by an axis-aligned box of
-            # use_radius because that is what a batched AABB pass can do; the
-            # authored radius is a sphere, as it was at 2.4.2. Without this the
-            # button fires from up to sqrt(3) times its radius diagonally, and
-            # disagrees with the prompt the player is shown.
-            use_radius = float(brush.get('use_radius', 96.0))
-            if distance_sq >= use_radius * use_radius:
+            # The sphere is what decides; the broad-phase box only nominated
+            # this trigger as a candidate. Same predicate the prompt uses, so
+            # what the player is shown and what pressing E does cannot drift.
+            if not self.use_trigger_contains(
+                    distance_sq, float(brush.get('use_radius', 96.0))):
                 continue
             if distance_sq > 1.0e-8:
                 to_trigger = offset / math.sqrt(distance_sq)

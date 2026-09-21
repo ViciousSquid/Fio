@@ -262,3 +262,86 @@ def test_interaction_prompt_survives_a_full_poll_window():
         logic._handle_triggers(False, 1.0 / 60.0)
 
     assert logic.current_hud_message == "[E] Drop"
+
+
+# ---------------------------------------------------------------------------
+# The authored use volume is a sphere.
+#
+# use_radius is the exact activation radius in every direction -- what a mapper
+# writing use_radius = 128 means, and what 2.4.2 implemented. The broad phase
+# bounds the trigger with an axis-aligned box of the same radius because that
+# is what a batched pass can do cheaply; the box fully contains the sphere, so
+# it can only nominate candidates. It must never be what decides.
+# ---------------------------------------------------------------------------
+
+def _press_use(logic, seconds=1.5):
+    """Drive a use-key press the way play mode does.
+
+    _handle_triggers owns the use-key generation; _poll_triggers only consumes
+    it. A trigger also has to have been polled once before a press can be an
+    edge for it, so this seeds the scheduler first and then presses, which is
+    what walking up to a button and pressing E actually looks like.
+    """
+    ticks = int(seconds * 60)
+    for _ in range(ticks):                 # let the scheduler sample it once
+        logic._handle_triggers(False, 1.0 / 60.0)
+    logic._handle_triggers(True, 1.0 / 60.0)
+    for _ in range(ticks):                 # and let the next poll consume it
+        logic._handle_triggers(False, 1.0 / 60.0)
+
+
+def test_use_trigger_contains_is_a_sphere():
+    """The predicate itself, scalar and batched, from one definition."""
+    import numpy as np
+
+    assert LogicThread.use_trigger_contains(99.0 ** 2, 100.0)
+    assert not LogicThread.use_trigger_contains(100.0 ** 2, 100.0)   # boundary is exclusive
+    assert not LogicThread.use_trigger_contains(101.0 ** 2, 100.0)
+
+    # A corner of the broad-phase box: inside the box, outside the sphere.
+    corner_sq = 3 * (100.0 ** 2)                                     # |d| = 173
+    assert not LogicThread.use_trigger_contains(corner_sq, 100.0)
+
+    batched = LogicThread.use_trigger_contains(
+        np.array([0.0, 99.0 ** 2, 101.0 ** 2, corner_sq]), 100.0)
+    assert batched.tolist() == [True, True, False, False]
+
+
+def test_a_use_trigger_does_not_fire_from_a_box_corner():
+    """The firing path, not just the prompt.
+
+    A player inside the broad-phase box but outside the authored sphere may be
+    shown no prompt and must also not be able to activate the trigger -- the
+    two share one predicate precisely so they cannot disagree.
+    """
+    radius = 100.0
+    logic = _logic(player_pos=(80.0, 0.0, 80.0))      # |d| = 113 > 100
+    _use_trigger(logic, radius=radius)
+    logic.player.angle = math.pi + math.pi / 4        # facing the origin
+
+    _press_use(logic)
+    assert logic._events == [], "fired from outside the authored radius"
+
+    logic.player.pos = glm.vec3(60.0, 0.0, 60.0)      # |d| = 85 < 100
+    _press_use(logic)
+    assert ('enter', 'player') in logic._events
+
+
+def test_the_prompt_and_the_firing_test_agree_at_the_boundary():
+    """One contract, so what is offered is exactly what can be used."""
+    radius = 100.0
+    for distance, expected in ((85.0, True), (113.0, False)):
+        offset = distance / math.sqrt(2.0)
+        logic = _logic(player_pos=(offset, 0.0, offset))
+        _use_trigger(logic, radius=radius)
+        logic.player.angle = math.pi + math.pi / 4
+
+        logic._handle_triggers(False, 1.0 / 60.0)
+        prompted = logic.current_hud_message == "[E] Activate"
+
+        _press_use(logic)
+        fired = ('enter', 'player') in logic._events
+
+        assert prompted is expected, "prompt disagreed at |d|=%s" % distance
+        assert fired is expected, "firing disagreed at |d|=%s" % distance
+        assert prompted == fired
