@@ -667,9 +667,9 @@
         },
         {
             "pos": [
-                -92.0,
+                -96.0,
                 -128.0,
-                -136.0
+                -144.0
             ],
             "size": [
                 584.0,
@@ -686,7 +686,10 @@
                 "down": "default.png"
             },
             "hidden": false,
-            "id": "bdbc2839-9b06-42d4-b21d-1da60163fcf3"
+            "id": "bdbc2839-9b06-42d4-b21d-1da60163fcf3",
+            "trigger_filters": [
+                "player"
+            ]
         },
         {
             "pos": [
@@ -2301,6 +2304,45 @@
                     "fire_once": false
                 }
             ]
+        },
+        {
+            "pos": [
+                -128.0,
+                0,
+                -56.0
+            ],
+            "size": [
+                160.0,
+                128,
+                144.0
+            ],
+            "textures": {
+                "north": "trigger.jpg",
+                "south": "trigger.jpg",
+                "east": "trigger.jpg",
+                "west": "trigger.jpg",
+                "top": "trigger.jpg",
+                "down": "default.png",
+                "bottom": "trigger.jpg"
+            },
+            "trigger_filters": [
+                "monsters"
+            ],
+            "id": "6b519e8f-88b9-4e43-ba47-6ff925ad4c30",
+            "is_trigger": true,
+            "trigger_type": "Once",
+            "show_aabb_bounds": false,
+            "io_connections": [
+                {
+                    "output": "OnTrigger",
+                    "target": "Light_00",
+                    "input": "Toggle",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false,
+                    "target_id": "4744495e-5f75-45f5-93c7-870ea49b6fb9"
+                }
+            ]
         }
     ],
     "things": [
@@ -2326,7 +2368,7 @@
                     255,
                     255
                 ],
-                "state": "on",
+                "state": "off",
                 "show_radius": false,
                 "casts_shadows": false,
                 "id": "4744495e-5f75-45f5-93c7-870ea49b6fb9",
@@ -2335,7 +2377,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2350,7 +2393,8 @@
                 "type": "playerstart",
                 "name": "PlayerStart_1",
                 "angle": 0.0,
-                "id": "86adcd90-887a-4dec-a869-0bcff0fd94cc"
+                "id": "86adcd90-887a-4dec-a869-0bcff0fd94cc",
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2380,7 +2424,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2410,7 +2455,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2440,7 +2486,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2470,7 +2517,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2500,7 +2548,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2530,7 +2579,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2560,7 +2610,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2577,12 +2628,13 @@
                 "item_type": "gun1",
                 "value": 25,
                 "activation": "walk_over",
-                "collected": false,
+                "collected": true,
                 "respawns": false,
                 "respawn_time": 20.0,
                 "key_name": "blue_key",
                 "custom_sprite": "assets/sprites/gun1.png",
-                "id": "bf40606e-a530-4a0c-9d96-b532638bbb05"
+                "id": "bf40606e-a530-4a0c-9d96-b532638bbb05",
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2612,7 +2664,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2632,16 +2685,17 @@
                 "fade_time": 0.5,
                 "show_radius": false,
                 "radius": 128.0,
-                "usable": false
+                "usable": false,
+                "io_enabled": true
             },
             "io_connections": []
         },
         {
             "type": "monster",
             "pos": [
-                695.8739013671875,
-                160.0,
-                -11.180965423583984
+                254.96835327148438,
+                32.0,
+                340.61798095703125
             ],
             "properties": {
                 "type": "monster",
@@ -2662,7 +2716,7 @@
                 "patrol_target": "PathNode_2",
                 "patrol_mode": "loop",
                 "variant": "variant1",
-                "dead": false
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2682,7 +2736,8 @@
                 "affects_type": "both",
                 "next_node": "PathNode_3",
                 "wait_time": 0.0,
-                "speed": 1.0
+                "speed": 1.0,
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2702,7 +2757,8 @@
                 "affects_type": "both",
                 "next_node": "PathNode_1",
                 "wait_time": 0.0,
-                "speed": 1.0
+                "speed": 1.0,
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2722,7 +2778,8 @@
                 "affects_type": "both",
                 "next_node": "PathNode_4",
                 "wait_time": 0.0,
-                "speed": 1.0
+                "speed": 1.0,
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2742,7 +2799,8 @@
                 "affects_type": "both",
                 "next_node": "PathNode_5",
                 "wait_time": 0.0,
-                "speed": 1.0
+                "speed": 1.0,
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2762,9 +2820,11 @@
                 "affects_type": "both",
                 "next_node": "",
                 "wait_time": 0.0,
-                "speed": 1.0
+                "speed": 1.0,
+                "io_enabled": true
             },
             "io_connections": []
         }
-    ]
+    ],
+    "created": "2026-09-21T04:31:56"
 }

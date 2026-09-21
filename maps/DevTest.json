@@ -34,7 +34,10 @@
             "water_wave_enabled": true,
             "water_wave_height": 0.6,
             "water_plane": false,
-            "hidden": false
+            "hidden": false,
+            "trigger_filters": [
+                "player"
+            ]
         },
         {
             "pos": [
@@ -187,7 +190,9 @@
                     1
                 ],
                 "id": "58eae7f7-9a62-413b-b422-b30f802b282f",
-                "io_enabled": true
+                "io_enabled": true,
+                "collision_shape": "auto",
+                "no_collision": true
             },
             "io_connections": []
         },
@@ -276,7 +281,9 @@
                     0.0,
                     0.0
                 ],
-                "disabled": false
+                "disabled": false,
+                "collision_shape": "auto",
+                "render_mode": "model"
             },
             "io_connections": []
         }
