@@ -122,3 +122,49 @@ def test_physics_prop_is_pushable_by_player():
 
     assert prop.pos[0] > 0.0
     assert session.moving[id(prop)]['velocity_x'] > 0.0
+
+
+def test_prop_exposes_mass_and_collision_shape_defaults():
+    prop = Prop()
+    assert prop.properties['mass'] == 1.0
+    assert prop.properties['no_collision'] is True
+    assert prop.properties['physics_enabled'] is False
+    assert prop.properties['collision_shape'] == 'auto'
+
+
+def test_aabb_collision_shape_skips_mesh_collision():
+    from types import SimpleNamespace
+    from engine.logic_thread import LogicThread
+
+    class Builder:
+        model_collision_enabled = True
+
+        def __init__(self):
+            self.things = [
+                SimpleNamespace(
+                    pos=[10.0, 20.0, 30.0],
+                    properties={
+                        'type': 'prop',
+                        'model_path': 'Barrel7.obj',
+                        'scale': [2.0, 2.0, 2.0],
+                        'rotation': [0.0, 0.0, 0.0],
+                        'collision_shape': 'aabb',
+                        'collision_size': [0.0, 0.0, 0.0],
+                        'no_collision': False,
+                        'physics_enabled': False,
+                    },
+                )
+            ]
+
+        def _compute_model_bounds(self, model_path):
+            assert model_path == 'Barrel7.obj'
+            return ([-5.0, 0.0, -3.0], [5.0, 10.0, 3.0])
+
+        def _compute_model_collision_mesh(self, *args):
+            raise AssertionError("AABB mode must not build mesh collision")
+
+    brushes = LogicThread._build_model_collision_brushes(Builder())
+    assert len(brushes) == 1
+    assert brushes[0]['_collision_mode'] == 'aabb'
+    assert brushes[0]['size'] == [20.0, 20.0, 12.0]
+    assert brushes[0]['pos'] == [10.0, 30.0, 30.0]
