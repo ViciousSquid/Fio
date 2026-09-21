@@ -145,6 +145,10 @@ class LogicThread(threading.Thread):
     TICK_RATE = 60
     TICK_DURATION = 1.0 / TICK_RATE
 
+    # Trigger polling is scheduled at the fastest supported interval, while
+    # each trigger independently decides when its next sample is due.
+    TRIGGER_POLL_TICK = 0.25
+
     # Seconds between repeating wade footstep sounds while walking in water
     WATERWALK_INTERVAL = 0.45
 
@@ -264,22 +268,27 @@ class LogicThread(threading.Thread):
         # Trigger state
         self.fired_once_triggers: set = set()
         # Active occupants keyed by trigger id, then (entity type, entity id).
-        # One unified contact set lets the 1 Hz trigger poll diff the complete
-        # trigger/entity broad-phase result and emit I/O only for changed state.
+        # Each trigger is sampled at its own configured interval; unchanged
+        # contacts are retained between that trigger's polls.
         self._trigger_contacts: Dict[int, set] = {}
         # Backward-compatible mirrors for code/tests that inspect player-only
         # or non-player trigger state directly.
         self.player_in_triggers: set = set()
         self._nonplayer_trigger_contacts: Dict[int, set] = {}
-        # Trigger detection is deliberately sampled at 1 Hz. The logic thread
-        # never scans trigger occupancy at its 60 Hz tick rate.
+        # Scheduler accumulator: the broad-phase never runs at the 60 Hz logic
+        # rate. It wakes at the fastest supported trigger interval and only
+        # polls triggers whose individual interval has elapsed.
         self._trigger_poll_elapsed = 0.0
-        # Use-key edges are latched until the next trigger poll so a brief key
-        # press cannot be lost between 1 Hz samples.
-        self._trigger_use_pending = False
-        # Cached use prompt is published every frame without doing trigger
-        # detection; the actual trigger query remains strictly 1 Hz.
+        self._trigger_poll_elapsed_by_bid: Dict[int, float] = {}
+        # Each use-key press gets a generation number. Every trigger consumes
+        # each generation independently, so a fast trigger cannot steal an E
+        # press from a slower use trigger.
+        self._trigger_use_generation = 0
+        self._trigger_use_seen: Dict[int, int] = {}
+        # Cached use prompts are published every frame without re-running the
+        # trigger broad-phase.
         self._trigger_use_prompt = ""
+        self._trigger_use_prompts: Dict[int, str] = {}
 
         # Logic Gate State
         self.gate_inputs = {}
@@ -1041,8 +1050,11 @@ class LogicThread(threading.Thread):
             self._trigger_contacts.clear()
             self._nonplayer_trigger_contacts.clear()
             self._trigger_poll_elapsed = 0.0
-            self._trigger_use_pending = False
+            self._trigger_poll_elapsed_by_bid.clear()
+            self._trigger_use_generation = 0
+            self._trigger_use_seen.clear()
             self._trigger_use_prompt = ""
+            self._trigger_use_prompts.clear()
             self.collected_pickups.clear()
             self.collected_keys.clear()
             self.respawn_timers.clear()
@@ -1161,8 +1173,11 @@ class LogicThread(threading.Thread):
             self._trigger_contacts.clear()
             self._nonplayer_trigger_contacts.clear()
             self._trigger_poll_elapsed = 0.0
-            self._trigger_use_pending = False
+            self._trigger_poll_elapsed_by_bid.clear()
+            self._trigger_use_generation = 0
+            self._trigger_use_seen.clear()
             self._trigger_use_prompt = ""
+            self._trigger_use_prompts.clear()
             self.fired_once_triggers.clear()
             self.collected_pickups.clear()
             self.collected_keys.clear()
@@ -2239,32 +2254,51 @@ class LogicThread(threading.Thread):
             if str(name).strip().lower() in ('player', 'props', 'monsters')
         }
 
-    def _poll_triggers(self, use_key_pressed=False):
-        """Run the complete trigger broad-phase once per second.
+    def _trigger_poll_interval(self, brush):
+        """Return a valid per-trigger polling interval in seconds."""
+        try:
+            value = float(brush.get('trigger_poll_interval', 1.0))
+        except (TypeError, ValueError):
+            return 1.0
 
-        Pipeline:
-            1 Hz trigger tick
-                -> batch all trigger AABBs
-                -> one NumPy/vectorised entity × trigger broad-phase
-                -> identify overlapping entity IDs/types
-                -> diff against the previous contact state
-                -> only changed contacts generate trigger I/O/events
+        allowed = (1.0, 0.5, 0.25)
+        return min(allowed, key=lambda interval: abs(interval - value))
 
-        The Python work around the NumPy operation is limited to assembling
-        compact 1 Hz snapshots and dispatching the sparse state transitions.
+    def _poll_triggers(self, use_key_pressed=False, trigger_ids=None):
+        """Run one batched trigger poll for the triggers that are due.
+
+        The scheduler wakes every 0.25 s, but only triggers whose configured
+        polling interval has elapsed are included in the NumPy broad-phase.
+        With the default 1.0 s setting this preserves the old 1 Hz workload.
         """
         if not self.player:
             return
 
-        self._trigger_use_prompt = ""
+        if use_key_pressed:
+            self._trigger_use_generation += 1
 
-        # ------------------------------------------------------------------
-        # Snapshot ALL trigger AABBs into one matrix.
-        # Use triggers are represented by their configured use-radius AABB;
-        # the later facing test remains a player-only activation rule.
-        # ------------------------------------------------------------------
+        if trigger_ids is None:
+            trigger_ids = {
+                bid for bid, _ in self._trigger_brushes
+            }
+        else:
+            trigger_ids = set(trigger_ids)
+
+        if not trigger_ids:
+            return
+
+        # A due trigger gets a fresh use-prompt result on this poll.
+        for bid in trigger_ids:
+            self._trigger_use_prompts.pop(bid, None)
+
+        # Snapshot the trigger AABBs due for this poll.
         trigger_entries = []
+        polled_ids = set()
         for bid, brush in self._trigger_brushes:
+            if bid not in trigger_ids:
+                continue
+
+            polled_ids.add(bid)
             if brush.get('disabled', False):
                 continue
 
@@ -2290,18 +2324,39 @@ class LogicThread(threading.Thread):
                 (4 if 'monsters' in filters else 0)
             )
             if filter_mask:
-                trigger_entries.append((bid, brush, bounds, filter_mask, activation))
+                trigger_entries.append(
+                    (bid, brush, bounds, filter_mask, activation)
+                )
+
+        # Preserve contacts for triggers that were not due. Replace only the
+        # state belonging to triggers sampled on this pass.
+        new_contacts = dict(self._trigger_contacts)
+        for bid in polled_ids:
+            new_contacts.pop(bid, None)
 
         if not trigger_entries:
-            self._trigger_contacts = {}
-            self.player_in_triggers = set()
-            self._nonplayer_trigger_contacts = {}
+            self._trigger_contacts = new_contacts
+            self.player_in_triggers = {
+                bid for bid, contacts in new_contacts.items()
+                if any(entity_type == 'player' for entity_type, _ in contacts)
+            }
+            self._nonplayer_trigger_contacts = {
+                bid: {
+                    contact for contact in contacts
+                    if contact[0] != 'player'
+                }
+                for bid, contacts in new_contacts.items()
+                if any(contact[0] != 'player' for contact in contacts)
+            }
+            self._trigger_use_prompt = next(
+                (
+                    self._trigger_use_prompts[bid]
+                    for bid, _ in self._trigger_brushes
+                    if self._trigger_use_prompts.get(bid)
+                ),
+                "",
+            )
             return
-
-        trigger_bounds = np.asarray(
-            [entry[2] for entry in trigger_entries],
-            dtype=np.float32,
-        )
 
         # ------------------------------------------------------------------
         # Snapshot ALL eligible entities into one compact array.
@@ -2330,10 +2385,13 @@ class LogicThread(threading.Thread):
         entity_type_mask = np.asarray(entity_types, dtype=np.uint8)
 
         # ------------------------------------------------------------------
-        # ONE vectorised broad-phase:
-        # entity count × trigger count, then apply each trigger's filter mask.
+        # ONE vectorised broad-phase over only the trigger subset that is due.
         # No Python entity × trigger nested loop.
         # ------------------------------------------------------------------
+        trigger_bounds = np.asarray(
+            [entry[2] for entry in trigger_entries],
+            dtype=np.float32,
+        )
         inside = (
             (positions[:, None, 0] >= trigger_bounds[None, :, 0]) &
             (positions[:, None, 0] <= trigger_bounds[None, :, 3]) &
@@ -2354,7 +2412,6 @@ class LogicThread(threading.Thread):
         # Sparse result: only actual overlaps are materialised from NumPy.
         entity_indices, trigger_indices = np.nonzero(inside)
 
-        new_contacts: Dict[int, set] = {}
         for entity_index, trigger_index in zip(entity_indices, trigger_indices):
             entry = trigger_entries[int(trigger_index)]
             bid = entry[0]
@@ -2374,10 +2431,7 @@ class LogicThread(threading.Thread):
         # Only changed contacts generate trigger enter/exit I/O.
         # Unchanged occupancy produces no I/O work.
         # ------------------------------------------------------------------
-        all_trigger_ids = set(old_contacts)
-        all_trigger_ids.update(new_contacts)
-
-        for bid in all_trigger_ids:
+        for bid in polled_ids:
             old = old_contacts.get(bid, set())
             new = new_contacts.get(bid, set())
             entered = new - old
@@ -2433,7 +2487,7 @@ class LogicThread(threading.Thread):
 
         self._trigger_contacts = new_contacts
 
-        # Maintain the legacy mirrors from the same single broad-phase result.
+        # Maintain the legacy mirrors from the same sampled contact state.
         self.player_in_triggers = {
             bid for bid, contacts in new_contacts.items()
             if any(entity_type == 'player' for entity_type, _ in contacts)
@@ -2449,53 +2503,68 @@ class LogicThread(threading.Thread):
 
         # ------------------------------------------------------------------
         # Use triggers: broad-phase already identified candidate player
-        # contacts. Facing and the latched use-key edge are the narrow-phase.
+        # contacts. Facing and the queued use-key generation are the
+        # narrow-phase.
         # ------------------------------------------------------------------
-        if use_key_pressed:
-            p_forward = np.asarray(
-                [math.sin(self.player.angle), 0.0, math.cos(self.player.angle)],
+        for trigger_index, entry in enumerate(trigger_entries):
+            bid, brush, bounds, _, activation = entry
+            if activation != 'use':
+                continue
+
+            generation = self._trigger_use_generation
+            last_seen = self._trigger_use_seen.get(bid, generation)
+            use_edge = last_seen < generation
+            self._trigger_use_seen[bid] = generation
+
+            if not inside[0, trigger_index]:
+                continue
+            if not use_edge:
+                continue
+
+            center = np.asarray(
+                brush.get('pos', (0.0, 0.0, 0.0)),
                 dtype=np.float32,
             )
-            player_index = 0
-
-            for trigger_index, entry in enumerate(trigger_entries):
-                bid, brush, bounds, _, activation = entry
-                if activation != 'use':
-                    continue
-                if not (inside[player_index, trigger_index]):
-                    continue
-
-                center = np.asarray(brush.get('pos', (0.0, 0.0, 0.0)), dtype=np.float32)
-                offset = center - positions[player_index]
-                distance_sq = float(np.dot(offset, offset))
-                if distance_sq > 1.0e-8:
-                    to_trigger = offset / math.sqrt(distance_sq)
-                    if float(np.dot(p_forward, to_trigger)) <= 0.5:
-                        continue
-
-                trigger_type = brush.get('trigger_type', 'multiple').lower()
-                if trigger_type == 'once' and bid in self.fired_once_triggers:
-                    continue
-
-                self._on_trigger_enter(
-                    brush,
-                    bid,
-                    activator_type='player',
-                    activator_entity=self.player,
+            offset = center - positions[0]
+            distance_sq = float(np.dot(offset, offset))
+            if distance_sq > 1.0e-8:
+                to_trigger = offset / math.sqrt(distance_sq)
+                p_forward = np.asarray(
+                    [math.sin(self.player.angle), 0.0, math.cos(self.player.angle)],
+                    dtype=np.float32,
                 )
+                if float(np.dot(p_forward, to_trigger)) <= 0.5:
+                    continue
+
+            trigger_type = brush.get('trigger_type', 'multiple').lower()
+            if trigger_type == 'once' and bid in self.fired_once_triggers:
+                continue
+
+            self._on_trigger_enter(
+                brush,
+                bid,
+                activator_type='player',
+                activator_entity=self.player,
+            )
 
         # ------------------------------------------------------------------
-        # Persistent hurt triggers are evaluated only when the player remains
-        # in the sampled contact set, never on the 60 Hz logic path.
+        # Persistent hurt triggers are evaluated only for triggers sampled on
+        # this pass, never on the 60 Hz logic path.
         # ------------------------------------------------------------------
-        for bid in self.player_in_triggers:
+        for bid in polled_ids:
+            if bid not in self.player_in_triggers:
+                continue
             brush = self._trigger_brush_by_bid.get(bid)
             if (
                 brush
                 and brush.get('trigger_action') == 'hurt'
                 and brush.get('trigger_activation', 'touch').lower() != 'use'
             ):
-                self._process_hurt_trigger(brush, bid)
+                self._process_hurt_trigger(
+                    brush,
+                    bid,
+                    self._trigger_poll_interval(brush),
+                )
 
         # Use prompts are generated from the same broad-phase candidate set.
         for trigger_index, entry in enumerate(trigger_entries):
@@ -2505,7 +2574,10 @@ class LogicThread(threading.Thread):
             if not inside[0, trigger_index]:
                 continue
 
-            center = np.asarray(brush.get('pos', (0.0, 0.0, 0.0)), dtype=np.float32)
+            center = np.asarray(
+                brush.get('pos', (0.0, 0.0, 0.0)),
+                dtype=np.float32,
+            )
             offset = center - positions[0]
             distance_sq = float(np.dot(offset, offset))
             if distance_sq > 1.0e-8:
@@ -2518,23 +2590,46 @@ class LogicThread(threading.Thread):
                     continue
 
             use_label = brush.get('use_label', '') or 'Activate'
-            self._trigger_use_prompt = f"[E] {use_label}"
-            break
+            self._trigger_use_prompts[bid] = f"[E] {use_label}"
+
+        self._trigger_use_prompt = next(
+            (
+                self._trigger_use_prompts[bid]
+                for bid, _ in self._trigger_brushes
+                if self._trigger_use_prompts.get(bid)
+            ),
+            "",
+        )
 
     def _handle_triggers(self, use_key_pressed: bool, delta=None):
-        """Accumulate trigger time; actual trigger detection is strictly 1 Hz."""
-        self._trigger_use_pending = self._trigger_use_pending or bool(use_key_pressed)
+        """Schedule trigger polls without scanning occupancy at 60 Hz."""
+        if use_key_pressed:
+            self._trigger_use_generation += 1
 
-        # Republish the last 1 Hz trigger prompt without re-scanning triggers.
+        # Republish the last sampled trigger prompt without re-scanning triggers.
         self.current_hud_message = self._trigger_use_prompt
 
         step = float(delta) if delta is not None else float(self.TICK_DURATION)
         self._trigger_poll_elapsed += max(0.0, step)
-        if self._trigger_poll_elapsed >= 1.0:
-            self._trigger_poll_elapsed %= 1.0
-            use_pending = self._trigger_use_pending
-            self._trigger_use_pending = False
-            self._poll_triggers(use_key_pressed=use_pending)
+
+        scheduler_tick = self.TRIGGER_POLL_TICK
+        while self._trigger_poll_elapsed >= scheduler_tick:
+            self._trigger_poll_elapsed -= scheduler_tick
+
+            due_ids = set()
+            for bid, brush in self._trigger_brushes:
+                elapsed = (
+                    self._trigger_poll_elapsed_by_bid.get(bid, 0.0)
+                    + scheduler_tick
+                )
+                interval = self._trigger_poll_interval(brush)
+                if elapsed + 1.0e-9 >= interval:
+                    due_ids.add(bid)
+                    elapsed %= interval
+                self._trigger_poll_elapsed_by_bid[bid] = elapsed
+
+            if due_ids:
+                self._poll_triggers(trigger_ids=due_ids)
 
     def _apply_player_damage(self, damage):
         with self._player_damage_lock:
@@ -2634,9 +2729,9 @@ class LogicThread(threading.Thread):
             activator_type=activator_type,
         )
 
-    def _process_hurt_trigger(self, brush: dict, trigger_id: int):
+    def _process_hurt_trigger(self, brush: dict, trigger_id: int, poll_interval=1.0):
         if trigger_id in self.hurt_trigger_timers:
-            self.hurt_trigger_timers[trigger_id] -= 1.0
+            self.hurt_trigger_timers[trigger_id] -= float(poll_interval)
             if self.hurt_trigger_timers[trigger_id] <= 0:
                 damage = brush.get('damage', 10)
                 self._apply_player_damage(damage)
