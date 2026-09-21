@@ -897,8 +897,12 @@ class Prop(Model):
         self.properties.setdefault('sprite_size', [32.0, 32.0])
         self.properties.setdefault('mass', 1.0)
         self.properties.setdefault('collision_size', [0.0, 0.0, 0.0])
-        self.properties.setdefault('no_collision', True)
         self.properties.setdefault('physics_enabled', False)
+        # Physics is the single authored switch for a Prop. Keep the legacy
+        # no_collision field synchronized for model-collision code and old maps.
+        self.properties['no_collision'] = not bool(
+            self.properties.get('physics_enabled', False)
+        )
         self.properties.setdefault('gravity', True)
         self.properties.setdefault('friction', 0.55)
         self.properties.setdefault('linear_damping', 0.08)
