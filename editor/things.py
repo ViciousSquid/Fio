@@ -879,7 +879,6 @@ class Prop(Model):
         'no_collision',
         'physics_enabled',
         'gravity',
-        'friction',
         'linear_damping',
         'angular_damping',
         'pickup_enabled',
