@@ -363,6 +363,7 @@ class LogicThread(threading.Thread):
         self._id_cache = {}
         self._trigger_brushes = []
         self._trigger_brush_by_bid = {}
+        self._use_trigger_entries = []
         self._pickup_things = []
         self._prop_things = []
         self._prop_by_id = {}
@@ -466,6 +467,7 @@ class LogicThread(threading.Thread):
             (b.get('id') or i, b) for i, b in enumerate(self.brushes) if b.get('is_trigger')
         ]
         self._trigger_brush_by_bid = dict(self._trigger_brushes)
+        self._refresh_use_triggers()
 
         # PERF: precomputed thing lists for _handle_interactions / _handle_pickups
         self._pickup_things = [t for t in self.things if Pickup and isinstance(t, Pickup)]
@@ -2246,9 +2248,94 @@ class LogicThread(threading.Thread):
         # per trigger, so a fast trigger cannot steal a slower one's press.
         self._trigger_use_generation = 0
         fresh('_trigger_use_seen', dict)
-        # Cached prompts republished every frame without a broad-phase.
+        # Evaluated per tick by _sample_use_prompt; kept as an attribute only
+        # so the render state and tests can read the frame's current prompt.
         self._trigger_use_prompt = ""
-        fresh('_trigger_use_prompts', dict)
+        self._refresh_use_triggers()
+
+    def _refresh_use_triggers(self):
+        """The use-activated subset of the trigger list, in trigger order.
+
+        Kept apart because the prompt for a use trigger is evaluated every
+        tick while occupancy for everything else stays on the poll scheduler.
+        Refreshed wherever the trigger list is rebuilt and again on each poll,
+        so an activation mode changed at runtime is picked up.
+        """
+        # Tolerates being called before the trigger list exists: state reset
+        # runs during construction, ahead of the first cache build.
+        self._use_trigger_entries = [
+            (bid, brush) for bid, brush in getattr(self, '_trigger_brushes', ())
+            if str(brush.get('trigger_activation', 'touch')).lower() == 'use'
+        ]
+
+    def _use_prompt_candidates(self):
+        """(bid, brush, centre, radius) for every use trigger a prompt may name."""
+        for bid, brush in self._use_trigger_entries:
+            if brush.get('disabled', False):
+                continue
+            if 'player' not in self._trigger_filters(brush):
+                continue
+            # A spent 'once' trigger does nothing, so it must not keep
+            # advertising itself -- 2.4.2 suppressed the prompt for exactly
+            # this case and the rewrite dropped the check.
+            if (str(brush.get('trigger_type', 'multiple')).lower() == 'once'
+                    and bid in self.fired_once_triggers):
+                continue
+            centre = brush.get('pos', (0.0, 0.0, 0.0))
+            yield (bid, brush,
+                   (float(centre[0]), float(centre[1]), float(centre[2])),
+                   float(brush.get('use_radius', 96.0)))
+
+    def _sample_use_prompt(self):
+        """The '[E] ...' line for the use trigger the player is facing, now.
+
+        Occupancy for touch triggers is the expensive pass -- every entity
+        against every trigger -- and stays on the poll scheduler. This is only
+        the use-activated subset, which is buttons, and it is evaluated against
+        the live player position and angle so the prompt appears and clears the
+        moment the player moves or turns instead of up to a poll interval
+        later. The arithmetic is one batched pass over that subset.
+        """
+        player = self.player
+        if player is None or not self._use_trigger_entries:
+            return ""
+
+        candidates = list(self._use_prompt_candidates())
+        if not candidates:
+            return ""
+
+        centres = np.asarray([c[2] for c in candidates], dtype=np.float64)
+        radii = np.asarray([c[3] for c in candidates], dtype=np.float64)
+        pos = player.pos
+        origin = np.asarray(
+            (float(pos[0]), float(pos[1]), float(pos[2])), dtype=np.float64)
+
+        offset = centres - origin
+        distance_sq = np.einsum('ij,ij->i', offset, offset)
+        # A sphere of use_radius, which is what 2.4.2 tested. The poll's broad
+        # phase uses an axis-aligned box of the same radius because that is
+        # what a batched AABB pass can do cheaply; taking the box as the answer
+        # let a button be used from up to sqrt(3) times its authored radius
+        # diagonally.
+        in_range = distance_sq < radii * radii
+        if not in_range.any():
+            return ""
+
+        forward = np.asarray(
+            (math.sin(player.angle), 0.0, math.cos(player.angle)),
+            dtype=np.float64)
+        # Facing is undefined when the player stands on the trigger centre;
+        # 2.4.2 and the poll path both treat that as facing it.
+        coincident = distance_sq <= 1.0e-8
+        with np.errstate(invalid='ignore', divide='ignore'):
+            facing = (offset @ forward) / np.sqrt(distance_sq)
+        usable = in_range & (coincident | (facing > 0.5))
+        if not usable.any():
+            return ""
+
+        index = int(np.flatnonzero(usable)[0])
+        label = candidates[index][1].get('use_label', '') or 'Activate'
+        return f"[E] {label}"
 
     def _trigger_poll_interval(self, brush):
         """Return a valid per-trigger polling interval in seconds."""
@@ -2283,9 +2370,10 @@ class LogicThread(threading.Thread):
         if not trigger_ids:
             return
 
-        # A due trigger gets a fresh use-prompt result on this poll.
-        for bid in trigger_ids:
-            self._trigger_use_prompts.pop(bid, None)
+        # The use-activated subset can change if a brush's activation mode is
+        # edited mid-session; refreshing it here keeps the per-tick prompt pass
+        # correct without walking the whole trigger list every frame.
+        self._refresh_use_triggers()
 
         # Snapshot the trigger AABBs due for this poll.
         trigger_entries = []
@@ -2344,14 +2432,6 @@ class LogicThread(threading.Thread):
                 for bid, contacts in new_contacts.items()
                 if any(contact[0] != 'player' for contact in contacts)
             }
-            self._trigger_use_prompt = next(
-                (
-                    self._trigger_use_prompts[bid]
-                    for bid, _ in self._trigger_brushes
-                    if self._trigger_use_prompts.get(bid)
-                ),
-                "",
-            )
             return
 
         # ------------------------------------------------------------------
@@ -2523,6 +2603,14 @@ class LogicThread(threading.Thread):
             )
             offset = center - positions[0]
             distance_sq = float(np.dot(offset, offset))
+            # The broad phase bounded this trigger by an axis-aligned box of
+            # use_radius because that is what a batched AABB pass can do; the
+            # authored radius is a sphere, as it was at 2.4.2. Without this the
+            # button fires from up to sqrt(3) times its radius diagonally, and
+            # disagrees with the prompt the player is shown.
+            use_radius = float(brush.get('use_radius', 96.0))
+            if distance_sq >= use_radius * use_radius:
+                continue
             if distance_sq > 1.0e-8:
                 to_trigger = offset / math.sqrt(distance_sq)
                 p_forward = np.asarray(
@@ -2562,58 +2650,29 @@ class LogicThread(threading.Thread):
                     self._trigger_poll_interval(brush),
                 )
 
-        # Use prompts are generated from the same broad-phase candidate set.
-        for trigger_index, entry in enumerate(trigger_entries):
-            bid, brush, bounds, _, activation = entry
-            if activation != 'use':
-                continue
-            if not inside[0, trigger_index]:
-                continue
-
-            center = np.asarray(
-                brush.get('pos', (0.0, 0.0, 0.0)),
-                dtype=np.float32,
-            )
-            offset = center - positions[0]
-            distance_sq = float(np.dot(offset, offset))
-            if distance_sq > 1.0e-8:
-                to_trigger = offset / math.sqrt(distance_sq)
-                forward = np.asarray(
-                    [math.sin(self.player.angle), 0.0, math.cos(self.player.angle)],
-                    dtype=np.float32,
-                )
-                if float(np.dot(forward, to_trigger)) <= 0.5:
-                    continue
-
-            use_label = brush.get('use_label', '') or 'Activate'
-            self._trigger_use_prompts[bid] = f"[E] {use_label}"
-
-        self._trigger_use_prompt = next(
-            (
-                self._trigger_use_prompts[bid]
-                for bid, _ in self._trigger_brushes
-                if self._trigger_use_prompts.get(bid)
-            ),
-            "",
-        )
+        # Use prompts are no longer sampled here: _sample_use_prompt evaluates
+        # them every tick against the live player position and angle, which is
+        # both more responsive and cheaper than carrying per-trigger prompt
+        # state between polls.
 
     def _handle_triggers(self, use_key_pressed: bool, delta=None):
         """Schedule trigger polls without scanning occupancy at 60 Hz."""
         if use_key_pressed:
             self._trigger_use_generation += 1
 
-        # Republish the last sampled trigger prompt without re-scanning triggers.
+        # The use prompt is evaluated here, every tick, against the live player
+        # position and angle -- not republished from the last poll. Sampling it
+        # at the poll cadence made it appear up to a poll interval late and
+        # linger that long after the player turned away.
         #
-        # Only when there is one. _handle_triggers runs after
+        # Set only when there is one. _handle_triggers runs after
         # _handle_interactions and PropSession.tick in _tick_play_mode, so this
         # is the last word on the HUD line before the render state is
-        # published. At 2.4.2 the assignment lived inside the in-range/facing
-        # branch and could only ever *add* a use prompt; assigning
-        # unconditionally wipes the line those earlier stages just set, because
-        # _trigger_use_prompt is "" whenever no use trigger is in range. That
-        # is what silently removed "NEED: <key>", "[E] Open",
-        # "[E] Unlock (...)", "[E] Pick up ...", "[E] Complete Level" and
-        # "[E] Drop" from the HUD.
+        # published; assigning unconditionally wiped the line those earlier
+        # stages had just set, which is what silently removed "NEED: <key>",
+        # "[E] Open", "[E] Unlock (...)", "[E] Pick up ...",
+        # "[E] Complete Level" and "[E] Drop" from the HUD.
+        self._trigger_use_prompt = self._sample_use_prompt()
         if self._trigger_use_prompt:
             self.current_hud_message = self._trigger_use_prompt
 

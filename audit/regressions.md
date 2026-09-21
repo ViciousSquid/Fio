@@ -58,14 +58,35 @@ Consequences at the 1 Hz default: the prompt can appear up to a second after
 the player is in position, and linger up to a second after they walk away or
 turn around. At 2.4.2 both were exact, every tick.
 
-*Not fixed here.* Restoring per-frame responsiveness means re-introducing
-per-tick work for use triggers specifically (they are few, and the test is a
-sphere check plus a dot product, so a per-tick pass over just the
-use-activated subset would be cheap). That is a design decision about where to
-spend the frame, and it belongs to the maintainer, not to a regression repair.
-**Recommended fix:** precompute the use-activated trigger list at build time
-and evaluate only that list per tick, leaving the expensive
-all-entities × all-triggers occupancy broad-phase on the 1 Hz scheduler.
+**FIXED.** The polling architecture is kept for what it was built for and the
+prompt is taken off it.
+
+`_refresh_use_triggers` maintains the use-activated subset of the trigger list
+(rebuilt wherever the trigger list is, and again on each poll so an activation
+mode edited mid-session is picked up). `_sample_use_prompt` evaluates *only*
+that subset every tick, batched, against the live player position and angle.
+The expensive pass -- every entity against every trigger -- stays exactly where
+the rewrite put it.
+
+Cost scales with the number of **use** triggers, not the trigger count:
+
+| use triggers | touch triggers | per tick | ms/s @60Hz |
+|---|---|---|---|
+| 2 | 50 | 0.025 ms | 1.5 |
+| 10 | 200 | 0.039 ms | 2.3 |
+| 50 | 500 | 0.088 ms | 5.3 |
+| 200 | 1000 | 0.284 ms | 17.0 |
+
+A realistic level pays about 1.5 ms per second of play for a prompt that is
+now exact rather than up to a second stale in both directions.
+
+The per-trigger prompt dictionary the poll used to carry between samples is
+gone entirely; the prompt is derived, not stored.
+
+*Tests.* `test_use_prompt_appears_and_clears_within_one_tick`,
+`test_use_prompt_clears_when_the_player_turns_away`,
+`test_use_trigger_prompt_still_wins_the_hud_line`. Verified by mutation:
+removing the per-tick call fails 5 of the module's tests.
 
 ---
 
@@ -275,3 +296,51 @@ Verified by running the same checks against `origin/2.4.2.1709_Latest`:
 * `plugins/tidy/tests/test_smoke.py::test_plugin_loads_and_registers` failed
   whenever another test loaded the plugins first. Root cause in `conftest.py`;
   see testing.md. Fixed here, since it makes the whole suite order-dependent.
+
+
+---
+
+## REG-09 — S2 — A use trigger fires from ~1.7x its authored radius
+
+*Introduced by:* commit **483 "Vectorize complete trigger broad-phase"**.
+
+At 2.4.2 a use trigger's range was a sphere:
+
+    dist = glm.distance(player_pos, t_pos)
+    if dist < use_radius:
+
+The vectorised broad phase bounds each use trigger by an **axis-aligned box**
+of `±use_radius` — which is the right shape for a batched AABB pass — and the
+narrow phase then checks only the facing dot. The box was left as the answer,
+so a button became usable from up to `sqrt(3) ≈ 1.73` times its authored radius
+along a diagonal, and `use_radius` stopped meaning what a designer authoring it
+would expect.
+
+*Fix.* The box stays as the broad phase; the narrow phase now re-tests the
+sphere, on both the firing path and the prompt path so the two cannot
+disagree. Standard broad/narrow separation, and it restores the 2.4.2 contract
+exactly without giving up the batched pass.
+*Test.* `test_use_radius_is_a_sphere_not_a_box` — a player inside the box but
+outside the sphere (|d| = 113 with radius 100) gets no prompt; moving to
+|d| = 85 does. Verified by mutation.
+
+---
+
+## REG-10 — S3 — A spent 'once' use trigger keeps advertising itself
+
+*Introduced by:* commit **481 / 483** (the prompt loop was rewritten without
+the check).
+
+2.4.2 suppressed the HUD prompt for a `once` trigger that had already fired:
+
+    already_fired = (trigger_type == 'once' and bid in self.fired_once_triggers)
+    if not already_fired:
+        self.current_hud_message = f"[E] {use_label}"
+
+The rewritten prompt loop dropped that, so a spent button went on offering
+`[E] Activate` and did nothing when pressed.
+
+*Fix.* `_use_prompt_candidates` skips a spent `once` trigger, along with
+disabled triggers and any whose filters exclude the player.
+*Test.* `test_a_spent_once_use_trigger_stops_advertising_itself`,
+`test_a_disabled_use_trigger_shows_no_prompt`. Verified by mutation.
