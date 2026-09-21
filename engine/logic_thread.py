@@ -148,6 +148,14 @@ class LogicThread(threading.Thread):
     # Trigger polling is scheduled at the fastest supported interval, while
     # each trigger independently decides when its next sample is due.
     TRIGGER_POLL_TICK = 0.25
+    #: Slack on both trigger-scheduler comparisons. The scheduler accumulates
+    #: arbitrary frame deltas and 1/60 is not exactly representable, so 60
+    #: ticks sum to 0.99999999999999989 rather than 1.0; comparing bare against
+    #: an exact decimal lost one scheduler step per second and let the poll
+    #: cadence drift behind the configured interval. A nanosecond is far below
+    #: any cadence a map can author and comfortably above the accumulated
+    #: representation error of a whole session.
+    TRIGGER_POLL_EPSILON = 1.0e-9
 
     # Seconds between repeating wade footstep sounds while walking in water
     WATERWALK_INTERVAL = 0.45
@@ -2699,7 +2707,7 @@ class LogicThread(threading.Thread):
         scheduler_tick = self.TRIGGER_POLL_TICK
         # Tolerance: 15 x (1/60) sums to 0.2499999..., which would otherwise
         # push every poll one logic tick late (same epsilon as per-trigger).
-        while self._trigger_poll_elapsed + 1.0e-9 >= scheduler_tick:
+        while self._trigger_poll_elapsed + self.TRIGGER_POLL_EPSILON >= scheduler_tick:
             self._trigger_poll_elapsed = max(0.0, self._trigger_poll_elapsed - scheduler_tick)
 
             due_ids = set()
@@ -2709,7 +2717,7 @@ class LogicThread(threading.Thread):
                     + scheduler_tick
                 )
                 interval = self._trigger_poll_interval(brush)
-                if elapsed + 1.0e-9 >= interval:
+                if elapsed + self.TRIGGER_POLL_EPSILON >= interval:
                     due_ids.add(bid)
                     elapsed %= interval
                 self._trigger_poll_elapsed_by_bid[bid] = elapsed

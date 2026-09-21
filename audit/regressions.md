@@ -267,11 +267,15 @@ The benchmark plugin passes `yield_hook=cooperative_yield` into
 believing it works, so the Qt event loop is starved for the whole
 grid-geometry pass of a large generated map.
 
-*Not fixed here.* It is a benchmark-responsiveness bug in developer tooling,
-not a shipped-gameplay regression, and choosing the yield granularity is a
-judgement call. **Recommended fix:** call `yield_hook()` every N cells in
-`generate_brushes_from_grid`'s main loop, matching the
-`index % 64` cadence `EditorState._deserialize_brushes` already uses.
+**FIXED.** `generate_brushes_from_grid` now calls the hook during both O(w*h)
+grid walks, every `YIELD_EVERY_COLUMNS` (8) columns — the same cadence
+`EditorState._deserialize_brushes` uses when loading.
+
+Verified: the hook fires repeatedly across the walk (not once at the start),
+and the generated geometry is byte-identical with and without it, so
+responsiveness costs no determinism.
+*Tests.* `tests/editor/test_procedural_cooperative_yield.py` (5 tests).
+Verified by mutation: making the hook dead again fails two of them.
 
 ---
 
