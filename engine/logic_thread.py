@@ -28,11 +28,13 @@ from .prop_runtime import PropSession
 
 # Import Thing subclasses for type checking
 try:
-    from editor.things import (Speaker, Pickup, Light, Monster as MonsterThing,
-                               PathNode, LogicTimer, PlayerStart, Portal, LevelChanger)
+    from editor.things import (Speaker, Pickup, Prop as PropThing, Light,
+                               Monster as MonsterThing, PathNode, LogicTimer,
+                               PlayerStart, Portal, LevelChanger)
 except ImportError:
     Speaker = None
     Pickup = None
+    PropThing = None
     Light = None
     MonsterThing = None
     PathNode = None
@@ -262,6 +264,10 @@ class LogicThread(threading.Thread):
         # Trigger state
         self.player_in_triggers: set = set()
         self.fired_once_triggers: set = set()
+        # Active occupants keyed by trigger id, then (filter type, entity id).
+        # This lets touch triggers remember separate props/monsters/player
+        # entries and fire again correctly when an entity exits and re-enters.
+        self._trigger_entities_inside: Dict[int, set] = {}
 
         # Logic Gate State
         self.gate_inputs = {}
@@ -357,6 +363,7 @@ class LogicThread(threading.Thread):
         self._trigger_brushes = []
         self._trigger_brush_by_bid = {}
         self._pickup_things = []
+        self._prop_things = []
         self._levelchanger_things = []
         self._monster_things = []
         self._monster_by_id = {}
@@ -460,6 +467,12 @@ class LogicThread(threading.Thread):
 
         # PERF: precomputed thing lists for _handle_interactions / _handle_pickups
         self._pickup_things = [t for t in self.things if Pickup and isinstance(t, Pickup)]
+        # Props use the serialised type contract so the standalone player
+        # fallback and editor Prop class share the same trigger semantics.
+        self._prop_things = [
+            t for t in self.things
+            if getattr(t, 'properties', {}).get('type') == 'prop'
+        ]
         self._levelchanger_things = [t for t in self.things if LevelChanger and isinstance(t, LevelChanger)]
 
         # PERF: precomputed monster list + id lookup, used by MonsterAI so it
@@ -1010,6 +1023,8 @@ class LogicThread(threading.Thread):
             self.notarget = False
             
             # Reset pickup state
+            self.player_in_triggers.clear()
+            self._trigger_entities_inside.clear()
             self.collected_pickups.clear()
             self.collected_keys.clear()
             self.respawn_timers.clear()
@@ -1125,6 +1140,7 @@ class LogicThread(threading.Thread):
         else:
             self._stop_monster_ai()
             self.player_in_triggers.clear()
+            self._trigger_entities_inside.clear()
             self.fired_once_triggers.clear()
             self.collected_pickups.clear()
             self.collected_keys.clear()
@@ -2184,65 +2200,143 @@ class LogicThread(threading.Thread):
     # TRIGGER HANDLING
     # =========================================================================
 
+    @staticmethod
+    def _trigger_filters(brush):
+        """Return the configured trigger detection categories.
+
+        Old maps have no filter property, so the compatibility default is
+        exactly the historical behaviour: player only.
+        """
+        filters = brush.get('trigger_filters', ['player'])
+        if isinstance(filters, str):
+            filters = [filters]
+        if not isinstance(filters, (list, tuple, set)):
+            filters = ['player']
+        return {
+            str(name).strip().lower()
+            for name in filters
+            if str(name).strip().lower() in ('player', 'props', 'monsters')
+        }
+
+    @staticmethod
+    def _trigger_point_inside(brush, entity):
+        pos = getattr(entity, 'pos', None)
+        if pos is None:
+            return False
+        try:
+            b0, b1, b2, b3, b4, b5 = brush_aabb_bounds(brush)
+            return (
+                b0 <= float(pos[0]) <= b3 and
+                b1 <= float(pos[1]) <= b4 and
+                b2 <= float(pos[2]) <= b5
+            )
+        except (TypeError, ValueError, IndexError):
+            return False
+
     def _handle_triggers(self, use_key_pressed: bool):
         if not self.player:
             return
-            
-        player_pos = self.player.pos
-        currently_in = set()
 
-        # PERF: hoist player position to scalars and use the cached float32 AABB
-        # bounds (bit-identical to glm.vec3(pos) +/- size/2) so the per-trigger
-        # containment test allocates no throwaway glm.vec3 every tick.
-        px, py, pz = player_pos.x, player_pos.y, player_pos.z
+        player_pos = self.player.pos
+        current_contacts = {}
+
+        # Touch filtering is deliberately category-based rather than a second
+        # collision system. The trigger volume remains the same AABB; only the
+        # kinds of entities allowed to activate it change.
+        candidates = {
+            'player': (self.player,),
+            'props': tuple(getattr(self, '_prop_things', ())),
+            'monsters': tuple(getattr(self, '_monster_things', ())),
+        }
 
         for bid, brush in self._trigger_brushes:
             if brush.get('disabled', False):
+                # Do not leave stale contact state behind when a trigger is
+                # disabled while something is standing inside it.
+                self._trigger_entities_inside.pop(bid, None)
+                self.player_in_triggers.discard(bid)
                 continue
-            b0, b1, b2, b3, b4, b5 = brush_aabb_bounds(brush)
 
-            inside = (b0 <= px <= b3 and
-                      b1 <= py <= b4 and
-                      b2 <= pz <= b5)
-
+            filters = self._trigger_filters(brush)
             activation = brush.get('trigger_activation', 'touch').lower()
 
             if activation == 'use':
-                # Use-activated: behaves like a button — player faces the trigger
-                # from outside and presses E. No need to be inside the volume.
-                t_pos = glm.vec3(brush['pos'])
-                use_radius = float(brush.get('use_radius', 96.0))
-                dist = glm.distance(player_pos, t_pos)
-                if dist < use_radius:
-                    p_forward = glm.vec3(
-                        math.sin(self.player.angle), 0,
-                        math.cos(self.player.angle))
-                    to_trigger = glm.normalize(t_pos - player_pos)
-                    if glm.dot(p_forward, to_trigger) > 0.5:
-                        trigger_type = brush.get('trigger_type', 'multiple').lower()
-                        already_fired = (trigger_type == 'once'
-                                         and bid in self.fired_once_triggers)
-                        if not already_fired:
-                            use_label = brush.get('use_label', '') or 'Activate'
-                            self.current_hud_message = f"[E] {use_label}"
-                            if use_key_pressed:
-                                self._on_trigger_enter(brush, bid)
-            elif inside:
-                # Touch activation (default behaviour)
-                currently_in.add(bid)
-                if bid not in self.player_in_triggers:
-                    self._on_trigger_enter(brush, bid)
-                else:
-                    if brush.get('trigger_action') == 'hurt':
-                        self._process_hurt_trigger(brush, bid)
-        
-        for bid in self.player_in_triggers:
-            if bid not in currently_in:
+                # Use-activated triggers are player interaction by definition.
+                # The Player filter therefore controls whether E can activate it.
+                if 'player' in filters:
+                    t_pos = glm.vec3(brush['pos'])
+                    use_radius = float(brush.get('use_radius', 96.0))
+                    dist = glm.distance(player_pos, t_pos)
+                    if dist < use_radius:
+                        p_forward = glm.vec3(
+                            math.sin(self.player.angle), 0, math.cos(self.player.angle))
+                        offset = t_pos - player_pos
+                        if glm.length(offset) > 0.0001:
+                            to_trigger = glm.normalize(offset)
+                            if glm.dot(p_forward, to_trigger) > 0.5:
+                                trigger_type = brush.get('trigger_type', 'multiple').lower()
+                                already_fired = (
+                                    trigger_type == 'once'
+                                    and bid in self.fired_once_triggers
+                                )
+                                if not already_fired:
+                                    use_label = brush.get('use_label', '') or 'Activate'
+                                    self.current_hud_message = f"[E] {use_label}"
+                                    if use_key_pressed:
+                                        self._on_trigger_enter(
+                                            brush, bid, activator_type='player'
+                                        )
+                continue
+
+            occupants = set()
+            for filter_name in ('player', 'props', 'monsters'):
+                if filter_name not in filters:
+                    continue
+                for entity in candidates[filter_name]:
+                    if getattr(entity, 'properties', {}).get('disabled', False):
+                        continue
+                    if self._trigger_point_inside(brush, entity):
+                        occupants.add((filter_name, id(entity)))
+
+            if occupants:
+                current_contacts[bid] = occupants
+
+            previous = self._trigger_entities_inside.get(bid, set())
+            entered = occupants - previous
+
+            for filter_name in ('player', 'props', 'monsters'):
+                for contact in entered:
+                    if contact[0] != filter_name:
+                        continue
+                    self._on_trigger_enter(
+                        brush, bid, activator_type=filter_name
+                    )
+
+            # Hurt is meaningful only while the player is a current activator;
+            # props/monsters may still activate ordinary target/I/O triggers.
+            player_contact = ('player', id(self.player)) in occupants
+            if player_contact and brush.get('trigger_action') == 'hurt':
+                player_was_already_inside = (
+                    ('player', id(self.player)) in previous
+                )
+                if player_was_already_inside:
+                    self._process_hurt_trigger(brush, bid)
+
+        # Fire end-touch for every entity that left a multi-filter trigger.
+        for bid, previous in self._trigger_entities_inside.items():
+            current = current_contacts.get(bid, set())
+            for filter_name, entity_id in previous - current:
                 brush = self._trigger_brush_by_bid.get(bid)
                 if brush:
-                    self._on_trigger_exit(brush, bid)
-        
-        self.player_in_triggers = currently_in
+                    self._on_trigger_exit(
+                        brush, bid, activator_type=filter_name
+                    )
+
+        self._trigger_entities_inside = current_contacts
+        self.player_in_triggers = {
+            bid for bid, contacts in current_contacts.items()
+            if ('player', id(self.player)) in contacts
+        }
 
     def _apply_player_damage(self, damage):
         with self._player_damage_lock:
@@ -2258,7 +2352,9 @@ class LogicThread(threading.Thread):
         if became_dead:
             self._plugin_emit("player_death")
 
-    def _on_trigger_enter(self, brush: dict, trigger_id: int):
+    def _on_trigger_enter(
+        self, brush: dict, trigger_id: int, activator_type='player'
+    ):
         trigger_type = brush.get('trigger_type', 'multiple')
         if trigger_type == 'once' and trigger_id in self.fired_once_triggers:
             return
@@ -2280,24 +2376,38 @@ class LogicThread(threading.Thread):
                 debug_log("Warning", "Trigger action 'teleport' used but no target_node set.")
 
         elif action == 'hurt':
-            damage = brush.get('damage', 10)
-            self._apply_player_damage(damage)
-            self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
+            # Only the player has damage/health semantics at present.
+            if activator_type == 'player':
+                damage = brush.get('damage', 10)
+                self._apply_player_damage(damage)
+                self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
 
         elif action == 'target':
             if self.io_manager:
                 self.io_manager.fire_output(brush, 'OnStartTouch')
                 self.io_manager.fire_output(brush, 'OnTrigger')
 
-        self._plugin_emit("trigger_enter", trigger=brush, action=action,
-                          trigger_id=trigger_id)
+        self._plugin_emit(
+            "trigger_enter",
+            trigger=brush,
+            action=action,
+            trigger_id=trigger_id,
+            activator_type=activator_type,
+        )
         if trigger_type == 'once':
             self.fired_once_triggers.add(trigger_id)
 
-    def _on_trigger_exit(self, brush: dict, trigger_id: int):
+    def _on_trigger_exit(
+        self, brush: dict, trigger_id: int, activator_type='player'
+    ):
         if self.io_manager:
             self.io_manager.fire_output(brush, 'OnEndTouch')
-        self._plugin_emit("trigger_exit", trigger=brush, trigger_id=trigger_id)
+        self._plugin_emit(
+            "trigger_exit",
+            trigger=brush,
+            trigger_id=trigger_id,
+            activator_type=activator_type,
+        )
 
     def _process_hurt_trigger(self, brush: dict, trigger_id: int):
         if trigger_id in self.hurt_trigger_timers:

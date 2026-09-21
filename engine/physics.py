@@ -393,6 +393,13 @@ class PhysicsWorld:
     MAX_STEP = np.float32(0.05)
     REST_SPEED = np.float32(1.0)
 
+    # Runtime physics controls. Entity-authored mass/friction/damping remain
+    # intact; these values provide global tuning/debug controls for play mode.
+    DEFAULT_TIME_SCALE = np.float32(1.0)
+    DEFAULT_FRICTION_SCALE = np.float32(1.0)
+    DEFAULT_DAMPING_SCALE = np.float32(1.0)
+    DEFAULT_SLEEP_ENABLED = True
+
     def __init__(self, spatial_grid):
         self.spatial_grid = spatial_grid
         self.bodies = {}
@@ -415,6 +422,13 @@ class PhysicsWorld:
         self._dirty = False
         self._static_cells = {}
         self._static_query_cache = {}
+
+        # Console-adjustable world controls.
+        self.gravity = float(self.GRAVITY)
+        self.time_scale = float(self.DEFAULT_TIME_SCALE)
+        self.friction_scale = float(self.DEFAULT_FRICTION_SCALE)
+        self.damping_scale = float(self.DEFAULT_DAMPING_SCALE)
+        self.sleep_enabled = bool(self.DEFAULT_SLEEP_ENABLED)
 
     def clear(self):
         for body in self.bodies.values():
@@ -582,6 +596,14 @@ class PhysicsWorld:
         body = self.get_body(entity)
         if body is not None:
             body.set_rest_callback(callback)
+
+    def wake_all(self):
+        """Wake every non-kinematic physics body for runtime console tuning."""
+        self._pack()
+        if not self._entities:
+            return
+        active = self._physics_enabled & ~self._kinematic
+        self._awake[active] = True
 
     def _sync_entities(self, indices=None):
         if indices is None:
@@ -792,7 +814,9 @@ class PhysicsWorld:
         if not self._entities:
             return
 
-        dt = np.float32(min(0.05, max(0.0, float(delta) or 1.0 / 60.0)))
+        base_dt = float(delta) or 1.0 / 60.0
+        scale = max(0.0, float(self.time_scale))
+        dt = np.float32(min(0.05, max(0.0, base_dt * scale)))
         active = self._physics_enabled & ~self._kinematic
 
         if player is not None:
@@ -860,15 +884,17 @@ class PhysicsWorld:
         if np.any(moving):
             if np.any(moving & (self._gravity != 0.0)):
                 self._velocity[moving, 1] += (
-                    self._gravity[moving] * self.GRAVITY * dt
+                    self._gravity[moving] * np.float32(self.gravity) * dt
                 )
+
+            damping = self._damping * np.float32(max(0.0, float(self.damping_scale)))
             self._velocity[moving, 1] *= np.maximum(
-                0.0, 1.0 - self._damping[moving] * dt
+                0.0, 1.0 - damping[moving] * dt
             )
 
             horizontal_damp = np.maximum(
                 0.0,
-                1.0 - self._damping * dt,
+                1.0 - damping * dt,
             )
             self._velocity[moving, 0] *= horizontal_damp[moving]
             self._velocity[moving, 2] *= horizontal_damp[moving]
@@ -900,7 +926,11 @@ class PhysicsWorld:
 
                 # Treat friction as a surface coefficient rather than a tiny
                 # per-frame damping term. Apply it only while grounded.
-                friction_accel = self._friction[landed] * np.abs(self.GRAVITY)
+                friction_accel = (
+                    self._friction[landed]
+                    * np.float32(max(0.0, float(self.friction_scale)))
+                    * np.float32(abs(float(self.gravity)))
+                )
                 ground_speed = np.hypot(
                     self._velocity[landed, 0],
                     self._velocity[landed, 2],
@@ -924,7 +954,11 @@ class PhysicsWorld:
                     props['rotation'] = (rotation + angular[i] * dt).tolist()
 
             speed = np.max(np.abs(self._velocity), axis=1)
-            sleeping = moving & (speed < self.REST_SPEED)
+            sleeping = (
+                self.sleep_enabled
+                & moving
+                & (speed < self.REST_SPEED)
+            )
             if np.any(sleeping):
                 self._velocity[sleeping] = 0.0
                 rest_indices = np.flatnonzero(sleeping)

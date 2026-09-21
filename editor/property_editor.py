@@ -721,6 +721,25 @@ class PropertyEditor(QWidget):
             fill(index)
         return index
 
+    def _set_trigger_filter(self, filter_name, checked):
+        """Update one trigger activation filter while preserving filter order."""
+        brush = self.current_object
+        if not isinstance(brush, dict):
+            return
+
+        filters = brush.get('trigger_filters', ['player'])
+        if isinstance(filters, str):
+            filters = [filters]
+        filters = [f for f in filters if f in ('player', 'props', 'monsters')]
+
+        if checked:
+            if filter_name not in filters:
+                filters.append(filter_name)
+        else:
+            filters = [f for f in filters if f != filter_name]
+
+        self.update_object_prop('trigger_filters', filters)
+
     def _create_io_tab_for_brush(self, brush):
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -888,6 +907,8 @@ class PropertyEditor(QWidget):
         return lbl
 
     def _create_trigger_tab(self, brush):
+        brush.setdefault('trigger_filters', ['player'])
+
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -954,6 +975,32 @@ class PropertyEditor(QWidget):
         activation_combo.currentTextChanged.connect(
             _on_activation_changed
         )
+
+        # Detection filters are independent of the trigger action. Any selected
+        # category can activate the trigger when its object enters the volume.
+        filter_group = QGroupBox("Detection Filters")
+        filter_group.setStyleSheet(_Style.group_box("#42A5F5", "#1a2a3d"))
+        filter_layout = QVBoxLayout(filter_group)
+        filter_layout.setSpacing(4)
+        filter_layout.setContentsMargins(8, 8, 8, 8)
+
+        filters = set(brush.get('trigger_filters', ['player']))
+        for filter_name, label, tooltip in (
+            ('player', 'Player', 'Allow the player to activate this trigger'),
+            ('props', 'Props', 'Allow Prop entities to activate this trigger'),
+            ('monsters', 'Monsters', 'Allow Monster entities to activate this trigger'),
+        ):
+            cb = _make_checkbox(
+                label,
+                filter_name in filters,
+                lambda checked, name=filter_name: self._set_trigger_filter(name, checked),
+                _Style.CHECKBOX
+            )
+            cb.setToolTip(tooltip)
+            filter_layout.addWidget(cb)
+            self._widgets[f'trigger_filter_{filter_name}_cb'] = cb
+
+        layout.addWidget(filter_group)
 
         action_combo = _make_combo(
             ['target', 'hurt', 'teleport'],
@@ -3533,6 +3580,7 @@ class PropertyEditor(QWidget):
         self.current_object['is_trigger'] = is_trigger
         if is_trigger:
             self.current_object.setdefault('trigger_type', 'Once')
+            self.current_object.setdefault('trigger_filters', ['player'])
             self.current_object.setdefault('textures', {})
             for face in ['top', 'bottom', 'north', 'south', 'east', 'west']:
                 self.current_object['textures'][face] = 'trigger.jpg'
