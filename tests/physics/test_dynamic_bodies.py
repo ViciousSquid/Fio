@@ -65,6 +65,44 @@ def test_engine_physics_pushes_body_by_player_velocity_and_mass():
     assert world.get_body(light).velocity[0] > world.get_body(heavy).velocity[0]
 
 
+
+def test_engine_physics_does_not_lift_body_onto_overlapping_wall():
+    from engine.physics import SpatialGrid
+
+    grid = SpatialGrid(cell_size=512.0)
+    floor = {
+        'pos': [0.0, -10.0, 0.0],
+        'size': [1000.0, 20.0, 1000.0],
+        'is_trigger': False,
+    }
+    wall = {
+        'pos': [20.0, 15.0, 0.0],
+        'size': [40.0, 30.0, 200.0],
+        'is_trigger': False,
+    }
+    grid.populate([floor, wall])
+
+    world = PhysicsWorld(grid)
+    prop = _prop()
+    prop.pos = [0.0, 20.0, 0.0]
+    body_brush = _brush(prop, (40.0, 40.0, 40.0))
+    world.rebuild([body_brush])
+    world.wake(prop)
+
+    player = SimpleNamespace(
+        pos=Vec(-30.0, 20.0, 0.0),
+        velocity=Vec(120.0, 0.0, 0.0),
+        width=50.0,
+        height=100.0,
+        depth=50.0,
+    )
+    world.step(1.0 / 60.0, player)
+
+    # The wall's top is inside the prop's vertical span, so it is not a floor.
+    # The prop must remain on the actual floor instead of jumping upward.
+    assert abs(prop.pos[1] - 20.0) < 1e-5
+
+
 def test_engine_physics_body_lands_on_floor_and_sleeps():
     grid = Grid()
     world = PhysicsWorld(grid)
