@@ -14,7 +14,7 @@ import copy
 import datetime
 import uuid
 from collections import deque
-from .things import Thing, Model
+from .things import Thing
 from editor.things import update_all_counters_from_entities
 
 # Import I/O system for serialization
@@ -321,22 +321,8 @@ class EditorState:
         """
         self._invalidate_entity_caches()
 
-        # Handle both old and new format
-        version = level_data.get('version', 1)
-
-        if version >= 2:
-            # New format with I/O connections stored separately
-            self.brushes = self._deserialize_brushes(level_data.get('brushes', []), yield_hook=yield_hook)
-        else:
-            # Old format - brushes are plain dicts
-            self.brushes = level_data.get('brushes', [])
-            # Backfill stable IDs for v1 brushes
-            for brush in self.brushes:
-                brush.setdefault('id', str(uuid.uuid4()))
-            # Migrate legacy 'target' property to I/O connections
-            if IO_AVAILABLE:
-                for brush in self.brushes:
-                    self._migrate_legacy_target(brush)
+        self.brushes = self._deserialize_brushes(
+            level_data.get('brushes', []), yield_hook=yield_hook)
 
         self.terrain_data = level_data.get('terrain_data', None)
         # Absent in maps written before this existed; the overview falls back to
@@ -349,41 +335,14 @@ class EditorState:
         if lg:
             self._logic_graph_positions = lg.get('node_positions', {})
 
-        # Let loaded plugins migrate legacy entity records before core Thing
-        # deserialisation. This keeps old map formats out of core entity classes.
-        try:
-            from plugins.manager import load_plugins, get_manager
-            load_plugins()
-            get_manager().migrate_map_data(level_data)
-        except Exception as exc:
-            print(f"[EditorState] plugin map migration failed: {exc}")
-
         # Load things
         things_data = level_data.get('things', [])
         new_things = []
         for index, t_data in enumerate(things_data):
             if yield_hook is not None and index % 25 == 0:
                 yield_hook()
-            thing = None
-            if t_data.get('type') == 'Model':
-                # Legacy fast path: a 'Model' record was written with its
-                # fields as top-level keys. An unexpected key raises TypeError,
-                # which used to abort the whole load -- one malformed record
-                # cost the user every entity after it. Fall through to the
-                # normal resolver instead, which preserves what it cannot
-                # build rather than dropping or raising.
-                model_kwargs = {k: v for k, v in t_data.items() if k != 'type'}
-                try:
-                    thing = Model(**model_kwargs)
-                except Exception as exc:
-                    print(f"[EditorState] legacy Model record could not be "
-                          f"built ({exc}); preserving it unchanged.")
-            if thing is None:
-                thing = Thing.from_dict(t_data)
+            thing = Thing.from_dict(t_data)
             if thing is not None:
-                # Migrate legacy 'target' property
-                if thing.properties.get('target') and IO_AVAILABLE:
-                    self._migrate_legacy_thing_target(thing)
                 new_things.append(thing)
 
         self.things = new_things
@@ -409,56 +368,6 @@ class EditorState:
 
         if save_undo:
             self.save_state()
-
-    def _migrate_legacy_target(self, brush):
-        """Migrate old 'target' property to I/O connection for brushes."""
-        target = brush.get('target', '')
-        if not target:
-            return
-
-        # Determine what output to use
-        if brush.get('is_trigger'):
-            output = 'OnTrigger'
-        elif brush.get('is_mover'):
-            output = 'OnFullyOpen'
-        elif brush.get('is_door'):
-            output = 'OnOpen'
-        else:
-            return
-
-        # Create connection
-        conn = OutputConnection(
-            output_name=output,
-            target_name=target,
-            input_name='Toggle',  # Generic default
-            parameter='',
-            delay=0.0,
-            fire_once=False
-        )
-
-        if '_io_connections' not in brush:
-            brush['_io_connections'] = []
-        brush['_io_connections'].append(conn)
-
-    def _migrate_legacy_thing_target(self, thing):
-        """Migrate old 'target' property to I/O connection for things."""
-        target = thing.properties.get('target', '')
-        if not target:
-            return
-
-        entity_type = thing.properties.get('type', '')
-
-        # Determine output based on type
-        if entity_type == 'logic_gate':
-            output = 'OnTrigger'
-        else:
-            return
-
-        thing.add_output_connection(
-            output_name=output,
-            target_name=target,
-            input_name='Toggle'
-        )
 
     def _selection_identifiers(self):
         """Stable identifiers for the whole selection, for state restoration.
@@ -645,13 +554,9 @@ class EditorState:
         things_data = state.get('things', [])
         new_things = []
         for t_data in things_data:
-            if t_data.get('type') == 'Model':
-                model_kwargs = {k: v for k, v in t_data.items() if k != 'type'}
-                new_things.append(Model(**model_kwargs))
-            else:
-                thing = Thing.from_dict(t_data)
-                if thing:
-                    new_things.append(thing)
+            thing = Thing.from_dict(t_data)
+            if thing is not None:
+                new_things.append(thing)
         self.things = new_things
 
         if 'selection' in state:

@@ -608,27 +608,10 @@ class PluginManager:
                 out.append(plugin)
         return out
 
-    def migrate_map_data(self, map_data) -> dict:
-        """Run every plugin's legacy map migration hook in place."""
-        if not isinstance(map_data, dict):
-            return map_data
-        for plugin in self.plugins + self._builtin_games:
-            if not self._overrides(plugin, "migrate_map_data"):
-                continue
-            try:
-                plugin.migrate_map_data(map_data)
-            except Exception:
-                self._log(
-                    f"migrate_map_data() failed for '{plugin.name}':\n"
-                    f"{traceback.format_exc()}"
-                )
-        return map_data
-
     def required_plugins_for_map(self, map_data) -> List[FioPlugin]:
         """Plugins required by a map's entity types or plugin activation hook."""
         if not isinstance(map_data, dict):
             return []
-        self.migrate_map_data(map_data)
         types = []
         for t in map_data.get("things", []) or []:
             if not isinstance(t, dict):

@@ -177,8 +177,6 @@ def probe_parameter(entity_type: str, io_def) -> str:
     if (entity_type, name) in PROBE_PARAMS:
         return PROBE_PARAMS[(entity_type, name)]
     # The pre-2.4 type token shares LogicState's definitions and its parameters.
-    if entity_type == "logic_keyvalue" and ("logic_state", name) in PROBE_PARAMS:
-        return PROBE_PARAMS[("logic_state", name)]
     if name in PROBE_PARAMS_BY_NAME:
         return PROBE_PARAMS_BY_NAME[name]
     return PROBE_BY_PARAM_TYPE.get(io_def.param_type, "")
@@ -391,10 +389,7 @@ def test_every_registered_type_has_an_instance_the_probe_can_build():
     for entity_type in sorted(IO_REGISTRY):
         if _make_entity(entity_type) is None:
             missing.append(entity_type)
-    # `logic_keyvalue` is the pre-2.4 token for `logic_state`: it shares that
-    # type's definitions and has no instances of its own, because an entity
-    # loaded from an old map reports the current type.
-    assert missing == ["logic_keyvalue"], (
+    assert missing == [], (
         "no instance could be built for: %s" % (missing,))
 
 

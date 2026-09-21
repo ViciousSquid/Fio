@@ -314,25 +314,6 @@ def test_marking_a_brush_static_marks_the_lighting_dirty(state):
 # Legacy maps
 # ---------------------------------------------------------------------------
 
-def test_a_legacy_brush_target_is_migrated_to_a_connection(state):
-    """Old maps wire a trigger to a door with a bare ``target`` name."""
-    state.load_from_data({
-        "version": 1,
-        "brushes": [
-            dict(box_brush("button", is_trigger=True), target="door"),
-            dict(box_brush("door", is_door=True)),
-        ],
-        "things": [],
-    })
-
-    button = state.find_entity_by_name("button")
-    connections = io.get_connections(button)
-    assert connections, (
-        "the legacy 'target' property produced no connection; the trigger "
-        "would do nothing in a map that used to work")
-    assert connections[0].target_name == "door"
-
-
 def test_a_map_with_no_ids_gets_them_backfilled(state):
     state.load_from_data({
         "version": 1,

@@ -137,18 +137,6 @@ def register_io(entity_type: str, inputs: List[IODef], outputs: List[IODef]):
 ABSTRACT_IO: Dict[tuple, str] = {}
 
 
-def register_io_alias(alias: str, entity_type: str):
-    """Make *alias* resolve to the same I/O definitions as *entity_type*.
-
-    Used when an entity is renamed: the old type token keeps answering, so a
-    map saved by an older Fio still shows its inputs and outputs in the editor
-    instead of an empty list.  The two names share one definition object, so
-    they cannot drift apart.
-    """
-    if entity_type in IO_REGISTRY:
-        IO_REGISTRY[alias] = IO_REGISTRY[entity_type]
-
-
 def is_registered_type(entity_type: str) -> bool:
     """Whether Fio has I/O definitions for this entity type at all.
 
@@ -1155,11 +1143,6 @@ def register_default_io():
             IODef('OnCompareFalse','Legacy name for OnFalse (param: the value)'),
         ]
     )
-
-    # Pre-2.4 type token for the same entity: a map saved before the rename
-    # still resolves its inputs and outputs in the editor.
-    register_io_alias('logic_keyvalue', 'logic_state')
-
 
 
 # =============================================================================

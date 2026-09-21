@@ -955,14 +955,6 @@ class FioPlugin:
         """
 
     # -- play lifecycle -----------------------------------------------------
-    def migrate_map_data(self, map_data: dict) -> None:
-        """Migrate legacy map data into the current representation.
-
-        Called before entity instances are built. A plugin may mutate the
-        supplied map dictionary in place; migrations should be idempotent so a
-        host may safely call them more than once.
-        """
-
     def map_uses_plugin(self, map_data: dict) -> bool:
         """Return whether *map_data* needs this plugin to be active.
 

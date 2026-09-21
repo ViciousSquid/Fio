@@ -185,11 +185,6 @@ class PlayerPluginHost:
             return
 
         try:
-            self.manager.migrate_map_data(map_data)
-        except Exception as exc:
-            print(f"[Fio Player] plugin map migration failed: {exc}")
-
-        try:
             self.manager.auto_enable_for_map(map_data)
         except Exception:
             pass

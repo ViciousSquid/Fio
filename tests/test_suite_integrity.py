@@ -110,7 +110,7 @@ CRITICAL_MODULES = {
     "tests/io/test_io_contract.py": 10,
     "tests/renderer/test_light_budget.py": 10,
     "tests/renderer/test_render_cull.py": 10,
-    "tests/persistence/test_legacy_map_compat.py": 4,
+    "tests/persistence/test_unknown_entity_preservation.py": 1,
     "tests/persistence/test_map_round_trip.py": 10,
     "tests/plugins/test_registration_replay.py": 4,
     "tests/editor/test_property_editor_rebuilds.py": 10,

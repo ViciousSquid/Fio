@@ -292,21 +292,13 @@ class Thing:
                     pass
 
         # A subclass may declare `map_type` when its serialised type token
-        # differs from its class name; otherwise the class name is used, so
-        # every existing entity resolves exactly as before.  `legacy_map_types`
-        # lists tokens an *older* Fio wrote for the same entity, so a map saved
-        # before a rename still loads into the renamed class rather than being
-        # dropped with a warning.  Current tokens are matched across every class
-        # first, so a legacy alias can never shadow a live entity type.
+        # differs from its class name; otherwise the class name is used.
         thing = None
         token = thing_type.replace('_', '').lower()
         _load_core_entity_types()
         subclasses = find_subclasses(Thing)
         match = next((c for c in subclasses
                       if token == getattr(c, 'map_type', c.__name__.lower())), None)
-        if match is None:
-            match = next((c for c in subclasses
-                          if token in getattr(c, 'legacy_map_types', ())), None)
         if match is not None:
             thing = match(pos=data.get('pos'), properties=properties)
 
@@ -1720,10 +1712,6 @@ class LogicState(Thing):
 
     #: Type token written to map files.
     map_type = 'logicstate'
-    #: Tokens older Fio versions wrote for this same entity.  Listed so maps
-    #: and saves made before the rename load into this class instead of being
-    #: dropped as an unknown type.
-    legacy_map_types = ('logickeyvalue', 'logickeyvaluestore')
 
     # Class-level registry of persistent stores across level transitions.
     # Keyed by store_name, stores the dict of values. Survives as long as

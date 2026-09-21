@@ -561,25 +561,9 @@ def test_a_store_round_trips_through_a_map_file():
     assert restored.properties["id"] == store.properties["id"]
 
 
-def test_a_store_saved_by_an_older_fio_still_loads():
-    """The pre-2.4 type token resolved to no class at all, so every store
-    placed in a map was dropped on load with a warning."""
+def test_string_values_load_untouched_and_still_work():
     legacy = {
-        "type": "logic_keyvalue",
-        "pos": [0, 0, 0],
-        "properties": {"name": "Store_1", "id": UUID_TEXT,
-                       "store_name": "world", "type": "logic_keyvalue"},
-        "runtime_data": {"stage": "3"},
-    }
-    restored = Thing.from_dict(legacy)
-    assert isinstance(restored, LogicState)
-    assert restored.properties["id"] == UUID_TEXT
-    assert restored.properties["type"] == "logic_state"
-
-
-def test_legacy_string_values_load_untouched_and_still_work():
-    legacy = {
-        "type": "logic_keyvalue",
+        "type": "logic_state",
         "pos": [0, 0, 0],
         "properties": {"name": "Store_1", "store_name": "world"},
         "runtime_data": {"killed": "4", "flag": "true"},
