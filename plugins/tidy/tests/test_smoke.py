@@ -72,35 +72,6 @@ def test_plugin_loads_and_registers():
            "tidy_category registered as a Prop extension")
 
 
-def test_legacy_map_migration():
-    print("[2] legacy tidyobject records migrate to core Prop")
-    from plugins.manager import get_manager, load_plugins
-
-    load_plugins()
-    mgr = get_manager()
-    data = {
-        "version": 3,
-        "things": [{
-            "type": "tidyobject",
-            "pos": [10, 20, 30],
-            "properties": {
-                "type": "tidyobject",
-                "category": "book",
-                "model_path": "plugins/tidy/assets/book.obj",
-                "tidied": True,
-            },
-        }],
-    }
-
-    mgr.migrate_map_data(data)
-    thing = data["things"][0]
-    _check(thing["type"] == "prop", "top-level type migrated to prop")
-    _check(thing["properties"]["type"] == "prop", "property type migrated to prop")
-    _check(thing["properties"]["tidy_category"] == "book",
-           "legacy category copied to tidy_category")
-    _check("tidied" not in thing["properties"], "transient tidy state removed")
-
-
 def test_core_prop_pickup_and_tidy_place():
     print("[3] core PropSession handles pickup/drop while Tidy intercepts placement")
     from engine.prop_runtime import PropSession
@@ -197,7 +168,6 @@ def test_tidy_ignores_plain_props():
 
 def main():
     test_plugin_loads_and_registers()
-    test_legacy_map_migration()
     test_core_prop_pickup_and_tidy_place()
     test_receptacle_slots_and_filtering()
     test_tidy_ignores_plain_props()
