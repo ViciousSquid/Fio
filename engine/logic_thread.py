@@ -721,8 +721,8 @@ class LogicThread(threading.Thread):
                 'is_water': False,
                 'is_fog': False,
                 '_model_collision': True,
-                '_prop_entity': thing,
-                '_dynamic_prop': is_dynamic_prop,
+                '_physics_entity': thing,
+                '_physics_body': is_physics_body,
                 '_collision_mode': 'aabb',
             })
 
