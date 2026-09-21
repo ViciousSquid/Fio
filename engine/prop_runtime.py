@@ -134,9 +134,9 @@ class PropSession:
             self._fire(prop, 'OnDropped')
 
     def _floor_y(self, prop, x, z, from_y):
-        # Physics is the single authored switch for Props. ``no_collision`` is
-        # retained only as a compatibility field for the model collision path.
-        if not prop.properties.get('physics_enabled', False):
+        # Physics controls motion; collision remains an independent Prop
+        # setting so physics-without-collision is valid.
+        if prop.properties.get('no_collision', True):
             return None
         grid = getattr(self.logic, '_spatial_grid', None)
         raycast = getattr(grid, 'raycast_down', None)
