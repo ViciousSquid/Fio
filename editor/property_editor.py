@@ -1438,6 +1438,10 @@ class PropertyEditor(QWidget):
         props_tab = self._create_thing_properties_tab(thing)
         self.tab_widget.addTab(props_tab, "Properties")
 
+        if isinstance(thing, Prop):
+            physics_tab = self._create_prop_physics_tab(thing)
+            self.tab_widget.addTab(physics_tab, "Physics")
+
         advanced_tab = self._create_thing_advanced_tab(thing)
         if advanced_tab is not None:
             self.tab_widget.addTab(advanced_tab, "Advanced")
@@ -1570,9 +1574,6 @@ class PropertyEditor(QWidget):
         if form.rowCount() > 0:
             tab_layout.addLayout(form)
 
-        if isinstance(thing, Prop):
-            self._build_prop_physics_group(tab_layout, thing)
-
         # Type-specific grouped editors (already visually grouped).
         if isinstance(thing, PathNode):
             self._build_pathnode_group(tab_layout, thing)
@@ -1631,6 +1632,16 @@ class PropertyEditor(QWidget):
         tab_layout.addWidget(section)
         tab_layout.addStretch()
 
+        return w
+
+    def _create_prop_physics_tab(self, thing):
+        """Render the complete Prop physics controls on a dedicated tab."""
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
+        self._build_prop_physics_group(layout, thing)
+        layout.addStretch()
         return w
 
     def _build_prop_physics_group(self, parent_layout, thing):
@@ -1706,6 +1717,54 @@ class PropertyEditor(QWidget):
         physics_form.addRow("Mass:", mass_spin)
         self._widgets['prop_mass_spin'] = mass_spin
 
+        gravity_cb = _make_checkbox(
+            "Gravity",
+            bool(thing.properties.get('gravity', True)),
+            lambda checked: self.update_object_prop('gravity', bool(checked)),
+            _Style.CHECKBOX,
+        )
+        gravity_cb.setToolTip(
+            "Apply world gravity to this prop while physics is enabled."
+        )
+        physics_form.addRow("", gravity_cb)
+        self._widgets['prop_gravity_cb'] = gravity_cb
+
+        linear_damping = min(
+            100.0,
+            max(0.0, float(thing.properties.get('linear_damping', 0.08)))
+        )
+        linear_damping_spin = QDoubleSpinBox()
+        linear_damping_spin.setRange(0.0, 100.0)
+        linear_damping_spin.setDecimals(3)
+        linear_damping_spin.setSingleStep(0.01)
+        linear_damping_spin.setValue(linear_damping)
+        linear_damping_spin.setToolTip(
+            "Air/overall linear damping applied to the prop's velocity."
+        )
+        linear_damping_spin.valueChanged.connect(
+            lambda value: self.update_object_prop('linear_damping', value)
+        )
+        physics_form.addRow("Linear Damping:", linear_damping_spin)
+        self._widgets['prop_linear_damping_spin'] = linear_damping_spin
+
+        angular_damping = min(
+            100.0,
+            max(0.0, float(thing.properties.get('angular_damping', 0.12)))
+        )
+        angular_damping_spin = QDoubleSpinBox()
+        angular_damping_spin.setRange(0.0, 100.0)
+        angular_damping_spin.setDecimals(3)
+        angular_damping_spin.setSingleStep(0.01)
+        angular_damping_spin.setValue(angular_damping)
+        angular_damping_spin.setToolTip(
+            "Angular damping value used by prop rotation physics."
+        )
+        angular_damping_spin.valueChanged.connect(
+            lambda value: self.update_object_prop('angular_damping', value)
+        )
+        physics_form.addRow("Angular Damping:", angular_damping_spin)
+        self._widgets['prop_angular_damping_spin'] = angular_damping_spin
+
         friction = min(1.0, max(0.0, float(thing.properties.get('friction', 0.55))))
         friction_spin = QDoubleSpinBox()
         friction_spin.setRange(0.0, 1.0)
@@ -1763,7 +1822,7 @@ class PropertyEditor(QWidget):
         section = CollapsibleSection(
             "Physics",
             expanded=True,
-            count=6,
+            count=9,
         )
         section.addLayout(physics_form)
         parent_layout.addWidget(section)
