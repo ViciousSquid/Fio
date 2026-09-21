@@ -363,11 +363,16 @@ class PropSession:
             floor = self._floor_y(prop, x, z, y + 1.0)
             if floor is not None and new_y <= floor:
                 prop.pos = [x, floor, z]
-                sleeping.append(key)
-                p['_physics_awake'] = False
-                self._fire(prop, 'OnRest')
-                continue
-            prop.pos = [x, new_y, z]
+                velocity = 0.0
+                state['velocity'] = 0.0
+                if (abs(state.get('velocity_x', 0.0)) < 1.0 and
+                        abs(state.get('velocity_z', 0.0)) < 1.0):
+                    sleeping.append(key)
+                    p['_physics_awake'] = False
+                    self._fire(prop, 'OnRest')
+                    continue
+            else:
+                prop.pos = [x, new_y, z]
 
             if (abs(state.get('velocity_x', 0.0)) < 1.0 and
                     abs(state.get('velocity_z', 0.0)) < 1.0 and
