@@ -1872,7 +1872,12 @@ layout (location = 9) in vec4 iNormal2;
             return
 
         active = self._light_ubo_data[0]
-        active[...] = 0
+        # ``active`` is a NumPy structured scalar; it has no scalar ``[...]``
+        # assignment. Clear each fixed-size array field before packing live lights.
+        active['position'][...] = 0
+        active['color'][...] = 0
+        active['params'][...] = 0
+        active['indices'][...] = 0
         active_lights = lights[:count]
 
         positions = np.asarray([light.pos for light in active_lights], dtype=np.float32)
