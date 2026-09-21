@@ -44,10 +44,10 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None):
     logic.plugins = None
     logic._events = []
 
-    def on_enter(brush, trigger_id, activator_type='player'):
+    def on_enter(brush, trigger_id, activator_type='player', activator_entity=None):
         logic._events.append(('enter', activator_type))
 
-    def on_exit(brush, trigger_id, activator_type='player'):
+    def on_exit(brush, trigger_id, activator_type='player', activator_entity=None):
         logic._events.append(('exit', activator_type))
 
     logic._on_trigger_enter = on_enter
