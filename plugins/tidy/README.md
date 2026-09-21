@@ -22,8 +22,8 @@ Open **`maps/Tidy_Test.json`** and press **Play**.
 Look at a book and press **E** to pick it up. Turn toward the shelf and press
 **E** again to put it away. The HUD tracks the number of objects tidied.
 
-The demo contains **42 core Props** carrying Tidy metadata. There is no special
-"Tidy Object" entity to place.
+The demo contains **42 core Props** carrying Tidy metadata. Tidyable objects
+use the normal Prop workflow.
 
 ## Mapper workflow
 
@@ -217,8 +217,8 @@ Tidy deliberately stays out of the systems that already belong to core Fio.
 - goal completion;
 - Tidy-specific I/O.
 
-There is no `TidyObject` entity, no duplicate pickup implementation, no
-second Prop physics simulation, and no second Prop spatial hash.
+There is no duplicate pickup implementation, second Prop physics simulation,
+or second Prop spatial hash.
 
 This keeps a large collection of ordinary Props in the core runtime while Tidy
 only maintains its own small amount of state: the tidyable Props, receptacles,
