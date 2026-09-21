@@ -743,16 +743,35 @@ class PhysicsWorld:
             center = self._position[i] + self._offset[i]
             current_bottom = float(center[1] - self._half[i, 1])
             ray_y = max(current_bottom, float(previous_bottom[i])) + 1.0
-            try:
-                floor = raycast(
-                    float(center[0]),
-                    float(center[2]),
-                    ray_y,
-                )
-            except Exception:
-                floor = None
-            if floor is not None:
-                floors[i] = float(floor)
+
+            # A pushed barrel can straddle a floor seam while its centre is
+            # briefly over the seam itself.  Sample the centre plus four
+            # in-footprint support points so horizontal motion cannot make a
+            # grounded body lose contact just because its centre crossed a
+            # small gap between floor brushes.
+            hx = float(self._half[i, 0]) * 0.75
+            hz = float(self._half[i, 2]) * 0.75
+            support_points = (
+                (float(center[0]), float(center[2])),
+                (float(center[0] - hx), float(center[2])),
+                (float(center[0] + hx), float(center[2])),
+                (float(center[0]), float(center[2] - hz)),
+                (float(center[0]), float(center[2] + hz)),
+            )
+
+            best_floor = None
+            for ray_x, ray_z in support_points:
+                try:
+                    floor = raycast(ray_x, ray_z, ray_y)
+                except Exception:
+                    floor = None
+                if floor is not None and (
+                    best_floor is None or floor > best_floor
+                ):
+                    best_floor = float(floor)
+
+            if best_floor is not None:
+                floors[i] = best_floor
 
         return floors
 
