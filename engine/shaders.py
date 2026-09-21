@@ -172,9 +172,10 @@ _LIGHT_DECL_RE = re.compile(
 def light_ubo_source(source):
     """Rewrite a legacy Light[] fragment shader to the shared std140 UBO.
 
-    The original shader interface is intentionally accepted here so the source
-    files remain readable and the same transform applies to loose shaders,
-    fallback strings, ARM variants and instanced variants alike.
+    The source files keep the readable ``Light`` interface; at compile time it
+    is replaced with four parallel vec4/ivec4 arrays. Keeping each member in
+    its own std140 array avoids the dynamically indexed array-of-structs access
+    path, while retaining the same logical shader interface.
     """
     if not source or 'uniform Light lights[' not in source:
         return source
@@ -185,31 +186,21 @@ def light_ubo_source(source):
 
     count = int(match.group(1))
     block = (
-        "struct Light {\n"
-        "    highp vec4 position;\n"
-        "    vec4 color;\n"
-        "    vec4 params;       // x=intensity, y=radius\n"
-        "    ivec4 indices;     // x=shadow index\n"
-        "};\n"
         "layout(std140) uniform FioLightBlock {\n"
-        f"    Light lights[{count}];\n"
+        f"    vec4 lightPosition[{count}];\n"
+        f"    vec4 lightColor[{count}];\n"
+        f"    vec4 lightParams[{count}];       // x=intensity, y=radius\n"
+        f"    ivec4 lightIndices[{count}];     // x=shadow index\n"
         "};"
     )
     result = _LIGHT_DECL_RE.sub(block, source, count=1)
 
-    # Preserve the old field semantics at each use site while giving the UBO a
-    # tightly predictable std140 layout (four vec4/ivec4 slots per light).
-    result = re.sub(r"lights\[([^]]+)\]\.position\b", r"lights[\1].position.xyz", result)
-    result = re.sub(r"lights\[([^]]+)\]\.color\b", r"lights[\1].color.xyz", result)
-    result = re.sub(r"lights\[([^]]+)\]\.intensity\b", r"lights[\1].params.x", result)
-    result = re.sub(r"lights\[([^]]+)\]\.radius\b", r"lights[\1].params.y", result)
-    result = re.sub(
-        r"lights\[([^]]+)\]\.shadowIndex\b",
-        r"int(lights[\1].indices.x)",
-        result,
-    )
+    result = re.sub(r"lights\[([^]]+)\]\.position\b", r"lightPosition[\1].xyz", result)
+    result = re.sub(r"lights\[([^]]+)\]\.color\b", r"lightColor[\1].xyz", result)
+    result = re.sub(r"lights\[([^]]+)\]\.intensity\b", r"lightParams[\1].x", result)
+    result = re.sub(r"lights\[([^]]+)\]\.radius\b", r"lightParams[\1].y", result)
+    result = re.sub(r"lights\[([^]]+)\]\.shadowIndex\b", r"int(lightIndices[\1].x)", result)
     return result
-
 SHADOW_GLSL = """
 #define MAX_SHADOW_LIGHTS 4
 uniform samplerCube shadowMaps[MAX_SHADOW_LIGHTS];

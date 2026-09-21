@@ -305,14 +305,16 @@ class BaseRenderer:
         self._light_ubo = None
         self._light_ubo_capacity = 0
         self._light_ubo_key = None
+        # Mirror FioLightBlock exactly: four parallel std140 arrays, each with
+        # a 16-byte element stride. One structured record keeps the complete
+        # block contiguous while the GPU avoids an array-of-structs access path.
         self._light_ubo_dtype = np.dtype([
-            ('position', '<f4', (4,)),
-            ('color', '<f4', (4,)),
-            ('params', '<f4', (4,)),
-            ('indices', '<i4', (4,)),
+            ('position', '<f4', (self.MAX_LIGHTS, 4)),
+            ('color', '<f4', (self.MAX_LIGHTS, 4)),
+            ('params', '<f4', (self.MAX_LIGHTS, 4)),
+            ('indices', '<i4', (self.MAX_LIGHTS, 4)),
         ])
-        self._light_ubo_data = np.zeros(self.MAX_LIGHTS, dtype=self._light_ubo_dtype)
-
+        self._light_ubo_data = np.zeros(1, dtype=self._light_ubo_dtype)
         # Depth cube-map shadow-mapping state (created lazily once GL is ready).
         self._shadow_fbo = None
         self._shadow_cubemaps = []          # texture ids, one cube-map per shadow slot
@@ -1837,8 +1839,7 @@ layout (location = 9) in vec4 iNormal2;
             self._light_ubo = gl.glGenBuffers(1)
         if capacity > self._light_ubo_capacity:
             self._light_ubo_capacity = max(self.MAX_LIGHTS, capacity)
-            self._light_ubo_data = np.zeros(self._light_ubo_capacity,
-                                            dtype=self._light_ubo_dtype)
+            self._light_ubo_data = np.zeros(1, dtype=self._light_ubo_dtype)
             gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
             gl.glBufferData(
                 gl.GL_UNIFORM_BUFFER,
@@ -1870,13 +1871,10 @@ layout (location = 9) in vec4 iNormal2;
         if self._light_ubo_key == key:
             return
 
-        active = self._light_ubo_data[:count]
+        active = self._light_ubo_data[0]
         active[...] = 0
         active_lights = lights[:count]
 
-        # Light counts are capped at 64 (16 on the low-power shader path).
-        # Object values are gathered once; contiguous std140 packing is then
-        # handled by NumPy rather than a Python loop over every UBO field.
         positions = np.asarray([light.pos for light in active_lights], dtype=np.float32)
         colors = np.asarray([light.get_color() for light in active_lights], dtype=np.float32)
         params = np.asarray(
@@ -1889,15 +1887,23 @@ layout (location = 9) in vec4 iNormal2;
             count=count,
         )
 
-        active['position'][:, :3] = positions
-        active['position'][:, 3] = 1.0
-        active['color'][:, :3] = colors
-        active['color'][:, 3] = 1.0
-        active['params'][:, :2] = params
-        active['indices'][:, 0] = shadow_indices
+        active['position'][0, :count, :3] = positions
+        active['position'][0, :count, 3] = 1.0
+        active['color'][0, :count, :3] = colors
+        active['color'][0, :count, 3] = 1.0
+        active['params'][0, :count, :2] = params
+        active['indices'][0, :count, 0] = shadow_indices
 
         gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
-        gl.glBufferSubData(gl.GL_UNIFORM_BUFFER, 0, active[:count])
+
+        # Upload the live prefix of each std140 array in block order.
+        payload = (
+            active['position'][0, :count].tobytes() +
+            active['color'][0, :count].tobytes() +
+            active['params'][0, :count].tobytes() +
+            active['indices'][0, :count].tobytes()
+        )
+        gl.glBufferSubData(gl.GL_UNIFORM_BUFFER, 0, payload)
         self._light_ubo_key = key
 
     # --------------------------------------------------------------------------
