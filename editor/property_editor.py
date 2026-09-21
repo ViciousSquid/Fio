@@ -1601,26 +1601,62 @@ class PropertyEditor(QWidget):
         return w
 
     def _build_prop_physics_group(self, parent_layout, thing):
-        """Render Prop collision and dynamics as one unified Physics section."""
+        """Render Prop dynamics and collision as one unified Physics section."""
         physics_form = QFormLayout()
         physics_form.setSpacing(4)
 
-        enabled = bool(thing.properties.get('physics_enabled', False))
-        physics_cb = _make_checkbox("Enabled", enabled, None, _Style.CHECKBOX)
+        physics_enabled = bool(thing.properties.get('physics_enabled', False))
+        collision_enabled = not bool(thing.properties.get('no_collision', True))
+
+        physics_cb = _make_checkbox(
+            "Physics Enabled",
+            physics_enabled,
+            None,
+            _Style.CHECKBOX,
+        )
         physics_cb.setToolTip(
-            "Enable gravity and physical collision for this prop"
+            "Enable gravity and dropped-object physics for this prop"
         )
 
+        collision_cb = _make_checkbox(
+            "Collision Enabled",
+            collision_enabled,
+            None,
+            _Style.CHECKBOX,
+        )
+        collision_cb.setToolTip(
+            "Allow this prop to collide with the world. It can be disabled "
+            "independently of physics."
+        )
+
+        def set_checkbox(widget, value):
+            widget.blockSignals(True)
+            widget.setChecked(bool(value))
+            widget.blockSignals(False)
+
         def on_physics_toggled(checked):
-            # Keep the persisted legacy collision flag in lockstep with the
-            # single Physics control. Old maps still load, but the editor no
-            # longer exposes two independent switches for the same behaviour.
             self.update_object_prop('physics_enabled', bool(checked))
+            # Enabling physics implies collision, but disabling physics does
+            # not force collision off. This leaves the two properties
+            # independently editable after the initial enable.
+            if checked and not collision_cb.isChecked():
+                set_checkbox(collision_cb, True)
+                self.update_object_prop('no_collision', False)
+
+        def on_collision_toggled(checked):
             self.update_object_prop('no_collision', not bool(checked))
+            # Enabling collision implies physics, but disabling collision does
+            # not force physics off. This permits physics-without-collision.
+            if checked and not physics_cb.isChecked():
+                set_checkbox(physics_cb, True)
+                self.update_object_prop('physics_enabled', True)
 
         physics_cb.toggled.connect(on_physics_toggled)
+        collision_cb.toggled.connect(on_collision_toggled)
         physics_form.addRow("", physics_cb)
+        physics_form.addRow("", collision_cb)
         self._widgets['prop_physics_enabled_cb'] = physics_cb
+        self._widgets['prop_collision_enabled_cb'] = collision_cb
 
         collision_size = thing.properties.get('collision_size')
         cs_widget, cs_inputs = self._vec3_row(
@@ -1637,7 +1673,7 @@ class PropertyEditor(QWidget):
         section = CollapsibleSection(
             "Physics",
             expanded=True,
-            count=2,
+            count=3,
         )
         section.addLayout(physics_form)
         parent_layout.addWidget(section)
