@@ -75,6 +75,14 @@ def test_plugin_loads_and_registers():
     demo = os.path.join(os.path.dirname(__file__), "..", "Tidy_Test.json")
     _check(os.path.isfile(demo), "bundled Tidy demo map exists")
 
+    receptacle_schema = {spec.name: spec for spec in mgr.property_schema_for("tidyreceptacle")}
+    goal_schema = {spec.name: spec for spec in mgr.property_schema_for("tidygoal")}
+    _check(set(["accepts", "capacity", "slot_cols", "slot_spacing",
+                "slot_offset", "reach", "disabled"]).issubset(receptacle_schema),
+           "Tidy Receptacle exposes its gameplay properties")
+    _check(set(["target", "category", "show_hud", "disabled"]).issubset(goal_schema),
+           "Tidy Goal exposes its gameplay properties")
+
     extras = mgr.extra_fields_for("prop")
     _check(any(getattr(spec, "name", "") == "tidy_category" for spec in extras),
            "tidy_category registered as a Prop extension")
