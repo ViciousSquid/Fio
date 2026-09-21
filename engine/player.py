@@ -301,8 +301,8 @@ class Player:
             # Fallback: all brushes (old behaviour)
             colliders = list(brushes)
 
-        # Dynamic physics-enabled Props are resolved by PropSession so the
-        # player can push them instead of treating them as static walls.
+        # Dynamic physics bodies are resolved by PhysicsWorld rather than as
+        # static walls in the player's brush-collision path.
         colliders = [b for b in colliders if not b.get('_physics_body')]
 
         if movers:
