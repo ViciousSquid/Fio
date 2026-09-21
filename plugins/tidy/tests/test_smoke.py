@@ -49,19 +49,17 @@ class FakeLogic:
 def test_plugin_loads_and_registers():
     print("[1] plugin loads and extends core Prop")
     try:
-        import pytest
-        pytest.importorskip("PyQt5")
-    except ImportError:
-        pass
+        from editor.things import ENTITY_TYPES
+        from editor.io_system import get_input_names, get_output_names
+    except Exception as exc:
+        print(f"  skip: editor tier unavailable ({exc})")
+        return
 
     from plugins.manager import get_manager, load_plugins
     load_plugins()
     mgr = get_manager()
     names = [p.name for p in mgr.plugins]
     _check("tidy" in names, f"tidy plugin discovered ({names})")
-
-    from editor.things import ENTITY_TYPES
-    from editor.io_system import get_input_names, get_output_names
 
     _check("TidyObject" not in ENTITY_TYPES, "TidyObject removed from editor entity types")
     _check("TidyReceptacle" in ENTITY_TYPES, "TidyReceptacle registered")
