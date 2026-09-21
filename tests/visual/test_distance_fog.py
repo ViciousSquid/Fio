@@ -162,6 +162,30 @@ def test_the_fogged_pipeline_compiles_and_draws(renderer, context):
     assert image.std() > 0.0, "the frame is a flat colour — nothing was drawn"
 
 
+def test_play_mode_with_dynamic_light_draws_cleanly(renderer, context):
+    """A live Light must not break the play-mode lighting pipeline."""
+    brushes, things = ground_scene()
+    import glm
+    import OpenGL.GL as gl
+
+    eye = glm.vec3(*EYE)
+    from engine.view_distance import ViewDistance
+    vd = ViewDistance(4096.0)
+    renderer.view_distance = vd
+    projection = glm.perspective(glm.radians(70.0), 1.0, 1.0, vd.far_plane)
+    view = glm.lookAt(eye, glm.vec3(*TARGET), glm.vec3(0, 1, 0))
+    config = glh.render_config(
+        play_mode=True,
+        all_brushes=brushes,
+        all_things=things,
+        all_lights=things,
+    )
+    context.bind()
+    gl.glClearColor(*FOG_RGB, 1.0)
+    with glh.no_gl_errors("play-mode dynamic-light render"):
+        renderer.render_scene(projection, view, eye, brushes, things, None, config)
+        gl.glFinish()
+
 # ---------------------------------------------------------------------------
 # Fog and clipping work together
 # ---------------------------------------------------------------------------

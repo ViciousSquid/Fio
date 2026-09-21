@@ -12,7 +12,6 @@ PERFORMANCE-OPTIMIZED:
 
 import time
 
-from PyQt5.QtWidgets import QWidget
 from PyQt5.QtCore import Qt, QRect, QPoint
 from PyQt5.QtGui import (
     QPainter, QColor, QFont, QPen, QBrush, QPolygon, QFontMetrics
@@ -73,6 +72,7 @@ class SysMon:
         self._ft_count = 0
         self._ft_max = 16.67
         self._ft_max_age = 0
+        self._fps = 0.0
 
         # Font & metrics
         self.font = QFont("Arial", 9)
@@ -138,6 +138,7 @@ class SysMon:
         if self.expanded != expanded:
             self.expanded = expanded
 
+
     def record_frame_time(self, delta_ms):
         """Record a frame time. Uses ring buffer — O(1)."""
         old_val = self._ft_buffer[self._ft_index]
@@ -158,12 +159,112 @@ class SysMon:
             else:
                 self._ft_max = 16.67
 
+
     def update_stats(self, visible_brushes=0, culled_brushes=0, total_brushes=0):
         self.stats['visible_brushes'] = visible_brushes
         self.stats['culled_brushes'] = culled_brushes
         self.stats['total_brushes'] = total_brushes
 
-    # ------------------------------------------------------------------
+    def record_fps(self, fps):
+        """Record the FPS value used by the Fio runtime HUD."""
+        try:
+            self._fps = max(0.0, float(fps))
+        except (TypeError, ValueError):
+            self._fps = 0.0
+
+    def reset_metrics(self):
+        """Clear the frame-time history and the per-frame stat counters."""
+        self._ft_buffer.fill(0.0)
+        self._ft_index = 0
+        self._ft_count = 0
+        self._ft_max = 16.67
+        self._ft_max_age = 0
+        self._fps = 0.0
+        for key in self.stats:
+            self.stats[key] = 0
+        self._stats_cache = {}
+        self._stats_cache_time = 0.0
+
+    def get_metrics(self):
+        """Return a machine-readable snapshot without adding work to the frame path.
+
+        Everything is derived on demand from state the overlay already keeps,
+        so a caller that never asks costs the frame path nothing.
+        """
+        count = int(self._ft_count)
+        if count:
+            frame_times = np.asarray(self._ft_buffer[:count], dtype=np.float64)
+            current_frame_ms = float(
+                self._ft_buffer[(self._ft_index - 1) % self.GRAPH_POINTS]
+            )
+            average_frame_ms = float(np.mean(frame_times))
+            p95_frame_ms = float(np.percentile(frame_times, 95))
+        else:
+            current_frame_ms = 0.0
+            average_frame_ms = 0.0
+            p95_frame_ms = 0.0
+
+        vram_used_mb, vram_total_mb = self._get_vram_info()
+        logic_thread = getattr(self.parent, "logic_thread", None)
+        renderer = getattr(self.parent, "renderer", None)
+        editor = getattr(self.parent, "editor", None)
+
+        visible_tris = int(self.stats.get("visible_tris", 0))
+        culled_tris = int(self.stats.get("culled_tris", 0))
+        visible_surfaces = int(self.stats.get("visible_surfaces", 0))
+        culled_surfaces = int(self.stats.get("culled_surfaces", 0))
+
+        if renderer is not None:
+            render_stats = getattr(renderer, "render_stats", None)
+            if render_stats is not None:
+                visible_tris = int(
+                    getattr(render_stats, "visible_tris", visible_tris) or 0
+                )
+
+        if editor is not None:
+            state = getattr(editor, "state", None)
+            brushes = getattr(state, "brushes", []) if state is not None else []
+            total_tris = len(brushes) * 12
+            terrain = getattr(editor, "terrain", None)
+            if terrain is not None:
+                try:
+                    total_tris += int(terrain.get_tri_count())
+                except (AttributeError, TypeError, ValueError):
+                    pass
+            culled_tris = max(0, total_tris - visible_tris)
+            visible_surfaces = int(self.stats.get("visible_brushes", 0))
+            culled_surfaces = int(self.stats.get("culled_brushes", 0))
+
+        fps = float(self._fps)
+        if fps <= 0.0 and average_frame_ms > 0.0:
+            fps = 1000.0 / average_frame_ms
+
+        return {
+            "fps": fps,
+            "frame_time_ms": current_frame_ms,
+            "average_frame_time_ms": average_frame_ms,
+            "p95_frame_time_ms": p95_frame_ms,
+            "vram_used_mb": vram_used_mb,
+            "vram_total_mb": vram_total_mb,
+            "visible_brushes": int(self.stats.get("visible_brushes", 0)),
+            "culled_brushes": int(self.stats.get("culled_brushes", 0)),
+            "total_brushes": int(self.stats.get("total_brushes", 0)),
+            "visible_tris": visible_tris,
+            "culled_tris": culled_tris,
+            "visible_surfaces": visible_surfaces,
+            "culled_surfaces": culled_surfaces,
+            "tps": float(getattr(logic_thread, "actual_tps", 0.0) or 0.0),
+            "things": int(
+                len(getattr(getattr(editor, "state", None), "things", []) or [])
+            ),
+            "draw_calls": int(
+                getattr(
+                    getattr(renderer, "render_stats", None), "draw_calls", 0
+                ) or 0
+            ),
+        }
+
+
     # Mouse interaction
     # ------------------------------------------------------------------
 

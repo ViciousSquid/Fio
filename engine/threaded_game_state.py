@@ -1,8 +1,6 @@
 import threading
 import glm
 import numpy as np
-import time
-from typing import List, Any, Dict, Optional
 from collections import deque
 
 # Shared immutable "nothing to drain" result for the per-frame consumer methods
@@ -52,8 +50,13 @@ class RenderState:
         self.visible_brushes = []
         self.all_brushes = []
         self.visible_things = []
-        # Reusable numeric view of visible entity positions. Rows are [x, z];
-        # Thing.pos remains the sole authoritative transform.
+        # Authoritative Light objects for renderer lighting; avoids scanning
+        # the full Thing set every render frame.
+        self.all_lights = []
+        # Reusable numeric views aligned with the published render-object lists.
+        # These are snapshots derived from authoritative transforms.
+        self.visible_brush_positions = np.empty((0, 2), dtype=np.float64)
+        self.visible_brush_position_count = 0
         self.visible_thing_positions = np.empty((0, 2), dtype=np.float64)
         self.visible_thing_position_count = 0
         
@@ -92,6 +95,17 @@ class RenderState:
         self.total_brushes = 0
         self.culled_brushes = 0
         self.timestamp = 0.0
+
+    def ensure_visible_brush_positions(self, count):
+        """Ensure a reusable contiguous [x, z] buffer can hold count brushes."""
+        count = max(0, int(count))
+        capacity = int(self.visible_brush_positions.shape[0])
+        if count > capacity:
+            new_capacity = max(count, 16 if capacity == 0 else capacity * 2)
+            self.visible_brush_positions = np.empty(
+                (new_capacity, 2), dtype=np.float64)
+        self.visible_brush_position_count = count
+        return self.visible_brush_positions
 
     def ensure_visible_thing_positions(self, count):
         """Ensure a reusable contiguous [x, z] buffer can hold count entities.
@@ -137,6 +151,8 @@ class RenderState:
         self.visible_brushes = []
         self.all_brushes = []
         self.visible_things = []
+        self.all_lights = []
+        self.visible_brush_position_count = 0
         self.visible_thing_position_count = 0
         self.collected_keys = set()
         self.hud_message = ""

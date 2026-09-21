@@ -3,21 +3,19 @@ import os
 import math
 import numpy as np
 import ctypes
-from collections import deque
 from typing import Optional
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
-from PyQt5.QtCore import Qt, QTimer, QPoint, QUrl, QRect, QEvent
-from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush, QPolygon, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient
+from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent
+from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
 from engine.camera import Camera
 from editor.things import (
-    Thing, Light, PlayerStart, Monster, Pickup, Speaker,
+    Thing, Light, PlayerStart, Monster, Pickup, Prop, Speaker,
     LogicGate, LogicRelay, LogicTimer, LevelChanger, Portal
 )
 from engine.player import Player
-from PIL import Image
 
 from .renderer_F   import Renderer_F
 _RENDERER_CLASSES = {
@@ -43,14 +41,13 @@ def available_renderers():
     """The names of all registered renderer modes."""
     return list(_RENDERER_CLASSES.keys())
 
-from engine import shaders
 from engine import brush_geometry
 from editor import component_edit
 from engine.threaded_game_state import ThreadedGameState, RenderState
 from engine.view_distance import ViewDistance
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
-from editor.debug_console import DebugConsole, get_debug_logger
+from editor.debug_console import DebugConsole
 from .sysmon import SysMon
 
 # Pygame for gamepad support
@@ -59,7 +56,6 @@ import pygame
 # System monitoring (pure Python, no external deps)
 import ctypes
 import os
-import platform
 
 # OpenGL GPU memory query constants
 GL_GPU_MEM_INFO_TOTAL_AVAILABLE_MEM_NVX = 0x9048
@@ -1038,12 +1034,22 @@ class QtGameView(QOpenGLWidget):
             self._render_config["all_things"] = render_state.all_things
         else:
             self._render_config["all_things"] = self.editor.state.things
+        if render_state and hasattr(render_state, 'all_lights'):
+            self._render_config["all_lights"] = render_state.all_lights
+        else:
+            # Editor/non-threaded fallback: Renderer_F maintains a cached
+            # light collection keyed to the Thing-list identity/size.
+            self._render_config["all_lights"] = None
 
         # The render-state position buffer is a derived snapshot of
         # authoritative Thing.pos values. It is aligned with things_to_render
         # and lets the renderer batch the expensive X/Z distance arithmetic.
         self._render_config["thing_positions"] = (
             getattr(render_state, "visible_thing_positions", None)
+            if render_state is not None else None
+        )
+        self._render_config["brush_positions"] = (
+            getattr(render_state, "visible_brush_positions", None)
             if render_state is not None else None
         )
         self.update_instance_textures(things_to_render)
@@ -1199,16 +1205,14 @@ class QtGameView(QOpenGLWidget):
                         _components.overlay(_targets), _components.version)
         if render_state:
             visible = len(render_state.visible_brushes)
-            total = render_state.total_brushes
             actual_total = len(self.editor.state.brushes)
-            if total == 0 and actual_total > 0:
-                pass
-            else:
-                self.sysmon.update_stats(
-                    visible_brushes=visible,
-                    culled_brushes=render_state.culled_brushes,
-                    total_brushes=total
-                )
+            total = actual_total if actual_total > 0 else render_state.total_brushes
+            culled = max(0, total - visible)
+            self.sysmon.update_stats(
+                visible_brushes=visible,
+                culled_brushes=culled,
+                total_brushes=total
+            )
         # 3D world is done; plugins may add their own passes here (still in the
         # GL context, before the 2D overlay painter opens).
         if _pmgr is not None and _pmgr.has_listeners("render.post_scene"):
@@ -1742,6 +1746,8 @@ class QtGameView(QOpenGLWidget):
                     parts.append((id(t), t.properties.get('logic_type', 'and')))
                 elif isinstance(t, Pickup):
                     parts.append((id(t), t.properties.get('item_type', ''), t.properties.get('key_name', ''), t.properties.get('custom_sprite', '')))
+                elif isinstance(t, Prop):
+                    parts.append((id(t), t.properties.get('render_mode', 'model'), t.properties.get('sprite_path', '')))
                 else:
                     parts.append(id(t))
             return hash(tuple(parts))
@@ -1785,6 +1791,20 @@ class QtGameView(QOpenGLWidget):
                         self.sprite_textures[tex_key] = tid
                 if tex_key in self.sprite_textures:
                     instance_textures[id(thing)] = self.sprite_textures[tex_key]
+            elif isinstance(thing, Prop):
+                if str(thing.properties.get('render_mode', 'model')).lower() == 'billboard':
+                    sprite_path = str(thing.properties.get('sprite_path', '') or '')
+                    if sprite_path:
+                        tex_key = f"propsprite__{sprite_path.replace('/', '__').replace('.', '_')}"
+                        if tex_key not in self.sprite_textures:
+                            rel_path = sprite_path.replace('assets/', '', 1)
+                            dirname = os.path.dirname(rel_path)
+                            filename = os.path.basename(rel_path)
+                            tid = self.load_texture(filename, dirname)
+                            if tid:
+                                self.sprite_textures[tex_key] = tid
+                        if tex_key in self.sprite_textures:
+                            instance_textures[id(thing)] = self.sprite_textures[tex_key]
             elif isinstance(thing, Pickup):
                 if thing.is_key():
                     key_name = thing.get_key_name()

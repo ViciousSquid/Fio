@@ -14,12 +14,12 @@ import copy
 import datetime
 import uuid
 from collections import deque
-from .things import Thing, Model
+from .things import Thing
 from editor.things import update_all_counters_from_entities
 
 # Import I/O system for serialization
 try:
-    from .io_system import OutputConnection, get_connections, set_connections
+    from .io_system import OutputConnection, get_connections
     IO_AVAILABLE = True
 except ImportError:
     IO_AVAILABLE = False
@@ -285,11 +285,13 @@ class EditorState:
 
         return serialized
 
-    def _deserialize_brushes(self, brushes_data):
+    def _deserialize_brushes(self, brushes_data, yield_hook=None):
         """Deserialize brushes with I/O connections."""
         result = []
 
-        for brush_data in brushes_data:
+        for index, brush_data in enumerate(brushes_data):
+            if yield_hook is not None and index % 64 == 0:
+                yield_hook()
             brush = brush_data.copy()
 
             # Backfill stable ID for legacy maps
@@ -311,26 +313,16 @@ class EditorState:
 
         return result
 
-    def load_from_data(self, level_data):
-        """Populates the scene from a dictionary."""
+    def load_from_data(self, level_data, *, yield_hook=None, save_undo=True):
+        """Populates the scene from a dictionary.
+
+        ``yield_hook`` is an optional cooperative callback used by long-running
+        imports. Normal editor loads remain unchanged.
+        """
         self._invalidate_entity_caches()
 
-        # Handle both old and new format
-        version = level_data.get('version', 1)
-
-        if version >= 2:
-            # New format with I/O connections stored separately
-            self.brushes = self._deserialize_brushes(level_data.get('brushes', []))
-        else:
-            # Old format - brushes are plain dicts
-            self.brushes = level_data.get('brushes', [])
-            # Backfill stable IDs for v1 brushes
-            for brush in self.brushes:
-                brush.setdefault('id', str(uuid.uuid4()))
-            # Migrate legacy 'target' property to I/O connections
-            if IO_AVAILABLE:
-                for brush in self.brushes:
-                    self._migrate_legacy_target(brush)
+        self.brushes = self._deserialize_brushes(
+            level_data.get('brushes', []), yield_hook=yield_hook)
 
         self.terrain_data = level_data.get('terrain_data', None)
         # Absent in maps written before this existed; the overview falls back to
@@ -346,17 +338,12 @@ class EditorState:
         # Load things
         things_data = level_data.get('things', [])
         new_things = []
-        for t_data in things_data:
-            if t_data.get('type') == 'Model':
-                model_kwargs = {k: v for k, v in t_data.items() if k != 'type'}
-                new_things.append(Model(**model_kwargs))
-            else:
-                thing = Thing.from_dict(t_data)
-                if thing:
-                    # Migrate legacy 'target' property
-                    if thing.properties.get('target') and IO_AVAILABLE:
-                        self._migrate_legacy_thing_target(thing)
-                    new_things.append(thing)
+        for index, t_data in enumerate(things_data):
+            if yield_hook is not None and index % 25 == 0:
+                yield_hook()
+            thing = Thing.from_dict(t_data)
+            if thing is not None:
+                new_things.append(thing)
 
         self.things = new_things
 
@@ -379,57 +366,8 @@ class EditorState:
             # at least once before the first Play in this session.
             self.bake_state.mark_dirty()
 
-        self.save_state()
-
-    def _migrate_legacy_target(self, brush):
-        """Migrate old 'target' property to I/O connection for brushes."""
-        target = brush.get('target', '')
-        if not target:
-            return
-
-        # Determine what output to use
-        if brush.get('is_trigger'):
-            output = 'OnTrigger'
-        elif brush.get('is_mover'):
-            output = 'OnFullyOpen'
-        elif brush.get('is_door'):
-            output = 'OnOpen'
-        else:
-            return
-
-        # Create connection
-        conn = OutputConnection(
-            output_name=output,
-            target_name=target,
-            input_name='Toggle',  # Generic default
-            parameter='',
-            delay=0.0,
-            fire_once=False
-        )
-
-        if '_io_connections' not in brush:
-            brush['_io_connections'] = []
-        brush['_io_connections'].append(conn)
-
-    def _migrate_legacy_thing_target(self, thing):
-        """Migrate old 'target' property to I/O connection for things."""
-        target = thing.properties.get('target', '')
-        if not target:
-            return
-
-        entity_type = thing.properties.get('type', '')
-
-        # Determine output based on type
-        if entity_type == 'logic_gate':
-            output = 'OnTrigger'
-        else:
-            return
-
-        thing.add_output_connection(
-            output_name=output,
-            target_name=target,
-            input_name='Toggle'
-        )
+        if save_undo:
+            self.save_state()
 
     def _selection_identifiers(self):
         """Stable identifiers for the whole selection, for state restoration.
@@ -616,13 +554,9 @@ class EditorState:
         things_data = state.get('things', [])
         new_things = []
         for t_data in things_data:
-            if t_data.get('type') == 'Model':
-                model_kwargs = {k: v for k, v in t_data.items() if k != 'type'}
-                new_things.append(Model(**model_kwargs))
-            else:
-                thing = Thing.from_dict(t_data)
-                if thing:
-                    new_things.append(thing)
+            thing = Thing.from_dict(t_data)
+            if thing is not None:
+                new_things.append(thing)
         self.things = new_things
 
         if 'selection' in state:

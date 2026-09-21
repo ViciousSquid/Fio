@@ -36,7 +36,7 @@ be small insertions in those files; see ``plugins/README.md``.
 
 from __future__ import annotations
 
-from PyQt5.QtWidgets import QMessageBox, QMenu
+from PyQt5.QtWidgets import QMenu
 
 _applied = False
 
@@ -299,6 +299,19 @@ def _patch_editor_menu():
     Ui_MainWindow._fio_plugins_patched = True
 
 
+def refresh_plugin_ui(MainWindow):
+    """Rebuild the plugin-facing editor UI after the plugin set changes.
+
+    Loading a package's bundled plugins mid-session adds entity types and menu
+    actions that were not there when the menus were built. This is the one
+    entry point that puts them on screen; it is safe to call repeatedly.
+    """
+    try:
+        _build_plugins_menu(MainWindow)
+    except Exception as exc:
+        _log(f"plugin UI refresh failed: {exc}")
+
+
 def _disabled_from_config(MainWindow):
     """Read the persisted set of disabled plugin names from settings.ini."""
     cfg = getattr(MainWindow, "config", None)
@@ -352,6 +365,12 @@ def _build_plugins_menu(MainWindow):
             help_action = action
             break
 
+    # Drop a previously built menu: this runs again when a .fiopak brings
+    # plugins of its own, and two "Plugins" entries is not a menu bar.
+    for action in list(menubar.actions()):
+        if action.text().replace("&", "") == "Plugins":
+            menubar.removeAction(action)
+
     menu = QMenu("Plugins", menubar)
     if help_action:
         menubar.insertMenu(help_action, menu)
@@ -364,14 +383,42 @@ def _build_plugins_menu(MainWindow):
         return
 
     for plugin in mgr.plugins:
-        sub = menu.addMenu(f"{plugin.name}  v{plugin.version}")
+        sub = menu.addMenu(plugin.name)
+
+        # Plugin-owned actions sit at the very top, and are hidden outright
+        # while that plugin is off rather than shown greyed out.
+        # _run_plugin_menu_action refuses to call them without their plugin, so
+        # a visible one is an offer the editor cannot honour -- Tidy's "Load
+        # Demo map" looked available and silently did nothing.
+        plugin_actions = []
+        enabled = mgr.is_enabled(plugin)
+        for label, callback, tooltip in [
+            (label, callback, tooltip)
+            for pl, label, callback, tooltip in mgr.menu_actions()
+            if pl is plugin
+        ]:
+            act = sub.addAction(label)
+            if tooltip:
+                act.setToolTip(tooltip)
+            act.triggered.connect(
+                lambda _checked=False, p=plugin, cb=callback:
+                _run_plugin_menu_action(MainWindow, p, cb))
+            plugin_actions.append(act)
+        if plugin_actions:
+            # The separator belongs to the group: with the actions hidden it
+            # would otherwise sit above "Enabled" on its own.
+            plugin_actions.append(sub.addSeparator())
+        for act in plugin_actions:
+            act.setVisible(enabled)
+            act.setEnabled(enabled)
 
         # Enable/disable toggle (checked = on).
         toggle = sub.addAction("Enabled")
         toggle.setCheckable(True)
         toggle.setChecked(mgr.is_enabled(plugin))
         toggle.toggled.connect(
-            lambda checked, p=plugin: _toggle_plugin(MainWindow, p, checked))
+            lambda checked, p=plugin, acts=plugin_actions:
+            _toggle_plugin(MainWindow, p, checked, acts))
         sub.addSeparator()
 
         # Placement entries for this plugin's entities.
@@ -393,15 +440,32 @@ def _build_plugins_menu(MainWindow):
             QMessageBox.information(
                 MainWindow, f"{p.name} v{p.version}",
                 f"{p.description or '(no description)'}\n\n"
+                f"Version: {p.version}\n"
                 f"Category: {p.category}\n"
                 f"Place its entities from here or the 2D view's right-click "
                 f"menu under Plugins ▸ {p.name}."))
 
 
 
-def _toggle_plugin(MainWindow, plugin, enabled):
+def _run_plugin_menu_action(MainWindow, plugin, callback):
+    """Invoke a plugin-owned editor menu action safely."""
+    if not getattr(plugin, "enabled", False):
+        return
+    try:
+        callback(MainWindow)
+    except Exception as exc:
+        _log(f"plugin menu action failed for '{plugin.name}': {exc}")
+
+
+def _toggle_plugin(MainWindow, plugin, enabled, menu_actions=None):
     from plugins.manager import get_manager
     get_manager().set_enabled(plugin, enabled)
+    for action in menu_actions or ():
+        try:
+            action.setVisible(bool(enabled))
+            action.setEnabled(bool(enabled))
+        except Exception:
+            pass
     _persist_disabled(MainWindow)
     if hasattr(MainWindow, "show_toast"):
         state = "enabled" if enabled else "disabled"
@@ -511,62 +575,62 @@ def _patch_property_editor():
 
     _orig_iterate = PropertyEditor._iterate_thing_properties
 
-def _iterate_thing_properties(self, form, thing, property_keys=None):
-    specs = owner = ttype = mgr = None
+    def _iterate_thing_properties(self, form, thing, property_keys=None):
+        specs = owner = ttype = mgr = None
 
-    try:
-        props = getattr(thing, "properties", None)
-        ttype = props.get("type") if isinstance(props, dict) else None
-
-        if ttype:
-            mgr = get_manager()
-            specs = mgr.property_schema_for(ttype)
-            owner = mgr.plugin_for_type(ttype)
-    except Exception:
-        specs = owner = None
-
-    # Plugin-owned entity with a full schema gets its schema-driven widgets.
-    # Otherwise use the normal PropertyEditor iterator. Pass property_keys
-    # through so the editor's explicit primary/advanced classification is
-    # preserved even when this plugin shim is installed.
-    rendered = False
-
-    if specs and owner is not None:
         try:
-            # A plugin schema owns the complete rendering of its properties.
-            # Explicit property filtering is therefore not applied here.
-            _render_schema_rows(self, form, thing, specs)
-            rendered = True
-        except Exception as exc:
-            _log(
-                f"schema render failed for "
-                f"'{getattr(thing, 'name', '?')}', falling back ({exc})"
-            )
+            props = getattr(thing, "properties", None)
+            ttype = props.get("type") if isinstance(props, dict) else None
 
-    if not rendered:
-        _orig_iterate(
-            self,
-            form,
-            thing,
-            property_keys=property_keys,
-        )
+            if ttype:
+                mgr = get_manager()
+                specs = mgr.property_schema_for(ttype)
+                owner = mgr.plugin_for_type(ttype)
+        except Exception:
+            specs = owner = None
 
-    try:
-        extra = (
-            mgr.extra_fields_for(ttype)
-            if (mgr and ttype)
-            else []
-        )
+        # Plugin-owned entity with a full schema gets its schema-driven widgets.
+        # Otherwise use the normal PropertyEditor iterator. Pass property_keys
+        # through so the editor's explicit primary/advanced classification is
+        # preserved even when this plugin shim is installed.
+        rendered = False
 
-        if extra:
-            _append_extra_fields(
+        if specs and owner is not None:
+            try:
+                # A plugin schema owns the complete rendering of its properties.
+                # Explicit property filtering is therefore not applied here.
+                _render_schema_rows(self, form, thing, specs)
+                rendered = True
+            except Exception as exc:
+                _log(
+                    f"schema render failed for "
+                    f"'{getattr(thing, 'name', '?')}', falling back ({exc})"
+                )
+
+        if not rendered:
+            _orig_iterate(
                 self,
                 form,
                 thing,
-                extra,
+                property_keys=property_keys,
             )
-    except Exception as exc:
-        _log(f"extra-field render failed ({exc})")
+
+        try:
+            extra = (
+                mgr.extra_fields_for(ttype)
+                if (mgr and ttype)
+                else []
+            )
+
+            if extra:
+                _append_extra_fields(
+                    self,
+                    form,
+                    thing,
+                    extra,
+                )
+        except Exception as exc:
+            _log(f"extra-field render failed ({exc})")
 
     PropertyEditor._iterate_thing_properties = _iterate_thing_properties
 

@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QDialogButtonBox, QHBoxLayout
 )
 from PyQt5.QtWidgets import QShortcut
-from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QPoint, pyqtSignal
+from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal
 from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor, QIcon
 
 from editor.things import Light, PlayerStart, Model, update_all_counters_from_entities
@@ -37,10 +37,8 @@ from editor.component_edit import (
     MODE_OBJECT, MODE_FACE, MODE_EDGE, MODE_VERTEX,
 )
 from editor.terrain_editor import TerrainEditorPanel
-from engine.terrain import Terrain
 from editor.debug_console import DebugConsole, CommandInput, debug_log
 from editor.console_commands import ConsoleCommandHandler
-from editor.procedural_generator import ProceduralMapWidget
 
 
 class Toast(QLabel):
@@ -196,6 +194,7 @@ class MainWindow(QMainWindow):
         self.preview_data = {} 
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
+
         self.update_recent_files_menu()
         self.setup_package_actions() 
         self.update_title()
@@ -712,6 +711,24 @@ class MainWindow(QMainWindow):
         else:
             tab.setCurrentIndex(console_idx)
 
+    def show_properties_panel(self):
+        """Bring the Properties tab to the front and make sure it is visible.
+
+        The dock is tabbed with the Debug Console and can be closed outright,
+        so showing the panel means three things, not one: the dock visible, the
+        dock raised above anything docked over it, and the Properties tab
+        selected rather than the console.
+        """
+        dock = getattr(self, 'properties_dock', None)
+        tab = getattr(self, 'properties_tab_widget', None)
+        if dock is not None:
+            dock.setVisible(True)
+            dock.raise_()
+        if tab is not None:
+            index = tab.indexOf(self.property_editor)
+            if index >= 0:
+                tab.setCurrentIndex(index)
+
     def _clear_terrain(self):
         """Remove the terrain object and clear all references."""
         # Destroy the live terrain object
@@ -954,7 +971,6 @@ class MainWindow(QMainWindow):
     
     def open_terrain_editor(self):
         """Open the terrain editor floating window."""
-        from PyQt5.QtWidgets import QProgressDialog
         from PyQt5.QtCore import Qt
         
        # Create terrain if it doesn't exist
@@ -1241,7 +1257,35 @@ class MainWindow(QMainWindow):
         new_model = Model(pos=[0, 0, 0])
         new_model.properties['model_path'] = filepath.replace('\\', '/') # Ensure forward slashes
         new_model.properties['rotation'] = rotation
-        new_model.properties['scale'] = scale
+
+        # Downloaded OBJs are commonly authored in real-world units and can be
+        # only a few Fio units across. Fio's world is much larger (TILE_SIZE is
+        # 50), so an otherwise valid imported mesh can become effectively
+        # invisible in the editor at the default camera distance. When the Asset
+        # Browser supplies the neutral [1,1,1] scale, give unusually small OBJs a
+        # sensible initial scene scale. Existing authored maps and explicit
+        # non-unit scales are left untouched.
+        initial_scale = list(scale) if isinstance(scale, (list, tuple)) else scale
+        if (
+            str(filepath).lower().endswith('.obj')
+            and isinstance(initial_scale, (list, tuple))
+            and len(initial_scale) == 3
+            and all(float(v) == 1.0 for v in initial_scale)
+        ):
+            try:
+                from engine.obj_loader import OBJLoader
+                loader = OBJLoader()
+                if loader.load(filepath) and loader.vertices:
+                    verts = np.asarray(loader.vertices, dtype=np.float32)
+                    extent = float(np.max(verts.max(axis=0) - verts.min(axis=0)))
+                    if 0.0 < extent < TILE_SIZE * 0.2:
+                        fit_target = TILE_SIZE * 0.5
+                        fit = min(fit_target / extent, 25.0)
+                        initial_scale = [fit, fit, fit]
+            except Exception:
+                pass
+
+        new_model.properties['scale'] = initial_scale
         
         # Set a default name based on filename
         model_name = os.path.splitext(os.path.basename(filepath))[0]
@@ -4184,7 +4228,6 @@ class MainWindow(QMainWindow):
         """Extract a zip file safely, rejecting any member that would escape dest_dir."""
         import zipfile
         import os
-        import shutil
 
         dest_dir = os.path.realpath(dest_dir)
         with zipfile.ZipFile(zip_path, 'r') as zf:
@@ -4223,8 +4266,7 @@ class MainWindow(QMainWindow):
 
             # Extract package to temp directory
             temp_dir = tempfile.mkdtemp(prefix="fio_package_")
-            with zipfile.ZipFile(filePath, 'r') as zf:
-                self._safe_extract_zip(filePath, temp_dir)
+            self._safe_extract_zip(filePath, temp_dir)
 
             # Find the map JSON inside the package
             map_path = self._find_map_in_package(temp_dir)
@@ -4234,6 +4276,8 @@ class MainWindow(QMainWindow):
             if not map_path:
                 QMessageBox.critical(self, "Error", "No map file found in game package.")
                 return
+
+            self._load_package_plugins(temp_dir)
 
             # Try to configure ResourceManager for package assets
             try:
@@ -4276,8 +4320,10 @@ class MainWindow(QMainWindow):
             self._package_temp_dir = temp_dir
             temp_dir = None  # Prevent cleanup in finally block
 
-            # Update UI state
-            self.file_path = filePath
+            # Update UI state.  file_path deliberately stays None (set above):
+            # it is what save_level() writes to, and writing a map over the
+            # .fiopak replaces the archive -- and every asset in it -- with a
+            # JSON file.  The first save must go through Save As.
             self.unsaved_changes = False
             self.update_title()
             self.set_selected_object(None)
@@ -4299,6 +4345,34 @@ class MainWindow(QMainWindow):
         finally:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _load_package_plugins(self, package_root):
+        """Load the plugins a .fiopak carries, before its map is parsed.
+
+        A package bundles the plugin code its maps need so it plays on a
+        machine without those plugins installed (see the .fiopak format docs).
+        Both import paths go through here, and it runs *before* the map is
+        loaded: Thing.from_dict resolves an entity's class at parse time, so a
+        plugin arriving afterwards would leave every one of its entities as an
+        unresolved record.
+        """
+        try:
+            from plugins.packaging import load_package_plugins
+        except Exception:
+            return []          # no plugin system in this build
+        try:
+            added = load_package_plugins(package_root, log=print)
+        except Exception as exc:
+            print(f"[Package] plugin load failed: {exc}")
+            return []
+        if added:
+            self.show_toast("Package plugins loaded: %s" % ", ".join(added))
+            try:
+                from plugins.integration import refresh_plugin_ui
+                refresh_plugin_ui(self)
+            except Exception:
+                pass
+        return added
 
     def play_package_from_path(self, file_path):
         """Load and launch a game package from the given file path.
@@ -4324,8 +4398,7 @@ class MainWindow(QMainWindow):
 
             # Extract package to temp directory
             temp_dir = tempfile.mkdtemp(prefix="fio_package_")
-            with zipfile.ZipFile(file_path, 'r') as zf:
-                self._safe_extract_zip(file_path, temp_dir)
+            self._safe_extract_zip(file_path, temp_dir)
 
             # Find the map JSON inside the package
             map_path = self._find_map_in_package(temp_dir)
@@ -4334,6 +4407,8 @@ class MainWindow(QMainWindow):
             if not map_path:
                 self.show_toast("No map file found in game package.", is_error=True)
                 return
+
+            self._load_package_plugins(temp_dir)
 
             # Configure ResourceManager for package assets
             try:
@@ -4375,7 +4450,6 @@ class MainWindow(QMainWindow):
             temp_dir = None  # Prevent cleanup in finally block
 
             # Update UI state
-            self.file_path = file_path
             self.unsaved_changes = False
             self.update_title()
             self.set_selected_object(None)
@@ -4574,7 +4648,7 @@ class MainWindow(QMainWindow):
 
     def open_logic_wizard(self):
         """Open the Logic Wizard (guided I/O scenario setup)."""
-        from editor.logic_graph_widget import LogicGraphWindow, LogicGraphScene
+        from editor.logic_graph_widget import LogicGraphScene
         from editor.logic_wizard import LogicWizard
         # Reuse the existing graph window's scene if it is already open,
         # so that wizard-added connections appear there immediately.
@@ -4635,8 +4709,6 @@ class MainWindow(QMainWindow):
         )
 
         problems = validation['problems']
-        io_count = validation['io_count']
-        pathnode_count = validation['pathnode_count']
         total = validation['total']
 
         # Format validation problems.  I/O and PathNode problems use the

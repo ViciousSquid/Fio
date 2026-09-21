@@ -35,6 +35,10 @@ import tempfile
 from typing import List, Optional
 
 
+from engine.prop_runtime import PropSession
+from engine.prop_entity import Prop as CoreProp
+
+
 class _CamPlayer:
     """Adapts the player's free-look camera to the engine player interface.
 
@@ -72,6 +76,8 @@ class _BridgeLogic:
         self.player = _CamPlayer()
         self.io_manager = _NullIO()
         self.current_hud_message = ""
+        self._props = None
+        self._prop_drop_interceptor = None
 
 
 class PlayerPluginHost:
@@ -174,48 +180,61 @@ class PlayerPluginHost:
         return activated
 
     def build_and_start(self, map_data: dict) -> None:
-        """Instantiate the map's plugin entities and start the play session."""
+        """Instantiate core Props and plugin entities, then start play."""
         if not self.active or self.manager is None:
             return
-        # A plugin may ship disabled-by-default; a package built around it still
-        # needs it running here. Enable any plugin this map's entities require
-        # before we build them, so dispatch_play_start below doesn't skip it.
+
         try:
             self.manager.auto_enable_for_map(map_data)
         except Exception:
             pass
-        # Enable entity-less global plugins the map declares (e.g. topdown).
+
         required = self._activate_required_plugins(map_data)
         things = []
         for t in map_data.get("things", []):
             if not isinstance(t, dict):
                 continue
+
             typ = t.get("type") or t.get("properties", {}).get("type")
             if not typ:
                 continue
-            cls = self.manager.entity_class_for_type(typ)
+            norm = str(typ).replace("_", "").lower()
+
+            if norm == "prop":
+                cls = CoreProp
+            else:
+                cls = self.manager.entity_class_for_type(typ)
             if cls is None:
                 continue
+
             try:
-                things.append(cls(pos=list(t.get("pos", [0, 0, 0])),
-                                  properties=dict(t.get("properties", {}))))
+                things.append(
+                    cls(
+                        pos=list(t.get("pos", [0, 0, 0])),
+                        properties=dict(t.get("properties", {})),
+                    )
+                )
             except Exception:
                 continue
 
         if not things and not required:
-            self.active = False   # nothing in this map for plugins to act on
+            self.active = False
             return
 
         self.bridge = _BridgeLogic(things)
-        # Bind the host so plugins can reach the session and its event stream in
-        # the player exactly as in the editor. Guarded: older managers without
-        # bind_host simply skip it.
+        # The engine's Prop registry, exactly as the editor logic thread builds
+        # it: one session, filled from the authoritative thing list.  The player
+        # does not decide for itself which Things are Props.
+        self.bridge._props = PropSession(self.bridge)
+        self.bridge._props.start()
+
         try:
             binder = getattr(self.manager, "bind_host", None)
             if binder is not None:
                 binder(self.bridge, kind="player")
         except Exception as exc:
             print(f"[Fio Player] plugin host bind failed: {exc}")
+
         try:
             self.manager.dispatch_play_start(self.bridge)
             emit = getattr(self.manager, "emit", None)
@@ -228,14 +247,25 @@ class PlayerPluginHost:
              use_pressed: bool) -> None:
         if not self.active or self.bridge is None or self.manager is None:
             return
+
         self.bridge.player.update(cam_pos, cam_yaw_deg, cam_pitch_deg)
         self.bridge.current_hud_message = ""
+
+        props = self.bridge._props
+        if props is not None:
+            props.tick(dt, bool(use_pressed))
+            props.sync_physics_positions()
+
         try:
-            # Same cached, early-out dispatch the engine uses: builds a context
-            # only when a plugin actually ticks.
-            self.manager.tick(self.bridge, use_pressed=bool(use_pressed), delta=dt)
+            self.manager.tick(
+                self.bridge,
+                use_pressed=bool(use_pressed),
+                interaction_consumed=bool(self.bridge.current_hud_message),
+                delta=dt,
+            )
         except Exception:
             return
+
         self.hud_message = self.bridge.current_hud_message
 
     def camera_override(self, cam_pos, cam_yaw_deg: float, cam_pitch_deg: float):
@@ -277,6 +307,11 @@ class PlayerPluginHost:
     def stop(self) -> None:
         if self.active and self.bridge is not None and self.manager is not None:
             try:
+                props = getattr(self.bridge, "_props", None)
+                if props is not None:
+                    props.stop()
+                self.bridge._props = None
+
                 self.manager.dispatch_play_stop(self.bridge)
                 emit = getattr(self.manager, "emit", None)
                 if emit is not None:

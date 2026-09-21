@@ -26,7 +26,7 @@ from PyQt5.QtWidgets import (
     QComboBox, QFrame, QSizePolicy, QToolBar, QAction,
     QGraphicsDropShadowEffect, QApplication, QShortcut
 )
-from PyQt5.QtCore  import Qt, QRectF, QPointF, pyqtSignal, QSize
+from PyQt5.QtCore  import Qt, QRectF, QPointF, pyqtSignal
 from PyQt5.QtGui   import (
     QPainter, QPen, QBrush, QColor, QFont, QPainterPath, QPainterPathStroker,
     QLinearGradient, QIcon, QKeySequence, QFontMetrics
@@ -106,7 +106,6 @@ TYPE_HDR: Dict[str, QColor] = {
     'logic_camera': QColor(150,  90, 200),
     'logic_spawner':QColor( 45, 160, 120),
     'logic_state':    QColor(170, 140,  50),
-    'logic_keyvalue': QColor(170, 140,  50),   # pre-2.4 token for the same entity
 }
 C_HDR_DEFAULT = QColor(85, 85, 95)
 

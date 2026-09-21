@@ -8,7 +8,6 @@ from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
 from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
                           LogicCamera, LogicSpawner, Portal, LogicState)
-from editor.scene_hierarchy import SceneHierarchy
 from engine import brush_geometry as bg  # convex/angled-brush geometry
 from engine.constants import brush_aabb_bounds
 from editor import component_edit as ce  # shared object/face/edge/vertex model
@@ -2087,23 +2086,24 @@ class View2D(QWidget):
         """Helper to compute screen coordinates for a model's wireframe.
         Returns (pts_x, pts_y) numpy arrays, or None if failed."""
         model_path = model_thing.properties.get('model_path')
-        if not model_path: return None
+        if not model_path:
+            return None
 
-        # Access loaded model from renderer via main window reference
+        # 2D is a QPainter view, not the renderer's OpenGL context. Never load
+        # a model here: OBJ/GLB loading creates VAOs/VBOs and must happen in the
+        # 3D view's current GL context. The 3D renderer loads it on its next frame.
         if not hasattr(self.main_window, 'view_3d') or not self.main_window.view_3d.renderer:
             return None
-            
+
         renderer = self.main_window.view_3d.renderer
-        
-        if model_path not in renderer.loaded_models:
+        obj = renderer.get_loaded_model(model_path)
+        if not obj or not obj.is_loaded:
             return None
-            
-        obj = renderer.loaded_models.get(model_path)
         if not obj or not hasattr(obj, 'cpu_vertices') or obj.cpu_vertices is None or len(obj.cpu_vertices) == 0:
             return None
 
         # Optimization: Too many vertices check
-        if len(obj.cpu_vertices) > 2000:
+        if len(obj.cpu_vertices) > 50000:
             return None # Treat as box fallback elsewhere
 
         # Transform parameters
@@ -2157,10 +2157,6 @@ class View2D(QWidget):
     def _draw_model_wireframe(self, painter, model_thing, ax_map, ax1, ax2):
         """Draws the projected wireframe of a 3D model in the 2D view."""
         model_path = model_thing.properties.get('model_path')
-        if model_path and hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.renderer:
-            renderer = self.main_window.view_3d.renderer
-            if model_path not in renderer.loaded_models:
-                renderer.load_model(model_path)
 
         coords = self._compute_model_screen_coords(model_thing, ax_map, ax1, ax2)
 
@@ -2182,10 +2178,10 @@ class View2D(QWidget):
         # edges AND crashes when vertex_count % 3 != 0.
         obj = None
         if model_path and hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.renderer:
-            obj = self.main_window.view_3d.renderer.loaded_models.get(model_path)
+            obj = self.main_window.view_3d.renderer.get_loaded_model(model_path)
         cpu_triangles = getattr(obj, 'cpu_triangles', None)
 
-        if cpu_triangles:
+        if cpu_triangles is not None and len(cpu_triangles):
             for tri in cpu_triangles:
                 i0, i1, i2 = tri
                 # Guard against malformed index data
@@ -2244,7 +2240,7 @@ class View2D(QWidget):
             draw_rect = None
 
             # --- MODEL RENDERING ---
-            if isinstance(thing, Model) and thing.properties.get('model_path'):
+            if thing.properties.get('model_path'):
                 self._draw_model_wireframe(painter, thing, ax_map, ax1, ax2)
                 # Selection box for models
                 draw_rect = QRectF(s_pos.x() - 16, s_pos.y() - 16, 32, 32)
@@ -3823,7 +3819,7 @@ class View2D(QWidget):
         add_logic_timer_action = logic_menu.addAction("LogicTimer")
         add_logic_gate_action = logic_menu.addAction("LogicGate")
         add_logic_command_action = logic_menu.addAction("LogicCommand")
-        add_logic_keyvalue_action = logic_menu.addAction("State Store")
+        add_logic_state_action = logic_menu.addAction("State Store")
 
         # Node / Special submenu
         ai_menu = menu.addMenu("Nodes")
@@ -3885,7 +3881,7 @@ class View2D(QWidget):
         elif action == add_logic_gate_action:
             new_thing = LogicGate(pos=pos_3d)
             new_thing.properties['logic_type'] = 'AND' 
-        elif action == add_logic_keyvalue_action:
+        elif action == add_logic_state_action:
             new_thing = LogicState(pos=pos_3d)
             new_thing.properties['initial_data'] = {}
         elif action == add_logic_camera_action:
@@ -4247,7 +4243,7 @@ class View2D(QWidget):
             is_hit = False
             
             # Standard Thing Hit Test
-            if isinstance(thing, Model) and thing.properties.get('model_path'):
+            if thing.properties.get('model_path'):
                 # Advanced Model Hit Test: Check Bounding Box of projected vertices
                 coords = self._compute_model_screen_coords(thing, ax_map, ax1, ax2)
                 if coords:

@@ -6,8 +6,8 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
                              QMainWindow, QPushButton, QFileDialog, QTreeView, 
                              QFileSystemModel, QTabWidget, QAbstractItemView,
                              QSizePolicy, QListWidget, QListWidgetItem)
-from PyQt5.QtCore import Qt, QSize, QDir, QRect, QPointF, pyqtSignal, QTimer
-from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QIcon, QPen, QPolygonF, QTextCursor, QDesktopServices
+from PyQt5.QtCore import Qt, QDir, QRect, QPointF, QTimer
+from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QPen, QPolygonF
 from engine.glb_loader import render_glb_thumbnail
 # The Surface Inspector's FACE toggle sets this colour; the INSPECTOR button
 # that opens that panel borrows it so the two read as a pair.

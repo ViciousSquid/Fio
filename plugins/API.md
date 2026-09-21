@@ -60,8 +60,8 @@ implements; `API_VERSION_INFO` is the same value as an `(int, int, int)` tuple.
 
 | Value | Introduced |
 |-------|------------|
-| `API_VERSION` | `"1.3.0"` |
-| `API_VERSION_INFO` | `(1, 3, 0)` |
+| `API_VERSION` | `"1.4.0"` |
+| `API_VERSION_INFO` | `(1, 4, 0)` |
 
 History:
 
@@ -70,6 +70,7 @@ History:
 - **1.3.0** — render hooks (`render.*` events), swappable-renderer registration
   (`register_renderer`), editor-UI extensions (extra property fields on any
   entity, custom property tabs), and the `FIO_NO_PLUGINS` kill-switch.
+- **1.4.0** — optional editor Tools actions and console-command registration for developer plugins.
 
 A plugin declares the minimum it needs with `FioPlugin.api_version`. If that is
 **newer** than the host's `API_VERSION`, the manager refuses to load the plugin
@@ -297,6 +298,14 @@ mode. *cls* must implement the renderer interface (`render_scene`,
 `draw_models`, `cleanup`, a `lod_manager`, …). Returns `True` if registered,
 `False` in a headless/player context with no viewport. This is how a whole new
 renderer ships as a plugin.
+
+### Developer/editor tools (API 1.4.0)
+
+```python
+def register_tools_action(self, label: str, callback, tooltip: str = "") -> None
+def register_console_command(self, name: str, callback, help_text: str = "") -> None
+```
+Register developer-only editor actions and console commands without importing Qt or OpenGL at plugin registration time. Tools callbacks receive `main_window`; console callbacks receive `(args, main_window, logic, play_mode)`. Disabled plugins are not dispatched.
 
 ### Global store & logging
 
@@ -616,8 +625,7 @@ api.register_properties("bigworldsettings", [
 
 Process-wide, cross-level key/value storage for plugins. When the editor package
 is present it binds to the **same** persistent registry that map `LogicState`
-entities use (`LogicKeyValueStore` before 2.4 — the same class under its old
-name), so a plugin's globals live alongside — and can share stores with — map
+entities use, so a plugin's globals live alongside — and can share stores with — map
 state, persisting across level loads within a session. In the dependency-light
 player it falls back to a plain process-local dict-of-dicts with the same API.
 

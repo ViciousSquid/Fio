@@ -78,6 +78,21 @@ class FakeHost(QWidget):
     def update_all_ui(self):
         pass
 
+    # on_trigger_changed() refreshes the hierarchy after retyping a brush.
+    # Part of the slice the panel talks to, so the fake carries it.
+    class _FakeHierarchy:
+        def __init__(self):
+            self.refreshes = 0
+
+        def refresh_list(self):
+            self.refreshes += 1
+
+    @property
+    def scene_hierarchy(self):
+        if not hasattr(self, "_scene_hierarchy"):
+            self._scene_hierarchy = FakeHost._FakeHierarchy()
+        return self._scene_hierarchy
+
     def show_toast(self, message, is_error=False, duration=None):
         pass
 
@@ -699,11 +714,18 @@ def test_light_show_radius_row_labels_itself(panel):
 
     editor.set_object(light)
 
-    cb = editor._widgets.get('light_show_radius_cb')
+    cb = _show_radius_cb(editor)
     assert cb is not None, "the Show Radius checkbox was not built"
     assert cb.text() == "Show Radius"
     assert cb.isChecked()
     assert _row_label_for(editor, cb) == ""
+
+
+def _show_radius_cb(editor):
+    """The Light panel's Show Radius checkbox, found by what the user sees."""
+    from PyQt5.QtWidgets import QCheckBox
+    return next((cb for cb in editor.findChildren(QCheckBox)
+                 if cb.text() == "Show Radius"), None)
 
 
 def test_light_show_radius_accepts_a_string_value(panel):
@@ -715,7 +737,7 @@ def test_light_show_radius_accepts_a_string_value(panel):
 
     editor.set_object(light)
 
-    cb = editor._widgets['light_show_radius_cb']
+    cb = _show_radius_cb(editor)
     assert cb.isChecked()
 
 
@@ -726,6 +748,84 @@ def test_light_show_radius_writes_back(panel):
     host.state.things = [light]
 
     editor.set_object(light)
-    editor._widgets['light_show_radius_cb'].setChecked(True)
+    _show_radius_cb(editor).setChecked(True)
 
     assert light.properties['show_radius'] is True
+
+
+# ---------------------------------------------------------------------------
+# Selecting an object must not author into it.
+#
+# The panel builds every tab for every object and hides the ones that do not
+# apply, so a setdefault() inside a tab builder writes that tab's properties
+# onto objects the tab is not even for. _create_trigger_tab did exactly that
+# with trigger_filters and trigger_poll_interval: selecting a plain wall
+# stamped trigger keys into it -- map data mutated by a read-only action -- and
+# because the page-cache signature is computed from the object's own keys, a
+# build that adds keys guarantees the next lookup misses, so the whole panel
+# rebuilt on every selection, drag and rotate.
+#
+# Defaults belong in on_trigger_changed, where the user has actually made the
+# brush a trigger. Every reader already uses .get(..., default), in both the
+# panel and LogicThread.
+# ---------------------------------------------------------------------------
+
+def test_selecting_a_brush_does_not_author_properties_into_it(panel):
+    host, editor = panel
+    brush = make_brush()
+    host.state.brushes.append(brush)
+
+    before = dict(brush)
+    editor.set_object(brush)
+
+    added = set(brush) - set(before)
+    assert added == set(), (
+        "selection authored new keys into the brush: %s" % sorted(added))
+    changed = {k for k in before if brush[k] != before[k]}
+    assert changed == set(), (
+        "selection changed existing keys: %s" % sorted(changed))
+
+
+def test_selecting_a_thing_does_not_author_properties_into_it(panel):
+    host, editor = panel
+    light = Light(pos=[0, 0, 0])
+    host.state.things = [light]
+
+    before = dict(light.properties)
+    editor.set_object(light)
+
+    added = set(light.properties) - set(before)
+    assert added == set(), (
+        "selection authored new keys into the Thing: %s" % sorted(added))
+
+
+def test_the_page_cache_actually_hits_on_reselect(panel):
+    """The rebuild avoidance the cache exists for, asserted end to end."""
+    host, editor = panel
+    brush = make_brush()
+    host.state.brushes.append(brush)
+
+    editor.set_object(brush)
+    first = page_of(editor)
+    signature = editor._signature
+
+    editor.set_object(brush)
+
+    assert editor._signature == signature, (
+        "the panel's own build changed its cache signature, so the cache can "
+        "never hit")
+    assert page_of(editor) is first
+
+
+def test_turning_a_brush_into_a_trigger_does_author_its_defaults(panel):
+    """The other half of the contract: the defaults must land somewhere."""
+    host, editor = panel
+    brush = make_brush()
+    host.state.brushes.append(brush)
+    editor.set_object(brush)
+
+    editor.on_trigger_changed(True)
+
+    assert brush['is_trigger'] is True
+    assert brush['trigger_filters'] == ['player']
+    assert brush['trigger_poll_interval'] == 1.0

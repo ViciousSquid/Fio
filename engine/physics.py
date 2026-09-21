@@ -1,8 +1,9 @@
 import math
 import glm
+import numpy as np
 
 from .constants import is_water_brush, brush_aabb_bounds
-from .spatial import CELL_SIZE, CellIndex, authored_hidden
+from .spatial import CELL_SIZE, CellIndex, authored_hidden, cells_of_points
 
 class SpatialGrid:
     """
@@ -47,6 +48,9 @@ class SpatialGrid:
             # otherwise drop every parked brush from collision for good, even
             # after its cell came back.
             if authored_hidden(brush) or brush.get('is_fog'):
+                continue
+            # Physics bodies are simulated by the engine physics world rather than the static grid.
+            if brush.get('_physics_body'):
                 continue
             if is_water_brush(brush):
                 self.water_brushes.append(brush)
@@ -308,3 +312,1009 @@ class SpatialGrid:
                         if t_min < limit:
                             return False
         return True
+
+
+class PhysicsBody:
+    """Lightweight handle for one row in the engine's batched physics state."""
+
+    def __init__(self, world, entity, entity_id):
+        self.world = world
+        self.entity = entity
+        self.entity_id = entity_id
+        self.rest_callback = None
+
+    @property
+    def _index(self):
+        # Registration only queues a row; the index exists once the world packs.
+        # Pack on demand so a handle read right after register_body() reports
+        # the body's real state instead of the not-found defaults. _pack()
+        # early-outs unless the world is dirty, so this costs nothing on the
+        # steady-state path.
+        self.world._pack()
+        return self.world._indices.get(self.entity_id)
+
+    @property
+    def velocity(self):
+        i = self._index
+        if i is None:
+            return [0.0, 0.0, 0.0]
+        return self.world._velocity[i].tolist()
+
+    @velocity.setter
+    def velocity(self, value):
+        i = self._index
+        if i is not None:
+            self.world._velocity[i] = np.asarray(value, dtype=np.float32)
+
+    @property
+    def mass(self):
+        i = self._index
+        return float(self.world._mass[i]) if i is not None else 1.0
+
+    # ------------------------------------------------------------------
+    # Shape and authored-material accessors.
+    #
+    # Before the batched-NumPy rewrite these were plain attributes on the
+    # body. Packing the state into the world's SoA arrays kept the arrays
+    # but dropped the handle's read side, so callers -- and this class's
+    # own tests -- lost the ability to ask a body what shape it is. They
+    # are restored here as index-backed properties in the same style as
+    # ``velocity``/``mass`` above, reading the packed row rather than
+    # duplicating any state.
+    # ------------------------------------------------------------------
+
+    @property
+    def half_extents(self):
+        """Half the body's collision box, as the world stores it."""
+        i = self._index
+        if i is None:
+            return (0.0, 0.0, 0.0)
+        return tuple(float(v) for v in self.world._half[i])
+
+    @property
+    def size(self):
+        """The body's full collision box.
+
+        ``size`` means full extent everywhere else in Fio (``brush['size']``,
+        ``collision_size``), and it meant full extent on this handle before
+        the rewrite, so it keeps that meaning. Use :attr:`half_extents` for
+        the half-size the batched maths works in.
+        """
+        i = self._index
+        if i is None:
+            return (0.0, 0.0, 0.0)
+        return tuple(float(v) * 2.0 for v in self.world._half[i])
+
+    @property
+    def offset(self):
+        """Collision-box centre relative to the entity's origin."""
+        i = self._index
+        if i is None:
+            return (0.0, 0.0, 0.0)
+        return tuple(float(v) for v in self.world._offset[i])
+
+    @property
+    def solid(self):
+        i = self._index
+        return bool(self.world._solid[i]) if i is not None else False
+
+    @property
+    def gravity(self):
+        i = self._index
+        return bool(self.world._gravity[i]) if i is not None else True
+
+    @property
+    def friction(self):
+        i = self._index
+        return float(self.world._friction[i]) if i is not None else 0.55
+
+    @property
+    def linear_damping(self):
+        i = self._index
+        return float(self.world._damping[i]) if i is not None else 0.08
+
+    @property
+    def angular_velocity(self):
+        i = self._index
+        if i is None:
+            return [0.0, 0.0, 0.0]
+        return self.world._angular_velocity[i].tolist()
+
+    @property
+    def awake(self):
+        i = self._index
+        return bool(self.world._awake[i]) if i is not None else False
+
+    @awake.setter
+    def awake(self, value):
+        i = self._index
+        if i is not None:
+            self.world._awake[i] = bool(value)
+
+    @property
+    def kinematic(self):
+        i = self._index
+        return bool(self.world._kinematic[i]) if i is not None else False
+
+    @kinematic.setter
+    def kinematic(self, value):
+        self.world._set_kinematic_index(self._index, bool(value))
+
+    def set_kinematic(self, value):
+        self.kinematic = value
+
+    def wake(self, velocity=None):
+        self.world._wake_index(self._index, velocity)
+
+    def set_rest_callback(self, callback):
+        self.rest_callback = callback
+
+    def clear(self):
+        self.rest_callback = None
+
+
+class PhysicsWorld:
+    """Engine-owned batched dynamic-body simulation.
+
+    Body state is stored as structure-of-arrays NumPy buffers. The per-tick
+    integration, damping, gravity, push response, sleep test and position
+    updates are vectorised. Python remains only at the engine-object boundary
+    and for the small number of world-collision cell/contact groups that
+    cannot be expressed as one dense operation without wasting large amounts
+    of memory.
+    """
+
+    GRAVITY = np.float32(-900.0)
+    #: Active-body count from which the grouped floor query is worth its setup.
+    #: Below it the NumPy assembly costs more than the scalar raycasts it saves
+    #: -- measured crossover is around 56-64 bodies on this scene shape, so the
+    #: grouped path is only taken where it is demonstrably faster. Both paths
+    #: are bit-identical (tests/physics/test_dynamic_bodies.py), so this is
+    #: purely a cost choice and never a behavioural one.
+    FLOOR_BATCH_MIN_BODIES = 64
+    MAX_STEP = np.float32(0.05)
+    REST_SPEED = np.float32(1.0)
+
+    # Runtime physics controls. Entity-authored mass/friction/damping remain
+    # intact; these values provide global tuning/debug controls for play mode.
+    DEFAULT_TIME_SCALE = np.float32(1.0)
+    DEFAULT_FRICTION_SCALE = np.float32(1.0)
+    DEFAULT_DAMPING_SCALE = np.float32(1.0)
+    DEFAULT_SLEEP_ENABLED = True
+
+    def __init__(self, spatial_grid):
+        self.spatial_grid = spatial_grid
+        self.bodies = {}
+        self._indices = {}
+
+        self._entities = []
+        self._velocity = np.empty((0, 3), dtype=np.float32)
+        self._position = np.empty((0, 3), dtype=np.float32)
+        self._offset = np.empty((0, 3), dtype=np.float32)
+        self._half = np.empty((0, 3), dtype=np.float32)
+        self._mass = np.empty(0, dtype=np.float32)
+        self._friction = np.empty(0, dtype=np.float32)
+        self._damping = np.empty(0, dtype=np.float32)
+        self._gravity = np.empty(0, dtype=np.float32)
+        self._angular_velocity = np.empty((0, 3), dtype=np.float32)
+        self._solid = np.empty(0, dtype=np.bool_)
+        self._physics_enabled = np.empty(0, dtype=np.bool_)
+        self._awake = np.empty(0, dtype=np.bool_)
+        self._kinematic = np.empty(0, dtype=np.bool_)
+        self._dirty = False
+        self._static_cells = {}
+        self._static_query_cache = {}
+        # Baseline for entities_that_changed_cell(): one (N, 2) cell array.
+        self._reported_cell = None
+
+        # Console-adjustable world controls.
+        self.gravity = float(self.GRAVITY)
+        self.time_scale = float(self.DEFAULT_TIME_SCALE)
+        self.friction_scale = float(self.DEFAULT_FRICTION_SCALE)
+        self.damping_scale = float(self.DEFAULT_DAMPING_SCALE)
+        self.sleep_enabled = bool(self.DEFAULT_SLEEP_ENABLED)
+
+    def clear(self):
+        for body in self.bodies.values():
+            body.clear()
+        self.bodies.clear()
+        self._indices.clear()
+        self._entities.clear()
+        self._velocity = np.empty((0, 3), dtype=np.float32)
+        self._position = np.empty((0, 3), dtype=np.float32)
+        self._offset = np.empty((0, 3), dtype=np.float32)
+        self._half = np.empty((0, 3), dtype=np.float32)
+        self._mass = np.empty(0, dtype=np.float32)
+        self._friction = np.empty(0, dtype=np.float32)
+        self._damping = np.empty(0, dtype=np.float32)
+        self._gravity = np.empty(0, dtype=np.float32)
+        self._angular_velocity = np.empty((0, 3), dtype=np.float32)
+        self._solid = np.empty(0, dtype=np.bool_)
+        self._physics_enabled = np.empty(0, dtype=np.bool_)
+        self._awake = np.empty(0, dtype=np.bool_)
+        self._kinematic = np.empty(0, dtype=np.bool_)
+        self._static_cells.clear()
+        self._static_query_cache.clear()
+        self._reported_cell = None
+        self._dirty = False
+
+    @staticmethod
+    def _shape_from_brush(entity, brush):
+        bounds = brush.get('_mesh_bounds') if brush.get('_collision_mode') == 'mesh' else None
+        if bounds:
+            min_v, max_v = bounds
+            center = np.array(
+                [(float(min_v[i]) + float(max_v[i])) * 0.5 for i in range(3)],
+                dtype=np.float32,
+            )
+            size = np.array(
+                [float(max_v[i]) - float(min_v[i]) for i in range(3)],
+                dtype=np.float32,
+            )
+        else:
+            center = np.asarray(
+                brush.get('pos', (0.0, 0.0, 0.0)), dtype=np.float32
+            )
+            size = np.asarray(
+                brush.get('size', (64.0, 64.0, 64.0)), dtype=np.float32
+            )
+
+        origin = np.asarray(
+            getattr(entity, 'pos', (0.0, 0.0, 0.0)), dtype=np.float32
+        )
+        return size * np.float32(0.5), center - origin
+
+    def register_body(self, entity, brush, rest_callback=None):
+        """Register one body; state is packed once before the next tick."""
+        entity_id = id(entity)
+        body = self.bodies.get(entity_id)
+        if body is None:
+            body = PhysicsBody(self, entity, entity_id)
+            self.bodies[entity_id] = body
+            self._entities.append(entity)
+
+        props = getattr(entity, 'properties', {})
+        half, offset = self._shape_from_brush(entity, brush)
+        body.rest_callback = rest_callback
+
+        # Keep registration descriptors on the handle until packing. This is
+        # construction-time Python work, not physics work.
+        body._initial = (
+            np.asarray(getattr(entity, 'pos', (0.0, 0.0, 0.0)), dtype=np.float32),
+            half,
+            offset,
+            max(0.01, float(props.get('mass', 1.0))),
+            max(0.0, min(1.0, float(props.get('friction', 0.55)))),
+            max(0.0, float(props.get('linear_damping', 0.08))),
+            1.0 if props.get('gravity', True) else 0.0,
+            np.asarray(props.get('drop_angular_velocity', [0.0, 0.0, 0.0]), dtype=np.float32),
+            not bool(props.get('no_collision', True)),
+            bool(props.get('physics_enabled', False)),
+        )
+        self._dirty = True
+        return body
+
+    def _pack(self):
+        if not self._dirty:
+            return
+        n = len(self._entities)
+        if n == 0:
+            self._dirty = False
+            return
+
+        self._position = np.empty((n, 3), dtype=np.float32)
+        self._offset = np.empty((n, 3), dtype=np.float32)
+        self._half = np.empty((n, 3), dtype=np.float32)
+        self._velocity = np.zeros((n, 3), dtype=np.float32)
+        self._mass = np.empty(n, dtype=np.float32)
+        self._friction = np.empty(n, dtype=np.float32)
+        self._damping = np.empty(n, dtype=np.float32)
+        self._gravity = np.empty(n, dtype=np.float32)
+        self._angular_velocity = np.empty((n, 3), dtype=np.float32)
+        self._solid = np.empty(n, dtype=np.bool_)
+        self._physics_enabled = np.empty(n, dtype=np.bool_)
+        self._awake = np.zeros(n, dtype=np.bool_)
+        self._kinematic = np.zeros(n, dtype=np.bool_)
+
+        for i, entity in enumerate(self._entities):
+            body = self.bodies[id(entity)]
+            (
+                position, half, offset, mass, friction, damping, gravity,
+                angular_velocity, solid, physics_enabled,
+            ) = body._initial
+            self._indices[id(entity)] = i
+            self._position[i] = position
+            self._half[i] = half
+            self._offset[i] = offset
+            self._mass[i] = mass
+            self._friction[i] = friction
+            self._damping[i] = damping
+            self._gravity[i] = gravity
+            self._angular_velocity[i] = angular_velocity
+            self._solid[i] = solid
+            self._physics_enabled[i] = physics_enabled
+
+        self._dirty = False
+
+    def get_body(self, entity):
+        self._pack()
+        return self.bodies.get(id(entity))
+
+    def _set_kinematic_index(self, index, value):
+        if index is None:
+            return
+        self._pack()
+
+        # Kinematic bodies are positioned by the gameplay/runtime layer
+        # (for example PropSession while a prop is being carried). Synchronise
+        # the physics copy whenever transform ownership changes so physics
+        # cannot restore a stale pre-carry position on release.
+        entity = self._entities[index]
+        self._position[index] = np.asarray(
+            getattr(entity, "pos", self._position[index]),
+            dtype=np.float32,
+        )
+
+        self._kinematic[index] = value
+        if value:
+            self._velocity[index] = 0.0
+            self._awake[index] = False
+
+    def set_kinematic(self, entity, value):
+        self._pack()
+        self._set_kinematic_index(self._indices.get(id(entity)), value)
+
+    def _wake_index(self, index, velocity=None):
+        if index is None:
+            return
+        self._pack()
+        if velocity is not None:
+            self._velocity[index] = np.asarray(velocity, dtype=np.float32)
+        self._awake[index] = True
+        self._kinematic[index] = False
+
+    def wake(self, entity, velocity=None):
+        self._pack()
+        self._wake_index(self._indices.get(id(entity)), velocity)
+
+    def sync_entity_position(self, entity, wake=False):
+        """Synchronize a body's cached position after external movement."""
+        self._pack()
+        index = self._indices.get(id(entity))
+        if index is None:
+            return
+        self._position[index] = np.asarray(
+            getattr(entity, 'pos', self._position[index]),
+            dtype=np.float32,
+        )
+        if wake:
+            self._awake[index] = True
+            self._kinematic[index] = False
+            self._velocity[index] = 0.0
+
+    def set_rest_callback(self, entity, callback):
+        body = self.get_body(entity)
+        if body is not None:
+            body.set_rest_callback(callback)
+
+    def entities_that_changed_cell(self):
+        """Bodies that crossed a cell boundary since the last call.
+
+        PhysicsWorld owns an entity's position while it is in motion, so a
+        spatial index built on those entities has to be told when to re-file
+        one. This is how, and it answers the narrowest useful question: not
+        "which bodies are awake" and not even "which moved", but "which are no
+        longer in the cell they were in" — the only ones whose membership can
+        actually be wrong.
+
+        The detection is one vectorised comparison over the body arrays, so the
+        per-frame cost does not grow a Python loop as the world fills up; what
+        comes back is normally empty, because a body has to travel a whole
+        512-unit column to appear in it. The returned entities are objects, so
+        acting on them is per-entity by nature — which is the point of making
+        this set as small as it can correctly be.
+        """
+        self._pack()
+        if not self._entities:
+            self._reported_cell = None
+            return ()
+
+        cx, cz = cells_of_points(self._position[:, 0], self._position[:, 2])
+        current = np.stack((cx, cz), axis=1)
+        previous = self._reported_cell
+
+        if previous is None or previous.shape != current.shape:
+            # First call, or the body set changed size and the rows no longer
+            # line up. Registration filed every body from its live position, so
+            # nothing is stale — take this as the new baseline.
+            self._reported_cell = current
+            return ()
+
+        changed = np.flatnonzero(np.any(current != previous, axis=1))
+        self._reported_cell = current
+        if changed.size == 0:
+            return ()
+        return [self._entities[i] for i in changed]
+
+    def wake_all(self):
+        """Wake every non-kinematic physics body for runtime console tuning."""
+        self._pack()
+        if not self._entities:
+            return
+        active = self._physics_enabled & ~self._kinematic
+        self._awake[active] = True
+
+    def _disabled_mask(self, candidates):
+        """Which candidate bodies their entity currently marks ``disabled``.
+
+        ``disabled`` is authored state that changes at runtime -- an I/O
+        Disable, or Big World parking a cell, which stashes the authored values
+        and forces the flag on. It is written in a dozen places across
+        io_handlers and the streaming layer, so there is no single setter to
+        hook; it has to be read.
+
+        Reading it is bounded the way the pre-vectorisation simulation bounded
+        it: that loop only ever consulted ``disabled`` for bodies it was
+        actually moving, so this consults only candidates that are also awake.
+        A world with nothing in motion pays nothing, and a parked or disabled
+        prop stops being integrated instead of quietly falling while dormant.
+        """
+        mask = np.zeros(len(self._entities), dtype=np.bool_)
+        indices = np.flatnonzero(candidates & self._awake)
+        if indices.size == 0:
+            return mask
+        for i in indices:
+            props = getattr(self._entities[int(i)], 'properties', None)
+            if isinstance(props, dict) and props.get('disabled', False):
+                mask[i] = True
+        return mask
+
+    def _integrate_rotation(self, angular, dt):
+        """Advance the rotation of every spinning body.
+
+        Rotation lives on the entity's property dict rather than in the packed
+        arrays, so this is necessarily an object-boundary operation. What it
+        does not have to be is scalar arithmetic: the gather, the multiply-add
+        and the conversion back to lists are each one operation over all
+        spinning bodies, and only the dict reads and writes stay per-entity.
+
+        Which bodies spin is unchanged -- any body with a non-zero angular
+        velocity, awake or not, exactly as before.
+        """
+        spinning = np.flatnonzero(np.any(angular != 0.0, axis=1))
+        if spinning.size == 0:
+            return
+
+        current = np.zeros((spinning.size, 3), dtype=np.float32)
+        targets = []
+        for slot, index in enumerate(spinning):
+            props = getattr(self._entities[int(index)], 'properties', None)
+            if not isinstance(props, dict):
+                targets.append(None)
+                continue
+            targets.append(props)
+            rotation = props.get('rotation')
+            if rotation is None:
+                continue
+            try:
+                current[slot] = rotation
+            except (TypeError, ValueError):
+                # A malformed authored rotation restarts from zero rather than
+                # aborting the whole step for every other body.
+                current[slot] = 0.0
+
+        updated = (current + angular[spinning] * dt).tolist()
+        for props, rotation in zip(targets, updated):
+            if props is not None:
+                props['rotation'] = rotation
+
+    def _sync_entities(self, indices=None):
+        # Position only. Rotation is integrated (angular * dt) in step();
+        # applying angular velocity here as well spun bodies ~61x too fast.
+        if indices is None:
+            indices = range(len(self._entities))
+        for i in indices:
+            entity = self._entities[int(i)]
+            entity.pos[:] = self._position[int(i)].tolist()
+
+    def _rebuild_static_cells(self):
+        """Cache static collision AABBs as contiguous NumPy arrays per grid cell."""
+        cells = {}
+        for key, brushes in self.spatial_grid.cells.items():
+            if not brushes:
+                continue
+            rows = []
+            for brush in brushes:
+                if brush.get('_physics_body'):
+                    continue
+                bounds = brush.get('_mesh_bounds') if brush.get('_collision_mode') == 'mesh' else None
+                if bounds:
+                    lo, hi = bounds
+                    rows.append([
+                        float(lo[0]), float(lo[1]), float(lo[2]),
+                        float(hi[0]), float(hi[1]), float(hi[2]),
+                    ])
+                else:
+                    pos = brush.get('pos', (0.0, 0.0, 0.0))
+                    size = brush.get('size', (0.0, 0.0, 0.0))
+                    rows.append([
+                        float(pos[0]) - float(size[0]) * 0.5,
+                        float(pos[1]) - float(size[1]) * 0.5,
+                        float(pos[2]) - float(size[2]) * 0.5,
+                        float(pos[0]) + float(size[0]) * 0.5,
+                        float(pos[1]) + float(size[1]) * 0.5,
+                        float(pos[2]) + float(size[2]) * 0.5,
+                    ])
+            if rows:
+                cells[key] = np.asarray(rows, dtype=np.float32)
+        self._static_cells = cells
+
+    def rebuild(self, brushes):
+        self.clear()
+
+        for brush in brushes:
+            if not brush.get('_physics_body'):
+                continue
+            entity = brush.get('_physics_entity')
+            if entity is not None:
+                self.register_body(entity, brush)
+
+        self._pack()
+        self._rebuild_static_cells()
+
+    def _candidate_aabbs(self, cell_x, cell_z):
+        key = (cell_x, cell_z)
+        cached = self._static_query_cache.get(key)
+        if cached is False:
+            return None
+        if cached is not None:
+            return cached
+
+        parts = []
+        cells = self._static_cells
+        for dx in (-1, 0, 1):
+            for dz in (-1, 0, 1):
+                aabbs = cells.get((cell_x + dx, cell_z + dz))
+                if aabbs is not None:
+                    parts.append(aabbs)
+
+        if not parts:
+            self._static_query_cache[key] = False
+            return None
+        if len(parts) == 1:
+            result = parts[0]
+        else:
+            result = np.concatenate(parts, axis=0)
+        self._static_query_cache[key] = result
+        return result
+
+    def _batch_static_collision(self, axis, old_position):
+        """Resolve one horizontal axis with vectorised AABB tests per cell group."""
+        active = (
+            self._physics_enabled
+            & self._awake
+            & ~self._kinematic
+            & self._solid
+        )
+        indices = np.flatnonzero(active)
+        if indices.size == 0:
+            return
+
+        cell_size = np.float32(self.spatial_grid.cell_size)
+        cell_keys = np.column_stack((
+            np.floor(self._position[indices, 0] / cell_size).astype(np.int64),
+            np.floor(self._position[indices, 2] / cell_size).astype(np.int64),
+        ))
+        unique_cells, inverse = np.unique(
+            cell_keys, axis=0, return_inverse=True
+        )
+
+        collision = np.zeros(indices.size, dtype=np.bool_)
+
+        for group_id, key in enumerate(unique_cells):
+            local_indices = np.flatnonzero(inverse == group_id)
+            bi = indices[local_indices]
+            aabbs = self._candidate_aabbs(int(key[0]), int(key[1]))
+            if aabbs is None:
+                continue
+
+            pos = self._position[bi] + self._offset[bi]
+            half = self._half[bi]
+
+            bmin = pos - half
+            bmax = pos + half
+
+            cmin = aabbs[:, :3]
+            cmax = aabbs[:, 3:]
+
+            overlap = (
+                (bmax[:, None, 0] > cmin[None, :, 0]) &
+                (bmin[:, None, 0] < cmax[None, :, 0]) &
+                (bmax[:, None, 1] > cmin[None, :, 1]) &
+                (bmin[:, None, 1] < cmax[None, :, 1]) &
+                (bmax[:, None, 2] > cmin[None, :, 2]) &
+                (bmin[:, None, 2] < cmax[None, :, 2])
+            )
+            hit = overlap.any(axis=1)
+
+            collision[local_indices] |= hit
+
+        if np.any(collision):
+            hit_indices = indices[collision]
+            self._position[hit_indices, axis] = old_position[hit_indices, axis]
+            self._velocity[hit_indices, axis] = 0.0
+
+    def _batch_floor(self, previous_bottom=None):
+        """Find the floor beneath each active dynamic body.
+
+        Five support points per body -- centre plus four in-footprint samples --
+        so a body straddling a seam between floor brushes cannot lose contact
+        just because its centre crossed the gap.
+
+        That is 5N downward queries per step. Done one at a time they were the
+        largest remaining scalar section of the dynamic path: each
+        ``raycast_down`` call re-derives the cell and then walks that cell's
+        brush dicts in Python, so the cost is 5N x (brushes per cell) Python
+        iterations. :meth:`_batch_floor_grouped` instead groups all 5N sample
+        points by grid cell and tests every point in a cell against every brush
+        in it with one broadcast, which makes the Python work proportional to
+        the number of *distinct cells* rather than to the number of samples.
+
+        Brush positions are still read live on every step. Movers and doors sit
+        in the grid and move without it being repopulated, so a prop riding a
+        platform depends on seeing the platform's current height; caching the
+        AABBs would quietly break that.
+
+        The grouped path is used only for a stock :class:`SpatialGrid`. Anything
+        that overrides ``raycast_down`` -- a test double, or a future grid with
+        its own tracing -- keeps the scalar path, because its answers are not
+        derivable from ``cells`` alone.
+        """
+        active = self._physics_enabled & self._awake & ~self._kinematic & self._solid
+        if (int(active.sum()) >= self.FLOOR_BATCH_MIN_BODIES
+                and self._can_group_floor_queries()):
+            return self._batch_floor_grouped(previous_bottom)
+        return self._batch_floor_scalar(previous_bottom)
+
+    def _can_group_floor_queries(self):
+        grid = self.spatial_grid
+        if type(grid).__dict__.get('raycast_down') is None:
+            # Inherited from SpatialGrid rather than overridden.
+            if not isinstance(grid, SpatialGrid):
+                return False
+        elif type(grid).raycast_down is not SpatialGrid.raycast_down:
+            return False
+        return (isinstance(getattr(grid, 'cells', None), dict)
+                and getattr(grid, 'cell_size', None))
+
+    def _support_offsets(self, indices):
+        """Per-body support-point offsets and ray origins, in float64.
+
+        float64 deliberately: the scalar path promotes each float32 component
+        to a Python float before the offset arithmetic, so matching the width
+        here keeps the two paths bit-identical rather than merely close.
+        """
+        centers = (self._position[indices] + self._offset[indices]).astype(np.float64)
+        half = self._half[indices].astype(np.float64)
+        zeros = np.zeros(indices.size, dtype=np.float64)
+        hx = half[:, 0] * 0.75
+        hz = half[:, 2] * 0.75
+        off_x = np.stack([zeros, -hx, hx, zeros, zeros], axis=1)
+        off_z = np.stack([zeros, zeros, zeros, -hz, hz], axis=1)
+        px = centers[:, 0:1] + off_x
+        pz = centers[:, 2:3] + off_z
+        bottom = centers[:, 1] - half[:, 1]
+        return px, pz, bottom
+
+    def _batch_floor_grouped(self, previous_bottom=None):
+        n = len(self._entities)
+        floors = np.full(n, -np.inf, dtype=np.float32)
+        active = self._physics_enabled & self._awake & ~self._kinematic & self._solid
+        indices = np.flatnonzero(active)
+        if indices.size == 0:
+            return floors
+
+        previous_bottom = self._previous_bottom(previous_bottom)
+        px, pz, bottom = self._support_offsets(indices)
+        ray_y = np.maximum(bottom, previous_bottom[indices].astype(np.float64)) + 1.0
+
+        samples = px.size
+        flat_x = px.ravel()
+        flat_z = pz.ravel()
+        flat_y = np.repeat(ray_y, px.shape[1])
+
+        cell_size = float(self.spatial_grid.cell_size)
+        cx = np.floor(flat_x / cell_size).astype(np.int64)
+        cz = np.floor(flat_z / cell_size).astype(np.int64)
+
+        best = np.full(samples, -np.inf, dtype=np.float64)
+        cells = self.spatial_grid.cells
+
+        # Sort once, then walk contiguous runs: one pass per distinct cell
+        # instead of one boolean scan of every sample per cell.
+        order = np.lexsort((cz, cx))
+        s_cx = cx[order]
+        s_cz = cz[order]
+        starts = np.flatnonzero(
+            np.r_[True, (s_cx[1:] != s_cx[:-1]) | (s_cz[1:] != s_cz[:-1])]
+        )
+        ends = np.r_[starts[1:], samples]
+
+        for start, end in zip(starts, ends):
+            brushes = cells.get((int(s_cx[start]), int(s_cz[start])))
+            if not brushes:
+                continue
+            bounds = self._cell_bounds(brushes)
+            if bounds is None:
+                continue
+            lo_x, hi_x, lo_z, hi_z, top_y = bounds
+
+            sel = order[start:end]
+            X = flat_x[sel][:, None]
+            Z = flat_z[sel][:, None]
+            Y = flat_y[sel][:, None]
+            inside = (
+                (X >= lo_x) & (X <= hi_x)
+                & (Z >= lo_z) & (Z <= hi_z)
+                & (top_y[None, :] <= Y)
+            )
+            if not inside.any():
+                continue
+            best[sel] = np.where(inside, top_y[None, :], -np.inf).max(axis=1)
+
+        per_body = best.reshape(px.shape).max(axis=1)
+        hit = per_body > -np.inf
+        if hit.any():
+            floors[indices[hit]] = per_body[hit].astype(np.float32)
+        return floors
+
+    @staticmethod
+    def _cell_bounds(brushes):
+        """Live XZ extents and top surface of every brush in one grid cell.
+
+        Read from the dicts on every call, not cached: see _batch_floor.
+        """
+        count = len(brushes)
+        lo_x = np.empty(count, dtype=np.float64)
+        hi_x = np.empty(count, dtype=np.float64)
+        lo_z = np.empty(count, dtype=np.float64)
+        hi_z = np.empty(count, dtype=np.float64)
+        top_y = np.empty(count, dtype=np.float64)
+        kept = 0
+        for brush in brushes:
+            try:
+                pos = brush['pos']
+                size = brush['size']
+                x, y, z = float(pos[0]), float(pos[1]), float(pos[2])
+                sx, sy, sz = float(size[0]), float(size[1]), float(size[2])
+            except (KeyError, TypeError, ValueError, IndexError):
+                continue
+            lo_x[kept] = x - sx * 0.5
+            hi_x[kept] = x + sx * 0.5
+            lo_z[kept] = z - sz * 0.5
+            hi_z[kept] = z + sz * 0.5
+            top_y[kept] = y + sy * 0.5
+            kept += 1
+        if kept == 0:
+            return None
+        return (lo_x[:kept], hi_x[:kept], lo_z[:kept], hi_z[:kept], top_y[:kept])
+
+    def _previous_bottom(self, previous_bottom):
+        if previous_bottom is None:
+            return (self._position + self._offset)[:, 1] - self._half[:, 1]
+        return np.asarray(previous_bottom, dtype=np.float32)
+
+    def _batch_floor_scalar(self, previous_bottom=None):
+        """One raycast_down per support point. Fallback for a custom grid."""
+        n = len(self._entities)
+        floors = np.full(n, -np.inf, dtype=np.float32)
+        active = self._physics_enabled & self._awake & ~self._kinematic & self._solid
+        indices = np.flatnonzero(active)
+        if indices.size == 0:
+            return floors
+
+        raycast = getattr(self.spatial_grid, 'raycast_down', None)
+        if raycast is None:
+            return floors
+
+        # Use the body's previous bottom as the ray origin while it is falling.
+        # If integration has already carried the body slightly through the
+        # floor this keeps the ray above the surface, allowing raycast_down()
+        # to see it instead of starting underneath it.
+        previous_bottom = self._previous_bottom(previous_bottom)
+
+        for i in indices:
+            i = int(i)
+            center = self._position[i] + self._offset[i]
+            current_bottom = float(center[1] - self._half[i, 1])
+            ray_y = max(current_bottom, float(previous_bottom[i])) + 1.0
+
+            # A pushed barrel can straddle a floor seam while its centre is
+            # briefly over the seam itself.  Sample the centre plus four
+            # in-footprint support points so horizontal motion cannot make a
+            # grounded body lose contact just because its centre crossed a
+            # small gap between floor brushes.
+            hx = float(self._half[i, 0]) * 0.75
+            hz = float(self._half[i, 2]) * 0.75
+            support_points = (
+                (float(center[0]), float(center[2])),
+                (float(center[0] - hx), float(center[2])),
+                (float(center[0] + hx), float(center[2])),
+                (float(center[0]), float(center[2] - hz)),
+                (float(center[0]), float(center[2] + hz)),
+            )
+
+            best_floor = None
+            for ray_x, ray_z in support_points:
+                try:
+                    floor = raycast(ray_x, ray_z, ray_y)
+                except Exception:
+                    floor = None
+                if floor is not None and (
+                    best_floor is None or floor > best_floor
+                ):
+                    best_floor = float(floor)
+
+            if best_floor is not None:
+                floors[i] = best_floor
+
+        return floors
+
+
+    def step(self, delta, player=None):
+        self._pack()
+        if not self._entities:
+            return
+
+        base_dt = float(delta) or 1.0 / 60.0
+        scale = max(0.0, float(self.time_scale))
+        dt = np.float32(min(0.05, max(0.0, base_dt * scale)))
+        active = self._physics_enabled & ~self._kinematic
+        active &= ~self._disabled_mask(active)
+
+        if player is not None:
+            ppos = np.asarray(getattr(player, 'pos', (0.0, 0.0, 0.0)), dtype=np.float32)
+            ph = getattr(player, '_half', None)
+            if ph is not None:
+                player_half = np.asarray([float(ph.x), float(ph.y), float(ph.z)], dtype=np.float32)
+            else:
+                player_half = np.asarray([
+                    float(getattr(player, 'width', 50.0)) * 0.5,
+                    float(getattr(player, 'height', 100.0)) * 0.5,
+                    float(getattr(player, 'depth', 50.0)) * 0.5,
+                ], dtype=np.float32)
+
+            pvel = getattr(player, 'velocity', None)
+            player_velocity = np.asarray([
+                float(getattr(pvel, 'x', 0.0)),
+                0.0,
+                float(getattr(pvel, 'z', 0.0)),
+            ], dtype=np.float32)
+
+            center = self._position + self._offset
+            body_min = center - self._half
+            body_max = center + self._half
+            player_min = ppos - player_half
+            player_max = ppos + player_half
+
+            overlap = (
+                (body_max[:, 0] > player_min[0]) &
+                (body_min[:, 0] < player_max[0]) &
+                (body_max[:, 1] > player_min[1]) &
+                (body_min[:, 1] < player_max[1]) &
+                (body_max[:, 2] > player_min[2]) &
+                (body_min[:, 2] < player_max[2])
+            )
+            pushable = active & self._solid & ~self._kinematic & overlap
+            speed = float(np.hypot(player_velocity[0], player_velocity[2]))
+            if speed >= 0.01 and np.any(pushable):
+                dx = center[:, 0] - ppos[0]
+                dz = center[:, 2] - ppos[2]
+                overlap_x = player_half[0] + self._half[:, 0] - np.abs(dx)
+                overlap_z = player_half[2] + self._half[:, 2] - np.abs(dz)
+                use_x = overlap_x <= overlap_z
+
+                x_indices = pushable & use_x
+                z_indices = pushable & ~use_x
+
+                x_dir = np.where(dx >= 0.0, 1.0, -1.0).astype(np.float32)
+                z_dir = np.where(dz >= 0.0, 1.0, -1.0).astype(np.float32)
+
+                self._position[x_indices, 0] += x_dir[x_indices] * (overlap_x[x_indices] + 0.5)
+                self._position[z_indices, 2] += z_dir[z_indices] * (overlap_z[z_indices] + 0.5)
+
+                target_x = np.abs(player_velocity[0]) / self._mass * 0.85
+                target_z = np.abs(player_velocity[2]) / self._mass * 0.85
+                self._velocity[x_indices, 0] = x_dir[x_indices] * np.maximum(
+                    target_x[x_indices], np.abs(self._velocity[x_indices, 0])
+                )
+                self._velocity[z_indices, 2] = z_dir[z_indices] * np.maximum(
+                    target_z[z_indices], np.abs(self._velocity[z_indices, 2])
+                )
+                self._awake[pushable] = True
+
+        moving = active & self._awake
+        if np.any(moving):
+            if np.any(moving & (self._gravity != 0.0)):
+                self._velocity[moving, 1] += (
+                    self._gravity[moving] * np.float32(self.gravity) * dt
+                )
+
+            damping = self._damping * np.float32(max(0.0, float(self.damping_scale)))
+            self._velocity[moving, 1] *= np.maximum(
+                0.0, 1.0 - damping[moving] * dt
+            )
+
+            horizontal_damp = np.maximum(
+                0.0,
+                1.0 - damping * dt,
+            )
+            self._velocity[moving, 0] *= horizontal_damp[moving]
+            self._velocity[moving, 2] *= horizontal_damp[moving]
+
+            old_position = self._position.copy()
+            old_center = old_position + self._offset
+            previous_bottom = old_center[:, 1] - self._half[:, 1]
+
+            self._position[moving, 0] += self._velocity[moving, 0] * dt
+            self._batch_static_collision(0, old_position)
+
+            self._position[moving, 2] += self._velocity[moving, 2] * dt
+            self._batch_static_collision(2, old_position)
+
+            self._position[moving, 1] += self._velocity[moving, 1] * dt
+            floors = self._batch_floor(previous_bottom)
+            new_center = self._position + self._offset
+            new_bottom = new_center[:, 1] - self._half[:, 1]
+            landed = moving & np.isfinite(floors) & (
+                new_bottom <= floors + 1.0
+            )
+            if np.any(landed):
+                self._position[landed, 1] = (
+                    floors[landed]
+                    - self._offset[landed, 1]
+                    + self._half[landed, 1]
+                )
+                self._velocity[landed, 1] = 0.0
+
+                # Treat friction as a surface coefficient rather than a tiny
+                # per-frame damping term. Apply it only while grounded.
+                friction_accel = (
+                    self._friction[landed]
+                    * np.float32(max(0.0, float(self.friction_scale)))
+                    * np.float32(abs(float(self.gravity)))
+                )
+                ground_speed = np.hypot(
+                    self._velocity[landed, 0],
+                    self._velocity[landed, 2],
+                )
+                friction_delta = friction_accel * dt
+                scale = np.maximum(
+                    0.0,
+                    1.0 - friction_delta / np.maximum(ground_speed, 1e-6),
+                )
+                self._velocity[landed, 0] *= scale
+                self._velocity[landed, 2] *= scale
+
+            angular = self._angular_velocity
+            if np.any(angular):
+                self._integrate_rotation(angular, dt)
+
+            speed = np.max(np.abs(self._velocity), axis=1)
+            sleeping = (
+                self.sleep_enabled
+                & moving
+                & (speed < self.REST_SPEED)
+            )
+            if np.any(sleeping):
+                self._velocity[sleeping] = 0.0
+                rest_indices = np.flatnonzero(sleeping)
+                self._awake[sleeping] = False
+                for i in rest_indices:
+                    body = self.bodies[id(self._entities[int(i)])]
+                    callback = body.rest_callback
+                    if callback is not None:
+                        callback(body.entity)
+
+            self._sync_entities(np.flatnonzero(moving))
+

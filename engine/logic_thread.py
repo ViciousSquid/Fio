@@ -19,20 +19,22 @@ import glm
 import math
 import os
 
-from .threaded_game_state import ThreadedGameState, RenderState
+from .threaded_game_state import ThreadedGameState
 from .player import Player
 from .camera import Camera
-from .constants import is_water_brush, brush_aabb_bounds
+from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
 from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
 from .prop_runtime import PropSession
 
 # Import Thing subclasses for type checking
 try:
-    from editor.things import (Speaker, Pickup, Light, Monster as MonsterThing,
-                               PathNode, LogicTimer, PlayerStart, Portal, LevelChanger)
+    from editor.things import (Speaker, Pickup, Prop as PropThing, Light,
+                               Monster as MonsterThing, PathNode, LogicTimer,
+                               PlayerStart, Portal, LevelChanger)
 except ImportError:
     Speaker = None
     Pickup = None
+    PropThing = None
     Light = None
     MonsterThing = None
     PathNode = None
@@ -42,10 +44,7 @@ except ImportError:
 
 # Import I/O system
 try:
-    from editor.io_system import (
-        IOManager, get_connections, reset_all_connections,
-        get_entity_type_for_io
-    )
+    from editor.io_system import IOManager, get_connections
     from editor.io_handlers import register_all_input_handlers
     IO_AVAILABLE = True
     print("[LogicThread] I/O System loaded successfully.")
@@ -80,22 +79,8 @@ except ImportError:
 
 # Monster AI constants (still needed for initialisation)
 from .monster_constants import (
-    MONSTER_SIGHT_RANGE,
-    MONSTER_SHOOT_INTERVAL,
-    MONSTER_SHOOT_ANIM_TIME,
-    MONSTER_MOVE_SPEED,
-    MONSTER_STOP_DISTANCE,
-    MONSTER_GRAVITY,
-    MONSTER_TERMINAL_VEL,
-    MONSTER_MIN_WIDTH,
-    MONSTER_WALL_MARGIN,
-    MONSTER_DEAD_FALL_SPEED,
-    MONSTER_STUCK_THRESHOLD,
-    MONSTER_DETOUR_RANGE,
     WEAPON_DAMAGE,
-    WEAPON_SHOOT_SOUND,
     NON_FIRING_WEAPONS,
-    MONSTER_PROJECTILE_SPEED,
     MONSTER_PROJECTILE_MAX_DIST,
     MONSTER_PROJECTILE_SPRITE_SIZE,
 )
@@ -142,6 +127,18 @@ class LogicThread(threading.Thread):
     
     TICK_RATE = 60
     TICK_DURATION = 1.0 / TICK_RATE
+
+    # Trigger polling is scheduled at the fastest supported interval, while
+    # each trigger independently decides when its next sample is due.
+    TRIGGER_POLL_TICK = 0.25
+    #: Slack on both trigger-scheduler comparisons. The scheduler accumulates
+    #: arbitrary frame deltas and 1/60 is not exactly representable, so 60
+    #: ticks sum to 0.99999999999999989 rather than 1.0; comparing bare against
+    #: an exact decimal lost one scheduler step per second and let the poll
+    #: cadence drift behind the configured interval. A nanosecond is far below
+    #: any cadence a map can author and comfortably above the accumulated
+    #: representation error of a whole session.
+    TRIGGER_POLL_EPSILON = 1.0e-9
 
     # Seconds between repeating wade footstep sounds while walking in water
     WATERWALK_INTERVAL = 0.45
@@ -260,8 +257,9 @@ class LogicThread(threading.Thread):
                 print(f"[LogicThread] plugin attach skipped: {exc}")
 
         # Trigger state
-        self.player_in_triggers: set = set()
         self.fired_once_triggers: set = set()
+        # Trigger occupancy/scheduler state has a single owner.
+        self._reset_trigger_state()
 
         # Logic Gate State
         self.gate_inputs = {}
@@ -309,6 +307,8 @@ class LogicThread(threading.Thread):
 
         # Model collision pseudo-brushes for things with model_path
         self._model_collision_brushes: list = []
+        self._physics_body_brushes: list = []
+        self._physics_world = None
         # PERF: cached self.brushes + self._model_collision_brushes (see
         # _refresh_collision_brushes_cache)
         self._collision_brushes_cache: list = []
@@ -354,7 +354,11 @@ class LogicThread(threading.Thread):
         self._id_cache = {}
         self._trigger_brushes = []
         self._trigger_brush_by_bid = {}
+        self._use_trigger_entries = []
         self._pickup_things = []
+        # The Prop registry (engine.prop_runtime.PropSession).  Created on
+        # play-mode enter and None in the editor, where nothing simulates.
+        self._props = None
         self._levelchanger_things = []
         self._monster_things = []
         self._monster_by_id = {}
@@ -371,8 +375,8 @@ class LogicThread(threading.Thread):
         self._portal_prev_player_pos = None
         # Portal name → Portal lookup cache; rebuilt on play start and when
         # the things list changes.  Avoids an O(n) rebuild every physics tick.
+        self._portal_things: List = []
         self._portals_by_name: Dict[str, object] = {}
-        self._portals_cache_dirty: bool = True
 
         self.level_complete_ui = None
 
@@ -455,9 +459,16 @@ class LogicThread(threading.Thread):
             (b.get('id') or i, b) for i, b in enumerate(self.brushes) if b.get('is_trigger')
         ]
         self._trigger_brush_by_bid = dict(self._trigger_brushes)
+        self._refresh_use_triggers()
 
         # PERF: precomputed thing lists for _handle_interactions / _handle_pickups
         self._pickup_things = [t for t in self.things if Pickup and isinstance(t, Pickup)]
+        # Props are not cached here.  PropSession is the registry for the Prop
+        # domain and a second list would be a competing copy of it; this is the
+        # point at which it re-derives itself from the thing list, alongside
+        # every other entity cache, and the engine reads Props back off it.
+        if self._props is not None:
+            self._props.rebuild(self.things)
         self._levelchanger_things = [t for t in self.things if LevelChanger and isinstance(t, LevelChanger)]
 
         # PERF: precomputed monster list + id lookup, used by MonsterAI so it
@@ -470,6 +481,18 @@ class LogicThread(threading.Thread):
         # the one per-frame path the logic system has, and it should walk the
         # timers, not the level.
         self._timer_things = [t for t in self.things if LogicTimer and isinstance(t, LogicTimer)]
+
+        # PERF: portals, for the same reason again.  _update_portals ticks every
+        # portal's fade every frame, which used to mean an isinstance scan of
+        # the entire thing list per frame on a map with no portals at all.  The
+        # name index is derived here too, in the same pass, so the two can never
+        # disagree about which portals exist.
+        self._portal_things = [t for t in self.things if Portal and isinstance(t, Portal)]
+        self._portals_by_name = {}
+        for t in self._portal_things:
+            n = t.properties.get('name', '')
+            if n:
+                self._portals_by_name[n] = t
 
     def _find_entity_by_name(self, name: str):
         if not name:
@@ -559,15 +582,23 @@ class LogicThread(threading.Thread):
                 self._clear_brush_collision(brush)
 
     def _build_model_collision_brushes(self):
-        """Create collision data for model entities. Supports AABB or mesh-accurate."""
-        if not getattr(self, 'model_collision_enabled', True):
-            return []
+        """Create collision data for model entities.
+
+        Props can explicitly choose Automatic, AABB, or Mesh collision. A
+        non-zero collision_size always overrides the shape choice with a
+        custom AABB.
+        """
+        model_collision_enabled = bool(getattr(self, 'model_collision_enabled', True))
         brushes = []
+
         for thing in self.things:
             props = getattr(thing, 'properties', {})
             if not props.get('model_path'):
                 continue
-            if props.get('no_collision', False):
+            physics_enabled = bool(props.get('physics_enabled', False))
+            if not model_collision_enabled and not physics_enabled:
+                continue
+            if props.get('no_collision', False) and not physics_enabled:
                 continue
 
             pos = getattr(thing, 'pos', [0, 0, 0])
@@ -583,10 +614,20 @@ class LogicThread(threading.Thread):
                 scale = list(scale)
 
             rot = props.get('rotation', [0, 0, 0])
+            is_physics_body = physics_enabled
+            collision_shape = str(
+                props.get('collision_shape', 'auto')
+            ).lower()
 
-            # Check for explicit collision_size (forces AABB mode)
+            # A non-zero explicit collision_size always forces a custom AABB.
             collision_size = props.get('collision_size')
-            if collision_size:
+            has_collision_size = (
+                isinstance(collision_size, (list, tuple))
+                and len(collision_size) == 3
+                and any(float(v) != 0.0 for v in collision_size)
+            )
+
+            if has_collision_size:
                 size = list(collision_size)
                 brushes.append({
                     'pos': pos,
@@ -598,46 +639,48 @@ class LogicThread(threading.Thread):
                     'is_water': False,
                     'is_fog': False,
                     '_model_collision': True,
+                    '_physics_entity': thing,
+                    '_physics_body': is_physics_body,
                     '_collision_mode': 'aabb',
                 })
                 continue
 
-            # Try mesh-accurate collision
+            # A Prop drawn as a sprite has no model-shaped collision.
+            # ``model_path`` alone decides whether this loop looks at a Thing,
+            # which is right for a Model entity but wrong for a Prop: a Prop
+            # keeps its mesh path when its representation is switched back to
+            # Billboard, and would otherwise collide as a mesh nobody can see.
+            # An explicit collision_size still applies -- that is authored for
+            # the entity, not derived from the model -- and is handled above.
+            if str(props.get('render_mode', 'model')).lower() == 'billboard':
+                continue
+
             model_path = props.get('model_path', '')
-            mesh_tris = self._compute_model_collision_mesh(model_path, pos, scale, rot)
-            if mesh_tris:
-                brushes.append({
-                    'pos': pos,
-                    'size': [1, 1, 1],  # Dummy, not used for mesh collision
-                    'hidden': False,
-                    'is_trigger': False,
-                    'is_mover': False,
-                    'is_door': False,
-                    'is_water': False,
-                    'is_fog': False,
-                    '_model_collision': True,
-                    '_collision_mode': 'mesh',
-                    '_mesh_triangles': mesh_tris,
-                    '_mesh_bounds': self._compute_mesh_bounds(mesh_tris),
-                })
-            else:
-                # Fallback to AABB from model bounds.
-                # FIX: The brush 'pos' must be the WORLD-SPACE centre of the
-                # bounding box, not just the entity origin.  Many models have
-                # their geometry offset from origin (e.g. base sitting at y=0
-                # in local space), so we add the scaled local-centre offset.
+
+            # Explicit AABB mode skips mesh loading and always uses the model's
+            # scaled bounds. This is useful for barrels, bricks and other props
+            # where a stable box is preferable to triangle-level collision.
+            if collision_shape == 'aabb':
                 bounds = self._compute_model_bounds(model_path)
                 if bounds:
                     min_v, max_v = bounds
-                    size = [max_v[0] - min_v[0], max_v[1] - min_v[1], max_v[2] - min_v[2]]
-                    size = [size[i] * scale[i] for i in range(3)]
-                    # Centre of the local bounding box (may not be at model origin)
-                    local_centre = [(min_v[i] + max_v[i]) * 0.5 for i in range(3)]
-                    aabb_pos = [pos[i] + local_centre[i] * scale[i] for i in range(3)]
+                    size = [
+                        (max_v[i] - min_v[i]) * scale[i]
+                        for i in range(3)
+                    ]
+                    local_centre = [
+                        (min_v[i] + max_v[i]) * 0.5
+                        for i in range(3)
+                    ]
+                    aabb_pos = [
+                        pos[i] + local_centre[i] * scale[i]
+                        for i in range(3)
+                    ]
                 else:
                     base = 64.0
                     size = [base * scale[i] for i in range(3)]
                     aabb_pos = pos
+
                 brushes.append({
                     'pos': aabb_pos,
                     'size': size,
@@ -648,8 +691,74 @@ class LogicThread(threading.Thread):
                     'is_water': False,
                     'is_fog': False,
                     '_model_collision': True,
+                    '_physics_entity': thing,
+                    '_physics_body': is_physics_body,
                     '_collision_mode': 'aabb',
                 })
+                continue
+
+            # Automatic uses mesh collision where supported. Explicit Mesh
+            # behaves the same today and falls back to AABB if the model cannot
+            # provide mesh collision.
+            mesh_tris = self._compute_model_collision_mesh(
+                model_path, pos, scale, rot
+            )
+            if mesh_tris and collision_shape in ('auto', 'mesh'):
+                brushes.append({
+                    'pos': pos,
+                    'size': [1, 1, 1],
+                    'hidden': False,
+                    'is_trigger': False,
+                    'is_mover': False,
+                    'is_door': False,
+                    'is_water': False,
+                    'is_fog': False,
+                    '_model_collision': True,
+                    '_physics_entity': thing,
+                    '_physics_body': is_physics_body,
+                    '_collision_mode': 'mesh',
+                    '_mesh_triangles': mesh_tris,
+                    '_mesh_bounds': self._compute_mesh_bounds(mesh_tris),
+                })
+                continue
+
+            # Fallback for Automatic/Mesh when the model has no CPU collision
+            # mesh (for example OBJ today).
+            bounds = self._compute_model_bounds(model_path)
+            if bounds:
+                min_v, max_v = bounds
+                size = [
+                    (max_v[i] - min_v[i]) * scale[i]
+                    for i in range(3)
+                ]
+                local_centre = [
+                    (min_v[i] + max_v[i]) * 0.5
+                    for i in range(3)
+                ]
+                aabb_pos = [
+                    pos[i] + local_centre[i] * scale[i]
+                    for i in range(3)
+                ]
+            else:
+                base = 64.0
+                size = [base * scale[i] for i in range(3)]
+                aabb_pos = pos
+
+            brushes.append({
+                'pos': aabb_pos,
+                'size': size,
+                'hidden': False,
+                'is_trigger': False,
+                'is_mover': False,
+                'is_door': False,
+                'is_water': False,
+                'is_fog': False,
+                '_model_collision': True,
+                '_physics_entity': thing,
+                '_physics_body': is_physics_body,
+                '_collision_mode': 'aabb',
+            })
+
         return brushes
 
     def _compute_model_collision_mesh(self, model_path, world_pos, scale, rotation):
@@ -759,19 +868,48 @@ class LogicThread(threading.Thread):
             return None
 
         ext = os.path.splitext(model_path)[1].lower()
-        if ext == '.glb':
-            try:
+        try:
+            if ext == '.glb':
                 from .glb_loader import GLBLoader
                 loader = GLBLoader()
                 loader._filepath_hint = full_path
                 if loader.load(full_path):
                     verts = loader.get_flattened_vertices()
-                    if verts:
-                        min_v = [min(v[i] for v in verts) for i in range(3)]
-                        max_v = [max(v[i] for v in verts) for i in range(3)]
-                        return min_v, max_v
-            except Exception as e:
-                debug_log("Collision", f"Failed to compute GLB bounds for {model_path}: {e}")
+                else:
+                    verts = None
+            elif ext == '.obj':
+                # OBJ collision only needs CPU geometry.  Do not instantiate the
+                # OpenGL-backed OBJ model on the logic thread.
+                from .obj_loader import OBJLoader
+                loader = OBJLoader()
+                if loader.load(full_path):
+                    source_vertices = np.asarray(loader.vertices, dtype=np.float32)
+                    if source_vertices.size == 0:
+                        verts = None
+                    else:
+                        source_min = source_vertices.min(axis=0)
+                        source_max = source_vertices.max(axis=0)
+                        source_centre = (source_min + source_max) * 0.5
+                        half_extent = (source_max - source_min) * 0.5
+                        threshold = np.maximum(half_extent * 4.0, 2.0)
+                        offset = np.where(
+                            np.abs(source_centre) > threshold,
+                            source_centre,
+                            0.0,
+                        ).astype(np.float32)
+                        corrected = source_vertices - offset
+                        verts = corrected.tolist()
+                else:
+                    verts = None
+            else:
+                return None
+
+            if verts:
+                min_v = [min(v[i] for v in verts) for i in range(3)]
+                max_v = [max(v[i] for v in verts) for i in range(3)]
+                return min_v, max_v
+        except Exception as e:
+            debug_log("Collision", f"Failed to compute {ext.upper()} bounds for {model_path}: {e}")
         return None
 
     def toggle_model_collision(self, enabled: bool = None) -> bool:
@@ -786,12 +924,20 @@ class LogicThread(threading.Thread):
         # (editor mode uses them for visualization via showcollision command)
         if self.model_collision_enabled:
             self._model_collision_brushes = self._build_model_collision_brushes()
+            self._physics_body_brushes = [
+                b for b in self._model_collision_brushes
+                if b.get('_physics_body')
+            ]
             if self.play_mode and hasattr(self, '_spatial_grid') and self._spatial_grid:
                 self._spatial_grid.populate(self.brushes + self._model_collision_brushes)
+                if getattr(self, '_physics_world', None) is not None:
+                    self._physics_world.rebuild(self._physics_body_brushes)
         else:
             self._model_collision_brushes = []
             if self.play_mode and hasattr(self, '_spatial_grid') and self._spatial_grid:
                 self._spatial_grid.populate(self.brushes)
+                if getattr(self, '_physics_world', None) is not None:
+                    self._physics_world.rebuild(self._physics_body_brushes)
         self._refresh_collision_brushes_cache()
 
         return self.model_collision_enabled
@@ -880,6 +1026,10 @@ class LogicThread(threading.Thread):
 
             # Build collision brushes for model entities
             self._model_collision_brushes = self._build_model_collision_brushes()
+            self._physics_body_brushes = [
+                b for b in self._model_collision_brushes
+                if b.get('_physics_body')
+            ]
             self._refresh_collision_brushes_cache()
 
             # Reset player stats
@@ -891,6 +1041,7 @@ class LogicThread(threading.Thread):
             self.notarget = False
             
             # Reset pickup state
+            self._reset_trigger_state()
             self.collected_pickups.clear()
             self.collected_keys.clear()
             self.respawn_timers.clear()
@@ -946,17 +1097,19 @@ class LogicThread(threading.Thread):
             self._build_cull_cache()
 
             # Build spatial grid for fast collision queries (monsters + player)
-            from .physics import SpatialGrid
+            from .physics import SpatialGrid, PhysicsWorld
             self._spatial_grid = SpatialGrid(cell_size=512.0)
             self._spatial_grid.populate(self.brushes + self._model_collision_brushes)
+            self._physics_world = PhysicsWorld(self._spatial_grid)
+            self._physics_world.rebuild(self._physics_body_brushes)
             self.monster_ai.set_spatial_grid(self._spatial_grid)
 
-            # Props are a core feature, but do not allocate a runtime session
-            # for maps that do not contain one.
-            self._props = None
-            if PropSession.has_props(self.things):
-                self._props = PropSession(self)
-                self._props.start()
+            # The Prop session is the registry for the Prop domain, so it
+            # exists for the whole play session and is filled by
+            # _build_entity_caches below.  A map with no Props leaves it empty,
+            # which costs an empty list and an empty dict.
+            self._props = PropSession(self)
+            self._props.start()
 
             # Reset cinematic state (mover_path_states already reset by _init_movers)
             self.cinematic_state = None
@@ -965,7 +1118,6 @@ class LogicThread(threading.Thread):
             # Reset portal transit state
             self._portal_cooldowns.clear()
             self._portal_prev_player_pos = None
-            self._portals_cache_dirty = True
 
             # Reset portal fade state so portals start at the correct opacity
             if Portal is not None:
@@ -1003,7 +1155,7 @@ class LogicThread(threading.Thread):
             
         else:
             self._stop_monster_ai()
-            self.player_in_triggers.clear()
+            self._reset_trigger_state()
             self.fired_once_triggers.clear()
             self.collected_pickups.clear()
             self.collected_keys.clear()
@@ -1016,6 +1168,7 @@ class LogicThread(threading.Thread):
             self._reset_parented_portals()
             self._clear_angled_brush_collision()
             self._model_collision_brushes = []
+            self._physics_body_brushes = []
             self._refresh_collision_brushes_cache()
             self._invalidate_cull_cache()
             self.current_hud_message = ""
@@ -1035,6 +1188,10 @@ class LogicThread(threading.Thread):
             if props is not None:
                 props.stop()
             self._props = None
+            physics_world = getattr(self, '_physics_world', None)
+            if physics_world is not None:
+                physics_world.clear()
+            self._physics_world = None
             self.monster_ai.set_spatial_grid(None)
             grid = getattr(self, '_spatial_grid', None)
             if grid is not None:
@@ -1049,7 +1206,6 @@ class LogicThread(threading.Thread):
             # Reset portal transit state
             self._portal_cooldowns.clear()
             self._portal_prev_player_pos = None
-            self._portals_cache_dirty = True
 
             # Reset portal fade state to match 'active' property (editor view stays correct)
             if Portal is not None:
@@ -1681,17 +1837,18 @@ class LogicThread(threading.Thread):
 
         # Gameplay
         self._handle_interactions(use_key)
-        props = getattr(self, '_props', None)
-        if props is not None:
-            # Editor/runtime map edits can remove every Prop while playing.
-            # Release the session immediately instead of retaining objects.
-            if props.is_empty():
-                props.stop()
-                self._props = None
-            else:
-                props.tick(delta, use_key)
+        if self._props is not None:
+            self._props.tick(delta, use_key)
+        physics_world = getattr(self, '_physics_world', None)
+        if physics_world is not None:
+            physics_world.step(delta, self.player)
+            # Physics owned those positions for the duration of the step; the
+            # Prop domain takes its index back into line now that it is over.
+            if self._props is not None:
+                self._props.sync_physics_positions()
+
         self._check_pickups()
-        self._handle_triggers(use_key)
+        self._handle_triggers(use_key, delta)
 
         # Plugin tick: runs last in the gameplay sequence so the use-key edge is
         # intact and any plugin HUD prompt is the final word for the frame. The
@@ -1804,11 +1961,15 @@ class LogicThread(threading.Thread):
         """
         if Portal is None or not self.player:
             return
+        if not self._portal_things:
+            # No portals in this map: nothing to fade, nothing to cross, and no
+            # cooldowns to decay (they are only ever written below).
+            return
 
-        # Tick fade transitions for every portal each frame
-        for t in self.things:
-            if isinstance(t, Portal):
-                t.tick_fade(delta)
+        # Tick fade transitions for every portal each frame, off the list built
+        # by _build_entity_caches — walking the portals, not the level.
+        for t in self._portal_things:
+            t.tick_fade(delta)
 
         # Decay all active cooldowns
         for pid in list(self._portal_cooldowns):
@@ -1816,14 +1977,6 @@ class LogicThread(threading.Thread):
             if self._portal_cooldowns[pid] <= 0.0:
                 del self._portal_cooldowns[pid]
 
-        # Build (or reuse) name → Portal lookup
-        if self._portals_cache_dirty:
-            self._portals_by_name = {
-                t.properties.get('name', ''): t
-                for t in self.things
-                if isinstance(t, Portal) and t.properties.get('name', '')
-            }
-            self._portals_cache_dirty = False
         portals_by_name = self._portals_by_name
 
         cur = (float(self.player.pos.x), float(self.player.pos.y), float(self.player.pos.z))
@@ -2054,65 +2207,521 @@ class LogicThread(threading.Thread):
     # TRIGGER HANDLING
     # =========================================================================
 
-    def _handle_triggers(self, use_key_pressed: bool):
-        if not self.player:
-            return
-            
-        player_pos = self.player.pos
-        currently_in = set()
+    @staticmethod
+    def _trigger_filters(brush):
+        """Return configured trigger detection categories.
 
-        # PERF: hoist player position to scalars and use the cached float32 AABB
-        # bounds (bit-identical to glm.vec3(pos) +/- size/2) so the per-trigger
-        # containment test allocates no throwaway glm.vec3 every tick.
-        px, py, pz = player_pos.x, player_pos.y, player_pos.z
+        Missing filters are the compatibility default: player only.
+        """
+        filters = brush.get('trigger_filters', ['player'])
+        if isinstance(filters, str):
+            filters = [filters]
+        if not isinstance(filters, (list, tuple, set)):
+            filters = ['player']
+        return {
+            str(name).strip().lower()
+            for name in filters
+            if str(name).strip().lower() in ('player', 'props', 'monsters')
+        }
 
-        for bid, brush in self._trigger_brushes:
+    def _reset_trigger_state(self):
+        """Create or clear all trigger occupancy and scheduler state.
+
+        Containers are cleared in place when they already exist, so any
+        holder of a reference (e.g. ``player_in_triggers``) sees the reset.
+        """
+        def fresh(name, factory):
+            current = getattr(self, name, None)
+            if current is None:
+                setattr(self, name, factory())
+            else:
+                current.clear()
+
+        # Active occupants keyed by trigger id, then (entity type, entity id).
+        # Each trigger is sampled at its own configured interval; unchanged
+        # contacts are retained between that trigger's polls.
+        fresh('_trigger_contacts', dict)
+        # Mirrors for code that inspects player-only or non-player state.
+        fresh('player_in_triggers', set)
+        fresh('_nonplayer_trigger_contacts', dict)
+        # Scheduler: wakes every TRIGGER_POLL_TICK and polls only triggers
+        # whose own interval has elapsed; never scans at the 60 Hz tick rate.
+        self._trigger_poll_elapsed = 0.0
+        fresh('_trigger_poll_elapsed_by_bid', dict)
+        # Each use-key press gets a generation number consumed independently
+        # per trigger, so a fast trigger cannot steal a slower one's press.
+        self._trigger_use_generation = 0
+        fresh('_trigger_use_seen', dict)
+        # Evaluated per tick by _sample_use_prompt; kept as an attribute only
+        # so the render state and tests can read the frame's current prompt.
+        self._trigger_use_prompt = ""
+        self._refresh_use_triggers()
+
+    @staticmethod
+    def use_trigger_contains(distance_sq, use_radius):
+        """Whether something at *distance_sq* is inside a use trigger's volume.
+
+        **Fio's authored use volume is a sphere.** ``use_radius`` is the exact
+        activation radius in every direction, which is what a mapper writing
+        ``use_radius = 128`` means and what 2.4.2 implemented
+        (``glm.distance(player, trigger) < use_radius``).
+
+        The spatial broad phase bounds a use trigger with an axis-aligned box
+        of the same radius because that is what a batched pass can do cheaply.
+        That box is an **acceleration structure, not a second trigger shape**:
+        it fully contains the sphere, so it can only ever admit candidates, and
+        this predicate is the only thing that decides. Letting the box decide
+        made a button usable from up to sqrt(3) times its authored radius on
+        the diagonal.
+
+        Squared throughout -- no square roots, and it vectorises, so the
+        prompt pass and the firing pass share one definition rather than
+        keeping two that can drift apart.
+        """
+        radius = np.asarray(use_radius, dtype=np.float64)
+        return distance_sq < radius * radius
+
+    def _refresh_use_triggers(self):
+        """The use-activated subset of the trigger list, in trigger order.
+
+        Kept apart because the prompt for a use trigger is evaluated every
+        tick while occupancy for everything else stays on the poll scheduler.
+        Refreshed wherever the trigger list is rebuilt and again on each poll,
+        so an activation mode changed at runtime is picked up.
+        """
+        # Tolerates being called before the trigger list exists: state reset
+        # runs during construction, ahead of the first cache build.
+        self._use_trigger_entries = [
+            (bid, brush) for bid, brush in getattr(self, '_trigger_brushes', ())
+            if str(brush.get('trigger_activation', 'touch')).lower() == 'use'
+        ]
+
+    def _use_prompt_candidates(self):
+        """(bid, brush, centre, radius) for every use trigger a prompt may name."""
+        for bid, brush in self._use_trigger_entries:
             if brush.get('disabled', False):
                 continue
-            b0, b1, b2, b3, b4, b5 = brush_aabb_bounds(brush)
+            if 'player' not in self._trigger_filters(brush):
+                continue
+            # A spent 'once' trigger does nothing, so it must not keep
+            # advertising itself -- 2.4.2 suppressed the prompt for exactly
+            # this case and the rewrite dropped the check.
+            if (str(brush.get('trigger_type', 'multiple')).lower() == 'once'
+                    and bid in self.fired_once_triggers):
+                continue
+            centre = brush.get('pos', (0.0, 0.0, 0.0))
+            yield (bid, brush,
+                   (float(centre[0]), float(centre[1]), float(centre[2])),
+                   float(brush.get('use_radius', 96.0)))
 
-            inside = (b0 <= px <= b3 and
-                      b1 <= py <= b4 and
-                      b2 <= pz <= b5)
+    def _sample_use_prompt(self):
+        """The '[E] ...' line for the use trigger the player is facing, now.
+
+        Occupancy for touch triggers is the expensive pass -- every entity
+        against every trigger -- and stays on the poll scheduler. This is only
+        the use-activated subset, which is buttons, and it is evaluated against
+        the live player position and angle so the prompt appears and clears the
+        moment the player moves or turns instead of up to a poll interval
+        later. The arithmetic is one batched pass over that subset.
+        """
+        player = self.player
+        if player is None or not self._use_trigger_entries:
+            return ""
+
+        candidates = list(self._use_prompt_candidates())
+        if not candidates:
+            return ""
+
+        centres = np.asarray([c[2] for c in candidates], dtype=np.float64)
+        radii = np.asarray([c[3] for c in candidates], dtype=np.float64)
+        pos = player.pos
+        origin = np.asarray(
+            (float(pos[0]), float(pos[1]), float(pos[2])), dtype=np.float64)
+
+        offset = centres - origin
+        distance_sq = np.einsum('ij,ij->i', offset, offset)
+        in_range = self.use_trigger_contains(distance_sq, radii)
+        if not in_range.any():
+            return ""
+
+        forward = np.asarray(
+            (math.sin(player.angle), 0.0, math.cos(player.angle)),
+            dtype=np.float64)
+        # Facing is undefined when the player stands on the trigger centre;
+        # 2.4.2 and the poll path both treat that as facing it.
+        coincident = distance_sq <= 1.0e-8
+        with np.errstate(invalid='ignore', divide='ignore'):
+            facing = (offset @ forward) / np.sqrt(distance_sq)
+        usable = in_range & (coincident | (facing > 0.5))
+        if not usable.any():
+            return ""
+
+        index = int(np.flatnonzero(usable)[0])
+        label = candidates[index][1].get('use_label', '') or 'Activate'
+        return f"[E] {label}"
+
+    def _trigger_poll_interval(self, brush):
+        """Return a valid per-trigger polling interval in seconds."""
+        try:
+            value = float(brush.get('trigger_poll_interval', 1.0))
+        except (TypeError, ValueError):
+            return 1.0
+
+        allowed = (1.0, 0.5, 0.25)
+        return min(allowed, key=lambda interval: abs(interval - value))
+
+    def _poll_triggers(self, use_key_pressed=False, trigger_ids=None):
+        """Run one batched trigger poll for the triggers that are due.
+
+        The scheduler wakes every 0.25 s, but only triggers whose configured
+        polling interval has elapsed are included in the NumPy broad-phase.
+        With the default 1.0 s setting this preserves the old 1 Hz workload.
+        """
+        if not self.player:
+            return
+
+        if use_key_pressed:
+            self._trigger_use_generation += 1
+
+        if trigger_ids is None:
+            trigger_ids = {
+                bid for bid, _ in self._trigger_brushes
+            }
+        else:
+            trigger_ids = set(trigger_ids)
+
+        if not trigger_ids:
+            return
+
+        # The use-activated subset can change if a brush's activation mode is
+        # edited mid-session; refreshing it here keeps the per-tick prompt pass
+        # correct without walking the whole trigger list every frame.
+        self._refresh_use_triggers()
+
+        # Snapshot the trigger AABBs due for this poll.
+        trigger_entries = []
+        polled_ids = set()
+        for bid, brush in self._trigger_brushes:
+            if bid not in trigger_ids:
+                continue
+
+            polled_ids.add(bid)
+            if brush.get('disabled', False):
+                continue
 
             activation = brush.get('trigger_activation', 'touch').lower()
-
             if activation == 'use':
-                # Use-activated: behaves like a button — player faces the trigger
-                # from outside and presses E. No need to be inside the volume.
-                t_pos = glm.vec3(brush['pos'])
-                use_radius = float(brush.get('use_radius', 96.0))
-                dist = glm.distance(player_pos, t_pos)
-                if dist < use_radius:
-                    p_forward = glm.vec3(
-                        math.sin(self.player.angle), 0,
-                        math.cos(self.player.angle))
-                    to_trigger = glm.normalize(t_pos - player_pos)
-                    if glm.dot(p_forward, to_trigger) > 0.5:
-                        trigger_type = brush.get('trigger_type', 'multiple').lower()
-                        already_fired = (trigger_type == 'once'
-                                         and bid in self.fired_once_triggers)
-                        if not already_fired:
-                            use_label = brush.get('use_label', '') or 'Activate'
-                            self.current_hud_message = f"[E] {use_label}"
-                            if use_key_pressed:
-                                self._on_trigger_enter(brush, bid)
-            elif inside:
-                # Touch activation (default behaviour)
-                currently_in.add(bid)
-                if bid not in self.player_in_triggers:
-                    self._on_trigger_enter(brush, bid)
-                else:
-                    if brush.get('trigger_action') == 'hurt':
-                        self._process_hurt_trigger(brush, bid)
-        
-        for bid in self.player_in_triggers:
-            if bid not in currently_in:
+                center = brush.get('pos', (0.0, 0.0, 0.0))
+                radius = float(brush.get('use_radius', 96.0))
+                bounds = (
+                    float(center[0]) - radius,
+                    float(center[1]) - radius,
+                    float(center[2]) - radius,
+                    float(center[0]) + radius,
+                    float(center[1]) + radius,
+                    float(center[2]) + radius,
+                )
+            else:
+                bounds = brush_aabb_bounds(brush)
+
+            filters = self._trigger_filters(brush)
+            filter_mask = (
+                (1 if 'player' in filters else 0) |
+                (2 if 'props' in filters else 0) |
+                (4 if 'monsters' in filters else 0)
+            )
+            if filter_mask:
+                trigger_entries.append(
+                    (bid, brush, bounds, filter_mask, activation)
+                )
+
+        # Preserve contacts for triggers that were not due. Replace only the
+        # state belonging to triggers sampled on this pass.
+        new_contacts = dict(self._trigger_contacts)
+        for bid in polled_ids:
+            new_contacts.pop(bid, None)
+
+        if not trigger_entries:
+            self._trigger_contacts = new_contacts
+            self.player_in_triggers = {
+                bid for bid, contacts in new_contacts.items()
+                if any(entity_type == 'player' for entity_type, _ in contacts)
+            }
+            self._nonplayer_trigger_contacts = {
+                bid: {
+                    contact for contact in contacts
+                    if contact[0] != 'player'
+                }
+                for bid, contacts in new_contacts.items()
+                if any(contact[0] != 'player' for contact in contacts)
+            }
+            return
+
+        # ------------------------------------------------------------------
+        # Snapshot ALL eligible entities into one compact array.
+        # The first row is always the player; props and monsters follow.
+        # ------------------------------------------------------------------
+        entities = [self.player]
+        entity_types = [1]  # player
+        entity_ids = [id(self.player)]
+
+        for entity in (self._props.props if self._props is not None else ()):
+            if not getattr(entity, 'properties', {}).get('disabled', False):
+                entities.append(entity)
+                entity_types.append(2)
+                entity_ids.append(id(entity))
+
+        for entity in self._monster_things:
+            if not getattr(entity, 'properties', {}).get('disabled', False):
+                entities.append(entity)
+                entity_types.append(4)
+                entity_ids.append(id(entity))
+
+        positions = np.asarray(
+            [entity.pos for entity in entities],
+            dtype=np.float32,
+        )
+        entity_type_mask = np.asarray(entity_types, dtype=np.uint8)
+
+        # ------------------------------------------------------------------
+        # ONE vectorised broad-phase over only the trigger subset that is due.
+        # No Python entity × trigger nested loop.
+        # ------------------------------------------------------------------
+        trigger_bounds = np.asarray(
+            [entry[2] for entry in trigger_entries],
+            dtype=np.float32,
+        )
+        inside = (
+            (positions[:, None, 0] >= trigger_bounds[None, :, 0]) &
+            (positions[:, None, 0] <= trigger_bounds[None, :, 3]) &
+            (positions[:, None, 1] >= trigger_bounds[None, :, 1]) &
+            (positions[:, None, 1] <= trigger_bounds[None, :, 4]) &
+            (positions[:, None, 2] >= trigger_bounds[None, :, 2]) &
+            (positions[:, None, 2] <= trigger_bounds[None, :, 5])
+        )
+
+        trigger_filter_masks = np.asarray(
+            [entry[3] for entry in trigger_entries],
+            dtype=np.uint8,
+        )
+        inside &= (
+            (entity_type_mask[:, None] & trigger_filter_masks[None, :]) != 0
+        )
+
+        # Sparse result: only actual overlaps are materialised from NumPy.
+        entity_indices, trigger_indices = np.nonzero(inside)
+
+        for entity_index, trigger_index in zip(entity_indices, trigger_indices):
+            entry = trigger_entries[int(trigger_index)]
+            bid = entry[0]
+            entity_type = entity_type_mask[int(entity_index)]
+            category = (
+                'player' if entity_type == 1
+                else 'props' if entity_type == 2
+                else 'monsters'
+            )
+            new_contacts.setdefault(bid, set()).add(
+                (category, entity_ids[int(entity_index)])
+            )
+
+        old_contacts = self._trigger_contacts
+
+        # ------------------------------------------------------------------
+        # Only changed contacts generate trigger enter/exit I/O.
+        # Unchanged occupancy produces no I/O work.
+        # ------------------------------------------------------------------
+        for bid in polled_ids:
+            old = old_contacts.get(bid, set())
+            new = new_contacts.get(bid, set())
+            entered = new - old
+            exited = old - new
+
+            if entered:
                 brush = self._trigger_brush_by_bid.get(bid)
                 if brush:
-                    self._on_trigger_exit(brush, bid)
-        
-        self.player_in_triggers = currently_in
+                    for activator_type, entity_id in entered:
+                        if activator_type == 'player':
+                            activator = self.player
+                        elif activator_type == 'props':
+                            activator = (self._props.by_id(entity_id)
+                                         if self._props is not None else None)
+                        else:
+                            activator = self._monster_by_id.get(entity_id)
+
+                        if activator is not None:
+                            # Use triggers are activation-driven rather than
+                            # touch-state-driven; their broad-phase contact is
+                            # handled below, but it must not fire OnStartTouch
+                            # merely because the player entered its AABB.
+                            if brush.get('trigger_activation', 'touch').lower() != 'use':
+                                self._on_trigger_enter(
+                                    brush,
+                                    bid,
+                                    activator_type=activator_type,
+                                    activator_entity=activator,
+                                )
+
+            if exited:
+                brush = self._trigger_brush_by_bid.get(bid)
+                if brush:
+                    for activator_type, entity_id in exited:
+                        if activator_type == 'player':
+                            activator = self.player
+                        elif activator_type == 'props':
+                            activator = (self._props.by_id(entity_id)
+                                         if self._props is not None else None)
+                        else:
+                            activator = self._monster_by_id.get(entity_id)
+
+                        if activator is not None:
+                            if brush.get('trigger_activation', 'touch').lower() != 'use':
+                                self._on_trigger_exit(
+                                    brush,
+                                    bid,
+                                    activator_type=activator_type,
+                                    activator_entity=activator,
+                                )
+
+                    # A player leaving a hurt trigger clears its cadence.
+                    if any(entity_type == 'player' for entity_type, _ in exited):
+                        self.hurt_trigger_timers.pop(bid, None)
+
+        self._trigger_contacts = new_contacts
+
+        # Maintain the legacy mirrors from the same sampled contact state.
+        self.player_in_triggers = {
+            bid for bid, contacts in new_contacts.items()
+            if any(entity_type == 'player' for entity_type, _ in contacts)
+        }
+        self._nonplayer_trigger_contacts = {
+            bid: {
+                contact for contact in contacts
+                if contact[0] != 'player'
+            }
+            for bid, contacts in new_contacts.items()
+            if any(contact[0] != 'player' for contact in contacts)
+        }
+
+        # ------------------------------------------------------------------
+        # Use triggers: broad-phase already identified candidate player
+        # contacts. Facing and the queued use-key generation are the
+        # narrow-phase.
+        # ------------------------------------------------------------------
+        for trigger_index, entry in enumerate(trigger_entries):
+            bid, brush, bounds, _, activation = entry
+            if activation != 'use':
+                continue
+
+            generation = self._trigger_use_generation
+            last_seen = self._trigger_use_seen.get(bid, generation)
+            use_edge = last_seen < generation
+            self._trigger_use_seen[bid] = generation
+
+            if not inside[0, trigger_index]:
+                continue
+            if not use_edge:
+                continue
+
+            center = np.asarray(
+                brush.get('pos', (0.0, 0.0, 0.0)),
+                dtype=np.float32,
+            )
+            offset = center - positions[0]
+            distance_sq = float(np.dot(offset, offset))
+            # The sphere is what decides; the broad-phase box only nominated
+            # this trigger as a candidate. Same predicate the prompt uses, so
+            # what the player is shown and what pressing E does cannot drift.
+            if not self.use_trigger_contains(
+                    distance_sq, float(brush.get('use_radius', 96.0))):
+                continue
+            if distance_sq > 1.0e-8:
+                to_trigger = offset / math.sqrt(distance_sq)
+                p_forward = np.asarray(
+                    [math.sin(self.player.angle), 0.0, math.cos(self.player.angle)],
+                    dtype=np.float32,
+                )
+                if float(np.dot(p_forward, to_trigger)) <= 0.5:
+                    continue
+
+            trigger_type = brush.get('trigger_type', 'multiple').lower()
+            if trigger_type == 'once' and bid in self.fired_once_triggers:
+                continue
+
+            self._on_trigger_enter(
+                brush,
+                bid,
+                activator_type='player',
+                activator_entity=self.player,
+            )
+
+        # ------------------------------------------------------------------
+        # Persistent hurt triggers are evaluated only for triggers sampled on
+        # this pass, never on the 60 Hz logic path.
+        # ------------------------------------------------------------------
+        for bid in polled_ids:
+            if bid not in self.player_in_triggers:
+                continue
+            brush = self._trigger_brush_by_bid.get(bid)
+            if (
+                brush
+                and brush.get('trigger_action') == 'hurt'
+                and brush.get('trigger_activation', 'touch').lower() != 'use'
+            ):
+                self._process_hurt_trigger(
+                    brush,
+                    bid,
+                    self._trigger_poll_interval(brush),
+                )
+
+        # Use prompts are no longer sampled here: _sample_use_prompt evaluates
+        # them every tick against the live player position and angle, which is
+        # both more responsive and cheaper than carrying per-trigger prompt
+        # state between polls.
+
+    def _handle_triggers(self, use_key_pressed: bool, delta=None):
+        """Schedule trigger polls without scanning occupancy at 60 Hz."""
+        if use_key_pressed:
+            self._trigger_use_generation += 1
+
+        # The use prompt is evaluated here, every tick, against the live player
+        # position and angle -- not republished from the last poll. Sampling it
+        # at the poll cadence made it appear up to a poll interval late and
+        # linger that long after the player turned away.
+        #
+        # Set only when there is one. _handle_triggers runs after
+        # _handle_interactions and PropSession.tick in _tick_play_mode, so this
+        # is the last word on the HUD line before the render state is
+        # published; assigning unconditionally wiped the line those earlier
+        # stages had just set, which is what silently removed "NEED: <key>",
+        # "[E] Open", "[E] Unlock (...)", "[E] Pick up ...",
+        # "[E] Complete Level" and "[E] Drop" from the HUD.
+        self._trigger_use_prompt = self._sample_use_prompt()
+        if self._trigger_use_prompt:
+            self.current_hud_message = self._trigger_use_prompt
+
+        step = float(delta) if delta is not None else float(self.TICK_DURATION)
+        self._trigger_poll_elapsed += max(0.0, step)
+
+        scheduler_tick = self.TRIGGER_POLL_TICK
+        # Tolerance: 15 x (1/60) sums to 0.2499999..., which would otherwise
+        # push every poll one logic tick late (same epsilon as per-trigger).
+        while self._trigger_poll_elapsed + self.TRIGGER_POLL_EPSILON >= scheduler_tick:
+            self._trigger_poll_elapsed = max(0.0, self._trigger_poll_elapsed - scheduler_tick)
+
+            due_ids = set()
+            for bid, brush in self._trigger_brushes:
+                elapsed = (
+                    self._trigger_poll_elapsed_by_bid.get(bid, 0.0)
+                    + scheduler_tick
+                )
+                interval = self._trigger_poll_interval(brush)
+                if elapsed + self.TRIGGER_POLL_EPSILON >= interval:
+                    due_ids.add(bid)
+                    elapsed %= interval
+                self._trigger_poll_elapsed_by_bid[bid] = elapsed
+
+            if due_ids:
+                self._poll_triggers(trigger_ids=due_ids)
 
     def _apply_player_damage(self, damage):
         with self._player_damage_lock:
@@ -2128,7 +2737,13 @@ class LogicThread(threading.Thread):
         if became_dead:
             self._plugin_emit("player_death")
 
-    def _on_trigger_enter(self, brush: dict, trigger_id: int):
+    def _on_trigger_enter(
+        self,
+        brush: dict,
+        trigger_id: int,
+        activator_type='player',
+        activator_entity=None,
+    ):
         trigger_type = brush.get('trigger_type', 'multiple')
         if trigger_type == 'once' and trigger_id in self.fired_once_triggers:
             return
@@ -2139,39 +2754,76 @@ class LogicThread(threading.Thread):
             target_node_name = brush.get('target_node', '')
             if target_node_name:
                 node = self._find_path_node_by_name(target_node_name)
-                if node and self.player:
-                    self.player.pos = glm.vec3(node.pos[0], node.pos[1], node.pos[2])
-                    self.player.velocity = glm.vec3(0, 0, 0)
+                if node and (activator_entity or self.player):
+                    activator = activator_entity or self.player
+                    dest = glm.vec3(node.pos[0], node.pos[1], node.pos[2])
+                    if activator is self.player:
+                        self.player.pos = dest
+                        self.player.velocity = glm.vec3(0, 0, 0)
+                    else:
+                        activator.pos = [dest.x, dest.y, dest.z]
+                        physics_world = getattr(self, '_physics_world', None)
+                        if physics_world is not None:
+                            try:
+                                physics_world.sync_entity_position(activator, wake=True)
+                            except (AttributeError, TypeError, ValueError):
+                                pass
                     if self.io_manager:
-                        self.io_manager.fire_output(brush, 'OnTeleport')
-                    debug_log("IO", f"Trigger teleported player → '{target_node_name}' "
+                        self.io_manager.fire_output(
+                            brush, 'OnTeleport', activator_entity=activator
+                        )
+                    debug_log("IO", f"Trigger teleported {activator_type} → '{target_node_name}' "
                                      f"({node.pos[0]:.0f}, {node.pos[1]:.0f}, {node.pos[2]:.0f})")
             else:
                 debug_log("Warning", "Trigger action 'teleport' used but no target_node set.")
 
         elif action == 'hurt':
-            damage = brush.get('damage', 10)
-            self._apply_player_damage(damage)
-            self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
+            # Only the player has damage/health semantics at present.
+            if activator_type == 'player':
+                damage = brush.get('damage', 10)
+                self._apply_player_damage(damage)
+                self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
 
         elif action == 'target':
             if self.io_manager:
-                self.io_manager.fire_output(brush, 'OnStartTouch')
-                self.io_manager.fire_output(brush, 'OnTrigger')
+                self.io_manager.fire_output(
+                    brush, 'OnStartTouch', activator_entity=activator_entity
+                )
+                self.io_manager.fire_output(
+                    brush, 'OnTrigger', activator_entity=activator_entity
+                )
 
-        self._plugin_emit("trigger_enter", trigger=brush, action=action,
-                          trigger_id=trigger_id)
+        self._plugin_emit(
+            "trigger_enter",
+            trigger=brush,
+            action=action,
+            trigger_id=trigger_id,
+            activator_type=activator_type,
+        )
         if trigger_type == 'once':
             self.fired_once_triggers.add(trigger_id)
 
-    def _on_trigger_exit(self, brush: dict, trigger_id: int):
+    def _on_trigger_exit(
+        self,
+        brush: dict,
+        trigger_id: int,
+        activator_type='player',
+        activator_entity=None,
+    ):
         if self.io_manager:
-            self.io_manager.fire_output(brush, 'OnEndTouch')
-        self._plugin_emit("trigger_exit", trigger=brush, trigger_id=trigger_id)
+            self.io_manager.fire_output(
+                brush, 'OnEndTouch', activator_entity=activator_entity
+            )
+        self._plugin_emit(
+            "trigger_exit",
+            trigger=brush,
+            trigger_id=trigger_id,
+            activator_type=activator_type,
+        )
 
-    def _process_hurt_trigger(self, brush: dict, trigger_id: int):
+    def _process_hurt_trigger(self, brush: dict, trigger_id: int, poll_interval=1.0):
         if trigger_id in self.hurt_trigger_timers:
-            self.hurt_trigger_timers[trigger_id] -= self.TICK_DURATION
+            self.hurt_trigger_timers[trigger_id] -= float(poll_interval)
             if self.hurt_trigger_timers[trigger_id] <= 0:
                 damage = brush.get('damage', 10)
                 self._apply_player_damage(damage)
@@ -2976,9 +3628,7 @@ class LogicThread(threading.Thread):
             else:
                 wall_candidates = all_collision_brushes
             for brush in wall_candidates:
-                if brush.get('hidden') or is_water_brush(brush) or brush.get('is_fog'):
-                    continue
-                if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
+                if not is_solid_world_brush(brush):
                     continue
                 pos = brush['pos']
                 size = brush['size']
@@ -3294,8 +3944,17 @@ class LogicThread(threading.Thread):
             else:
                 visible_mask = keep
 
-            all_brushes = row_refs[keep].tolist()
-            visible_brushes = row_refs[visible_mask].tolist()
+            all_indices = np.flatnonzero(keep)
+            visible_indices = np.flatnonzero(visible_mask)
+            all_brushes = row_refs[all_indices].tolist()
+            visible_brushes = row_refs[visible_indices].tolist()
+            brush_positions = write_state.ensure_visible_brush_positions(
+                len(visible_brushes))
+            if len(visible_indices):
+                np.take(centers[:, 0], visible_indices,
+                        out=brush_positions[:len(visible_indices), 0])
+                np.take(centers[:, 2], visible_indices,
+                        out=brush_positions[:len(visible_indices), 1])
             culled_count = total_count - len(visible_brushes)
         else:
             # ---- General path (editor mode / cache miss) --------------------
@@ -3334,17 +3993,33 @@ class LogicThread(threading.Thread):
 
             if self.culling_enabled and refs:
                 visible_mask = self._aabb_in_frustum_batch(frustum_planes, centers, halves)
-                visible_brushes = [ref for ref, vis in zip(refs, visible_mask) if vis]
+                visible_indices = np.flatnonzero(visible_mask)
+                visible_brushes = [refs[int(i)] for i in visible_indices]
                 culled_count += len(refs) - len(visible_brushes)
+                brush_positions = write_state.ensure_visible_brush_positions(
+                    len(visible_brushes))
+                if len(visible_indices):
+                    center_array = np.asarray(centers, dtype=np.float64)
+                    np.take(center_array[:, 0], visible_indices,
+                            out=brush_positions[:len(visible_indices), 0])
+                    np.take(center_array[:, 2], visible_indices,
+                            out=brush_positions[:len(visible_indices), 1])
             else:
                 visible_brushes = refs
+                brush_positions = write_state.ensure_visible_brush_positions(
+                    len(visible_brushes))
+                if visible_brushes:
+                    center_array = np.asarray(centers, dtype=np.float64)
+                    brush_positions[:len(visible_brushes)] = center_array[:, (0, 2)]
 
         write_state.visible_brushes = visible_brushes
+        write_state.visible_brush_position_count = len(visible_brushes)
         write_state.all_brushes = all_brushes
         write_state.total_brushes = total_count
         write_state.culled_brushes = culled_count
 
         visible_things = []
+        all_lights = []
         visible_thing_positions = write_state.ensure_visible_thing_positions(
             len(self.things))
         visible_thing_count = 0
@@ -3362,6 +4037,9 @@ class LogicThread(threading.Thread):
             visible_thing_positions[visible_thing_count, 1] = float(pos[2])
             visible_thing_count += 1
 
+            if Light is not None and isinstance(thing, Light):
+                all_lights.append(thing)
+
             if isinstance(thing, MonsterThing):
                 visible_things.append(thing.get_render_snapshot())
             else:
@@ -3370,6 +4048,7 @@ class LogicThread(threading.Thread):
         write_state.visible_things = visible_things
         write_state.visible_thing_position_count = visible_thing_count
         write_state.all_things = list(self.things)
+        write_state.all_lights = all_lights
         write_state.timestamp = time.perf_counter()
 
         # ── Player 2 render state ─────────────────────────────────────────────

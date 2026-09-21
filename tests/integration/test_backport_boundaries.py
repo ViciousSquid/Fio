@@ -64,7 +64,7 @@ def test_generic_modules_carry_no_rpg_vocabulary():
     # Pre-existing Fio prose that merely *mentions* an RPG concept as an
     # example is not RPG machinery and predates this back-port.
     ALLOWED = {
-        ("editor/things.py", "quest"),   # LogicKeyValueStore docstring example
+        ("editor/things.py", "quest"),   # LogicState docstring example
     }
     offenders = []
     for rel in GENERIC_MODULES:

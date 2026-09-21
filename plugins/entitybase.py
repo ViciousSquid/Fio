@@ -96,23 +96,15 @@ class Model(Thing):
         self.properties.setdefault("scale", [1, 1, 1])
 
 
-class Prop(Model):
-    """PyQt-free counterpart of :class:`editor.things.Prop`."""
+def __getattr__(name):
+    """``plugins.entitybase.Prop`` is an alias, not a second implementation.
 
-    def __init__(self, pos=None, properties=None):
-        super().__init__(pos, properties)
-        self.properties['type'] = 'prop'
-        for key, value in {
-            'sprite_path': 'assets/sprites/pickup.png', 'sprite_size': [32.0, 32.0], 'mass': 1.0,
-            'collision_size': [0.0, 0.0, 0.0], 'no_collision': True,
-            'physics_enabled': False, 'gravity': True, 'friction': 0.55,
-            'linear_damping': 0.08, 'angular_damping': 0.12,
-            'pickup_enabled': True, 'pickup_reach': 110.0,
-            'carry_distance': 55.0, 'carry_offset': [0.0, -6.0, 0.0],
-            'drop_velocity': 0.0, 'drop_angular_velocity': [0.0, 0.0, 0.0],
-            'disabled': False,
-        }.items():
-            self.properties.setdefault(key, value)
-
-    def get_sprite_path(self):
-        return self.properties.get('sprite_path', '')
+    Prop is a core engine primitive defined once in :mod:`engine.prop_entity`
+    (on this module's Model when the editor tier is absent). Resolved lazily
+    because that module imports this one.
+    """
+    if name == 'Prop':
+        from engine.prop_entity import Prop
+        globals()['Prop'] = Prop
+        return Prop
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

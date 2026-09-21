@@ -1,4 +1,3 @@
-import math
 import numpy as np
 import glm
 
@@ -23,7 +22,6 @@ class Camera:
         from list/tuple and prints a traceback
         """
         if not isinstance(value, glm.vec3):
-            import traceback
             #print(f"WARNING: Camera position being set to non-glm.vec3 type: {type(value)} - Value: {value}")
 
             if isinstance(value, (list, tuple)):

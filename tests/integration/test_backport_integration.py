@@ -38,17 +38,16 @@ def _render_scene_source():
 
 
 def test_cull_output_feeds_only_sort_objects():
-    """cull_brushes/cull_things must reach _sort_objects and nothing else."""
+    """render_scene hands the culled lists (not the originals) to _sort_objects."""
     body = _render_scene_source()
-    uses = re.findall(r"cull_brushes|cull_things", body)
-    # 2 assignments (tuple target), 2 in the reassignment, 2 in the _sort_objects call.
-    assert "self._sort_objects(cull_brushes, cull_things, config)" in body
-    # No other call site may consume the culled lists.
-    other = re.findall(r"\w+\((?:[^()]*\b(?:cull_brushes|cull_things)\b[^()]*)\)", body)
-    for call in other:
-        assert "_sort_objects" in call or "_camera_distance_cull" in call, \
-            f"culled list leaked into another call: {call}"
-    assert len(uses) >= 4
+    tree = ast.parse("def _f():\n" + "\n".join("    " + l for l in body.splitlines()))
+    sort_calls = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "_sort_objects"
+    ]
+    main = [c for c in sort_calls
+            if [getattr(a, "id", None) for a in c.args[:2]] == ["cull_brushes", "cull_things"]]
+    assert len(main) == 1, "main camera pass must sort the culled collections"
 
 
 def test_shadow_and_portal_passes_use_the_unculled_collections():
@@ -81,15 +80,42 @@ def test_cull_does_not_mutate_its_input_lists():
     assert len(out) == 1
 
 
-def test_light_and_portal_exemption_predicate():
-    """_cull_keep_thing must exempt Light and Portal and nothing else."""
-    src = _read("engine/renderer_F.py")
-    assert "def _cull_keep_thing(t):" in src
-    assert "isinstance(t, Light)" in src
-    assert "isinstance(t, Portal)" in src
-    # The predicate is passed for things only, never for brushes.
-    assert "out=tbuf, keep=self._cull_keep_thing" in src
-    assert "out=bbuf)" in src
+def test_camera_cull_exempts_lights_and_portals_and_tracks_positions():
+    """Behavioural: far Lights/Portals survive, far brushes/Things do not."""
+    import numpy as np
+    from editor.things import Light, Portal, Thing
+    from engine.renderer_F import Renderer_F
+    from engine.view_distance import ViewDistance
+
+    r = Renderer_F.__new__(Renderer_F)
+    r.view_distance = ViewDistance(1000.0)
+    r._cull_brush_buf, r._cull_thing_buf = [], []
+    r._cull_brush_pos_buf = np.empty((0, 2), dtype=np.float64)
+    r._cull_thing_pos_buf = np.empty((0, 2), dtype=np.float64)
+
+    far = [50000.0, 0.0, 0.0]
+    near_brush = {"pos": [10.0, 0.0, 10.0]}
+    far_brush = {"pos": list(far)}
+    light, portal, thing = Light(pos=list(far)), Portal(pos=list(far)), Thing(pos=list(far))
+    near_thing = Thing(pos=[5.0, 0.0, 5.0])
+    brushes = [far_brush, near_brush]
+    things = [thing, light, near_thing, portal]
+    bpos = np.asarray([[b["pos"][0], b["pos"][2]] for b in brushes])
+    tpos = np.asarray([[t.pos[0], t.pos[2]] for t in things])
+
+    kb, kt = r._camera_distance_cull(brushes, things, glm_vec(0.0, 0.0, 0.0),
+                                     brush_positions=bpos, thing_positions=tpos)
+
+    assert kb == [near_brush]
+    assert kt == [light, near_thing, portal]
+    np.testing.assert_array_equal(r._last_cull_brush_positions, bpos[1:])
+    np.testing.assert_array_equal(r._last_cull_thing_positions, tpos[1:])
+    assert brushes == [far_brush, near_brush]  # inputs untouched
+
+
+def glm_vec(x, y, z):
+    import glm
+    return glm.vec3(x, y, z)
 
 
 # ---------------------------------------------------------------------------

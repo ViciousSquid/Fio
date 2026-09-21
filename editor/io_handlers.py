@@ -1527,11 +1527,8 @@ def register_all_input_handlers(io_manager: IOManager):
         'clearobjectstate': state_clear_object_state,
     }
 
-    # Registered under the current type token and the pre-2.4 one, so a store
-    # loaded from an old map dispatches through exactly the same handlers.
-    for _state_type in ('logic_state', 'logic_keyvalue'):
-        for _input_name, _handler in _STATE_INPUTS.items():
-            io_manager.register_input_handler(_state_type, _input_name, _handler)
+    for _input_name, _handler in _STATE_INPUTS.items():
+        io_manager.register_input_handler('logic_state', _input_name, _handler)
 
     # ==========================================================================
     # PORTAL INPUTS

@@ -8,9 +8,8 @@ import copy
 import os
 import math
 import uuid
-from PyQt5.QtGui import QPixmap, QColor
+from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt
-import json
 import ast
 
 from . import state_values as _sv
@@ -64,7 +63,9 @@ def update_all_counters_from_entities(entities):
             if num > max_indices[class_name]:
                 max_indices[class_name] = num
 
-    # Update counters for all Thing subclasses
+    # Update counters for all Thing subclasses (including core entities
+    # defined outside this module, e.g. Prop).
+    _load_core_entity_types()
     for cls in find_subclasses(Thing):
         class_name = cls.__name__
         if class_name in max_indices:
@@ -175,6 +176,23 @@ class Thing:
         """
         return self.__class__.get_pixmap()
 
+    def _pixmap_for_path(self, sprite_path):
+        """Cached QPixmap for an authored sprite path (project-relative or absolute).
+
+        Returns None when the file is missing or unreadable. Shared by any
+        entity whose 2D icon comes from an authored path rather than its class.
+        """
+        cache_key = ('sprite_path', sprite_path)
+        if cache_key in self._pixmap_cache:
+            return self._pixmap_cache[cache_key]
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        absolute_path = sprite_path if os.path.isabs(sprite_path) else os.path.join(project_root, sprite_path)
+        pixmap = QPixmap(absolute_path) if os.path.exists(absolute_path) else None
+        if pixmap is not None and pixmap.isNull():
+            pixmap = None
+        self._pixmap_cache[cache_key] = pixmap
+        return pixmap
+
     def duplicate(self, existing_names=()):
         """An independent copy of this entity, ready to place.
 
@@ -247,7 +265,21 @@ class Thing:
     def from_dict(data):
         """Deserialize from dictionary."""
         thing_type = data.get('type')
+
+        # Untouched copy for opaque preservation of unresolvable types; the
+        # loop below rewrites string property values in place.
+        original_record = copy.deepcopy(data)
+
         if not thing_type:
+            # Deliberately *not* preserved, unlike an unresolvable type token.
+            # Preservation exists so an entity whose plugin is missing survives
+            # a load/save round trip; that entity is identifiable, carries
+            # authored content, and a plugin may supply its class later. A
+            # record with no type at all is none of those things -- there is
+            # nothing to resolve it to and nothing to show the author but a
+            # nameless ghost. Skipping it (without stopping the load) is the
+            # contract test_a_thing_with_no_type_is_skipped_rather_than_
+            # crashing_the_load pins.
             return None
 
         properties = data.get('properties', {})
@@ -259,20 +291,13 @@ class Thing:
                     pass
 
         # A subclass may declare `map_type` when its serialised type token
-        # differs from its class name; otherwise the class name is used, so
-        # every existing entity resolves exactly as before.  `legacy_map_types`
-        # lists tokens an *older* Fio wrote for the same entity, so a map saved
-        # before a rename still loads into the renamed class rather than being
-        # dropped with a warning.  Current tokens are matched across every class
-        # first, so a legacy alias can never shadow a live entity type.
+        # differs from its class name; otherwise the class name is used.
         thing = None
         token = thing_type.replace('_', '').lower()
+        _load_core_entity_types()
         subclasses = find_subclasses(Thing)
         match = next((c for c in subclasses
                       if token == getattr(c, 'map_type', c.__name__.lower())), None)
-        if match is None:
-            match = next((c for c in subclasses
-                          if token in getattr(c, 'legacy_map_types', ())), None)
         if match is not None:
             thing = match(pos=data.get('pos'), properties=properties)
 
@@ -280,8 +305,11 @@ class Thing:
             if thing_type == 'thing':
                 thing = Thing(pos=data.get('pos'), properties=properties)
             else:
-                print(f"Warning: Unknown thing type '{thing_type}' found in map file.")
-                return None
+                # Never drop an entity: a later save would erase it for good.
+                # Keep the record opaque so it round-trips byte-for-byte.
+                print(f"Warning: Unknown thing type '{thing_type}' found in map file; "
+                      f"preserved unchanged (is a plugin missing or disabled?).")
+                return UnresolvedThing(original_record)
         
         io_data = data.get('io_connections', [])
         if io_data:
@@ -349,6 +377,50 @@ class PlayerStart(Thing):
 
     def get_angle(self):
         return float(self.properties.get('angle', 0.0))
+
+
+class UnresolvedThing(Thing):
+    """Opaque stand-in for an entity whose type this build cannot resolve.
+
+    Typically a plugin entity whose plugin is missing or disabled, or a type
+    from a newer/older Fio with no migration. The original map record is kept
+    verbatim and written back unchanged on save (only ``pos`` follows edits,
+    so it can still be moved or deleted in the editor). It has no runtime
+    behaviour: no class-specific handling matches it, and it declares no I/O.
+
+    ``map_type`` is set to a token no map can contain, so the from_dict
+    subclass walk can never resolve a record *to* this class.
+    """
+    map_type = '\x00unresolved'
+
+    def __init__(self, record=None, pos=None, properties=None):
+        record = copy.deepcopy(record) if isinstance(record, dict) else {}
+        self._record = record
+        raw_props = record.get('properties')
+        props = copy.deepcopy(raw_props) if isinstance(raw_props, dict) else {}
+        if properties:
+            props.update(properties)
+        super().__init__(pos=list(record.get('pos') or pos or [0, 0, 0]),
+                         properties=props)
+        self.properties['type'] = record.get('type') or self.properties.get('type')
+
+    @property
+    def unresolved_type(self):
+        return self._record.get('type')
+
+    def to_dict(self):
+        data = copy.deepcopy(self._record)
+        data['pos'] = [float(v) for v in self.pos]
+        return data
+
+    def duplicate(self, existing_names=()):
+        """Copies need their own identity inside the preserved record too."""
+        clone = super().duplicate(existing_names)
+        props = clone._record.setdefault('properties', {})
+        if isinstance(props, dict):
+            props['id'] = clone.properties['id']
+            props['name'] = clone.properties['name']
+        return clone
 
 
 class Light(Thing):
@@ -859,77 +931,12 @@ class Model(Thing):
         self.properties.setdefault('model_path', "")
         self.properties.setdefault('rotation', [0, 0, 0])
         self.properties.setdefault('scale', [1, 1, 1])
+        self.properties.setdefault('collision_shape', 'auto')
 
 
-class Prop(Model):
-    """A generic carryable world object.
-
-    A prop uses ``model_path`` when it is set; otherwise ``sprite_path`` is
-    rendered as a camera-facing billboard.  Its data-only defaults are kept on
-    the entity so maps serialize through :class:`Thing` without a special
-    format and runtimes can opt into the same carry/physics contract.
-    """
-    pixmap_path = "assets/sprites/pickup.png"
-    EDITOR_PRIMARY_PROPERTIES = (
-        'sprite_path',
-        'sprite_size',
-        'mass',
-        'collision_size',
-        'no_collision',
-        'physics_enabled',
-        'gravity',
-        'friction',
-        'linear_damping',
-        'angular_damping',
-        'pickup_enabled',
-        'pickup_reach',
-        'carry_distance',
-        'carry_offset',
-        'drop_velocity',
-        'drop_angular_velocity',
-        'disabled',
-    )
-
-    def __init__(self, pos=None, properties=None):
-        super().__init__(pos, properties)
-        self.properties['type'] = 'prop'
-        self.properties.setdefault('sprite_path', 'assets/sprites/pickup.png')
-        self.properties.setdefault('sprite_size', [32.0, 32.0])
-        self.properties.setdefault('mass', 1.0)
-        self.properties.setdefault('collision_size', [0.0, 0.0, 0.0])
-        self.properties.setdefault('no_collision', True)
-        self.properties.setdefault('physics_enabled', False)
-        self.properties.setdefault('gravity', True)
-        self.properties.setdefault('friction', 0.55)
-        self.properties.setdefault('linear_damping', 0.08)
-        self.properties.setdefault('angular_damping', 0.12)
-        self.properties.setdefault('pickup_enabled', True)
-        self.properties.setdefault('pickup_reach', 110.0)
-        self.properties.setdefault('carry_distance', 55.0)
-        self.properties.setdefault('carry_offset', [0.0, -6.0, 0.0])
-        self.properties.setdefault('drop_velocity', 0.0)
-        self.properties.setdefault('drop_angular_velocity', [0.0, 0.0, 0.0])
-        self.properties.setdefault('disabled', False)
-
-    def get_sprite_path(self):
-        """Return the authored billboard texture path, if this prop has one."""
-        return self.properties.get('sprite_path', '')
-
-    def get_instance_pixmap(self):
-        """Load the authored billboard for 2D editor views."""
-        sprite_path = self.get_sprite_path()
-        if not sprite_path:
-            return super().get_instance_pixmap()
-        cache_key = ('prop_sprite', sprite_path)
-        if cache_key in self._pixmap_cache:
-            return self._pixmap_cache[cache_key]
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-        absolute_path = sprite_path if os.path.isabs(sprite_path) else os.path.join(project_root, sprite_path)
-        pixmap = QPixmap(absolute_path) if os.path.exists(absolute_path) else None
-        if pixmap is not None and pixmap.isNull():
-            pixmap = None
-        self._pixmap_cache[cache_key] = pixmap
-        return pixmap
+# Prop is a core engine primitive shared with the headless player, so it is
+# defined once in engine/prop_entity.py and exposed here lazily (see the
+# module-level __getattr__ at the end of this file).
 
 
 # =============================================================================
@@ -1700,14 +1707,10 @@ class LogicState(Thing):
     Inputs and outputs are declared in :mod:`editor.io_system` and implemented
     in :mod:`editor.io_handlers`; see ``editor/LOGIC.md`` for the whole model.
     """
-    pixmap_path = "assets/sprites/logic_keyvalue.png"
+    pixmap_path = "assets/sprites/logic_state.png"
 
     #: Type token written to map files.
     map_type = 'logicstate'
-    #: Tokens older Fio versions wrote for this same entity.  Listed so maps
-    #: and saves made before the rename load into this class instead of being
-    #: dropped as an unknown type.
-    legacy_map_types = ('logickeyvalue', 'logickeyvaluestore')
 
     # Class-level registry of persistent stores across level transitions.
     # Keyed by store_name, stores the dict of values. Survives as long as
@@ -2077,11 +2080,6 @@ def _same_value(a, b) -> bool:
     return type(a) is type(b) and a == b
 
 
-#: Pre-2.4 name for the state entity.  Kept as an alias so existing imports,
-#: plugins and the persistent-registry attribute path keep resolving; the two
-#: names are the same class, so ``isinstance`` checks written either way agree.
-LogicKeyValueStore = LogicState
-
 
 # =============================================================================
 # ENTITY REGISTRY
@@ -2114,3 +2112,33 @@ ENTITY_CATEGORIES = {
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicState'],
     'AI': ['PathNode'],
 }
+
+
+# =============================================================================
+# CORE ENTITIES DEFINED OUTSIDE THIS MODULE
+# =============================================================================
+#
+# Core primitives that the headless player also needs (currently Prop) live in
+# engine/, subclassing this module's Model when the editor tier is present.
+# They cannot be imported at the top of this file (they import it), so they are
+# loaded on first use: by name via __getattr__ (``from editor.things import
+# Prop``), and before map deserialization via _load_core_entity_types() so the
+# subclass walk in Thing.from_dict can resolve their type tokens.
+
+_CORE_ENTITY_MODULES = {'Prop': 'engine.prop_entity'}
+
+
+def _load_core_entity_types():
+    import importlib
+    for module_name in set(_CORE_ENTITY_MODULES.values()):
+        importlib.import_module(module_name)
+
+
+def __getattr__(name):
+    module_name = _CORE_ENTITY_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+    value = getattr(importlib.import_module(module_name), name)
+    globals()[name] = value
+    return value

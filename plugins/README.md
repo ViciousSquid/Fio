@@ -207,8 +207,7 @@ cross-level state through the [`GlobalStore`](API.md#globalstore--cross-level-st
   the keys you pass to `register_io` and `register_input_handler`. If you
   subclass `Thing` directly, the base defaults `type` to the lowercased class
   name; set it explicitly to be safe.
-- **Want 3D geometry in play mode?** Subclass the engine's `Model` (as `tidy`'s
-  `TidyObject` does) or set a `model_path` property — any `Thing` with a
+- **Want 3D geometry in play mode?** Subclass the engine's `Model` for a new visual entity, or set a `model_path` property — any `Thing` with a
   `model_path` is rendered by the existing model pipeline. Things without one are
   editor-only sprites.
 - **Keep `register()` UI-free.** It runs in headless/engine contexts too — no Qt,

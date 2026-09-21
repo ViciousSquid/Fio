@@ -449,7 +449,6 @@ def test_the_state_store_is_not_walked_per_frame():
     source = _read("engine/logic_thread.py")
     tick = source[source.index("def _tick_play_mode"):
                   source.index("def _update_water_sounds")]
-    for name in ("LogicState", "logic_state", "_persistent_registry",
-                 "LogicKeyValueStore"):
+    for name in ("LogicState", "logic_state", "_persistent_registry"):
         assert name not in tick, (
             "the play-mode tick touches %r — state must be event-driven" % name)

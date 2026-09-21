@@ -1,8 +1,8 @@
 """
-Generate maps/Tidy_Test.json — a small demo level for the Tidy plugin.
+Generate plugins/tidy/Tidy_Test.json — a small demo level for the Tidy plugin.
 
 A closed room with a player start, a shelf (brush) fronted by a TidyReceptacle,
-a grid of TidyObjects scattered on the floor, and a TidyGoal wired to a level
+a grid of core Props marked with Tidy categories scattered on the floor, and a TidyGoal wired to a level
 message. Things are serialised through the real entity classes so the file
 always matches the current schema.
 
@@ -37,7 +37,8 @@ def brush(pos, size, tex="Dev/512.jpg"):
 def main():
     from plugins.manager import load_plugins
     load_plugins()
-    from plugins.tidy.entities import TidyObject, TidyReceptacle, TidyGoal
+    from plugins.tidy.entities import TidyReceptacle, TidyGoal
+    from engine.prop_entity import Prop
     from editor.things import PlayerStart, Light
 
     HALF = 640.0        # room half-width (interior)
@@ -88,9 +89,13 @@ def main():
         for col in range(6):
             x = (col - 2.5) * 90.0
             z = (row - 1.0) * 90.0 + 40.0
-            obj = TidyObject(
+            obj = Prop(
                 pos=[x, 12.0, z],
-                properties={"name": f"Book_{idx+1}", "category": "book"},
+                properties={
+                    "name": f"Book_{idx+1}",
+                    "tidy_category": "book",
+                    "model_path": "plugins/tidy/assets/book.obj",
+                },
             )
             things.append(obj.to_dict())
             idx += 1
@@ -104,11 +109,11 @@ def main():
     things.append(goal.to_dict())
 
     doc = {"version": 3, "brushes": brushes, "things": things}
-    out = os.path.join(_ROOT, "maps", "Tidy_Test.json")
+    out = os.path.join(_ROOT, "plugins", "tidy", "Tidy_Test.json")
     with open(out, "w") as f:
         json.dump(doc, f, indent=1)
     print(f"Wrote {out}: {len(brushes)} brushes, {len(things)} things "
-          f"({idx} tidy objects)")
+          f"({idx} core Props with tidy metadata)")
 
 
 if __name__ == "__main__":

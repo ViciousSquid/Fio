@@ -5,9 +5,9 @@ from PyQt5.QtWidgets import (
     QColorDialog, QMessageBox, QProgressDialog, QApplication
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QColor, QIcon, QPainter, QLinearGradient, QPen, QBrush
+from PyQt5.QtGui import QColor, QPainter, QLinearGradient, QPen
 
-from engine.terrain import Terrain, BIOMES, BiomeConfig
+from engine.terrain import Terrain, BIOMES
 
 
 class GradientPreview(QWidget):

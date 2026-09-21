@@ -22,7 +22,7 @@ no engine, editor or game imports.
 """
 
 from PyQt5.QtCore import Qt, QRect, QPoint
-from PyQt5.QtGui import QPainter, QColor, QFont, QPen, QBrush, QFontMetrics
+from PyQt5.QtGui import QColor, QFont, QPen, QBrush, QFontMetrics
 
 
 # Shared palette (matches engine.sysmon so popups look like one family).

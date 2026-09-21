@@ -33,11 +33,11 @@ import pytest
 pytest.importorskip("PyQt5", reason="the entity classes need PyQt5")
 
 import editor.io_system as io_system                      # noqa: E402
-from editor.io_system import (ABSTRACT_IO, IO_REGISTRY, IOManager,  # noqa: E402
+from editor.io_system import (ABSTRACT_IO, OutputConnection, IO_REGISTRY, IOManager,  # noqa: E402
                               audit_io_coverage, get_input_names,
                               get_output_names)
 from editor.io_handlers import register_all_input_handlers  # noqa: E402
-from editor.things import ENTITY_TYPES                     # noqa: E402
+from editor.things import ENTITY_TYPES, Thing                    # noqa: E402
 from plugins.manager import get_manager                    # noqa: E402
 
 pytestmark = pytest.mark.qt
@@ -109,8 +109,17 @@ def _make_entity(entity_type):
             brush[flag] = True
         return brush
 
-    for cls in list(ENTITY_TYPES.values()) + list(
-            getattr(get_manager(), "_entity_classes", {}).values()):
+    # Resolve the way map loading does (Thing.from_dict walks subclasses), so
+    # entities that are not in the Add-Entity menu (e.g. core Prop) count too.
+    def _subclasses(root):
+        for sub in root.__subclasses__():
+            yield sub
+            yield from _subclasses(sub)
+
+    candidates = list(ENTITY_TYPES.values()) + list(
+        getattr(get_manager(), "_entity_classes", {}).values())
+    candidates += [c for c in _subclasses(Thing) if c not in candidates]
+    for cls in candidates:
         try:
             thing = cls(pos=[0, 0, 0], properties={"name": "probe"})
         except Exception:
@@ -168,8 +177,6 @@ def probe_parameter(entity_type: str, io_def) -> str:
     if (entity_type, name) in PROBE_PARAMS:
         return PROBE_PARAMS[(entity_type, name)]
     # The pre-2.4 type token shares LogicState's definitions and its parameters.
-    if entity_type == "logic_keyvalue" and ("logic_state", name) in PROBE_PARAMS:
-        return PROBE_PARAMS[("logic_state", name)]
     if name in PROBE_PARAMS_BY_NAME:
         return PROBE_PARAMS_BY_NAME[name]
     return PROBE_BY_PARAM_TYPE.get(io_def.param_type, "")
@@ -382,10 +389,7 @@ def test_every_registered_type_has_an_instance_the_probe_can_build():
     for entity_type in sorted(IO_REGISTRY):
         if _make_entity(entity_type) is None:
             missing.append(entity_type)
-    # `logic_keyvalue` is the pre-2.4 token for `logic_state`: it shares that
-    # type's definitions and has no instances of its own, because an entity
-    # loaded from an old map reports the current type.
-    assert missing == ["logic_keyvalue"], (
+    assert missing == [], (
         "no instance could be built for: %s" % (missing,))
 
 
@@ -489,27 +493,27 @@ def test_io_disabled_source_does_not_fire_output():
         "name": "source",
         "id": "source-id",
         "io_enabled": False,
-        "_io_connections": [{
+        "_io_connections": [OutputConnection.from_dict({
             "output": "OnOpen",
             "target": "target",
             "target_id": "target-id",
             "input": "Enable",
             "parameter": "",
             "delay": 0,
-        }],
+        })],
     }
 
     original_execute = mgr._execute_input
 
-def tracking_execute(*args, **kwargs):
-    seen.append(True)
-    return original_execute(*args, **kwargs)
+    def tracking_execute(*args, **kwargs):
+        seen.append(True)
+        return original_execute(*args, **kwargs)
 
-mgr._execute_input = tracking_execute
+    mgr._execute_input = tracking_execute
 
-mgr.fire_output(source, "OnOpen")
+    mgr.fire_output(source, "OnOpen")
 
-assert seen == []
+    assert seen == []
 
 def test_io_disabled_target_does_not_receive_input():
     """An entity with io_enabled=False cannot receive runtime I/O."""
@@ -520,14 +524,14 @@ def test_io_disabled_target_does_not_receive_input():
     source = {
         "name": "source",
         "id": "source-id",
-        "_io_connections": [{
+        "_io_connections": [OutputConnection.from_dict({
             "output": "OnOpen",
             "target": "target",
             "target_id": "target-id",
             "input": "Enable",
             "parameter": "",
             "delay": 0,
-        }],
+        })],
     }
 
     target = {
@@ -540,13 +544,15 @@ def test_io_disabled_target_does_not_receive_input():
     mgr.set_entity_finder(lambda name: target if name == "target" else None)
     mgr.set_entity_finder_by_id(lambda entity_id: target if entity_id == "target-id" else None)
 
-    original_execute = mgr._execute_input
+    # The target gate sits inside _execute_input, before handler lookup:
+    # observe handler dispatch, not entry into _execute_input.
+    class Watch(dict):
+        def get(self, key, default=None):
+            seen.append(key)
+            return super().get(key, default)
 
-    def tracking_execute(*args, **kwargs):
-        seen.append(True)
-        return original_execute(*args, **kwargs)
-
-    mgr._execute_input = tracking_execute
+    mgr._input_handlers = Watch(mgr._input_handlers)
+    mgr._try_generic_input = lambda *a, **k: seen.append("generic")
 
     mgr.fire_output(source, "OnOpen")
 
@@ -576,3 +582,46 @@ def test_io_enabled_defaults_to_true():
     assert io_enabled({"name": "legacy"}) is True
     assert io_enabled({"name": "enabled", "io_enabled": True}) is True
     assert io_enabled({"name": "disabled", "io_enabled": False}) is False
+
+def test_fire_output_propagates_explicit_trigger_activator_through_delay():
+    from editor.io_system import IOManager
+
+    mgr = IOManager()
+    activator = {"name": "prop_a", "id": "prop-id", "_io_connections": []}
+    source = {
+        "name": "trigger_a",
+        "id": "trigger-id",
+        "is_trigger": True,
+        "_io_connections": [OutputConnection.from_dict({
+            "output": "OnTrigger",
+            "target": "target",
+            "target_id": "target-id",
+            "input": "Enable",
+            "parameter": "",
+            "delay": 0.25,
+        })],
+    }
+    target = {"name": "target", "id": "target-id", "_io_connections": []}
+    seen = []
+
+    mgr.set_entity_finder(lambda name: target if name == "target" else None)
+    mgr.set_entity_finder_by_id(
+        lambda ident: {
+            "target-id": target,
+            "prop-id": activator,
+            "trigger-id": source,
+        }.get(ident)
+    )
+    mgr.register_input_handler(
+        "thing",
+        "enable",
+        lambda entity, param, logic: seen.append(mgr.current_activator()),
+    )
+    mgr._get_entity_type = lambda entity: "thing"
+
+    mgr.fire_output(source, "OnTrigger", activator_entity=activator)
+    assert seen == []
+
+    mgr.update(0.25)
+
+    assert seen == [activator]

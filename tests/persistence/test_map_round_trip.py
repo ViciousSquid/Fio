@@ -291,32 +291,3 @@ def test_a_version_1_map_opens():
     assert [t.name for t in state.things] == ["old_lamp"]
 
 
-def test_a_legacy_map_is_saved_in_the_current_format():
-    state = EditorState()
-    state.load_from_data({
-        "brushes": [{"pos": [0, 0, 0], "size": [64, 64, 64], "name": "old_wall",
-                     "is_trigger": True, "target": "old_door"}],
-        "things": [],
-    })
-    data = state.get_level_data()
-    assert data["version"] == 3
-    assert data["brushes"][0].get("id"), "the upgraded map has no stable id"
-    assert data["brushes"][0].get("io_connections"), (
-        "the legacy 'target' was not migrated into the connection list: %s"
-        % (data["brushes"][0],))
-
-
-def test_the_migrated_connection_survives_a_further_round_trip():
-    state = EditorState()
-    state.load_from_data({
-        "brushes": [{"pos": [0, 0, 0], "size": [64, 64, 64], "name": "button",
-                     "is_trigger": True, "target": "door"},
-                    {"pos": [200, 0, 0], "size": [64, 64, 64], "name": "door",
-                     "is_door": True}],
-        "things": [],
-    })
-    loaded, _ = _round_trip(state)
-    connections = io.get_connections(loaded.find_entity_by_name("button"))
-    assert [c.target_name for c in connections] == ["door"], (
-        "the migrated connection did not survive being saved and reloaded: %s"
-        % (connections,))

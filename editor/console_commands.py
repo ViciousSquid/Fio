@@ -17,7 +17,7 @@ except ImportError:
     # debug_log("Warning", "I/O system not fully loaded in console")
 
 # For spawn command
-from editor.things import Pickup, Light, PlayerStart, LevelChanger
+from editor.things import Pickup, Light, LevelChanger
 
 
 class ConsoleCommandHandler:
@@ -68,6 +68,14 @@ class ConsoleCommandHandler:
 
             # Play Mode only commands
             'physics': self.cmd_physics,
+            'phys_gravity': self.cmd_phys_gravity,
+            'phys_timescale': self.cmd_phys_timescale,
+            'phys_friction': self.cmd_phys_friction,
+            'phys_damping': self.cmd_phys_damping,
+            'phys_sleep': self.cmd_phys_sleep,
+            'phys_info': self.cmd_phys_info,
+            'phys_reset': self.cmd_phys_reset,
+            'phys': self.cmd_phys_info,
             'setpos': self.cmd_setpos,
             'teleport': self.cmd_setpos,
             'ss': self.cmd_split_screen,
@@ -198,7 +206,9 @@ class ConsoleCommandHandler:
             view_3d = getattr(self.main_window, 'view_3d', None)
             lt = getattr(view_3d, 'logic_thread', None) if view_3d else None
             play = bool(getattr(view_3d, 'play_mode', False))
-            handled, reply = mgr.dispatch_console_command(cmd, args, lt, play_mode=play)
+            handled, reply = mgr.dispatch_console_command(
+                cmd, args, lt, main_window=self.main_window, play_mode=play
+            )
             if handled and reply:
                 debug_log("Info", str(reply))
             return handled
@@ -228,8 +238,7 @@ class ConsoleCommandHandler:
         debug_log("Info", f"Bound '{key_str}' to '{command}'")
 
     def _open_bind_dialog(self):
-        from PyQt5.QtWidgets import QInputDialog, QDialog, QVBoxLayout, QLabel, QKeySequenceEdit, QPushButton, QLineEdit, QDialogButtonBox
-        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QKeySequenceEdit, QLineEdit, QDialogButtonBox
 
         dialog = QDialog(self.main_window)
         dialog.setWindowTitle("Bind Key")
@@ -291,7 +300,6 @@ class ConsoleCommandHandler:
 
         # Fire I/O output if available
         try:
-            from editor.io_system import get_connections, fire_output
             # Since we don't have IOManager reference here, we can use the logic_thread's io_manager if in play mode
             if hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.logic_thread:
                 io_manager = self.main_window.view_3d.logic_thread.io_manager
@@ -537,6 +545,7 @@ class ConsoleCommandHandler:
         self.editor_state.things.append(portal_a)
         self.editor_state.things.append(portal_b)
         self.editor_state.save_state()
+        self._rebuild_logic_entity_caches()
 
         debug_log("Info", f"Created portal pair: '{name1}' ↔ '{name2}' at ({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f})")
         self.main_window.update_all_ui()
@@ -730,6 +739,7 @@ class ConsoleCommandHandler:
                     break
 
         self.editor_state.save_state()
+        self._rebuild_logic_entity_caches()
         debug_log("Info", f"Deleted portal(s): {', '.join(deleted)}")
         self.main_window.update_all_ui()
 
@@ -797,7 +807,14 @@ entity to drive them from the I/O system.</i><br>
 <b style="color:orange;">r_fogcolor</b> &lt;R&gt; &lt;G&gt; &lt;B&gt; — Fog colour, and the sky behind it<br>
 <b style="color:orange;">ambient</b> &lt;level&gt;{sep}&lt;R&gt; &lt;G&gt; &lt;B&gt;{sep}<b style="color:orange;">off</b> — Global omnidirectional light (no entity added)<br>
 <b style="color:cyan;">=== Movement & Physics ===</b><br>
-<b style="color:orange;">physics</b> on/off/toggle<br>
+<b style="color:orange;">physics</b> on/off/toggle — Player movement physics<br>
+<b style="color:orange;">phys_gravity</b> &lt;units/s²&gt; — Global dynamic-body gravity<br>
+<b style="color:orange;">phys_timescale</b> &lt;multiplier&gt; — Dynamic-body simulation speed (0 pauses)<br>
+<b style="color:orange;">phys_friction</b> &lt;multiplier&gt; — Global friction multiplier<br>
+<b style="color:orange;">phys_damping</b> &lt;multiplier&gt; — Global damping multiplier<br>
+<b style="color:orange;">phys_sleep</b> on/off/toggle — Automatic body sleeping<br>
+<b style="color:orange;">phys_info</b> — Show global physics controls<br>
+<b style="color:orange;">phys_reset</b> — Restore physics defaults<br>
 <b style="color:orange;">setpos</b>{sep}<b style="color:orange;">teleport</b> x y z<br>
 <b style="color:orange;">cam</b>{sep}<b style="color:orange;">camera</b> [overhead|fp] [seconds] — Tween between overhead &amp; first person (e.g. 'cam 2')<br>
 <b style="color:cyan;">=== Portals ===</b><br>
@@ -1809,6 +1826,109 @@ entity to drive them from the I/O system.</i><br>
         self.main_window.show_toast(f"Physics: {state}")
         debug_log("Info", f"Physics set to {state}")
 
+    def _get_physics_world(self):
+        """Return the live PhysicsWorld, or None when play mode is unavailable."""
+        try:
+            view_3d = self.main_window.view_3d
+            world = getattr(getattr(view_3d, 'logic_thread', None), '_physics_world', None)
+            if world is None:
+                debug_log("Error", "Physics world is not active. Enter play mode first.")
+            return world
+        except Exception:
+            debug_log("Error", "Physics world is not active. Enter play mode first.")
+            return None
+
+    def _set_physics_float(self, args, command, attr, minimum, maximum, label):
+        if not self._require_play_mode(command):
+            return
+        world = self._get_physics_world()
+        if world is None:
+            return
+        try:
+            value = float(args.strip())
+        except (TypeError, ValueError):
+            debug_log("Error", f"Usage: {command} <value>")
+            return
+        value = max(minimum, min(maximum, value))
+        setattr(world, attr, value)
+        world.wake_all()
+        debug_log("Info", f"{label}: {value:g}")
+
+    def cmd_phys_gravity(self, args):
+        """phys_gravity <units/s^2> — Set global gravity; 0 disables it."""
+        self._set_physics_float(args, "phys_gravity", "gravity", -5000.0, 5000.0, "Physics gravity")
+
+    def cmd_phys_timescale(self, args):
+        """phys_timescale <multiplier> — Scale dynamic-body simulation time."""
+        self._set_physics_float(args, "phys_timescale", "time_scale", 0.0, 4.0, "Physics time scale")
+
+    def cmd_phys_friction(self, args):
+        """phys_friction <multiplier> — Scale authored body friction globally."""
+        self._set_physics_float(args, "phys_friction", "friction_scale", 0.0, 4.0, "Physics friction scale")
+
+    def cmd_phys_damping(self, args):
+        """phys_damping <multiplier> — Scale authored body damping globally."""
+        self._set_physics_float(args, "phys_damping", "damping_scale", 0.0, 4.0, "Physics damping scale")
+
+    def cmd_phys_sleep(self, args):
+        """phys_sleep on|off|toggle — Enable/disable automatic body sleeping."""
+        if not self._require_play_mode("phys_sleep"):
+            return
+        world = self._get_physics_world()
+        if world is None:
+            return
+        arg = args.lower().strip() if args else "toggle"
+        if arg in ("on", "1", "true"):
+            world.sleep_enabled = True
+        elif arg in ("off", "0", "false"):
+            world.sleep_enabled = False
+        else:
+            world.sleep_enabled = not bool(world.sleep_enabled)
+        world.wake_all()
+        state = "ON" if world.sleep_enabled else "OFF"
+        self.main_window.show_toast(f"Physics sleep: {state}")
+        debug_log("Info", f"Physics sleep set to {state}")
+
+    def cmd_phys_info(self, args):
+        """phys_info — Print current global dynamic-body physics controls."""
+        if not self._require_play_mode("phys_info"):
+            return
+        world = self._get_physics_world()
+        if world is None:
+            return
+        debug_log(
+            "Info",
+            "Physics: "
+            f"gravity={world.gravity:g}, "
+            f"timescale={world.time_scale:g}, "
+            f"friction_scale={world.friction_scale:g}, "
+            f"damping_scale={world.damping_scale:g}, "
+            f"sleep={'ON' if world.sleep_enabled else 'OFF'}"
+        )
+
+    def cmd_phys_reset(self, args):
+        """phys_reset — Restore default global physics controls."""
+        if not self._require_play_mode("phys_reset"):
+            return
+        world = self._get_physics_world()
+        if world is None:
+            return
+        world.gravity = float(world.GRAVITY)
+        world.time_scale = float(world.DEFAULT_TIME_SCALE)
+        world.friction_scale = float(world.DEFAULT_FRICTION_SCALE)
+        world.damping_scale = float(world.DEFAULT_DAMPING_SCALE)
+        world.sleep_enabled = bool(world.DEFAULT_SLEEP_ENABLED)
+        world.wake_all()
+        self.main_window.show_toast("Physics controls reset")
+        debug_log(
+            "Info",
+            "Physics controls reset to defaults "
+            f"(gravity={world.gravity:g}, timescale={world.time_scale:g}, "
+            f"friction_scale={world.friction_scale:g}, "
+            f"damping_scale={world.damping_scale:g}, "
+            f"sleep={'ON' if world.sleep_enabled else 'OFF'})"
+        )
+
     def cmd_setpos(self, args):
         if not self._require_play_mode("setpos"):
             return
@@ -1899,6 +2019,19 @@ entity to drive them from the I/O system.</i><br>
     def _logic_thread(self):
         view_3d = getattr(self.main_window, 'view_3d', None)
         return getattr(view_3d, 'logic_thread', None) if view_3d else None
+
+    def _rebuild_logic_entity_caches(self):
+        """Tell a running logic thread that the thing list changed.
+
+        The logic thread indexes entities once and then walks the index, not
+        the level, every frame — so a console command that adds or removes an
+        entity mid-play has to say so, exactly as LogicSpawner does. Without
+        this, a portal created from the console is invisible to the portal
+        system until play mode is toggled.
+        """
+        logic = self._logic_thread()
+        if logic is not None and hasattr(logic, '_build_entity_caches'):
+            logic._build_entity_caches()
 
     def _in_play_mode(self):
         view_3d = getattr(self.main_window, 'view_3d', None)

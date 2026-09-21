@@ -193,14 +193,6 @@ def test_is_registered_type_separates_the_two_cases():
     assert io.is_registered_type('a_type_fio_has_never_heard_of') is False
 
 
-def test_the_legacy_type_token_resolves_to_the_same_definitions():
-    assert io.get_inputs('logic_keyvalue') is io.get_inputs('logic_state')
-
-
-# ===========================================================================
-# Delayed I/O and dormancy
-# ===========================================================================
-
 class Streamed:
     """A world with an I/O manager and a Big-World-style parking switch."""
 

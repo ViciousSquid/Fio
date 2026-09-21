@@ -19,7 +19,7 @@ pytest.importorskip("PyQt5", reason="these drive the real logic thread")
 from editor import io_system as io                  # noqa: E402
 from editor.editor_state import EditorState         # noqa: E402
 from editor.io_system import OutputConnection       # noqa: E402
-from editor.things import Monster                   # noqa: E402
+from editor.things import Light, Monster            # noqa: E402
 from engine.constants import brush_aabb_bounds      # noqa: E402
 from engine.logic_thread import LogicThread         # noqa: E402
 from engine.physics import SpatialGrid              # noqa: E402
@@ -299,3 +299,69 @@ def test_the_tick_gate_answer_is_cached_across_frames(logic):
     assert manager._tick_work_gen == generation, (
         "the tick gate recomputed itself with nothing changed; it is meant to "
         "be one integer compare per frame")
+
+
+# ---------------------------------------------------------------------------
+# Portals
+# ---------------------------------------------------------------------------
+
+def test_portal_fades_tick_off_the_cache_not_the_thing_list(logic):
+    """``_update_portals`` runs every frame and used to isinstance-scan every
+    Thing in the map to find the portals — on a map with none at all."""
+    from editor.things import Portal
+    from engine.player import Player
+
+    portals = [Portal(pos=[0, 0, float(i) * 200.0],
+                      properties={'name': 'P%d' % i}) for i in range(3)]
+    filler = [make_thing(Light, "L%d" % i) for i in range(50)]
+    thread = logic(brushes=room(), things=filler + portals)
+    thread.set_player(Player(0.0, 0.0, 0.0))
+    thread.set_play_mode(True)
+    try:
+        assert thread._portal_things == portals
+        assert set(thread._portals_by_name) == {'P0', 'P1', 'P2'}
+
+        # Fades still advance, and they advance for portals the name index
+        # cannot hold (an unnamed portal is still a portal).
+        unnamed = Portal(pos=[500, 0, 0])
+        thread.editor_state.things.append(unnamed)
+        thread._build_entity_caches()
+        assert unnamed in thread._portal_things
+        assert '' not in thread._portals_by_name
+
+        for p in thread._portal_things:
+            p._fade_alpha, p._fade_target = 0.0, 1.0
+        thread._update_portals(1.0 / 60.0)
+        assert all(p._fade_alpha > 0.0 for p in thread._portal_things)
+
+        # And the per-frame path must not walk the level to find them.
+        scanned = []
+        original = type(thread).things
+        try:
+            type(thread).things = property(
+                lambda self: (scanned.append(1), original.fget(self))[1])
+            thread._update_portals(1.0 / 60.0)
+        finally:
+            type(thread).things = original
+        assert scanned == [], (
+            "_update_portals read the full thing list %d times in one frame"
+            % len(scanned))
+    finally:
+        thread.set_play_mode(False)
+
+
+def test_a_map_with_no_portals_pays_nothing_for_the_portal_system(logic):
+    from engine.player import Player
+
+    thread = logic(brushes=room(),
+                   things=[make_thing(Light, "L%d" % i) for i in range(20)])
+    thread.set_player(Player(0.0, 0.0, 0.0))
+    thread.set_play_mode(True)
+    try:
+        assert thread._portal_things == []
+        thread._portal_prev_player_pos = None
+        thread._update_portals(1.0 / 60.0)
+        assert thread._portal_prev_player_pos is None, (
+            "the portal system did per-frame work on a map with no portals")
+    finally:
+        thread.set_play_mode(False)
