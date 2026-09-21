@@ -2284,7 +2284,10 @@ class LogicThread(threading.Thread):
                                     self.current_hud_message = f"[E] {use_label}"
                                     if use_key_pressed:
                                         self._on_trigger_enter(
-                                            brush, bid, activator_type='player'
+                                            brush,
+                                            bid,
+                                            activator_type='player',
+                                            activator_entity=self.player,
                                         )
                 continue
 
@@ -2308,8 +2311,20 @@ class LogicThread(threading.Thread):
                 for contact in entered:
                     if contact[0] != filter_name:
                         continue
+                    activator_entity = self.player
+                    if filter_name != 'player':
+                        activator_entity = next(
+                            (
+                                entity for entity in candidates[filter_name]
+                                if id(entity) == contact[1]
+                            ),
+                            None,
+                        )
                     self._on_trigger_enter(
-                        brush, bid, activator_type=filter_name
+                        brush,
+                        bid,
+                        activator_type=filter_name,
+                        activator_entity=activator_entity,
                     )
 
             # Hurt is meaningful only while the player is a current activator;
@@ -2328,8 +2343,22 @@ class LogicThread(threading.Thread):
             for filter_name, entity_id in previous - current:
                 brush = self._trigger_brush_by_bid.get(bid)
                 if brush:
+                    activator_entity = self.player
+                    if filter_name != 'player':
+                        pool = (
+                            getattr(self, '_prop_things', ())
+                            if filter_name == 'props'
+                            else getattr(self, '_monster_things', ())
+                        )
+                        activator_entity = next(
+                            (entity for entity in pool if id(entity) == entity_id),
+                            None,
+                        )
                     self._on_trigger_exit(
-                        brush, bid, activator_type=filter_name
+                        brush,
+                        bid,
+                        activator_type=filter_name,
+                        activator_entity=activator_entity,
                     )
 
         self._trigger_entities_inside = current_contacts
@@ -2353,7 +2382,11 @@ class LogicThread(threading.Thread):
             self._plugin_emit("player_death")
 
     def _on_trigger_enter(
-        self, brush: dict, trigger_id: int, activator_type='player'
+        self,
+        brush: dict,
+        trigger_id: int,
+        activator_type='player',
+        activator_entity=None,
     ):
         trigger_type = brush.get('trigger_type', 'multiple')
         if trigger_type == 'once' and trigger_id in self.fired_once_triggers:
@@ -2365,12 +2398,25 @@ class LogicThread(threading.Thread):
             target_node_name = brush.get('target_node', '')
             if target_node_name:
                 node = self._find_path_node_by_name(target_node_name)
-                if node and self.player:
-                    self.player.pos = glm.vec3(node.pos[0], node.pos[1], node.pos[2])
-                    self.player.velocity = glm.vec3(0, 0, 0)
+                if node and (activator_entity or self.player):
+                    activator = activator_entity or self.player
+                    dest = glm.vec3(node.pos[0], node.pos[1], node.pos[2])
+                    if activator is self.player:
+                        self.player.pos = dest
+                        self.player.velocity = glm.vec3(0, 0, 0)
+                    else:
+                        activator.pos = [dest.x, dest.y, dest.z]
+                        physics_world = getattr(self, '_physics_world', None)
+                        if physics_world is not None:
+                            try:
+                                physics_world.sync_entity_position(activator, wake=True)
+                            except (AttributeError, TypeError, ValueError):
+                                pass
                     if self.io_manager:
-                        self.io_manager.fire_output(brush, 'OnTeleport')
-                    debug_log("IO", f"Trigger teleported player → '{target_node_name}' "
+                        self.io_manager.fire_output(
+                            brush, 'OnTeleport', activator_entity=activator
+                        )
+                    debug_log("IO", f"Trigger teleported {activator_type} → '{target_node_name}' "
                                      f"({node.pos[0]:.0f}, {node.pos[1]:.0f}, {node.pos[2]:.0f})")
             else:
                 debug_log("Warning", "Trigger action 'teleport' used but no target_node set.")
@@ -2384,8 +2430,12 @@ class LogicThread(threading.Thread):
 
         elif action == 'target':
             if self.io_manager:
-                self.io_manager.fire_output(brush, 'OnStartTouch')
-                self.io_manager.fire_output(brush, 'OnTrigger')
+                self.io_manager.fire_output(
+                    brush, 'OnStartTouch', activator_entity=activator_entity
+                )
+                self.io_manager.fire_output(
+                    brush, 'OnTrigger', activator_entity=activator_entity
+                )
 
         self._plugin_emit(
             "trigger_enter",
@@ -2398,10 +2448,16 @@ class LogicThread(threading.Thread):
             self.fired_once_triggers.add(trigger_id)
 
     def _on_trigger_exit(
-        self, brush: dict, trigger_id: int, activator_type='player'
+        self,
+        brush: dict,
+        trigger_id: int,
+        activator_type='player',
+        activator_entity=None,
     ):
         if self.io_manager:
-            self.io_manager.fire_output(brush, 'OnEndTouch')
+            self.io_manager.fire_output(
+                brush, 'OnEndTouch', activator_entity=activator_entity
+            )
         self._plugin_emit(
             "trigger_exit",
             trigger=brush,

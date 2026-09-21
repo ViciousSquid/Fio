@@ -592,6 +592,21 @@ class PhysicsWorld:
         self._pack()
         self._wake_index(self._indices.get(id(entity)), velocity)
 
+    def sync_entity_position(self, entity, wake=False):
+        """Synchronize a body's cached position after external movement."""
+        self._pack()
+        index = self._indices.get(id(entity))
+        if index is None:
+            return
+        self._position[index] = np.asarray(
+            getattr(entity, 'pos', self._position[index]),
+            dtype=np.float32,
+        )
+        if wake:
+            self._awake[index] = True
+            self._kinematic[index] = False
+            self._velocity[index] = 0.0
+
     def set_rest_callback(self, entity, callback):
         body = self.get_body(entity)
         if body is not None:

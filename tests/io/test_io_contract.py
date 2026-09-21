@@ -576,3 +576,48 @@ def test_io_enabled_defaults_to_true():
     assert io_enabled({"name": "legacy"}) is True
     assert io_enabled({"name": "enabled", "io_enabled": True}) is True
     assert io_enabled({"name": "disabled", "io_enabled": False}) is False
+
+def test_fire_output_propagates_explicit_trigger_activator_through_delay():
+    from editor.io_system import IOManager
+
+    mgr = IOManager()
+    activator = {"name": "prop_a", "id": "prop-id", "_io_connections": []}
+    source = {
+        "name": "trigger_a",
+        "id": "trigger-id",
+        "is_trigger": True,
+        "_io_connections": [{
+            "output": "OnTrigger",
+            "target": "target",
+            "target_id": "target-id",
+            "input": "Enable",
+            "parameter": "",
+            "delay": 0.25,
+        }],
+    }
+    target = {"name": "target", "id": "target-id", "_io_connections": []}
+    seen = []
+
+    mgr.set_entity_finder(lambda name: target if name == "target" else None)
+    mgr.set_entity_finder_by_id(
+        lambda ident: {
+            "target-id": target,
+            "prop-id": activator,
+            "trigger-id": source,
+        }.get(ident)
+    )
+    mgr.register_input_handler(
+        "thing",
+        "enable",
+        lambda entity, param, logic: seen.append(
+            logic.io_manager.current_activator()
+        ),
+    )
+    mgr._get_entity_type = lambda entity: "thing"
+
+    mgr.fire_output(source, "OnTrigger", activator_entity=activator)
+    assert seen == []
+
+    mgr.update(0.25)
+
+    assert seen == [activator]
