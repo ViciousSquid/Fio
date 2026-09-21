@@ -2,7 +2,7 @@
 Headless tests for Tidy's disabled-by-default activation.
 
 Tidy now activates for its own receptacle/goal types and for core Props carrying
-tidy_category. Legacy tidyobject maps are migrated before activation.
+tidy_category. 
 """
 
 import os
@@ -69,35 +69,8 @@ def test_plain_and_tidy_maps():
     _check(mgr.is_enabled(tidy) is True, "tidy is on for marked core Props")
 
 
-def test_legacy_map_migration_auto_enables():
-    print("[3] legacy tidyobject map migrates and auto-enables")
-    from plugins.manager import get_manager
-    mgr = get_manager()
-    tidy = _tidy(mgr)
-    mgr.set_enabled(tidy, False)
-
-    legacy = {
-        "version": 3,
-        "things": [{
-            "type": "tidyobject",
-            "pos": [0, 40, 35],
-            "properties": {
-                "type": "tidyobject",
-                "category": "book",
-                "name": "book1",
-            },
-        }],
-    }
-    enabled = mgr.auto_enable_for_map(legacy)
-    thing = legacy["things"][0]
-    _check([p.name for p in enabled] == ["tidy"], "legacy map enables tidy")
-    _check(thing["type"] == "prop", "legacy map was migrated to prop")
-    _check(thing["properties"]["tidy_category"] == "book",
-           "legacy category became tidy_category")
-
-
 def test_disable_auto_enabled_on_clear():
-    print("[4] a cleared/new scene reverts a level-driven auto-enable")
+    print("[3] a cleared/new scene reverts a level-driven auto-enable")
     from plugins.manager import get_manager
     mgr = get_manager()
     tidy = _tidy(mgr)
@@ -123,7 +96,7 @@ def test_disable_auto_enabled_on_clear():
 
 
 def test_player_host_auto_enables():
-    print("[5] player host auto-enables tidy from marked core Prop data")
+    print("[4] player host auto-enables tidy from marked core Prop data")
     from plugins.manager import get_manager
     from player.plugin_host import PlayerPluginHost
     mgr = get_manager()
@@ -167,7 +140,6 @@ def test_player_host_auto_enables():
 def main():
     test_disabled_by_default()
     test_plain_and_tidy_maps()
-    test_legacy_map_migration_auto_enables()
     test_disable_auto_enabled_on_clear()
     test_player_host_auto_enables()
     print("\nALL AUTO-ENABLE TESTS PASSED")
