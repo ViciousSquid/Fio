@@ -559,10 +559,16 @@ class LogicThread(threading.Thread):
                 self._clear_brush_collision(brush)
 
     def _build_model_collision_brushes(self):
-        """Create collision data for model entities. Supports AABB or mesh-accurate."""
+        """Create collision data for model entities.
+
+        Props can explicitly choose Automatic, AABB, or Mesh collision. A
+        non-zero collision_size always overrides the shape choice with a
+        custom AABB.
+        """
         if not getattr(self, 'model_collision_enabled', True):
             return []
         brushes = []
+
         for thing in self.things:
             props = getattr(thing, 'properties', {})
             if not props.get('model_path'):
@@ -587,14 +593,18 @@ class LogicThread(threading.Thread):
                 props.get('type') == 'prop'
                 and props.get('physics_enabled', False)
             )
+            collision_shape = str(
+                props.get('collision_shape', 'auto')
+            ).lower()
 
-            # Check for explicit collision_size (forces AABB mode)
+            # A non-zero explicit collision_size always forces a custom AABB.
             collision_size = props.get('collision_size')
             has_collision_size = (
                 isinstance(collision_size, (list, tuple))
                 and len(collision_size) == 3
                 and any(float(v) != 0.0 for v in collision_size)
             )
+
             if has_collision_size:
                 size = list(collision_size)
                 brushes.append({
@@ -613,44 +623,32 @@ class LogicThread(threading.Thread):
                 })
                 continue
 
-            # Try mesh-accurate collision
             model_path = props.get('model_path', '')
-            mesh_tris = self._compute_model_collision_mesh(model_path, pos, scale, rot)
-            if mesh_tris:
-                brushes.append({
-                    'pos': pos,
-                    'size': [1, 1, 1],  # Dummy, not used for mesh collision
-                    'hidden': False,
-                    'is_trigger': False,
-                    'is_mover': False,
-                    'is_door': False,
-                    'is_water': False,
-                    'is_fog': False,
-                    '_model_collision': True,
-                    '_prop_entity': thing,
-                    '_dynamic_prop': is_dynamic_prop,
-                    '_collision_mode': 'mesh',
-                    '_mesh_triangles': mesh_tris,
-                    '_mesh_bounds': self._compute_mesh_bounds(mesh_tris),
-                })
-            else:
-                # Fallback to AABB from model bounds.
-                # FIX: The brush 'pos' must be the WORLD-SPACE centre of the
-                # bounding box, not just the entity origin.  Many models have
-                # their geometry offset from origin (e.g. base sitting at y=0
-                # in local space), so we add the scaled local-centre offset.
+
+            # Explicit AABB mode skips mesh loading and always uses the model's
+            # scaled bounds. This is useful for barrels, bricks and other props
+            # where a stable box is preferable to triangle-level collision.
+            if collision_shape == 'aabb':
                 bounds = self._compute_model_bounds(model_path)
                 if bounds:
                     min_v, max_v = bounds
-                    size = [max_v[0] - min_v[0], max_v[1] - min_v[1], max_v[2] - min_v[2]]
-                    size = [size[i] * scale[i] for i in range(3)]
-                    # Centre of the local bounding box (may not be at model origin)
-                    local_centre = [(min_v[i] + max_v[i]) * 0.5 for i in range(3)]
-                    aabb_pos = [pos[i] + local_centre[i] * scale[i] for i in range(3)]
+                    size = [
+                        (max_v[i] - min_v[i]) * scale[i]
+                        for i in range(3)
+                    ]
+                    local_centre = [
+                        (min_v[i] + max_v[i]) * 0.5
+                        for i in range(3)
+                    ]
+                    aabb_pos = [
+                        pos[i] + local_centre[i] * scale[i]
+                        for i in range(3)
+                    ]
                 else:
                     base = 64.0
                     size = [base * scale[i] for i in range(3)]
                     aabb_pos = pos
+
                 brushes.append({
                     'pos': aabb_pos,
                     'size': size,
@@ -665,6 +663,70 @@ class LogicThread(threading.Thread):
                     '_dynamic_prop': is_dynamic_prop,
                     '_collision_mode': 'aabb',
                 })
+                continue
+
+            # Automatic uses mesh collision where supported. Explicit Mesh
+            # behaves the same today and falls back to AABB if the model cannot
+            # provide mesh collision.
+            mesh_tris = self._compute_model_collision_mesh(
+                model_path, pos, scale, rot
+            )
+            if mesh_tris and collision_shape in ('auto', 'mesh'):
+                brushes.append({
+                    'pos': pos,
+                    'size': [1, 1, 1],
+                    'hidden': False,
+                    'is_trigger': False,
+                    'is_mover': False,
+                    'is_door': False,
+                    'is_water': False,
+                    'is_fog': False,
+                    '_model_collision': True,
+                    '_prop_entity': thing,
+                    '_dynamic_prop': is_dynamic_prop,
+                    '_collision_mode': 'mesh',
+                    '_mesh_triangles': mesh_tris,
+                    '_mesh_bounds': self._compute_mesh_bounds(mesh_tris),
+                })
+                continue
+
+            # Fallback for Automatic/Mesh when the model has no CPU collision
+            # mesh (for example OBJ today).
+            bounds = self._compute_model_bounds(model_path)
+            if bounds:
+                min_v, max_v = bounds
+                size = [
+                    (max_v[i] - min_v[i]) * scale[i]
+                    for i in range(3)
+                ]
+                local_centre = [
+                    (min_v[i] + max_v[i]) * 0.5
+                    for i in range(3)
+                ]
+                aabb_pos = [
+                    pos[i] + local_centre[i] * scale[i]
+                    for i in range(3)
+                ]
+            else:
+                base = 64.0
+                size = [base * scale[i] for i in range(3)]
+                aabb_pos = pos
+
+            brushes.append({
+                'pos': aabb_pos,
+                'size': size,
+                'hidden': False,
+                'is_trigger': False,
+                'is_mover': False,
+                'is_door': False,
+                'is_water': False,
+                'is_fog': False,
+                '_model_collision': True,
+                '_prop_entity': thing,
+                '_dynamic_prop': is_dynamic_prop,
+                '_collision_mode': 'aabb',
+            })
+
         return brushes
 
     def _compute_model_collision_mesh(self, model_path, world_pos, scale, rotation):
