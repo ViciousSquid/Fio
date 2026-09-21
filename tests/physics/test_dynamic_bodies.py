@@ -66,6 +66,29 @@ def test_engine_physics_pushes_body_by_player_velocity_and_mass():
 
 
 
+
+def test_engine_physics_drop_lands_when_body_crosses_floor():
+    grid = Grid()
+    world = PhysicsWorld(grid)
+    prop = _prop()
+    # Entity origin at the barrel's base; collision box is centred 32.59
+    # units above the origin, matching the Oil_Drum_Grey bounds.
+    prop.pos = [0.0, 120.0, 0.0]
+    body_brush = _brush(prop, (45.64271, 65.181947, 45.64271))
+    body_brush['pos'] = [0.0, 152.5909735, 0.0]
+
+    world.rebuild([body_brush])
+    world.wake(prop)
+
+    for _ in range(120):
+        world.step(1.0 / 60.0)
+
+    # The downward ray must catch the floor even on the frame where the
+    # integrated position has crossed it.
+    assert abs(prop.pos[1]) < 1e-5
+    assert world.get_body(prop).awake is False
+
+
 def test_engine_physics_does_not_bounce_when_pushing_along_floor():
     from engine.physics import SpatialGrid
 
