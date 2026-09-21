@@ -262,7 +262,6 @@ class LogicThread(threading.Thread):
                 print(f"[LogicThread] plugin attach skipped: {exc}")
 
         # Trigger state
-        self.player_in_triggers: set = set()
         self.fired_once_triggers: set = set()
         # Active occupants keyed by trigger id, then (entity type, entity id).
         # One unified contact set lets the 1 Hz trigger poll diff the complete
