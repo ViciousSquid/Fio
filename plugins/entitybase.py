@@ -105,6 +105,7 @@ class Prop(Model):
         for key, value in {
             'sprite_path': 'assets/sprites/pickup.png', 'sprite_size': [32.0, 32.0], 'mass': 1.0,
             'collision_size': [0.0, 0.0, 0.0], 'no_collision': True,
+            'collision_shape': 'auto',
             'physics_enabled': False, 'gravity': True, 'friction': 0.55,
             'linear_damping': 0.08, 'angular_damping': 0.12,
             'pickup_enabled': True, 'pickup_reach': 110.0,
