@@ -872,6 +872,7 @@ class Prop(Model):
     """
     pixmap_path = "assets/sprites/pickup.png"
     EDITOR_PRIMARY_PROPERTIES = (
+        'render_mode',
         'sprite_path',
         'sprite_size',
         'pickup_enabled',
@@ -886,6 +887,7 @@ class Prop(Model):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties['type'] = 'prop'
+        self.properties.setdefault('render_mode', 'model')
         self.properties.setdefault('sprite_path', 'assets/sprites/pickup.png')
         self.properties.setdefault('sprite_size', [32.0, 32.0])
         self.properties.setdefault('mass', 1.0)
