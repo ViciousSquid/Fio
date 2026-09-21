@@ -714,14 +714,13 @@ class PhysicsWorld:
             self._position[hit_indices, axis] = old_position[hit_indices, axis]
             self._velocity[hit_indices, axis] = 0.0
 
-    def _batch_floor(self):
-        """Return the highest surface that is actually below each active body.
+    def _batch_floor(self, previous_bottom=None):
+        """Return the highest surface crossed by each falling body.
 
-        The old query used the body's *top* as the ray start, which lets the
-        top face of a wall/step that overlaps the body's vertical span masquerade
-        as a floor. When a pushed prop slides into or past such geometry, that
-        produces an artificial vertical snap (the visible "bounce"). A floor
-        must be under the body's bottom, not merely somewhere below its top.
+        Floor contact is a vertical sweep: a surface is eligible when it was
+        at or below the body's previous bottom. This keeps a body grounded
+        while it moves horizontally, but prevents the top of a wall that merely
+        overlaps the body's height from being mistaken for a floor.
         """
         n = len(self._entities)
         floors = np.full(n, -np.inf, dtype=np.float32)
@@ -739,6 +738,12 @@ class PhysicsWorld:
             cell_keys, axis=0, return_inverse=True
         )
 
+        if previous_bottom is None:
+            center = self._position[indices] + self._offset[indices]
+            previous_bottom = center[:, 1] - self._half[indices, 1]
+        else:
+            previous_bottom = np.asarray(previous_bottom, dtype=np.float32)
+
         for group_id, key in enumerate(unique_cells):
             local_indices = np.flatnonzero(inverse == group_id)
             bi = indices[local_indices]
@@ -747,14 +752,10 @@ class PhysicsWorld:
                 continue
 
             center = self._position[bi] + self._offset[bi]
-            half = self._half[bi]
-            bottom = center[:, 1] - half[:, 1]
-
-            # A horizontal footprint is sufficient for floor contact, but the
-            # candidate surface itself must be at or just below the body's
-            # bottom. This prevents vertical walls and overhead geometry from
-            # being interpreted as floors.
-            max_floor_y = bottom + 1.0
+            # A candidate floor may be touched from slightly above without
+            # tunnelling through it, but it must not be above the previous
+            # bottom. This is what excludes a wall top beside the prop.
+            max_floor_y = previous_bottom[local_indices] + 1.0
             horizontal = (
                 (center[:, None, 0] >= aabbs[None, :, 0]) &
                 (center[:, None, 0] <= aabbs[None, :, 3]) &
@@ -861,6 +862,8 @@ class PhysicsWorld:
             self._velocity[moving, 2] *= horizontal_damp[moving]
 
             old_position = self._position.copy()
+            old_center = old_position + self._offset
+            previous_bottom = old_center[:, 1] - self._half[:, 1]
 
             self._position[moving, 0] += self._velocity[moving, 0] * dt
             self._batch_static_collision(0, old_position)
@@ -869,9 +872,11 @@ class PhysicsWorld:
             self._batch_static_collision(2, old_position)
 
             self._position[moving, 1] += self._velocity[moving, 1] * dt
-            floors = self._batch_floor()
+            floors = self._batch_floor(previous_bottom)
+            new_center = self._position + self._offset
+            new_bottom = new_center[:, 1] - self._half[:, 1]
             landed = moving & np.isfinite(floors) & (
-                self._position[:, 1] <= floors
+                new_bottom <= floors + 1.0
             )
             if np.any(landed):
                 self._position[landed, 1] = (
