@@ -545,6 +545,17 @@ class PhysicsWorld:
         if index is None:
             return
         self._pack()
+
+        # Kinematic bodies are positioned by the gameplay/runtime layer
+        # (for example PropSession while a prop is being carried). Synchronise
+        # the physics copy whenever transform ownership changes so physics
+        # cannot restore a stale pre-carry position on release.
+        entity = self._entities[index]
+        self._position[index] = np.asarray(
+            getattr(entity, "pos", self._position[index]),
+            dtype=np.float32,
+        )
+
         self._kinematic[index] = value
         if value:
             self._velocity[index] = 0.0
