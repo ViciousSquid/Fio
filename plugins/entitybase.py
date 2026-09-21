@@ -103,7 +103,7 @@ class Prop(Model):
         super().__init__(pos, properties)
         self.properties['type'] = 'prop'
         for key, value in {
-            'sprite_path': 'assets/sprites/pickup.png', 'sprite_size': [32.0, 32.0], 'mass': 1.0,
+            'render_mode': 'model', 'sprite_path': 'assets/sprites/pickup.png', 'sprite_size': [32.0, 32.0], 'mass': 1.0,
             'collision_size': [0.0, 0.0, 0.0], 'no_collision': True,
             'collision_shape': 'auto',
             'physics_enabled': False, 'gravity': True, 'friction': 0.55,
