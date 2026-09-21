@@ -714,7 +714,7 @@ class PhysicsWorld:
             self._position[hit_indices, axis] = old_position[hit_indices, axis]
             self._velocity[hit_indices, axis] = 0.0
 
-    def _batch_floor(self):
+    def _batch_floor(self, previous_bottom=None):
         """Raycast down beneath each active dynamic body to find its floor."""
         n = len(self._entities)
         floors = np.full(n, -np.inf, dtype=np.float32)
@@ -727,19 +727,27 @@ class PhysicsWorld:
         if raycast is None:
             return floors
 
-        # Props are few compared with brushes, so keep the established
-        # raycast_down path rather than maintaining a second floor solver.
-        # The ray starts just above the collision body's bottom. A wall top
-        # that overlaps the body's vertical span is therefore not a floor.
+        # Use the body's previous bottom as the ray origin while it is falling.
+        # If integration has already carried the body slightly through the
+        # floor this keeps the ray above the surface, allowing raycast_down()
+        # to see it instead of starting underneath it.
+        if previous_bottom is None:
+            previous_bottom = (
+                (self._position + self._offset)[:, 1] - self._half[:, 1]
+            )
+        else:
+            previous_bottom = np.asarray(previous_bottom, dtype=np.float32)
+
         for i in indices:
             i = int(i)
             center = self._position[i] + self._offset[i]
-            bottom = float(center[1] - self._half[i, 1])
+            current_bottom = float(center[1] - self._half[i, 1])
+            ray_y = max(current_bottom, float(previous_bottom[i])) + 1.0
             try:
                 floor = raycast(
                     float(center[0]),
                     float(center[2]),
-                    bottom + 1.0,
+                    ray_y,
                 )
             except Exception:
                 floor = None
@@ -836,6 +844,8 @@ class PhysicsWorld:
             self._velocity[moving, 2] *= horizontal_damp[moving]
 
             old_position = self._position.copy()
+            old_center = old_position + self._offset
+            previous_bottom = old_center[:, 1] - self._half[:, 1]
 
             self._position[moving, 0] += self._velocity[moving, 0] * dt
             self._batch_static_collision(0, old_position)
@@ -844,7 +854,7 @@ class PhysicsWorld:
             self._batch_static_collision(2, old_position)
 
             self._position[moving, 1] += self._velocity[moving, 1] * dt
-            floors = self._batch_floor()
+            floors = self._batch_floor(previous_bottom)
             new_center = self._position + self._offset
             new_bottom = new_center[:, 1] - self._half[:, 1]
             landed = moving & np.isfinite(floors) & (
