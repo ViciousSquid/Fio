@@ -1,0 +1,174 @@
+{
+    "version": 3,
+    "brushes": [
+        {
+            "pos": [
+                -64.0,
+                0,
+                88.0
+            ],
+            "size": [
+                1344.0,
+                128,
+                1296.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": true,
+            "id": "d84b349b-f600-4539-b46e-dea070359480"
+        },
+        {
+            "pos": [
+                -64.0,
+                416.0,
+                64.0
+            ],
+            "size": [
+                128.0,
+                960.0,
+                128.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": true,
+            "id": "503a48f1-6549-486a-ac73-43357b6d57b2"
+        },
+        {
+            "pos": [
+                -816.0,
+                416.0,
+                88.0
+            ],
+            "size": [
+                160.0,
+                960.0,
+                1296.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": true,
+            "id": "d026e86a-8d8b-4674-aea0-25822c987051"
+        },
+        {
+            "pos": [
+                -64.0,
+                288,
+                64.0
+            ],
+            "size": [
+                112.0,
+                128,
+                64.0
+            ],
+            "textures": {
+                "north": "BlackLodgeFloor.png",
+                "south": "default.png",
+                "east": "nodraw.jpg",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "ed4058d9-bf5e-4d23-8802-dbeb919b451a",
+            "uv_shift": {
+                "east": [
+                    0.0,
+                    0.0
+                ]
+            },
+            "uv_scale": {
+                "east": [
+                    1.0,
+                    1.0
+                ]
+            },
+            "uv_angle": {
+                "east": 0.0
+            },
+            "is_mover": true,
+            "speed": 100.0,
+            "distance": 300.0,
+            "direction": [
+                1.0,
+                0.0,
+                0.0
+            ],
+            "name": "rot",
+            "rotate": false,
+            "original_pos": [
+                -64.0,
+                288,
+                64.0
+            ],
+            "rotation_yaw": 166.39999999999785,
+            "start_on": true
+        }
+    ],
+    "things": [
+        {
+            "type": "light",
+            "pos": [
+                272.0,
+                272.0,
+                48.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 1280.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": true,
+                "id": "3d80e810-1675-4595-913a-4a59539733cc",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "io_enabled": true
+            },
+            "io_connections": []
+        },
+        {
+            "type": "playerstart",
+            "pos": [
+                288.0,
+                112,
+                576.0
+            ],
+            "properties": {
+                "type": "playerstart",
+                "io_enabled": true,
+                "name": "PlayerStart_1",
+                "id": "7a51503e-5760-457f-bbb0-e45df9ef1ede",
+                "angle": 45.0
+            },
+            "io_connections": []
+        }
+    ],
+    "created": "2026-09-21T01:59:22"
+}
