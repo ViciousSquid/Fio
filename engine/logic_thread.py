@@ -1038,9 +1038,11 @@ class LogicThread(threading.Thread):
             
             # Reset pickup state
             self.player_in_triggers.clear()
-            self._trigger_entities_inside.clear()
+            self._trigger_contacts.clear()
             self._nonplayer_trigger_contacts.clear()
-            self._nonplayer_trigger_poll_elapsed = 0.0
+            self._trigger_poll_elapsed = 0.0
+            self._trigger_use_pending = False
+            self._trigger_use_prompt = ""
             self.collected_pickups.clear()
             self.collected_keys.clear()
             self.respawn_timers.clear()
@@ -1156,9 +1158,11 @@ class LogicThread(threading.Thread):
         else:
             self._stop_monster_ai()
             self.player_in_triggers.clear()
-            self._trigger_entities_inside.clear()
+            self._trigger_contacts.clear()
             self._nonplayer_trigger_contacts.clear()
-            self._nonplayer_trigger_poll_elapsed = 0.0
+            self._trigger_poll_elapsed = 0.0
+            self._trigger_use_pending = False
+            self._trigger_use_prompt = ""
             self.fired_once_triggers.clear()
             self.collected_pickups.clear()
             self.collected_keys.clear()
