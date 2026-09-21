@@ -301,6 +301,10 @@ class Player:
             # Fallback: all brushes (old behaviour)
             colliders = list(brushes)
 
+        # Dynamic physics-enabled Props are resolved by PropSession so the
+        # player can push them instead of treating them as static walls.
+        colliders = [b for b in colliders if not b.get('_dynamic_prop')]
+
         if movers:
             colliders.extend(movers)
         if doors:
