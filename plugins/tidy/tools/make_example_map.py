@@ -1,5 +1,5 @@
 """
-Generate maps/Tidy_Test.json — a small demo level for the Tidy plugin.
+Generate plugins/tidy/Tidy_Test.json — a small demo level for the Tidy plugin.
 
 A closed room with a player start, a shelf (brush) fronted by a TidyReceptacle,
 a grid of core Props marked with Tidy categories scattered on the floor, and a TidyGoal wired to a level
@@ -109,7 +109,7 @@ def main():
     things.append(goal.to_dict())
 
     doc = {"version": 3, "brushes": brushes, "things": things}
-    out = os.path.join(_ROOT, "maps", "Tidy_Test.json")
+    out = os.path.join(_ROOT, "plugins", "tidy", "Tidy_Test.json")
     with open(out, "w") as f:
         json.dump(doc, f, indent=1)
     print(f"Wrote {out}: {len(brushes)} brushes, {len(things)} things "
