@@ -2,14 +2,9 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from engine.physics import PhysicsWorld
+from engine.physics import PhysicsWorld, SpatialGrid
 from engine.prop_runtime import PropSession
-from plugins.entitybase import Prop
-
-
-class Grid:
-    def raycast_down(self, x, z, from_y):
-        return 0.0
+from engine.prop_entity import Prop
 
 
 class IO:
@@ -19,59 +14,78 @@ class IO:
     def fire_output(self, entity, name):
         self.events.append((entity, name))
 
+    def names(self):
+        return [name for _, name in self.events]
 
-def test_core_prop_pickup_drop_without_plugins():
-    prop = Prop(pos=[0, 40, 30], properties={
+
+def _floor_grid():
+    grid = SpatialGrid(cell_size=512.0)
+    grid.populate([{'pos': [0.0, -50.0, 0.0], 'size': [2000.0, 100.0, 2000.0]}])
+    return grid
+
+
+def test_core_prop_pickup_carry_drop_rest_without_plugins():
+    spin = 90.0  # degrees per second about X
+    prop = Prop(pos=[0.0, 40.0, 30.0], properties={
         'physics_enabled': True,
         'no_collision': False,
-        'drop_angular_velocity': [10, 0, 0],
+        'drop_angular_velocity': [spin, 0.0, 0.0],
     })
     io = IO()
-
-    grid = Grid()
+    grid = _floor_grid()
     physics = PhysicsWorld(grid)
-    physics.register_body(
-        prop,
-        {
-            'pos': [0, 40, 30],
-            'size': [32, 32, 32],
-            '_physics_body': True,
-            '_physics_entity': prop,
-            '_collision_mode': 'aabb',
-        },
-    )
-
+    # Origin at the prop's base; 32-unit box centred half a height above it.
+    physics.rebuild([{
+        'pos': [0.0, 56.0, 30.0],
+        'size': [32.0, 32.0, 32.0],
+        '_physics_body': True,
+        '_physics_entity': prop,
+        '_collision_mode': 'aabb',
+    }])
     logic = SimpleNamespace(
-        things=[prop],
-        io_manager=io,
-        _spatial_grid=grid,
-        _physics_world=physics,
-        player=SimpleNamespace(
-            pos=[0, 0, 0], angle=0.0, pitch=0.0,
-            camera_height=40.0,
-        ),
+        things=[prop], io_manager=io,
+        _spatial_grid=grid, _physics_world=physics,
+        player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
+                               camera_height=40.0),
         current_hud_message='',
     )
     session = PropSession(logic)
     session.start()
 
+    # Pick up: the prop is directly ahead at eye height.
     session.tick(1 / 60, use_pressed=True)
     assert session.held is prop
     assert physics.get_body(prop).kinematic
-    assert io.events[-1][1] == 'OnPickedUp'
+    assert io.names()[-1] == 'OnPickedUp'
 
+    # Carry: the prop follows the view; physics must not move it.
+    session.tick(1 / 60, use_pressed=False)
+    physics.step(1 / 60)
+    carried = list(prop.pos)
+    assert carried[2] > 30.0
+    assert logic.current_hud_message == '[E] Drop'
+
+    # Drop: physics takes over from the carried position, not the home one.
     session.tick(1 / 60, use_pressed=True)
     assert session.held is None
-    assert not physics.get_body(prop).kinematic
-    assert physics.get_body(prop).awake
-    assert 'OnDropped' in [event for _, event in io.events]
+    body = physics.get_body(prop)
+    assert not body.kinematic and body.awake
+    assert 'OnDropped' in io.names()
 
-    for _ in range(30):
+    physics.step(1 / 60)
+    assert abs(prop.properties['rotation'][0] - spin / 60) < 1e-3
+    assert abs(prop.pos[2] - carried[2]) < 1e-3
+
+    for _ in range(60):
         physics.step(1 / 60)
+    assert abs(prop.pos[1]) < 1e-4
+    assert 'OnRest' in io.names()
+    assert not body.awake
 
-    assert prop.pos[1] == 40.0
-    assert ('OnRest' in [event for _, event in io.events])
-    assert prop.properties['rotation'][0] > 0
+    # Stop restores the authored home position and releases callbacks.
+    session.stop()
+    assert prop.pos == [0.0, 40.0, 30.0]
+    assert session.props == []
 
 
 def test_session_detects_maps_without_props_and_unloads_when_removed():
@@ -85,6 +99,68 @@ def test_session_detects_maps_without_props_and_unloads_when_removed():
     assert session.is_empty()
     assert session.props == []
     assert not PropSession.has_props(logic.things)
+
+
+class CountingThings(list):
+    """A thing list that records every full traversal of itself."""
+
+    def __init__(self, items):
+        super().__init__(items)
+        self.walks = 0
+
+    def __iter__(self):
+        self.walks += 1
+        return super().__iter__()
+
+
+def test_the_liveness_poll_does_not_walk_the_map_every_frame():
+    """``is_empty`` runs once per tick from both the logic thread and the
+    standalone player; deriving the live set means walking every Thing in the
+    map, so it is gated on a cheap fingerprint of the thing list."""
+    things = CountingThings([Prop(pos=[0, 0, 0])]
+                            + [SimpleNamespace(properties={'type': 'light'})
+                               for _ in range(200)])
+    session = PropSession(SimpleNamespace(things=things))
+    session.start()
+
+    walks_before = things.walks
+    for _ in range(PropSession.RESCAN_INTERVAL):
+        assert session.is_empty() is False
+    assert things.walks == walks_before, (
+        "the liveness poll walked the map %d times in %d ticks"
+        % (things.walks - walks_before, PropSession.RESCAN_INTERVAL))
+
+
+def test_the_liveness_poll_still_notices_a_removal_immediately():
+    prop, other = Prop(pos=[0, 0, 0]), Prop(pos=[10, 0, 0])
+    things = [prop, other]
+    session = PropSession(SimpleNamespace(things=things))
+    session.start()
+    assert session.is_empty() is False
+
+    things.remove(other)
+    assert session.is_empty() is False
+    assert session.props == [prop], "a removed Prop stayed in the session"
+
+    things.remove(prop)
+    assert session.is_empty() is True
+
+
+def test_a_same_length_swap_is_caught_by_the_periodic_rescan():
+    """The fingerprint cannot see a remove-and-add inside one poll interval,
+    which is exactly why the rescan is unconditional every N polls."""
+    prop = Prop(pos=[0, 0, 0])
+    things = [prop]
+    logic = SimpleNamespace(things=things)
+    session = PropSession(logic)
+    session.start()
+    session.held = prop
+
+    things[0] = Prop(pos=[0, 0, 0])          # same length, different object
+    for _ in range(PropSession.RESCAN_INTERVAL + 1):
+        session.is_empty()
+    assert session.props == [], "the replaced Prop was never pruned"
+    assert session.held is None, "the session kept hold of a Prop that is gone"
 
 
 def test_prop_has_a_default_billboard_and_2d_menu_entry():

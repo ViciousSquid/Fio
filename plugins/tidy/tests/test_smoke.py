@@ -121,7 +121,7 @@ def test_demo_loader_respects_unsaved_changes():
 def test_core_prop_pickup_and_tidy_place():
     print("[3] core PropSession handles pickup/drop while Tidy intercepts placement")
     from engine.prop_runtime import PropSession
-    from plugins.entitybase import Prop
+    from engine.prop_entity import Prop
     from plugins.tidy.entities import TidyReceptacle, TidyGoal
     from plugins.tidy.runtime import TidySession
 
@@ -203,7 +203,7 @@ def test_receptacle_slots_and_filtering():
 
 def test_tidy_ignores_plain_props():
     print("[5] ordinary core Props are not silently converted into Tidy objects")
-    from plugins.entitybase import Prop
+    from engine.prop_entity import Prop
     from plugins.tidy.runtime import TidySession
     prop = Prop(pos=[0, 0, 0], properties={"name": "ordinary"})
     logic = FakeLogic([prop])

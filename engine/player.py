@@ -239,6 +239,34 @@ def _collide_and_slide(sphere_pos, velocity, radius, mesh_tris, mesh_bounds, max
 # Player Class
 # =============================================================================
 
+def _blocks_player(brush):
+    """Single source of truth for "does the player collide with this brush?".
+
+    Every collision pass the player runs — horizontal sweep, step-up, vertical
+    resolve, capsule depenetration, waterjump probe — used to re-derive this per
+    brush, so a brush near the player was classified five or six times a frame,
+    ``is_water_brush`` (which lower-cases every face texture) included.  It is
+    derived once per frame now, in ``Player.update``, and the passes just walk
+    the list they are handed.
+
+    The expensive water test goes last deliberately: ``SpatialGrid.populate``
+    already keeps water, fog, non-dynamic triggers and physics bodies out of the
+    grid, so on the normal path the only brushes that reach it are the movers
+    and doors appended afterwards.  The flags *are* still tested here, because
+    ``hidden``/``disabled`` are runtime state the grid cannot filter on (it
+    indexes by ``authored_hidden`` precisely so a streamed-out brush can come
+    back), and because the no-grid fallback path hands over the raw brush list.
+    """
+    if brush.get('_physics_body'):
+        # Simulated by PhysicsWorld as a dynamic body, not a static wall.
+        return False
+    if brush.get('hidden') or brush.get('disabled') or brush.get('is_fog'):
+        return False
+    if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
+        return False
+    return not is_water_brush(brush)
+
+
 class Player:
     def __init__(self, x, z, angle=math.pi, physics_enabled=True):
         # Initialize position (Y is set to 2 tiles high by default)
@@ -301,14 +329,22 @@ class Player:
             # Fallback: all brushes (old behaviour)
             colliders = list(brushes)
 
-        # Dynamic physics bodies are resolved by PhysicsWorld rather than as
-        # static walls in the player's brush-collision path.
-        colliders = [b for b in colliders if not b.get('_physics_body')]
-
-        if movers:
-            colliders.extend(movers)
-        if doors:
-            colliders.extend(doors)
+        # One pass over everything that could collide this frame: drop what the
+        # player does not collide with at all (see _blocks_player) and split the
+        # rest by collision mode.  Movers and doors are always included since
+        # they're dynamic and the static grid never sees them.
+        mesh_brushes = []
+        aabb_brushes = []
+        for source in (colliders, movers, doors):
+            if not source:
+                continue
+            for b in source:
+                if not _blocks_player(b):
+                    continue
+                if b.get('_collision_mode') == 'mesh':
+                    mesh_brushes.append(b)
+                else:
+                    aabb_brushes.append(b)
 
         # --- Water immersion (before movement so swim physics can use it) ---
         if spatial_grid is not None:
@@ -372,18 +408,9 @@ class Player:
         # Works while wading AND swimming; without it, any pool whose rim is
         # taller than a normal jump becomes an inescapable trap.
         if self.in_water and jump:
-            self._try_water_jump(colliders, wish_dir)
+            self._try_water_jump(aabb_brushes, wish_dir)
 
         # --- 3. Collision Resolution ---
-
-        # Separate mesh brushes from AABB brushes (single pass over colliders)
-        mesh_brushes = []
-        aabb_brushes = []
-        for b in colliders:
-            if b.get('_collision_mode') == 'mesh':
-                mesh_brushes.append(b)
-            else:
-                aabb_brushes.append(b)
 
         # A. Horizontal movement with AABB collision.  This integrates X/Z
         # once (it advances pos even with an empty brush list), so mesh brushes
@@ -514,18 +541,7 @@ class Player:
         self.on_ground = False
         self.ground_object = None
 
-    @staticmethod
-    def _waterjump_solid(brush):
-        """Solid AABB obstacles a waterjump can vault onto (or be blocked by)."""
-        if brush.get('hidden') or brush.get('disabled') or brush.get('is_fog') or is_water_brush(brush):
-            return False
-        if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
-            return False
-        if brush.get('_collision_mode') == 'mesh':
-            return False
-        return True
-
-    def _try_water_jump(self, colliders, wish_dir):
+    def _try_water_jump(self, aabb_brushes, wish_dir):
         """Vault out of water onto a nearby ledge.
 
         Probes one step ahead in the movement direction for a solid wall whose
@@ -551,9 +567,7 @@ class Player:
 
             # Highest climbable ledge at this probe point
             ledge_top = None
-            for brush in colliders:
-                if not self._waterjump_solid(brush):
-                    continue
+            for brush in aabb_brushes:
                 bpos, bsize = brush['pos'], brush['size']
                 if not (abs(px - bpos[0]) <= bsize[0] * 0.5 and
                         abs(pz - bpos[2]) <= bsize[2] * 0.5):
@@ -576,9 +590,7 @@ class Player:
 
             # Headroom: the player must fit standing on the ledge
             blocked = False
-            for brush in colliders:
-                if not self._waterjump_solid(brush):
-                    continue
+            for brush in aabb_brushes:
                 bpos, bsize = brush['pos'], brush['size']
                 if not (abs(px - bpos[0]) <= bsize[0] * 0.5 and
                         abs(pz - bpos[2]) <= bsize[2] * 0.5):
@@ -841,20 +853,14 @@ class Player:
         return True
 
     def _resolve_collision(self, brushes, axis, delta, ignore_brush=None):
-        """
-        Resolve AABB or mesh collision by pushing the player out of overlapping brushes.
+        """Push the player out of any overlapping brush on one axis.
+
+        Takes brushes the caller has already filtered with ``_blocks_player``.
         """
         half = self._half
 
         for brush in brushes:
             if ignore_brush and brush is ignore_brush:
-                continue
-
-            if brush.get('hidden') or brush.get('disabled') or is_water_brush(brush) or brush.get('is_fog'):
-                continue
-
-            is_dynamic_solid = brush.get('is_mover') or brush.get('is_door')
-            if brush.get('is_trigger') and not is_dynamic_solid:
                 continue
 
             # === MESH COLLISION ===
@@ -925,24 +931,24 @@ class Player:
                 
                 continue  # Done with this mesh brush
 
-            # === AABB COLLISION (existing code) ===
+            # === AABB COLLISION ===
             player_min = self.pos - half
             player_max = self.pos + half
 
-            pos   = glm.vec3(brush['pos'])
-            size  = glm.vec3(brush['size'])
-            b_min = pos - size * 0.5
-            b_max = pos + size * 0.5
+            # PERF: cached float32 bounds (bit-identical to glm.vec3(pos) +/-
+            # size*0.5) instead of four throwaway glm.vec3 per brush per axis
+            # pass — the same cache _has_headroom already reads.
+            b = brush_aabb_bounds(brush)
 
-            if (player_max.x < b_min.x or player_min.x > b_max.x or
-                    player_max.y < b_min.y or player_min.y > b_max.y or
-                    player_max.z < b_min.z or player_min.z > b_max.z):
+            if (player_max.x < b[0] or player_min.x > b[3] or
+                    player_max.y < b[1] or player_min.y > b[4] or
+                    player_max.z < b[2] or player_min.z > b[5]):
                 continue
 
             # Resolve on the relevant axis
             if axis == 'x':
-                dx1 = player_max.x - b_min.x
-                dx2 = b_max.x - player_min.x
+                dx1 = player_max.x - b[0]
+                dx2 = b[3] - player_min.x
                 if dx1 < dx2:
                     self.pos.x -= dx1 + 0.001
                 else:
@@ -950,8 +956,8 @@ class Player:
                 self.velocity.x = 0
 
             elif axis == 'z':
-                dz1 = player_max.z - b_min.z
-                dz2 = b_max.z - player_min.z
+                dz1 = player_max.z - b[2]
+                dz2 = b[5] - player_min.z
                 if dz1 < dz2:
                     self.pos.z -= dz1 + 0.001
                 else:
@@ -959,8 +965,8 @@ class Player:
                 self.velocity.z = 0
 
             elif axis == 'y':
-                dy1 = player_max.y - b_min.y
-                dy2 = b_max.y - player_min.y
+                dy1 = player_max.y - b[1]
+                dy2 = b[4] - player_min.y
                 if dy1 < dy2:
                     self.pos.y -= dy1 + 0.001
                     if self.velocity.y > 0:
@@ -970,62 +976,3 @@ class Player:
                     self.velocity.y    = 0
                     self.on_ground     = True
                     self.ground_object = brush
-
-    def _check_overlap(self, brushes, ignore_brush=None):
-        """
-        Returns True if the player currently overlaps any solid brush.
-        Handles both AABB and mesh collision brushes.
-        """
-        half       = self._half
-        player_min = self.pos - half
-        player_max = self.pos + half
-
-        for brush in brushes:
-            if brush.get('hidden') or brush.get('disabled') or is_water_brush(brush) or brush.get('is_fog'):
-                continue
-
-            is_dynamic_solid = brush.get('is_mover') or brush.get('is_door')
-            if brush.get('is_trigger') and not is_dynamic_solid:
-                continue
-
-            if ignore_brush is not None and brush is ignore_brush:
-                continue
-
-            # Mesh collision: use bounds for broad-phase
-            if brush.get('_collision_mode') == 'mesh':
-                bounds = brush.get('_mesh_bounds')
-                if bounds:
-                    min_b, max_b = bounds
-                    if (player_max.x > min_b[0] and player_min.x < max_b[0] and
-                        player_max.y > min_b[1] and player_min.y < max_b[1] and
-                        player_max.z > min_b[2] and player_min.z < max_b[2]):
-                        # Broad-phase overlap - do narrow-phase test
-                        mesh_tris = brush.get('_mesh_triangles', [])
-                        for tri, normal in mesh_tris:
-                            # Simple sphere vs triangle test
-                            sp = (self.pos.x, self.pos.y, self.pos.z)
-                            # Distance to plane
-                            to_v0 = (sp[0] - tri[0][0], sp[1] - tri[0][1], sp[2] - tri[0][2])
-                            dist = abs(to_v0[0]*normal[0] + to_v0[1]*normal[1] + to_v0[2]*normal[2])
-                            if dist < min(half.x, half.z):
-                                # Close to plane - check if point projects into triangle
-                                plane_point = (
-                                    sp[0] - normal[0]*dist,
-                                    sp[1] - normal[1]*dist,
-                                    sp[2] - normal[2]*dist,
-                                )
-                                if _point_in_triangle(plane_point, tri[0], tri[1], tri[2]):
-                                    return True
-                continue
-
-            pos   = glm.vec3(brush['pos'])
-            size  = glm.vec3(brush['size'])
-            b_min = pos - size * 0.5
-            b_max = pos + size * 0.5
-
-            if (player_max.x > b_min.x and player_min.x < b_max.x and
-                    player_max.y > b_min.y and player_min.y < b_max.y and
-                    player_max.z > b_min.z and player_min.z < b_max.z):
-                return True
-
-        return False

@@ -90,9 +90,10 @@ def test_plugin_loads_without_editor_or_pyqt():
 
 def test_player_host_runs_core_prop_and_tidy():
     print("[2] player host runs core Prop pickup + Tidy placement")
-    from plugins.manager import get_manager
+    from plugins.manager import get_manager, load_plugins
     from player.plugin_host import PlayerPluginHost
 
+    load_plugins()  # idempotent; do not rely on an earlier test
     mgr = get_manager()
     tidy = next(p for p in mgr.plugins if p.name == "tidy")
     mgr.set_enabled(tidy, False)

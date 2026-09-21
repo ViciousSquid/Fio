@@ -907,8 +907,10 @@ class PropertyEditor(QWidget):
         return lbl
 
     def _create_trigger_tab(self, brush):
-        brush.setdefault('trigger_filters', ['player'])
-        brush.setdefault('trigger_poll_interval', 1.0)
+        # Read-only: this tab is built (hidden) for every brush, so writing
+        # defaults here stamped trigger keys onto plain walls, changed the
+        # page signature and defeated the page cache. Readers use .get()
+        # defaults; on_trigger_changed() writes them when a brush becomes one.
 
         w = QWidget()
         layout = QVBoxLayout(w)
@@ -2465,6 +2467,11 @@ class PropertyEditor(QWidget):
 
                 form.addRow(QLabel("Item Type:"), combo)
                 continue
+
+            # Legacy maps store show_radius as "True"/"False"; normalise so it
+            # still gets its checkbox instead of falling through to a text field.
+            if key == 'show_radius' and isinstance(thing, Light):
+                value = thing.get_show_radius()
 
             # Generic booleans.
             if isinstance(value, bool):

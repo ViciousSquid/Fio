@@ -219,6 +219,14 @@ class BaseRenderer:
     # that shader declared room for.  Per-shader caps below cover the ones that
     # are deliberately smaller (water, terrain, the ARM variants).
     MAX_LIGHTS = shaders.MAX_LIGHTS
+    # CPU mirror of the std140 GLSL `struct Light` (shaders.py): four 16-byte
+    # fields per light, 64 bytes total. One upload feeds every lit shader.
+    LIGHT_UBO_DTYPE = np.dtype([
+        ('position', '<f4', (4,)),
+        ('color', '<f4', (4,)),
+        ('params', '<f4', (4,)),
+        ('indices', '<i4', (4,)),
+    ])
     MAX_PORTALS = 4      # maximum portal apertures rendered per frame
 
     # How many times a portal may be seen recursively through another portal.
@@ -305,13 +313,7 @@ class BaseRenderer:
         self._light_ubo = None
         self._light_ubo_capacity = 0
         self._light_ubo_key = None
-        # Mirror the std140 Light struct: four 16-byte fields per light.
-        self._light_ubo_dtype = np.dtype([
-            ('position', '<f4', (4,)),
-            ('color', '<f4', (4,)),
-            ('params', '<f4', (4,)),
-            ('indices', '<i4', (4,)),
-        ])
+        self._light_ubo_dtype = self.LIGHT_UBO_DTYPE
         self._light_ubo_data = np.zeros(self.MAX_LIGHTS, dtype=self._light_ubo_dtype)
         # Depth cube-map shadow-mapping state (created lazily once GL is ready).
         self._shadow_fbo = None

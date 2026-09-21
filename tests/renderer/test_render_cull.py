@@ -4,6 +4,7 @@ import os
 import sys
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
@@ -186,7 +187,7 @@ def test_batched_positions_out_tracks_selected_rows():
         [[o["pos"][0], o["pos"][2]] for o in objects], dtype=np.float64)
     out_positions = np.empty((3, 2), dtype=np.float64)
     kept = cull_by_distance(
-        objects, 0.0, 0.0, 1000.0,
+        objects, 0.0, 0.0, 1.0e6,
         positions=positions, positions_out=out_positions)
     assert kept == objects
     np.testing.assert_array_equal(out_positions[:3], positions)
@@ -312,3 +313,52 @@ def test_the_box_is_never_smaller_than_the_visible_volume():
         # The camera's own column is inside the box whenever it is in the slab,
         # and the box is non-degenerate whenever anything is visible at all.
         assert max_x - min_x > 0.0
+
+
+# ---------------------------------------------------------------------------
+# sort_by_distance keeps two implementations: a Python sort below
+# min_numpy_count objects and a batched NumPy argsort at or above it. A scene
+# crossing that threshold must not change draw order, or transparency pops as
+# objects enter and leave view. Nothing pinned the boundary, and the existing
+# coverage exercises the NumPy path only (25 objects).
+# ---------------------------------------------------------------------------
+
+def _scene(count):
+    objects = [{"n": i, "pos": [float(i % 5), 0.0, float((i * 3) % 7)]}
+               for i in range(count)]
+    positions = np.asarray(
+        [[o["pos"][0], o["pos"][2]] for o in objects], dtype=np.float64)
+    return objects, positions
+
+
+@pytest.mark.parametrize("count", [2, 3, 15, 16, 17, 40])
+@pytest.mark.parametrize("reverse", [True, False])
+def test_scalar_and_batched_depth_sort_agree(count, reverse):
+    objects, positions = _scene(count)
+
+    batched = sort_by_distance(objects, positions, 1.0, 2.0,
+                               reverse=reverse, min_numpy_count=1)
+    scalar = sort_by_distance(objects, positions, 1.0, 2.0,
+                              reverse=reverse, min_numpy_count=10 ** 6)
+
+    assert [o["n"] for o in batched] == [o["n"] for o in scalar]
+
+
+@pytest.mark.parametrize("reverse", [True, False])
+def test_depth_sort_is_stable_across_equal_distances(reverse):
+    """Ties must keep authored order in both paths.
+
+    Reversing a stable ascending sort reverses its ties too; the batched path
+    negates the distances instead, which is what keeps it matching Python's
+    own stable reverse sort.
+    """
+    objects = [{"n": i, "pos": [3.0, 0.0, -2.0]} for i in range(20)]
+    positions = np.asarray([[3.0, -2.0]] * 20, dtype=np.float64)
+
+    batched = sort_by_distance(objects, positions, 3.0, -2.0,
+                               reverse=reverse, min_numpy_count=1)
+    scalar = sort_by_distance(objects, positions, 3.0, -2.0,
+                              reverse=reverse, min_numpy_count=10 ** 6)
+
+    assert [o["n"] for o in batched] == list(range(20))
+    assert [o["n"] for o in scalar] == list(range(20))

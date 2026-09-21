@@ -38,7 +38,7 @@ def main():
     from plugins.manager import load_plugins
     load_plugins()
     from plugins.tidy.entities import TidyReceptacle, TidyGoal
-    from plugins.entitybase import Prop
+    from engine.prop_entity import Prop
     from editor.things import PlayerStart, Light
 
     HALF = 640.0        # room half-width (interior)

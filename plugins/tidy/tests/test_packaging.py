@@ -51,7 +51,7 @@ def test_required_plugin_resolution():
 
 def test_augment_fiopak_bundles_plugin():
     print("[2] augment_fiopak bundles Tidy for marked core Props")
-    from plugins.entitybase import Prop
+    from engine.prop_entity import Prop
     from plugins.tidy.entities import TidyReceptacle, TidyGoal
     from plugins.packaging import augment_fiopak, collect_entity_types
 
@@ -130,7 +130,7 @@ def test_augment_is_noop_without_tidy_metadata():
 
 def test_player_package_reads_plugins():
     print("[4] player package receives Tidy from core Prop metadata")
-    from plugins.entitybase import Prop
+    from engine.prop_entity import Prop
     from plugins.packaging import augment_fiopak
     from player.fiopak import FioPackage
 

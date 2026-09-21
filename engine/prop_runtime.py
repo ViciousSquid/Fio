@@ -29,10 +29,19 @@ def _dot(a, b):
 class PropSession:
     """Pickup/carry/drop orchestration for core Props."""
 
+    # How many polls may go by on the cheap fingerprint alone before
+    # ``is_empty`` re-derives the live set the expensive way.  Half a second at
+    # 60Hz: short enough that a stale Prop can never be interacted with for a
+    # noticeable time, long enough that the full scan costs nothing per frame.
+    RESCAN_INTERVAL = 30
+
     def __init__(self, logic):
         self.logic = logic
         self.props = []
         self.held = None
+        # Cheap change detector for ``logic.things`` — see ``is_empty``.
+        self._things_fingerprint = None
+        self._polls_since_scan = 0
 
     @staticmethod
     def has_props(things):
@@ -46,6 +55,8 @@ class PropSession:
         self.props = [t for t in self.logic.things
                       if getattr(t, "properties", {}).get("type") == "prop"]
         self.held = None
+        self._things_fingerprint = self._fingerprint()
+        self._polls_since_scan = 0
         for prop in self.props:
             prop.properties["_prop_home_pos"] = list(prop.pos)
             prop.properties.pop("_drop_requested", None)
@@ -65,7 +76,33 @@ class PropSession:
         self.held = None
         self.props.clear()
 
+    def _fingerprint(self):
+        things = self.logic.things
+        return (id(things), len(things))
+
     def is_empty(self):
+        """Prune Props that left the world, and report whether any remain.
+
+        Nothing tells the session when a map edit removes a Thing mid-play, so
+        this is a poll — and it runs every tick, from both the editor logic
+        thread and the standalone player.  Deriving the live set means walking
+        *every* Thing in the map, which on a large map is far more per-frame
+        Python than a liveness check is worth, so the walk is gated on a cheap
+        fingerprint of the things list (its identity and length).  Adding or
+        removing a Thing changes the fingerprint and is caught on the very next
+        poll; the two cases it cannot see on its own — a same-poll
+        remove-then-add, and a wholesale list replacement that happens to reuse
+        the freed list's id at the same length — are caught by the periodic
+        rescan, which bounds staleness to ``RESCAN_INTERVAL`` polls regardless.
+        """
+        fingerprint = self._fingerprint()
+        if (fingerprint == self._things_fingerprint
+                and self._polls_since_scan < self.RESCAN_INTERVAL):
+            self._polls_since_scan += 1
+            return not self.props
+
+        self._things_fingerprint = fingerprint
+        self._polls_since_scan = 0
         live = {id(t) for t in self.logic.things
                 if getattr(t, "properties", {}).get("type") == "prop"}
         if len(live) == len(self.props) and all(id(prop) in live for prop in self.props):
@@ -130,23 +167,27 @@ class PropSession:
             eye[1] + forward[1] * distance + float(offset[1]),
             eye[2] + forward[2] * distance + float(offset[2]),
         ]
-        self.logic.current_hud_message = "[E] Drop"
-        if use_pressed or p.pop("_drop_requested", False):
-            # A gameplay plugin may consume the drop (for example, a Tidy
-            # receptacle placement) while the core Prop still owns pickup,
-            # carrying and the eventual ordinary drop.
-            interceptor = getattr(self.logic, "_prop_drop_interceptor", None)
-            if interceptor is not None:
-                try:
-                    if interceptor(prop):
-                        return
-                except Exception:
-                    # A broken plugin must not prevent the core prop from
-                    # dropping normally.
-                    pass
+        if not (use_pressed or p.pop("_drop_requested", False)):
+            self.logic.current_hud_message = "[E] Drop"
+            return
 
-            self.held = None
-            if self.physics is not None:
-                self.physics.set_kinematic(prop, False)
-                self.physics.wake(prop, [0.0, float(p.get("drop_velocity", 0.0)), 0.0])
-            self._fire(prop, "OnDropped")
+        # Drop requested this tick: no "[E] Drop" prompt, so a gameplay
+        # plugin's HUD line (e.g. Tidy progress) is not suppressed.
+        # A plugin may consume the drop (for example, a Tidy receptacle
+        # placement) while the core Prop still owns pickup, carrying and the
+        # eventual ordinary drop.
+        interceptor = getattr(self.logic, "_prop_drop_interceptor", None)
+        if interceptor is not None:
+            try:
+                if interceptor(prop):
+                    return
+            except Exception as exc:
+                # A broken plugin must not prevent the core prop from
+                # dropping normally, but the failure must be visible.
+                print(f"[PropSession] drop interceptor failed: {exc!r}")
+
+        self.held = None
+        if self.physics is not None:
+            self.physics.set_kinematic(prop, False)
+            self.physics.wake(prop, [0.0, float(p.get("drop_velocity", 0.0)), 0.0])
+        self._fire(prop, "OnDropped")

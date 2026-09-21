@@ -548,6 +548,7 @@ class ConsoleCommandHandler:
         self.editor_state.things.append(portal_a)
         self.editor_state.things.append(portal_b)
         self.editor_state.save_state()
+        self._rebuild_logic_entity_caches()
 
         debug_log("Info", f"Created portal pair: '{name1}' ↔ '{name2}' at ({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f})")
         self.main_window.update_all_ui()
@@ -741,6 +742,7 @@ class ConsoleCommandHandler:
                     break
 
         self.editor_state.save_state()
+        self._rebuild_logic_entity_caches()
         debug_log("Info", f"Deleted portal(s): {', '.join(deleted)}")
         self.main_window.update_all_ui()
 
@@ -2020,6 +2022,19 @@ entity to drive them from the I/O system.</i><br>
     def _logic_thread(self):
         view_3d = getattr(self.main_window, 'view_3d', None)
         return getattr(view_3d, 'logic_thread', None) if view_3d else None
+
+    def _rebuild_logic_entity_caches(self):
+        """Tell a running logic thread that the thing list changed.
+
+        The logic thread indexes entities once and then walks the index, not
+        the level, every frame — so a console command that adds or removes an
+        entity mid-play has to say so, exactly as LogicSpawner does. Without
+        this, a portal created from the console is invisible to the portal
+        system until play mode is toggled.
+        """
+        logic = self._logic_thread()
+        if logic is not None and hasattr(logic, '_build_entity_caches'):
+            logic._build_entity_caches()
 
     def _in_play_mode(self):
         view_3d = getattr(self.main_window, 'view_3d', None)

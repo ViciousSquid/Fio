@@ -220,8 +220,28 @@ class GridMap:
 # ----------------------------------------------------------------------
 # Geometry generation with nodraw optimization
 # ----------------------------------------------------------------------
+#: Columns of the grid walked between cooperative yields. Matches the cadence
+#: EditorState._deserialize_brushes uses when loading: often enough that the
+#: caller's event loop stays responsive, rarely enough that the yield itself
+#: is not the cost.
+YIELD_EVERY_COLUMNS = 8
+
+
 def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None):
+    """Build the wall/floor brushes for *grid_map*.
+
+    ``yield_hook``, when given, is called periodically during the two O(w*h)
+    grid walks so a caller driving this from a UI thread can keep its event
+    loop alive. It used to be accepted and threaded through without ever being
+    called, so a caller that passed one -- the benchmark plugin does -- was
+    frozen for the whole of geometry generation believing it had asked not to
+    be.
+    """
     brushes = []
+
+    def _yield(column):
+        if yield_hook is not None and column % YIELD_EVERY_COLUMNS == 0:
+            yield_hook()
     min_wx = 0
     max_wx = grid_map.w * CELL_SIZE
     min_wz = 0
@@ -263,6 +283,7 @@ def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None):
                 cell_to_room[(room.cell_x + dx, room.cell_y + dy)] = room
 
     for x in range(grid_map.w):
+        _yield(x)
         for y in range(grid_map.h):
             if not grid_map.solid[x][y]:
                 room = cell_to_room.get((x, y), None)
@@ -357,6 +378,7 @@ def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None):
 
     pillar_idx = 0
     for vx in range(grid_map.w + 1):
+        _yield(vx)
         for vz in range(grid_map.h + 1):
             # The four cells around vertex (vx, vz).
             sw = (vx - 1, vz - 1)

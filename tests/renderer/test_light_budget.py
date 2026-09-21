@@ -173,11 +173,26 @@ def test_the_old_settings_key_is_still_honoured():
     renderer_src = read_source('engine', 'renderer_core.py')
     assert "'arm_mode'" in renderer_src
     assert "'lowpower_mode'" in renderer_src
-\n\ndef test_light_ubo_cpu_layout_matches_std140_light_struct():
+
+
+def test_light_ubo_cpu_layout_matches_std140_light_struct():
+    """CPU record must byte-match the GLSL std140 `struct Light`."""
+    import numpy as np
     from engine.renderer_core import BaseRenderer
-    renderer_src = read_source('engine', 'renderer_core.py')
-    assert "('position', '<f4', (4,))" in renderer_src
-    assert "('color', '<f4', (4,))" in renderer_src
-    assert "('params', '<f4', (4,))" in renderer_src
-    assert "('indices', '<i4', (4,))" in renderer_src
+    dt = BaseRenderer.LIGHT_UBO_DTYPE
+    assert dt.itemsize == 64
+    assert [dt.fields[n][1] for n in dt.names] == [0, 16, 32, 48]
+
+    legacy = (
+        "struct Light { highp vec3 position; vec3 color; float intensity; "
+        "highp float radius; int shadowIndex; };\n"
+        "uniform Light lights[8];\nvoid main(){}"
+    )
+    glsl = shaders.light_ubo_source(legacy)
+    assert 'layout(std140) uniform FioLightBlock' in glsl
+    struct = re.search(r"struct Light \{(.*?)\};", glsl, re.S).group(1)
+    fields = re.findall(r"(i?vec4)\s+(\w+);", struct)
+    glsl_kinds = {'vec4': np.dtype('<f4'), 'ivec4': np.dtype('<i4')}
+    assert [(name, glsl_kinds[kind]) for kind, name in fields] == [
+        (name, dt[name].base) for name in dt.names]
     assert BaseRenderer.MAX_LIGHTS == shaders.MAX_LIGHTS

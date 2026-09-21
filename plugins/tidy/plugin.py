@@ -198,23 +198,17 @@ class TidyPlugin(FioPlugin):
             ],
         )
 
-        try:
-            from editor.io_system import get_inputs, get_outputs, register_io
-
-            inputs = list(get_inputs("prop"))
-            outputs = list(get_outputs("prop"))
-            input_names = {d.name.lower() for d in inputs}
-            output_names = {d.name.lower() for d in outputs}
-
-            if "reset" not in input_names:
-                inputs.append(io_def("Reset", "Return this tidy Prop to its authored position"))
-            if "ontidied" not in output_names:
-                outputs.append(io_def("OnTidied", "Fired when this Prop is put away"))
-
-            register_io("prop", inputs, outputs)
-        except Exception:
-            # Headless/player processes do not expose the editor I/O registry.
-            pass
+        # Tidy extends the *core* prop type rather than owning one, so this
+        # adds to prop's declarations instead of replacing them. Going through
+        # the API (rather than reaching into editor.io_system and doing the
+        # read-merge-write by hand) keeps the registration visible to the
+        # manager, which is what lets it be replayed if the process-wide
+        # registry is ever reset. It is a no-op where there is no editor tier.
+        api.extend_io(
+            "prop",
+            inputs=[io_def("Reset", "Return this tidy Prop to its authored position")],
+            outputs=[io_def("OnTidied", "Fired when this Prop is put away")],
+        )
 
     def map_uses_plugin(self, map_data: dict) -> bool:
         """Auto-enable Tidy for receptacles, goals, or marked core Props."""

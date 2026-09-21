@@ -36,7 +36,7 @@ from typing import List, Optional
 
 
 from engine.prop_runtime import PropSession
-from plugins.entitybase import Prop as CoreProp
+from engine.prop_entity import Prop as CoreProp
 
 
 class _CamPlayer:

@@ -429,11 +429,54 @@ class EditorAPI:
             from editor.io_system import register_io
         except Exception:
             return
-        register_io(
-            entity_type,
+        defs_in = [d for d in inputs if d is not None]
+        defs_out = [d for d in outputs if d is not None]
+        register_io(entity_type, defs_in, defs_out)
+        # Remember the call so the manager can put it back. IO_REGISTRY is a
+        # module-level singleton that something else may reset (the test
+        # harness does; a future plugin reload would), and plugin registration
+        # is otherwise a once-per-process side effect with no way to replay it.
+        self._manager._record_io_registration(
+            self._plugin, 'set', entity_type, defs_in, defs_out)
+
+    def extend_io(self, entity_type: str, inputs=(), outputs=()):
+        """Add I/O to an entity type this plugin does not own.
+
+        A plugin that extends a *core* entity -- Tidy adding ``Reset`` and
+        ``OnTidied`` to ``prop``, say -- cannot use :meth:`register_io`, which
+        replaces the type's declarations outright and would strip the core
+        ones. Without this the only way to do it was to reach past the plugin
+        API into ``editor.io_system`` and perform the read-merge-write by hand,
+        which is both easy to get wrong and invisible to the manager, so the
+        registration could not be replayed.
+
+        Definitions already declared for *entity_type* are left alone, matched
+        case-insensitively by name, so this is idempotent.
+        """
+        try:
+            from editor.io_system import get_inputs, get_outputs, register_io
+        except Exception:
+            # Headless/player processes do not expose the editor I/O registry.
+            return
+
+        merged_in = list(get_inputs(entity_type))
+        merged_out = list(get_outputs(entity_type))
+        have_in = {d.name.lower() for d in merged_in}
+        have_out = {d.name.lower() for d in merged_out}
+
+        added_in = [d for d in inputs if d is not None and d.name.lower() not in have_in]
+        added_out = [d for d in outputs if d is not None and d.name.lower() not in have_out]
+        merged_in.extend(added_in)
+        merged_out.extend(added_out)
+
+        register_io(entity_type, merged_in, merged_out)
+        # Recorded as an *extension*, not a replacement, so replaying it
+        # re-merges against whatever the registry holds at that point rather
+        # than pinning the core declarations as they were at load.
+        self._manager._record_io_registration(
+            self._plugin, 'extend', entity_type,
             [d for d in inputs if d is not None],
-            [d for d in outputs if d is not None],
-        )
+            [d for d in outputs if d is not None])
 
     # -- property schema ----------------------------------------------------
     def register_properties(self, entity_type: str, specs: List[PropertySpec]):

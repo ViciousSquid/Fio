@@ -148,6 +148,14 @@ class LogicThread(threading.Thread):
     # Trigger polling is scheduled at the fastest supported interval, while
     # each trigger independently decides when its next sample is due.
     TRIGGER_POLL_TICK = 0.25
+    #: Slack on both trigger-scheduler comparisons. The scheduler accumulates
+    #: arbitrary frame deltas and 1/60 is not exactly representable, so 60
+    #: ticks sum to 0.99999999999999989 rather than 1.0; comparing bare against
+    #: an exact decimal lost one scheduler step per second and let the poll
+    #: cadence drift behind the configured interval. A nanosecond is far below
+    #: any cadence a map can author and comfortably above the accumulated
+    #: representation error of a whole session.
+    TRIGGER_POLL_EPSILON = 1.0e-9
 
     # Seconds between repeating wade footstep sounds while walking in water
     WATERWALK_INTERVAL = 0.45
@@ -267,28 +275,8 @@ class LogicThread(threading.Thread):
 
         # Trigger state
         self.fired_once_triggers: set = set()
-        # Active occupants keyed by trigger id, then (entity type, entity id).
-        # Each trigger is sampled at its own configured interval; unchanged
-        # contacts are retained between that trigger's polls.
-        self._trigger_contacts: Dict[int, set] = {}
-        # Backward-compatible mirrors for code/tests that inspect player-only
-        # or non-player trigger state directly.
-        self.player_in_triggers: set = set()
-        self._nonplayer_trigger_contacts: Dict[int, set] = {}
-        # Scheduler accumulator: the broad-phase never runs at the 60 Hz logic
-        # rate. It wakes at the fastest supported trigger interval and only
-        # polls triggers whose individual interval has elapsed.
-        self._trigger_poll_elapsed = 0.0
-        self._trigger_poll_elapsed_by_bid: Dict[int, float] = {}
-        # Each use-key press gets a generation number. Every trigger consumes
-        # each generation independently, so a fast trigger cannot steal an E
-        # press from a slower use trigger.
-        self._trigger_use_generation = 0
-        self._trigger_use_seen: Dict[int, int] = {}
-        # Cached use prompts are published every frame without re-running the
-        # trigger broad-phase.
-        self._trigger_use_prompt = ""
-        self._trigger_use_prompts: Dict[int, str] = {}
+        # Trigger occupancy/scheduler state has a single owner.
+        self._reset_trigger_state()
 
         # Logic Gate State
         self.gate_inputs = {}
@@ -383,6 +371,7 @@ class LogicThread(threading.Thread):
         self._id_cache = {}
         self._trigger_brushes = []
         self._trigger_brush_by_bid = {}
+        self._use_trigger_entries = []
         self._pickup_things = []
         self._prop_things = []
         self._prop_by_id = {}
@@ -402,8 +391,8 @@ class LogicThread(threading.Thread):
         self._portal_prev_player_pos = None
         # Portal name → Portal lookup cache; rebuilt on play start and when
         # the things list changes.  Avoids an O(n) rebuild every physics tick.
+        self._portal_things: List = []
         self._portals_by_name: Dict[str, object] = {}
-        self._portals_cache_dirty: bool = True
 
         self.level_complete_ui = None
 
@@ -486,6 +475,7 @@ class LogicThread(threading.Thread):
             (b.get('id') or i, b) for i, b in enumerate(self.brushes) if b.get('is_trigger')
         ]
         self._trigger_brush_by_bid = dict(self._trigger_brushes)
+        self._refresh_use_triggers()
 
         # PERF: precomputed thing lists for _handle_interactions / _handle_pickups
         self._pickup_things = [t for t in self.things if Pickup and isinstance(t, Pickup)]
@@ -508,6 +498,18 @@ class LogicThread(threading.Thread):
         # the one per-frame path the logic system has, and it should walk the
         # timers, not the level.
         self._timer_things = [t for t in self.things if LogicTimer and isinstance(t, LogicTimer)]
+
+        # PERF: portals, for the same reason again.  _update_portals ticks every
+        # portal's fade every frame, which used to mean an isinstance scan of
+        # the entire thing list per frame on a map with no portals at all.  The
+        # name index is derived here too, in the same pass, so the two can never
+        # disagree about which portals exist.
+        self._portal_things = [t for t in self.things if Portal and isinstance(t, Portal)]
+        self._portals_by_name = {}
+        for t in self._portal_things:
+            n = t.properties.get('name', '')
+            if n:
+                self._portals_by_name[n] = t
 
     def _find_entity_by_name(self, name: str):
         if not name:
@@ -1046,15 +1048,7 @@ class LogicThread(threading.Thread):
             self.notarget = False
             
             # Reset pickup state
-            self.player_in_triggers.clear()
-            self._trigger_contacts.clear()
-            self._nonplayer_trigger_contacts.clear()
-            self._trigger_poll_elapsed = 0.0
-            self._trigger_poll_elapsed_by_bid.clear()
-            self._trigger_use_generation = 0
-            self._trigger_use_seen.clear()
-            self._trigger_use_prompt = ""
-            self._trigger_use_prompts.clear()
+            self._reset_trigger_state()
             self.collected_pickups.clear()
             self.collected_keys.clear()
             self.respawn_timers.clear()
@@ -1131,7 +1125,6 @@ class LogicThread(threading.Thread):
             # Reset portal transit state
             self._portal_cooldowns.clear()
             self._portal_prev_player_pos = None
-            self._portals_cache_dirty = True
 
             # Reset portal fade state so portals start at the correct opacity
             if Portal is not None:
@@ -1169,15 +1162,7 @@ class LogicThread(threading.Thread):
             
         else:
             self._stop_monster_ai()
-            self.player_in_triggers.clear()
-            self._trigger_contacts.clear()
-            self._nonplayer_trigger_contacts.clear()
-            self._trigger_poll_elapsed = 0.0
-            self._trigger_poll_elapsed_by_bid.clear()
-            self._trigger_use_generation = 0
-            self._trigger_use_seen.clear()
-            self._trigger_use_prompt = ""
-            self._trigger_use_prompts.clear()
+            self._reset_trigger_state()
             self.fired_once_triggers.clear()
             self.collected_pickups.clear()
             self.collected_keys.clear()
@@ -1228,7 +1213,6 @@ class LogicThread(threading.Thread):
             # Reset portal transit state
             self._portal_cooldowns.clear()
             self._portal_prev_player_pos = None
-            self._portals_cache_dirty = True
 
             # Reset portal fade state to match 'active' property (editor view stays correct)
             if Portal is not None:
@@ -1987,11 +1971,15 @@ class LogicThread(threading.Thread):
         """
         if Portal is None or not self.player:
             return
+        if not self._portal_things:
+            # No portals in this map: nothing to fade, nothing to cross, and no
+            # cooldowns to decay (they are only ever written below).
+            return
 
-        # Tick fade transitions for every portal each frame
-        for t in self.things:
-            if isinstance(t, Portal):
-                t.tick_fade(delta)
+        # Tick fade transitions for every portal each frame, off the list built
+        # by _build_entity_caches — walking the portals, not the level.
+        for t in self._portal_things:
+            t.tick_fade(delta)
 
         # Decay all active cooldowns
         for pid in list(self._portal_cooldowns):
@@ -1999,14 +1987,6 @@ class LogicThread(threading.Thread):
             if self._portal_cooldowns[pid] <= 0.0:
                 del self._portal_cooldowns[pid]
 
-        # Build (or reuse) name → Portal lookup
-        if self._portals_cache_dirty:
-            self._portals_by_name = {
-                t.properties.get('name', ''): t
-                for t in self.things
-                if isinstance(t, Portal) and t.properties.get('name', '')
-            }
-            self._portals_cache_dirty = False
         portals_by_name = self._portals_by_name
 
         cur = (float(self.player.pos.x), float(self.player.pos.y), float(self.player.pos.z))
@@ -2254,6 +2234,142 @@ class LogicThread(threading.Thread):
             if str(name).strip().lower() in ('player', 'props', 'monsters')
         }
 
+    def _reset_trigger_state(self):
+        """Create or clear all trigger occupancy and scheduler state.
+
+        Containers are cleared in place when they already exist, so any
+        holder of a reference (e.g. ``player_in_triggers``) sees the reset.
+        """
+        def fresh(name, factory):
+            current = getattr(self, name, None)
+            if current is None:
+                setattr(self, name, factory())
+            else:
+                current.clear()
+
+        # Active occupants keyed by trigger id, then (entity type, entity id).
+        # Each trigger is sampled at its own configured interval; unchanged
+        # contacts are retained between that trigger's polls.
+        fresh('_trigger_contacts', dict)
+        # Mirrors for code that inspects player-only or non-player state.
+        fresh('player_in_triggers', set)
+        fresh('_nonplayer_trigger_contacts', dict)
+        # Scheduler: wakes every TRIGGER_POLL_TICK and polls only triggers
+        # whose own interval has elapsed; never scans at the 60 Hz tick rate.
+        self._trigger_poll_elapsed = 0.0
+        fresh('_trigger_poll_elapsed_by_bid', dict)
+        # Each use-key press gets a generation number consumed independently
+        # per trigger, so a fast trigger cannot steal a slower one's press.
+        self._trigger_use_generation = 0
+        fresh('_trigger_use_seen', dict)
+        # Evaluated per tick by _sample_use_prompt; kept as an attribute only
+        # so the render state and tests can read the frame's current prompt.
+        self._trigger_use_prompt = ""
+        self._refresh_use_triggers()
+
+    @staticmethod
+    def use_trigger_contains(distance_sq, use_radius):
+        """Whether something at *distance_sq* is inside a use trigger's volume.
+
+        **Fio's authored use volume is a sphere.** ``use_radius`` is the exact
+        activation radius in every direction, which is what a mapper writing
+        ``use_radius = 128`` means and what 2.4.2 implemented
+        (``glm.distance(player, trigger) < use_radius``).
+
+        The spatial broad phase bounds a use trigger with an axis-aligned box
+        of the same radius because that is what a batched pass can do cheaply.
+        That box is an **acceleration structure, not a second trigger shape**:
+        it fully contains the sphere, so it can only ever admit candidates, and
+        this predicate is the only thing that decides. Letting the box decide
+        made a button usable from up to sqrt(3) times its authored radius on
+        the diagonal.
+
+        Squared throughout -- no square roots, and it vectorises, so the
+        prompt pass and the firing pass share one definition rather than
+        keeping two that can drift apart.
+        """
+        radius = np.asarray(use_radius, dtype=np.float64)
+        return distance_sq < radius * radius
+
+    def _refresh_use_triggers(self):
+        """The use-activated subset of the trigger list, in trigger order.
+
+        Kept apart because the prompt for a use trigger is evaluated every
+        tick while occupancy for everything else stays on the poll scheduler.
+        Refreshed wherever the trigger list is rebuilt and again on each poll,
+        so an activation mode changed at runtime is picked up.
+        """
+        # Tolerates being called before the trigger list exists: state reset
+        # runs during construction, ahead of the first cache build.
+        self._use_trigger_entries = [
+            (bid, brush) for bid, brush in getattr(self, '_trigger_brushes', ())
+            if str(brush.get('trigger_activation', 'touch')).lower() == 'use'
+        ]
+
+    def _use_prompt_candidates(self):
+        """(bid, brush, centre, radius) for every use trigger a prompt may name."""
+        for bid, brush in self._use_trigger_entries:
+            if brush.get('disabled', False):
+                continue
+            if 'player' not in self._trigger_filters(brush):
+                continue
+            # A spent 'once' trigger does nothing, so it must not keep
+            # advertising itself -- 2.4.2 suppressed the prompt for exactly
+            # this case and the rewrite dropped the check.
+            if (str(brush.get('trigger_type', 'multiple')).lower() == 'once'
+                    and bid in self.fired_once_triggers):
+                continue
+            centre = brush.get('pos', (0.0, 0.0, 0.0))
+            yield (bid, brush,
+                   (float(centre[0]), float(centre[1]), float(centre[2])),
+                   float(brush.get('use_radius', 96.0)))
+
+    def _sample_use_prompt(self):
+        """The '[E] ...' line for the use trigger the player is facing, now.
+
+        Occupancy for touch triggers is the expensive pass -- every entity
+        against every trigger -- and stays on the poll scheduler. This is only
+        the use-activated subset, which is buttons, and it is evaluated against
+        the live player position and angle so the prompt appears and clears the
+        moment the player moves or turns instead of up to a poll interval
+        later. The arithmetic is one batched pass over that subset.
+        """
+        player = self.player
+        if player is None or not self._use_trigger_entries:
+            return ""
+
+        candidates = list(self._use_prompt_candidates())
+        if not candidates:
+            return ""
+
+        centres = np.asarray([c[2] for c in candidates], dtype=np.float64)
+        radii = np.asarray([c[3] for c in candidates], dtype=np.float64)
+        pos = player.pos
+        origin = np.asarray(
+            (float(pos[0]), float(pos[1]), float(pos[2])), dtype=np.float64)
+
+        offset = centres - origin
+        distance_sq = np.einsum('ij,ij->i', offset, offset)
+        in_range = self.use_trigger_contains(distance_sq, radii)
+        if not in_range.any():
+            return ""
+
+        forward = np.asarray(
+            (math.sin(player.angle), 0.0, math.cos(player.angle)),
+            dtype=np.float64)
+        # Facing is undefined when the player stands on the trigger centre;
+        # 2.4.2 and the poll path both treat that as facing it.
+        coincident = distance_sq <= 1.0e-8
+        with np.errstate(invalid='ignore', divide='ignore'):
+            facing = (offset @ forward) / np.sqrt(distance_sq)
+        usable = in_range & (coincident | (facing > 0.5))
+        if not usable.any():
+            return ""
+
+        index = int(np.flatnonzero(usable)[0])
+        label = candidates[index][1].get('use_label', '') or 'Activate'
+        return f"[E] {label}"
+
     def _trigger_poll_interval(self, brush):
         """Return a valid per-trigger polling interval in seconds."""
         try:
@@ -2287,9 +2403,10 @@ class LogicThread(threading.Thread):
         if not trigger_ids:
             return
 
-        # A due trigger gets a fresh use-prompt result on this poll.
-        for bid in trigger_ids:
-            self._trigger_use_prompts.pop(bid, None)
+        # The use-activated subset can change if a brush's activation mode is
+        # edited mid-session; refreshing it here keeps the per-tick prompt pass
+        # correct without walking the whole trigger list every frame.
+        self._refresh_use_triggers()
 
         # Snapshot the trigger AABBs due for this poll.
         trigger_entries = []
@@ -2348,14 +2465,6 @@ class LogicThread(threading.Thread):
                 for bid, contacts in new_contacts.items()
                 if any(contact[0] != 'player' for contact in contacts)
             }
-            self._trigger_use_prompt = next(
-                (
-                    self._trigger_use_prompts[bid]
-                    for bid, _ in self._trigger_brushes
-                    if self._trigger_use_prompts.get(bid)
-                ),
-                "",
-            )
             return
 
         # ------------------------------------------------------------------
@@ -2527,6 +2636,12 @@ class LogicThread(threading.Thread):
             )
             offset = center - positions[0]
             distance_sq = float(np.dot(offset, offset))
+            # The sphere is what decides; the broad-phase box only nominated
+            # this trigger as a candidate. Same predicate the prompt uses, so
+            # what the player is shown and what pressing E does cannot drift.
+            if not self.use_trigger_contains(
+                    distance_sq, float(brush.get('use_radius', 96.0))):
+                continue
             if distance_sq > 1.0e-8:
                 to_trigger = offset / math.sqrt(distance_sq)
                 p_forward = np.asarray(
@@ -2566,55 +2681,40 @@ class LogicThread(threading.Thread):
                     self._trigger_poll_interval(brush),
                 )
 
-        # Use prompts are generated from the same broad-phase candidate set.
-        for trigger_index, entry in enumerate(trigger_entries):
-            bid, brush, bounds, _, activation = entry
-            if activation != 'use':
-                continue
-            if not inside[0, trigger_index]:
-                continue
-
-            center = np.asarray(
-                brush.get('pos', (0.0, 0.0, 0.0)),
-                dtype=np.float32,
-            )
-            offset = center - positions[0]
-            distance_sq = float(np.dot(offset, offset))
-            if distance_sq > 1.0e-8:
-                to_trigger = offset / math.sqrt(distance_sq)
-                forward = np.asarray(
-                    [math.sin(self.player.angle), 0.0, math.cos(self.player.angle)],
-                    dtype=np.float32,
-                )
-                if float(np.dot(forward, to_trigger)) <= 0.5:
-                    continue
-
-            use_label = brush.get('use_label', '') or 'Activate'
-            self._trigger_use_prompts[bid] = f"[E] {use_label}"
-
-        self._trigger_use_prompt = next(
-            (
-                self._trigger_use_prompts[bid]
-                for bid, _ in self._trigger_brushes
-                if self._trigger_use_prompts.get(bid)
-            ),
-            "",
-        )
+        # Use prompts are no longer sampled here: _sample_use_prompt evaluates
+        # them every tick against the live player position and angle, which is
+        # both more responsive and cheaper than carrying per-trigger prompt
+        # state between polls.
 
     def _handle_triggers(self, use_key_pressed: bool, delta=None):
         """Schedule trigger polls without scanning occupancy at 60 Hz."""
         if use_key_pressed:
             self._trigger_use_generation += 1
 
-        # Republish the last sampled trigger prompt without re-scanning triggers.
-        self.current_hud_message = self._trigger_use_prompt
+        # The use prompt is evaluated here, every tick, against the live player
+        # position and angle -- not republished from the last poll. Sampling it
+        # at the poll cadence made it appear up to a poll interval late and
+        # linger that long after the player turned away.
+        #
+        # Set only when there is one. _handle_triggers runs after
+        # _handle_interactions and PropSession.tick in _tick_play_mode, so this
+        # is the last word on the HUD line before the render state is
+        # published; assigning unconditionally wiped the line those earlier
+        # stages had just set, which is what silently removed "NEED: <key>",
+        # "[E] Open", "[E] Unlock (...)", "[E] Pick up ...",
+        # "[E] Complete Level" and "[E] Drop" from the HUD.
+        self._trigger_use_prompt = self._sample_use_prompt()
+        if self._trigger_use_prompt:
+            self.current_hud_message = self._trigger_use_prompt
 
         step = float(delta) if delta is not None else float(self.TICK_DURATION)
         self._trigger_poll_elapsed += max(0.0, step)
 
         scheduler_tick = self.TRIGGER_POLL_TICK
-        while self._trigger_poll_elapsed >= scheduler_tick:
-            self._trigger_poll_elapsed -= scheduler_tick
+        # Tolerance: 15 x (1/60) sums to 0.2499999..., which would otherwise
+        # push every poll one logic tick late (same epsilon as per-trigger).
+        while self._trigger_poll_elapsed + self.TRIGGER_POLL_EPSILON >= scheduler_tick:
+            self._trigger_poll_elapsed = max(0.0, self._trigger_poll_elapsed - scheduler_tick)
 
             due_ids = set()
             for bid, brush in self._trigger_brushes:
@@ -2623,7 +2723,7 @@ class LogicThread(threading.Thread):
                     + scheduler_tick
                 )
                 interval = self._trigger_poll_interval(brush)
-                if elapsed + 1.0e-9 >= interval:
+                if elapsed + self.TRIGGER_POLL_EPSILON >= interval:
                     due_ids.add(bid)
                     elapsed %= interval
                 self._trigger_poll_elapsed_by_bid[bid] = elapsed
