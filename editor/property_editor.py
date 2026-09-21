@@ -1552,21 +1552,30 @@ class PropertyEditor(QWidget):
                 sprite_path_row = form.getWidgetPosition(sprite_widget)[0]
                 sprite_size_row = form.getWidgetPosition(sprite_size_widget)[0]
 
+                def set_form_row_visible(row, visible):
+                    for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
+                        item = form.itemAt(row, role)
+                        if item is None:
+                            continue
+                        widget = item.widget()
+                        if widget is not None:
+                            widget.setVisible(visible)
+
                 def set_representation(label):
                     is_model = label == 'Model'
                     self.update_object_prop(
                         'render_mode', 'model' if is_model else 'billboard'
                     )
                     for row in (model_path_row, scale_row, rotation_row):
-                        form.setRowVisible(row, is_model)
+                        set_form_row_visible(row, is_model)
                     for row in (sprite_path_row, sprite_size_row):
-                        form.setRowVisible(row, not is_model)
+                        set_form_row_visible(row, not is_model)
 
                 mode_combo.currentTextChanged.connect(set_representation)
                 for row in (model_path_row, scale_row, rotation_row):
-                    form.setRowVisible(row, model_mode)
+                    set_form_row_visible(row, model_mode)
                 for row in (sprite_path_row, sprite_size_row):
-                    form.setRowVisible(row, not model_mode)
+                    set_form_row_visible(row, not model_mode)
 
             # Prop owns its physical state on its dedicated Physics tab.
             # Ordinary Model entities retain their collision controls.
