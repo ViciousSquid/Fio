@@ -66,13 +66,13 @@ def test_engine_physics_pushes_body_by_player_velocity_and_mass():
 
 
 
-def test_engine_physics_does_not_lift_body_onto_overlapping_wall():
+def test_engine_physics_does_not_bounce_when_pushing_along_floor():
     from engine.physics import SpatialGrid
 
     grid = SpatialGrid(cell_size=512.0)
     floor = {
-        'pos': [0.0, -10.0, 0.0],
-        'size': [1000.0, 20.0, 1000.0],
+        'pos': [0.0, -50.0, 0.0],
+        'size': [1000.0, 100.0, 1000.0],
         'is_trigger': False,
     }
     wall = {
@@ -84,9 +84,11 @@ def test_engine_physics_does_not_lift_body_onto_overlapping_wall():
 
     world = PhysicsWorld(grid)
     prop = _prop()
+    # Barrel7/Oil_Drum-style bounds: local Y starts at zero, so the entity
+    # origin is the point touching the floor.
     prop.pos = [0.0, 0.0, 0.0]
-    body_brush = _brush(prop, (40.0, 40.0, 40.0))
-    body_brush['pos'] = [0.0, 20.0, 0.0]
+    body_brush = _brush(prop, (45.64271, 65.181947, 45.64271))
+    body_brush['pos'] = [0.0, 32.5909735, 0.0]
     world.rebuild([body_brush])
     world.wake(prop)
 
@@ -97,12 +99,16 @@ def test_engine_physics_does_not_lift_body_onto_overlapping_wall():
         height=100.0,
         depth=50.0,
     )
-    world.step(1.0 / 60.0, player)
 
-    # The wall's top is inside the prop's vertical span, so it is not a floor.
-    # The prop's origin is at its base, so it must remain at floor height
-    # instead of being lifted onto the wall's top face.
+    for _ in range(30):
+        world.step(1.0 / 60.0, player)
+
+    # The wall top is inside the barrel's vertical span, but above its
+    # previous bottom, so it must not be treated as a floor. The actual floor
+    # remains in contact while the barrel is pushed horizontally.
     assert abs(prop.pos[1]) < 1e-5
+    assert prop.pos[0] > 0.0
+
 
 
 def test_engine_physics_body_lands_on_floor_and_sleeps():
