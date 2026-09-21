@@ -1465,32 +1465,35 @@ class PropertyEditor(QWidget):
             self.add_vector3_widget(form, thing, 'scale')
             self.add_vector3_widget(form, thing, 'rotation')
 
-            # Collision toggle for this model entity
-            no_collision = thing.properties.get('no_collision', False)
-            collision_cb = _make_checkbox(
-                "Disable collision for this model",
-                no_collision,
-                lambda c: self.update_object_prop('no_collision', c),
-                _Style.CHECKBOX,
-            )
-            collision_cb.setToolTip(
-                "If checked, player and monsters will pass through this model"
-            )
-            form.addRow("", collision_cb)
-            self._widgets['model_no_collision_cb'] = collision_cb
+            # Prop owns its physical state as one grouped control below.
+            # Ordinary Model entities retain the older collision controls.
+            if not isinstance(thing, Prop):
+                # Collision toggle for this model entity
+                no_collision = thing.properties.get('no_collision', False)
+                collision_cb = _make_checkbox(
+                    "Disable collision for this model",
+                    no_collision,
+                    lambda c: self.update_object_prop('no_collision', c),
+                    _Style.CHECKBOX,
+                )
+                collision_cb.setToolTip(
+                    "If checked, player and monsters will pass through this model"
+                )
+                form.addRow("", collision_cb)
+                self._widgets['model_no_collision_cb'] = collision_cb
 
-            # Collision size override
-            collision_size = thing.properties.get('collision_size')
-            cs_widget, cs_inputs = self._vec3_row(
-                collision_size if collision_size else [0, 0, 0],
-                lambda v: self._on_collision_size_changed(v, thing)
-            )
-            cs_label = QLabel("Collision Size:")
-            cs_label.setToolTip(
-                "Custom collision box size (0,0,0 = auto from scale)"
-            )
-            form.addRow(cs_label, cs_widget)
-            self._widgets['model_collision_size_inputs'] = cs_inputs
+                # Collision size override
+                collision_size = thing.properties.get('collision_size')
+                cs_widget, cs_inputs = self._vec3_row(
+                    collision_size if collision_size else [0, 0, 0],
+                    lambda v: self._on_collision_size_changed(v, thing)
+                )
+                cs_label = QLabel("Collision Size:")
+                cs_label.setToolTip(
+                    "Custom collision box size (0,0,0 = auto from scale)"
+                )
+                form.addRow(cs_label, cs_widget)
+                self._widgets['model_collision_size_inputs'] = cs_inputs
 
             if IO_AVAILABLE:
                 note = QLabel("💡 Use the I/O tab for advanced targeting")
@@ -1498,6 +1501,9 @@ class PropertyEditor(QWidget):
                     "QLabel { color: #88AAFF; font-style: italic; padding: 4px; }"
                 )
                 form.addRow("", note)
+
+        if isinstance(thing, Prop):
+            self._build_prop_physics_group(tab_layout, thing)
 
         if isinstance(thing, Light):
             self.add_color_picker_widget(form, thing, 'colour')
@@ -1593,6 +1599,48 @@ class PropertyEditor(QWidget):
         tab_layout.addStretch()
 
         return w
+
+    def _build_prop_physics_group(self, parent_layout, thing):
+        """Render Prop collision and dynamics as one unified Physics section."""
+        physics_form = QFormLayout()
+        physics_form.setSpacing(4)
+
+        enabled = bool(thing.properties.get('physics_enabled', False))
+        physics_cb = _make_checkbox("Enabled", enabled, None, _Style.CHECKBOX)
+        physics_cb.setToolTip(
+            "Enable gravity and physical collision for this prop"
+        )
+
+        def on_physics_toggled(checked):
+            # Keep the persisted legacy collision flag in lockstep with the
+            # single Physics control. Old maps still load, but the editor no
+            # longer exposes two independent switches for the same behaviour.
+            self.update_object_prop('physics_enabled', bool(checked))
+            self.update_object_prop('no_collision', not bool(checked))
+
+        physics_cb.toggled.connect(on_physics_toggled)
+        physics_form.addRow("", physics_cb)
+        self._widgets['prop_physics_enabled_cb'] = physics_cb
+
+        collision_size = thing.properties.get('collision_size')
+        cs_widget, cs_inputs = self._vec3_row(
+            collision_size if collision_size else [0, 0, 0],
+            lambda v: self._on_collision_size_changed(v, thing)
+        )
+        cs_label = QLabel("Collision Size:")
+        cs_label.setToolTip(
+            "Custom collision box size (0,0,0 = automatic model bounds)"
+        )
+        physics_form.addRow(cs_label, cs_widget)
+        self._widgets['prop_collision_size_inputs'] = cs_inputs
+
+        section = CollapsibleSection(
+            "Physics",
+            expanded=True,
+            count=2,
+        )
+        section.addLayout(physics_form)
+        parent_layout.addWidget(section)
 
     def _build_attach_to_mover(self, form, thing, prefix=''):
         """Shared attach-to-mover logic for Light and Portal."""
@@ -1775,6 +1823,14 @@ class PropertyEditor(QWidget):
                 'model_path',
                 'scale',
                 'rotation',
+            ):
+                continue
+
+            # Prop exposes collision and dynamics through one Physics section.
+            if isinstance(thing, Prop) and key in (
+                'no_collision',
+                'collision_size',
+                'physics_enabled',
             ):
                 continue
 
