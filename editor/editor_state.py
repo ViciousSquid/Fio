@@ -349,15 +349,6 @@ class EditorState:
         if lg:
             self._logic_graph_positions = lg.get('node_positions', {})
 
-        # Let loaded plugins migrate legacy entity records before core Thing
-        # deserialisation. This keeps old map formats out of core entity classes.
-        try:
-            from plugins.manager import load_plugins, get_manager
-            load_plugins()
-            get_manager().migrate_map_data(level_data)
-        except Exception:
-            pass
-
         # Load things
         things_data = level_data.get('things', [])
         new_things = []
