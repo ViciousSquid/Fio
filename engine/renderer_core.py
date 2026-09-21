@@ -1694,11 +1694,13 @@ layout (location = 9) in vec4 iNormal2;
                 continue
 
             kind = self._thing_render_kind(t)
-            if kind == 'pickup' or kind == 'entity_sprite':
+            if isinstance(t, Prop):
+                if render_mode == 'billboard' and kind == 'sprite':
+                    sprites.append(t)
+            elif kind == 'pickup' or kind == 'entity_sprite':
                 sprites.append(t)
             elif model_path and render_mode == 'model':
-                # A model with no model slot should never become a billboard.
-                # Only explicit billboard Props render through the sprite path.
+                # Models have already been collected into model_out above.
                 pass
             elif kind == 'sprite':
                 sprites.append(t)
