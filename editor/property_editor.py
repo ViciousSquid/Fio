@@ -1606,7 +1606,7 @@ class PropertyEditor(QWidget):
         physics_form.setSpacing(4)
 
         physics_enabled = bool(thing.properties.get('physics_enabled', False))
-        collision_enabled = not bool(thing.properties.get('no_collision', True))
+        solid_enabled = not bool(thing.properties.get('no_collision', True))
 
         physics_cb = _make_checkbox(
             "Physics Enabled",
@@ -1615,18 +1615,18 @@ class PropertyEditor(QWidget):
             _Style.CHECKBOX,
         )
         physics_cb.setToolTip(
-            "Enable gravity and dropped-object physics for this prop"
+            "Enable gravity, pushing and dropped-object physics for this prop"
         )
 
-        collision_cb = _make_checkbox(
-            "Collision Enabled",
-            collision_enabled,
+        solid_cb = _make_checkbox(
+            "Solid",
+            solid_enabled,
             None,
             _Style.CHECKBOX,
         )
-        collision_cb.setToolTip(
-            "Allow this prop to collide with the world. It can be disabled "
-            "independently of physics."
+        solid_cb.setToolTip(
+            "Make this prop physically solid. Solid and Physics can be "
+            "controlled independently after enabling either one."
         )
 
         def set_checkbox(widget, value):
@@ -1639,24 +1639,66 @@ class PropertyEditor(QWidget):
             # Enabling physics implies collision, but disabling physics does
             # not force collision off. This leaves the two properties
             # independently editable after the initial enable.
-            if checked and not collision_cb.isChecked():
-                set_checkbox(collision_cb, True)
+            if checked and not solid_cb.isChecked():
+                set_checkbox(solid_cb, True)
                 self.update_object_prop('no_collision', False)
 
-        def on_collision_toggled(checked):
+        def on_solid_toggled(checked):
             self.update_object_prop('no_collision', not bool(checked))
-            # Enabling collision implies physics, but disabling collision does
+            # Enabling solidity implies physics, but disabling solidity does
             # not force physics off. This permits physics-without-collision.
             if checked and not physics_cb.isChecked():
                 set_checkbox(physics_cb, True)
                 self.update_object_prop('physics_enabled', True)
 
         physics_cb.toggled.connect(on_physics_toggled)
-        collision_cb.toggled.connect(on_collision_toggled)
+        solid_cb.toggled.connect(on_solid_toggled)
         physics_form.addRow("", physics_cb)
-        physics_form.addRow("", collision_cb)
+        physics_form.addRow("", solid_cb)
         self._widgets['prop_physics_enabled_cb'] = physics_cb
-        self._widgets['prop_collision_enabled_cb'] = collision_cb
+        self._widgets['prop_solid_cb'] = solid_cb
+
+        mass = max(0.01, float(thing.properties.get('mass', 1.0)))
+        mass_spin = QDoubleSpinBox()
+        mass_spin.setRange(0.01, 999999.0)
+        mass_spin.setDecimals(2)
+        mass_spin.setSingleStep(0.1)
+        mass_spin.setValue(mass)
+        mass_spin.setToolTip(
+            "Mass used by pushing and other Prop physics. Higher values are harder to move."
+        )
+        mass_spin.valueChanged.connect(
+            lambda value: self.update_object_prop('mass', value)
+        )
+        physics_form.addRow("Mass:", mass_spin)
+        self._widgets['prop_mass_spin'] = mass_spin
+
+        shape_mode = str(thing.properties.get('collision_shape', 'auto')).lower()
+        shape_labels = {
+            'auto': 'Automatic',
+            'aabb': 'AABB',
+            'mesh': 'Mesh',
+        }
+        shape_combo = _make_combo(
+            list(shape_labels.values()),
+            shape_labels.get(shape_mode, 'Automatic'),
+            None,
+            tooltip=(
+                "Automatic uses mesh collision where supported and otherwise "
+                "uses the model bounds. AABB always uses a box around the model."
+            ),
+        )
+        reverse_shape_labels = {label: value for value, label in shape_labels.items()}
+
+        def on_shape_changed(label):
+            self.update_object_prop(
+                'collision_shape',
+                reverse_shape_labels.get(label, 'auto'),
+            )
+
+        shape_combo.currentTextChanged.connect(on_shape_changed)
+        physics_form.addRow("Collision Shape:", shape_combo)
+        self._widgets['prop_collision_shape_combo'] = shape_combo
 
         collision_size = thing.properties.get('collision_size')
         cs_widget, cs_inputs = self._vec3_row(
@@ -1673,7 +1715,7 @@ class PropertyEditor(QWidget):
         section = CollapsibleSection(
             "Physics",
             expanded=True,
-            count=3,
+            count=5,
         )
         section.addLayout(physics_form)
         parent_layout.addWidget(section)
@@ -1864,9 +1906,11 @@ class PropertyEditor(QWidget):
 
             # Prop exposes collision and dynamics through one Physics section.
             if isinstance(thing, Prop) and key in (
+                'mass',
                 'no_collision',
                 'collision_size',
                 'physics_enabled',
+                'collision_shape',
             ):
                 continue
 
