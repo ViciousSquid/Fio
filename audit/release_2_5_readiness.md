@@ -6,10 +6,15 @@ workflow being Tools → Play Game Package → fullscreen Play, with Editor mode
 a setting. Android and `player/` are future work and are **not** assessed as
 blockers. 2.4 `.fiopak` compatibility is explicitly not required.
 
-Four conditions were found. **Two are fixed** (R1, R2). The remaining two are
-validation that cannot be done from the repository alone: nothing launches the
-compiled artifact, and the GL floor has never been checked on the reference
-machine.
+Four conditions were found. **Three are closed:** R1 and R2 are fixed in the
+tree, and R4 is validated on the primary Windows-on-ARM reference machine — the
+Nuitka-compiled Windows artifact launches and renders there, so the OpenGL 3.3
+Core floor is empirically met on the target hardware.
+
+**R3 is the one that remains**, and it is narrower than it was: the compiled
+Windows artifact has been manually smoke-tested on the reference machine, so
+what is left is the pipeline gap rather than an unknown about the software —
+CI still ships a binary nothing has launched.
 
 ---
 
@@ -120,6 +125,12 @@ compiled one.
 The gap matters because compilation genuinely changes behaviour — see the two
 compiled-build defects in the appendix, neither of which any test can see.
 
+**Manual target-hardware validation now exists.** The Windows Nuitka artifact
+was launched and exercised successfully on the primary Surface Pro 9 5G / SQ3 /
+Adreno reference machine. This confirms that the compiled Windows artifact can
+start and render on the actual target hardware. Automated compiled-artifact
+smoke testing in CI remains absent.
+
 Minimum bar: launch the built binary headless (`xvfb-run` on Linux, offscreen
 Qt platform elsewhere), load a map, enter and leave Play mode, and exit non-zero
 on an unhandled exception. `workflow_dispatch` is also the only trigger, so the
@@ -145,7 +156,7 @@ instead of testing it.
 
 ---
 
-## R4 — GL 3.3 Core is unvalidated on the primary reference machine
+## R4 — GL 3.3 Core on the primary reference machine — **VALIDATED**
 
 `main.py` sets a hard floor before `QApplication` exists:
 
@@ -166,10 +177,22 @@ only with Microsoft's OpenCL/OpenGL Compatibility Pack installed — is a fact
 about the device that cannot be established from this repository, and I have not
 assumed either answer.
 
-It is a release condition rather than a defect: **run the compiled binary on the
-reference machine and record what `GL_VERSION` / `GL_RENDERER` report.** The
-outcome decides whether 2.5 needs a documented prerequisite, a fallback path, or
-nothing at all.
+**Target-hardware validation is complete.** The branch was tested on the primary
+Surface Pro 9 5G / SQ3 / Adreno reference machine in both forms:
+
+- **Interpreted Python build:** launches and renders successfully.
+- **Nuitka-compiled Windows build:** launches and renders successfully.
+
+Therefore the stated OpenGL 3.3 Core requirement is empirically compatible with
+the primary target hardware and the compiled Windows release artifact. The
+previous repository-only uncertainty about whether the SQ3/Adreno environment
+could provide the required context is closed for this reference configuration.
+
+No fallback profile or speculative GL compatibility path is being added on the
+basis of the former uncertainty.
+
+A future diagnostic could still record `GL_VERSION` / `GL_RENDERER`, but it is
+no longer a release-blocking validation condition for the tested target.
 
 Worth noting the groundwork is already there: `engine.shaders.detect_low_power_arm()`
 selects cheaper `*_arm` shader variants and names the SQ3 explicitly as a part
