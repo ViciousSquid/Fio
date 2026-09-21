@@ -64,9 +64,10 @@ def test_trigger_defaults_to_player_only():
     monster = _thing('monster')
     logic = _logic(props=[prop], monsters=[monster])
 
-    logic._handle_triggers(False)
+    logic._poll_nonplayer_triggers()
 
     assert logic._events == []
+    logic._handle_triggers(False, 0.0)
     assert logic.player_in_triggers == {1}
 
 
@@ -79,7 +80,7 @@ def test_trigger_can_target_props_and_monsters_in_any_combination():
         filters=['props', 'monsters'],
     )
 
-    logic._handle_triggers(False)
+    logic._poll_nonplayer_triggers()
 
     assert set(logic._events) == {
         ('enter', 'props'),
@@ -92,7 +93,7 @@ def test_trigger_filter_reentry_is_per_entity():
     prop = _thing('prop')
     logic = _logic(props=[prop], filters=['props'])
 
-    logic._handle_triggers(False)
+    logic._poll_nonplayer_triggers()
     assert logic._events == [('enter', 'props')]
 
     prop.pos = [50, 50, 50]
@@ -106,3 +107,24 @@ def test_trigger_filter_reentry_is_per_entity():
         ('exit', 'props'),
         ('enter', 'props'),
     ]
+
+
+def test_nonplayer_trigger_poll_is_not_frame_rate():
+    prop = _thing('prop')
+    logic = _logic(props=[prop], filters=['props'])
+
+    calls = []
+    original = logic._poll_nonplayer_triggers
+    def tracked():
+        calls.append(True)
+        original()
+    logic._poll_nonplayer_triggers = tracked
+
+    logic._handle_triggers(False, 1.0 / 60.0)
+    for _ in range(58):
+        logic._handle_triggers(False, 1.0 / 60.0)
+
+    assert len(calls) == 0
+
+    logic._handle_triggers(False, 1.0 / 60.0)
+    assert len(calls) == 1
