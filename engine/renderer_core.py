@@ -1892,12 +1892,12 @@ layout (location = 9) in vec4 iNormal2;
             count=count,
         )
 
-        active['position'][0, :count, :3] = positions
-        active['position'][0, :count, 3] = 1.0
-        active['color'][0, :count, :3] = colors
-        active['color'][0, :count, 3] = 1.0
-        active['params'][0, :count, :2] = params
-        active['indices'][0, :count, 0] = shadow_indices
+        active['position'][:count, :3] = positions
+        active['position'][:count, 3] = 1.0
+        active['color'][:count, :3] = colors
+        active['color'][:count, 3] = 1.0
+        active['params'][:count, :2] = params
+        active['indices'][:count, 0] = shadow_indices
 
         gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
 
