@@ -49,6 +49,30 @@ class TidyPlugin(FioPlugin):
 
         # Extend the core Prop I/O instead of replacing it. The core system
         # already owns Enable/Disable/Drop/Wake and OnPickedUp/OnDropped/OnRest.
+        api.register_io(
+            "tidyreceptacle",
+            inputs=[
+                io_def("Reset", "Empty the receptacle; send its objects home"),
+                io_def("Enable", "Allow objects to be placed here"),
+                io_def("Disable", "Refuse new objects"),
+            ],
+            outputs=[
+                io_def("OnObjectPlaced", "Fired each time an object is stowed here", "int"),
+                io_def("OnFull", "Fired when the receptacle reaches capacity"),
+            ],
+        )
+        api.register_io(
+            "tidygoal",
+            inputs=[
+                io_def("Enable", "Count toward completion"),
+                io_def("Disable", "Stop counting"),
+            ],
+            outputs=[
+                io_def("OnProgress", "Fired on every stow: 'done/need'", "string"),
+                io_def("OnComplete", "Fired once when the tidy target is reached"),
+            ],
+        )
+
         try:
             from editor.io_system import get_inputs, get_outputs, register_io
 
