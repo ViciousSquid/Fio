@@ -131,6 +131,12 @@ discarded. It twice modified production code (`IOManager.fire_output`,
 `SysMon`) and both intrusions were fully reverted — cleanly, and verified so.
 The destination is right. Most of the journey is in the main branch.
 
+## Current status
+
+See `audit/status.md` for the live position: 10 confirmed regressions, 9
+fixed, 1 left unchanged by design, every fix mutation-guarded, three CI tiers
+green (2620 / 1641 / 33).
+
 ## Open items for you
 
 1. **COMPAT-01** — `Thing.from_dict` still silently drops *any* unknown entity
@@ -141,10 +147,10 @@ The destination is right. Most of the journey is in the main branch.
    default. Worth checking real authored maps for props that were billboards by
    the old implicit rule.
 3. **REG-02** — use-trigger prompt latency.
-4. **RISK-REPO-1** — `origin/2.5.0.0_canary` is an orphan commit with no shared
-   ancestry with either 2.4.2 or the 559-commit branch, so `git blame`/`bisect`
-   do not cross the boundary. `audit/commit_manifest.txt` preserves all 559
-   commits as metadata, but **the commit objects exist only in the audit
-   working copy** — pushing the tag is refused by the egress policy (HTTP 403)
-   and a bundle is 108 MB. If you still have a clone with the history, tag and
-   push it from there; otherwise it is lost when this session ends.
+4. **RISK-REPO-1 — RESOLVED.** The 559-commit history is on the repository as
+   `refs/heads/history/2.5.0.0_canary-full` (tip `3a78157`), with continuous
+   ancestry from `v2.4.2.1709`, so `git log`/`blame`/`bisect` cross the 2.4→2.5
+   boundary again. It had to be a branch rather than a tag: this environment's
+   egress policy refuses `refs/tags/*` (HTTP 403 — confirmed tag-specific, not
+   size). `audit/status.md` has the one command to add a tag from any clone now
+   that the objects are published.
