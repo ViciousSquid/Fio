@@ -1482,6 +1482,39 @@ class PropertyEditor(QWidget):
                 form.addRow("", collision_cb)
                 self._widgets['model_no_collision_cb'] = collision_cb
 
+                # Collision shape selection uses the same Automatic /
+                # AABB / Mesh modes as Prop.
+                shape_mode = str(
+                    thing.properties.get('collision_shape', 'auto')
+                ).lower()
+                shape_labels = {
+                    'auto': 'Automatic',
+                    'aabb': 'AABB',
+                    'mesh': 'Mesh',
+                }
+                shape_combo = _make_combo(
+                    list(shape_labels.values()),
+                    shape_labels.get(shape_mode, 'Automatic'),
+                    None,
+                    tooltip=(
+                        "Automatic uses mesh collision where supported and "
+                        "otherwise uses the model bounds. AABB always uses a "
+                        "box around the model. Mesh uses triangle collision "
+                        "where supported."
+                    ),
+                )
+                reverse_shape_labels = {
+                    label: value for value, label in shape_labels.items()
+                }
+                shape_combo.currentTextChanged.connect(
+                    lambda label: self.update_object_prop(
+                        'collision_shape',
+                        reverse_shape_labels.get(label, 'auto'),
+                    )
+                )
+                form.addRow("Collision Shape:", shape_combo)
+                self._widgets['model_collision_shape_combo'] = shape_combo
+
                 # Collision size override
                 collision_size = thing.properties.get('collision_size')
                 cs_widget, cs_inputs = self._vec3_row(
