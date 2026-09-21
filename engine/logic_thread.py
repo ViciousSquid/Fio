@@ -2603,7 +2603,19 @@ class LogicThread(threading.Thread):
             self._trigger_use_generation += 1
 
         # Republish the last sampled trigger prompt without re-scanning triggers.
-        self.current_hud_message = self._trigger_use_prompt
+        #
+        # Only when there is one. _handle_triggers runs after
+        # _handle_interactions and PropSession.tick in _tick_play_mode, so this
+        # is the last word on the HUD line before the render state is
+        # published. At 2.4.2 the assignment lived inside the in-range/facing
+        # branch and could only ever *add* a use prompt; assigning
+        # unconditionally wipes the line those earlier stages just set, because
+        # _trigger_use_prompt is "" whenever no use trigger is in range. That
+        # is what silently removed "NEED: <key>", "[E] Open",
+        # "[E] Unlock (...)", "[E] Pick up ...", "[E] Complete Level" and
+        # "[E] Drop" from the HUD.
+        if self._trigger_use_prompt:
+            self.current_hud_message = self._trigger_use_prompt
 
         step = float(delta) if delta is not None else float(self.TICK_DURATION)
         self._trigger_poll_elapsed += max(0.0, step)

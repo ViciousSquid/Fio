@@ -325,6 +325,12 @@ class PhysicsBody:
 
     @property
     def _index(self):
+        # Registration only queues a row; the index exists once the world packs.
+        # Pack on demand so a handle read right after register_body() reports
+        # the body's real state instead of the not-found defaults. _pack()
+        # early-outs unless the world is dirty, so this costs nothing on the
+        # steady-state path.
+        self.world._pack()
         return self.world._indices.get(self.entity_id)
 
     @property
@@ -344,6 +350,75 @@ class PhysicsBody:
     def mass(self):
         i = self._index
         return float(self.world._mass[i]) if i is not None else 1.0
+
+    # ------------------------------------------------------------------
+    # Shape and authored-material accessors.
+    #
+    # Before the batched-NumPy rewrite these were plain attributes on the
+    # body. Packing the state into the world's SoA arrays kept the arrays
+    # but dropped the handle's read side, so callers -- and this class's
+    # own tests -- lost the ability to ask a body what shape it is. They
+    # are restored here as index-backed properties in the same style as
+    # ``velocity``/``mass`` above, reading the packed row rather than
+    # duplicating any state.
+    # ------------------------------------------------------------------
+
+    @property
+    def half_extents(self):
+        """Half the body's collision box, as the world stores it."""
+        i = self._index
+        if i is None:
+            return (0.0, 0.0, 0.0)
+        return tuple(float(v) for v in self.world._half[i])
+
+    @property
+    def size(self):
+        """The body's full collision box.
+
+        ``size`` means full extent everywhere else in Fio (``brush['size']``,
+        ``collision_size``), and it meant full extent on this handle before
+        the rewrite, so it keeps that meaning. Use :attr:`half_extents` for
+        the half-size the batched maths works in.
+        """
+        i = self._index
+        if i is None:
+            return (0.0, 0.0, 0.0)
+        return tuple(float(v) * 2.0 for v in self.world._half[i])
+
+    @property
+    def offset(self):
+        """Collision-box centre relative to the entity's origin."""
+        i = self._index
+        if i is None:
+            return (0.0, 0.0, 0.0)
+        return tuple(float(v) for v in self.world._offset[i])
+
+    @property
+    def solid(self):
+        i = self._index
+        return bool(self.world._solid[i]) if i is not None else False
+
+    @property
+    def gravity(self):
+        i = self._index
+        return bool(self.world._gravity[i]) if i is not None else True
+
+    @property
+    def friction(self):
+        i = self._index
+        return float(self.world._friction[i]) if i is not None else 0.55
+
+    @property
+    def linear_damping(self):
+        i = self._index
+        return float(self.world._damping[i]) if i is not None else 0.08
+
+    @property
+    def angular_velocity(self):
+        i = self._index
+        if i is None:
+            return [0.0, 0.0, 0.0]
+        return self.world._angular_velocity[i].tolist()
 
     @property
     def awake(self):
@@ -620,6 +695,31 @@ class PhysicsWorld:
         active = self._physics_enabled & ~self._kinematic
         self._awake[active] = True
 
+    def _disabled_mask(self, candidates):
+        """Which candidate bodies their entity currently marks ``disabled``.
+
+        ``disabled`` is authored state that changes at runtime -- an I/O
+        Disable, or Big World parking a cell, which stashes the authored values
+        and forces the flag on. It is written in a dozen places across
+        io_handlers and the streaming layer, so there is no single setter to
+        hook; it has to be read.
+
+        Reading it is bounded the way the pre-vectorisation simulation bounded
+        it: that loop only ever consulted ``disabled`` for bodies it was
+        actually moving, so this consults only candidates that are also awake.
+        A world with nothing in motion pays nothing, and a parked or disabled
+        prop stops being integrated instead of quietly falling while dormant.
+        """
+        mask = np.zeros(len(self._entities), dtype=np.bool_)
+        indices = np.flatnonzero(candidates & self._awake)
+        if indices.size == 0:
+            return mask
+        for i in indices:
+            props = getattr(self._entities[int(i)], 'properties', None)
+            if isinstance(props, dict) and props.get('disabled', False):
+                mask[i] = True
+        return mask
+
     def _sync_entities(self, indices=None):
         # Position only. Rotation is integrated (angular * dt) in step();
         # applying angular velocity here as well spun bodies ~61x too fast.
@@ -827,6 +927,7 @@ class PhysicsWorld:
         scale = max(0.0, float(self.time_scale))
         dt = np.float32(min(0.05, max(0.0, base_dt * scale)))
         active = self._physics_enabled & ~self._kinematic
+        active &= ~self._disabled_mask(active)
 
         if player is not None:
             ppos = np.asarray(getattr(player, 'pos', (0.0, 0.0, 0.0)), dtype=np.float32)

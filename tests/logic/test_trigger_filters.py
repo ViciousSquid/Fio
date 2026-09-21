@@ -120,3 +120,47 @@ def test_reset_clears_occupancy_in_place():
     assert logic._trigger_contacts == {}
     logic._poll_triggers()  # re-entry after reset fires again
     assert logic._events == [('enter', 'player'), ('enter', 'player')]
+
+
+# ---------------------------------------------------------------------------
+# HUD prompt ownership
+#
+# _handle_triggers runs after _handle_interactions and PropSession.tick in
+# LogicThread._tick_play_mode, so whatever it leaves in current_hud_message is
+# what the frame publishes. It may add a use-trigger prompt; it must never
+# clear a prompt an earlier stage set, or doors, pickups, level changers and
+# carried props all go silent.
+# ---------------------------------------------------------------------------
+
+def test_empty_trigger_prompt_does_not_clear_an_interaction_prompt():
+    """A door/pickup/prop prompt survives a tick with no use trigger in range."""
+    logic = _logic()
+    logic._trigger_use_prompt = ""
+    logic.current_hud_message = "NEED: Red Key"
+
+    logic._handle_triggers(False, 1.0 / 60.0)
+
+    assert logic.current_hud_message == "NEED: Red Key"
+
+
+def test_use_trigger_prompt_still_wins_the_hud_line():
+    """An in-range use trigger still overrides an interaction prompt."""
+    logic = _logic()
+    logic._trigger_use_prompt = "[E] Activate"
+    logic.current_hud_message = "[E] Open"
+
+    logic._handle_triggers(False, 1.0 / 60.0)
+
+    assert logic.current_hud_message == "[E] Activate"
+
+
+def test_interaction_prompt_survives_a_full_poll_window():
+    """Not just the frames between polls: the prompt must survive the poll too."""
+    logic = _logic()
+    logic._trigger_use_prompt = ""
+    logic.current_hud_message = "[E] Drop"
+
+    for _ in range(120):  # two full 1 Hz poll windows
+        logic._handle_triggers(False, 1.0 / 60.0)
+
+    assert logic.current_hud_message == "[E] Drop"

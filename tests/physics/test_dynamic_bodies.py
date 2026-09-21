@@ -191,3 +191,107 @@ def test_clear_releases_all_body_state():
     assert world._position.shape == (0, 3)
     assert not world._static_cells
     world.step(1.0 / 60.0)  # empty world must be a cheap no-op
+
+
+# ---------------------------------------------------------------------------
+# PhysicsBody is a handle over the world's packed rows. Packing the state into
+# those arrays must not cost callers the ability to read a body back.
+# ---------------------------------------------------------------------------
+
+def test_body_reports_its_shape_from_the_packed_row():
+    world = _world()
+    prop = _prop()
+    prop.pos = [10.0, 20.0, 30.0]
+    brush = {
+        'pos': list(prop.pos),
+        'size': [1.0, 1.0, 1.0],
+        '_physics_body': True,
+        '_physics_entity': prop,
+        '_collision_mode': 'mesh',
+        '_mesh_bounds': ([-5.0, 0.0, -3.0], [5.0, 10.0, 3.0]),
+    }
+    body = world.register_body(prop, brush)
+
+    # Bounds (-5,0,-3)..(5,10,3): full extent (10, 10, 6), centre (0, 5, 0);
+    # offset is that centre relative to the entity origin (10, 20, 30).
+    # Read straight after register_body, before any step: the handle has to
+    # pack on demand rather than report not-found defaults.
+    assert body.half_extents == (5.0, 5.0, 3.0)
+    assert body.size == (10.0, 10.0, 6.0)
+    assert body.offset == (-10.0, -15.0, -30.0)
+
+
+def test_body_reports_its_authored_material():
+    world = _world()
+    prop = _prop(mass=4.0, friction=0.25, linear_damping=0.5, gravity=False)
+    world.rebuild([_drum_brush(prop)])
+    body = world.get_body(prop)
+
+    assert body.mass == 4.0
+    assert body.friction == 0.25
+    assert body.linear_damping == 0.5
+    assert body.gravity is False
+    assert body.solid is True  # _prop() sets no_collision=False
+
+
+def test_shape_accessors_are_safe_once_the_body_is_gone():
+    world = _world()
+    prop = _prop()
+    world.rebuild([_drum_brush(prop)])
+    body = world.get_body(prop)
+    world.clear()
+
+    assert body.size == (0.0, 0.0, 0.0)
+    assert body.offset == (0.0, 0.0, 0.0)
+    assert body.velocity == [0.0, 0.0, 0.0]
+
+
+# ---------------------------------------------------------------------------
+# `disabled` is authored state that changes at runtime: an I/O Disable, or Big
+# World parking a cell (which stashes the authored flags and forces this one
+# on). The pre-vectorisation simulation skipped disabled bodies outright; the
+# move into PhysicsWorld left that check behind in PropSession, so a parked or
+# disabled prop went on falling while it was supposed to be dormant.
+# ---------------------------------------------------------------------------
+
+def test_a_disabled_body_is_not_integrated():
+    world = _world()
+    prop = _prop(pos=(0.0, 400.0, 0.0))
+    world.rebuild([_drum_brush(prop)])
+    world.wake(prop)
+    prop.properties['disabled'] = True
+
+    for _ in range(60):
+        world.step(1.0 / 60.0)
+
+    assert prop.pos[1] == 400.0
+
+
+def test_a_parked_body_resumes_when_it_is_re_enabled():
+    world = _world()
+    prop = _prop(pos=(0.0, 400.0, 0.0))
+    world.rebuild([_drum_brush(prop)])
+    world.wake(prop)
+
+    prop.properties['disabled'] = True
+    for _ in range(60):
+        world.step(1.0 / 60.0)
+    assert prop.pos[1] == 400.0
+
+    prop.properties['disabled'] = False
+    for _ in range(60):
+        world.step(1.0 / 60.0)
+    assert prop.pos[1] < 400.0
+
+
+def test_an_enabled_body_still_falls():
+    """Control: the guard must not freeze ordinary bodies."""
+    world = _world()
+    prop = _prop(pos=(0.0, 400.0, 0.0))
+    world.rebuild([_drum_brush(prop)])
+    world.wake(prop)
+
+    for _ in range(60):
+        world.step(1.0 / 60.0)
+
+    assert prop.pos[1] < 400.0

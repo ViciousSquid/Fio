@@ -88,8 +88,38 @@ def _deterministic_rngs():
     yield
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _plugins_loaded_before_isolation():
+    """Load the plugins once, before any per-test registry snapshot is taken.
+
+    ``_isolate_process_singletons`` restores ``IO_REGISTRY`` to whatever it held
+    at the *start of each test*, so a test that registers a fake entity type
+    cannot leak it into the next one. But plugin registration is a
+    once-per-process event: ``PluginManager.discover_and_load`` early-outs on
+    ``self._loaded``. So if the first ``load_plugins()`` of the process happened
+    inside a test, that test's teardown rolled the registry back to before the
+    plugins registered and nothing ever registered them again -- every later
+    test saw a plugin that is loaded and enabled but whose I/O and entity
+    declarations had silently vanished.
+
+    That is why ``plugins/tidy/tests/test_smoke.py::test_plugin_loads_and_registers``
+    passes alone and fails when another tidy test runs first. Loading here, at
+    session scope, puts the plugin registrations *inside* every per-test
+    snapshot, so restoring a snapshot preserves them while still dropping
+    anything an individual test added.
+
+    Guarded: the headless CI tier has no PyQt5, so plugin import can fail there.
+    That tier simply runs without plugins, exactly as before.
+    """
+    try:
+        from plugins.manager import load_plugins
+        load_plugins()
+    except Exception:
+        pass
+
+
 @pytest.fixture(autouse=True)
-def _isolate_process_singletons():
+def _isolate_process_singletons(_plugins_loaded_before_isolation):
     """Undo the process-wide state a test can leave behind.
 
     Fio keeps several deliberate singletons: the plugin manager, the I/O
