@@ -1,0 +1,94 @@
+# Builds a debug APK of the standalone Fio Player with buildozer
+# (python-for-android) and uploads it as a downloadable artifact.
+#
+# Trigger it from the GitHub UI: Actions -> "Android Player Build" -> Run
+# workflow. It also runs automatically when files under player/ change.
+#
+# The FIRST run is slow (~25-45 min): buildozer downloads the Android SDK/NDK
+# and cross-compiles CPython + every native dependency. Later runs reuse the
+# cached ~/.buildozer, so they are much faster.
+
+name: Android Player Build
+
+on:
+  workflow_dispatch:          # manual "Run workflow" button
+  push:
+    paths:
+      - 'player/**'
+      - 'engine/**'
+      - 'main.py'
+      - '.github/workflows/android-build.yml'
+
+jobs:
+  build-apk:
+    # Ubuntu 22.04: python-for-android's toolchain (and packages like
+    # libtinfo5 / libncurses5-dev) is reliable here. 24.04 ("noble", what
+    # ubuntu-latest now is) dropped libtinfo5, which the Android NDK needs.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # System packages python-for-android needs to bootstrap the toolchain.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git zip unzip openjdk-17-jdk autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 \
+            cmake libffi-dev libssl-dev build-essential ccache
+
+      - name: Install buildozer
+        run: |
+          python -m pip install --upgrade pip
+          # Cython 0.29.x is the version p4a's recipes are validated against.
+          pip install "cython==0.29.36" buildozer
+
+      # Cache the Android SDK/NDK + p4a build dir so reruns are fast.
+      - name: Cache buildozer global dir
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildozer
+          key: buildozer-global-${{ runner.os }}-${{ hashFiles('player/buildozer.spec') }}
+          restore-keys: buildozer-global-${{ runner.os }}-
+
+      - name: Cache buildozer local dir
+        uses: actions/cache@v4
+        with:
+          path: player/.buildozer
+          key: buildozer-local-${{ runner.os }}-${{ hashFiles('player/buildozer.spec') }}
+          restore-keys: buildozer-local-${{ runner.os }}-
+
+      # Bundle a real map so the APK loads an actual package (the loader path
+      # runs on-device). Remove this step to ship an empty bring-up build.
+      - name: Bundle sample game package
+        run: |
+          python -m player.tools.make_pak maps/Simple_Map_Test.json \
+            -o player/game.fiopak --root . --title "Fio Player Test"
+
+      - name: Build debug APK
+        working-directory: player
+        run: |
+          # Non-interactive: auto-accept the Android SDK licences.
+          yes | buildozer android debug || buildozer android debug
+
+      - name: Locate APK
+        id: apk
+        run: |
+          APK=$(find player/bin -name '*.apk' | head -n1)
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          echo "Built: $APK"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fio-player-debug-apk
+          path: player/bin/*.apk
+          if-no-files-found: error

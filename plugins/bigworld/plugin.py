@@ -1,0 +1,291 @@
+"""
+The Big World plugin: cell streaming for very large Fio maps.
+
+Big World lets a Fio map hold hundreds of thousands of brushes/entities while
+only the cells around the player take part in runtime rendering, collision,
+entity processing and lighting. It is a **runtime scalability layer**, not a new
+world format: it reuses Fio's existing 512-unit spatial grid, keeps every object
+in place with its existing UUID, and cooperates with machinery Fio already has
+(the render cull's ``hidden`` check, the spatial grid's local collision queries,
+the AI/pickup ``disabled`` skip) rather than replacing any subsystem.
+
+This module is the thin FioPlugin wiring:
+
+* ``register``          — declare the :class:`BigWorldSettings` entity + its
+                          property schema (its presence is the map's opt-in).
+* ``on_play_start``     — if the map opts in, build a :class:`BigWorldSession`
+                          and stream in the region around the player.
+* ``on_tick``           — advance streaming when the player crosses a cell
+                          boundary (cheap; early-outs otherwise).
+* ``on_play_stop``      — tear the session down and restore the world exactly.
+* ``connect``           — publish a ``bigworld`` service and draw the optional
+                          debug overlay via the ``render.overlay`` event.
+
+The plugin ships **disabled by default** and is auto-enabled by the manager only
+for maps that contain a ``BigWorldSettings`` entity, so ordinary small maps pay
+nothing and behave exactly as before (§19/§20).
+"""
+
+from __future__ import annotations
+
+from plugins.api import FioPlugin, TickContext, prop
+
+# NOTE: nothing below the plugin's own declaration is imported here.
+#
+# ``.entities`` is deferred because it pulls in ``editor.things`` and therefore
+# the editor package, and the plugin manager reads ``PLUGIN`` off this package at
+# import time — an eager import would fire a re-entrant plugin-discovery pass
+# (editor bootstrap → load_plugins) before ``PLUGIN`` is set.
+#
+# ``.manager`` / ``.runtime`` / ``.persistence`` / ``.streaming`` are deferred for
+# a stronger reason: *Big World must be absent from a map that does not use it*.
+# Being disabled is not the same as being absent. Every map load walks every
+# plugin package, so importing the streaming runtime up here meant an ordinary
+# Fio map paid for the cell manager, the session and the persistence layer being
+# read, compiled and held in ``sys.modules`` for no reason. They are imported
+# inside :meth:`on_play_start`, the one place that has just established the map
+# really does opt in, so a map with no ``BigWorldSettings`` entity never loads a
+# line of the Big World runtime.
+
+
+class BigWorldPlugin(FioPlugin):
+    name = "bigworld"
+    version = "1.0.0"
+    description = "Cell streaming: keep only the area around the player active in huge maps."
+    category = "Big World"
+    api_version = "1.2.0"   # needs the PluginHost / event bus (connect) surface
+    # Disabled by default: only maps that place a BigWorldSettings entity use it.
+    # The manager auto-enables the plugin when such a map loads (auto_enable_for_map),
+    # so streaming maps just work while ordinary maps never pay for it.
+    enabled = False
+
+    #: Normalised ``type`` of the entity whose presence opts a map in. Kept here
+    #: as a bare string rather than read off ``.entities`` so asking "does this
+    #: map use Big World?" costs no import at all.
+    SETTINGS_TYPE = "bigworldsettings"
+
+    # -- load time ----------------------------------------------------------
+    def register(self, api):
+        from .config import FIELDS
+        from .entities import BigWorldSettings  # lazy: pulls in editor.things
+        api.register_entity(BigWorldSettings, menu_label="Big World Settings")
+        # The schema is derived, not written out again: the entity's defaults
+        # and the runtime's coercion read the same table, so a field can't be
+        # editable here and invisible to the session (see .config).
+        api.register_properties(self.SETTINGS_TYPE, [
+            prop(f.key, f.kind, f.label, default=f.default,
+                 min=f.min, max=f.max, help=f.help)
+            for f in FIELDS
+        ])
+
+    # -- runtime host wiring ------------------------------------------------
+    def connect(self, host):
+        # Keep the host so the overlay handler can reach the live session, and
+        # publish the session as a service other plugins/tools can query.
+        self._host = host
+        host.on("render.overlay", self._on_overlay)
+
+    # -- opt-in test --------------------------------------------------------
+    @classmethod
+    def map_uses_bigworld(cls, things) -> bool:
+        """Whether a map actually needs Big World.
+
+        The opt-in is the presence of a ``BigWorldSettings`` entity, and this is
+        the *only* question asked of a map before any part of the streaming
+        runtime is imported. Accepts live entities or raw map-thing dicts, so a
+        map loader can ask before it has built anything.
+        """
+        for t in things or ():
+            props = getattr(t, "properties", None)
+            if not isinstance(props, dict):
+                if not isinstance(t, dict):
+                    continue
+                props = t.get("properties", t) or {}
+            typ = str(props.get("type") or "").replace("_", "").lower()
+            if typ == cls.SETTINGS_TYPE:
+                return True
+        return False
+
+    # -- play lifecycle -----------------------------------------------------
+    def on_play_start(self, logic):
+        logic._bigworld = None
+        things = getattr(logic, "things", None) or []
+        if not self.map_uses_bigworld(things):
+            # No opt-in: behave as ordinary Fio, and in particular leave the
+            # streaming runtime unimported. Checking this *before* the import
+            # below is the whole point — see the note at the top of the module.
+            return
+        from .persistence import config_from_settings, find_settings_thing
+        from .runtime import BigWorldSession
+
+        settings = find_settings_thing(things)
+        if settings is None:
+            return  # map didn't opt in; behave as ordinary Fio
+        cfg = config_from_settings(settings)
+        if not cfg["enabled"]:
+            return
+        session = None
+        if cfg.get("disk_streaming"):
+            # Experimental disk-streaming path: genuinely free unloaded cells,
+            # re-streaming them from a pristine in-memory partition of the map.
+            # Fails safe to the in-RAM session if anything goes wrong.
+            try:
+                from .streaming import DiskStreamingSession, MemoryCellSource
+                source = MemoryCellSource.from_logic(logic)
+                session = DiskStreamingSession(
+                    logic, source,
+                    load_radius=cfg["activation_radius"],
+                    evict_radius=cfg["deactivation_radius"],
+                )
+                session.start()
+            except Exception:
+                session = None
+        if session is None:
+            session = BigWorldSession(
+                logic,
+                activation_radius=cfg["activation_radius"],
+                deactivation_radius=cfg["deactivation_radius"],
+                terrain_fill=cfg["terrain_fill"],
+                terrain_infinite=cfg["terrain_infinite"],
+                terrain_stream_radius=cfg["terrain_stream_radius"],
+                sim_near_radius=cfg["sim_near_radius"],
+            )
+            session.start()
+        session._show_debug = cfg["show_cell_debug"]
+        logic._bigworld = session
+        # Expose the live session as a service (renderer/other plugins/tools).
+        try:
+            host = getattr(self, "_host", None)
+            if host is not None:
+                host.provide("bigworld", session)
+        except Exception:
+            pass
+
+    def on_play_stop(self, logic):
+        session = getattr(logic, "_bigworld", None)
+        if session is not None:
+            session.stop()
+            logic._bigworld = None
+        try:
+            host = getattr(self, "_host", None)
+            if host is not None:
+                host.provide("bigworld", None)
+        except Exception:
+            pass
+
+    def on_tick(self, logic, ctx: TickContext):
+        session = getattr(logic, "_bigworld", None)
+        if session is not None:
+            session.tick()
+
+    # -- debug overlay ------------------------------------------------------
+    def _on_overlay(self, ev):
+        """Draw the Big World stats panel + active-cell minimap (editor viewport).
+
+        Uses the live QPainter from the ``render.overlay`` event. Fully guarded:
+        no session, not in play mode, or debug turned off ⇒ draws nothing.
+        """
+        if not ev.get("play_mode"):
+            return
+        host = getattr(self, "_host", None)
+        logic = host.logic if host is not None else None
+        session = getattr(logic, "_bigworld", None)
+        if session is None or not getattr(session, "_show_debug", True):
+            return
+        painter = ev.get("painter")
+        if painter is None:
+            return
+        try:
+            self._paint_debug(painter, session, ev.get("width", 0), ev.get("height", 0))
+        except Exception:
+            pass  # never let a debug draw take down the frame
+
+    def _paint_debug(self, painter, session, width, height):
+        from PyQt5.QtCore import Qt, QRect
+        from PyQt5.QtGui import QColor, QFont
+
+        s = session.stats()
+        pc = s.get("player_cell")
+        pc_txt = f"{pc[0]}, {pc[1]}" if pc else "-"
+        lines = [
+            ("Player Cell", pc_txt),
+            ("Active Cells", f"{s['active_cells']}"),
+            ("Loaded Cells", f"{s['loaded_cells']}"),
+            ("Activation Radius", f"{s['activation_radius']:.0f}"),
+            ("Active Brushes", f"{s['active_brushes']:,}"),
+            ("Total Brushes", f"{s['total_brushes']:,}"),
+            ("Active Entities", f"{s['active_entities']:,}"),
+            ("Total Entities", f"{s['total_entities']:,}"),
+            ("Active Lights", f"{s['active_lights']:,} / {s['total_lights']:,}"),
+        ]
+        if s.get("terrain_fill"):
+            if s.get("terrain_infinite"):
+                stream_txt = "∞"  # ∞: streaming forever, no world edge
+            else:
+                stream_txt = "on" if s.get("terrain_streaming") else "off"
+            lines.append(("Terrain Chunks",
+                          f"{s.get('terrain_chunks', 0):,} (stream {stream_txt})"))
+
+        pad = 10
+        row_h = 16
+        panel_w = 230
+        panel_h = pad * 2 + row_h * (len(lines) + 1)
+        x0 = 12
+        y0 = 90  # sit below Fio's own top-left debug text
+
+        painter.save()
+        painter.setRenderHint(painter.Antialiasing, False)
+        painter.fillRect(QRect(x0, y0, panel_w, panel_h), QColor(10, 12, 20, 200))
+        painter.setPen(QColor(120, 90, 200))
+        painter.drawRect(QRect(x0, y0, panel_w, panel_h))
+
+        font = QFont("Consolas", 9)
+        painter.setFont(font)
+        painter.setPen(QColor(180, 150, 240))
+        painter.drawText(x0 + pad, y0 + pad + row_h - 4, "BIG WORLD")
+
+        painter.setFont(QFont("Consolas", 8))
+        y = y0 + pad + row_h * 2 - 4
+        for label, value in lines:
+            painter.setPen(QColor(150, 150, 170))
+            painter.drawText(x0 + pad, y, label)
+            painter.setPen(QColor(230, 230, 245))
+            painter.drawText(x0 + pad + 130, y, value)
+            y += row_h
+
+        self._paint_minimap(painter, session, x0, y0 + panel_h + 8)
+        painter.restore()
+
+    def _paint_minimap(self, painter, session, x0, y0):
+        """A tiny top-down map of loaded cells, active ones highlighted."""
+        from PyQt5.QtCore import QRect
+        from PyQt5.QtGui import QColor
+
+        mgr = session.manager
+        if not mgr.cells:
+            return
+        pc = mgr._last_player_cell or (0, 0)
+        span = 8  # cells each way around the player
+        px_per_cell = 12
+        size = (span * 2 + 1) * px_per_cell
+        painter.fillRect(QRect(x0, y0, size, size), QColor(10, 12, 20, 200))
+        painter.setPen(QColor(120, 90, 200))
+        painter.drawRect(QRect(x0, y0, size, size))
+        for cx in range(pc[0] - span, pc[0] + span + 1):
+            for cz in range(pc[1] - span, pc[1] + span + 1):
+                coord = (cx, cz)
+                cell = mgr.cells.get(coord)
+                if cell is None:
+                    continue
+                sx = x0 + (cx - (pc[0] - span)) * px_per_cell
+                sz = y0 + (cz - (pc[1] - span)) * px_per_cell
+                if coord in mgr.active_cells:
+                    col = QColor(110, 200, 130, 230)
+                else:
+                    col = QColor(60, 60, 80, 200)
+                painter.fillRect(QRect(sx + 1, sz + 1, px_per_cell - 2, px_per_cell - 2), col)
+        # Player cell marker.
+        sx = x0 + span * px_per_cell
+        sz = y0 + span * px_per_cell
+        painter.setPen(QColor(255, 220, 120))
+        painter.drawRect(QRect(sx + 1, sz + 1, px_per_cell - 2, px_per_cell - 2))

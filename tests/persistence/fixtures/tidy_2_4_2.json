@@ -1,0 +1,197 @@
+{
+ "version": 3,
+ "brushes": [],
+ "things": [
+  {
+   "type": "playerstart",
+   "pos": [
+    0.0,
+    40.0,
+    520.0
+   ],
+   "properties": {
+    "angle": 180.0,
+    "type": "playerstart",
+    "name": "PlayerStart_1",
+    "id": "52cf6d09-2599-4cd1-b46e-2e869bc93821"
+   },
+   "io_connections": []
+  },
+  {
+   "type": "light",
+   "pos": [
+    0.0,
+    432.0,
+    0.0
+   ],
+   "properties": {
+    "intensity": 1.1,
+    "radius": 2000.0,
+    "state": "on",
+    "type": "light",
+    "name": "Light_1",
+    "id": "caed68a1-2aac-4a6c-a780-458ca7ef3f4c",
+    "colour": [
+     255,
+     255,
+     255
+    ],
+    "show_radius": false,
+    "casts_shadows": false,
+    "parent_mover": "",
+    "parent_offset": [
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "io_connections": []
+  },
+  {
+   "type": "tidyreceptacle",
+   "pos": [
+    0.0,
+    132.0,
+    -600.0
+   ],
+   "properties": {
+    "name": "Shelf",
+    "accepts": "any",
+    "capacity": 48,
+    "slot_cols": 12,
+    "slot_spacing": [
+     30.0,
+     44.0,
+     0.0
+    ],
+    "slot_offset": [
+     0.0,
+     6.0,
+     0.0
+    ],
+    "reach": 180.0,
+    "type": "tidyreceptacle",
+    "id": "13802323-7cc3-4904-8a47-2659dc8ea8d7",
+    "disabled": false
+   },
+   "io_connections": []
+  },
+  {
+   "type": "tidygoal",
+   "pos": [
+    0.0,
+    60.0,
+    580.0
+   ],
+   "properties": {
+    "name": "TidyGoal",
+    "target": "all",
+    "category": "any",
+    "type": "tidygoal",
+    "id": "7562eb46-6cac-41b9-99cf-72c1b6b2994f",
+    "show_hud": true,
+    "disabled": false
+   },
+   "io_connections": [
+    {
+     "output": "OnComplete",
+     "target": "Shelf",
+     "input": "Disable",
+     "parameter": "",
+     "delay": 0.0,
+     "fire_once": false,
+     "target_id": "13802323-7cc3-4904-8a47-2659dc8ea8d7"
+    }
+   ]
+  },
+  {
+   "type": "tidyobject",
+   "pos": [
+    -225.0,
+    12.0,
+    -50.0
+   ],
+   "properties": {
+    "name": "Book_1",
+    "category": "book",
+    "type": "tidyobject",
+    "id": "7f442965-539a-4a85-82a9-37d9e2dbd07f",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_08.png",
+    "no_collision": true,
+    "tidied": false,
+    "disabled": false
+   },
+   "io_connections": []
+  },
+  {
+   "type": "tidyobject",
+   "pos": [
+    -135.0,
+    12.0,
+    -50.0
+   ],
+   "properties": {
+    "name": "Book_2",
+    "category": "book",
+    "type": "tidyobject",
+    "id": "455206e7-69e1-447b-b6ce-b4603dd3106f",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_10.png",
+    "no_collision": true,
+    "tidied": false,
+    "disabled": false
+   },
+   "io_connections": []
+  },
+  {
+   "type": "tidyobject",
+   "pos": [
+    -45.0,
+    12.0,
+    -50.0
+   ],
+   "properties": {
+    "name": "Loose_1",
+    "type": "tidyobject",
+    "id": "00000000-0000-0000-0000-00000000c0de",
+    "model_path": "plugins/tidy/assets/book.obj",
+    "rotation": [
+     0,
+     0,
+     0
+    ],
+    "scale": [
+     1,
+     1,
+     1
+    ],
+    "texture": "plugins/tidy/assets/covers/cover_03.png",
+    "no_collision": true,
+    "tidied": false,
+    "disabled": false
+   },
+   "io_connections": []
+  }
+ ]
+}

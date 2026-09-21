@@ -1,0 +1,244 @@
+{
+    "version": 3,
+    "brushes": [
+        {
+            "pos": [
+                -752.0,
+                96.0,
+                0.0
+            ],
+            "size": [
+                32.0,
+                736.0,
+                1024.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "3f42eb11-5f77-43a8-8061-241b48b7a6bf"
+        },
+        {
+            "pos": [
+                1008.0,
+                96.0,
+                0.0
+            ],
+            "size": [
+                32.0,
+                736.0,
+                1024.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "839afbab-6d82-44b9-b504-347b1b0b9d99"
+        },
+        {
+            "pos": [
+                128.0,
+                -256.0,
+                0.0
+            ],
+            "size": [
+                1728.0,
+                32.0,
+                1024.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "cbe8c563-d81f-4c9c-ad90-915e392373fe"
+        },
+        {
+            "pos": [
+                128.0,
+                448.0,
+                0.0
+            ],
+            "size": [
+                1728.0,
+                32.0,
+                1024.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "f8e3fc29-d010-4fc9-ae9f-229ff3bfb0d6"
+        },
+        {
+            "pos": [
+                128.0,
+                96.0,
+                -496.0
+            ],
+            "size": [
+                1728.0,
+                672.0,
+                32.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "8db7fc09-6e02-468a-8097-7e47b4a715eb"
+        },
+        {
+            "pos": [
+                128.0,
+                96.0,
+                496.0
+            ],
+            "size": [
+                1728.0,
+                672.0,
+                32.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "0f4d42eb-a933-424f-b02c-87ad73a0693e"
+        },
+        {
+            "pos": [
+                64.0,
+                -40.0,
+                0.0
+            ],
+            "size": [
+                640.0,
+                368.0,
+                928.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_fog": true,
+            "fog_density": 2.0,
+            "id": "1ab503da-93ef-4d82-b9d4-ca547af24579",
+            "shader": "Fog",
+            "fog_color": [
+                0.5,
+                0.6,
+                0.7
+            ],
+            "is_trigger": false
+        }
+    ],
+    "things": [
+        {
+            "type": "light",
+            "pos": [
+                -384.0,
+                40,
+                0.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "d05823c5-8ed1-418b-b8e5-d9a6d1b6742f",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                576.0,
+                40,
+                0.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_3",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "8870d8d3-c2c8-4692-9bc2-643feffd7366",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "playerstart",
+            "pos": [
+                -560.0,
+                -80.0,
+                224.0
+            ],
+            "properties": {
+                "type": "playerstart",
+                "name": "PlayerStart_1",
+                "angle": 0.0,
+                "id": "b006143f-f3b2-4a84-a3cf-8afd375f2946"
+            },
+            "io_connections": []
+        }
+    ]
+}

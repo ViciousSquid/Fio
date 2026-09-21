@@ -1,0 +1,13 @@
+newmtl leaves_color_LPTree1
+Ka 0.0000 0.0000 0.0000
+Kd 0.0000 0.41000 0.0000
+Ks 0.0000 0.0000 0.0000
+d 1.0000
+Illum 2
+
+newmtl trunks_color_LPTree1
+Ka 0.0000 0.0000 0.0000
+Kd 0.4000 0.37000 0.12000
+Ks 0.0000 0.0000 0.0000
+d 1.0000
+Illum 2

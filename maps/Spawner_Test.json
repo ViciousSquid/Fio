@@ -1,0 +1,347 @@
+{
+    "version": 3,
+    "brushes": [
+        {
+            "pos": [
+                -504.0,
+                192.0,
+                24.0
+            ],
+            "size": [
+                16.0,
+                512.0,
+                816.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "a96508c0-78ce-4ab5-b7d6-78773c23cd9c",
+            "hidden": false
+        },
+        {
+            "pos": [
+                728.0,
+                192.0,
+                32.0
+            ],
+            "size": [
+                16.0,
+                512.0,
+                816.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "09ed180d-b04e-45a7-8d5f-fd75ef4b8da4",
+            "hidden": false
+        },
+        {
+            "pos": [
+                112.0,
+                -56.0,
+                32.0
+            ],
+            "size": [
+                1216.0,
+                16.0,
+                816.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "5b2cfdd6-afee-43bf-a41d-04f98d1050cd",
+            "hidden": false
+        },
+        {
+            "pos": [
+                112.0,
+                440.0,
+                24.0
+            ],
+            "size": [
+                1216.0,
+                16.0,
+                816.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "e9881309-72f5-47b2-9d96-76e56bcacc6c",
+            "hidden": false
+        },
+        {
+            "pos": [
+                112.0,
+                192.0,
+                -376.0
+            ],
+            "size": [
+                1216.0,
+                480.0,
+                16.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "e75e3c4d-7d0a-44af-8c96-594372a0b4cf"
+        },
+        {
+            "pos": [
+                112.0,
+                192.0,
+                424.0
+            ],
+            "size": [
+                1216.0,
+                480.0,
+                16.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "ad54244c-d9f2-495b-86f8-1e17dd166670"
+        },
+        {
+            "pos": [
+                -16.0,
+                -48,
+                -128.0
+            ],
+            "size": [
+                128.0,
+                32.0,
+                128.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "colour": [
+                1.0,
+                0.0,
+                0.4980392156862745
+            ],
+            "id": "97db6644-0e88-46f4-862b-a4e4da85de7f"
+        },
+        {
+            "pos": [
+                0.0,
+                -48.0,
+                192.0
+            ],
+            "size": [
+                256.0,
+                32.0,
+                128.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "colour": [
+                0.2,
+                0.3803921568627451,
+                0.8
+            ],
+            "id": "590c33ed-cbcb-4404-9996-ae7ae70f1269"
+        },
+        {
+            "pos": [
+                0.0,
+                32.0,
+                192.0
+            ],
+            "size": [
+                240.0,
+                128.0,
+                128.0
+            ],
+            "textures": {
+                "north": "trigger.jpg",
+                "south": "trigger.jpg",
+                "east": "trigger.jpg",
+                "west": "trigger.jpg",
+                "top": "trigger.jpg",
+                "down": "default.png",
+                "bottom": "trigger.jpg"
+            },
+            "is_trigger": true,
+            "trigger_type": "Multiple",
+            "id": "7d6b21e9-51de-47e9-b1f5-32c11a406b54",
+            "io_connections": [
+                {
+                    "output": "OnTrigger",
+                    "target": "LogicSpawner_1",
+                    "input": "Spawn",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false
+                }
+            ]
+        }
+    ],
+    "things": [
+        {
+            "type": "light",
+            "pos": [
+                -192.0,
+                208.0,
+                24.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "id": "b4d2d29a-c424-47b4-b881-634c51a43cf4",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                416.0,
+                208.0,
+                24.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_2",
+                "id": "afbbcc4e-732a-4cf2-9062-94677f96c1bc",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "logic_spawner",
+            "pos": [
+                -16,
+                48,
+                -128
+            ],
+            "properties": {
+                "type": "logic_spawner",
+                "name": "LogicSpawner_1",
+                "id": "7c991454-563a-4385-b6f2-7c868f9cd3c9",
+                "spawn_type": "Monster",
+                "target_node": "PathNode_1",
+                "max_spawn": 0,
+                "spawn_properties": {
+                    "random": true
+                },
+                "_spawn_count": 6
+            },
+            "io_connections": []
+        },
+        {
+            "type": "playerstart",
+            "pos": [
+                -448,
+                32,
+                368
+            ],
+            "properties": {
+                "type": "playerstart",
+                "name": "PlayerStart_1",
+                "id": "12805398-cad5-4e18-8a66-a2a80a08abb2",
+                "angle": 0.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "pickup",
+            "pos": [
+                -352.0,
+                16,
+                368.0
+            ],
+            "properties": {
+                "type": "pickup",
+                "name": "Pickup_1",
+                "id": "9fdef6c9-070d-4089-9afa-607550896c6f",
+                "item_type": "gun2",
+                "value": 25,
+                "activation": "walk_over",
+                "collected": true,
+                "respawns": false,
+                "respawn_time": 20.0,
+                "key_name": "blue_key",
+                "custom_sprite": "assets/sprites/gun2.png"
+            },
+            "io_connections": []
+        }
+    ]
+}

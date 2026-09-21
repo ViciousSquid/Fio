@@ -1,0 +1,519 @@
+{
+    "version": 3,
+    "brushes": [
+        {
+            "pos": [
+                0.0,
+                -8.0,
+                0.0
+            ],
+            "size": [
+                1600.0,
+                48.0,
+                1600.0
+            ],
+            "textures": {
+                "east": "Dev/512.jpg",
+                "west": "Dev/512.jpg",
+                "top": "Dev/512.jpg",
+                "down": "Dev/512.jpg",
+                "north": "Dev/512.jpg",
+                "south": "Dev/512.jpg"
+            },
+            "id": "78c5f272-ced6-41fa-a61f-3eb40576479c",
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                -400.0,
+                100.0,
+                0.0
+            ],
+            "size": [
+                400.0,
+                200.0,
+                300.0
+            ],
+            "textures": {
+                "east": "Dev/256.jpg",
+                "west": "Dev/256.jpg",
+                "top": "Dev/256.jpg",
+                "down": "Dev/256.jpg",
+                "north": "Dev/256.jpg",
+                "south": "Dev/256.jpg"
+            },
+            "geometry": {
+                "planes": [
+                    {
+                        "n": [
+                            1.0,
+                            0.0,
+                            0.0
+                        ],
+                        "d": -200.0,
+                        "texture": "Dev/256.jpg",
+                        "face": "east"
+                    },
+                    {
+                        "n": [
+                            -1.0,
+                            0.0,
+                            0.0
+                        ],
+                        "d": 600.0,
+                        "texture": "Dev/256.jpg",
+                        "face": "west"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            1.0,
+                            0.0
+                        ],
+                        "d": 200.0,
+                        "texture": "Dev/256.jpg",
+                        "face": "top"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            -1.0,
+                            0.0
+                        ],
+                        "d": 0.0,
+                        "texture": "Dev/256.jpg",
+                        "face": "down"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            0.0,
+                            1.0
+                        ],
+                        "d": 150.0,
+                        "texture": "Dev/256.jpg",
+                        "face": "north"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            0.0,
+                            -1.0
+                        ],
+                        "d": 150.0,
+                        "texture": "Dev/256.jpg",
+                        "face": "south"
+                    },
+                    {
+                        "n": [
+                            -0.447213595499958,
+                            0.894427190999916,
+                            -0.0
+                        ],
+                        "d": 268.32815729997486,
+                        "texture": "Dev/256.jpg",
+                        "uv_scale": [
+                            0.0078125,
+                            0.0078125
+                        ]
+                    }
+                ]
+            },
+            "id": "37d98a48-0f7d-46a5-88cb-9cb28dca42aa",
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                400.0,
+                100.0,
+                -200.0
+            ],
+            "size": [
+                300.0,
+                160.0,
+                400.0
+            ],
+            "textures": {
+                "east": "Dev/256.jpg",
+                "west": "Dev/256.jpg",
+                "top": "Dev/256.jpg",
+                "down": "Dev/256.jpg",
+                "north": "Dev/256.jpg",
+                "south": "Dev/256.jpg"
+            },
+            "geometry": {
+                "planes": [
+                    {
+                        "n": [
+                            1.0,
+                            0.0,
+                            0.0
+                        ],
+                        "d": 550.0,
+                        "texture": "Dev/256.jpg",
+                        "face": "east"
+                    },
+                    {
+                        "n": [
+                            -1.0,
+                            0.0,
+                            0.0
+                        ],
+                        "d": -250.0,
+                        "texture": "Dev/256.jpg",
+                        "face": "west"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            1.0,
+                            0.0
+                        ],
+                        "d": 180.0,
+                        "texture": "Dev/256.jpg",
+                        "face": "top"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            -1.0,
+                            0.0
+                        ],
+                        "d": -20.0,
+                        "texture": "Dev/256.jpg",
+                        "face": "down"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            0.0,
+                            1.0
+                        ],
+                        "d": 0.0,
+                        "texture": "Dev/256.jpg",
+                        "face": "north"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            0.0,
+                            -1.0
+                        ],
+                        "d": 400.0,
+                        "texture": "Dev/256.jpg",
+                        "face": "south"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            0.9284766908852593,
+                            -0.3713906763541037
+                        ],
+                        "d": 167.12580435934666,
+                        "texture": "Dev/256.jpg",
+                        "uv_scale": [
+                            0.0078125,
+                            0.0078125
+                        ]
+                    }
+                ]
+            },
+            "id": "61303a75-94a4-41bc-8e67-26c79a2b7cfa",
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                0.0,
+                128.0,
+                500.0
+            ],
+            "size": [
+                400.0,
+                256.0,
+                400.0
+            ],
+            "textures": {
+                "east": "Dev/128.jpg",
+                "west": "Dev/128.jpg",
+                "top": "Dev/128.jpg",
+                "down": "Dev/128.jpg",
+                "north": "Dev/128.jpg",
+                "south": "Dev/128.jpg"
+            },
+            "geometry": {
+                "planes": [
+                    {
+                        "n": [
+                            1.0,
+                            0.0,
+                            0.0
+                        ],
+                        "d": 200.0,
+                        "texture": "Dev/128.jpg",
+                        "face": "east"
+                    },
+                    {
+                        "n": [
+                            -1.0,
+                            0.0,
+                            0.0
+                        ],
+                        "d": 200.0,
+                        "texture": "Dev/128.jpg",
+                        "face": "west"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            1.0,
+                            0.0
+                        ],
+                        "d": 256.0,
+                        "texture": "Dev/128.jpg",
+                        "face": "top"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            -1.0,
+                            0.0
+                        ],
+                        "d": 0.0,
+                        "texture": "Dev/128.jpg",
+                        "face": "down"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            0.0,
+                            1.0
+                        ],
+                        "d": 700.0,
+                        "texture": "Dev/128.jpg",
+                        "face": "north"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            0.0,
+                            -1.0
+                        ],
+                        "d": -300.0,
+                        "texture": "Dev/128.jpg",
+                        "face": "south"
+                    },
+                    {
+                        "n": [
+                            0.7071067811865476,
+                            0.0,
+                            0.7071067811865476
+                        ],
+                        "d": 410.1219330881975,
+                        "texture": "Dev/128.jpg",
+                        "uv_scale": [
+                            0.0078125,
+                            0.0078125
+                        ]
+                    }
+                ]
+            },
+            "id": "82a23e7c-e6e1-49e3-b46b-1cc112c8d873",
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                300.0,
+                150.0,
+                300.0
+            ],
+            "size": [
+                163.923,
+                300.0,
+                163.923
+            ],
+            "textures": {
+                "east": "Dev/128.jpg",
+                "west": "Dev/128.jpg",
+                "top": "Dev/128.jpg",
+                "down": "Dev/128.jpg",
+                "north": "Dev/128.jpg",
+                "south": "Dev/128.jpg"
+            },
+            "geometry": {
+                "planes": [
+                    {
+                        "n": [
+                            0.8660254037844387,
+                            0.0,
+                            -0.49999999999999994
+                        ],
+                        "d": 169.80762113533163,
+                        "texture": "Dev/128.jpg",
+                        "face": "east"
+                    },
+                    {
+                        "n": [
+                            -0.8660254037844387,
+                            0.0,
+                            0.49999999999999994
+                        ],
+                        "d": -49.80762113533164,
+                        "texture": "Dev/128.jpg",
+                        "face": "west"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            1.0,
+                            0.0
+                        ],
+                        "d": 300.0,
+                        "texture": "Dev/128.jpg",
+                        "face": "top"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            -1.0,
+                            0.0
+                        ],
+                        "d": 0.0,
+                        "texture": "Dev/128.jpg",
+                        "face": "down"
+                    },
+                    {
+                        "n": [
+                            0.49999999999999994,
+                            0.0,
+                            0.8660254037844387
+                        ],
+                        "d": 469.8076211353316,
+                        "texture": "Dev/128.jpg",
+                        "face": "north"
+                    },
+                    {
+                        "n": [
+                            -0.49999999999999994,
+                            0.0,
+                            -0.8660254037844387
+                        ],
+                        "d": -349.8076211353316,
+                        "texture": "Dev/128.jpg",
+                        "face": "south"
+                    }
+                ]
+            },
+            "id": "bcac8b00-8f0e-4012-9823-26a7f996e01a",
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                0.0,
+                200.0,
+                -780.0
+            ],
+            "size": [
+                1600.0,
+                400.0,
+                40.0
+            ],
+            "textures": {
+                "east": "Dev/512.jpg",
+                "west": "Dev/512.jpg",
+                "top": "Dev/512.jpg",
+                "down": "Dev/512.jpg",
+                "north": "Dev/512.jpg",
+                "south": "Dev/512.jpg"
+            },
+            "id": "ee83aee1-a4f3-4a4a-80a6-e8d5dd53b805",
+            "is_trigger": false
+        }
+    ],
+    "things": [
+        {
+            "type": "playerstart",
+            "pos": [
+                0,
+                60,
+                0
+            ],
+            "properties": {
+                "type": "playerstart",
+                "name": "PlayerStart_1",
+                "angle": 0.0,
+                "id": "9d0adfff-e558-4e82-9f88-08ba43f9fb14"
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                0,
+                600,
+                0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "color": [
+                    1.0,
+                    0.95,
+                    0.85
+                ],
+                "intensity": 1.2,
+                "radius": 2500.0,
+                "state": "on",
+                "id": "7271c0ba-16f2-4355-b8b5-0bf6a3ecf086",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                -400,
+                400,
+                0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "color": [
+                    1.0,
+                    0.95,
+                    0.85
+                ],
+                "intensity": 0.8,
+                "radius": 1500.0,
+                "state": "on",
+                "id": "1ad457ef-f253-462f-b5d2-81950b633114",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        }
+    ]
+}

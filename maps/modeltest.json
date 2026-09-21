@@ -1,0 +1,240 @@
+{
+    "version": 3,
+    "brushes": [
+        {
+            "pos": [
+                -504.0,
+                176.0,
+                48.0
+            ],
+            "size": [
+                16.0,
+                480.0,
+                768.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "f21f061a-2369-4745-ad89-ddb8cb7a700c"
+        },
+        {
+            "pos": [
+                552.0,
+                176.0,
+                48.0
+            ],
+            "size": [
+                16.0,
+                480.0,
+                768.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "081a16e3-0e18-402b-880d-abd82ddde706"
+        },
+        {
+            "pos": [
+                24.0,
+                -56.0,
+                48.0
+            ],
+            "size": [
+                1040.0,
+                16.0,
+                768.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "973b944e-b42a-4e39-b0d9-ec3189c364c3"
+        },
+        {
+            "pos": [
+                24.0,
+                408.0,
+                48.0
+            ],
+            "size": [
+                1040.0,
+                16.0,
+                768.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "abcb5655-1e9d-430b-942d-7ee60b7a65dc"
+        },
+        {
+            "pos": [
+                24.0,
+                176.0,
+                -328.0
+            ],
+            "size": [
+                1040.0,
+                448.0,
+                16.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "348c7a0b-ad5b-4589-8937-144743cba51c"
+        },
+        {
+            "pos": [
+                24.0,
+                176.0,
+                424.0
+            ],
+            "size": [
+                1040.0,
+                448.0,
+                16.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "47c026f1-1f64-4efd-9700-49f1eca9a265"
+        }
+    ],
+    "things": [
+        {
+            "type": "light",
+            "pos": [
+                -236.0,
+                192.0,
+                48.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "id": "bba80477-65d8-4eeb-b264-927a78f12cb3",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                284.0,
+                192.0,
+                48.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_2",
+                "id": "b0cc894d-5129-46bd-baf6-5e393779ed7f",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "model",
+            "pos": [
+                0,
+                -48,
+                0
+            ],
+            "properties": {
+                "type": "model",
+                "name": "ramp_a",
+                "id": "e9da2ec0-21a5-458a-9cf4-2f50db65c3b3",
+                "model_path": "assets/models/ramp_a.glb",
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ],
+                "no_collision": false
+            },
+            "io_connections": []
+        },
+        {
+            "type": "playerstart",
+            "pos": [
+                -336.0,
+                40,
+                272.0
+            ],
+            "properties": {
+                "type": "playerstart",
+                "name": "PlayerStart_1",
+                "id": "14f6bb81-470a-4423-9b92-f2bd008b0430",
+                "angle": 0.0
+            },
+            "io_connections": []
+        }
+    ]
+}

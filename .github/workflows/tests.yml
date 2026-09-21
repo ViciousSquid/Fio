@@ -1,0 +1,112 @@
+name: Tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# A failure in one optional graphical tier must not hide a failure in the core
+# suite, so each tier is its own job and none of them depends on another.
+jobs:
+  headless:
+    name: Core (headless, no Qt, no GL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+      - name: Install the dependency-light half
+        # No PyQt5 and no PyOpenGL: this job proves how much of Fio is testable
+        # without the desktop dependency set at all.
+        run: pip install pytest numpy PyGLM
+      - name: Run the tests that need no Qt, no OpenGL, no display
+        run: python -m pytest -m "not qt and not gl and not benchmark" -q
+
+  editor:
+    name: Editor + engine (Qt, offscreen)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+      - name: Install Qt's platform-plugin libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
+      - name: Install dependencies
+        run: |
+          pip install pytest
+          pip install -r requirements.txt
+      - name: Run everything that does not need a GPU
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -m "not gl and not benchmark" -q
+
+  opengl:
+    name: Renderer (OpenGL, software rasteriser)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+      - name: Install Mesa and a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb libgl1-mesa-dri libglx-mesa0 libegl1 \
+            libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
+      - name: Install dependencies
+        run: |
+          pip install pytest
+          pip install -r requirements.txt
+      - name: Run the visual tier against llvmpipe
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: xvfb-run -a python -m pytest -m gl -q
+
+  benchmark:
+    name: Renderer benchmark (reported, never fails on timing)
+    runs-on: ubuntu-latest
+    # Informational: a shared runner's speed is not a property of Fio.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+      - name: Install Mesa and a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb libgl1-mesa-dri libglx-mesa0 libegl1 \
+            libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
+      - name: Install dependencies
+        run: |
+          pip install pytest
+          pip install -r requirements.txt
+      - name: Measure and report
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          FIO_BENCH_OUT: benchmark.json
+        run: xvfb-run -a python -m pytest tests/performance/test_renderer_benchmark.py -m benchmark --run-benchmarks -k distance_cull_benchmark -q -s
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: renderer-benchmark
+          path: benchmark.json
+          if-no-files-found: ignore
