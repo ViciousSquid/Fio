@@ -305,16 +305,14 @@ class BaseRenderer:
         self._light_ubo = None
         self._light_ubo_capacity = 0
         self._light_ubo_key = None
-        # Mirror FioLightBlock exactly: four parallel std140 arrays, each with
-        # a 16-byte element stride. One structured record keeps the complete
-        # block contiguous while the GPU avoids an array-of-structs access path.
+        # Mirror the std140 Light struct: four 16-byte fields per light.
         self._light_ubo_dtype = np.dtype([
-            ('position', '<f4', (self.MAX_LIGHTS, 4)),
-            ('color', '<f4', (self.MAX_LIGHTS, 4)),
-            ('params', '<f4', (self.MAX_LIGHTS, 4)),
-            ('indices', '<i4', (self.MAX_LIGHTS, 4)),
+            ('position', '<f4', (4,)),
+            ('color', '<f4', (4,)),
+            ('params', '<f4', (4,)),
+            ('indices', '<i4', (4,)),
         ])
-        self._light_ubo_data = np.zeros(1, dtype=self._light_ubo_dtype)
+        self._light_ubo_data = np.zeros(self.MAX_LIGHTS, dtype=self._light_ubo_dtype)
         # Depth cube-map shadow-mapping state (created lazily once GL is ready).
         self._shadow_fbo = None
         self._shadow_cubemaps = []          # texture ids, one cube-map per shadow slot
@@ -1839,7 +1837,8 @@ layout (location = 9) in vec4 iNormal2;
             self._light_ubo = gl.glGenBuffers(1)
         if capacity > self._light_ubo_capacity:
             self._light_ubo_capacity = max(self.MAX_LIGHTS, capacity)
-            self._light_ubo_data = np.zeros(1, dtype=self._light_ubo_dtype)
+            self._light_ubo_data = np.zeros(self._light_ubo_capacity,
+                                            dtype=self._light_ubo_dtype)
             gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
             gl.glBufferData(
                 gl.GL_UNIFORM_BUFFER,
@@ -1852,15 +1851,8 @@ layout (location = 9) in vec4 iNormal2;
             shaders.LIGHT_UBO_BINDING,
             self._light_ubo,
         )
-
     def _upload_light_ubo(self, lights, count):
-        """Pack the active light slice with NumPy and upload it once per render pass.
-
-        render_scene() clears _light_ubo_key at the start of each pass, so
-        moving lights and animated light properties are repacked before the
-        first lighting draw. The ID key only suppresses duplicate uploads
-        for subsequent lighting shader passes in the same render_scene().
-        """
+        """Pack the active light slice once and upload it to the shared UBO."""
         count = min(int(count), self.MAX_LIGHTS)
         self._ensure_light_ubo(count)
         if count <= 0:
@@ -1871,15 +1863,13 @@ layout (location = 9) in vec4 iNormal2;
         if self._light_ubo_key == key:
             return
 
-        active = self._light_ubo_data[0]
-        # ``active`` is a NumPy structured scalar; it has no scalar ``[...]``
-        # assignment. Clear each fixed-size array field before packing live lights.
-        active['position'][...] = 0
-        active['color'][...] = 0
-        active['params'][...] = 0
-        active['indices'][...] = 0
-        active_lights = lights[:count]
+        active = self._light_ubo_data[:count]
+        active['position'].fill(0.0)
+        active['color'].fill(0.0)
+        active['params'].fill(0.0)
+        active['indices'].fill(0)
 
+        active_lights = lights[:count]
         positions = np.asarray([light.pos for light in active_lights], dtype=np.float32)
         colors = np.asarray([light.get_color() for light in active_lights], dtype=np.float32)
         params = np.asarray(
@@ -1892,19 +1882,19 @@ layout (location = 9) in vec4 iNormal2;
             count=count,
         )
 
-        active['position'][:count, :3] = positions
-        active['position'][:count, 3] = 1.0
-        active['color'][:count, :3] = colors
-        active['color'][:count, 3] = 1.0
-        active['params'][:count, :2] = params
-        active['indices'][:count, 0] = shadow_indices
+        active['position'][:, :3] = positions
+        active['position'][:, 3] = 1.0
+        active['color'][:, :3] = colors
+        active['color'][:, 3] = 1.0
+        active['params'][:, :2] = params
+        active['indices'][:, 0] = shadow_indices
 
         gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
-
-        # The GLSL arrays have fixed MAX_LIGHTS lengths, so each array
-        # starts after the full previous array rather than after the live prefix.
-        # Upload the complete 4 KiB block after zero-filling unused slots.
-        gl.glBufferSubData(gl.GL_UNIFORM_BUFFER, 0, active.tobytes())
+        gl.glBufferSubData(
+            gl.GL_UNIFORM_BUFFER,
+            0,
+            active,
+        )
         self._light_ubo_key = key
 
     # --------------------------------------------------------------------------
