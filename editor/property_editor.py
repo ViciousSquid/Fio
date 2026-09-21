@@ -1673,6 +1673,21 @@ class PropertyEditor(QWidget):
         physics_form.addRow("Mass:", mass_spin)
         self._widgets['prop_mass_spin'] = mass_spin
 
+        friction = min(1.0, max(0.0, float(thing.properties.get('friction', 0.55))))
+        friction_spin = QDoubleSpinBox()
+        friction_spin.setRange(0.0, 1.0)
+        friction_spin.setDecimals(2)
+        friction_spin.setSingleStep(0.05)
+        friction_spin.setValue(friction)
+        friction_spin.setToolTip(
+            "Ground friction coefficient. 0.0 = slides freely, 1.0 = very strong friction."
+        )
+        friction_spin.valueChanged.connect(
+            lambda value: self.update_object_prop('friction', value)
+        )
+        physics_form.addRow("Friction:", friction_spin)
+        self._widgets['prop_friction_spin'] = friction_spin
+
         shape_mode = str(thing.properties.get('collision_shape', 'auto')).lower()
         shape_labels = {
             'auto': 'Automatic',
@@ -1715,7 +1730,7 @@ class PropertyEditor(QWidget):
         section = CollapsibleSection(
             "Physics",
             expanded=True,
-            count=5,
+            count=6,
         )
         section.addLayout(physics_form)
         parent_layout.addWidget(section)
