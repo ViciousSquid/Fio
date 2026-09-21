@@ -414,6 +414,7 @@ class PhysicsWorld:
         self._kinematic = np.empty(0, dtype=np.bool_)
         self._dirty = False
         self._static_cells = {}
+        self._static_query_cache = {}
 
     def clear(self):
         for body in self.bodies.values():
@@ -435,6 +436,7 @@ class PhysicsWorld:
         self._awake = np.empty(0, dtype=np.bool_)
         self._kinematic = np.empty(0, dtype=np.bool_)
         self._static_cells.clear()
+        self._static_query_cache.clear()
         self._dirty = False
 
     @staticmethod
@@ -619,7 +621,6 @@ class PhysicsWorld:
 
     def rebuild(self, brushes):
         self.clear()
-        self._rebuild_static_cells()
 
         for brush in brushes:
             if not brush.get('_physics_body'):
@@ -632,6 +633,11 @@ class PhysicsWorld:
         self._rebuild_static_cells()
 
     def _candidate_aabbs(self, cell_x, cell_z):
+        key = (cell_x, cell_z)
+        cached = self._static_query_cache.get(key)
+        if cached is not None:
+            return cached
+
         parts = []
         cells = self._static_cells
         for dx in (-1, 0, 1):
@@ -639,11 +645,16 @@ class PhysicsWorld:
                 aabbs = cells.get((cell_x + dx, cell_z + dz))
                 if aabbs is not None:
                     parts.append(aabbs)
+
         if not parts:
+            self._static_query_cache[key] = False
             return None
         if len(parts) == 1:
-            return parts[0]
-        return np.concatenate(parts, axis=0)
+            result = parts[0]
+        else:
+            result = np.concatenate(parts, axis=0)
+        self._static_query_cache[key] = result
+        return result
 
     def _batch_static_collision(self, axis, old_position):
         """Resolve one horizontal axis with vectorised AABB tests per cell group."""
@@ -658,23 +669,23 @@ class PhysicsWorld:
             return
 
         cell_size = np.float32(self.spatial_grid.cell_size)
-        cx = np.floor(self._position[indices, 0] / cell_size).astype(np.int64)
-        cz = np.floor(self._position[indices, 2] / cell_size).astype(np.int64)
-
-        # Group only by occupied cells; collision arithmetic within each group
-        # is entirely NumPy.
-        groups = {}
-        for local, (gx, gz) in enumerate(zip(cx.tolist(), cz.tolist())):
-            groups.setdefault((int(gx), int(gz)), []).append(int(indices[local]))
+        cell_keys = np.column_stack((
+            np.floor(self._position[indices, 0] / cell_size).astype(np.int64),
+            np.floor(self._position[indices, 2] / cell_size).astype(np.int64),
+        ))
+        unique_cells, inverse = np.unique(
+            cell_keys, axis=0, return_inverse=True
+        )
 
         collision = np.zeros(indices.size, dtype=np.bool_)
 
-        for key, body_indices in groups.items():
-            aabbs = self._candidate_aabbs(*key)
+        for group_id, key in enumerate(unique_cells):
+            local_indices = np.flatnonzero(inverse == group_id)
+            bi = indices[local_indices]
+            aabbs = self._candidate_aabbs(int(key[0]), int(key[1]))
             if aabbs is None:
                 continue
 
-            bi = np.asarray(body_indices, dtype=np.int64)
             pos = self._position[bi] + self._offset[bi]
             half = self._half[bi]
 
@@ -694,7 +705,6 @@ class PhysicsWorld:
             )
             hit = overlap.any(axis=1)
 
-            local_indices = np.searchsorted(indices, bi)
             collision[local_indices] |= hit
 
         if np.any(collision):
@@ -712,17 +722,20 @@ class PhysicsWorld:
             return floors
 
         cell_size = np.float32(self.spatial_grid.cell_size)
-        cx = np.floor((self._position[indices, 0] + self._offset[indices, 0]) / cell_size).astype(np.int64)
-        cz = np.floor((self._position[indices, 2] + self._offset[indices, 2]) / cell_size).astype(np.int64)
-        groups = {}
-        for local, (gx, gz) in enumerate(zip(cx.tolist(), cz.tolist())):
-            groups.setdefault((int(gx), int(gz)), []).append(int(indices[local]))
+        cell_keys = np.column_stack((
+            np.floor((self._position[indices, 0] + self._offset[indices, 0]) / cell_size).astype(np.int64),
+            np.floor((self._position[indices, 2] + self._offset[indices, 2]) / cell_size).astype(np.int64),
+        ))
+        unique_cells, inverse = np.unique(
+            cell_keys, axis=0, return_inverse=True
+        )
 
-        for key, body_indices in groups.items():
-            aabbs = self._candidate_aabbs(*key)
+        for group_id, key in enumerate(unique_cells):
+            local_indices = np.flatnonzero(inverse == group_id)
+            bi = indices[local_indices]
+            aabbs = self._candidate_aabbs(int(key[0]), int(key[1]))
             if aabbs is None:
                 continue
-            bi = np.asarray(body_indices, dtype=np.int64)
             center = self._position[bi] + self._offset[bi]
             half = self._half[bi]
             start_y = center[:, 1] + half[:, 1] + 1.0
