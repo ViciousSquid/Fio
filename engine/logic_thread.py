@@ -309,6 +309,7 @@ class LogicThread(threading.Thread):
 
         # Model collision pseudo-brushes for things with model_path
         self._model_collision_brushes: list = []
+        self._physics_body_brushes: list = []
         self._physics_world = None
         # PERF: cached self.brushes + self._model_collision_brushes (see
         # _refresh_collision_brushes_cache)
@@ -862,16 +863,20 @@ class LogicThread(threading.Thread):
         # (editor mode uses them for visualization via showcollision command)
         if self.model_collision_enabled:
             self._model_collision_brushes = self._build_model_collision_brushes()
+            self._physics_body_brushes = [
+                b for b in self._model_collision_brushes
+                if b.get('_physics_body')
+            ]
             if self.play_mode and hasattr(self, '_spatial_grid') and self._spatial_grid:
                 self._spatial_grid.populate(self.brushes + self._model_collision_brushes)
                 if getattr(self, '_physics_world', None) is not None:
-                    self._physics_world.rebuild(self._model_collision_brushes)
+                    self._physics_world.rebuild(self._physics_body_brushes)
         else:
             self._model_collision_brushes = []
             if self.play_mode and hasattr(self, '_spatial_grid') and self._spatial_grid:
                 self._spatial_grid.populate(self.brushes)
                 if getattr(self, '_physics_world', None) is not None:
-                    self._physics_world.rebuild(())
+                    self._physics_world.rebuild(self._physics_body_brushes)
         self._refresh_collision_brushes_cache()
 
         return self.model_collision_enabled
@@ -960,6 +965,10 @@ class LogicThread(threading.Thread):
 
             # Build collision brushes for model entities
             self._model_collision_brushes = self._build_model_collision_brushes()
+            self._physics_body_brushes = [
+                b for b in self._model_collision_brushes
+                if b.get('_physics_body')
+            ]
             self._refresh_collision_brushes_cache()
 
             # Reset player stats
@@ -1030,7 +1039,7 @@ class LogicThread(threading.Thread):
             self._spatial_grid = SpatialGrid(cell_size=512.0)
             self._spatial_grid.populate(self.brushes + self._model_collision_brushes)
             self._physics_world = PhysicsWorld(self._spatial_grid)
-            self._physics_world.rebuild(self._model_collision_brushes)
+            self._physics_world.rebuild(self._physics_body_brushes)
             self.monster_ai.set_spatial_grid(self._spatial_grid)
 
             # Props are a core feature, but do not allocate a runtime session
@@ -1098,6 +1107,7 @@ class LogicThread(threading.Thread):
             self._reset_parented_portals()
             self._clear_angled_brush_collision()
             self._model_collision_brushes = []
+            self._physics_body_brushes = []
             self._refresh_collision_brushes_cache()
             self._invalidate_cull_cache()
             self.current_hud_message = ""
