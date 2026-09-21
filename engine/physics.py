@@ -817,20 +817,19 @@ class PhysicsWorld:
         moving = active & self._awake
         if np.any(moving):
             if np.any(moving & (self._gravity != 0.0)):
-                self._velocity[:, 1] += self._gravity * self.GRAVITY * dt
-                self._velocity[:, 1] *= np.where(
-                    moving,
-                    np.maximum(0.0, 1.0 - self._damping * dt),
-                    1.0,
+                self._velocity[moving, 1] += (
+                    self._gravity[moving] * self.GRAVITY * dt
                 )
+            self._velocity[moving, 1] *= np.maximum(
+                0.0, 1.0 - self._damping[moving] * dt
+            )
 
             horizontal_damp = np.maximum(
                 0.0,
                 1.0 - (self._damping + self._friction) * dt,
             )
-            horizontal_mask = moving[:, None] & np.array([True, False, True], dtype=np.bool_)
-            self._velocity[:, 0] *= np.where(horizontal_mask[:, 0], horizontal_damp, 1.0)
-            self._velocity[:, 2] *= np.where(horizontal_mask[:, 2], horizontal_damp, 1.0)
+            self._velocity[moving, 0] *= horizontal_damp[moving]
+            self._velocity[moving, 2] *= horizontal_damp[moving]
 
             old_position = self._position.copy()
 
