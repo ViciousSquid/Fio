@@ -635,6 +635,8 @@ class PhysicsWorld:
     def _candidate_aabbs(self, cell_x, cell_z):
         key = (cell_x, cell_z)
         cached = self._static_query_cache.get(key)
+        if cached is False:
+            return None
         if cached is not None:
             return cached
 
