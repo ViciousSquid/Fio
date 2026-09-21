@@ -50,6 +50,21 @@ class PropSession:
                       if getattr(t, 'properties', {}).get('type') == 'prop']
         self.held = None
         self.moving.clear()
+        self._shapes = {}
+        for brush in getattr(self.logic, '_model_collision_brushes', ()):
+            prop = brush.get('_prop_entity')
+            if prop is None or not brush.get('_dynamic_prop'):
+                continue
+            pos = _vec(prop.pos)
+            brush_pos = _vec(brush.get('pos', pos))
+            self._shapes[id(prop)] = {
+                'size': list(brush.get('size', [64.0, 64.0, 64.0])),
+                'offset': (
+                    brush_pos[0] - pos[0],
+                    brush_pos[1] - pos[1],
+                    brush_pos[2] - pos[2],
+                ),
+            }
         for prop in self.props:
             prop.properties['_prop_home_pos'] = list(prop.pos)
             prop.properties.pop('_physics_awake', None)
@@ -93,8 +108,164 @@ class PropSession:
                 self._carry(eye, forward, use_pressed)
             elif use_pressed:
                 self._pick_in_view(eye, forward)
+        if player is not None:
+            self._push_from_player(player)
         if self.moving:
             self._simulate(delta)
+
+    def _shape_for(self, prop):
+        return self._shapes.get(id(prop))
+
+    def _push_from_player(self, player):
+        """Push overlapping physics-enabled Props away from the player."""
+        if getattr(player, 'physics_enabled', True) is False:
+            return
+
+        player_pos = _vec(player.pos)
+        half = getattr(player, '_half', None)
+        if half is not None:
+            player_half_x = float(half.x)
+            player_half_y = float(half.y)
+            player_half_z = float(half.z)
+        else:
+            player_half_x = float(getattr(player, 'width', 50.0)) * 0.5
+            player_half_y = float(getattr(player, 'height', 100.0)) * 0.5
+            player_half_z = float(getattr(player, 'depth', 50.0)) * 0.5
+
+        velocity = getattr(player, 'velocity', None)
+        pvx = float(getattr(velocity, 'x', 0.0))
+        pvz = float(getattr(velocity, 'z', 0.0))
+        speed = math.hypot(pvx, pvz)
+        if speed < 0.01:
+            return
+
+        for prop in self.props:
+            if prop is self.held:
+                continue
+            p = prop.properties
+            if p.get('disabled') or not p.get('physics_enabled', False):
+                continue
+            if p.get('no_collision', True):
+                continue
+
+            shape = self._shape_for(prop)
+            if shape is None:
+                continue
+
+            sx, sy, sz = (float(v) * 0.5 for v in shape['size'])
+            off = shape['offset']
+            center = (
+                float(prop.pos[0]) + off[0],
+                float(prop.pos[1]) + off[1],
+                float(prop.pos[2]) + off[2],
+            )
+            dx = center[0] - player_pos[0]
+            dz = center[2] - player_pos[2]
+            overlap_x = player_half_x + sx - abs(dx)
+            overlap_z = player_half_z + sz - abs(dz)
+            prop_min_y = center[1] - sy
+            prop_max_y = center[1] + sy
+            player_min_y = player_pos[1] - player_half_y
+            player_max_y = player_pos[1] + player_half_y
+
+            if (overlap_x <= 0.0 or overlap_z <= 0.0 or
+                    player_max_y <= prop_min_y or player_min_y >= prop_max_y):
+                continue
+
+            state = self.moving.get(id(prop))
+            if state is None:
+                state = {
+                    'prop': prop,
+                    'velocity': 0.0,
+                    'velocity_x': 0.0,
+                    'velocity_z': 0.0,
+                }
+                self.moving[id(prop)] = state
+
+            mass = max(float(p.get('mass', 1.0)), 0.01)
+            if overlap_x <= overlap_z:
+                direction = 1.0 if dx >= 0.0 else -1.0
+                prop.pos[0] += direction * (overlap_x + 0.5)
+                push_speed = abs(pvx) / mass
+                state['velocity_x'] = direction * max(
+                    abs(state.get('velocity_x', 0.0)), push_speed * 0.85
+                )
+            else:
+                direction = 1.0 if dz >= 0.0 else -1.0
+                prop.pos[2] += direction * (overlap_z + 0.5)
+                push_speed = abs(pvz) / mass
+                state['velocity_z'] = direction * max(
+                    abs(state.get('velocity_z', 0.0)), push_speed * 0.85
+                )
+
+            p['_physics_awake'] = True
+
+    def _prop_overlaps_brush(self, center, half, brush):
+        if brush.get('_collision_mode') == 'mesh':
+            bounds = brush.get('_mesh_bounds')
+            if bounds:
+                bmin, bmax = bounds
+                return (
+                    center[0] + half[0] > bmin[0] and
+                    center[0] - half[0] < bmax[0] and
+                    center[1] + half[1] > bmin[1] and
+                    center[1] - half[1] < bmax[1] and
+                    center[2] + half[2] > bmin[2] and
+                    center[2] - half[2] < bmax[2]
+                )
+            return False
+
+        bpos = brush.get('pos', (0.0, 0.0, 0.0))
+        bsize = brush.get('size', (0.0, 0.0, 0.0))
+        return (
+            center[0] + half[0] > bpos[0] - bsize[0] * 0.5 and
+            center[0] - half[0] < bpos[0] + bsize[0] * 0.5 and
+            center[1] + half[1] > bpos[1] - bsize[1] * 0.5 and
+            center[1] - half[1] < bpos[1] + bsize[1] * 0.5 and
+            center[2] + half[2] > bpos[2] - bsize[2] * 0.5 and
+            center[2] - half[2] < bpos[2] + bsize[2] * 0.5
+        )
+
+    def _move_horizontal(self, prop, state, axis, amount, center, half):
+        if abs(amount) < 0.00001:
+            return False
+
+        before = list(prop.pos)
+        if axis == 0:
+            prop.pos[0] += amount
+        else:
+            prop.pos[2] += amount
+
+        grid = getattr(self.logic, '_spatial_grid', None)
+        query = getattr(grid, 'get_potential_colliders', None)
+        if query is None:
+            return True
+
+        cx = center[0] + (prop.pos[0] - before[0])
+        cz = center[2] + (prop.pos[2] - before[2])
+        center_now = (cx, center[1], cz)
+        min_pos = (
+            type('_V', (), {'x': cx - half[0], 'y': center_now[1] - half[1], 'z': cz - half[2]})()
+        )
+        max_pos = (
+            type('_V', (), {'x': cx + half[0], 'y': center_now[1] + half[1], 'z': cz + half[2]})()
+        )
+        try:
+            colliders = query(min_pos, max_pos)
+        except Exception:
+            colliders = ()
+
+        for brush in colliders:
+            if brush.get('_dynamic_prop'):
+                continue
+            if self._prop_overlaps_brush(center_now, half, brush):
+                prop.pos = before
+                if axis == 0:
+                    state['velocity_x'] = 0.0
+                else:
+                    state['velocity_z'] = 0.0
+                return False
+        return True
 
     def _pick_in_view(self, eye, forward):
         best = None
@@ -159,11 +330,34 @@ class PropSession:
             if not p.get('physics_enabled', False):
                 sleeping.append(key)
                 continue
-            velocity = state['velocity']
+            velocity = state.get('velocity', 0.0)
             if p.get('gravity', True):
                 velocity += GRAVITY * dt
             velocity *= max(0.0, 1.0 - float(p.get('linear_damping', 0.08)) * dt)
             state['velocity'] = velocity
+
+            vx = float(state.get('velocity_x', 0.0))
+            vz = float(state.get('velocity_z', 0.0))
+            friction = max(0.0, min(1.0, float(p.get('friction', 0.55))))
+            horizontal_damp = max(
+                0.0,
+                1.0 - (float(p.get('linear_damping', 0.08)) + friction) * dt,
+            )
+            vx *= horizontal_damp
+            vz *= horizontal_damp
+            state['velocity_x'] = vx
+            state['velocity_z'] = vz
+
+            shape = self._shape_for(prop)
+            x, y, z = _vec(prop.pos)
+            if shape is not None:
+                off = shape['offset']
+                half = tuple(float(v) * 0.5 for v in shape['size'])
+                center = (x + off[0], y + off[1], z + off[2])
+                self._move_horizontal(prop, state, 0, vx * dt, center, half)
+                center = (prop.pos[0] + off[0], y + off[1], prop.pos[2] + off[2])
+                self._move_horizontal(prop, state, 1, vz * dt, center, half)
+
             x, y, z = _vec(prop.pos)
             new_y = y + velocity * dt
             floor = self._floor_y(prop, x, z, y + 1.0)
@@ -174,6 +368,17 @@ class PropSession:
                 self._fire(prop, 'OnRest')
                 continue
             prop.pos = [x, new_y, z]
+
+            if (abs(state.get('velocity_x', 0.0)) < 1.0 and
+                    abs(state.get('velocity_z', 0.0)) < 1.0 and
+                    abs(velocity) < 1.0):
+                state['velocity_x'] = 0.0
+                state['velocity_z'] = 0.0
+                sleeping.append(key)
+                p['_physics_awake'] = False
+                self._fire(prop, 'OnRest')
+                continue
+
             rotation = p.get('rotation', [0.0, 0.0, 0.0])
             angular = p.get('drop_angular_velocity', [0.0, 0.0, 0.0])
             p['rotation'] = [float(rotation[i]) + float(angular[i]) * dt for i in range(3)]
