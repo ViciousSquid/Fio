@@ -67,6 +67,111 @@ class TidyPlugin(FioPlugin):
             menu_label="Tidy Goal",
         )
 
+        api.register_properties(
+            "tidyreceptacle",
+            [
+                prop(
+                    "accepts",
+                    type="string",
+                    label="Accepts category",
+                    default="any",
+                    help="Category accepted by this receptacle, or 'any'.",
+                    group="Tidy",
+                ),
+                prop(
+                    "capacity",
+                    type="int",
+                    label="Capacity",
+                    default=24,
+                    min=1,
+                    max=100000,
+                    help="Maximum number of Props this receptacle can hold.",
+                    group="Tidy",
+                ),
+                prop(
+                    "slot_cols",
+                    type="int",
+                    label="Slots per row",
+                    default=6,
+                    min=1,
+                    max=1000,
+                    help="Number of slots across before a new row begins.",
+                    group="Placement",
+                ),
+                prop(
+                    "slot_spacing",
+                    type="vec3",
+                    label="Slot spacing",
+                    default=[28.0, 40.0, 0.0],
+                    help="Spacing between successive slots as [x, y, z].",
+                    group="Placement",
+                ),
+                prop(
+                    "slot_offset",
+                    type="vec3",
+                    label="Slot offset",
+                    default=[0.0, 0.0, 0.0],
+                    help="Offset of the first slot from the receptacle origin.",
+                    group="Placement",
+                ),
+                prop(
+                    "reach",
+                    type="float",
+                    label="Placement reach",
+                    default=140.0,
+                    min=1.0,
+                    max=10000.0,
+                    help="Maximum distance at which a held Prop can be placed.",
+                    group="Placement",
+                ),
+                prop(
+                    "disabled",
+                    type="bool",
+                    label="Disabled",
+                    default=False,
+                    help="When enabled, the receptacle refuses new objects.",
+                    group="Tidy",
+                ),
+            ],
+        )
+        api.register_properties(
+            "tidygoal",
+            [
+                prop(
+                    "target",
+                    type="string",
+                    label="Target",
+                    default="all",
+                    help="Use 'all' or enter a numeric target count.",
+                    group="Goal",
+                ),
+                prop(
+                    "category",
+                    type="string",
+                    label="Category",
+                    default="any",
+                    help="Restrict progress to one Tidy category, or use 'any'.",
+                    group="Goal",
+                ),
+                prop(
+                    "show_hud",
+                    type="bool",
+                    label="Show HUD",
+                    default=True,
+                    help="Show the live Tidied: N / M counter.",
+                    group="Goal",
+                ),
+                prop(
+                    "disabled",
+                    type="bool",
+                    label="Disabled",
+                    default=False,
+                    help="When enabled, this goal stops counting progress.",
+                    group="Goal",
+                ),
+            ],
+        )
+
         # Extend the core Prop I/O instead of replacing it. The core system
         # already owns Enable/Disable/Drop/Wake and OnPickedUp/OnDropped/OnRest.
         api.register_io(
