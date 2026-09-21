@@ -393,6 +393,7 @@ def _build_plugins_menu(MainWindow):
             QMessageBox.information(
                 MainWindow, f"{p.name} v{p.version}",
                 f"{p.description or '(no description)'}\n\n"
+                f"Version: {p.version}\n"
                 f"Category: {p.category}\n"
                 f"Place its entities from here or the 2D view's right-click "
                 f"menu under Plugins ▸ {p.name}."))
