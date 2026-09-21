@@ -899,6 +899,7 @@ class Prop(Model):
         self.properties.setdefault('collision_size', [0.0, 0.0, 0.0])
         self.properties.setdefault('physics_enabled', False)
         self.properties.setdefault('no_collision', True)
+        self.properties.setdefault('collision_shape', 'auto')
         self.properties.setdefault('gravity', True)
         self.properties.setdefault('friction', 0.55)
         self.properties.setdefault('linear_damping', 0.08)
