@@ -197,10 +197,10 @@ def light_ubo_source(source):
     )
     result = _LIGHT_DECL_RE.sub(block, source, count=1)
 
-    result = re.sub(r"lights\[([^]]+)\]\.position\b", r"lights[\\1].position.xyz", result)
-    result = re.sub(r"lights\[([^]]+)\]\.color\b", r"lights[\\1].color.xyz", result)
-    result = re.sub(r"lights\[([^]]+)\]\.intensity\b", r"lights[\\1].params.x", result)
-    result = re.sub(r"lights\[([^]]+)\]\.radius\b", r"lights[\\1].params.y", result)
+    result = re.sub(r"lights\[([^]]+)\]\.position\b", r"lights[\1].position.xyz", result)
+    result = re.sub(r"lights\[([^]]+)\]\.color\b", r"lights[\1].color.xyz", result)
+    result = re.sub(r"lights\[([^]]+)\]\.intensity\b", r"lights[\1].params.x", result)
+    result = re.sub(r"lights\[([^]]+)\]\.radius\b", r"lights[\1].params.y", result)
     result = re.sub(
         r"lights\[([^]]+)\]\.shadowIndex\b",
         r"int(lights[\1].indices.x)",
