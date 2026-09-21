@@ -88,79 +88,69 @@ def test_core_prop_pickup_carry_drop_rest_without_plugins():
     assert session.props == []
 
 
-def test_session_detects_maps_without_props_and_unloads_when_removed():
-    prop = Prop(pos=[0, 0, 0])
-    logic = SimpleNamespace(things=[prop])
-    assert PropSession.has_props(logic.things)
+def test_the_registry_is_derived_from_the_authoritative_thing_list():
+    """PropSession is the Prop registry; the thing list is still the world."""
+    prop, light = Prop(pos=[0, 0, 0]), SimpleNamespace(properties={'type': 'light'})
+    logic = SimpleNamespace(things=[prop, light])
     session = PropSession(logic)
     session.start()
 
-    logic.things.clear()
-    assert session.is_empty()
-    assert session.props == []
-    assert not PropSession.has_props(logic.things)
+    assert session.props == [prop]
+    assert session.by_id(id(prop)) is prop
+    assert session.by_id(id(light)) is None
 
 
-class CountingThings(list):
-    """A thing list that records every full traversal of itself."""
-
-    def __init__(self, items):
-        super().__init__(items)
-        self.walks = 0
-
-    def __iter__(self):
-        self.walks += 1
-        return super().__iter__()
-
-
-def test_the_liveness_poll_does_not_walk_the_map_every_frame():
-    """``is_empty`` runs once per tick from both the logic thread and the
-    standalone player; deriving the live set means walking every Thing in the
-    map, so it is gated on a cheap fingerprint of the thing list."""
-    things = CountingThings([Prop(pos=[0, 0, 0])]
-                            + [SimpleNamespace(properties={'type': 'light'})
-                               for _ in range(200)])
-    session = PropSession(SimpleNamespace(things=things))
+def test_a_rebuild_adopts_a_new_prop_without_disturbing_the_others():
+    """A spawn elsewhere in the map must not reset a Prop already registered."""
+    settled = Prop(pos=[0, 0, 0])
+    logic = SimpleNamespace(things=[settled])
+    session = PropSession(logic)
     session.start()
 
-    walks_before = things.walks
-    for _ in range(PropSession.RESCAN_INTERVAL):
-        assert session.is_empty() is False
-    assert things.walks == walks_before, (
-        "the liveness poll walked the map %d times in %d ticks"
-        % (things.walks - walks_before, PropSession.RESCAN_INTERVAL))
+    settled.pos = [10.0, 20.0, 30.0]          # it has moved since it was adopted
+    home = list(settled.properties['_prop_home_pos'])
+
+    spawned = Prop(pos=[100, 0, 0])
+    logic.things.append(spawned)
+    session.rebuild()
+
+    assert session.props == [settled, spawned]
+    assert settled.properties['_prop_home_pos'] == home, (
+        "adopting a new Prop re-homed one that was already registered")
+    assert spawned.properties['_prop_home_pos'] == [100.0, 0.0, 0.0]
 
 
-def test_the_liveness_poll_still_notices_a_removal_immediately():
+def test_a_rebuild_releases_a_prop_that_left_the_world():
     prop, other = Prop(pos=[0, 0, 0]), Prop(pos=[10, 0, 0])
-    things = [prop, other]
-    session = PropSession(SimpleNamespace(things=things))
-    session.start()
-    assert session.is_empty() is False
-
-    things.remove(other)
-    assert session.is_empty() is False
-    assert session.props == [prop], "a removed Prop stayed in the session"
-
-    things.remove(prop)
-    assert session.is_empty() is True
-
-
-def test_a_same_length_swap_is_caught_by_the_periodic_rescan():
-    """The fingerprint cannot see a remove-and-add inside one poll interval,
-    which is exactly why the rescan is unconditional every N polls."""
-    prop = Prop(pos=[0, 0, 0])
-    things = [prop]
-    logic = SimpleNamespace(things=things)
+    logic = SimpleNamespace(things=[prop, other])
     session = PropSession(logic)
     session.start()
-    session.held = prop
+    session.held = other
 
-    things[0] = Prop(pos=[0, 0, 0])          # same length, different object
-    for _ in range(PropSession.RESCAN_INTERVAL + 1):
-        session.is_empty()
-    assert session.props == [], "the replaced Prop was never pruned"
+    logic.things.remove(other)
+    session.rebuild()
+
+    assert session.props == [prop]
+    assert session.by_id(id(other)) is None
     assert session.held is None, "the session kept hold of a Prop that is gone"
+    assert '_prop_home_pos' not in other.properties, (
+        "a released Prop kept the session's authored state")
+
+
+def test_an_empty_registry_is_a_valid_state():
+    """A map with no Props still has a session; it just has nothing in it."""
+    logic = SimpleNamespace(things=[SimpleNamespace(properties={'type': 'light'})])
+    session = PropSession(logic)
+    session.start()
+    assert session.props == []
+    session.tick(1 / 60.0, use_pressed=True)      # must not raise
+
+
+def test_is_prop_is_the_one_type_contract():
+    """Every tier decides what a Prop is the same way: the serialised type."""
+    assert PropSession.is_prop(Prop(pos=[0, 0, 0])) is True
+    assert PropSession.is_prop(SimpleNamespace(properties={'type': 'monster'})) is False
+    assert PropSession.is_prop(SimpleNamespace()) is False
 
 
 def test_prop_has_a_default_billboard_and_2d_menu_entry():

@@ -222,9 +222,11 @@ class PlayerPluginHost:
             return
 
         self.bridge = _BridgeLogic(things)
-        if any(getattr(t, "properties", {}).get("type") == "prop" for t in things):
-            self.bridge._props = PropSession(self.bridge)
-            self.bridge._props.start()
+        # The engine's Prop registry, exactly as the editor logic thread builds
+        # it: one session, filled from the authoritative thing list.  The player
+        # does not decide for itself which Things are Props.
+        self.bridge._props = PropSession(self.bridge)
+        self.bridge._props.start()
 
         try:
             binder = getattr(self.manager, "bind_host", None)
@@ -251,11 +253,8 @@ class PlayerPluginHost:
 
         props = self.bridge._props
         if props is not None:
-            if props.is_empty():
-                props.stop()
-                self.bridge._props = None
-            else:
-                props.tick(dt, bool(use_pressed))
+            props.tick(dt, bool(use_pressed))
+            props.sync_physics_positions()
 
         try:
             self.manager.tick(

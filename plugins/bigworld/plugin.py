@@ -201,7 +201,7 @@ class BigWorldPlugin(FioPlugin):
             pass  # never let a debug draw take down the frame
 
     def _paint_debug(self, painter, session, width, height):
-        from PyQt5.QtCore import Qt, QRect
+        from PyQt5.QtCore import QRect
         from PyQt5.QtGui import QColor, QFont
 
         s = session.stats()

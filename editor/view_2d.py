@@ -8,7 +8,6 @@ from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
 from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
                           LogicCamera, LogicSpawner, Portal, LogicState)
-from editor.scene_hierarchy import SceneHierarchy
 from engine import brush_geometry as bg  # convex/angled-brush geometry
 from engine.constants import brush_aabb_bounds
 from editor import component_edit as ce  # shared object/face/edge/vertex model
@@ -3820,7 +3819,7 @@ class View2D(QWidget):
         add_logic_timer_action = logic_menu.addAction("LogicTimer")
         add_logic_gate_action = logic_menu.addAction("LogicGate")
         add_logic_command_action = logic_menu.addAction("LogicCommand")
-        add_logic_keyvalue_action = logic_menu.addAction("State Store")
+        add_logic_state_action = logic_menu.addAction("State Store")
 
         # Node / Special submenu
         ai_menu = menu.addMenu("Nodes")
@@ -3882,7 +3881,7 @@ class View2D(QWidget):
         elif action == add_logic_gate_action:
             new_thing = LogicGate(pos=pos_3d)
             new_thing.properties['logic_type'] = 'AND' 
-        elif action == add_logic_keyvalue_action:
+        elif action == add_logic_state_action:
             new_thing = LogicState(pos=pos_3d)
             new_thing.properties['initial_data'] = {}
         elif action == add_logic_camera_action:

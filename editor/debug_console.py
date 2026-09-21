@@ -2,9 +2,9 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextBrowser, QPushButton, 
     QLabel, QCheckBox, QComboBox, QFrame, QLineEdit, QSplitter, QScrollArea
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QUrl
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QUrl
 from PyQt5 import sip
-from PyQt5.QtGui import QFont, QTextCursor, QColor, QDesktopServices, QPainter, QPixmap
+from PyQt5.QtGui import QFont, QTextCursor, QPainter, QPixmap
 from collections import deque
 import re
 

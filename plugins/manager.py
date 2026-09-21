@@ -105,7 +105,7 @@ class PluginManager:
         # Normalised entity-type name -> list[PropertySpec]. Optional typed
         # schemas plugins declare for their entities' editable properties.
         self._property_schemas: dict = {}
-        # Cross-level key/value store shared with map LogicKeyValueStores in the
+        # Cross-level key/value store shared with the map LogicState entities in the
         # editor, and a process-local dict in the dependency-light player.
         self.global_store = GlobalStore()
         # The open-ended extension surface: a process-wide event bus the engine

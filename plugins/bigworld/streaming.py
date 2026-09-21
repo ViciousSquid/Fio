@@ -489,6 +489,7 @@ class DiskStreamingSession:
 
     def _apply_saved_delta(self, lc: _LoadedCell) -> None:
         """Overlay any saved delta for this cell's UUIDs onto the fresh objects."""
+        moved = []
         for kind, uuid in lc.objs:
             entry = self._delta_by_uuid.get(uuid)
             if entry is None:
@@ -500,19 +501,32 @@ class DiskStreamingSession:
             if kind == _BRUSH:
                 self._apply_brush_rec(obj, rec)
             else:
-                self._apply_thing_rec(obj, rec)
+                if self._apply_thing_rec(obj, rec):
+                    moved.append(obj)
+        # A cell coming back puts its Things where the save left them, so the
+        # Prop domain is told which ones moved -- as one batch per cell, not a
+        # call per object. Unknown Things are ignored on the far side, so this
+        # does not have to know which of them are Props.
+        if moved:
+            session = getattr(self.logic, "_props", None)
+            if session is not None:
+                session.refile(moved)
 
     @staticmethod
-    def _apply_thing_rec(thing, rec: dict) -> None:
+    def _apply_thing_rec(thing, rec: dict) -> bool:
+        """Overlay one saved Thing record. Returns True if its position moved."""
+        placed = False
         try:
             if rec.get("pos") is not None:
                 thing.pos = list(rec["pos"])
+                placed = True
             for k, v in (rec.get("properties") or {}).items():
                 if k == "_io_connections":
                     continue
                 thing.properties[k] = v
         except Exception:
             pass
+        return placed
 
     def _apply_brush_rec(self, brush: dict, rec: dict) -> None:
         from engine.savegame import _BRUSH_OVERLAY_KEYS

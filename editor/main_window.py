@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QDialogButtonBox, QHBoxLayout
 )
 from PyQt5.QtWidgets import QShortcut
-from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, QPoint, pyqtSignal
+from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal
 from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor, QIcon
 
 from editor.things import Light, PlayerStart, Model, update_all_counters_from_entities
@@ -37,10 +37,8 @@ from editor.component_edit import (
     MODE_OBJECT, MODE_FACE, MODE_EDGE, MODE_VERTEX,
 )
 from editor.terrain_editor import TerrainEditorPanel
-from engine.terrain import Terrain
 from editor.debug_console import DebugConsole, CommandInput, debug_log
 from editor.console_commands import ConsoleCommandHandler
-from editor.procedural_generator import ProceduralMapWidget
 
 
 class Toast(QLabel):
@@ -955,7 +953,6 @@ class MainWindow(QMainWindow):
     
     def open_terrain_editor(self):
         """Open the terrain editor floating window."""
-        from PyQt5.QtWidgets import QProgressDialog
         from PyQt5.QtCore import Qt
         
        # Create terrain if it doesn't exist
@@ -4213,7 +4210,6 @@ class MainWindow(QMainWindow):
         """Extract a zip file safely, rejecting any member that would escape dest_dir."""
         import zipfile
         import os
-        import shutil
 
         dest_dir = os.path.realpath(dest_dir)
         with zipfile.ZipFile(zip_path, 'r') as zf:
@@ -4252,8 +4248,7 @@ class MainWindow(QMainWindow):
 
             # Extract package to temp directory
             temp_dir = tempfile.mkdtemp(prefix="fio_package_")
-            with zipfile.ZipFile(filePath, 'r') as zf:
-                self._safe_extract_zip(filePath, temp_dir)
+            self._safe_extract_zip(filePath, temp_dir)
 
             # Find the map JSON inside the package
             map_path = self._find_map_in_package(temp_dir)
@@ -4353,8 +4348,7 @@ class MainWindow(QMainWindow):
 
             # Extract package to temp directory
             temp_dir = tempfile.mkdtemp(prefix="fio_package_")
-            with zipfile.ZipFile(file_path, 'r') as zf:
-                self._safe_extract_zip(file_path, temp_dir)
+            self._safe_extract_zip(file_path, temp_dir)
 
             # Find the map JSON inside the package
             map_path = self._find_map_in_package(temp_dir)
@@ -4603,7 +4597,7 @@ class MainWindow(QMainWindow):
 
     def open_logic_wizard(self):
         """Open the Logic Wizard (guided I/O scenario setup)."""
-        from editor.logic_graph_widget import LogicGraphWindow, LogicGraphScene
+        from editor.logic_graph_widget import LogicGraphScene
         from editor.logic_wizard import LogicWizard
         # Reuse the existing graph window's scene if it is already open,
         # so that wizard-added connections appear there immediately.
@@ -4664,8 +4658,6 @@ class MainWindow(QMainWindow):
         )
 
         problems = validation['problems']
-        io_count = validation['io_count']
-        pathnode_count = validation['pathnode_count']
         total = validation['total']
 
         # Format validation problems.  I/O and PathNode problems use the

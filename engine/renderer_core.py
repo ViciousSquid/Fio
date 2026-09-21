@@ -21,14 +21,13 @@ Both Renderer_F and Renderer_D inherit from BaseRenderer.
 import ctypes
 import math
 import os
-from collections import defaultdict
 
 import glm
 import numpy as np
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 
-from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX, is_water_brush, brush_aabb_bounds
+from engine.constants import is_water_brush, brush_aabb_bounds
 from engine import brush_geometry
 from engine import shaders
 from engine.shaders import DEFAULT_SHADERS

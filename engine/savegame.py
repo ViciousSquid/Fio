@@ -80,7 +80,7 @@ import hashlib
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from .spatial import PARKED_DISABLED_KEY, PARKED_HIDDEN_KEY
 
@@ -591,6 +591,11 @@ def _overlay_entities(logic, level: dict) -> None:
         tid = _thing_id(t)
         if tid:
             live_things[tid] = t
+    # A restore teleports entities, so the Prop domain's spatial index has to
+    # be told about the Props among them.  Collected and handed over as a batch
+    # rather than one call per Thing: a save restores the whole level at once.
+    prop_session = getattr(logic, "_props", None)
+    restored_props = []
     for t_data in level.get("things", []):
         props = t_data.get("properties", {}) or {}
         tid = props.get("id", "")
@@ -600,6 +605,8 @@ def _overlay_entities(logic, level: dict) -> None:
         try:
             if "pos" in t_data and t_data["pos"] is not None:
                 live.pos = list(t_data["pos"])
+                if prop_session is not None:
+                    restored_props.append(live)
             for k, v in props.items():
                 if k == "_io_connections" or k in _PARKABLE_KEYS:
                     continue
@@ -611,6 +618,9 @@ def _overlay_entities(logic, level: dict) -> None:
                 _overlay_parkable(live.properties, k, props)
         except Exception:
             continue
+
+    if prop_session is not None and restored_props:
+        prop_session.refile(restored_props)
 
     # -- brushes: restore only genuinely gameplay-mutable state by id ------
     # Static geometry (pos/size/direction/…) comes from the freshly-loaded map

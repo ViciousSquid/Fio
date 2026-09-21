@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QMenu, QAction, QSizePolicy
 )
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtGui import QColor
 
 try:
     from .io_system import (

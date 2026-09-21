@@ -5,19 +5,22 @@ timers or IPC are created during normal editor startup.
 
 from __future__ import annotations
 
+import configparser
 import copy
 import json
 import html
 import os
+import platform
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import traceback
+from datetime import datetime, timezone
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication, QToolButton
+from PyQt5.QtWidgets import QApplication, QFileDialog, QToolButton
 
 
 
@@ -1632,6 +1635,11 @@ class BenchmarkResults:
     
 
     def _benchmark_results_html(self, version):
+        # Imported here rather than at module scope: fio_benchmark pulls in the
+        # world builders, and this module is meant to cost nothing until the
+        # benchmark is actually opened.
+        from .fio_benchmark import _execution_environment
+
         timestamp = datetime.now(timezone.utc).isoformat()
         environment = self._html_escape(_execution_environment())
         platform_name = self._html_escape(platform.platform())

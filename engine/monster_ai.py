@@ -9,7 +9,7 @@ import threading
 import time
 import glm
 import math
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional
 # The debug console is a Qt widget and lives in the editor package; the AI only
 # wants somewhere to write a line.  Guarded exactly like the rest of the engine
 # (see logic_thread) so the AI still runs - and is still testable - in the
@@ -19,7 +19,7 @@ try:
 except ImportError:  # pragma: no cover - exercised by the head-less player
     def debug_log(category, message):
         print(f"[{category}] {message}")
-from .constants import is_water_brush
+from .constants import is_solid_world_brush
 from .monster_constants import (
     MONSTER_SIGHT_RANGE,
     MONSTER_SHOOT_INTERVAL,
@@ -31,7 +31,6 @@ from .monster_constants import (
     MONSTER_WALL_MARGIN,
     MONSTER_STUCK_THRESHOLD,
     MONSTER_DETOUR_RANGE,
-    WEAPON_DAMAGE,
     MONSTER_SHOOT_SOUNDS,
     MONSTER_SHOOT_SOUND_DEFAULT,
     MONSTER_BITE_DISTANCE,
@@ -1169,9 +1168,7 @@ class MonsterAI:
         ray_dir = ray_dir / ray_len
 
         for brush in self.lt.brushes:
-            if brush.get('hidden') or is_water_brush(brush) or brush.get('is_fog'):
-                continue
-            if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
+            if not is_solid_world_brush(brush):
                 continue
             pos = glm.vec3(brush['pos'])
             size = glm.vec3(brush['size'])
@@ -1190,9 +1187,7 @@ class MonsterAI:
         # Fallback
         best_y = None
         for brush in self.lt.brushes:
-            if brush.get('hidden') or is_water_brush(brush) or brush.get('is_fog'):
-                continue
-            if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
+            if not is_solid_world_brush(brush):
                 continue
             pos = brush['pos']
             size = brush['size']
@@ -1215,9 +1210,7 @@ class MonsterAI:
 
         # Fallback
         for brush in self.lt.brushes:
-            if brush.get('hidden') or is_water_brush(brush) or brush.get('is_fog'):
-                continue
-            if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
+            if not is_solid_world_brush(brush):
                 continue
             pos = brush['pos']
             size = brush['size']

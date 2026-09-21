@@ -186,6 +186,10 @@ class TidySession:
 
         obj.properties.pop("_drop_requested", None)
         obj.pos = list(receptacle.slot_world_pos(index))
+        # Tidy performed this placement, so Tidy tells the Prop domain: its
+        # spatial index is derived from prop.pos and cannot see the write.
+        if prop_session is not None:
+            prop_session.moved(obj)
         obj.properties.setdefault(
             "_tidy_previous_pickup_enabled",
             bool(obj.properties.get("pickup_enabled", True)),
@@ -244,6 +248,9 @@ class TidySession:
         home = obj.properties.get("_prop_home_pos")
         if home is not None:
             obj.pos = list(home)
+            prop_session = getattr(self.logic, "_props", None)
+            if prop_session is not None:
+                prop_session.moved(obj)
 
         physics = getattr(self.logic, "_physics_world", None)
         if physics is not None:

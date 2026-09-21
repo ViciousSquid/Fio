@@ -19,10 +19,10 @@ import glm
 import math
 import os
 
-from .threaded_game_state import ThreadedGameState, RenderState
+from .threaded_game_state import ThreadedGameState
 from .player import Player
 from .camera import Camera
-from .constants import is_water_brush, brush_aabb_bounds
+from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
 from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
 from .prop_runtime import PropSession
 
@@ -44,10 +44,7 @@ except ImportError:
 
 # Import I/O system
 try:
-    from editor.io_system import (
-        IOManager, get_connections, reset_all_connections,
-        get_entity_type_for_io
-    )
+    from editor.io_system import IOManager, get_connections
     from editor.io_handlers import register_all_input_handlers
     IO_AVAILABLE = True
     print("[LogicThread] I/O System loaded successfully.")
@@ -82,22 +79,8 @@ except ImportError:
 
 # Monster AI constants (still needed for initialisation)
 from .monster_constants import (
-    MONSTER_SIGHT_RANGE,
-    MONSTER_SHOOT_INTERVAL,
-    MONSTER_SHOOT_ANIM_TIME,
-    MONSTER_MOVE_SPEED,
-    MONSTER_STOP_DISTANCE,
-    MONSTER_GRAVITY,
-    MONSTER_TERMINAL_VEL,
-    MONSTER_MIN_WIDTH,
-    MONSTER_WALL_MARGIN,
-    MONSTER_DEAD_FALL_SPEED,
-    MONSTER_STUCK_THRESHOLD,
-    MONSTER_DETOUR_RANGE,
     WEAPON_DAMAGE,
-    WEAPON_SHOOT_SOUND,
     NON_FIRING_WEAPONS,
-    MONSTER_PROJECTILE_SPEED,
     MONSTER_PROJECTILE_MAX_DIST,
     MONSTER_PROJECTILE_SPRITE_SIZE,
 )
@@ -373,8 +356,9 @@ class LogicThread(threading.Thread):
         self._trigger_brush_by_bid = {}
         self._use_trigger_entries = []
         self._pickup_things = []
-        self._prop_things = []
-        self._prop_by_id = {}
+        # The Prop registry (engine.prop_runtime.PropSession).  Created on
+        # play-mode enter and None in the editor, where nothing simulates.
+        self._props = None
         self._levelchanger_things = []
         self._monster_things = []
         self._monster_by_id = {}
@@ -479,13 +463,12 @@ class LogicThread(threading.Thread):
 
         # PERF: precomputed thing lists for _handle_interactions / _handle_pickups
         self._pickup_things = [t for t in self.things if Pickup and isinstance(t, Pickup)]
-        # Props use the serialised type contract so the standalone player
-        # fallback and editor Prop class share the same trigger semantics.
-        self._prop_things = [
-            t for t in self.things
-            if getattr(t, 'properties', {}).get('type') == 'prop'
-        ]
-        self._prop_by_id = {id(t): t for t in self._prop_things}
+        # Props are not cached here.  PropSession is the registry for the Prop
+        # domain and a second list would be a competing copy of it; this is the
+        # point at which it re-derives itself from the thing list, alongside
+        # every other entity cache, and the engine reads Props back off it.
+        if self._props is not None:
+            self._props.rebuild(self.things)
         self._levelchanger_things = [t for t in self.things if LevelChanger and isinstance(t, LevelChanger)]
 
         # PERF: precomputed monster list + id lookup, used by MonsterAI so it
@@ -1111,12 +1094,12 @@ class LogicThread(threading.Thread):
             self._physics_world.rebuild(self._physics_body_brushes)
             self.monster_ai.set_spatial_grid(self._spatial_grid)
 
-            # Props are a core feature, but do not allocate a runtime session
-            # for maps that do not contain one.
-            self._props = None
-            if PropSession.has_props(self.things):
-                self._props = PropSession(self)
-                self._props.start()
+            # The Prop session is the registry for the Prop domain, so it
+            # exists for the whole play session and is filled by
+            # _build_entity_caches below.  A map with no Props leaves it empty,
+            # which costs an empty list and an empty dict.
+            self._props = PropSession(self)
+            self._props.start()
 
             # Reset cinematic state (mover_path_states already reset by _init_movers)
             self.cinematic_state = None
@@ -1844,18 +1827,15 @@ class LogicThread(threading.Thread):
 
         # Gameplay
         self._handle_interactions(use_key)
-        props = getattr(self, '_props', None)
-        if props is not None:
-            # Editor/runtime map edits can remove every Prop while playing.
-            # Release the session immediately instead of retaining objects.
-            if props.is_empty():
-                props.stop()
-                self._props = None
-            else:
-                props.tick(delta, use_key)
+        if self._props is not None:
+            self._props.tick(delta, use_key)
         physics_world = getattr(self, '_physics_world', None)
         if physics_world is not None:
             physics_world.step(delta, self.player)
+            # Physics owned those positions for the duration of the step; the
+            # Prop domain takes its index back into line now that it is over.
+            if self._props is not None:
+                self._props.sync_physics_positions()
 
         self._check_pickups()
         self._handle_triggers(use_key, delta)
@@ -2475,7 +2455,7 @@ class LogicThread(threading.Thread):
         entity_types = [1]  # player
         entity_ids = [id(self.player)]
 
-        for entity in self._prop_things:
+        for entity in (self._props.props if self._props is not None else ()):
             if not getattr(entity, 'properties', {}).get('disabled', False):
                 entities.append(entity)
                 entity_types.append(2)
@@ -2553,7 +2533,8 @@ class LogicThread(threading.Thread):
                         if activator_type == 'player':
                             activator = self.player
                         elif activator_type == 'props':
-                            activator = self._prop_by_id.get(entity_id)
+                            activator = (self._props.by_id(entity_id)
+                                         if self._props is not None else None)
                         else:
                             activator = self._monster_by_id.get(entity_id)
 
@@ -2577,7 +2558,8 @@ class LogicThread(threading.Thread):
                         if activator_type == 'player':
                             activator = self.player
                         elif activator_type == 'props':
-                            activator = self._prop_by_id.get(entity_id)
+                            activator = (self._props.by_id(entity_id)
+                                         if self._props is not None else None)
                         else:
                             activator = self._monster_by_id.get(entity_id)
 
@@ -3636,9 +3618,7 @@ class LogicThread(threading.Thread):
             else:
                 wall_candidates = all_collision_brushes
             for brush in wall_candidates:
-                if brush.get('hidden') or is_water_brush(brush) or brush.get('is_fog'):
-                    continue
-                if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
+                if not is_solid_world_brush(brush):
                     continue
                 pos = brush['pos']
                 size = brush['size']

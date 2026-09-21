@@ -41,10 +41,10 @@ from PyQt5.QtWidgets import (
     QWidget, QSpinBox, QApplication, QMessageBox, QPushButton
 )
 from PyQt5.QtCore import Qt, QSize
-from PyQt5.QtGui  import QFont, QFontMetrics
+from PyQt5.QtGui  import QFont
 
 try:
-    from .io_system import get_entity_type_for_io, IO_REGISTRY
+    from .io_system import get_entity_type_for_io
     IO_AVAILABLE = True
 except ImportError:
     IO_AVAILABLE = False

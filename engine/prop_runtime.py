@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import math
 
+from .spatial import CellIndex, cell_of_point
+
 
 def _vec(p):
     return float(p[0]), float(p[1]), float(p[2])
@@ -27,90 +29,229 @@ def _dot(a, b):
 
 
 class PropSession:
-    """Pickup/carry/drop orchestration for core Props."""
+    """The Prop domain: which Things are Props, and their session state.
 
-    # How many polls may go by on the cheap fingerprint alone before
-    # ``is_empty`` re-derives the live set the expensive way.  Half a second at
-    # 60Hz: short enough that a stale Prop can never be interacted with for a
-    # noticeable time, long enough that the full scan costs nothing per frame.
-    RESCAN_INTERVAL = 30
+    PropSession is the authoritative registry for Props at runtime. The
+    authoritative *world* data is still the thing list -- ``editor_state.things``
+    in the editor, the package's things in the standalone player -- and the
+    registry here is derived from it by :meth:`rebuild`, called from the one
+    place each tier re-derives its entity caches. Nothing else keeps a second
+    list of Props: ``LogicThread`` asks this session.
+
+    Ownership, stated once so it can be checked:
+
+    ===========================  =========================================
+    Prop data and session state  ``PropSession``
+    Position while in motion     ``PhysicsWorld``
+    Placement / reset / restore  whichever subsystem performs the operation
+    Spatial membership           ``PropSession``'s :class:`CellIndex`
+    Synchronisation              an explicit :meth:`moved` call
+    ===========================  =========================================
+
+    **``prop.pos`` is the source of truth. The cell index is a derived
+    acceleration structure.** It narrows a query to a few cells; the answer is
+    then decided by reading live positions. A cell that has gone stale can
+    therefore cost a Prop its place in a result, never put a wrong one in it —
+    and :meth:`moved` is how a subsystem that moves a Prop keeps even that from
+    happening.
+
+    No ``PhysicsBody`` state is mirrored here: the session asks
+    ``PhysicsWorld`` to make a body kinematic, to wake it, or to call back on
+    rest, and reads nothing back. ``SpatialGrid`` remains the index of the
+    static world; this index holds Props, which are dynamic and deliberately
+    absent from it.
+    """
+
+    #: Query radius used when a Prop declares no ``pickup_reach`` of its own.
+    DEFAULT_PICKUP_REACH = 110.0
 
     def __init__(self, logic):
         self.logic = logic
         self.props = []
         self.held = None
-        # Cheap change detector for ``logic.things`` — see ``is_empty``.
-        self._things_fingerprint = None
-        self._polls_since_scan = 0
+        self._by_id = {}
+        # Spatial membership for the Prop domain, on the one cell convention
+        # the rest of Fio partitions space with (engine.spatial).
+        self._cells = CellIndex()
+        self._filed = {}          # id(prop) -> the cell it is filed under
+        self._max_reach = self.DEFAULT_PICKUP_REACH
 
     @staticmethod
-    def has_props(things):
-        return any(getattr(t, "properties", {}).get("type") == "prop" for t in things)
+    def is_prop(thing):
+        """The serialised type contract, so every tier agrees what a Prop is."""
+        return getattr(thing, "properties", {}).get("type") == "prop"
 
     @property
     def physics(self):
         return getattr(self.logic, "_physics_world", None)
 
-    def start(self):
-        self.props = [t for t in self.logic.things
-                      if getattr(t, "properties", {}).get("type") == "prop"]
-        self.held = None
-        self._things_fingerprint = self._fingerprint()
-        self._polls_since_scan = 0
+    # -- registry ---------------------------------------------------------
+
+    def rebuild(self, things=None):
+        """Re-derive the registry from the authoritative thing list.
+
+        Called wherever a tier rebuilds its entity caches -- play-mode enter,
+        ``LogicSpawner``, savegame load, a console spawn, package load in the
+        player -- so the Prop registry goes stale at exactly the same moments as
+        every other derived entity list, and at no others. There is no polling:
+        a Prop that enters or leaves the world does so through a code path that
+        already has to say so.
+
+        Adopting and releasing are per-Prop, so a rebuild never disturbs a Prop
+        that was already registered -- its authored home position and its
+        physics wiring survive a spawn elsewhere in the map.
+        """
+        if things is None:
+            things = self.logic.things
+        current = [t for t in things if self.is_prop(t)]
+        current_ids = {id(t) for t in current}
+
         for prop in self.props:
-            prop.properties["_prop_home_pos"] = list(prop.pos)
-            prop.properties.pop("_drop_requested", None)
-            if self.physics is not None:
-                self.physics.set_rest_callback(prop, self._on_rest)
-                self.physics.set_kinematic(prop, False)
+            if id(prop) not in current_ids:
+                self._release(prop, restore_home=False)
+
+        known = self._by_id
+        for prop in current:
+            if id(prop) not in known:
+                self._adopt(prop)
+
+        self.props = current
+        self._by_id = {id(t): t for t in current}
+        if self.held is not None and id(self.held) not in current_ids:
+            self.held = None
+
+    def by_id(self, entity_id):
+        """The Prop with this ``id()``, or None. The engine's Prop lookup."""
+        return self._by_id.get(entity_id)
+
+    def _adopt(self, prop):
+        """Take responsibility for a Prop that has entered the world."""
+        prop.properties["_prop_home_pos"] = list(prop.pos)
+        prop.properties.pop("_drop_requested", None)
+        self._file(prop)
+        if self.physics is not None:
+            self.physics.set_rest_callback(prop, self._on_rest)
+            self.physics.set_kinematic(prop, False)
+
+    def _release(self, prop, restore_home=True):
+        """Hand a Prop back: drop our callbacks and our authored state."""
+        home = prop.properties.pop("_prop_home_pos", None)
+        prop.properties.pop("_drop_requested", None)
+        self._unfile(prop)
+        if self.physics is not None:
+            self.physics.set_rest_callback(prop, None)
+            self.physics.set_kinematic(prop, False)
+        if restore_home and home is not None:
+            prop.pos = home
+
+    # -- spatial membership -----------------------------------------------
+
+    def _reach_of(self, prop):
+        try:
+            return float(prop.properties.get("pickup_reach", self.DEFAULT_PICKUP_REACH))
+        except (TypeError, ValueError):
+            return self.DEFAULT_PICKUP_REACH
+
+    def _file(self, prop):
+        coord = cell_of_point(float(prop.pos[0]), float(prop.pos[2]))
+        self._cells.insert_point(prop, float(prop.pos[0]), float(prop.pos[2]))
+        self._filed[id(prop)] = coord
+        # The query radius has to cover the furthest-reaching Prop, or a Prop
+        # with a large authored reach would be filtered out by a radius derived
+        # from the default one.
+        reach = self._reach_of(prop)
+        if reach > self._max_reach:
+            self._max_reach = reach
+
+    def _unfile(self, prop):
+        coord = self._filed.pop(id(prop), None)
+        if coord is not None:
+            self._cells.remove_point(prop, coord)
+
+    def moved(self, prop):
+        """Tell the Prop domain that *prop* has been moved to a new position.
+
+        The synchronisation half of the ownership contract. Whoever moved the
+        Prop — a placement, a reset, a savegame restore, a streaming layer
+        bringing a cell back — calls this once afterwards, and its cell
+        membership is brought back in line with ``prop.pos``.
+
+        Cheap and idempotent: a Prop that has not left its cell costs a
+        comparison. Unknown Props are ignored, so a caller never has to check
+        whether the thing it moved was a Prop.
+        """
+        previous = self._filed.get(id(prop))
+        if previous is None:
+            return
+        x, z = float(prop.pos[0]), float(prop.pos[2])
+        coord = cell_of_point(x, z)
+        if coord == previous:
+            return
+        self._cells.remove_point(prop, previous)
+        self._cells.insert_point(prop, x, z)
+        self._filed[id(prop)] = coord
+
+    def refile(self, props):
+        """Batch half of the synchronisation contract.
+
+        A subsystem that moves many Props at once does not call :meth:`moved`
+        in a loop — it hands the set over here. Everything that can be decided
+        in bulk already has been by then: the caller's own batch interface
+        (see ``PhysicsWorld.entities_that_changed_cell``) is what narrows a
+        world of bodies down to the few that actually left their cell, so what
+        arrives is the set whose membership is genuinely wrong, and re-filing
+        it is a handful of dict and list operations.
+        """
+        for prop in props:
+            self.moved(prop)
+
+    def sync_physics_positions(self):
+        """Take the Props physics has moved out of their cells, and re-file them.
+
+        The Prop domain owns its index, so it is the session that asks — after
+        the physics update, once per frame. The question costs one vectorised
+        comparison over the body arrays no matter how many bodies there are,
+        and normally answers "none", because a body has to cross a whole
+        512-unit column to need re-filing.
+        """
+        physics = self.physics
+        if physics is None:
+            return
+        changed = getattr(physics, "entities_that_changed_cell", None)
+        if changed is None:
+            return
+        moved = changed()
+        if moved:
+            self.refile(moved)
+
+    def props_within(self, x, z, radius):
+        """Broad phase: Props filed in cells the circle ``(x, z, radius)`` reaches.
+
+        A superset — a cell is bigger than the circle — so every caller filters
+        the result against live positions. That is the point: the index picks
+        which Props are worth looking at, and ``prop.pos`` decides.
+        """
+        cells = self._cells
+        found = []
+        for coord in cells.cells_within(x, z, radius):
+            found.extend(cells.cell(coord))
+        return found
+
+    # -- session lifecycle ------------------------------------------------
+
+    def start(self):
+        self.held = None
+        self.rebuild()
 
     def stop(self):
         for prop in self.props:
-            home = prop.properties.pop("_prop_home_pos", None)
-            prop.properties.pop("_drop_requested", None)
-            if self.physics is not None:
-                self.physics.set_rest_callback(prop, None)
-                self.physics.set_kinematic(prop, False)
-            if home is not None:
-                prop.pos = home
+            self._release(prop)
         self.held = None
-        self.props.clear()
-
-    def _fingerprint(self):
-        things = self.logic.things
-        return (id(things), len(things))
-
-    def is_empty(self):
-        """Prune Props that left the world, and report whether any remain.
-
-        Nothing tells the session when a map edit removes a Thing mid-play, so
-        this is a poll — and it runs every tick, from both the editor logic
-        thread and the standalone player.  Deriving the live set means walking
-        *every* Thing in the map, which on a large map is far more per-frame
-        Python than a liveness check is worth, so the walk is gated on a cheap
-        fingerprint of the things list (its identity and length).  Adding or
-        removing a Thing changes the fingerprint and is caught on the very next
-        poll; the two cases it cannot see on its own — a same-poll
-        remove-then-add, and a wholesale list replacement that happens to reuse
-        the freed list's id at the same length — are caught by the periodic
-        rescan, which bounds staleness to ``RESCAN_INTERVAL`` polls regardless.
-        """
-        fingerprint = self._fingerprint()
-        if (fingerprint == self._things_fingerprint
-                and self._polls_since_scan < self.RESCAN_INTERVAL):
-            self._polls_since_scan += 1
-            return not self.props
-
-        self._things_fingerprint = fingerprint
-        self._polls_since_scan = 0
-        live = {id(t) for t in self.logic.things
-                if getattr(t, "properties", {}).get("type") == "prop"}
-        if len(live) == len(self.props) and all(id(prop) in live for prop in self.props):
-            return False
-        self.props = [prop for prop in self.props if id(prop) in live]
-        if self.held is not None and id(self.held) not in live:
-            self.held = None
-        return not self.props
+        self.props = []
+        self._by_id = {}
+        self._cells.clear()
+        self._filed.clear()
+        self._max_reach = self.DEFAULT_PICKUP_REACH
 
     def _fire(self, prop, output):
         io = getattr(self.logic, "io_manager", None)
@@ -134,9 +275,16 @@ class PropSession:
             self._pick_in_view(eye, forward)
 
     def _pick_in_view(self, eye, forward):
+        """The Prop the player is looking at, within its pickup reach.
+
+        Spatial membership narrows this to the Props filed near the player;
+        the decision is then made on live positions, so the index can only ever
+        affect *which* Props are examined, never the answer for one that is.
+        """
+        candidates = self.props_within(eye[0], eye[2], self._max_reach)
         best = None
         best_distance = None
-        for prop in self.props:
+        for prop in candidates:
             p = prop.properties
             if p.get("disabled") or not p.get("pickup_enabled", True):
                 continue
@@ -167,6 +315,7 @@ class PropSession:
             eye[1] + forward[1] * distance + float(offset[1]),
             eye[2] + forward[2] * distance + float(offset[2]),
         ]
+        self.moved(prop)
         if not (use_pressed or p.pop("_drop_requested", False)):
             self.logic.current_hud_message = "[E] Drop"
             return

@@ -61,6 +61,35 @@ def is_water_brush(brush):
     return False
 
 
+def is_solid_world_brush(brush):
+    """Single source of truth for "is this brush part of the solid world?".
+
+    The rule every collision consumer shares: a brush is solid unless it is
+    hidden, fog, water, or a trigger volume that is not also a mover or a door.
+    It was written out identically in five places -- the monster AI's three
+    no-grid fallbacks, the monster wall query in the logic thread, and the
+    player's own predicate -- which is how paths that are *supposed* to agree
+    about what a wall is end up disagreeing.
+
+    Two nearby predicates deliberately do not use this, and should not be
+    folded into it:
+
+    * ``SpatialGrid.populate`` asks ``authored_hidden`` rather than ``hidden``,
+      because it builds a durable index that has to outlive a streaming layer
+      parking a cell (see ``engine.spatial``), and it files water separately
+      rather than discarding it.
+    * ``Player._blocks_player`` adds ``disabled`` and ``_physics_body`` on top
+      of this, because it classifies movers and doors -- which never went
+      through the grid -- and because a dynamic body is simulated rather than
+      collided with as a wall.
+    """
+    if brush.get('hidden') or brush.get('is_fog'):
+        return False
+    if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
+        return False
+    return not is_water_brush(brush)
+
+
 # Runtime-only keys written to brush dicts by the cached-AABB helper below.
 # Stripped on serialisation alongside the renderer's own private keys.
 AABB_RUNTIME_KEYS = ('_aabb_sig', '_aabb_bounds')

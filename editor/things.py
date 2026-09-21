@@ -8,9 +8,8 @@ import copy
 import os
 import math
 import uuid
-from PyQt5.QtGui import QPixmap, QColor
+from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt
-import json
 import ast
 
 from . import state_values as _sv
@@ -1708,7 +1707,7 @@ class LogicState(Thing):
     Inputs and outputs are declared in :mod:`editor.io_system` and implemented
     in :mod:`editor.io_handlers`; see ``editor/LOGIC.md`` for the whole model.
     """
-    pixmap_path = "assets/sprites/logic_keyvalue.png"
+    pixmap_path = "assets/sprites/logic_state.png"
 
     #: Type token written to map files.
     map_type = 'logicstate'
@@ -2080,11 +2079,6 @@ def _same_value(a, b) -> bool:
         return False
     return type(a) is type(b) and a == b
 
-
-#: Pre-2.4 name for the state entity.  Kept as an alias so existing imports,
-#: plugins and the persistent-registry attribute path keep resolving; the two
-#: names are the same class, so ``isinstance`` checks written either way agree.
-LogicKeyValueStore = LogicState
 
 
 # =============================================================================

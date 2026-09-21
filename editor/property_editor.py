@@ -5,8 +5,8 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QToolButton, QSlider, QTabWidget, QGroupBox, QScrollArea,
                              QFrame, QDoubleSpinBox, QSizePolicy,
                              QTableWidget, QTableWidgetItem)
-from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QIcon, QFont
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor
 from editor.things import (Thing, Light, Pickup, Monster, Model, Prop, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
                            LogicState)
@@ -2307,7 +2307,7 @@ class PropertyEditor(QWidget):
             ):
                 continue
 
-            # LogicKeyValueStore properties handled by its dedicated group.
+            # LogicState properties handled by its dedicated group.
             if isinstance(thing, LogicState) and key in (
                 'store_name',
                 'initial_data',
