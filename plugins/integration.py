@@ -364,7 +364,7 @@ def _build_plugins_menu(MainWindow):
         return
 
     for plugin in mgr.plugins:
-        sub = menu.addMenu(f"{plugin.name}  v{plugin.version}")
+        sub = menu.addMenu(plugin.name)
 
         # Enable/disable toggle (checked = on).
         toggle = sub.addAction("Enabled")
