@@ -1092,6 +1092,19 @@ class PropertyEditor(QWidget):
         )
         self._widgets['damage_spin'] = dmg_spin
 
+        # A trigger that detects Props cannot currently deal player damage.
+        # Keep the Damage section visible so its configuration is preserved, but
+        # disable it while the Props filter is selected.
+        props_filter_cb = self._widgets.get('trigger_filter_props_cb')
+        damage_enabled = not (
+            props_filter_cb is not None and props_filter_cb.isChecked()
+        )
+        dmg_group.setEnabled(damage_enabled)
+        if props_filter_cb is not None:
+            props_filter_cb.toggled.connect(
+                lambda checked: dmg_group.setEnabled(not checked)
+            )
+
         layout.addWidget(dmg_group)
         layout.addStretch()
 
