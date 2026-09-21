@@ -1114,10 +1114,22 @@ class PropertyEditor(QWidget):
 
         return w
     def _disable_trigger_damage_if_props(self, props_selected):
-        """Clear trigger damage when the Props detection filter is selected."""
+        """Temporarily clear trigger damage while Props detection is selected."""
         hurt_cb = self._widgets.get('hurt_cb')
-        if props_selected and hurt_cb is not None and hurt_cb.isChecked():
-            hurt_cb.setChecked(False)
+        if hurt_cb is None:
+            return
+
+        if props_selected:
+            # Remember the state so disabling Props restores exactly what the
+            # user had configured before the damage controls were greyed out.
+            self._trigger_damage_before_props = hurt_cb.isChecked()
+            if hurt_cb.isChecked():
+                hurt_cb.setChecked(False)
+        else:
+            previous = getattr(self, '_trigger_damage_before_props', None)
+            if previous is not None:
+                hurt_cb.setChecked(previous)
+                self._trigger_damage_before_props = None
 
     def _create_mover_tab(self, brush):
         w = QWidget()
