@@ -193,6 +193,7 @@ def augment_fiopak(pak_path: str, log=None) -> dict:
     maps: Dict[str, dict] = {}
     types: Set[str] = set()
     declared_names: Set[str] = set()
+    map_plugins: List = []
     for name in map_names:
         try:
             data = json.loads(entries[name].decode("utf-8"))
@@ -201,6 +202,11 @@ def augment_fiopak(pak_path: str, log=None) -> dict:
         maps[name] = data
         types |= collect_entity_types(data)
         declared_names |= collect_required_plugin_names(data)
+        if mgr is not None:
+            try:
+                map_plugins.extend(mgr.required_plugins_for_map(data))
+            except Exception:
+                pass
 
     # Global plugins to ship: any the maps named, plus any enabled global plugin
     # (enabling one in the editor is the author opting the game into that mode).
@@ -217,7 +223,10 @@ def augment_fiopak(pak_path: str, log=None) -> dict:
                 seen.add(id(p))
                 global_plugins.append(p)
 
-    plugin_files = required_plugin_files(types, extra_plugins=global_plugins)
+    plugin_files = required_plugin_files(
+        types,
+        extra_plugins=list(global_plugins) + list(map_plugins),
+    )
     if not plugin_files:
         return {"plugins": [], "added_paths": set()}
 
@@ -226,8 +235,13 @@ def augment_fiopak(pak_path: str, log=None) -> dict:
     global_names: List[str] = []
     global_config: Dict[str, dict] = {}
     if mgr is not None:
-        entity_names = [mgr.plugin_package_name(p)
-                        for p in mgr.required_plugins_for_types(types)]
+        entity_plugins = list(mgr.required_plugins_for_types(types))
+        seen_entity_plugins = {id(p) for p in entity_plugins}
+        for p in map_plugins:
+            if p is not None and id(p) not in seen_entity_plugins:
+                seen_entity_plugins.add(id(p))
+                entity_plugins.append(p)
+        entity_names = [mgr.plugin_package_name(p) for p in entity_plugins]
         for p in global_plugins:
             nm = mgr.plugin_package_name(p)
             global_names.append(nm)
