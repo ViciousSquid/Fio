@@ -521,6 +521,56 @@ class PluginManager:
                 out.append(plugin)
         return out
 
+    def migrate_map_data(self, map_data) -> dict:
+        """Run every plugin's legacy map migration hook in place."""
+        if not isinstance(map_data, dict):
+            return map_data
+        for plugin in self.plugins + self._builtin_games:
+            if not self._overrides(plugin, "migrate_map_data"):
+                continue
+            try:
+                plugin.migrate_map_data(map_data)
+            except Exception:
+                self._log(
+                    f"migrate_map_data() failed for '{plugin.name}':\n"
+                    f"{traceback.format_exc()}"
+                )
+        return map_data
+
+    def required_plugins_for_map(self, map_data) -> List[FioPlugin]:
+        """Plugins required by a map's entity types or plugin activation hook."""
+        if not isinstance(map_data, dict):
+            return []
+        self.migrate_map_data(map_data)
+        types = []
+        for t in map_data.get("things", []) or []:
+            if not isinstance(t, dict):
+                continue
+            typ = t.get("type") or t.get("properties", {}).get("type")
+            if typ:
+                types.append(typ)
+
+        seen = set()
+        out = []
+        for plugin in self.required_plugins_for_types(types):
+            if id(plugin) not in seen:
+                seen.add(id(plugin))
+                out.append(plugin)
+
+        for plugin in self.plugins + self._builtin_games:
+            if id(plugin) in seen or not self._overrides(plugin, "map_uses_plugin"):
+                continue
+            try:
+                if plugin.map_uses_plugin(map_data):
+                    seen.add(id(plugin))
+                    out.append(plugin)
+            except Exception:
+                self._log(
+                    f"map_uses_plugin() failed for '{plugin.name}':\n"
+                    f"{traceback.format_exc()}"
+                )
+        return out
+
     # -- auto-enable on level load -----------------------------------------
     def auto_enable_for_types(self, type_names) -> List[FioPlugin]:
         """Enable any disabled plugin that owns one of *type_names*.
@@ -564,21 +614,15 @@ class PluginManager:
         return disabled
 
     def auto_enable_for_map(self, map_data) -> List[FioPlugin]:
-        """Enable plugins whose entity types appear in *map_data*.
-
-        *map_data* is a loaded level dict; its ``things`` are scanned for the
-        same ``type`` strings the editor/player use to build entities. A no-op
-        (returns ``[]``) for maps that reference no plugin-owned entities.
-        """
-        types: List[str] = []
-        things = map_data.get("things", []) if isinstance(map_data, dict) else []
-        for t in things:
-            if not isinstance(t, dict):
-                continue
-            typ = t.get("type") or t.get("properties", {}).get("type")
-            if typ:
-                types.append(typ)
-        return self.auto_enable_for_types(types)
+        """Enable plugins required by entity types and map-specific activation hooks."""
+        newly: List[FioPlugin] = []
+        for plugin in self.required_plugins_for_map(map_data):
+            if not self.is_enabled(plugin):
+                self.set_enabled(plugin, True, auto=True)
+                self._debug(
+                    f"Auto-enabled plugin '{plugin.name}' for loaded level")
+                newly.append(plugin)
+        return newly
 
     def plugin_package_dir(self, plugin: FioPlugin) -> Optional[str]:
         """Absolute filesystem directory of a plugin's package, or None."""
