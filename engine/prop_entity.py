@@ -31,7 +31,12 @@ except ImportError:  # standalone player / Android: no PyQt5
 
 #: Authored defaults, applied with ``setdefault`` so saved values always win.
 PROP_DEFAULTS = {
-    'render_mode': 'model',
+    # 'billboard', not 'model': this table ships a sprite_path and no
+    # model_path, so 'model' described a prop with no model to draw. The
+    # defaults have to be internally coherent on their own -- a prop built
+    # from this table alone must be drawable, without anything having to
+    # correct it afterwards.
+    'render_mode': 'billboard',
     'sprite_path': 'assets/sprites/pickup.png',
     'sprite_size': [32.0, 32.0],
     'mass': 1.0,
@@ -94,19 +99,28 @@ class Prop(_ModelBase):
     def _implied_render_mode(self):
         """The representation this prop's authored assets imply.
 
-        ``render_mode`` is authoritative, and a record that states one is never
-        second-guessed. A record that states none needs a default that can
-        actually draw something, and a fixed one cannot: PROP_DEFAULTS ships a
-        ``sprite_path`` but no ``model_path``, so defaulting to ``'model'``
-        produced a prop classified as a model with no model to draw -- it
-        reached neither the model list nor the sprite list and was rendered by
-        nothing at all. That is what the editor's "add Prop" action created.
+        ``render_mode`` is authoritative: a record that states one is never
+        second-guessed. A record that states none gets the mode its assets
+        support, by one rule:
 
-        So the default follows the assets: a model when one is set, otherwise
-        the billboard whose texture is always present. Resolved once here
-        rather than in the renderer, which keeps ``render_mode`` a single
-        authoritative property everywhere downstream and adds no per-frame
-        branch to a hot path.
+        =========================  ==========================================
+        authored assets            resolved ``render_mode``
+        =========================  ==========================================
+        ``model_path`` only        ``'model'``
+        ``sprite_path`` only       ``'billboard'``
+        both                       ``'model'`` -- a mesh is the richer
+                                   representation, and ``sprite_path`` is
+                                   always populated from PROP_DEFAULTS, so
+                                   treating its presence as a tie would make
+                                   every model-bearing prop a billboard
+        neither                    the PROP_DEFAULTS value, i.e. the author
+                                   cleared the shipped sprite and supplied no
+                                   mesh; nothing is invented for them
+        =========================  ==========================================
+
+        Resolved once here rather than in the renderer, so ``render_mode``
+        stays a single authoritative property everywhere downstream and no
+        per-frame branch is added to a hot path.
         """
         if self.properties.get('model_path'):
             return 'model'

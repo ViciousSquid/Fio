@@ -89,3 +89,39 @@ def test_the_implied_mode_survives_a_round_trip():
     restored = Thing.from_dict(prop.to_dict())
     assert restored.properties['render_mode'] == 'billboard'
     assert _drawn_as(restored) == {'sprite'}
+
+
+def test_the_defaults_table_is_internally_coherent():
+    """PROP_DEFAULTS alone must describe a drawable prop.
+
+    The table used to ship a sprite_path with render_mode='model' and no
+    model_path, so a prop built from the defaults was explicitly told to draw
+    a mesh it did not have. Nothing downstream should have to correct the
+    defaults for them to make sense.
+    """
+    from engine.prop_entity import PROP_DEFAULTS
+
+    assert PROP_DEFAULTS['render_mode'] == 'billboard'
+    assert PROP_DEFAULTS['sprite_path'], "billboard mode with no sprite to draw"
+    assert 'model_path' not in PROP_DEFAULTS, (
+        "the table claims a model; then 'model' would be the coherent default")
+
+
+def test_both_assets_present_resolves_to_model():
+    """The one 2.5 rule for the ambiguous case.
+
+    sprite_path is always populated from PROP_DEFAULTS, so treating its
+    presence as a tie would make every model-bearing prop a billboard.
+    """
+    prop = Prop(pos=[0, 0, 0],
+                properties={'model_path': 'm.obj', 'sprite_path': 's.png'})
+    assert prop.properties['render_mode'] == 'model'
+    assert _drawn_as(prop) == {'model'}
+
+
+def test_neither_asset_present_invents_nothing():
+    """An author who clears the sprite and supplies no mesh gets the default."""
+    from engine.prop_entity import PROP_DEFAULTS
+
+    prop = Prop(pos=[0, 0, 0], properties={'sprite_path': ''})
+    assert prop.properties['render_mode'] == PROP_DEFAULTS['render_mode']
