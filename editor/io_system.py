@@ -732,8 +732,8 @@ def register_default_io():
             IODef('Enable', 'Enable this trigger'),
             IODef('Disable', 'Disable this trigger'),
             IODef('Toggle', 'Toggle enabled state'),
-            IODef('TouchTest', 'Fire OnTrigger if player is inside'),
-            IODef('Teleport', 'Teleport the touching player to target_node'),
+            IODef('TouchTest', 'Fire OnTrigger if a filtered activator is inside'),
+            IODef('Teleport', 'Teleport the touching activator to target_node'),
             IODef('SetTargetNode', 'Change the target PathNode name', 'string'),
             IODef('Hide', 'Hide this trigger'),
             IODef('Show', 'Show this trigger'),
@@ -743,9 +743,9 @@ def register_default_io():
         ],
         outputs=[
             IODef('OnTrigger', 'Fired when activated'),
-            IODef('OnStartTouch', 'Fired when player enters'),
-            IODef('OnEndTouch', 'Fired when player exits'),
-            IODef('OnTeleport', 'Fired after a player is teleported'),
+            IODef('OnStartTouch', 'Fired when a filtered activator enters'),
+            IODef('OnEndTouch', 'Fired when a filtered activator exits'),
+            IODef('OnTeleport', 'Fired after an activator is teleported'),
         ]
     )
     
