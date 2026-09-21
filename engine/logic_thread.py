@@ -583,6 +583,10 @@ class LogicThread(threading.Thread):
                 scale = list(scale)
 
             rot = props.get('rotation', [0, 0, 0])
+            is_dynamic_prop = (
+                props.get('type') == 'prop'
+                and props.get('physics_enabled', False)
+            )
 
             # Check for explicit collision_size (forces AABB mode)
             collision_size = props.get('collision_size')
@@ -598,6 +602,8 @@ class LogicThread(threading.Thread):
                     'is_water': False,
                     'is_fog': False,
                     '_model_collision': True,
+                    '_prop_entity': thing,
+                    '_dynamic_prop': is_dynamic_prop,
                     '_collision_mode': 'aabb',
                 })
                 continue
@@ -616,6 +622,8 @@ class LogicThread(threading.Thread):
                     'is_water': False,
                     'is_fog': False,
                     '_model_collision': True,
+                    '_prop_entity': thing,
+                    '_dynamic_prop': is_dynamic_prop,
                     '_collision_mode': 'mesh',
                     '_mesh_triangles': mesh_tris,
                     '_mesh_bounds': self._compute_mesh_bounds(mesh_tris),
@@ -648,6 +656,8 @@ class LogicThread(threading.Thread):
                     'is_water': False,
                     'is_fog': False,
                     '_model_collision': True,
+                    '_prop_entity': thing,
+                    '_dynamic_prop': is_dynamic_prop,
                     '_collision_mode': 'aabb',
                 })
         return brushes
