@@ -711,6 +711,24 @@ class MainWindow(QMainWindow):
         else:
             tab.setCurrentIndex(console_idx)
 
+    def show_properties_panel(self):
+        """Bring the Properties tab to the front and make sure it is visible.
+
+        The dock is tabbed with the Debug Console and can be closed outright,
+        so showing the panel means three things, not one: the dock visible, the
+        dock raised above anything docked over it, and the Properties tab
+        selected rather than the console.
+        """
+        dock = getattr(self, 'properties_dock', None)
+        tab = getattr(self, 'properties_tab_widget', None)
+        if dock is not None:
+            dock.setVisible(True)
+            dock.raise_()
+        if tab is not None:
+            index = tab.indexOf(self.property_editor)
+            if index >= 0:
+                tab.setCurrentIndex(index)
+
     def _clear_terrain(self):
         """Remove the terrain object and clear all references."""
         # Destroy the live terrain object

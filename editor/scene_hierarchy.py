@@ -884,7 +884,11 @@ class SceneHierarchy(QWidget):
                 if brush_dict.get('color') == colour_name:
                     action.setChecked(True)
                 action.triggered.connect(lambda checked, c=colour_name: self.set_brush_colour(brush_dict, c, checked))
-            
+
+            menu.addSeparator()
+            properties_action = menu.addAction("Properties")
+            properties_action.setToolTip("Show this object in the Properties panel")
+
             action = menu.exec_(self.tree.viewport().mapToGlobal(position))
 
             if action == lock_action:
@@ -895,6 +899,8 @@ class SceneHierarchy(QWidget):
                 self.main_window.save_state()
                 brush_dict['hidden'] = not is_hidden
                 self.main_window.update_all_ui()
+            elif action == properties_action:
+                self.show_properties_for(brush_dict)
         
         elif data and data[0] == 'thing':
             thing_obj = self.main_window.state.things[data[1]]
@@ -932,7 +938,11 @@ class SceneHierarchy(QWidget):
                 if thing_obj.properties.get('color') == colour_name:
                     action.setChecked(True)
                 action.triggered.connect(lambda checked, c=colour_name: self.set_thing_colour(thing_obj, c, checked))
-            
+
+            menu.addSeparator()
+            properties_action = menu.addAction("Properties")
+            properties_action.setToolTip("Show this object in the Properties panel")
+
             action = menu.exec_(self.tree.viewport().mapToGlobal(position))
 
             if action == lock_action:
@@ -943,6 +953,21 @@ class SceneHierarchy(QWidget):
                 self.main_window.save_state()
                 thing_obj.properties['hidden'] = not is_hidden
                 self.main_window.update_all_ui()
+            elif action == properties_action:
+                self.show_properties_for(thing_obj)
+
+    def show_properties_for(self, obj):
+        """Select *obj* and bring the Properties panel to the front.
+
+        The selection is made explicitly rather than relied upon: ``open_menu``
+        selects the item under the cursor with signals blocked, so
+        ``handle_selection_change`` never ran and the panel could still be
+        showing whatever was selected before the right-click.
+        """
+        if obj is None:
+            return
+        self.main_window.set_selected_objects([obj])
+        self.main_window.show_properties_panel()
 
     def handle_selection_change(self):
         selected_items = self.tree.selectedItems()
