@@ -857,7 +857,7 @@ class PhysicsWorld:
 
             horizontal_damp = np.maximum(
                 0.0,
-                1.0 - (self._damping + self._friction) * dt,
+                1.0 - self._damping * dt,
             )
             self._velocity[moving, 0] *= horizontal_damp[moving]
             self._velocity[moving, 2] *= horizontal_damp[moving]
@@ -886,6 +886,21 @@ class PhysicsWorld:
                     + self._half[landed, 1]
                 )
                 self._velocity[landed, 1] = 0.0
+
+                # Treat friction as a surface coefficient rather than a tiny
+                # per-frame damping term. Apply it only while grounded.
+                friction_accel = self._friction[landed] * np.abs(self.GRAVITY)
+                ground_speed = np.hypot(
+                    self._velocity[landed, 0],
+                    self._velocity[landed, 2],
+                )
+                friction_delta = friction_accel * dt
+                scale = np.maximum(
+                    0.0,
+                    1.0 - friction_delta / np.maximum(ground_speed, 1e-6),
+                )
+                self._velocity[landed, 0] *= scale
+                self._velocity[landed, 2] *= scale
 
             angular = self._angular_velocity
             if np.any(angular):
