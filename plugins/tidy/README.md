@@ -1,127 +1,290 @@
-# Tidy plugin
+# Tidy
 
-Build **"put everything away"** games in Fio: books back on the shelf, tidy up
-the museum, clear the warehouse floor. The player walks up to objects, picks
-them up one at a time, and stows them in the right place until a goal is met —
-scaling to **thousands** of objects.
+Tidy adds **put-it-away gameplay** to Fio without introducing a second object or
+physics system.
 
-Try it: open **`maps/Tidy_Test.json`** and hit Play. Look at a book, press
-**E** to pick it up, face the shelf, press **E** to put it away. The HUD shows
-`Tidied: N / 42`.
+A tidyable object is an ordinary core **Prop** with a non-empty
+`tidy_category`. The core Prop system remains responsible for pickup,
+carrying, dropping, and physics. The Tidy plugin adds the rules for where that
+Prop can be put, tracks progress, and provides receptacles and goals.
 
-This plugin is **disabled by default** — it only matters for maps built around
-its entities, so it stays inert until you load a level (like `Tidy_Test.json`)
-that references its data, at which point the editor and player enable it
-automatically. Starting a fresh map with **File ▸ New** (or loading a map that
-doesn't use it) switches it back off. To place its entities in a new map, tick
-**Enabled** under **Plugins ▸ tidy** in the menu bar first — a manual enable
-sticks and isn't reverted underneath you.
+Typical uses include:
 
----
+- returning books to a shelf;
+- sorting museum objects into the correct display;
+- clearing loose objects from a room;
+- building simple "tidy everything" or "sort everything" objectives.
 
-## Entities
+## Quick start
 
-Place these from the 2D view's right-click menu under **Plugins ▸ tidy**.
+Open **`maps/Tidy_Test.json`** and press **Play**.
 
-### Tidyable Prop
-A Tidy object is an ordinary core **Prop**. Set `tidy_category` to a non-empty
-value such as `book`, `cup`, or `bone`; Tidy then adds placement/progress
-behaviour without replacing the Prop pickup, carry, drop, or physics runtime.
+Look at a book and press **E** to pick it up. Turn toward the shelf and press
+**E** again to put it away. The HUD tracks the number of objects tidied.
 
-| Property | Meaning |
-|----------|---------|
-| `tidy_category` | Logical Tidy group. A receptacle only takes Props whose category it accepts. |
-| `model_path` | Standard core-Prop model; the demo uses `plugins/tidy/assets/book.obj`. |
-| `texture` | Standard per-instance texture override, useful for bundled book covers. |
-| `physics_enabled` | Core Prop physics setting. Tidy does not implement a second physics system. |
-| `pickup_enabled` | Core Prop pickup setting. Tidy temporarily disables this while a Prop is stowed. |
+The demo contains **42 core Props** carrying Tidy metadata. There is no special
+"Tidy Object" entity to place.
 
-Core Prop outputs `OnPickedUp`, `OnDropped`, and `OnRest` remain available; Tidy
-adds the `Reset` input and `OnTidied` output.
-### Tidy Receptacle (shelf / bin)
-A drop-zone. When the player places an object here it snaps into the next free
-slot, arranged in a neat grid.
+## Mapper workflow
 
-| Property | Meaning |
-|----------|---------|
-| `accepts` | Category it takes, or `any`. |
-| `capacity` | Max objects it holds. |
-| `slot_cols` | Objects per row before stacking upward. |
-| `slot_spacing` | `[x, y, z]` spacing between slots (X across a row, Y per shelf). |
+### 1. Create a normal Prop
+
+Place a **Prop** using Fio's normal Prop workflow.
+
+Set:
+
+| Property | Purpose |
+|---|---|
+| `tidy_category` | The logical category of the object, such as `book`, `fossil`, or `pot`. A non-empty value makes the Prop tidyable. |
+
+Everything else remains a normal core Prop property. Use the normal Prop
+controls for its model, collision, mass, friction, pickup behaviour, and other
+physical properties.
+
+For example:
+
+```text
+type = prop
+tidy_category = book
+```
+
+A plain Prop with no `tidy_category` is completely unaffected by Tidy.
+
+### 2. Add a Tidy Receptacle
+
+Place **Tidy Receptacle (shelf/bin)** from **Plugins ▸ tidy**.
+
+The receptacle is an invisible gameplay volume/anchor. Put it where the objects
+should be arranged, normally just above a shelf, table, tray, or other visible
+piece of level geometry.
+
+| Property | Purpose |
+|---|---|
+| `accepts` | Category accepted by the receptacle, or `any`. |
+| `capacity` | Maximum number of Props it can hold. |
+| `slot_cols` | Number of slots across before a new row begins. |
+| `slot_spacing` | `[x, y, z]` spacing between slots. |
 | `slot_offset` | `[x, y, z]` offset of the first slot from the receptacle origin. |
-| `reach` | How close/aligned the player must be to place into it. |
+| `reach` | Maximum distance at which the player can place a held Prop. |
+| `disabled` | Prevents new objects from being placed here. |
 
-Outputs: `OnObjectPlaced` (parameter = new count), `OnFull`.
-Inputs: `Reset` (empty it), `Enable`, `Disable`.
+When a valid Prop is placed, Tidy moves it to the next free slot.
 
-The receptacle itself has no geometry — put it just above a shelf brush (or a
-bin model) so placed objects visually land on the surface. Tune `slot_offset`
-and `slot_spacing` to match your shelf.
+### 3. Add a Tidy Goal
+
+Place **Tidy Goal** from **Plugins ▸ tidy**.
+
+| Property | Purpose |
+|---|---|
+| `target` | `all` or a numeric number of objects to tidy. |
+| `category` | Restrict the goal to one Tidy category, or use `any`. |
+| `show_hud` | Show the live tidy counter. |
+| `disabled` | Temporarily stop the goal from counting toward completion. |
+
+A goal can be used purely as a progress tracker, or its `OnComplete`
+output can drive the rest of the level.
+
+## I/O
+
+Tidy extends the normal core Prop I/O rather than replacing it.
+
+### Prop
+
+Core Prop I/O remains available:
+
+**Inputs**
+
+- `Enable`
+- `Disable`
+- `Drop`
+- `Wake`
+
+Tidy adds:
+
+- `Reset` — return the tidyable Prop to its authored position.
+
+**Outputs**
+
+- `OnPickedUp`
+- `OnDropped`
+- `OnRest`
+
+Tidy adds:
+
+- `OnTidied` — fired when the Prop is successfully placed into a Tidy
+  receptacle.
+
+### Tidy Receptacle
+
+**Inputs**
+
+- `Reset` — remove everything from the receptacle and return the contained
+  Props to their authored positions.
+- `Enable`
+- `Disable`
+
+**Outputs**
+
+- `OnObjectPlaced` — parameter is the new number of objects in the receptacle.
+- `OnFull` — fired when the receptacle reaches capacity.
 
 ### Tidy Goal
-Invisible logic entity that tracks progress and ends the round.
 
-| Property | Meaning |
-|----------|---------|
-| `target` | `all` (every object) or an integer count. |
-| `category` | Restrict the goal to one category, or `any`. |
-| `show_hud` | Show the live `Tidied: N / M` counter. |
+**Inputs**
 
-Outputs: `OnProgress` (parameter = `done/need`, fired on every stow),
-`OnComplete` (fired once when the target is reached).
-Inputs: `Enable`, `Disable`.
+- `Enable`
+- `Disable`
 
-Wire `OnComplete` to a `LevelChanger`, a `Speaker`, a door, a light — whatever
-should happen when the room is tidy.
+**Outputs**
 
----
+- `OnProgress` — parameter is `done/need`.
+- `OnComplete` — fired once when the configured target is reached.
 
-## Controls
+Example:
 
-- **E** (use/interact) — pick up the object under the crosshair.
-- **E** again — place into the shelf you're facing, or drop it if none is in
-  reach.
+```text
+TidyGoal.OnComplete -> LevelChanger.Enable
+```
 
-The HUD prompts contextually (`[E] Pick up Book`, `[E] Put away (Shelf)`,
-`[E] Drop`) and shows live progress when idle.
+The same output can drive a door, light, speaker, message, or any other Fio
+entity with a compatible input.
 
-Ordinary dropped objects use the core Prop physics/runtime. Tidy does not contain
-a second falling simulation. When a core Prop is dropped over a valid Tidy
-receptacle, Tidy consumes that drop and snaps the Prop into the next slot.
+## Player interaction
 
----
+With a tidyable Prop under the crosshair:
 
-## Recipes
+**E** picks it up using the normal core Prop interaction.
 
-**Books back on the shelf.** Scatter `Tidy Object`s (`category: book`) on the
-floor. Put one `Tidy Receptacle` (`accepts: book`) above a shelf brush with
-`slot_cols` matching how many fit per shelf. Add a `Tidy Goal` (`target: all`).
+While carrying it, **E** attempts to place it into the valid receptacle being
+aimed at. If no suitable receptacle is in range, the normal core Prop drop
+behaviour is used instead.
 
-**Tidy up the museum (sorting).** Give Props different Tidy categories
-(`fossil`, `painting`, `pot`). Add one receptacle per category, each with its
-`accepts` set. Use a single `Tidy Goal` (`category: any, target: all`), or one
-goal per category to fire per-section rewards.
+When a Prop is placed successfully, Tidy:
 
-**Thousands of objects.** Just place (or procedurally generate) more core `Prop`s with `tidy_category` set.
-Tidy does not maintain a second spatial hash for props; core Prop interaction
-handles pickup/carry/drop, while Tidy only scans its usually-small receptacle set.
+1. consumes the core Prop drop;
+2. snaps the Prop to the next receptacle slot;
+3. temporarily disables pickup for that stowed Prop;
+4. updates tidy progress;
+5. fires `OnTidied`, `OnObjectPlaced`, `OnProgress`, and `OnFull` as
+   appropriate.
 
----
+Normal dropped Props continue to use the core physics system.
 
-## How it works (for the curious)
+## Categories and sorting
 
-- `entities.py` — the two Tidy-owned `Thing` subclasses (receptacle and goal).
-- `runtime.py` — `TidySession`: receptacle placement, temporary Prop state,
-  progress/goal tracking, and the HUD line. Core Prop owns carry/drop/physics.
-- `plugin.py` — registration, I/O handlers, and the play lifecycle wiring.
-- `assets/book.obj` + `assets/covers/cover_NN.png` — the UV-mapped book model
-  and its random covers. Regenerate with `python plugins/tidy/tools/make_books.py`.
-- `assets/tidy{receptacle,goal}.png` — the entities' own editor icons
-  (a book, a bookshelf, a checklist). Regenerate with
-  `python plugins/tidy/tools/make_sprites.py`.
+Categories are just metadata. Tidy does not prescribe a fixed list.
 
-Regenerate the demo map with:
+For example:
+
+```text
+Books       -> tidy_category = book
+Fossils     -> tidy_category = fossil
+Pots        -> tidy_category = pot
+Paintings   -> tidy_category = painting
+```
+
+Then create matching receptacles:
+
+```text
+Book shelf  -> accepts = book
+Fossil case -> accepts = fossil
+Pot shelf   -> accepts = pot
+```
+
+A receptacle can instead use `accepts = any` when category-specific sorting is
+not required.
+
+Goals can also be category-specific. A museum level could have one goal for
+all fossils and another for all pots, for example.
+
+## Performance and architecture
+
+Tidy deliberately stays out of the systems that already belong to core Fio.
+
+**Core Prop owns:**
+
+- pickup and carrying;
+- ordinary dropping;
+- physical simulation;
+- collision and wake/rest behaviour;
+- Prop spatial interaction.
+
+**Tidy owns:**
+
+- `tidy_category` metadata;
+- receptacles and slot placement;
+- tidy progress;
+- goal completion;
+- Tidy-specific I/O.
+
+There is no `TidyObject` entity, no duplicate pickup implementation, no
+second Prop physics simulation, and no second Prop spatial hash.
+
+This keeps a large collection of ordinary Props in the core runtime while Tidy
+only maintains its own small amount of state: the tidyable Props, receptacles,
+goals, and their placement/progress bookkeeping.
+
+## Plugin activation
+
+Tidy is **disabled by default**.
+
+A map automatically uses Tidy when it contains:
+
+- a Tidy Receptacle;
+- a Tidy Goal; or
+- a core Prop with a non-empty `tidy_category`.
+
+This means a normal Fio map containing ordinary Props does not pay for Tidy
+gameplay just because the plugin exists.
+
+For authoring a new map, Tidy can also be enabled manually from
+**Plugins ▸ tidy**.
+
+## Demo and assets
+
+The reference map is:
+
+```text
+maps/Tidy_Test.json
+```
+
+The example generator is:
 
 ```bash
 QT_QPA_PLATFORM=offscreen python plugins/tidy/tools/make_example_map.py
 ```
+
+Tidy's bundled book assets live under:
+
+```text
+plugins/tidy/assets/
+```
+
+The book model and cover textures can be regenerated with:
+
+```bash
+python plugins/tidy/tools/make_books.py
+```
+
+The receptacle and goal editor icons can be regenerated with:
+
+```bash
+python plugins/tidy/tools/make_sprites.py
+```
+
+## Implementation
+
+`plugins/tidy/entities.py` contains the two Tidy-owned entities:
+
+- `TidyReceptacle`
+- `TidyGoal`
+
+`plugins/tidy/runtime.py` contains `TidySession`, which handles receptacle
+selection, placement, temporary stowed-object state, progress, goals, and HUD
+updates.
+
+`plugins/tidy/plugin.py` registers the metadata and entities, installs the
+Tidy I/O handlers, and connects Tidy to the core Prop drop path.
+
+The important boundary is intentional: **Prop is the object; Tidy is what
+happens when that object is put away.**
