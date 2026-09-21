@@ -1502,9 +1502,6 @@ class PropertyEditor(QWidget):
                 )
                 form.addRow("", note)
 
-        if isinstance(thing, Prop):
-            self._build_prop_physics_group(tab_layout, thing)
-
         if isinstance(thing, Light):
             self.add_color_picker_widget(form, thing, 'colour')
             self._build_attach_to_mover(form, thing)
@@ -1539,6 +1536,9 @@ class PropertyEditor(QWidget):
 
         if form.rowCount() > 0:
             tab_layout.addLayout(form)
+
+        if isinstance(thing, Prop):
+            self._build_prop_physics_group(tab_layout, thing)
 
         # Type-specific grouped editors (already visually grouped).
         if isinstance(thing, PathNode):
