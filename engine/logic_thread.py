@@ -567,8 +567,7 @@ class LogicThread(threading.Thread):
         non-zero collision_size always overrides the shape choice with a
         custom AABB.
         """
-        if not getattr(self, 'model_collision_enabled', True):
-            return []
+        model_collision_enabled = bool(getattr(self, 'model_collision_enabled', True))
         brushes = []
 
         for thing in self.things:
@@ -576,6 +575,8 @@ class LogicThread(threading.Thread):
             if not props.get('model_path'):
                 continue
             physics_enabled = bool(props.get('physics_enabled', False))
+            if not model_collision_enabled and not physics_enabled:
+                continue
             if props.get('no_collision', False) and not physics_enabled:
                 continue
 
