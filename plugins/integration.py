@@ -416,6 +416,14 @@ def _build_plugins_menu(MainWindow):
 
 
 
+def _run_plugin_menu_action(MainWindow, plugin, callback):
+    """Invoke a plugin-owned editor menu action safely."""
+    try:
+        callback(MainWindow)
+    except Exception as exc:
+        _log(f"plugin menu action failed for '{plugin.name}': {exc}")
+
+
 def _toggle_plugin(MainWindow, plugin, enabled):
     from plugins.manager import get_manager
     get_manager().set_enabled(plugin, enabled)
