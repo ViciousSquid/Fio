@@ -1,5 +1,6 @@
 import math
 import glm
+import numpy as np
 
 from .constants import is_water_brush, brush_aabb_bounds
 from .spatial import CELL_SIZE, CellIndex, authored_hidden
@@ -312,234 +313,567 @@ class SpatialGrid:
                             return False
         return True
 
+
 class PhysicsBody:
-    """Engine-owned dynamic rigid body backed by a Thing-like entity."""
+    """Lightweight handle for one row in the engine's batched physics state."""
 
-    def __init__(self, entity, brush, rest_callback=None):
+    def __init__(self, world, entity, entity_id):
+        self.world = world
         self.entity = entity
-        self.brush = brush
-        self.rest_callback = rest_callback
-        self.kinematic = False
-        self.awake = False
-        self.velocity = [0.0, 0.0, 0.0]
-        props = getattr(entity, 'properties', {})
-        self.mass = max(0.01, float(props.get('mass', 1.0)))
-        self.gravity = bool(props.get('gravity', True))
-        self.friction = max(0.0, min(1.0, float(props.get('friction', 0.55))))
-        self.linear_damping = max(0.0, float(props.get('linear_damping', 0.08)))
-        angular = props.get('drop_angular_velocity', [0.0, 0.0, 0.0])
-        self.angular_velocity = [float(angular[i]) for i in range(3)]
-        self.size, self.offset = self._shape_from_brush(brush)
-
-    def _shape_from_brush(self, brush):
-        bounds = brush.get('_mesh_bounds') if brush.get('_collision_mode') == 'mesh' else None
-        if bounds:
-            min_v, max_v = bounds
-            center = tuple((float(min_v[i]) + float(max_v[i])) * 0.5 for i in range(3))
-            size = tuple(float(max_v[i]) - float(min_v[i]) for i in range(3))
-        else:
-            center = tuple(float(v) for v in brush.get('pos', (0.0, 0.0, 0.0)))
-            size = tuple(float(v) for v in brush.get('size', (64.0, 64.0, 64.0)))
-        pos = tuple(float(v) for v in getattr(self.entity, 'pos', (0.0, 0.0, 0.0)))
-        return size, tuple(center[i] - pos[i] for i in range(3))
+        self.entity_id = entity_id
+        self.rest_callback = None
 
     @property
-    def solid(self):
-        return not bool(getattr(self.entity, 'properties', {}).get('no_collision', True))
+    def _index(self):
+        return self.world._indices.get(self.entity_id)
+
+    @property
+    def velocity(self):
+        i = self._index
+        if i is None:
+            return [0.0, 0.0, 0.0]
+        return self.world._velocity[i].tolist()
+
+    @velocity.setter
+    def velocity(self, value):
+        i = self._index
+        if i is not None:
+            self.world._velocity[i] = np.asarray(value, dtype=np.float32)
+
+    @property
+    def mass(self):
+        i = self._index
+        return float(self.world._mass[i]) if i is not None else 1.0
+
+    @property
+    def awake(self):
+        i = self._index
+        return bool(self.world._awake[i]) if i is not None else False
+
+    @awake.setter
+    def awake(self, value):
+        i = self._index
+        if i is not None:
+            self.world._awake[i] = bool(value)
+
+    @property
+    def kinematic(self):
+        i = self._index
+        return bool(self.world._kinematic[i]) if i is not None else False
+
+    @kinematic.setter
+    def kinematic(self, value):
+        self.world._set_kinematic_index(self._index, bool(value))
 
     def set_kinematic(self, value):
-        self.kinematic = bool(value)
-        if self.kinematic:
-            self.velocity[:] = [0.0, 0.0, 0.0]
-            self.awake = False
+        self.kinematic = value
 
     def wake(self, velocity=None):
-        if velocity is not None:
-            self.velocity[:] = [float(v) for v in velocity]
-        self.awake = True
-        self.kinematic = False
+        self.world._wake_index(self._index, velocity)
 
     def set_rest_callback(self, callback):
         self.rest_callback = callback
 
     def clear(self):
         self.rest_callback = None
-        self.kinematic = False
-        self.awake = False
-        self.velocity[:] = [0.0, 0.0, 0.0]
 
-    def _fire_rest(self):
-        if self.rest_callback is not None:
-            self.rest_callback(self.entity)
 
 class PhysicsWorld:
-    """Engine-level dynamic-body simulation and world collision."""
+    """Engine-owned batched dynamic-body simulation.
+
+    Body state is stored as structure-of-arrays NumPy buffers. The per-tick
+    integration, damping, gravity, push response, sleep test and position
+    updates are vectorised. Python remains only at the engine-object boundary
+    and for the small number of world-collision cell/contact groups that
+    cannot be expressed as one dense operation without wasting large amounts
+    of memory.
+    """
+
+    GRAVITY = np.float32(-900.0)
+    MAX_STEP = np.float32(0.05)
+    REST_SPEED = np.float32(1.0)
 
     def __init__(self, spatial_grid):
         self.spatial_grid = spatial_grid
         self.bodies = {}
+        self._indices = {}
+
+        self._entities = []
+        self._velocity = np.empty((0, 3), dtype=np.float32)
+        self._position = np.empty((0, 3), dtype=np.float32)
+        self._offset = np.empty((0, 3), dtype=np.float32)
+        self._half = np.empty((0, 3), dtype=np.float32)
+        self._mass = np.empty(0, dtype=np.float32)
+        self._friction = np.empty(0, dtype=np.float32)
+        self._damping = np.empty(0, dtype=np.float32)
+        self._gravity = np.empty(0, dtype=np.float32)
+        self._angular_velocity = np.empty((0, 3), dtype=np.float32)
+        self._solid = np.empty(0, dtype=np.bool_)
+        self._physics_enabled = np.empty(0, dtype=np.bool_)
+        self._awake = np.empty(0, dtype=np.bool_)
+        self._kinematic = np.empty(0, dtype=np.bool_)
+        self._dirty = False
+        self._static_cells = {}
 
     def clear(self):
         for body in self.bodies.values():
             body.clear()
         self.bodies.clear()
+        self._indices.clear()
+        self._entities.clear()
+        self._velocity = np.empty((0, 3), dtype=np.float32)
+        self._position = np.empty((0, 3), dtype=np.float32)
+        self._offset = np.empty((0, 3), dtype=np.float32)
+        self._half = np.empty((0, 3), dtype=np.float32)
+        self._mass = np.empty(0, dtype=np.float32)
+        self._friction = np.empty(0, dtype=np.float32)
+        self._damping = np.empty(0, dtype=np.float32)
+        self._gravity = np.empty(0, dtype=np.float32)
+        self._angular_velocity = np.empty((0, 3), dtype=np.float32)
+        self._solid = np.empty(0, dtype=np.bool_)
+        self._physics_enabled = np.empty(0, dtype=np.bool_)
+        self._awake = np.empty(0, dtype=np.bool_)
+        self._kinematic = np.empty(0, dtype=np.bool_)
+        self._static_cells.clear()
+        self._dirty = False
+
+    @staticmethod
+    def _shape_from_brush(entity, brush):
+        bounds = brush.get('_mesh_bounds') if brush.get('_collision_mode') == 'mesh' else None
+        if bounds:
+            min_v, max_v = bounds
+            center = np.array(
+                [(float(min_v[i]) + float(max_v[i])) * 0.5 for i in range(3)],
+                dtype=np.float32,
+            )
+            size = np.array(
+                [float(max_v[i]) - float(min_v[i]) for i in range(3)],
+                dtype=np.float32,
+            )
+        else:
+            center = np.asarray(
+                brush.get('pos', (0.0, 0.0, 0.0)), dtype=np.float32
+            )
+            size = np.asarray(
+                brush.get('size', (64.0, 64.0, 64.0)), dtype=np.float32
+            )
+
+        origin = np.asarray(
+            getattr(entity, 'pos', (0.0, 0.0, 0.0)), dtype=np.float32
+        )
+        return size * np.float32(0.5), center - origin
 
     def register_body(self, entity, brush, rest_callback=None):
-        body = PhysicsBody(entity, brush, rest_callback)
-        self.bodies[id(entity)] = body
+        """Register one body; state is packed once before the next tick."""
+        entity_id = id(entity)
+        body = self.bodies.get(entity_id)
+        if body is None:
+            body = PhysicsBody(self, entity, entity_id)
+            self.bodies[entity_id] = body
+            self._entities.append(entity)
+
+        props = getattr(entity, 'properties', {})
+        half, offset = self._shape_from_brush(entity, brush)
+        body.rest_callback = rest_callback
+
+        # Keep registration descriptors on the handle until packing. This is
+        # construction-time Python work, not physics work.
+        body._initial = (
+            np.asarray(getattr(entity, 'pos', (0.0, 0.0, 0.0)), dtype=np.float32),
+            half,
+            offset,
+            max(0.01, float(props.get('mass', 1.0))),
+            max(0.0, min(1.0, float(props.get('friction', 0.55)))),
+            max(0.0, float(props.get('linear_damping', 0.08))),
+            1.0 if props.get('gravity', True) else 0.0,
+            np.asarray(props.get('drop_angular_velocity', [0.0, 0.0, 0.0]), dtype=np.float32),
+            not bool(props.get('no_collision', True)),
+            bool(props.get('physics_enabled', False)),
+        )
+        self._dirty = True
         return body
 
+    def _pack(self):
+        if not self._dirty:
+            return
+        n = len(self._entities)
+        if n == 0:
+            self._dirty = False
+            return
+
+        self._position = np.empty((n, 3), dtype=np.float32)
+        self._offset = np.empty((n, 3), dtype=np.float32)
+        self._half = np.empty((n, 3), dtype=np.float32)
+        self._velocity = np.zeros((n, 3), dtype=np.float32)
+        self._mass = np.empty(n, dtype=np.float32)
+        self._friction = np.empty(n, dtype=np.float32)
+        self._damping = np.empty(n, dtype=np.float32)
+        self._gravity = np.empty(n, dtype=np.float32)
+        self._angular_velocity = np.empty((n, 3), dtype=np.float32)
+        self._solid = np.empty(n, dtype=np.bool_)
+        self._physics_enabled = np.empty(n, dtype=np.bool_)
+        self._awake = np.zeros(n, dtype=np.bool_)
+        self._kinematic = np.zeros(n, dtype=np.bool_)
+
+        for i, entity in enumerate(self._entities):
+            body = self.bodies[id(entity)]
+            (
+                position, half, offset, mass, friction, damping, gravity,
+                angular_velocity, solid, physics_enabled,
+            ) = body._initial
+            self._indices[id(entity)] = i
+            self._position[i] = position
+            self._half[i] = half
+            self._offset[i] = offset
+            self._mass[i] = mass
+            self._friction[i] = friction
+            self._damping[i] = damping
+            self._gravity[i] = gravity
+            self._angular_velocity[i] = angular_velocity
+            self._solid[i] = solid
+            self._physics_enabled[i] = physics_enabled
+
+        self._dirty = False
+
     def get_body(self, entity):
+        self._pack()
         return self.bodies.get(id(entity))
+
+    def _set_kinematic_index(self, index, value):
+        if index is None:
+            return
+        self._pack()
+        self._kinematic[index] = value
+        if value:
+            self._velocity[index] = 0.0
+            self._awake[index] = False
+
+    def set_kinematic(self, entity, value):
+        self._pack()
+        self._set_kinematic_index(self._indices.get(id(entity)), value)
+
+    def _wake_index(self, index, velocity=None):
+        if index is None:
+            return
+        self._pack()
+        if velocity is not None:
+            self._velocity[index] = np.asarray(velocity, dtype=np.float32)
+        self._awake[index] = True
+        self._kinematic[index] = False
+
+    def wake(self, entity, velocity=None):
+        self._pack()
+        self._wake_index(self._indices.get(id(entity)), velocity)
 
     def set_rest_callback(self, entity, callback):
         body = self.get_body(entity)
         if body is not None:
             body.set_rest_callback(callback)
 
-    def set_kinematic(self, entity, value):
-        body = self.get_body(entity)
-        if body is not None:
-            body.set_kinematic(value)
+    def _sync_entities(self, indices=None):
+        if indices is None:
+            indices = range(len(self._entities))
+        for i in indices:
+            entity = self._entities[int(i)]
+            entity.pos[:] = self._position[int(i)].tolist()
 
-    def wake(self, entity, velocity=None):
-        body = self.get_body(entity)
-        if body is not None:
-            body.wake(velocity)
+            angular = self._angular_velocity[int(i)]
+            if np.any(angular):
+                props = getattr(entity, 'properties', {})
+                rotation = props.get('rotation', [0.0, 0.0, 0.0])
+                props['rotation'] = (
+                    np.asarray(rotation, dtype=np.float32) + angular
+                ).tolist()
 
-    @staticmethod
-    def _bounds(body):
-        pos = body.entity.pos
-        center = tuple(float(pos[i]) + body.offset[i] for i in range(3))
-        half = tuple(v * 0.5 for v in body.size)
-        return center, half
-
-    @staticmethod
-    def _overlaps_brush(center, half, brush):
-        if brush.get('_collision_mode') == 'mesh':
-            bounds = brush.get('_mesh_bounds')
-            if bounds:
-                lo, hi = bounds
-                return (center[0] + half[0] > lo[0] and center[0] - half[0] < hi[0] and
-                        center[1] + half[1] > lo[1] and center[1] - half[1] < hi[1] and
-                        center[2] + half[2] > lo[2] and center[2] - half[2] < hi[2])
-            return False
-        pos = brush.get('pos', (0.0, 0.0, 0.0))
-        size = brush.get('size', (0.0, 0.0, 0.0))
-        return (center[0] + half[0] > pos[0] - size[0] * 0.5 and
-                center[0] - half[0] < pos[0] + size[0] * 0.5 and
-                center[1] + half[1] > pos[1] - size[1] * 0.5 and
-                center[1] - half[1] < pos[1] + size[1] * 0.5 and
-                center[2] + half[2] > pos[2] - size[2] * 0.5 and
-                center[2] - half[2] < pos[2] + size[2] * 0.5)
-
-    def _floor_y(self, body):
-        if not body.solid:
-            return None
-        raycast = getattr(self.spatial_grid, 'raycast_down', None)
-        if raycast is None:
-            return None
-        center, half = self._bounds(body)
-        try:
-            return raycast(center[0], center[2], center[1] + half[1] + 1.0)
-        except Exception:
-            return None
-
-    def _move_horizontal(self, body, axis, amount):
-        if abs(amount) < 0.00001:
-            return
-        before = list(body.entity.pos)
-        body.entity.pos[axis] += amount
-        if not body.solid:
-            return
-        center, half = self._bounds(body)
-        query = getattr(self.spatial_grid, 'get_potential_colliders', None)
-        if query is None:
-            return
-        colliders = query(glm.vec3(center[0]-half[0], center[1]-half[1], center[2]-half[2]),
-                          glm.vec3(center[0]+half[0], center[1]+half[1], center[2]+half[2]))
-        for brush in colliders:
-            if brush.get('_physics_body'):
+    def _rebuild_static_cells(self):
+        """Cache static collision AABBs as contiguous NumPy arrays per grid cell."""
+        cells = {}
+        for key, brushes in self.spatial_grid.cells.items():
+            if not brushes:
                 continue
-            if self._overlaps_brush(center, half, brush):
-                body.entity.pos[:] = before
-                body.velocity[axis] = 0.0
-                return
-
-    def _push_from_player(self, body, player):
-        if body.kinematic or not body.solid:
-            return
-        ph = getattr(player, '_half', None)
-        if ph is not None:
-            player_half = (float(ph.x), float(ph.y), float(ph.z))
-        else:
-            player_half = (float(getattr(player, 'width', 50.0))*0.5, float(getattr(player, 'height', 100.0))*0.5, float(getattr(player, 'depth', 50.0))*0.5)
-        ppos = player.pos
-        pvel = getattr(player, 'velocity', None)
-        pv = (float(getattr(pvel, 'x', 0.0)), float(getattr(pvel, 'z', 0.0)))
-        if math.hypot(*pv) < 0.01:
-            return
-        center, half = self._bounds(body)
-        dx = center[0] - float(ppos[0])
-        dz = center[2] - float(ppos[2])
-        ox = player_half[0] + half[0] - abs(dx)
-        oz = player_half[2] + half[2] - abs(dz)
-        if (ox <= 0.0 or oz <= 0.0 or
-                float(ppos[1])+player_half[1] <= center[1]-half[1] or
-                float(ppos[1])-player_half[1] >= center[1]+half[1]):
-            return
-        if ox <= oz:
-            direction = 1.0 if dx >= 0.0 else -1.0
-            body.entity.pos[0] += direction * (ox + 0.5)
-            body.velocity[0] = direction * max(abs(pv[0]) / body.mass * 0.85, abs(body.velocity[0]))
-        else:
-            direction = 1.0 if dz >= 0.0 else -1.0
-            body.entity.pos[2] += direction * (oz + 0.5)
-            body.velocity[2] = direction * max(abs(pv[1]) / body.mass * 0.85, abs(body.velocity[2]))
-        body.awake = True
-
-    def step(self, delta, player=None):
-        dt = min(0.05, max(0.0, float(delta) or 1.0/60.0))
-        for body in tuple(self.bodies.values()):
-            props = getattr(body.entity, 'properties', {})
-            if body.kinematic or props.get('disabled') or not props.get('physics_enabled', False):
-                continue
-            if player is not None:
-                self._push_from_player(body, player)
-            if not body.awake:
-                continue
-            if body.gravity:
-                body.velocity[1] += -900.0 * dt
-            body.velocity[1] *= max(0.0, 1.0 - body.linear_damping * dt)
-            damp = max(0.0, 1.0 - (body.linear_damping + body.friction) * dt)
-            body.velocity[0] *= damp
-            body.velocity[2] *= damp
-            self._move_horizontal(body, 0, body.velocity[0] * dt)
-            self._move_horizontal(body, 2, body.velocity[2] * dt)
-            pos = body.entity.pos
-            new_y = float(pos[1]) + body.velocity[1] * dt
-            floor = self._floor_y(body)
-            if floor is not None and new_y <= floor:
-                # entity.pos is the model origin, not necessarily the
-                # collision-box centre. Place the body's bottom on the floor.
-                pos[1] = floor - body.offset[1] + body.size[1] * 0.5
-                body.velocity[1] = 0.0
-            else:
-                pos[1] = new_y
-            angular = body.angular_velocity
-            rotation = props.get('rotation', [0.0, 0.0, 0.0])
-            props['rotation'] = [float(rotation[i]) + angular[i] * dt for i in range(3)]
-            if max(abs(v) for v in body.velocity) < 1.0:
-                body.velocity[:] = [0.0, 0.0, 0.0]
-                if body.awake:
-                    body.awake = False
-                    body._fire_rest()
+            rows = []
+            for brush in brushes:
+                if brush.get('_physics_body'):
+                    continue
+                bounds = brush.get('_mesh_bounds') if brush.get('_collision_mode') == 'mesh' else None
+                if bounds:
+                    lo, hi = bounds
+                    rows.append([
+                        float(lo[0]), float(lo[1]), float(lo[2]),
+                        float(hi[0]), float(hi[1]), float(hi[2]),
+                    ])
+                else:
+                    pos = brush.get('pos', (0.0, 0.0, 0.0))
+                    size = brush.get('size', (0.0, 0.0, 0.0))
+                    rows.append([
+                        float(pos[0]) - float(size[0]) * 0.5,
+                        float(pos[1]) - float(size[1]) * 0.5,
+                        float(pos[2]) - float(size[2]) * 0.5,
+                        float(pos[0]) + float(size[0]) * 0.5,
+                        float(pos[1]) + float(size[1]) * 0.5,
+                        float(pos[2]) + float(size[2]) * 0.5,
+                    ])
+            if rows:
+                cells[key] = np.asarray(rows, dtype=np.float32)
+        self._static_cells = cells
 
     def rebuild(self, brushes):
         self.clear()
+        self._rebuild_static_cells()
+
         for brush in brushes:
             if not brush.get('_physics_body'):
                 continue
             entity = brush.get('_physics_entity')
             if entity is not None:
                 self.register_body(entity, brush)
+
+        self._pack()
+        self._rebuild_static_cells()
+
+    def _candidate_aabbs(self, cell_x, cell_z):
+        parts = []
+        cells = self._static_cells
+        for dx in (-1, 0, 1):
+            for dz in (-1, 0, 1):
+                aabbs = cells.get((cell_x + dx, cell_z + dz))
+                if aabbs is not None:
+                    parts.append(aabbs)
+        if not parts:
+            return None
+        if len(parts) == 1:
+            return parts[0]
+        return np.concatenate(parts, axis=0)
+
+    def _batch_static_collision(self, axis, old_position):
+        """Resolve one horizontal axis with vectorised AABB tests per cell group."""
+        active = (
+            self._physics_enabled
+            & self._awake
+            & ~self._kinematic
+            & self._solid
+        )
+        indices = np.flatnonzero(active)
+        if indices.size == 0:
+            return
+
+        cell_size = np.float32(self.spatial_grid.cell_size)
+        cx = np.floor(self._position[indices, 0] / cell_size).astype(np.int64)
+        cz = np.floor(self._position[indices, 2] / cell_size).astype(np.int64)
+
+        # Group only by occupied cells; collision arithmetic within each group
+        # is entirely NumPy.
+        groups = {}
+        for local, (gx, gz) in enumerate(zip(cx.tolist(), cz.tolist())):
+            groups.setdefault((int(gx), int(gz)), []).append(int(indices[local]))
+
+        collision = np.zeros(indices.size, dtype=np.bool_)
+
+        for key, body_indices in groups.items():
+            aabbs = self._candidate_aabbs(*key)
+            if aabbs is None:
+                continue
+
+            bi = np.asarray(body_indices, dtype=np.int64)
+            pos = self._position[bi] + self._offset[bi]
+            half = self._half[bi]
+
+            bmin = pos - half
+            bmax = pos + half
+
+            cmin = aabbs[:, :3]
+            cmax = aabbs[:, 3:]
+
+            overlap = (
+                (bmax[:, None, 0] > cmin[None, :, 0]) &
+                (bmin[:, None, 0] < cmax[None, :, 0]) &
+                (bmax[:, None, 1] > cmin[None, :, 1]) &
+                (bmin[:, None, 1] < cmax[None, :, 1]) &
+                (bmax[:, None, 2] > cmin[None, :, 2]) &
+                (bmin[:, None, 2] < cmax[None, :, 2])
+            )
+            hit = overlap.any(axis=1)
+
+            local_indices = np.searchsorted(indices, bi)
+            collision[local_indices] |= hit
+
+        if np.any(collision):
+            hit_indices = indices[collision]
+            self._position[hit_indices, axis] = old_position[hit_indices, axis]
+            self._velocity[hit_indices, axis] = 0.0
+
+    def _batch_floor(self):
+        """Return floor Y for each active solid body using vectorised cell queries."""
+        n = len(self._entities)
+        floors = np.full(n, -np.inf, dtype=np.float32)
+        active = self._physics_enabled & self._awake & ~self._kinematic & self._solid
+        indices = np.flatnonzero(active)
+        if indices.size == 0:
+            return floors
+
+        cell_size = np.float32(self.spatial_grid.cell_size)
+        cx = np.floor((self._position[indices, 0] + self._offset[indices, 0]) / cell_size).astype(np.int64)
+        cz = np.floor((self._position[indices, 2] + self._offset[indices, 2]) / cell_size).astype(np.int64)
+        groups = {}
+        for local, (gx, gz) in enumerate(zip(cx.tolist(), cz.tolist())):
+            groups.setdefault((int(gx), int(gz)), []).append(int(indices[local]))
+
+        for key, body_indices in groups.items():
+            aabbs = self._candidate_aabbs(*key)
+            if aabbs is None:
+                continue
+            bi = np.asarray(body_indices, dtype=np.int64)
+            center = self._position[bi] + self._offset[bi]
+            half = self._half[bi]
+            start_y = center[:, 1] + half[:, 1] + 1.0
+
+            horizontal = (
+                (center[:, None, 0] >= aabbs[None, :, 0]) &
+                (center[:, None, 0] <= aabbs[None, :, 3]) &
+                (center[:, None, 2] >= aabbs[None, :, 2]) &
+                (center[:, None, 2] <= aabbs[None, :, 5]) &
+                (aabbs[None, :, 4] <= start_y[:, None])
+            )
+            tops = np.where(
+                horizontal,
+                aabbs[None, :, 4],
+                -np.inf,
+            )
+            best = np.max(tops, axis=1)
+            finite = np.isfinite(best)
+            floors[bi[finite]] = best[finite]
+
+        return floors
+
+    def step(self, delta, player=None):
+        self._pack()
+        if not self._entities:
+            return
+
+        dt = np.float32(min(0.05, max(0.0, float(delta) or 1.0 / 60.0)))
+        active = self._physics_enabled & ~self._kinematic
+
+        if player is not None:
+            ppos = np.asarray(getattr(player, 'pos', (0.0, 0.0, 0.0)), dtype=np.float32)
+            ph = getattr(player, '_half', None)
+            if ph is not None:
+                player_half = np.asarray([float(ph.x), float(ph.y), float(ph.z)], dtype=np.float32)
+            else:
+                player_half = np.asarray([
+                    float(getattr(player, 'width', 50.0)) * 0.5,
+                    float(getattr(player, 'height', 100.0)) * 0.5,
+                    float(getattr(player, 'depth', 50.0)) * 0.5,
+                ], dtype=np.float32)
+
+            pvel = getattr(player, 'velocity', None)
+            player_velocity = np.asarray([
+                float(getattr(pvel, 'x', 0.0)),
+                0.0,
+                float(getattr(pvel, 'z', 0.0)),
+            ], dtype=np.float32)
+
+            center = self._position + self._offset
+            body_min = center - self._half
+            body_max = center + self._half
+            player_min = ppos - player_half
+            player_max = ppos + player_half
+
+            overlap = (
+                (body_max[:, 0] > player_min[0]) &
+                (body_min[:, 0] < player_max[0]) &
+                (body_max[:, 1] > player_min[1]) &
+                (body_min[:, 1] < player_max[1]) &
+                (body_max[:, 2] > player_min[2]) &
+                (body_min[:, 2] < player_max[2])
+            )
+            pushable = active & self._solid & ~self._kinematic & overlap
+            speed = float(np.hypot(player_velocity[0], player_velocity[2]))
+            if speed >= 0.01 and np.any(pushable):
+                dx = center[:, 0] - ppos[0]
+                dz = center[:, 2] - ppos[2]
+                overlap_x = player_half[0] + self._half[:, 0] - np.abs(dx)
+                overlap_z = player_half[2] + self._half[:, 2] - np.abs(dz)
+                use_x = overlap_x <= overlap_z
+
+                x_indices = pushable & use_x
+                z_indices = pushable & ~use_x
+
+                x_dir = np.where(dx >= 0.0, 1.0, -1.0).astype(np.float32)
+                z_dir = np.where(dz >= 0.0, 1.0, -1.0).astype(np.float32)
+
+                self._position[x_indices, 0] += x_dir[x_indices] * (overlap_x[x_indices] + 0.5)
+                self._position[z_indices, 2] += z_dir[z_indices] * (overlap_z[z_indices] + 0.5)
+
+                target_x = np.abs(player_velocity[0]) / self._mass * 0.85
+                target_z = np.abs(player_velocity[2]) / self._mass * 0.85
+                self._velocity[x_indices, 0] = x_dir[x_indices] * np.maximum(
+                    target_x[x_indices], np.abs(self._velocity[x_indices, 0])
+                )
+                self._velocity[z_indices, 2] = z_dir[z_indices] * np.maximum(
+                    target_z[z_indices], np.abs(self._velocity[z_indices, 2])
+                )
+                self._awake[pushable] = True
+
+        moving = active & self._awake
+        if np.any(moving):
+            if np.any(moving & (self._gravity != 0.0)):
+                self._velocity[:, 1] += self._gravity * self.GRAVITY * dt
+                self._velocity[:, 1] *= np.where(
+                    moving,
+                    np.maximum(0.0, 1.0 - self._damping * dt),
+                    1.0,
+                )
+
+            horizontal_damp = np.maximum(
+                0.0,
+                1.0 - (self._damping + self._friction) * dt,
+            )
+            horizontal_mask = moving[:, None] & np.array([True, False, True], dtype=np.bool_)
+            self._velocity[:, 0] *= np.where(horizontal_mask[:, 0], horizontal_damp, 1.0)
+            self._velocity[:, 2] *= np.where(horizontal_mask[:, 2], horizontal_damp, 1.0)
+
+            old_position = self._position.copy()
+
+            self._position[moving, 0] += self._velocity[moving, 0] * dt
+            self._batch_static_collision(0, old_position)
+
+            self._position[moving, 2] += self._velocity[moving, 2] * dt
+            self._batch_static_collision(2, old_position)
+
+            self._position[moving, 1] += self._velocity[moving, 1] * dt
+            floors = self._batch_floor()
+            landed = moving & np.isfinite(floors) & (
+                self._position[:, 1] <= floors
+            )
+            if np.any(landed):
+                self._position[landed, 1] = (
+                    floors[landed]
+                    - self._offset[landed, 1]
+                    + self._half[landed, 1]
+                )
+                self._velocity[landed, 1] = 0.0
+
+            angular = self._angular_velocity
+            if np.any(angular):
+                # Rotation remains an entity-property boundary operation; the
+                # arithmetic itself is still one NumPy operation.
+                for i in np.flatnonzero(np.any(angular != 0.0, axis=1)):
+                    entity = self._entities[int(i)]
+                    props = getattr(entity, 'properties', {})
+                    rotation = np.asarray(props.get('rotation', [0.0, 0.0, 0.0]), dtype=np.float32)
+                    props['rotation'] = (rotation + angular[i] * dt).tolist()
+
+            speed = np.max(np.abs(self._velocity), axis=1)
+            sleeping = moving & (speed < self.REST_SPEED)
+            if np.any(sleeping):
+                self._velocity[sleeping] = 0.0
+                rest_indices = np.flatnonzero(sleeping)
+                self._awake[sleeping] = False
+                for i in rest_indices:
+                    body = self.bodies[id(self._entities[int(i)])]
+                    callback = body.rest_callback
+                    if callback is not None:
+                        callback(body.entity)
+
+            self._sync_entities(np.flatnonzero(moving))
+
