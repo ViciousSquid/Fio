@@ -22,7 +22,10 @@ class IO:
 def test_core_prop_pickup_drop_and_rest_without_plugins():
     prop = Prop(pos=[0, 40, 30], properties={'physics_enabled': True,
                                              'drop_angular_velocity': [10, 0, 0]})
-    assert prop.properties['no_collision'] is False
+    assert prop.properties['no_collision'] is True
+
+    # Persisted props may intentionally keep physics and collision different.
+    prop.properties['no_collision'] = False
     io = IO()
     logic = SimpleNamespace(
         things=[prop], io_manager=io, _spatial_grid=Grid(),
