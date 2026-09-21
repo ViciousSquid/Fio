@@ -183,6 +183,26 @@ def test_engine_physics_body_lands_on_floor_and_sleeps():
     assert body.velocity == [0.0, 0.0, 0.0]
 
 
+def test_engine_physics_applies_strong_ground_friction():
+    grid = Grid()
+    world = PhysicsWorld(grid)
+    prop = _prop()
+    prop.pos = [0.0, 0.0, 0.0]
+    body_brush = _brush(prop, (45.64271, 65.181947, 45.64271))
+    body_brush['pos'] = [0.0, 32.5909735, 0.0]
+    world.rebuild([body_brush])
+    body = world.get_body(prop)
+    body.velocity = [100.0, 0.0, 0.0]
+    body.awake = True
+
+    for _ in range(30):
+        world.step(1.0 / 60.0)
+
+    assert abs(prop.pos[1]) < 1e-5
+    assert abs(body.velocity[0]) < 1e-5
+    assert abs(prop.pos[0]) < 10.0
+
+
 def test_engine_physics_allows_physics_without_solid_collision():
     grid = Grid()
     world = PhysicsWorld(grid)
