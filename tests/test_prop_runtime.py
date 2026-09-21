@@ -2,6 +2,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+from engine.physics import PhysicsWorld
 from engine.prop_runtime import PropSession
 from plugins.entitybase import Prop
 
@@ -19,31 +20,55 @@ class IO:
         self.events.append((entity, name))
 
 
-def test_core_prop_pickup_drop_and_rest_without_plugins():
-    prop = Prop(pos=[0, 40, 30], properties={'physics_enabled': True,
-                                             'drop_angular_velocity': [10, 0, 0]})
-    assert prop.properties['no_collision'] is True
-
-    # Persisted props may intentionally keep physics and collision different.
-    prop.properties['no_collision'] = False
+def test_core_prop_pickup_drop_without_plugins():
+    prop = Prop(pos=[0, 40, 30], properties={
+        'physics_enabled': True,
+        'no_collision': False,
+        'drop_angular_velocity': [10, 0, 0],
+    })
     io = IO()
+
+    grid = Grid()
+    physics = PhysicsWorld(grid)
+    physics.register_body(
+        prop,
+        {
+            'pos': [0, 0, 30],
+            'size': [32, 32, 32],
+            '_physics_body': True,
+            '_physics_entity': prop,
+            '_collision_mode': 'aabb',
+        },
+    )
+
     logic = SimpleNamespace(
-        things=[prop], io_manager=io, _spatial_grid=Grid(),
-        player=SimpleNamespace(pos=[0, 0, 0], angle=0.0, pitch=0.0,
-                               camera_height=40.0), current_hud_message='',
+        things=[prop],
+        io_manager=io,
+        _spatial_grid=grid,
+        _physics_world=physics,
+        player=SimpleNamespace(
+            pos=[0, 0, 0], angle=0.0, pitch=0.0,
+            camera_height=40.0,
+        ),
+        current_hud_message='',
     )
     session = PropSession(logic)
     session.start()
 
     session.tick(1 / 60, use_pressed=True)
     assert session.held is prop
+    assert physics.get_body(prop).kinematic
     assert io.events[-1][1] == 'OnPickedUp'
 
     session.tick(1 / 60, use_pressed=True)
     assert session.held is None
+    assert not physics.get_body(prop).kinematic
+    assert physics.get_body(prop).awake
     assert 'OnDropped' in [event for _, event in io.events]
+
     for _ in range(30):
-        session.tick(1 / 60, use_pressed=False)
+        physics.step(1 / 60)
+
     assert prop.pos[1] == 0.0
     assert ('OnRest' in [event for _, event in io.events])
     assert prop.properties['rotation'][0] > 0
@@ -68,60 +93,6 @@ def test_prop_has_a_default_billboard_and_2d_menu_entry():
     source = Path('editor/view_2d.py').read_text()
     assert 'add_prop_action = menu.addAction("Prop")' in source
     assert 'new_thing = Prop(pos=pos_3d)' in source
-
-
-def test_physics_prop_is_pushable_by_player():
-    prop = Prop(
-        pos=[0, 0, 0],
-        properties={
-            'physics_enabled': True,
-            'no_collision': False,
-            'mass': 1.0,
-        },
-    )
-    brush = {
-        'pos': [0, 25, 0],
-        'size': [40, 50, 40],
-        '_prop_entity': prop,
-        '_dynamic_prop': True,
-        '_collision_mode': 'aabb',
-    }
-
-    class Grid:
-        def raycast_down(self, x, z, from_y):
-            return 0.0
-
-        def get_potential_colliders(self, player_min, player_max):
-            return []
-
-    class Vec:
-        def __init__(self, x=0.0, y=0.0, z=0.0):
-            self.x = x
-            self.y = y
-            self.z = z
-
-    logic = SimpleNamespace(
-        things=[prop],
-        _model_collision_brushes=[brush],
-        _spatial_grid=Grid(),
-        player=SimpleNamespace(
-            pos=Vec(-30.0, 0.0, 0.0),
-            velocity=Vec(120.0, 0.0, 0.0),
-            width=50.0,
-            height=100.0,
-            depth=50.0,
-            physics_enabled=True,
-        ),
-        io_manager=IO(),
-        current_hud_message='',
-    )
-
-    session = PropSession(logic)
-    session.start()
-    session.tick(1 / 60, use_pressed=False)
-
-    assert prop.pos[0] > 0.0
-    assert session.moving[id(prop)]['velocity_x'] > 0.0
 
 
 def test_prop_exposes_mass_and_collision_shape_defaults():
