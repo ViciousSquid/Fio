@@ -2066,7 +2066,10 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "5a2d197f-5ee9-4bdd-baa8-ccf3d8716414"
+            "id": "5a2d197f-5ee9-4bdd-baa8-ccf3d8716414",
+            "trigger_filters": [
+                "player"
+            ]
         },
         {
             "pos": [
@@ -2392,11 +2395,21 @@
             "properties": {
                 "type": "playerstart",
                 "name": "PlayerStart_1",
-                "angle": 0.0,
+                "angle": 180.0,
                 "id": "86adcd90-887a-4dec-a869-0bcff0fd94cc",
                 "io_enabled": true
             },
-            "io_connections": []
+            "io_connections": [
+                {
+                    "output": "OnPlayerSpawn",
+                    "target": "LogicCommand_1",
+                    "input": "RunCommand",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false,
+                    "target_id": "df71cac1-4833-4c71-b6f4-b0f309319bd1"
+                }
+            ]
         },
         {
             "type": "light",
@@ -2628,7 +2641,7 @@
                 "item_type": "gun1",
                 "value": 25,
                 "activation": "walk_over",
-                "collected": true,
+                "collected": false,
                 "respawns": false,
                 "respawn_time": 20.0,
                 "key_name": "blue_key",
@@ -2693,9 +2706,9 @@
         {
             "type": "monster",
             "pos": [
-                254.96835327148438,
-                32.0,
-                340.61798095703125
+                657.8052978515625,
+                160.0,
+                294.345947265625
             ],
             "properties": {
                 "type": "monster",
@@ -2822,6 +2835,23 @@
                 "wait_time": 0.0,
                 "speed": 1.0,
                 "io_enabled": true
+            },
+            "io_connections": []
+        },
+        {
+            "type": "logic_command",
+            "pos": [
+                -176.0,
+                112,
+                784.0
+            ],
+            "properties": {
+                "type": "logic_command",
+                "io_enabled": true,
+                "name": "LogicCommand_1",
+                "id": "df71cac1-4833-4c71-b6f4-b0f309319bd1",
+                "command": "notarget",
+                "disabled": false
             },
             "io_connections": []
         }
