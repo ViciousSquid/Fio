@@ -134,6 +134,38 @@ def test_engine_physics_does_not_bounce_when_pushing_along_floor():
 
 
 
+def test_engine_physics_uses_footprint_support_across_floor_seam():
+    from engine.physics import SpatialGrid
+
+    grid = SpatialGrid(cell_size=512.0)
+    left_floor = {
+        'pos': [-50.0, -25.0, 0.0],
+        'size': [98.0, 50.0, 200.0],
+        'is_trigger': False,
+    }
+    right_floor = {
+        'pos': [50.0, -25.0, 0.0],
+        'size': [98.0, 50.0, 200.0],
+        'is_trigger': False,
+    }
+    grid.populate([left_floor, right_floor])
+
+    world = PhysicsWorld(grid)
+    prop = _prop()
+    # The centre is over a 2-unit seam, but most of the barrel footprint is
+    # still supported by solid floor on either side.
+    prop.pos = [0.0, 0.0, 0.0]
+    body_brush = _brush(prop, (45.64271, 65.181947, 45.64271))
+    body_brush['pos'] = [0.0, 32.5909735, 0.0]
+    world.rebuild([body_brush])
+    world.wake(prop)
+
+    for _ in range(30):
+        world.step(1.0 / 60.0)
+
+    assert abs(prop.pos[1]) < 1e-5
+
+
 def test_engine_physics_body_lands_on_floor_and_sleeps():
     grid = Grid()
     world = PhysicsWorld(grid)
