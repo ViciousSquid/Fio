@@ -309,6 +309,7 @@ class LogicThread(threading.Thread):
 
         # Model collision pseudo-brushes for things with model_path
         self._model_collision_brushes: list = []
+        self._physics_world = None
         # PERF: cached self.brushes + self._model_collision_brushes (see
         # _refresh_collision_brushes_cache)
         self._collision_brushes_cache: list = []
@@ -573,7 +574,8 @@ class LogicThread(threading.Thread):
             props = getattr(thing, 'properties', {})
             if not props.get('model_path'):
                 continue
-            if props.get('no_collision', False):
+            physics_enabled = bool(props.get('physics_enabled', False))
+            if props.get('no_collision', False) and not physics_enabled:
                 continue
 
             pos = getattr(thing, 'pos', [0, 0, 0])
@@ -589,10 +591,7 @@ class LogicThread(threading.Thread):
                 scale = list(scale)
 
             rot = props.get('rotation', [0, 0, 0])
-            is_dynamic_prop = (
-                props.get('type') == 'prop'
-                and props.get('physics_enabled', False)
-            )
+            is_physics_body = physics_enabled
             collision_shape = str(
                 props.get('collision_shape', 'auto')
             ).lower()
@@ -617,8 +616,8 @@ class LogicThread(threading.Thread):
                     'is_water': False,
                     'is_fog': False,
                     '_model_collision': True,
-                    '_prop_entity': thing,
-                    '_dynamic_prop': is_dynamic_prop,
+                    '_physics_entity': thing,
+                    '_physics_body': is_physics_body,
                     '_collision_mode': 'aabb',
                 })
                 continue
@@ -659,8 +658,8 @@ class LogicThread(threading.Thread):
                     'is_water': False,
                     'is_fog': False,
                     '_model_collision': True,
-                    '_prop_entity': thing,
-                    '_dynamic_prop': is_dynamic_prop,
+                    '_physics_entity': thing,
+                    '_physics_body': is_physics_body,
                     '_collision_mode': 'aabb',
                 })
                 continue
@@ -682,8 +681,8 @@ class LogicThread(threading.Thread):
                     'is_water': False,
                     'is_fog': False,
                     '_model_collision': True,
-                    '_prop_entity': thing,
-                    '_dynamic_prop': is_dynamic_prop,
+                    '_physics_entity': thing,
+                    '_physics_body': is_physics_body,
                     '_collision_mode': 'mesh',
                     '_mesh_triangles': mesh_tris,
                     '_mesh_bounds': self._compute_mesh_bounds(mesh_tris),
@@ -865,6 +864,8 @@ class LogicThread(threading.Thread):
             self._model_collision_brushes = self._build_model_collision_brushes()
             if self.play_mode and hasattr(self, '_spatial_grid') and self._spatial_grid:
                 self._spatial_grid.populate(self.brushes + self._model_collision_brushes)
+                if getattr(self, '_physics_world', None) is not None:
+                    self._physics_world.rebuild(self._model_collision_brushes)
         else:
             self._model_collision_brushes = []
             if self.play_mode and hasattr(self, '_spatial_grid') and self._spatial_grid:
@@ -1023,9 +1024,11 @@ class LogicThread(threading.Thread):
             self._build_cull_cache()
 
             # Build spatial grid for fast collision queries (monsters + player)
-            from .physics import SpatialGrid
+            from .physics import SpatialGrid, PhysicsWorld
             self._spatial_grid = SpatialGrid(cell_size=512.0)
             self._spatial_grid.populate(self.brushes + self._model_collision_brushes)
+            self._physics_world = PhysicsWorld(self._spatial_grid)
+            self._physics_world.rebuild(self._model_collision_brushes)
             self.monster_ai.set_spatial_grid(self._spatial_grid)
 
             # Props are a core feature, but do not allocate a runtime session
@@ -1112,6 +1115,10 @@ class LogicThread(threading.Thread):
             if props is not None:
                 props.stop()
             self._props = None
+            physics_world = getattr(self, '_physics_world', None)
+            if physics_world is not None:
+                physics_world.clear()
+            self._physics_world = None
             self.monster_ai.set_spatial_grid(None)
             grid = getattr(self, '_spatial_grid', None)
             if grid is not None:
@@ -1767,6 +1774,10 @@ class LogicThread(threading.Thread):
                 self._props = None
             else:
                 props.tick(delta, use_key)
+        physics_world = getattr(self, '_physics_world', None)
+        if physics_world is not None:
+            physics_world.step(delta, self.player)
+
         self._check_pickups()
         self._handle_triggers(use_key)
 
