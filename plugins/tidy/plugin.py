@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from plugins.api import FioPlugin, TickContext, io_def, prop
 
-from .entities import BOOK_MODEL, TidyGoal, TidyReceptacle
+from .entities import TidyGoal, TidyReceptacle
 from .runtime import TidySession
 
 
@@ -91,34 +91,6 @@ class TidyPlugin(FioPlugin):
             # Headless/player processes do not expose the editor I/O registry.
             pass
 
-    def migrate_map_data(self, map_data: dict) -> None:
-        """Convert legacy tidyobject records into core prop records."""
-        things = map_data.get("things", []) if isinstance(map_data, dict) else []
-        for thing in things:
-            if not isinstance(thing, dict):
-                continue
-
-            raw_type = thing.get("type") or thing.get("properties", {}).get("type")
-            norm = str(raw_type or "").replace("_", "").lower()
-            if norm != "tidyobject":
-                continue
-
-            props = thing.get("properties")
-            if not isinstance(props, dict):
-                props = {}
-                thing["properties"] = props
-
-            category = props.get("tidy_category")
-            if category is None or not str(category).strip():
-                category = props.get("category", "object")
-            props["tidy_category"] = str(category).strip() or "object"
-
-            # TidyObject already used core Prop-compatible model/physics keys.
-            props.setdefault("model_path", BOOK_MODEL)
-            props["type"] = "prop"
-            props.pop("tidied", None)
-            thing["type"] = "prop"
-
     def map_uses_plugin(self, map_data: dict) -> bool:
         """Auto-enable Tidy for receptacles, goals, or marked core Props."""
         things = map_data.get("things", []) if isinstance(map_data, dict) else []
@@ -128,8 +100,6 @@ class TidyPlugin(FioPlugin):
             raw_type = thing.get("type") or thing.get("properties", {}).get("type")
             norm = str(raw_type or "").replace("_", "").lower()
             if norm in ("tidyreceptacle", "tidygoal"):
-                return True
-            if norm == "tidyobject":
                 return True
             if norm == "prop":
                 props = thing.get("properties", {})
