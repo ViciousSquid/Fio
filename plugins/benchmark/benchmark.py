@@ -1,5 +1,4 @@
 """Live benchmark support for Fio.
-
 Imported only when Tools > Benchmark is first used. No benchmark objects,
 timers or IPC are created during normal editor startup.
 """
@@ -8,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
+import html
 import os
 import subprocess
 import sys
