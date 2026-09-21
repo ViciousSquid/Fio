@@ -80,6 +80,36 @@ def test_plugin_loads_and_registers():
            "tidy_category registered as a Prop extension")
 
 
+def test_demo_loader_respects_unsaved_changes():
+    print("[2] demo loader uses the existing unsaved-changes dialog")
+    from plugins.tidy.plugin import PLUGIN
+
+    class FakeWindow:
+        def __init__(self, allow):
+            self.allow = allow
+            self.checked = 0
+            self.loaded = None
+
+        def check_unsaved_changes(self):
+            self.checked += 1
+            return self.allow
+
+        def load_level_file(self, path):
+            self.loaded = path
+
+    blocked = FakeWindow(False)
+    PLUGIN._load_demo_map(blocked)
+    _check(blocked.checked == 1, "unsaved-change check was shown")
+    _check(blocked.loaded is None, "demo did not replace unsaved work")
+
+    allowed = FakeWindow(True)
+    PLUGIN._load_demo_map(allowed)
+    _check(allowed.checked == 1, "existing dialog was still used")
+    _check(allowed.loaded is not None and allowed.loaded.endswith(
+        os.path.join("plugins", "tidy", "Tidy_Test.json")
+    ), "demo loaded from the plugin folder")
+
+
 def test_core_prop_pickup_and_tidy_place():
     print("[3] core PropSession handles pickup/drop while Tidy intercepts placement")
     from engine.prop_runtime import PropSession
