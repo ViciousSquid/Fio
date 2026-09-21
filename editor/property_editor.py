@@ -2110,6 +2110,13 @@ class PropertyEditor(QWidget):
             ):
                 continue
 
+            if isinstance(thing, Prop) and key in (
+                'render_mode',
+                'sprite_path',
+                'sprite_size',
+            ):
+                continue
+
             # Prop exposes collision and dynamics through one Physics section.
             if isinstance(thing, Prop) and key in (
                 'mass',
@@ -3932,6 +3939,15 @@ class PropertyEditor(QWidget):
         update_swatch()
         h.addWidget(swatch)
         form_layout.addRow("Colour:", widget)
+
+    def _on_prop_sprite_size_changed(self, thing, index, value):
+        size = thing.properties.get('sprite_size', [32.0, 32.0])
+        if not isinstance(size, list) or len(size) < 2:
+            size = [32.0, 32.0]
+        else:
+            size = list(size)
+        size[index] = float(value)
+        self.update_object_prop('sprite_size', size)
 
     def update_object_prop(self, key, value):
         if self.current_object is None:
