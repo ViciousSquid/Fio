@@ -113,3 +113,20 @@ def test_extend_io_is_idempotent_and_additive(manager):
     api.extend_io("prop", inputs=[io_def("AuditProbe", "added by this test")])
     assert "auditprobe" in _prop_inputs()
     assert all(name in _prop_inputs() for name in before)
+
+
+def test_a_registration_made_during_a_test_does_not_leak(manager):
+    """The recorded list is process-wide state and must be isolated.
+
+    Recording registrations gave the replay something to restore -- and gave
+    anything registered mid-session a way to become permanent, because the
+    replay would faithfully re-apply it to every later test. conftest therefore
+    snapshots and restores ``_io_registrations`` alongside the other
+    singletons. Without that, the probe the previous test registers is replayed
+    into the I/O conformance suite and reported as an input that is declared
+    but implements nothing.
+    """
+    from editor.io_system import get_input_names
+
+    assert "auditprobe" not in [n.lower() for n in get_input_names("prop")], (
+        "a registration from an earlier test leaked into this one")

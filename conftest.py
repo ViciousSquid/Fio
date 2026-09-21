@@ -206,17 +206,25 @@ def _snapshot_plugin_state():
     return (manager,
             {plugin: bool(getattr(plugin, "enabled", True))
              for plugin in manager.plugins},
-            set(manager._auto_enabled))
+            set(manager._auto_enabled),
+            # The manager's recorded registrations are process-wide state like
+            # any other singleton here. A test that registers something -- the
+            # plugin-API tests do -- would otherwise have it replayed into
+            # every later test by reapply_registrations(), which is a leak the
+            # replay itself makes permanent.
+            list(getattr(manager, "_io_registrations", [])))
 
 
 def _restore_plugin_state(snapshot):
     if snapshot is None:
         return
-    manager, enabled, auto_enabled = snapshot
+    manager, enabled, auto_enabled, io_registrations = snapshot
     for plugin, was_enabled in enabled.items():
         plugin.enabled = was_enabled
     manager._auto_enabled.clear()
     manager._auto_enabled.update(auto_enabled)
+    if hasattr(manager, "_io_registrations"):
+        manager._io_registrations[:] = io_registrations
 
 
 # ---------------------------------------------------------------------------
