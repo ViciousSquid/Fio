@@ -364,16 +364,27 @@ class EditorState:
         for index, t_data in enumerate(things_data):
             if yield_hook is not None and index % 25 == 0:
                 yield_hook()
+            thing = None
             if t_data.get('type') == 'Model':
+                # Legacy fast path: a 'Model' record was written with its
+                # fields as top-level keys. An unexpected key raises TypeError,
+                # which used to abort the whole load -- one malformed record
+                # cost the user every entity after it. Fall through to the
+                # normal resolver instead, which preserves what it cannot
+                # build rather than dropping or raising.
                 model_kwargs = {k: v for k, v in t_data.items() if k != 'type'}
-                new_things.append(Model(**model_kwargs))
-            else:
+                try:
+                    thing = Model(**model_kwargs)
+                except Exception as exc:
+                    print(f"[EditorState] legacy Model record could not be "
+                          f"built ({exc}); preserving it unchanged.")
+            if thing is None:
                 thing = Thing.from_dict(t_data)
-                if thing:
-                    # Migrate legacy 'target' property
-                    if thing.properties.get('target') and IO_AVAILABLE:
-                        self._migrate_legacy_thing_target(thing)
-                    new_things.append(thing)
+            if thing is not None:
+                # Migrate legacy 'target' property
+                if thing.properties.get('target') and IO_AVAILABLE:
+                    self._migrate_legacy_thing_target(thing)
+                new_things.append(thing)
 
         self.things = new_things
 

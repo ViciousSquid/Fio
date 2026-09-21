@@ -320,3 +320,44 @@ def test_the_migrated_connection_survives_a_further_round_trip():
     assert [c.target_name for c in connections] == ["door"], (
         "the migrated connection did not survive being saved and reloaded: %s"
         % (connections,))
+
+
+def test_a_malformed_legacy_model_record_does_not_abort_the_load():
+    """The 'Model' fast path used to raise, taking the rest of the map with it.
+
+    A record typed 'Model' is built by splatting its top-level keys as keyword
+    arguments, which is how an older Fio wrote them. An unexpected key raised
+    TypeError out of load_from_data, so one bad record cost the author every
+    entity after it -- and saving the half-loaded scene would have made that
+    permanent. The record now falls through to the normal resolver.
+    """
+    state = EditorState()
+    state.load_from_data({
+        "version": 3,
+        "brushes": [],
+        "things": [
+            {"type": "Model", "pos": [0, 0, 0], "unexpected_key": 123},
+            {"type": "light", "pos": [0, 0, 0], "properties": {"name": "after"}},
+        ],
+    })
+
+    names = [t.name for t in state.things]
+    assert "after" in names, (
+        "a malformed legacy Model record stopped the load; scene holds %s" % (names,))
+
+
+def test_a_well_formed_legacy_model_record_still_loads_its_fields():
+    """The fast path itself must keep working for the shape it exists for."""
+    state = EditorState()
+    state.load_from_data({
+        "version": 3,
+        "brushes": [],
+        "things": [{"type": "Model", "pos": [5, 6, 7],
+                    "properties": {"model_path": "assets/models/Oil_Drum.obj",
+                                   "name": "drum"}}],
+    })
+
+    model = state.things[0]
+    assert model.properties["model_path"] == "assets/models/Oil_Drum.obj"
+    assert model.properties["name"] == "drum"
+    assert [float(v) for v in model.pos] == [5.0, 6.0, 7.0]

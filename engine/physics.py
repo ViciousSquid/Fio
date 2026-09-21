@@ -465,6 +465,13 @@ class PhysicsWorld:
     """
 
     GRAVITY = np.float32(-900.0)
+    #: Active-body count from which the grouped floor query is worth its setup.
+    #: Below it the NumPy assembly costs more than the scalar raycasts it saves
+    #: -- measured crossover is around 56-64 bodies on this scene shape, so the
+    #: grouped path is only taken where it is demonstrably faster. Both paths
+    #: are bit-identical (tests/physics/test_dynamic_bodies.py), so this is
+    #: purely a cost choice and never a behavioural one.
+    FLOOR_BATCH_MIN_BODIES = 64
     MAX_STEP = np.float32(0.05)
     REST_SPEED = np.float32(1.0)
 
@@ -720,6 +727,45 @@ class PhysicsWorld:
                 mask[i] = True
         return mask
 
+    def _integrate_rotation(self, angular, dt):
+        """Advance the rotation of every spinning body.
+
+        Rotation lives on the entity's property dict rather than in the packed
+        arrays, so this is necessarily an object-boundary operation. What it
+        does not have to be is scalar arithmetic: the gather, the multiply-add
+        and the conversion back to lists are each one operation over all
+        spinning bodies, and only the dict reads and writes stay per-entity.
+
+        Which bodies spin is unchanged -- any body with a non-zero angular
+        velocity, awake or not, exactly as before.
+        """
+        spinning = np.flatnonzero(np.any(angular != 0.0, axis=1))
+        if spinning.size == 0:
+            return
+
+        current = np.zeros((spinning.size, 3), dtype=np.float32)
+        targets = []
+        for slot, index in enumerate(spinning):
+            props = getattr(self._entities[int(index)], 'properties', None)
+            if not isinstance(props, dict):
+                targets.append(None)
+                continue
+            targets.append(props)
+            rotation = props.get('rotation')
+            if rotation is None:
+                continue
+            try:
+                current[slot] = rotation
+            except (TypeError, ValueError):
+                # A malformed authored rotation restarts from zero rather than
+                # aborting the whole step for every other body.
+                current[slot] = 0.0
+
+        updated = (current + angular[spinning] * dt).tolist()
+        for props, rotation in zip(targets, updated):
+            if props is not None:
+                props['rotation'] = rotation
+
     def _sync_entities(self, indices=None):
         # Position only. Rotation is integrated (angular * dt) in step();
         # applying angular velocity here as well spun bodies ~61x too fast.
@@ -857,7 +903,167 @@ class PhysicsWorld:
             self._velocity[hit_indices, axis] = 0.0
 
     def _batch_floor(self, previous_bottom=None):
-        """Raycast down beneath each active dynamic body to find its floor."""
+        """Find the floor beneath each active dynamic body.
+
+        Five support points per body -- centre plus four in-footprint samples --
+        so a body straddling a seam between floor brushes cannot lose contact
+        just because its centre crossed the gap.
+
+        That is 5N downward queries per step. Done one at a time they were the
+        largest remaining scalar section of the dynamic path: each
+        ``raycast_down`` call re-derives the cell and then walks that cell's
+        brush dicts in Python, so the cost is 5N x (brushes per cell) Python
+        iterations. :meth:`_batch_floor_grouped` instead groups all 5N sample
+        points by grid cell and tests every point in a cell against every brush
+        in it with one broadcast, which makes the Python work proportional to
+        the number of *distinct cells* rather than to the number of samples.
+
+        Brush positions are still read live on every step. Movers and doors sit
+        in the grid and move without it being repopulated, so a prop riding a
+        platform depends on seeing the platform's current height; caching the
+        AABBs would quietly break that.
+
+        The grouped path is used only for a stock :class:`SpatialGrid`. Anything
+        that overrides ``raycast_down`` -- a test double, or a future grid with
+        its own tracing -- keeps the scalar path, because its answers are not
+        derivable from ``cells`` alone.
+        """
+        active = self._physics_enabled & self._awake & ~self._kinematic & self._solid
+        if (int(active.sum()) >= self.FLOOR_BATCH_MIN_BODIES
+                and self._can_group_floor_queries()):
+            return self._batch_floor_grouped(previous_bottom)
+        return self._batch_floor_scalar(previous_bottom)
+
+    def _can_group_floor_queries(self):
+        grid = self.spatial_grid
+        if type(grid).__dict__.get('raycast_down') is None:
+            # Inherited from SpatialGrid rather than overridden.
+            if not isinstance(grid, SpatialGrid):
+                return False
+        elif type(grid).raycast_down is not SpatialGrid.raycast_down:
+            return False
+        return (isinstance(getattr(grid, 'cells', None), dict)
+                and getattr(grid, 'cell_size', None))
+
+    def _support_offsets(self, indices):
+        """Per-body support-point offsets and ray origins, in float64.
+
+        float64 deliberately: the scalar path promotes each float32 component
+        to a Python float before the offset arithmetic, so matching the width
+        here keeps the two paths bit-identical rather than merely close.
+        """
+        centers = (self._position[indices] + self._offset[indices]).astype(np.float64)
+        half = self._half[indices].astype(np.float64)
+        zeros = np.zeros(indices.size, dtype=np.float64)
+        hx = half[:, 0] * 0.75
+        hz = half[:, 2] * 0.75
+        off_x = np.stack([zeros, -hx, hx, zeros, zeros], axis=1)
+        off_z = np.stack([zeros, zeros, zeros, -hz, hz], axis=1)
+        px = centers[:, 0:1] + off_x
+        pz = centers[:, 2:3] + off_z
+        bottom = centers[:, 1] - half[:, 1]
+        return px, pz, bottom
+
+    def _batch_floor_grouped(self, previous_bottom=None):
+        n = len(self._entities)
+        floors = np.full(n, -np.inf, dtype=np.float32)
+        active = self._physics_enabled & self._awake & ~self._kinematic & self._solid
+        indices = np.flatnonzero(active)
+        if indices.size == 0:
+            return floors
+
+        previous_bottom = self._previous_bottom(previous_bottom)
+        px, pz, bottom = self._support_offsets(indices)
+        ray_y = np.maximum(bottom, previous_bottom[indices].astype(np.float64)) + 1.0
+
+        samples = px.size
+        flat_x = px.ravel()
+        flat_z = pz.ravel()
+        flat_y = np.repeat(ray_y, px.shape[1])
+
+        cell_size = float(self.spatial_grid.cell_size)
+        cx = np.floor(flat_x / cell_size).astype(np.int64)
+        cz = np.floor(flat_z / cell_size).astype(np.int64)
+
+        best = np.full(samples, -np.inf, dtype=np.float64)
+        cells = self.spatial_grid.cells
+
+        # Sort once, then walk contiguous runs: one pass per distinct cell
+        # instead of one boolean scan of every sample per cell.
+        order = np.lexsort((cz, cx))
+        s_cx = cx[order]
+        s_cz = cz[order]
+        starts = np.flatnonzero(
+            np.r_[True, (s_cx[1:] != s_cx[:-1]) | (s_cz[1:] != s_cz[:-1])]
+        )
+        ends = np.r_[starts[1:], samples]
+
+        for start, end in zip(starts, ends):
+            brushes = cells.get((int(s_cx[start]), int(s_cz[start])))
+            if not brushes:
+                continue
+            bounds = self._cell_bounds(brushes)
+            if bounds is None:
+                continue
+            lo_x, hi_x, lo_z, hi_z, top_y = bounds
+
+            sel = order[start:end]
+            X = flat_x[sel][:, None]
+            Z = flat_z[sel][:, None]
+            Y = flat_y[sel][:, None]
+            inside = (
+                (X >= lo_x) & (X <= hi_x)
+                & (Z >= lo_z) & (Z <= hi_z)
+                & (top_y[None, :] <= Y)
+            )
+            if not inside.any():
+                continue
+            best[sel] = np.where(inside, top_y[None, :], -np.inf).max(axis=1)
+
+        per_body = best.reshape(px.shape).max(axis=1)
+        hit = per_body > -np.inf
+        if hit.any():
+            floors[indices[hit]] = per_body[hit].astype(np.float32)
+        return floors
+
+    @staticmethod
+    def _cell_bounds(brushes):
+        """Live XZ extents and top surface of every brush in one grid cell.
+
+        Read from the dicts on every call, not cached: see _batch_floor.
+        """
+        count = len(brushes)
+        lo_x = np.empty(count, dtype=np.float64)
+        hi_x = np.empty(count, dtype=np.float64)
+        lo_z = np.empty(count, dtype=np.float64)
+        hi_z = np.empty(count, dtype=np.float64)
+        top_y = np.empty(count, dtype=np.float64)
+        kept = 0
+        for brush in brushes:
+            try:
+                pos = brush['pos']
+                size = brush['size']
+                x, y, z = float(pos[0]), float(pos[1]), float(pos[2])
+                sx, sy, sz = float(size[0]), float(size[1]), float(size[2])
+            except (KeyError, TypeError, ValueError, IndexError):
+                continue
+            lo_x[kept] = x - sx * 0.5
+            hi_x[kept] = x + sx * 0.5
+            lo_z[kept] = z - sz * 0.5
+            hi_z[kept] = z + sz * 0.5
+            top_y[kept] = y + sy * 0.5
+            kept += 1
+        if kept == 0:
+            return None
+        return (lo_x[:kept], hi_x[:kept], lo_z[:kept], hi_z[:kept], top_y[:kept])
+
+    def _previous_bottom(self, previous_bottom):
+        if previous_bottom is None:
+            return (self._position + self._offset)[:, 1] - self._half[:, 1]
+        return np.asarray(previous_bottom, dtype=np.float32)
+
+    def _batch_floor_scalar(self, previous_bottom=None):
+        """One raycast_down per support point. Fallback for a custom grid."""
         n = len(self._entities)
         floors = np.full(n, -np.inf, dtype=np.float32)
         active = self._physics_enabled & self._awake & ~self._kinematic & self._solid
@@ -873,12 +1079,7 @@ class PhysicsWorld:
         # If integration has already carried the body slightly through the
         # floor this keeps the ray above the surface, allowing raycast_down()
         # to see it instead of starting underneath it.
-        if previous_bottom is None:
-            previous_bottom = (
-                (self._position + self._offset)[:, 1] - self._half[:, 1]
-            )
-        else:
-            previous_bottom = np.asarray(previous_bottom, dtype=np.float32)
+        previous_bottom = self._previous_bottom(previous_bottom)
 
         for i in indices:
             i = int(i)
@@ -1055,13 +1256,7 @@ class PhysicsWorld:
 
             angular = self._angular_velocity
             if np.any(angular):
-                # Rotation remains an entity-property boundary operation; the
-                # arithmetic itself is still one NumPy operation.
-                for i in np.flatnonzero(np.any(angular != 0.0, axis=1)):
-                    entity = self._entities[int(i)]
-                    props = getattr(entity, 'properties', {})
-                    rotation = np.asarray(props.get('rotation', [0.0, 0.0, 0.0]), dtype=np.float32)
-                    props['rotation'] = (rotation + angular[i] * dt).tolist()
+                self._integrate_rotation(angular, dt)
 
             speed = np.max(np.abs(self._velocity), axis=1)
             sleeping = (

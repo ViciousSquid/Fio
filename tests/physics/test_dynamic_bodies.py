@@ -295,3 +295,142 @@ def test_an_enabled_body_still_falls():
         world.step(1.0 / 60.0)
 
     assert prop.pos[1] < 400.0
+
+
+# ---------------------------------------------------------------------------
+# Floor queries: two implementations of one answer.
+#
+# _batch_floor dispatches between a scalar path (one raycast_down per support
+# point) and a grouped path (all 5N samples bucketed by grid cell and tested
+# with one broadcast per cell). The grouped path is the faster one above
+# FLOOR_BATCH_MIN_BODIES active bodies, but "faster" is only acceptable if it
+# is also the *same* answer, so these pin equality directly rather than
+# trusting the threshold.
+# ---------------------------------------------------------------------------
+
+import random
+
+import numpy as np
+import pytest
+
+
+def _scattered_world(n_bodies, seed, spread=1500.0):
+    rng = random.Random(seed)
+    statics = [
+        {'pos': [rng.uniform(-spread, spread), rng.uniform(-60.0, 40.0),
+                 rng.uniform(-spread, spread)],
+         'size': [rng.uniform(100.0, 400.0), 40.0, rng.uniform(100.0, 400.0)]}
+        for _ in range(120)
+    ]
+    world = _world(*statics)
+    brushes = []
+    for _ in range(n_bodies):
+        prop = _prop(pos=(rng.uniform(-spread, spread),
+                          rng.uniform(50.0, 400.0),
+                          rng.uniform(-spread, spread)))
+        brushes.append(_drum_brush(prop))
+    world.rebuild(brushes)
+    for brush in brushes:
+        world.wake(brush['_physics_entity'])
+    world._pack()
+    return world
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3, 4])
+@pytest.mark.parametrize("n_bodies", [1, 7, 40, 130])
+def test_grouped_and_scalar_floor_queries_agree_exactly(n_bodies, seed):
+    world = _scattered_world(n_bodies, seed)
+    for _ in range(3):  # let bodies reach varied heights first
+        world.step(1.0 / 60.0)
+
+    grouped = world._batch_floor_grouped()
+    scalar = world._batch_floor_scalar()
+
+    # Exact, not approximate: the grouped path promotes to float64 before the
+    # support-point arithmetic precisely so it matches the scalar path bit for
+    # bit rather than merely closely.
+    assert np.array_equal(grouped, scalar)
+
+
+def test_grouped_floor_query_reads_mover_heights_live():
+    """A platform that moves without the grid being repopulated.
+
+    populate() runs on play-start, not per frame, so a mover's cell membership
+    is a snapshot while its height is not. Caching the cell AABBs would make a
+    prop ride a platform that is no longer there.
+    """
+    platform = {'pos': [0.0, 0.0, 0.0], 'size': [400.0, 20.0, 400.0],
+                'is_mover': True}
+    world = _world(platform)
+    prop = _prop(pos=(0.0, 300.0, 0.0))
+    world.rebuild([_drum_brush(prop)])
+    world.wake(prop)
+    world._pack()
+
+    assert world._batch_floor_grouped()[0] == pytest.approx(10.0)
+
+    platform['pos'][1] = 100.0          # rises; grid NOT repopulated
+    assert world._batch_floor_grouped()[0] == pytest.approx(110.0)
+    assert np.array_equal(world._batch_floor_grouped(),
+                          world._batch_floor_scalar())
+
+
+def test_a_custom_grid_keeps_the_scalar_path():
+    """A grid with its own raycast_down cannot be answered from `cells`."""
+    class TracingGrid(SpatialGrid):
+        def raycast_down(self, x, z, start_y=10000.0):
+            return 123.0
+
+    world = PhysicsWorld(TracingGrid(cell_size=512.0))
+    assert world._can_group_floor_queries() is False
+
+    prop = _prop(pos=(0.0, 300.0, 0.0))
+    world.rebuild([_drum_brush(prop)])
+    world.wake(prop)
+    world._pack()
+    assert world._batch_floor()[0] == pytest.approx(123.0)
+
+
+# ---------------------------------------------------------------------------
+# Rotation integration
+# ---------------------------------------------------------------------------
+
+def test_rotation_integrates_for_every_spinning_body():
+    world = _world()
+    brushes = []
+    for i in range(5):
+        prop = _prop(pos=(i * 200.0, 0.0, 0.0),
+                     rotation=[1.0, 2.0, 3.0],
+                     drop_angular_velocity=[10.0, 0.0, -5.0] if i % 2 == 0 else [0.0, 0.0, 0.0])
+        brushes.append(_drum_brush(prop))
+    world.rebuild(brushes)
+    world._pack()
+
+    dt = np.float32(1.0 / 60.0)
+    world._integrate_rotation(world._angular_velocity, dt)
+
+    for i, brush in enumerate(brushes):
+        rotation = brush['_physics_entity'].properties['rotation']
+        if i % 2 == 0:
+            expected = (np.float32([1.0, 2.0, 3.0])
+                        + np.float32([10.0, 0.0, -5.0]) * dt).tolist()
+            assert rotation == expected
+        else:
+            assert rotation == [1.0, 2.0, 3.0]  # untouched
+
+
+def test_rotation_survives_a_malformed_authored_value():
+    """One bad rotation must not abort the step for every other body."""
+    world = _world()
+    good = _prop(pos=(0.0, 0.0, 0.0), rotation=[0.0, 0.0, 0.0],
+                 drop_angular_velocity=[6.0, 0.0, 0.0])
+    bad = _prop(pos=(200.0, 0.0, 0.0), rotation="not a rotation",
+                drop_angular_velocity=[6.0, 0.0, 0.0])
+    world.rebuild([_drum_brush(good), _drum_brush(bad)])
+    world._pack()
+
+    dt = np.float32(1.0 / 60.0)
+    world._integrate_rotation(world._angular_velocity, dt)
+
+    assert good.properties['rotation'][0] == pytest.approx(0.1)
+    assert bad.properties['rotation'][0] == pytest.approx(0.1)  # restarted at 0

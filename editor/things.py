@@ -266,12 +266,22 @@ class Thing:
     def from_dict(data):
         """Deserialize from dictionary."""
         thing_type = data.get('type')
-        if not thing_type:
-            return None
 
         # Untouched copy for opaque preservation of unresolvable types; the
         # loop below rewrites string property values in place.
         original_record = copy.deepcopy(data)
+
+        if not thing_type:
+            # Deliberately *not* preserved, unlike an unresolvable type token.
+            # Preservation exists so an entity whose plugin is missing survives
+            # a load/save round trip; that entity is identifiable, carries
+            # authored content, and a plugin may supply its class later. A
+            # record with no type at all is none of those things -- there is
+            # nothing to resolve it to and nothing to show the author but a
+            # nameless ghost. Skipping it (without stopping the load) is the
+            # contract test_a_thing_with_no_type_is_skipped_rather_than_
+            # crashing_the_load pins.
+            return None
 
         properties = data.get('properties', {})
         for key, value in properties.items():
