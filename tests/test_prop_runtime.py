@@ -101,6 +101,68 @@ def test_session_detects_maps_without_props_and_unloads_when_removed():
     assert not PropSession.has_props(logic.things)
 
 
+class CountingThings(list):
+    """A thing list that records every full traversal of itself."""
+
+    def __init__(self, items):
+        super().__init__(items)
+        self.walks = 0
+
+    def __iter__(self):
+        self.walks += 1
+        return super().__iter__()
+
+
+def test_the_liveness_poll_does_not_walk_the_map_every_frame():
+    """``is_empty`` runs once per tick from both the logic thread and the
+    standalone player; deriving the live set means walking every Thing in the
+    map, so it is gated on a cheap fingerprint of the thing list."""
+    things = CountingThings([Prop(pos=[0, 0, 0])]
+                            + [SimpleNamespace(properties={'type': 'light'})
+                               for _ in range(200)])
+    session = PropSession(SimpleNamespace(things=things))
+    session.start()
+
+    walks_before = things.walks
+    for _ in range(PropSession.RESCAN_INTERVAL):
+        assert session.is_empty() is False
+    assert things.walks == walks_before, (
+        "the liveness poll walked the map %d times in %d ticks"
+        % (things.walks - walks_before, PropSession.RESCAN_INTERVAL))
+
+
+def test_the_liveness_poll_still_notices_a_removal_immediately():
+    prop, other = Prop(pos=[0, 0, 0]), Prop(pos=[10, 0, 0])
+    things = [prop, other]
+    session = PropSession(SimpleNamespace(things=things))
+    session.start()
+    assert session.is_empty() is False
+
+    things.remove(other)
+    assert session.is_empty() is False
+    assert session.props == [prop], "a removed Prop stayed in the session"
+
+    things.remove(prop)
+    assert session.is_empty() is True
+
+
+def test_a_same_length_swap_is_caught_by_the_periodic_rescan():
+    """The fingerprint cannot see a remove-and-add inside one poll interval,
+    which is exactly why the rescan is unconditional every N polls."""
+    prop = Prop(pos=[0, 0, 0])
+    things = [prop]
+    logic = SimpleNamespace(things=things)
+    session = PropSession(logic)
+    session.start()
+    session.held = prop
+
+    things[0] = Prop(pos=[0, 0, 0])          # same length, different object
+    for _ in range(PropSession.RESCAN_INTERVAL + 1):
+        session.is_empty()
+    assert session.props == [], "the replaced Prop was never pruned"
+    assert session.held is None, "the session kept hold of a Prop that is gone"
+
+
 def test_prop_has_a_default_billboard_and_2d_menu_entry():
     prop = Prop()
     assert prop.get_sprite_path() == 'assets/sprites/pickup.png'

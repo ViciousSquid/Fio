@@ -391,8 +391,8 @@ class LogicThread(threading.Thread):
         self._portal_prev_player_pos = None
         # Portal name → Portal lookup cache; rebuilt on play start and when
         # the things list changes.  Avoids an O(n) rebuild every physics tick.
+        self._portal_things: List = []
         self._portals_by_name: Dict[str, object] = {}
-        self._portals_cache_dirty: bool = True
 
         self.level_complete_ui = None
 
@@ -498,6 +498,18 @@ class LogicThread(threading.Thread):
         # the one per-frame path the logic system has, and it should walk the
         # timers, not the level.
         self._timer_things = [t for t in self.things if LogicTimer and isinstance(t, LogicTimer)]
+
+        # PERF: portals, for the same reason again.  _update_portals ticks every
+        # portal's fade every frame, which used to mean an isinstance scan of
+        # the entire thing list per frame on a map with no portals at all.  The
+        # name index is derived here too, in the same pass, so the two can never
+        # disagree about which portals exist.
+        self._portal_things = [t for t in self.things if Portal and isinstance(t, Portal)]
+        self._portals_by_name = {}
+        for t in self._portal_things:
+            n = t.properties.get('name', '')
+            if n:
+                self._portals_by_name[n] = t
 
     def _find_entity_by_name(self, name: str):
         if not name:
@@ -1113,7 +1125,6 @@ class LogicThread(threading.Thread):
             # Reset portal transit state
             self._portal_cooldowns.clear()
             self._portal_prev_player_pos = None
-            self._portals_cache_dirty = True
 
             # Reset portal fade state so portals start at the correct opacity
             if Portal is not None:
@@ -1202,7 +1213,6 @@ class LogicThread(threading.Thread):
             # Reset portal transit state
             self._portal_cooldowns.clear()
             self._portal_prev_player_pos = None
-            self._portals_cache_dirty = True
 
             # Reset portal fade state to match 'active' property (editor view stays correct)
             if Portal is not None:
@@ -1961,11 +1971,15 @@ class LogicThread(threading.Thread):
         """
         if Portal is None or not self.player:
             return
+        if not self._portal_things:
+            # No portals in this map: nothing to fade, nothing to cross, and no
+            # cooldowns to decay (they are only ever written below).
+            return
 
-        # Tick fade transitions for every portal each frame
-        for t in self.things:
-            if isinstance(t, Portal):
-                t.tick_fade(delta)
+        # Tick fade transitions for every portal each frame, off the list built
+        # by _build_entity_caches — walking the portals, not the level.
+        for t in self._portal_things:
+            t.tick_fade(delta)
 
         # Decay all active cooldowns
         for pid in list(self._portal_cooldowns):
@@ -1973,14 +1987,6 @@ class LogicThread(threading.Thread):
             if self._portal_cooldowns[pid] <= 0.0:
                 del self._portal_cooldowns[pid]
 
-        # Build (or reuse) name → Portal lookup
-        if self._portals_cache_dirty:
-            self._portals_by_name = {
-                t.properties.get('name', ''): t
-                for t in self.things
-                if isinstance(t, Portal) and t.properties.get('name', '')
-            }
-            self._portals_cache_dirty = False
         portals_by_name = self._portals_by_name
 
         cur = (float(self.player.pos.x), float(self.player.pos.y), float(self.player.pos.z))
