@@ -503,6 +503,10 @@ class EditorAPI:
         """Register a Tools-menu action for an editor/developer plugin."""
         self._manager._record_tools_action(self._plugin, label, callback, tooltip)
 
+    def register_menu_action(self, label: str, callback: Callable, tooltip: str = "") -> None:
+        """Register an action at the top of this plugin's editor menu."""
+        self._manager._record_menu_action(self._plugin, label, callback, tooltip)
+
     def register_console_command(self, name: str, callback: Callable, help_text: str = "") -> None:
         """Register a plugin-owned debug console command."""
         self._manager._register_console_command(self._plugin, name, callback, help_text)
