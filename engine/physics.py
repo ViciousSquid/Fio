@@ -312,3 +312,233 @@ class SpatialGrid:
                         if t_min < limit:
                             return False
         return True
+
+class PhysicsBody:
+    """Engine-owned dynamic rigid body backed by a Thing-like entity."""
+
+    def __init__(self, entity, brush, rest_callback=None):
+        self.entity = entity
+        self.brush = brush
+        self.rest_callback = rest_callback
+        self.kinematic = False
+        self.awake = False
+        self.velocity = [0.0, 0.0, 0.0]
+        props = getattr(entity, 'properties', {})
+        self.mass = max(0.01, float(props.get('mass', 1.0)))
+        self.gravity = bool(props.get('gravity', True))
+        self.friction = max(0.0, min(1.0, float(props.get('friction', 0.55))))
+        self.linear_damping = max(0.0, float(props.get('linear_damping', 0.08)))
+        angular = props.get('drop_angular_velocity', [0.0, 0.0, 0.0])
+        self.angular_velocity = [float(angular[i]) for i in range(3)]
+        self.size, self.offset = self._shape_from_brush(brush)
+
+    def _shape_from_brush(self, brush):
+        bounds = brush.get('_mesh_bounds') if brush.get('_collision_mode') == 'mesh' else None
+        if bounds:
+            min_v, max_v = bounds
+            center = tuple((float(min_v[i]) + float(max_v[i])) * 0.5 for i in range(3))
+            size = tuple(float(max_v[i]) - float(min_v[i]) for i in range(3))
+        else:
+            center = tuple(float(v) for v in brush.get('pos', (0.0, 0.0, 0.0)))
+            size = tuple(float(v) for v in brush.get('size', (64.0, 64.0, 64.0)))
+        pos = tuple(float(v) for v in getattr(self.entity, 'pos', (0.0, 0.0, 0.0)))
+        return size, tuple(center[i] - pos[i] for i in range(3))
+
+    @property
+    def solid(self):
+        return not bool(getattr(self.entity, 'properties', {}).get('no_collision', True))
+
+    def set_kinematic(self, value):
+        self.kinematic = bool(value)
+        if self.kinematic:
+            self.velocity[:] = [0.0, 0.0, 0.0]
+            self.awake = False
+
+    def wake(self, velocity=None):
+        if velocity is not None:
+            self.velocity[:] = [float(v) for v in velocity]
+        self.awake = True
+        self.kinematic = False
+
+    def set_rest_callback(self, callback):
+        self.rest_callback = callback
+
+    def clear(self):
+        self.rest_callback = None
+        self.kinematic = False
+        self.awake = False
+        self.velocity[:] = [0.0, 0.0, 0.0]
+
+    def _fire_rest(self):
+        if self.rest_callback is not None:
+            self.rest_callback(self.entity)
+
+class PhysicsWorld:
+    """Engine-level dynamic-body simulation and world collision."""
+
+    def __init__(self, spatial_grid):
+        self.spatial_grid = spatial_grid
+        self.bodies = {}
+
+    def clear(self):
+        for body in self.bodies.values():
+            body.clear()
+        self.bodies.clear()
+
+    def register_body(self, entity, brush, rest_callback=None):
+        body = PhysicsBody(entity, brush, rest_callback)
+        self.bodies[id(entity)] = body
+        return body
+
+    def get_body(self, entity):
+        return self.bodies.get(id(entity))
+
+    def set_rest_callback(self, entity, callback):
+        body = self.get_body(entity)
+        if body is not None:
+            body.set_rest_callback(callback)
+
+    def set_kinematic(self, entity, value):
+        body = self.get_body(entity)
+        if body is not None:
+            body.set_kinematic(value)
+
+    def wake(self, entity, velocity=None):
+        body = self.get_body(entity)
+        if body is not None:
+            body.wake(velocity)
+
+    @staticmethod
+    def _bounds(body):
+        pos = body.entity.pos
+        center = tuple(float(pos[i]) + body.offset[i] for i in range(3))
+        half = tuple(v * 0.5 for v in body.size)
+        return center, half
+
+    @staticmethod
+    def _overlaps_brush(center, half, brush):
+        if brush.get('_collision_mode') == 'mesh':
+            bounds = brush.get('_mesh_bounds')
+            if bounds:
+                lo, hi = bounds
+                return (center[0] + half[0] > lo[0] and center[0] - half[0] < hi[0] and
+                        center[1] + half[1] > lo[1] and center[1] - half[1] < hi[1] and
+                        center[2] + half[2] > lo[2] and center[2] - half[2] < hi[2])
+            return False
+        pos = brush.get('pos', (0.0, 0.0, 0.0))
+        size = brush.get('size', (0.0, 0.0, 0.0))
+        return (center[0] + half[0] > pos[0] - size[0] * 0.5 and
+                center[0] - half[0] < pos[0] + size[0] * 0.5 and
+                center[1] + half[1] > pos[1] - size[1] * 0.5 and
+                center[1] - half[1] < pos[1] + size[1] * 0.5 and
+                center[2] + half[2] > pos[2] - size[2] * 0.5 and
+                center[2] - half[2] < pos[2] + size[2] * 0.5)
+
+    def _floor_y(self, body):
+        if not body.solid:
+            return None
+        raycast = getattr(self.spatial_grid, 'raycast_down', None)
+        if raycast is None:
+            return None
+        center, half = self._bounds(body)
+        try:
+            return raycast(center[0], center[2], center[1] + half[1] + 1.0)
+        except Exception:
+            return None
+
+    def _move_horizontal(self, body, axis, amount):
+        if abs(amount) < 0.00001:
+            return
+        before = list(body.entity.pos)
+        body.entity.pos[axis] += amount
+        if not body.solid:
+            return
+        center, half = self._bounds(body)
+        query = getattr(self.spatial_grid, 'get_potential_colliders', None)
+        if query is None:
+            return
+        colliders = query(glm.vec3(center[0]-half[0], center[1]-half[1], center[2]-half[2]),
+                          glm.vec3(center[0]+half[0], center[1]+half[1], center[2]+half[2]))
+        for brush in colliders:
+            if brush.get('_physics_body'):
+                continue
+            if self._overlaps_brush(center, half, brush):
+                body.entity.pos[:] = before
+                body.velocity[axis] = 0.0
+                return
+
+    def _push_from_player(self, body, player):
+        if body.kinematic or not body.solid:
+            return
+        ph = getattr(player, '_half', None)
+        if ph is not None:
+            player_half = (float(ph.x), float(ph.y), float(ph.z))
+        else:
+            player_half = (float(getattr(player, 'width', 50.0))*0.5, float(getattr(player, 'height', 100.0))*0.5, float(getattr(player, 'depth', 50.0))*0.5)
+        ppos = player.pos
+        pvel = getattr(player, 'velocity', None)
+        pv = (float(getattr(pvel, 'x', 0.0)), float(getattr(pvel, 'z', 0.0)))
+        if math.hypot(*pv) < 0.01:
+            return
+        center, half = self._bounds(body)
+        dx = center[0] - float(ppos[0])
+        dz = center[2] - float(ppos[2])
+        ox = player_half[0] + half[0] - abs(dx)
+        oz = player_half[2] + half[2] - abs(dz)
+        if (ox <= 0.0 or oz <= 0.0 or
+                float(ppos[1])+player_half[1] <= center[1]-half[1] or
+                float(ppos[1])-player_half[1] >= center[1]+half[1]):
+            return
+        if ox <= oz:
+            direction = 1.0 if dx >= 0.0 else -1.0
+            body.entity.pos[0] += direction * (ox + 0.5)
+            body.velocity[0] = direction * max(abs(pv[0]) / body.mass * 0.85, abs(body.velocity[0]))
+        else:
+            direction = 1.0 if dz >= 0.0 else -1.0
+            body.entity.pos[2] += direction * (oz + 0.5)
+            body.velocity[2] = direction * max(abs(pv[1]) / body.mass * 0.85, abs(body.velocity[2]))
+        body.awake = True
+
+    def step(self, delta, player=None):
+        dt = min(0.05, max(0.0, float(delta) or 1.0/60.0))
+        for body in tuple(self.bodies.values()):
+            props = getattr(body.entity, 'properties', {})
+            if body.kinematic or props.get('disabled') or not props.get('physics_enabled', False):
+                continue
+            if player is not None:
+                self._push_from_player(body, player)
+            if not body.awake:
+                continue
+            if body.gravity:
+                body.velocity[1] += -900.0 * dt
+            body.velocity[1] *= max(0.0, 1.0 - body.linear_damping * dt)
+            damp = max(0.0, 1.0 - (body.linear_damping + body.friction) * dt)
+            body.velocity[0] *= damp
+            body.velocity[2] *= damp
+            self._move_horizontal(body, 0, body.velocity[0] * dt)
+            self._move_horizontal(body, 2, body.velocity[2] * dt)
+            pos = body.entity.pos
+            new_y = float(pos[1]) + body.velocity[1] * dt
+            floor = self._floor_y(body)
+            if floor is not None and new_y <= floor:
+                pos[1] = floor
+                body.velocity[1] = 0.0
+            else:
+                pos[1] = new_y
+            angular = body.angular_velocity
+            rotation = props.get('rotation', [0.0, 0.0, 0.0])
+            props['rotation'] = [float(rotation[i]) + angular[i] * dt for i in range(3)]
+            if max(abs(v) for v in body.velocity) < 1.0:
+                body.velocity[:] = [0.0, 0.0, 0.0]
+                if body.awake:
+                    body.awake = False
+                    body._fire_rest()
+
+    def rebuild(self, brushes):
+        self.clear()
+        for brush in brushes:
+            if not brush.get('_physics_body'):
+                continue
+            entity = brush.get('_physics_entity')
+            if entity is not None:
+                self.register_body(entity, brush)
