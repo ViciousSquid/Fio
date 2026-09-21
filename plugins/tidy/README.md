@@ -17,7 +17,7 @@ Typical uses include:
 
 ## Quick start
 
-Open **`maps/Tidy_Test.json`** and press **Play**.
+Open the Tidy plugin menu and choose **Load Demo map**.
 
 Look at a book and press **E** to pick it up. Turn toward the shelf and press
 **E** again to put it away. The HUD tracks the number of objects tidied.
@@ -242,11 +242,13 @@ For authoring a new map, Tidy can also be enabled manually from
 
 ## Demo and assets
 
-The reference map is:
+The bundled reference map is:
 
 ```text
-maps/Tidy_Test.json
+plugins/tidy/Tidy_Test.json
 ```
+
+It can be loaded directly from **Plugins ▸ tidy ▸ Load Demo map**.
 
 The example generator is:
 
