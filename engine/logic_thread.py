@@ -870,6 +870,8 @@ class LogicThread(threading.Thread):
             self._model_collision_brushes = []
             if self.play_mode and hasattr(self, '_spatial_grid') and self._spatial_grid:
                 self._spatial_grid.populate(self.brushes)
+                if getattr(self, '_physics_world', None) is not None:
+                    self._physics_world.rebuild(())
         self._refresh_collision_brushes_cache()
 
         return self.model_collision_enabled
