@@ -33,7 +33,7 @@ def test_core_prop_pickup_drop_without_plugins():
     physics.register_body(
         prop,
         {
-            'pos': [0, 0, 30],
+            'pos': [0, 40, 30],
             'size': [32, 32, 32],
             '_physics_body': True,
             '_physics_entity': prop,
@@ -69,7 +69,7 @@ def test_core_prop_pickup_drop_without_plugins():
     for _ in range(30):
         physics.step(1 / 60)
 
-    assert prop.pos[1] == 0.0
+    assert prop.pos[1] == 40.0
     assert ('OnRest' in [event for _, event in io.events])
     assert prop.properties['rotation'][0] > 0
 
