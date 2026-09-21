@@ -850,7 +850,6 @@ class Model(Thing):
         'scale',
         'rotation',
         'no_collision',
-        'collision_shape',
         'collision_size',
     )
     
