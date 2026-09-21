@@ -1896,14 +1896,10 @@ layout (location = 9) in vec4 iNormal2;
 
         gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
 
-        # Upload the live prefix of each std140 array in block order.
-        payload = (
-            active['position'][0, :count].tobytes() +
-            active['color'][0, :count].tobytes() +
-            active['params'][0, :count].tobytes() +
-            active['indices'][0, :count].tobytes()
-        )
-        gl.glBufferSubData(gl.GL_UNIFORM_BUFFER, 0, payload)
+        # The GLSL arrays have fixed MAX_LIGHTS lengths, so each array
+        # starts after the full previous array rather than after the live prefix.
+        # Upload the complete 4 KiB block after zero-filling unused slots.
+        gl.glBufferSubData(gl.GL_UNIFORM_BUFFER, 0, active.tobytes())
         self._light_ubo_key = key
 
     # --------------------------------------------------------------------------

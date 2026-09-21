@@ -173,3 +173,13 @@ def test_the_old_settings_key_is_still_honoured():
     renderer_src = read_source('engine', 'renderer_core.py')
     assert "'arm_mode'" in renderer_src
     assert "'lowpower_mode'" in renderer_src
+
+
+def test_light_ubo_cpu_layout_is_one_record_of_four_parallel_arrays():
+    from engine.renderer_core import BaseRenderer
+    renderer_src = read_source('engine', 'renderer_core.py')
+    assert "('position', '<f4', (self.MAX_LIGHTS, 4))" in renderer_src
+    assert "('color', '<f4', (self.MAX_LIGHTS, 4))" in renderer_src
+    assert "('params', '<f4', (self.MAX_LIGHTS, 4))" in renderer_src
+    assert "('indices', '<i4', (self.MAX_LIGHTS, 4))" in renderer_src
+    assert BaseRenderer.MAX_LIGHTS == shaders.MAX_LIGHTS
