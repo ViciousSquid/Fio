@@ -23,23 +23,21 @@ sticks and isn't reverted underneath you.
 
 Place these from the 2D view's right-click menu under **Plugins ▸ tidy**.
 
-### Tidy Object
-A single carryable prop. Renders in play mode as a **book with a random cover** —
-each object picks one of 12 bundled covers at creation, so a pile or shelf shows
-varied books, not identical boxes. Swap the model/cover in the Properties panel
-if you want something else (any `.obj`/`.glb` works).
+### Tidyable Prop
+A Tidy object is an ordinary core **Prop**. Set `tidy_category` to a non-empty
+value such as `book`, `cup`, or `bone`; Tidy then adds placement/progress
+behaviour without replacing the Prop pickup, carry, drop, or physics runtime.
 
 | Property | Meaning |
 |----------|---------|
-| `category` | Logical group (`book`, `cup`, `bone`…). A receptacle only takes objects whose category it accepts. |
-| `model_path` | 3D model to render (defaults to the UV-mapped `book.obj`). |
-| `texture` | Per-instance cover image (defaults to a random `covers/cover_NN.png`). |
-| `scale`, `rotation` | Standard model transform. |
-| `no_collision` | `True` by default so thousands of props stay cheap and walk-through. |
+| `tidy_category` | Logical Tidy group. A receptacle only takes Props whose category it accepts. |
+| `model_path` | Standard core-Prop model; the demo uses `plugins/tidy/assets/book.obj`. |
+| `texture` | Standard per-instance texture override, useful for bundled book covers. |
+| `physics_enabled` | Core Prop physics setting. Tidy does not implement a second physics system. |
+| `pickup_enabled` | Core Prop pickup setting. Tidy temporarily disables this while a Prop is stowed. |
 
-Outputs: `OnPickedUp`, `OnDropped`, `OnTidied`.
-Inputs: `Reset` (send home), `Enable`, `Disable`.
-
+Core Prop outputs `OnPickedUp`, `OnDropped`, and `OnRest` remain available; Tidy
+adds the `Reset` input and `OnTidied` output.
 ### Tidy Receptacle (shelf / bin)
 A drop-zone. When the player places an object here it snaps into the next free
 slot, arranged in a neat grid.
@@ -87,13 +85,9 @@ should happen when the room is tidy.
 The HUD prompts contextually (`[E] Pick up Book`, `[E] Put away (Shelf)`,
 `[E] Drop`) and shows live progress when idle.
 
-A dropped object **falls to the floor** under gravity instead of hanging where
-you released it. This physics is opt-in and cheap: only objects you've actually
-dropped are simulated, and only until they land — so a map with thousands of
-resting props pays nothing for it (framerate stays the priority). In editor
-play mode the landing height is read from the world geometry under the drop; the
-lighter standalone player has no such query and settles the object at its
-original resting height.
+Ordinary dropped objects use the core Prop physics/runtime. Tidy does not contain
+a second falling simulation. When a core Prop is dropped over a valid Tidy
+receptacle, Tidy consumes that drop and snaps the Prop into the next slot.
 
 ---
 
@@ -103,28 +97,26 @@ original resting height.
 floor. Put one `Tidy Receptacle` (`accepts: book`) above a shelf brush with
 `slot_cols` matching how many fit per shelf. Add a `Tidy Goal` (`target: all`).
 
-**Tidy up the museum (sorting).** Give objects different categories
+**Tidy up the museum (sorting).** Give Props different Tidy categories
 (`fossil`, `painting`, `pot`). Add one receptacle per category, each with its
 `accepts` set. Use a single `Tidy Goal` (`category: any, target: all`), or one
 goal per category to fire per-section rewards.
 
-**Thousands of objects.** Just place (or procedurally generate) more `Tidy
-Object`s — the runtime indexes available objects in a spatial hash, so the
-per-frame "what am I looking at" check stays fast no matter how many exist.
-Keep `no_collision` on (the default). Give receptacles generous `capacity`.
+**Thousands of objects.** Just place (or procedurally generate) more core `Prop`s with `tidy_category` set.
+Tidy does not maintain a second spatial hash for props; core Prop interaction
+handles pickup/carry/drop, while Tidy only scans its usually-small receptacle set.
 
 ---
 
 ## How it works (for the curious)
 
-- `entities.py` — the three `Thing` subclasses (data only).
-- `runtime.py` — `TidySession`: carry/place logic, drop-and-fall physics (only
-  in-flight objects are simulated), a `SpatialHash` over available objects,
-  receptacle slot maths, goal tracking, and the HUD line.
+- `entities.py` — the two Tidy-owned `Thing` subclasses (receptacle and goal).
+- `runtime.py` — `TidySession`: receptacle placement, temporary Prop state,
+  progress/goal tracking, and the HUD line. Core Prop owns carry/drop/physics.
 - `plugin.py` — registration, I/O handlers, and the play lifecycle wiring.
 - `assets/book.obj` + `assets/covers/cover_NN.png` — the UV-mapped book model
   and its random covers. Regenerate with `python plugins/tidy/tools/make_books.py`.
-- `assets/tidy{object,receptacle,goal}.png` — the entities' own editor icons
+- `assets/tidy{receptacle,goal}.png` — the entities' own editor icons
   (a book, a bookshelf, a checklist). Regenerate with
   `python plugins/tidy/tools/make_sprites.py`.
 
