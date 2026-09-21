@@ -68,3 +68,57 @@ def test_prop_has_a_default_billboard_and_2d_menu_entry():
     source = Path('editor/view_2d.py').read_text()
     assert 'add_prop_action = menu.addAction("Prop")' in source
     assert 'new_thing = Prop(pos=pos_3d)' in source
+
+
+def test_physics_prop_is_pushable_by_player():
+    prop = Prop(
+        pos=[0, 0, 0],
+        properties={
+            'physics_enabled': True,
+            'no_collision': False,
+            'mass': 1.0,
+        },
+    )
+    brush = {
+        'pos': [0, 25, 0],
+        'size': [40, 50, 40],
+        '_prop_entity': prop,
+        '_dynamic_prop': True,
+        '_collision_mode': 'aabb',
+    }
+
+    class Grid:
+        def raycast_down(self, x, z, from_y):
+            return 0.0
+
+        def get_potential_colliders(self, player_min, player_max):
+            return []
+
+    class Vec:
+        def __init__(self, x=0.0, y=0.0, z=0.0):
+            self.x = x
+            self.y = y
+            self.z = z
+
+    logic = SimpleNamespace(
+        things=[prop],
+        _model_collision_brushes=[brush],
+        _spatial_grid=Grid(),
+        player=SimpleNamespace(
+            pos=Vec(-30.0, 0.0, 0.0),
+            velocity=Vec(120.0, 0.0, 0.0),
+            width=50.0,
+            height=100.0,
+            depth=50.0,
+            physics_enabled=True,
+        ),
+        io_manager=IO(),
+        current_hud_message='',
+    )
+
+    session = PropSession(logic)
+    session.start()
+    session.tick(1 / 60, use_pressed=False)
+
+    assert prop.pos[0] > 0.0
+    assert session.moving[id(prop)]['velocity_x'] > 0.0
