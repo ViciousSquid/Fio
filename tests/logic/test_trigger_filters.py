@@ -20,7 +20,9 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None):
         pos=Vec(*player_pos), angle=0.0, velocity=Vec(0, 0, 0)
     )
     logic._prop_things = list(props)
+    logic._prop_by_id = {id(t): t for t in logic._prop_things}
     logic._monster_things = list(monsters)
+    logic._monster_by_id = {id(t): t for t in logic._monster_things}
     logic._trigger_brushes = [(1, {
         'id': 'trigger_1',
         'pos': [0, 0, 0],
@@ -33,6 +35,8 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None):
     })]
     logic._trigger_brush_by_bid = dict(logic._trigger_brushes)
     logic._trigger_entities_inside = {}
+    logic._nonplayer_trigger_contacts = {}
+    logic._nonplayer_trigger_poll_elapsed = 0.0
     logic.player_in_triggers = set()
     logic.fired_once_triggers = set()
     logic.hurt_trigger_timers = {}
@@ -97,11 +101,11 @@ def test_trigger_filter_reentry_is_per_entity():
     assert logic._events == [('enter', 'props')]
 
     prop.pos = [50, 50, 50]
-    logic._handle_triggers(False)
+    logic._poll_nonplayer_triggers()
     assert logic._events == [('enter', 'props'), ('exit', 'props')]
 
     prop.pos = [5, 5, 5]
-    logic._handle_triggers(False)
+    logic._poll_nonplayer_triggers()
     assert logic._events == [
         ('enter', 'props'),
         ('exit', 'props'),
