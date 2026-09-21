@@ -6,6 +6,7 @@ import glm
 import pytest
 
 from engine.logic_thread import LogicThread
+from engine.prop_runtime import PropSession
 
 
 def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
@@ -15,8 +16,10 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None,
     logic.player = SimpleNamespace(
         pos=glm.vec3(*player_pos), angle=0.0, velocity=glm.vec3(0.0)
     )
-    logic._prop_things = list(props)
-    logic._prop_by_id = {id(t): t for t in logic._prop_things}
+    # Props come off the engine's Prop registry, not a list the test invents:
+    # PropSession is what LogicThread reads.
+    logic._props = PropSession(logic)
+    logic._props.rebuild(list(props))
     logic._monster_things = list(monsters)
     logic._monster_by_id = {id(t): t for t in logic._monster_things}
     brush = {

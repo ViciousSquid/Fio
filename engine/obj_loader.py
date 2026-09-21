@@ -1,4 +1,4 @@
-from typing import List, Tuple, Optional, Iterator
+from typing import List, Tuple, Optional
 import os
 import numpy as np
 import OpenGL.GL as gl

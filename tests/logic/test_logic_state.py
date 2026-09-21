@@ -20,7 +20,7 @@ from editor import io_system as io                       # noqa: E402
 from editor import state_values as sv                    # noqa: E402
 from editor.io_system import IOManager, OutputConnection  # noqa: E402
 from editor.io_handlers import register_all_input_handlers  # noqa: E402
-from editor.things import LogicState, LogicKeyValueStore, Thing  # noqa: E402
+from editor.things import LogicState, Thing              # noqa: E402
 
 pytestmark = pytest.mark.qt
 
@@ -127,8 +127,11 @@ def bench():
 # Identity and naming
 # ---------------------------------------------------------------------------
 
-def test_the_old_name_is_the_same_class():
-    assert LogicKeyValueStore is LogicState
+def test_the_pre_2_5_alias_is_gone():
+    """2.5 is a clean break: one name for the state entity, not two."""
+    import editor.things as things
+    assert not hasattr(things, "LogicKeyValueStore"), (
+        "the pre-2.4 alias is back; 2.5 ships LogicState under one name")
 
 
 def test_a_store_carries_a_stable_uuid():
@@ -640,7 +643,9 @@ def test_the_state_entity_has_no_per_frame_entry_point():
 def test_the_state_entity_knows_about_no_other_system():
     source = open("editor/things.py", encoding="utf-8").read()
     start = source.index("class LogicState(Thing):")
-    end = source.index("LogicKeyValueStore = LogicState")
+    # LogicState is the last class in the module; its body runs to the entity
+    # registry banner that follows it.
+    end = source.index("# ENTITY REGISTRY")
     body = source[start:end].lower()
     # Prose may cite an example chain; code may not reach into these at all.
     for forbidden in ("import monster", "import door", "logicspawner(",

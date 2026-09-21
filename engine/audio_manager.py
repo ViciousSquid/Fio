@@ -1,4 +1,3 @@
-import io
 import pygame
 from typing import Optional, Dict
 from engine.resource_manager import ResourceManager

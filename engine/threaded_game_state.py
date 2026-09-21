@@ -1,8 +1,6 @@
 import threading
 import glm
 import numpy as np
-import time
-from typing import List, Any, Dict, Optional
 from collections import deque
 
 # Shared immutable "nothing to drain" result for the per-frame consumer methods

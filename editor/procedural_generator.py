@@ -1,16 +1,12 @@
-import sys
 import random
 import heapq
-import os
 import math
-from datetime import datetime
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QPushButton,
     QGroupBox, QFormLayout, QTextEdit, QCheckBox, QScrollArea, QFrame,
     QComboBox
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import pyqtSignal, QTimer
 
 # ----------------------------------------------------------------------
 # Constants
@@ -232,10 +228,9 @@ def generate_brushes_from_grid(grid_map, wall_tex, floor_tex, yield_hook=None):
 
     ``yield_hook``, when given, is called periodically during the two O(w*h)
     grid walks so a caller driving this from a UI thread can keep its event
-    loop alive. It used to be accepted and threaded through without ever being
-    called, so a caller that passed one -- the benchmark plugin does -- was
-    frozen for the whole of geometry generation believing it had asked not to
-    be.
+    loop alive. It used to be accepted and threaded through without ever
+    being called, so a caller that passed one was frozen for the whole of
+    geometry generation believing it had asked not to be.
     """
     brushes = []
 

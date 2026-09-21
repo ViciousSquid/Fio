@@ -2,8 +2,7 @@ import os
 import json
 import zipfile
 import io
-from pathlib import Path
-from typing import Optional, Dict, List, Union, BinaryIO
+from typing import Optional, Dict, List, BinaryIO
 
 
 class ResourceManager:

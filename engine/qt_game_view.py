@@ -3,11 +3,10 @@ import os
 import math
 import numpy as np
 import ctypes
-from collections import deque
 from typing import Optional
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
-from PyQt5.QtCore import Qt, QTimer, QPoint, QUrl, QRect, QEvent
-from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QFontDatabase, QPen, QBrush, QPolygon, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient
+from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent
+from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
@@ -17,7 +16,6 @@ from editor.things import (
     LogicGate, LogicRelay, LogicTimer, LevelChanger, Portal
 )
 from engine.player import Player
-from PIL import Image
 
 from .renderer_F   import Renderer_F
 _RENDERER_CLASSES = {
@@ -43,14 +41,13 @@ def available_renderers():
     """The names of all registered renderer modes."""
     return list(_RENDERER_CLASSES.keys())
 
-from engine import shaders
 from engine import brush_geometry
 from editor import component_edit
 from engine.threaded_game_state import ThreadedGameState, RenderState
 from engine.view_distance import ViewDistance
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
-from editor.debug_console import DebugConsole, get_debug_logger
+from editor.debug_console import DebugConsole
 from .sysmon import SysMon
 
 # Pygame for gamepad support
@@ -59,7 +56,6 @@ import pygame
 # System monitoring (pure Python, no external deps)
 import ctypes
 import os
-import platform
 
 # OpenGL GPU memory query constants
 GL_GPU_MEM_INFO_TOTAL_AVAILABLE_MEM_NVX = 0x9048

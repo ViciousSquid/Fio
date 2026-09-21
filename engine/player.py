@@ -1,12 +1,11 @@
 import math
 import glm
-from PyQt5.QtCore import Qt
 from .constants import (
     TILE_SIZE, GRAVITY, JUMP_STRENGTH, TERMINAL_VELOCITY,
     WATER_SWIM_SPEED_MULT, WATER_VERTICAL_SPEED_MULT, WATER_DRAG,
     WATER_WADE_SPEED_MULT, WATER_MAX_SINK_SPEED,
     WATERJUMP_MAX_CLIMB, WATERJUMP_EDGE_ABOVE_SURFACE, WATERJUMP_MAX_BOOST,
-    is_water_brush, brush_aabb_bounds,
+    is_solid_world_brush, is_water_brush, brush_aabb_bounds,
 )
 
 
@@ -260,11 +259,9 @@ def _blocks_player(brush):
     if brush.get('_physics_body'):
         # Simulated by PhysicsWorld as a dynamic body, not a static wall.
         return False
-    if brush.get('hidden') or brush.get('disabled') or brush.get('is_fog'):
+    if brush.get('disabled'):
         return False
-    if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
-        return False
-    return not is_water_brush(brush)
+    return is_solid_world_brush(brush)
 
 
 class Player:

@@ -639,7 +639,6 @@ class SettingsWindow(QDialog):
                 str(self.place_camera_at_player_start_checkbox.isChecked()))
 
     def _restart_application(self):
-        from PyQt5.QtWidgets import QApplication
         
         python = sys.executable
         script = sys.argv[0]

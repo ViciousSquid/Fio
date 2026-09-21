@@ -26,7 +26,7 @@ from PyQt5.QtWidgets import (
     QComboBox, QFrame, QSizePolicy, QToolBar, QAction,
     QGraphicsDropShadowEffect, QApplication, QShortcut
 )
-from PyQt5.QtCore  import Qt, QRectF, QPointF, pyqtSignal, QSize
+from PyQt5.QtCore  import Qt, QRectF, QPointF, pyqtSignal
 from PyQt5.QtGui   import (
     QPainter, QPen, QBrush, QColor, QFont, QPainterPath, QPainterPathStroker,
     QLinearGradient, QIcon, QKeySequence, QFontMetrics

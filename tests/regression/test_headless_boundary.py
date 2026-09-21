@@ -35,6 +35,15 @@ DEPENDENCY_LIGHT_MODULES = [
     "engine.monster_ai",
     "engine.monster_constants",
     "engine.threaded_game_state",
+    # The Prop domain.  The standalone player runs the same PropSession the
+    # editor's logic thread does, so both of these have to stay Qt-free.
+    "engine.prop_entity",
+    "engine.prop_runtime",
+    # The player entity itself.  It carried an unused ``from PyQt5.QtCore
+    # import Qt`` that made the whole module editor-tier by accident; nothing
+    # in it needs Qt, and the standalone player is meant to run this code
+    # rather than reimplement it.
+    "engine.player",
     # The plugin surface
     "plugins.api",
     "plugins.host",

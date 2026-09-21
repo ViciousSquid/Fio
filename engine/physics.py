@@ -3,7 +3,7 @@ import glm
 import numpy as np
 
 from .constants import is_water_brush, brush_aabb_bounds
-from .spatial import CELL_SIZE, CellIndex, authored_hidden
+from .spatial import CELL_SIZE, CellIndex, authored_hidden, cells_of_points
 
 class SpatialGrid:
     """
@@ -504,6 +504,8 @@ class PhysicsWorld:
         self._dirty = False
         self._static_cells = {}
         self._static_query_cache = {}
+        # Baseline for entities_that_changed_cell(): one (N, 2) cell array.
+        self._reported_cell = None
 
         # Console-adjustable world controls.
         self.gravity = float(self.GRAVITY)
@@ -533,6 +535,7 @@ class PhysicsWorld:
         self._kinematic = np.empty(0, dtype=np.bool_)
         self._static_cells.clear()
         self._static_query_cache.clear()
+        self._reported_cell = None
         self._dirty = False
 
     @staticmethod
@@ -693,6 +696,45 @@ class PhysicsWorld:
         body = self.get_body(entity)
         if body is not None:
             body.set_rest_callback(callback)
+
+    def entities_that_changed_cell(self):
+        """Bodies that crossed a cell boundary since the last call.
+
+        PhysicsWorld owns an entity's position while it is in motion, so a
+        spatial index built on those entities has to be told when to re-file
+        one. This is how, and it answers the narrowest useful question: not
+        "which bodies are awake" and not even "which moved", but "which are no
+        longer in the cell they were in" — the only ones whose membership can
+        actually be wrong.
+
+        The detection is one vectorised comparison over the body arrays, so the
+        per-frame cost does not grow a Python loop as the world fills up; what
+        comes back is normally empty, because a body has to travel a whole
+        512-unit column to appear in it. The returned entities are objects, so
+        acting on them is per-entity by nature — which is the point of making
+        this set as small as it can correctly be.
+        """
+        self._pack()
+        if not self._entities:
+            self._reported_cell = None
+            return ()
+
+        cx, cz = cells_of_points(self._position[:, 0], self._position[:, 2])
+        current = np.stack((cx, cz), axis=1)
+        previous = self._reported_cell
+
+        if previous is None or previous.shape != current.shape:
+            # First call, or the body set changed size and the rows no longer
+            # line up. Registration filed every body from its live position, so
+            # nothing is stale — take this as the new baseline.
+            self._reported_cell = current
+            return ()
+
+        changed = np.flatnonzero(np.any(current != previous, axis=1))
+        self._reported_cell = current
+        if changed.size == 0:
+            return ()
+        return [self._entities[i] for i in changed]
 
     def wake_all(self):
         """Wake every non-kinematic physics body for runtime console tuning."""

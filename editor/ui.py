@@ -6,8 +6,7 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox, QApplication, QSizePolicy, QInputDialog, QMenu
 )
 from PyQt5.QtCore import Qt, QSize
-from PyQt5.QtGui import QFont, QIcon, QKeySequence, QPixmap
-from PyQt5.QtGui import QPalette, QColor
+from PyQt5.QtGui import QIcon, QKeySequence
 
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
@@ -16,7 +15,6 @@ from engine.view_distance import (
 from editor.property_editor import PropertyEditor
 from editor.scene_hierarchy import SceneHierarchy
 from editor.asset_browser import AssetBrowser
-from editor.SettingsWindow import SettingsWindow
 from editor.debug_console import DebugConsole
 
 import math

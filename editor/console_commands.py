@@ -1,6 +1,5 @@
 import os
 import json
-import math
 from PyQt5.QtWidgets import QMessageBox
 
 from editor.debug_console import debug_log
@@ -18,7 +17,7 @@ except ImportError:
     # debug_log("Warning", "I/O system not fully loaded in console")
 
 # For spawn command
-from editor.things import Pickup, Light, PlayerStart, LevelChanger
+from editor.things import Pickup, Light, LevelChanger
 
 
 class ConsoleCommandHandler:
@@ -239,8 +238,7 @@ class ConsoleCommandHandler:
         debug_log("Info", f"Bound '{key_str}' to '{command}'")
 
     def _open_bind_dialog(self):
-        from PyQt5.QtWidgets import QInputDialog, QDialog, QVBoxLayout, QLabel, QKeySequenceEdit, QPushButton, QLineEdit, QDialogButtonBox
-        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QKeySequenceEdit, QLineEdit, QDialogButtonBox
 
         dialog = QDialog(self.main_window)
         dialog.setWindowTitle("Bind Key")
@@ -302,7 +300,6 @@ class ConsoleCommandHandler:
 
         # Fire I/O output if available
         try:
-            from editor.io_system import get_connections, fire_output
             # Since we don't have IOManager reference here, we can use the logic_thread's io_manager if in play mode
             if hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.logic_thread:
                 io_manager = self.main_window.view_3d.logic_thread.io_manager

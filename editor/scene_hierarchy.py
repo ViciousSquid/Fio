@@ -4,14 +4,11 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
                              QLineEdit, QStyle)
 from PyQt5.QtGui import QIcon, QColor, QBrush, QFont, QPainter, QPixmap
 from PyQt5 import QtCore
-import os
 import re
 from PyQt5.QtCore import Qt, QTimer
 
-from editor.things import Light, Model, Monster
 
 try:
-    from editor.io_system import get_connections
     IO_AVAILABLE = True
 except ImportError:
     IO_AVAILABLE = False

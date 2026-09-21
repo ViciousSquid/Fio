@@ -54,7 +54,7 @@ from __future__ import annotations
 import math
 import time as _time
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional, Tuple, Type
+from typing import Any, Callable, List, Optional, Tuple
 
 
 #: Version of the plugin API surface this module implements. Compare against
@@ -277,7 +277,7 @@ def prop(name: str, type: str = "string", label: str = "", default: Any = None,
 
 
 # ---------------------------------------------------------------------------
-# Global key/value store (cross-level, shared with map LogicKeyValueStores)
+# Global key/value store (cross-level, shared with map LogicState entities)
 # ---------------------------------------------------------------------------
 
 class GlobalStore:

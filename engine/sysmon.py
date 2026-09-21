@@ -12,7 +12,6 @@ PERFORMANCE-OPTIMIZED:
 
 import time
 
-from PyQt5.QtWidgets import QWidget
 from PyQt5.QtCore import Qt, QRect, QPoint
 from PyQt5.QtGui import (
     QPainter, QColor, QFont, QPen, QBrush, QPolygon, QFontMetrics
@@ -174,7 +173,7 @@ class SysMon:
             self._fps = 0.0
 
     def reset_metrics(self):
-        """Reset the frame/metric state used by benchmark measurements."""
+        """Clear the frame-time history and the per-frame stat counters."""
         self._ft_buffer.fill(0.0)
         self._ft_index = 0
         self._ft_count = 0
@@ -189,8 +188,8 @@ class SysMon:
     def get_metrics(self):
         """Return a machine-readable snapshot without adding work to the frame path.
 
-        Benchmark-only metrics are derived here when requested rather than being
-        maintained from QtGameView's per-frame/render hot paths.
+        Everything is derived on demand from state the overlay already keeps,
+        so a caller that never asks costs the frame path nothing.
         """
         count = int(self._ft_count)
         if count:

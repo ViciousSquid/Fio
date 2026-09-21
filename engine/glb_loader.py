@@ -661,8 +661,8 @@ def _render_glb_thumbnail_impl(filepath: str, width: int, height: int):
     Generate a wireframe thumbnail from a GLB file for the asset browser.
     Falls back to bounding-box preview if mesh is too complex.
     """
-    from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QPen, QPolygonF
-    from PyQt5.QtCore import Qt, QRect, QPointF
+    from PyQt5.QtGui import QPixmap, QColor, QPainter, QPen
+    from PyQt5.QtCore import QPointF
     import math
 
     loader = GLBLoader()

@@ -625,8 +625,7 @@ api.register_properties("bigworldsettings", [
 
 Process-wide, cross-level key/value storage for plugins. When the editor package
 is present it binds to the **same** persistent registry that map `LogicState`
-entities use (`LogicKeyValueStore` before 2.4 — the same class under its old
-name), so a plugin's globals live alongside — and can share stores with — map
+entities use, so a plugin's globals live alongside — and can share stores with — map
 state, persisting across level loads within a session. In the dependency-light
 player it falls back to a plain process-local dict-of-dicts with the same API.
 

@@ -13,7 +13,7 @@ from .renderer_core import BaseRenderer, normalize_color
 from engine.brush_geometry import (brush_has_geometry, face_uses_natural_scale,
                                    geometry_signature, natural_repeats)
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
-from editor.things import Thing, Light, PathNode, Portal, Pickup, Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger
+from editor.things import Thing, Light, Portal
 
 # Camera render-distance cull. The pure per-object geometry lives in
 # engine.render_cull (GL-free, so it is unit-testable without a GL context) and

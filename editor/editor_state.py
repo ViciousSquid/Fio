@@ -19,7 +19,7 @@ from editor.things import update_all_counters_from_entities
 
 # Import I/O system for serialization
 try:
-    from .io_system import OutputConnection, get_connections, set_connections
+    from .io_system import OutputConnection, get_connections
     IO_AVAILABLE = True
 except ImportError:
     IO_AVAILABLE = False
