@@ -179,3 +179,91 @@ def test_an_authored_collision_box_still_applies_to_a_sprite_prop():
     brushes = _collision_brushes_for([prop])
     assert len(brushes) == 1
     assert brushes[0]['size'] == [40.0, 40.0, 40.0]
+
+
+# ---------------------------------------------------------------------------
+# Where the control sits
+# ---------------------------------------------------------------------------
+
+#: The rows Representation shows and hides. All of them must sit below it, or
+#: choosing a mode moves the control that was just clicked.
+TOGGLED_ROWS = ("Model Path:", "Scale:", "Rotation:",
+                "Sprite Path:", "Sprite Size:")
+
+
+def prop_form_rows(panel):
+    """``{label: row index}`` for the form holding the Representation combo."""
+    from PyQt5.QtWidgets import QFormLayout, QLabel
+
+    for form in panel.findChildren(QFormLayout):
+        rows = {}
+        for r in range(form.rowCount()):
+            item = form.itemAt(r, QFormLayout.LabelRole)
+            if item is not None and isinstance(item.widget(), QLabel):
+                rows[item.widget().text()] = r
+        if "Representation:" in rows:
+            return rows
+    raise AssertionError("no form in the panel carries a Representation row")
+
+
+def test_representation_is_the_first_row(panel):
+    prop = Prop(pos=[0, 0, 0])
+    representation_combo(panel, prop)
+
+    rows = prop_form_rows(panel)
+    assert rows["Representation:"] == 0, (
+        "Representation is at row %d; it is meant to be first"
+        % rows["Representation:"])
+
+
+@pytest.mark.parametrize("label", TOGGLED_ROWS)
+def test_every_row_it_toggles_sits_below_it(panel, label):
+    prop = Prop(pos=[0, 0, 0])
+    representation_combo(panel, prop)
+
+    rows = prop_form_rows(panel)
+    assert label in rows, "the %s row is missing from the Prop form" % label
+    assert rows[label] > rows["Representation:"], (
+        "%s is above Representation, so showing it pushes the control down "
+        "the panel when the mode is changed" % label)
+
+
+def visible_rows_above_representation(panel):
+    """How far down the panel the control actually sits.
+
+    The row *index* never moved; what moved was the number of visible rows
+    above it, which is what a person sees. Switching to Model reveals Model
+    Path, Scale and Rotation — three rows that used to be above the combo.
+    """
+    from PyQt5.QtWidgets import QFormLayout, QLabel
+
+    for form in panel.findChildren(QFormLayout):
+        rows = {}
+        for r in range(form.rowCount()):
+            item = form.itemAt(r, QFormLayout.LabelRole)
+            if item is not None and isinstance(item.widget(), QLabel):
+                rows[r] = item.widget()
+        target = next((r for r, w in rows.items()
+                       if w.text() == "Representation:"), None)
+        if target is None:
+            continue
+        # isVisibleTo, not isVisible: the panel is never shown in a test,
+        # so isVisible() is False for everything and would compare 0 to 0.
+        return sum(1 for r, w in rows.items()
+                   if r < target and w.isVisibleTo(panel))
+    raise AssertionError("no form in the panel carries a Representation row")
+
+
+def test_the_control_does_not_move_when_it_is_used(panel):
+    """The reported symptom: the combo jumped when you changed it."""
+    prop = Prop(pos=[0, 0, 0])
+    combo = representation_combo(panel, prop)
+    before = visible_rows_above_representation(panel)
+
+    combo.setCurrentText('Model')
+    assert visible_rows_above_representation(panel) == before, (
+        "changing the mode to Model moved the control down the panel")
+
+    combo.setCurrentText('Billboard Sprite')
+    assert visible_rows_above_representation(panel) == before, (
+        "changing the mode back moved the control again")

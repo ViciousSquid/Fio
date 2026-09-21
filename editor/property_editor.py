@@ -1577,13 +1577,10 @@ class PropertyEditor(QWidget):
 
         if isinstance(thing, Model):
             model_mode = True
-            model_path_widget = self.add_model_path_widget(form, thing)
-            scale_before = form.rowCount()
-            self.add_vector3_widget(form, thing, 'scale')
-            rotation_before = form.rowCount()
-            self.add_vector3_widget(form, thing, 'rotation')
+            is_prop = isinstance(thing, Prop)
+            mode_combo = None
 
-            if isinstance(thing, Prop):
+            if is_prop:
                 render_mode = str(
                     thing.properties.get('render_mode', 'model')
                 ).lower()
@@ -1596,10 +1593,21 @@ class PropertyEditor(QWidget):
                         "renders it as a camera-facing 2D sprite."
                     ),
                 )
-
                 model_mode = render_mode != 'billboard'
+
+                # Representation is added before every row it shows and hides,
+                # so all of them sit below it and it never moves. Added after
+                # them, switching to Model inserted three visible rows above
+                # the control and pushed it down the panel mid-click.
                 form.addRow("Representation:", mode_combo)
 
+            model_path_widget = self.add_model_path_widget(form, thing)
+            scale_before = form.rowCount()
+            self.add_vector3_widget(form, thing, 'scale')
+            rotation_before = form.rowCount()
+            self.add_vector3_widget(form, thing, 'rotation')
+
+            if is_prop:
                 sprite_widget = QWidget()
                 sprite_layout = QHBoxLayout(sprite_widget)
                 sprite_layout.setContentsMargins(0, 0, 0, 0)
