@@ -66,8 +66,11 @@ class BenchmarkManager(QDialog):
         self._sock = None
         self._buffer = b""
         self._connected = False
+        # Whether Fio has a map worth benchmarking.  Answered by the host's
+        # "hello"; until then only a ticked test can enable a run.
+        self.has_current_map = False
 
-        self.setWindowTitle("Fio Benchmark Manager")
+        self.setWindowTitle("Fio Benchmark")
         self.resize(900, 700)
         self.setStyleSheet(
             """
@@ -202,17 +205,25 @@ class BenchmarkManager(QDialog):
         root = QVBoxLayout(self)
 
         description = QLabel(
-            "The benchmark runs against the existing Fio process. "
-            "This window is a separate process, so it can terminate Fio "
-            "if a live test stops responding."
+            'Click <span style="color:#ff9a32;">Run Benchmark</span> to analyse '
+            'the currently loaded map or choose a stress-test from below to '
+            'benchmark this Fio installation against another one.'
         )
+        description.setTextFormat(Qt.RichText)
         description.setWordWrap(True)
+        description.setStyleSheet("font-size: 15px; padding: 6px 2px 10px 2px;")
         root.addWidget(description)
 
-        self.status = QLabel("Connecting to Fio benchmark host…")
+        # Connection state and map availability are only worth screen space
+        # when they have something to say: the opening screen is the sentence
+        # above and the two controls, not a status readout.
+        self.status = QLabel("")
+        self.status.setWordWrap(True)
+        self.status.setVisible(False)
         root.addWidget(self.status)
 
-        self.current_map_label = QLabel("Current loaded map: checking…")
+        self.current_map_label = QLabel("")
+        self.current_map_label.setVisible(False)
         root.addWidget(self.current_map_label)
 
         self.progress = QProgressBar()
@@ -222,7 +233,7 @@ class BenchmarkManager(QDialog):
         root.addWidget(self.progress)
 
         toggle = QToolButton()
-        toggle.setText("See stress tests")
+        toggle.setText("See tests")
         toggle.setCheckable(True)
         toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         toggle.setArrowType(Qt.DownArrow)
@@ -239,6 +250,11 @@ class BenchmarkManager(QDialog):
             box.setToolTip(
                 "Run this workload in the already-running Fio renderer/editor."
             )
+            # Ticking a test is the other way to have something to benchmark,
+            # so it has to re-open the Run button.  Without this the button's
+            # enabled state was decided once, on connect, and a session opened
+            # with no map loaded could never start a run at all.
+            box.toggled.connect(self._refresh_run_enabled)
             self.checkboxes[key] = box
             options_layout.addWidget(box)
 
@@ -248,6 +264,7 @@ class BenchmarkManager(QDialog):
         additional.setToolTip(
             "Run the standard live I/O, renderer and monster-capacity workloads."
         )
+        additional.toggled.connect(self._refresh_run_enabled)
         self.checkboxes["additional_tests"] = additional
         options_layout.insertWidget(0, additional)
 
@@ -265,8 +282,19 @@ class BenchmarkManager(QDialog):
         scroll.viewport().setStyleSheet("background: #171717;")
         scroll.setWidget(options)
         scroll.setMaximumHeight(260)
+        scroll.setVisible(False)
         root.addWidget(scroll)
-        toggle.toggled.connect(options.setVisible)
+
+        def _show_tests(shown):
+            # Hide the scroll area, not just its contents: leaving an empty
+            # bordered box behind the collapsed list is what made the opening
+            # screen look like two output panes.
+            options.setVisible(shown)
+            scroll.setVisible(shown)
+            toggle.setArrowType(Qt.DownArrow if shown else Qt.RightArrow)
+
+        toggle.setArrowType(Qt.RightArrow)
+        toggle.toggled.connect(_show_tests)
 
         self.output = QTextBrowser()
         self.output.setOpenExternalLinks(False)
@@ -276,17 +304,38 @@ class BenchmarkManager(QDialog):
         )
         root.addWidget(self.output, 1)
 
+        self.run_button = QPushButton("Run Benchmark")
+        self.run_button.setEnabled(False)
+        self.run_button.setMinimumHeight(44)
+        self.run_button.setStyleSheet(
+            """
+            QPushButton {
+                background: #3aa757;
+                color: #ffffff;
+                border: none;
+                border-radius: 3px;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover   { background: #45bd66; }
+            QPushButton:pressed { background: #2f8b47; }
+            QPushButton:disabled { background: #2f4636; color: #7d8b81; }
+            """
+        )
+        self.run_button.clicked.connect(self.start)
+        root.addWidget(self.run_button)
+
         actions = QHBoxLayout()
 
+        # Nothing to export until a run has produced results, so it stays out
+        # of the opening screen entirely rather than sitting there greyed out.
         self.export_button = QPushButton("Export HTML Report…")
         self.export_button.setEnabled(False)
+        self.export_button.setVisible(False)
         self.export_button.clicked.connect(self.export_html)
         actions.addWidget(self.export_button)
 
-        self.run_button = QPushButton("Run Benchmark")
-        self.run_button.setEnabled(False)
-        self.run_button.clicked.connect(self.start)
-        actions.addWidget(self.run_button)
+        actions.addStretch(1)
 
         self.close_button = QPushButton("Close")
         self.close_button.setToolTip(
@@ -395,23 +444,19 @@ class BenchmarkManager(QDialog):
         event = message.get("event")
 
         if event == "hello":
-            has_map = bool(message.get("has_current_map"))
+            self.has_current_map = bool(message.get("has_current_map"))
             self.current_map_label.setText(
                 "Current loaded map: "
-                + ("available — included in the benchmark." if has_map else
-                   "none — select at least one stress test.")
+                + ("available — included in the benchmark."
+                   if self.has_current_map else
+                   "none — tick a test under “See tests”.")
             )
+            self.current_map_label.setVisible(not self.has_current_map)
             self.status.setText(
                 "Connected to Fio (PID %s) — ready."
                 % message.get("pid", self.args.pid)
             )
-            self.run_button.setEnabled(
-                has_map or any(
-                    box.isChecked()
-                    for key, box in self.checkboxes.items()
-                    if key != "additional_tests"
-                ) or self.checkboxes["additional_tests"].isChecked()
-            )
+            self._refresh_run_enabled()
 
         elif event == "run_started":
             self.running = True
@@ -485,21 +530,38 @@ class BenchmarkManager(QDialog):
         for box in self.checkboxes.values():
             box.setEnabled(enabled)
 
-    def start(self):
-        tests = [
-            key for key, box in self.checkboxes.items()
-            if key != "additional_tests" and box.isChecked()
-        ]
+    def _selected_tests(self):
+        """The stress tests ticked right now, additional_tests first."""
+        tests = [key for key, box in self.checkboxes.items()
+                 if key != "additional_tests" and box.isChecked()]
         if self.checkboxes["additional_tests"].isChecked():
             tests.insert(0, "additional_tests")
+        return tests
 
-        if not tests and not self.current_map_label.text().endswith(
-            "available — included in the benchmark."
-        ):
+    def _can_run(self):
+        """There is something to benchmark: a loaded map, or a ticked test."""
+        return bool(self.has_current_map or self._selected_tests())
+
+    def _refresh_run_enabled(self, *_args):
+        """Re-decide whether Run Benchmark is available.
+
+        Called on connect and on every checkbox toggle, so the button always
+        reflects what is actually selectable rather than what was true when the
+        window opened.
+        """
+        if self.running or not self._connected:
+            return
+        self.run_button.setEnabled(self._can_run())
+
+    def start(self):
+        tests = self._selected_tests()
+
+        if not self._can_run():
             QMessageBox.warning(
                 self,
-                "No benchmark selected",
-                "There is no loaded map. Select at least one stress test."
+                "Nothing to benchmark",
+                "There is no map loaded in Fio. Open “See tests” and tick at "
+                "least one stress test, or load a map in Fio first."
             )
             return
 

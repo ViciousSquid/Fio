@@ -309,16 +309,21 @@ def augment_fiopak(pak_path: str, log=None) -> dict:
 def load_package_plugins(package_root: str, log=None) -> List[str]:
     """Load plugins bundled inside an extracted package at *package_root*.
 
-    Adds *package_root* to ``sys.path`` (so the bundled ``plugins`` package is
-    importable) and runs discovery. Intended for a player/editor opening a
-    package built elsewhere. Returns the names of plugins now loaded.
+    A ``.fiopak`` carries the plugin code its maps need so that it plays on a
+    machine that does not have those plugins installed. This is the host side
+    of that: it puts the extracted package on ``sys.path`` and re-opens plugin
+    discovery over its ``plugins/`` directory. Returns the names of the plugins
+    this call added -- an empty list when the package brings none, or brings
+    only ones the session already has.
+
+    A plugin the session has already loaded is left alone, whichever package it
+    came from. Nothing is hot-swapped and nothing is unloaded: live entity
+    classes stay the ones the running editor already holds references to.
 
     Note: this makes the plugins' entity types and I/O available. Executing a
     plugin's *gameplay* additionally requires the host to dispatch the play
     lifecycle (as the editor's play mode does via ``plugins.integration``).
     """
-    import sys
-
     def _say(msg):
         if log:
             log(msg)
@@ -327,16 +332,31 @@ def load_package_plugins(package_root: str, log=None) -> List[str]:
     if not os.path.isdir(plugins_dir):
         return []
 
-    if package_root not in sys.path:
-        sys.path.insert(0, package_root)
+    # Extend the *package* search path, not sys.path.  ``plugins`` is already
+    # imported by the time any host opens a package, so its ``__path__`` is
+    # what decides where ``plugins.<name>`` is found -- putting the package
+    # root on sys.path would do nothing at all.  Extending ``__path__`` also
+    # scopes the change to this one package: nothing else on the interpreter's
+    # import path changes, so there is no leak to undo.
+    try:
+        import plugins as _plugins_pkg
+        if plugins_dir not in _plugins_pkg.__path__:
+            _plugins_pkg.__path__.append(plugins_dir)
+    except Exception as exc:
+        _say(f"[Plugins] could not extend the plugin search path: {exc}")
+        return []
 
     try:
-        from plugins.manager import get_manager, load_plugins
-        load_plugins()
+        from plugins.manager import get_manager
         mgr = get_manager()
-        names = [p.name for p in mgr.plugins]
-        _say(f"[Plugins] loaded from package: {', '.join(names) or '(none)'}")
-        return names
+        before = {p.name for p in mgr.plugins}
+        mgr.discover_and_load(extra_roots=[package_root])
+        added = [p.name for p in mgr.plugins if p.name not in before]
+        if added:
+            _say("[Plugins] loaded from package: %s" % ", ".join(added))
+        else:
+            _say("[Plugins] package adds no plugins this session does not have")
+        return added
     except Exception as exc:
         _say(f"[Plugins] failed to load package plugins: {exc}")
         return []

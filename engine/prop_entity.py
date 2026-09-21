@@ -29,6 +29,18 @@ except ImportError:  # standalone player / Android: no PyQt5
     EDITOR_TIER = False
 
 
+#: The mesh a Prop is given when its representation is switched to ``'model'``
+#: and it has none yet.
+#:
+#: Deliberately *not* in :data:`PROP_DEFAULTS`. Model collision is built for
+#: any Thing carrying a ``model_path`` — ``LogicThread._build_model_collision_brushes``
+#: keys on the path, not on ``render_mode`` — so defaulting every Prop to a
+#: mesh would give every billboard Prop barrel-shaped collision it never asked
+#: for, and would make ``_implied_render_mode`` read a model into props that
+#: have none. A Prop gets a mesh at the moment it is asked to be a model, and
+#: not before.
+DEFAULT_MODEL_PATH = 'assets/models/Oil_Drum.obj'
+
 #: Authored defaults, applied with ``setdefault`` so saved values always win.
 PROP_DEFAULTS = {
     # 'billboard', not 'model': this table ships a sprite_path and no
@@ -67,6 +79,11 @@ class Prop(_ModelBase):
     plain data in ``properties``, so maps serialize through the base ``Thing``
     without a special format.
     """
+
+    #: See :data:`DEFAULT_MODEL_PATH`. Exposed on the class so the editor asks
+    #: the entity what a model-mode Prop should look like rather than carrying
+    #: an asset path of its own.
+    DEFAULT_MODEL_PATH = DEFAULT_MODEL_PATH
 
     pixmap_path = "assets/sprites/pickup.png"
     EDITOR_PRIMARY_PROPERTIES = (

@@ -1677,6 +1677,18 @@ class PropertyEditor(QWidget):
                     self.update_object_prop(
                         'render_mode', 'model' if is_model else 'billboard'
                     )
+                    # Switching to Model with no mesh yet would leave the Prop
+                    # with nothing to draw, so give it the default one. Only
+                    # when the field is empty: an authored model is never
+                    # replaced, and nothing is added to a billboard Prop.
+                    if is_model and not thing.properties.get('model_path'):
+                        default_model = getattr(
+                            type(thing), 'DEFAULT_MODEL_PATH', '')
+                        if default_model:
+                            self.update_object_prop('model_path', default_model)
+                            model_path_edit = model_path_widget.findChild(QLineEdit)
+                            if model_path_edit is not None:
+                                model_path_edit.setText(default_model)
                     for row in (model_path_row, scale_row, rotation_row):
                         set_form_row_visible(row, is_model)
                     for row in (sprite_path_row, sprite_size_row):

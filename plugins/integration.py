@@ -299,6 +299,19 @@ def _patch_editor_menu():
     Ui_MainWindow._fio_plugins_patched = True
 
 
+def refresh_plugin_ui(MainWindow):
+    """Rebuild the plugin-facing editor UI after the plugin set changes.
+
+    Loading a package's bundled plugins mid-session adds entity types and menu
+    actions that were not there when the menus were built. This is the one
+    entry point that puts them on screen; it is safe to call repeatedly.
+    """
+    try:
+        _build_plugins_menu(MainWindow)
+    except Exception as exc:
+        _log(f"plugin UI refresh failed: {exc}")
+
+
 def _disabled_from_config(MainWindow):
     """Read the persisted set of disabled plugin names from settings.ini."""
     cfg = getattr(MainWindow, "config", None)
@@ -352,6 +365,12 @@ def _build_plugins_menu(MainWindow):
             help_action = action
             break
 
+    # Drop a previously built menu: this runs again when a .fiopak brings
+    # plugins of its own, and two "Plugins" entries is not a menu bar.
+    for action in list(menubar.actions()):
+        if action.text().replace("&", "") == "Plugins":
+            menubar.removeAction(action)
+
     menu = QMenu("Plugins", menubar)
     if help_action:
         menubar.insertMenu(help_action, menu)
@@ -366,16 +385,19 @@ def _build_plugins_menu(MainWindow):
     for plugin in mgr.plugins:
         sub = menu.addMenu(plugin.name)
 
-        # Plugin-owned actions sit at the very top and are only available
-        # while that plugin is enabled.
+        # Plugin-owned actions sit at the very top, and are hidden outright
+        # while that plugin is off rather than shown greyed out.
+        # _run_plugin_menu_action refuses to call them without their plugin, so
+        # a visible one is an offer the editor cannot honour -- Tidy's "Load
+        # Demo map" looked available and silently did nothing.
         plugin_actions = []
+        enabled = mgr.is_enabled(plugin)
         for label, callback, tooltip in [
             (label, callback, tooltip)
             for pl, label, callback, tooltip in mgr.menu_actions()
             if pl is plugin
         ]:
             act = sub.addAction(label)
-            act.setEnabled(mgr.is_enabled(plugin))
             if tooltip:
                 act.setToolTip(tooltip)
             act.triggered.connect(
@@ -383,7 +405,12 @@ def _build_plugins_menu(MainWindow):
                 _run_plugin_menu_action(MainWindow, p, cb))
             plugin_actions.append(act)
         if plugin_actions:
-            sub.addSeparator()
+            # The separator belongs to the group: with the actions hidden it
+            # would otherwise sit above "Enabled" on its own.
+            plugin_actions.append(sub.addSeparator())
+        for act in plugin_actions:
+            act.setVisible(enabled)
+            act.setEnabled(enabled)
 
         # Enable/disable toggle (checked = on).
         toggle = sub.addAction("Enabled")
@@ -435,6 +462,7 @@ def _toggle_plugin(MainWindow, plugin, enabled, menu_actions=None):
     get_manager().set_enabled(plugin, enabled)
     for action in menu_actions or ():
         try:
+            action.setVisible(bool(enabled))
             action.setEnabled(bool(enabled))
         except Exception:
             pass

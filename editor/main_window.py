@@ -4259,6 +4259,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Error", "No map file found in game package.")
                 return
 
+            self._load_package_plugins(temp_dir)
+
             # Try to configure ResourceManager for package assets
             try:
                 from engine.resource_manager import ResourceManager
@@ -4326,6 +4328,34 @@ class MainWindow(QMainWindow):
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
+    def _load_package_plugins(self, package_root):
+        """Load the plugins a .fiopak carries, before its map is parsed.
+
+        A package bundles the plugin code its maps need so it plays on a
+        machine without those plugins installed (see the .fiopak format docs).
+        Both import paths go through here, and it runs *before* the map is
+        loaded: Thing.from_dict resolves an entity's class at parse time, so a
+        plugin arriving afterwards would leave every one of its entities as an
+        unresolved record.
+        """
+        try:
+            from plugins.packaging import load_package_plugins
+        except Exception:
+            return []          # no plugin system in this build
+        try:
+            added = load_package_plugins(package_root, log=print)
+        except Exception as exc:
+            print(f"[Package] plugin load failed: {exc}")
+            return []
+        if added:
+            self.show_toast("Package plugins loaded: %s" % ", ".join(added))
+            try:
+                from plugins.integration import refresh_plugin_ui
+                refresh_plugin_ui(self)
+            except Exception:
+                pass
+        return added
+
     def play_package_from_path(self, file_path):
         """Load and launch a game package from the given file path.
         This is used by the asset browser when double‑clicking a .fiopak.
@@ -4359,6 +4389,8 @@ class MainWindow(QMainWindow):
             if not map_path:
                 self.show_toast("No map file found in game package.", is_error=True)
                 return
+
+            self._load_package_plugins(temp_dir)
 
             # Configure ResourceManager for package assets
             try:

@@ -645,6 +645,16 @@ class LogicThread(threading.Thread):
                 })
                 continue
 
+            # A Prop drawn as a sprite has no model-shaped collision.
+            # ``model_path`` alone decides whether this loop looks at a Thing,
+            # which is right for a Model entity but wrong for a Prop: a Prop
+            # keeps its mesh path when its representation is switched back to
+            # Billboard, and would otherwise collide as a mesh nobody can see.
+            # An explicit collision_size still applies -- that is authored for
+            # the entity, not derived from the model -- and is handled above.
+            if str(props.get('render_mode', 'model')).lower() == 'billboard':
+                continue
+
             model_path = props.get('model_path', '')
 
             # Explicit AABB mode skips mesh loading and always uses the model's
