@@ -3521,7 +3521,8 @@ layout (location = 9) in vec4 iNormal2;
             return None
         key = brush_geometry.geometry_signature(brush)
         mesh = self._geo_mesh_cache.get(id(brush))
-        if mesh is not None and mesh.key == key:            mesh.frame = self._geo_mesh_frame
+        if mesh is not None and mesh.key == key:
+            mesh.frame = self._geo_mesh_frame
             return mesh
         new = None
         convex = brush_geometry.get_convex(brush)
