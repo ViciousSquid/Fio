@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QTableWidget, QTableWidgetItem)
 from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QFont
-from editor.things import (Thing, Light, Pickup, Monster, Model, Speaker,
+from editor.things import (Thing, Light, Pickup, Monster, Model, Prop, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
                            LogicState)
 from editor import state_values as _sv
