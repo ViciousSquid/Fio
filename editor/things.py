@@ -850,6 +850,7 @@ class Model(Thing):
         'scale',
         'rotation',
         'no_collision',
+        'collision_shape',
         'collision_size',
     )
     
@@ -859,6 +860,7 @@ class Model(Thing):
         self.properties.setdefault('model_path', "")
         self.properties.setdefault('rotation', [0, 0, 0])
         self.properties.setdefault('scale', [1, 1, 1])
+        self.properties.setdefault('collision_shape', 'auto')
 
 
 class Prop(Model):
