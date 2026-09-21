@@ -875,6 +875,7 @@ class Prop(Model):
         'sprite_size',
         'mass',
         'collision_size',
+        'collision_shape',
         'no_collision',
         'physics_enabled',
         'gravity',
