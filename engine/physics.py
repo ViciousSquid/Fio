@@ -715,7 +715,14 @@ class PhysicsWorld:
             self._velocity[hit_indices, axis] = 0.0
 
     def _batch_floor(self):
-        """Return floor Y for each active solid body using vectorised cell queries."""
+        """Return the highest surface that is actually below each active body.
+
+        The old query used the body's *top* as the ray start, which lets the
+        top face of a wall/step that overlaps the body's vertical span masquerade
+        as a floor. When a pushed prop slides into or past such geometry, that
+        produces an artificial vertical snap (the visible "bounce"). A floor
+        must be under the body's bottom, not merely somewhere below its top.
+        """
         n = len(self._entities)
         floors = np.full(n, -np.inf, dtype=np.float32)
         active = self._physics_enabled & self._awake & ~self._kinematic & self._solid
@@ -738,16 +745,22 @@ class PhysicsWorld:
             aabbs = self._candidate_aabbs(int(key[0]), int(key[1]))
             if aabbs is None:
                 continue
+
             center = self._position[bi] + self._offset[bi]
             half = self._half[bi]
-            start_y = center[:, 1] + half[:, 1] + 1.0
+            bottom = center[:, 1] - half[:, 1]
 
+            # A horizontal footprint is sufficient for floor contact, but the
+            # candidate surface itself must be at or just below the body's
+            # bottom. This prevents vertical walls and overhead geometry from
+            # being interpreted as floors.
+            max_floor_y = bottom + 1.0
             horizontal = (
                 (center[:, None, 0] >= aabbs[None, :, 0]) &
                 (center[:, None, 0] <= aabbs[None, :, 3]) &
                 (center[:, None, 2] >= aabbs[None, :, 2]) &
                 (center[:, None, 2] <= aabbs[None, :, 5]) &
-                (aabbs[None, :, 4] <= start_y[:, None])
+                (aabbs[None, :, 4] <= max_floor_y[:, None])
             )
             tops = np.where(
                 horizontal,
@@ -759,6 +772,7 @@ class PhysicsWorld:
             floors[bi[finite]] = best[finite]
 
         return floors
+
 
     def step(self, delta, player=None):
         self._pack()
