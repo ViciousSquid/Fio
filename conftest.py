@@ -165,10 +165,27 @@ def _isolate_process_singletons(_plugins_loaded_before_isolation):
             # Derived from the registry, so it has to go back with it.
             if hasattr(io_system, "_declared_outputs_cache"):
                 io_system._declared_outputs_cache.clear()
+            # Restoring the registry to its pre-test state also undoes anything
+            # the plugins declared into it, and plugin registration is a
+            # once-per-process event that will not run again. Ask the manager
+            # to replay its recorded registrations so a plugin can never be
+            # left loaded and enabled but silently undeclared.
+            _reapply_plugin_registrations()
     things = sys.modules.get("editor.things")
     if things is not None and counters is not None:
         things.Thing._counters.clear()
         things.Thing._counters.update(counters)
+
+
+def _reapply_plugin_registrations():
+    """Put back the declarations a registry restore stripped from the plugins."""
+    manager_module = sys.modules.get("plugins.manager")
+    if manager_module is None:
+        return
+    try:
+        manager_module.get_manager().reapply_registrations()
+    except Exception:  # pragma: no cover - defensive
+        pass
 
 
 def _snapshot_plugin_state():

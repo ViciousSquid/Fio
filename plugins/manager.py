@@ -94,6 +94,11 @@ class PluginManager:
         # Keyed the same way editor.things.from_dict matches: class name,
         # lowercased, underscores stripped.
         self._entity_owner: dict = {}
+        # Every I/O registration the loaded plugins have made, so they can be
+        # replayed if the process-wide IO_REGISTRY is reset out from under
+        # them. See reapply_registrations().
+        self._io_registrations: list = []
+        self._replaying_registrations = False
         # Normalised entity-type name -> entity class. Lets the player host
         # instantiate plugin entities from map data without the editor palette.
         self._entity_classes: dict = {}
@@ -336,6 +341,80 @@ class PluginManager:
                 f"{traceback.format_exc()}"
             )
             return True, None
+
+    def _record_io_registration(self, plugin, kind, entity_type, inputs, outputs):
+        """Remember an I/O registration so it can be replayed.
+
+        *kind* is 'set' for a type the plugin owns and 'extend' for additions
+        to a type it does not. See :meth:`reapply_registrations`.
+        """
+        if getattr(self, '_replaying_registrations', False):
+            return
+        self._io_registrations.append(
+            (plugin, kind, entity_type, inputs, outputs))
+
+    def reapply_registrations(self):
+        """Re-issue every registration this manager's plugins have made.
+
+        Plugin registration happens once per process: ``discover_and_load``
+        early-outs on ``self._loaded``, so a plugin's ``register()`` runs on
+        first load and never again. The registries it writes into --
+        ``editor.io_system.IO_REGISTRY`` and ``editor.things.ENTITY_TYPES`` --
+        are module-level singletons, so anything that resets one of them
+        silently strips the plugins' declarations with no way to get them back:
+        the plugin is still loaded and still enabled, but its I/O and its
+        entity types have vanished.
+
+        This replays the *recorded* registrations rather than re-running
+        ``register()``, so it cannot re-trigger whatever else a plugin does at
+        registration time, and it is safe to call at any point.
+
+        Returns the number of I/O registrations replayed.
+        """
+        try:
+            from editor.io_system import register_io
+        except Exception:
+            return 0
+
+        # Snapshot, and suppress recording: replaying through the API would
+        # otherwise append to the very list being walked.
+        pending = list(self._io_registrations)
+        self._replaying_registrations = True
+        try:
+            self._replay_io(pending, register_io)
+        finally:
+            self._replaying_registrations = False
+
+        try:
+            from editor.things import ENTITY_TYPES, ENTITY_CATEGORIES
+        except Exception:
+            return len(pending)
+
+        for key, cls in list(self._entity_classes.items()):
+            if not isinstance(cls, type):
+                continue
+            plugin = self._entity_owner.get(key)
+            ENTITY_TYPES.setdefault(cls.__name__, cls)
+            category = getattr(plugin, 'category', None) or 'Plugins'
+            ENTITY_CATEGORIES.setdefault(category, [])
+            if cls.__name__ not in ENTITY_CATEGORIES[category]:
+                ENTITY_CATEGORIES[category].append(cls.__name__)
+
+        return len(pending)
+
+    def _replay_io(self, pending, register_io):
+        for entry in pending:
+            plugin, kind, entity_type, inputs, outputs = entry
+            try:
+                if kind == 'extend':
+                    # Re-merge against the live registry rather than pinning
+                    # the core declarations as they were at load time.
+                    api = EditorAPI(self, plugin)
+                    api.extend_io(entity_type, inputs, outputs)
+                else:
+                    register_io(entity_type, list(inputs), list(outputs))
+            except Exception:
+                self._log(f"could not replay I/O registration for '{entity_type}'")
 
     def _record_property_schema(self, entity_type: str, specs):
         """Store a typed property schema for *entity_type* (normalised key)."""
