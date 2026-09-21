@@ -67,6 +67,14 @@ def test_plugin_loads_and_registers():
     _check("Reset" in get_input_names("prop"), "Tidy Reset added to core Prop I/O")
     _check("OnTidied" in get_output_names("prop"), "OnTidied added to core Prop I/O")
 
+    menu_actions = [(label, callback) for plugin, label, callback, tooltip
+                    in mgr.menu_actions() if plugin.name == "tidy"]
+    _check(any(label == "Load Demo map" for label, _ in menu_actions),
+           "Tidy registers Load Demo map in its plugin menu")
+
+    demo = os.path.join(os.path.dirname(__file__), "..", "Tidy_Test.json")
+    _check(os.path.isfile(demo), "bundled Tidy demo map exists")
+
     extras = mgr.extra_fields_for("prop")
     _check(any(getattr(spec, "name", "") == "tidy_category" for spec in extras),
            "tidy_category registered as a Prop extension")
