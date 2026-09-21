@@ -35,7 +35,7 @@ from engine.shaders import DEFAULT_SHADERS
 from engine.terrain import TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER
 from engine.view_distance import ViewDistance
 from editor.things import (
-    Thing, PathNode, Portal, Pickup, Monster, LogicGate, LogicRelay,
+    Thing, PathNode, Portal, Pickup, Prop, Monster, LogicGate, LogicRelay,
     LogicTimer, LevelChanger, Light, LogicSpawner, LogicCamera,
 )
 
@@ -1608,7 +1608,8 @@ layout (location = 9) in vec4 iNormal2;
     def _thing_render_kind(thing):
         """Cache the type-derived render category of a Thing."""
         props = getattr(thing, 'properties', {})
-        key = (type(thing), bool(props.get('sprite_path')))
+        render_mode = str(props.get('render_mode', 'model')).lower()
+        key = (type(thing), render_mode, bool(props.get('sprite_path')))
         cached = getattr(thing, '_render_kind_cache', None)
         if cached is not None and cached[0] == key:
             return cached[1]
@@ -1617,7 +1618,7 @@ layout (location = 9) in vec4 iNormal2;
             kind = 'pickup'
         elif isinstance(thing, (Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger)):
             kind = 'entity_sprite'
-        elif key[1]:
+        elif key[1] == 'billboard' and key[2]:
             kind = 'sprite'
         else:
             kind = 'ordinary'
@@ -1682,7 +1683,12 @@ layout (location = 9) in vec4 iNormal2;
 
             props = getattr(t, 'properties', {})
             model_path = props.get('model_path')
-            model_visible = bool(model_path and not props.get('hidden', False))
+            render_mode = str(props.get('render_mode', 'model')).lower()
+            model_visible = bool(
+                model_path and
+                render_mode == 'model' and
+                not props.get('hidden', False)
+            )
             if model_out is not None and model_visible:
                 model_out.append(t)
                 continue
@@ -1690,8 +1696,10 @@ layout (location = 9) in vec4 iNormal2;
             kind = self._thing_render_kind(t)
             if kind == 'pickup' or kind == 'entity_sprite':
                 sprites.append(t)
-            elif model_path:
-                sprites.append(t)
+            elif model_path and render_mode == 'model':
+                # A model with no model slot should never become a billboard.
+                # Only explicit billboard Props render through the sprite path.
+                pass
             elif kind == 'sprite':
                 sprites.append(t)
             elif not is_play or show_sprites:
