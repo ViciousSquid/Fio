@@ -590,7 +590,12 @@ class LogicThread(threading.Thread):
 
             # Check for explicit collision_size (forces AABB mode)
             collision_size = props.get('collision_size')
-            if collision_size:
+            has_collision_size = (
+                isinstance(collision_size, (list, tuple))
+                and len(collision_size) == 3
+                and any(float(v) != 0.0 for v in collision_size)
+            )
+            if has_collision_size:
                 size = list(collision_size)
                 brushes.append({
                     'pos': pos,
