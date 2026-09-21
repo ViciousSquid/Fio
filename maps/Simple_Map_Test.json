@@ -282,7 +282,18 @@
             },
             "is_trigger": true,
             "target": "Light_2",
-            "id": "4793b933-f99c-4c21-bf66-d38e49d9d022"
+            "id": "4793b933-f99c-4c21-bf66-d38e49d9d022",
+            "io_connections": [
+                {
+                    "output": "OnTrigger",
+                    "target": "Light_2",
+                    "input": "Toggle",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false,
+                    "target_id": "53e6fc4d-aef0-4109-98cf-7695c304ee85"
+                }
+            ]
         },
         {
             "pos": [
@@ -338,7 +349,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -353,7 +365,8 @@
                 "type": "playerstart",
                 "name": "PlayerStart_1",
                 "angle": 0.0,
-                "id": "e107abe6-ff24-4ac6-bf74-264baeb3e5bf"
+                "id": "e107abe6-ff24-4ac6-bf74-264baeb3e5bf",
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -383,9 +396,11 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         }
-    ]
+    ],
+    "created": "2026-09-21T01:28:43"
 }
