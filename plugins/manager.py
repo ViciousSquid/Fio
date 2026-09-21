@@ -124,6 +124,7 @@ class PluginManager:
         self._extra_fields: dict = {}       # type -> list[PropertySpec]
         self._property_tabs: list = []      # list[(label, factory, type_or_None)]
         self._tools_actions: list = []
+        self._menu_actions: list = []
         self._console_commands: dict = {}
         # Disabled plugin names (by directory or plugin.name). Populated from
         # the FIO_DISABLED_PLUGINS env var, comma-separated.
@@ -295,6 +296,13 @@ class PluginManager:
 
     def tools_actions(self):
         return list(self._tools_actions)
+
+    def _record_menu_action(self, plugin, label: str, callback, tooltip: str = "") -> None:
+        if callable(callback):
+            self._menu_actions.append((plugin, str(label), callback, str(tooltip or "")))
+
+    def menu_actions(self):
+        return list(self._menu_actions)
 
     def _register_console_command(self, plugin, name: str, callback, help_text: str = "") -> None:
         key = str(name).strip().lower()
