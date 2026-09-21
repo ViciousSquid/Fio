@@ -36,7 +36,9 @@ def _logic(player_pos=(5, 5, 5), props=(), monsters=(), filters=None):
     logic._trigger_brush_by_bid = dict(logic._trigger_brushes)
     logic._trigger_entities_inside = {}
     logic._nonplayer_trigger_contacts = {}
-    logic._nonplayer_trigger_poll_elapsed = 0.0
+    logic._trigger_poll_elapsed = 0.0
+    logic._trigger_use_pending = False
+    logic._trigger_use_prompt = ""
     logic.player_in_triggers = set()
     logic.fired_once_triggers = set()
     logic.hurt_trigger_timers = {}
@@ -68,10 +70,9 @@ def test_trigger_defaults_to_player_only():
     monster = _thing('monster')
     logic = _logic(props=[prop], monsters=[monster])
 
-    logic._poll_nonplayer_triggers()
+    logic._poll_triggers()
 
-    assert logic._events == []
-    logic._handle_triggers(False, 0.0)
+    assert logic._events == [('enter', 'player')]
     assert logic.player_in_triggers == {1}
 
 
@@ -84,7 +85,7 @@ def test_trigger_can_target_props_and_monsters_in_any_combination():
         filters=['props', 'monsters'],
     )
 
-    logic._poll_nonplayer_triggers()
+    logic._poll_triggers()
 
     assert set(logic._events) == {
         ('enter', 'props'),
@@ -97,15 +98,15 @@ def test_trigger_filter_reentry_is_per_entity():
     prop = _thing('prop')
     logic = _logic(props=[prop], filters=['props'])
 
-    logic._poll_nonplayer_triggers()
+    logic._poll_triggers()
     assert logic._events == [('enter', 'props')]
 
     prop.pos = [50, 50, 50]
-    logic._poll_nonplayer_triggers()
+    logic._poll_triggers()
     assert logic._events == [('enter', 'props'), ('exit', 'props')]
 
     prop.pos = [5, 5, 5]
-    logic._poll_nonplayer_triggers()
+    logic._poll_triggers()
     assert logic._events == [
         ('enter', 'props'),
         ('exit', 'props'),
@@ -113,22 +114,33 @@ def test_trigger_filter_reentry_is_per_entity():
     ]
 
 
-def test_nonplayer_trigger_poll_is_not_frame_rate():
+def test_all_trigger_polling_is_not_frame_rate():
     prop = _thing('prop')
-    logic = _logic(props=[prop], filters=['props'])
+    logic = _logic(props=[prop], filters=['player', 'props'])
 
     calls = []
-    original = logic._poll_nonplayer_triggers
-    def tracked():
-        calls.append(True)
-        original()
-    logic._poll_nonplayer_triggers = tracked
+    original = logic._poll_triggers
 
-    logic._handle_triggers(False, 1.0 / 60.0)
-    for _ in range(58):
+    def tracked(use_key_pressed=False):
+        calls.append(True)
+        original(use_key_pressed=use_key_pressed)
+
+    logic._poll_triggers = tracked
+
+    # 59 ticks at 60 Hz must not invoke any trigger detection.
+    for _ in range(59):
         logic._handle_triggers(False, 1.0 / 60.0)
 
     assert len(calls) == 0
+    assert logic.player_in_triggers == set()
+    assert logic._events == []
 
+    # The 60th tick reaches the 1.0 second sample and detects both entities.
     logic._handle_triggers(False, 1.0 / 60.0)
+
     assert len(calls) == 1
+    assert logic.player_in_triggers == {1}
+    assert set(logic._events) == {
+        ('enter', 'player'),
+        ('enter', 'props'),
+    }
