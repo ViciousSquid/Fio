@@ -1102,13 +1102,23 @@ class PropertyEditor(QWidget):
         dmg_group.setEnabled(damage_enabled)
         if props_filter_cb is not None:
             props_filter_cb.toggled.connect(
-                lambda checked: dmg_group.setEnabled(not checked)
+                lambda checked: (
+                    dmg_group.setEnabled(not checked),
+                    self._disable_trigger_damage_if_props(checked)
+                )
             )
+            self._disable_trigger_damage_if_props(props_filter_cb.isChecked())
 
         layout.addWidget(dmg_group)
         layout.addStretch()
 
         return w
+    def _disable_trigger_damage_if_props(self, props_selected):
+        """Clear trigger damage when the Props detection filter is selected."""
+        hurt_cb = self._widgets.get('hurt_cb')
+        if props_selected and hurt_cb is not None and hurt_cb.isChecked():
+            hurt_cb.setChecked(False)
+
     def _create_mover_tab(self, brush):
         w = QWidget()
         layout = QVBoxLayout(w)
