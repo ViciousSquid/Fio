@@ -1465,12 +1465,111 @@ class PropertyEditor(QWidget):
         form = QFormLayout()
 
         if isinstance(thing, Model):
-            self.add_model_path_widget(form, thing)
+            model_mode = True
+            model_path_widget = self.add_model_path_widget(form, thing)
+            scale_before = form.rowCount()
             self.add_vector3_widget(form, thing, 'scale')
+            rotation_before = form.rowCount()
             self.add_vector3_widget(form, thing, 'rotation')
 
-            # Prop owns its physical state as one grouped control below.
-            # Ordinary Model entities retain the older collision controls.
+            if isinstance(thing, Prop):
+                render_mode = str(
+                    thing.properties.get('render_mode', 'model')
+                ).lower()
+                mode_combo = _make_combo(
+                    ['Model', 'Billboard Sprite'],
+                    'Billboard Sprite' if render_mode == 'billboard' else 'Model',
+                    None,
+                    tooltip=(
+                        "Model renders the Prop as its 3D model. Billboard Sprite "
+                        "renders it as a camera-facing 2D sprite."
+                    ),
+                )
+
+                model_mode = render_mode != 'billboard'
+                form.addRow("Representation:", mode_combo)
+
+                sprite_widget = QWidget()
+                sprite_layout = QHBoxLayout(sprite_widget)
+                sprite_layout.setContentsMargins(0, 0, 0, 0)
+                sprite_edit = QLineEdit(
+                    str(thing.properties.get('sprite_path', ''))
+                )
+                sprite_edit.setReadOnly(True)
+                sprite_btn = QPushButton("...")
+                sprite_btn.setFixedWidth(30)
+
+                def pick_sprite():
+                    fp, _ = QFileDialog.getOpenFileName(
+                        self, "Select Billboard Sprite", "assets/sprites",
+                        "Image Files (*.png *.jpg *.jpeg *.bmp)"
+                    )
+                    if fp:
+                        try:
+                            rel = os.path.relpath(fp, ".").replace("\\", "/")
+                        except Exception:
+                            rel = fp
+                        if rel.startswith("./"):
+                            rel = rel[2:]
+                        self.update_object_prop('sprite_path', rel)
+                        sprite_edit.setText(rel)
+
+                sprite_btn.clicked.connect(pick_sprite)
+                sprite_layout.addWidget(sprite_edit)
+                sprite_layout.addWidget(sprite_btn)
+                form.addRow("Sprite Path:", sprite_widget)
+
+                sprite_size_widget = QWidget()
+                sprite_size_layout = QHBoxLayout(sprite_size_widget)
+                sprite_size_layout.setContentsMargins(0, 0, 0, 0)
+                sprite_size = thing.properties.get('sprite_size', [32.0, 32.0])
+                if not isinstance(sprite_size, (list, tuple)) or len(sprite_size) < 2:
+                    sprite_size = [32.0, 32.0]
+                sprite_inputs = []
+                for idx in range(2):
+                    spin = QDoubleSpinBox()
+                    spin.setRange(1.0, 4096.0)
+                    spin.setDecimals(1)
+                    spin.setSingleStep(1.0)
+                    spin.setValue(float(sprite_size[idx]))
+                    spin.valueChanged.connect(
+                        lambda value, idx=idx: self._on_prop_sprite_size_changed(
+                            thing, idx, value
+                        )
+                    )
+                    sprite_size_layout.addWidget(spin)
+                    sprite_inputs.append(spin)
+                sprite_size_layout.addStretch()
+                form.addRow("Sprite Size:", sprite_size_widget)
+
+                self._widgets['prop_render_mode_combo'] = mode_combo
+                self._widgets['prop_sprite_path_edit'] = sprite_edit
+                self._widgets['prop_sprite_size_inputs'] = sprite_inputs
+
+                model_path_row = form.getWidgetPosition(model_path_widget)[0]
+                scale_row = scale_before
+                rotation_row = rotation_before
+                sprite_path_row = form.getWidgetPosition(sprite_widget)[0]
+                sprite_size_row = form.getWidgetPosition(sprite_size_widget)[0]
+
+                def set_representation(label):
+                    is_model = label == 'Model'
+                    self.update_object_prop(
+                        'render_mode', 'model' if is_model else 'billboard'
+                    )
+                    for row in (model_path_row, scale_row, rotation_row):
+                        form.setRowVisible(row, is_model)
+                    for row in (sprite_path_row, sprite_size_row):
+                        form.setRowVisible(row, not is_model)
+
+                mode_combo.currentTextChanged.connect(set_representation)
+                for row in (model_path_row, scale_row, rotation_row):
+                    form.setRowVisible(row, model_mode)
+                for row in (sprite_path_row, sprite_size_row):
+                    form.setRowVisible(row, not model_mode)
+
+            # Prop owns its physical state on its dedicated Physics tab.
+            # Ordinary Model entities retain their collision controls.
             if not isinstance(thing, Prop):
                 # Collision toggle for this model entity
                 no_collision = thing.properties.get('no_collision', False)
@@ -3739,7 +3838,9 @@ class PropertyEditor(QWidget):
         btn.setFixedWidth(30)
 
         def pick():
-            fp, _ = QFileDialog.getOpenFileName(self, "Select OBJ Model", "assets/models", "OBJ Files (*.obj)")
+            fp, _ = QFileDialog.getOpenFileName(
+                self, "Select OBJ Model", "assets/models", "Model Files (*.obj *.glb)"
+            )
             if fp:
                 try:
                     rel = os.path.relpath(fp, "assets").replace("\\", "/")
@@ -3754,6 +3855,7 @@ class PropertyEditor(QWidget):
         h.addWidget(path_edit)
         h.addWidget(btn)
         layout.addRow("Model Path:", widget)
+        return widget
 
     def add_vector3_widget(self, layout, thing, key):
         widget = QWidget()
