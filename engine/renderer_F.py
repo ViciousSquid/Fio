@@ -2,6 +2,7 @@
 engine/renderer_F.py  –  Forward renderer, inherits shared logic from BaseRenderer
 """
 
+import ctypes
 import glm
 import OpenGL.GL as gl
 import numpy as np
@@ -87,6 +88,12 @@ class Renderer_F(BaseRenderer):
         self._brush_mat_buf = np.empty((0, 16), dtype=np.float32)
         # name id -> GL texture id / (w, h), grown as the projection interns
         # names. Resolved once per unique name, never per brush.
+        # Per-face instancing: one VBO of instance rows, and a VAO binding it
+        # alongside the shared cube geometry.
+        self._brush_instance_vbo = None
+        self._brush_instance_vao = None
+        self._brush_instance_capacity = 0
+        self._brush_instance_data = np.empty((0, 32), dtype=np.float32)
         self._gl_tex_by_name_id = np.zeros(0, dtype=np.int32)
         self._tex_size_by_name_id = np.zeros((0, 2), dtype=np.float32)
         self._brush_nmat_buf = np.empty((0, 9), dtype=np.float32)
@@ -413,6 +420,149 @@ class Renderer_F(BaseRenderer):
         self._tex_size_by_name_id = grown
         return grown
 
+    def _ensure_brush_instance_buffer(self, count):
+        """Grow the per-face instance VBO and its staging array to *count* rows."""
+        if self._brush_instance_vbo is None:
+            self._brush_instance_vbo = gl.glGenBuffers(1)
+        if count <= self._brush_instance_capacity:
+            return
+        capacity = max(count, 256, self._brush_instance_capacity * 2)
+        self._brush_instance_capacity = capacity
+        self._brush_instance_data = np.empty(
+            (capacity, BaseRenderer.BRUSH_INSTANCE_FLOATS), dtype=np.float32)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, self._brush_instance_data.nbytes,
+                        None, gl.GL_DYNAMIC_DRAW)
+        # The VAO's instance pointers refer to the old buffer object only by
+        # name, which has not changed -- but the stride and offsets have to be
+        # re-specified against the new storage, so drop the VAO and rebuild it.
+        if self._brush_instance_vao is not None:
+            try:
+                gl.glDeleteVertexArrays(1, [self._brush_instance_vao])
+            except Exception:
+                pass
+            self._brush_instance_vao = None
+
+    def _ensure_brush_instance_vao(self):
+        """A VAO over the shared cube VBO plus the per-face instance buffer.
+
+        Deliberately separate from ``vaos['cube']``: the non-instanced path
+        shares that one, and giving it eight enabled divisor-1 attributes would
+        have every ordinary cube draw read an instance buffer it does not use.
+        """
+        if self._brush_instance_vao is not None:
+            return self._brush_instance_vao
+        vao = gl.glGenVertexArrays(1)
+        gl.glBindVertexArray(vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._cube_vbo)
+        for location, size, offset in ((0, 3, 0), (1, 3, 12), (2, 2, 24)):
+            gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
+                                     32, ctypes.c_void_p(offset))
+            gl.glEnableVertexAttribArray(location)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
+        stride = BaseRenderer.BRUSH_INSTANCE_FLOATS * 4
+        for location in range(3, 11):
+            gl.glVertexAttribPointer(
+                location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
+                ctypes.c_void_p((location - 3) * 16))
+            gl.glEnableVertexAttribArray(location)
+            gl.glVertexAttribDivisor(location, 1)
+        gl.glBindVertexArray(0)
+        self._brush_instance_vao = vao
+        return vao
+
+    def _point_brush_instances_at(self, base):
+        """Re-aim the instance attributes at instance *base*.
+
+        OpenGL 3.3 has no ``glDrawArraysInstancedBaseInstance``, so a run that
+        starts part way through the buffer is reached by moving the attribute
+        pointers instead. Eight calls per run, against six vertices' worth of
+        draw -- and there are at most six runs per texture.
+        """
+        stride = BaseRenderer.BRUSH_INSTANCE_FLOATS * 4
+        origin = int(base) * stride
+        for location in range(3, 11):
+            gl.glVertexAttribPointer(
+                location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
+                ctypes.c_void_p(origin + (location - 3) * 16))
+
+    def _fill_brush_instances(self, models, normals, rows, angles, scales,
+                              shifts):
+        """Pack one instance per face, straight from the arrays already built.
+
+        No Python loop and no per-object gather: every field is a vectorised
+        take from the batched transforms and the projection's UV columns.
+        """
+        count = len(rows)
+        self._ensure_brush_instance_buffer(count)
+        data = self._brush_instance_data[:count]
+        np.take(models, rows, axis=0, out=data[:, 0:16])
+        face_normals = normals[rows]
+        data[:, 16:19] = face_normals[:, 0:3]
+        data[:, 19] = angles              # the UV rotation rides in a spare w
+        data[:, 20:23] = face_normals[:, 3:6]
+        data[:, 23] = 0.0
+        data[:, 24:27] = face_normals[:, 6:9]
+        data[:, 27] = 0.0
+        data[:, 28:30] = scales
+        data[:, 30:32] = shifts
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+        return count
+
+    def _draw_face_runs_instanced(self, projection, view, lights, models,
+                                  normals, rows, faces, gl_tex, scales, shifts,
+                                  angles, run_starts):
+        """Submit the face batches as one instanced draw per state run.
+
+        Every face used to be its own ``glDrawArrays`` preceded by three or
+        four ``glUniform`` calls, because the transform and the UV state were
+        uniforms and a uniform cannot vary within a draw. They are instance
+        attributes now, so a run -- one texture, one cube face, any number of
+        brushes -- is a single submission.
+
+        What remains between draws is exactly what genuinely changed: a texture
+        bind when the run's texture differs from the last, and the attribute
+        base pointer, which stands in for the base-instance offset OpenGL 3.3
+        does not have.
+        """
+        program = self.shaders['brush_instanced']
+        uniforms = self.uniforms['brush_instanced']
+        count = self._fill_brush_instances(models, normals, rows, angles,
+                                           scales, shifts)
+        vao = self._ensure_brush_instance_vao()
+
+        gl.glUseProgram(program)
+        self._current_shader = program
+        self._upload_lights_once('brush_instanced', lights)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
+                              glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
+                              glm.value_ptr(view))
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['texture_diffuse'], 0)
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl.glBindVertexArray(vao)
+
+        current_tex = None
+        for run in range(len(run_starts) - 1):
+            begin = int(run_starts[run])
+            length = int(run_starts[run + 1]) - begin
+            if length <= 0:
+                continue
+            tex_id = int(gl_tex[begin])
+            if tex_id != current_tex:
+                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                current_tex = tex_id
+                self.render_stats.batched_draws += 1
+            self._point_brush_instances_at(begin)
+            gl.glDrawArraysInstanced(gl.GL_TRIANGLES, int(faces[begin]) * 6, 6,
+                                     length)
+            self.render_stats.draw_calls += 1
+            self.render_stats.visible_tris += 2 * length
+        gl.glBindVertexArray(0)
+        return count
+
     def _build_face_batches(self, table, slots, config):
         """Every drawable cube face of *slots*, ordered so texture binds run out.
 
@@ -434,7 +584,8 @@ class Renderer_F(BaseRenderer):
             (bits & render_table.CLASS_HAS_GEOMETRY) == 0).astype(np.int32)
         if not len(cube_rows):
             empty_i = np.empty(0, dtype=np.int32)
-            return empty_i, empty_i, empty_i, np.empty((0, 2), dtype=np.float32)
+            return (empty_i, empty_i, empty_i,
+                    np.empty((0, 2), dtype=np.float32), empty_i)
 
         cube_slots = slots[cube_rows]
         name_ids = table.tex_name_id[cube_slots]            # (R, 6)
@@ -447,22 +598,40 @@ class Renderer_F(BaseRenderer):
         row_idx, face_idx = np.nonzero(drawn)
         if not len(row_idx):
             empty_i = np.empty(0, dtype=np.int32)
-            return empty_i, empty_i, empty_i, np.empty((0, 2), dtype=np.float32)
+            return (empty_i, empty_i, empty_i,
+                    np.empty((0, 2), dtype=np.float32), empty_i)
 
         face_names = name_ids[row_idx, face_idx]
         gl_tex = self._gl_texture_ids(table)[face_names]
 
-        # Sorting by texture id is the batching: equal ids become one run, so
-        # glBindTexture happens once per run instead of once per face.
-        order = np.argsort(gl_tex, kind='stable')
+        # Sorting is the batching, and the key says what a run must share: the
+        # texture, because that is a bind, and the cube face, because a face is
+        # six consecutive vertices and `first` is a per-draw parameter rather
+        # than a per-instance one. Everything else that used to vary per face --
+        # the transform, the UV scale, rotation and shift -- travels as instance
+        # data, so a run can be one submission however many brushes are in it.
+        sort_key = gl_tex.astype(np.int64) * 8 + face_idx
+        order = np.argsort(sort_key, kind='stable')
         row_idx = row_idx[order]
         face_idx = face_idx[order].astype(np.int32)
         gl_tex = gl_tex[order]
         face_names = face_names[order]
 
+        # Run boundaries, from the sorted key: one entry per contiguous stretch
+        # sharing a texture and a face. This is the Quake 3 backend's rule --
+        # state changes only where the decoded key actually changes -- with the
+        # comparison done once over the whole array instead of per surface.
+        sorted_key = sort_key[order]
+        starts = np.empty(len(sorted_key) + 1, dtype=np.int32)
+        starts[0] = 0
+        boundaries = np.flatnonzero(sorted_key[1:] != sorted_key[:-1]) + 1
+        starts[1:len(boundaries) + 1] = boundaries
+        starts[len(boundaries) + 1] = len(sorted_key)
+        run_starts = starts[:len(boundaries) + 2]
+
         scale = self._face_uv_scales(table, cube_slots, row_idx, face_idx,
                                      face_names)
-        return cube_rows[row_idx], face_idx, gl_tex, scale
+        return cube_rows[row_idx], face_idx, gl_tex, scale, run_starts
 
     def _face_uv_scales(self, table, cube_slots, row_idx, face_idx, face_names):
         """The ``tex_scale`` uniform for each face, as one (F, 2) array.
@@ -558,7 +727,7 @@ class Renderer_F(BaseRenderer):
 
         if numeric:
             slots = visible
-            rows, faces, gl_tex, scales = self._build_face_batches(
+            rows, faces, gl_tex, scales, run_starts = self._build_face_batches(
                 table, slots, config)
             models, normals = self._frame_transforms(table, slots)
             sel_slots = slots[rows]
@@ -567,39 +736,52 @@ class Renderer_F(BaseRenderer):
             geo_brushes = [refs[int(sl)] for sl in slots[
                 (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0]]
 
-            self._portal_begin_cull(is_geo=False)
-            if self.debug_gl_state:
-                self._debug_textured_brush_gl_state()
+            instanced = (len(rows) > 0 and 'brush_instanced' in self.shaders
+                         and self._cube_vbo is not None)
+            if instanced:
+                self._draw_face_runs_instanced(
+                    projection, view, lights, models, normals, rows, faces,
+                    gl_tex, scales, shifts, angles, run_starts)
+                # The instanced program is a different one; the angled-brush
+                # loop below runs under the ordinary textured shader, so put it
+                # back and restore its per-draw uniform state.
+                gl.glUseProgram(shader)
+                self._current_shader = shader
+                gl.glActiveTexture(gl.GL_TEXTURE0)
+                gl.glBindVertexArray(self.vaos['cube'])
+                current_tex = None
+                self._portal_begin_cull(is_geo=False)
+            else:
+                self._portal_begin_cull(is_geo=False)
+                if self.debug_gl_state:
+                    self._debug_textured_brush_gl_state()
 
-            current_tex = None
-            last_row = -1
-            for i in range(len(rows)):
-                tex_id = int(gl_tex[i])
-                if tex_id != current_tex:
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                    current_tex = tex_id
-                    self.render_stats.batched_draws += 1
-                row = int(rows[i])
-                if row != last_row:
-                    # Faces are ordered by texture, so a brush's matrices are
-                    # re-sent when its faces are split across runs -- but only
-                    # then, not once per face.
-                    gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[row])
-                    if normal_mat_loc > 0:
-                        gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
-                                              normals[row])
-                    last_row = row
-                if tex_angle_loc != -1:
-                    gl.glUniform1f(tex_angle_loc, float(angles[i]))
-                if tex_shift_loc != -1:
-                    gl.glUniform2f(tex_shift_loc, float(shifts[i, 0]),
-                                   float(shifts[i, 1]))
-                if tex_scale_loc != -1:
-                    gl.glUniform2f(tex_scale_loc, float(scales[i, 0]),
-                                   float(scales[i, 1]))
-                gl.glDrawArrays(gl.GL_TRIANGLES, int(faces[i]) * 6, 6)
-                self.render_stats.visible_tris += 2
-                self.render_stats.draw_calls += 1
+                current_tex = None
+                last_row = -1
+                for i in range(len(rows)):
+                    tex_id = int(gl_tex[i])
+                    if tex_id != current_tex:
+                        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                        current_tex = tex_id
+                        self.render_stats.batched_draws += 1
+                    row = int(rows[i])
+                    if row != last_row:
+                        gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[row])
+                        if normal_mat_loc > 0:
+                            gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
+                                                  normals[row])
+                        last_row = row
+                    if tex_angle_loc != -1:
+                        gl.glUniform1f(tex_angle_loc, float(angles[i]))
+                    if tex_shift_loc != -1:
+                        gl.glUniform2f(tex_shift_loc, float(shifts[i, 0]),
+                                       float(shifts[i, 1]))
+                    if tex_scale_loc != -1:
+                        gl.glUniform2f(tex_scale_loc, float(scales[i, 0]),
+                                       float(scales[i, 1]))
+                    gl.glDrawArrays(gl.GL_TRIANGLES, int(faces[i]) * 6, 6)
+                    self.render_stats.visible_tris += 2
+                    self.render_stats.draw_calls += 1
         else:
             # ---- Texture batch cache -------------------------------------
             # Angled (convex-geometry) brushes carry per-plane faces instead of

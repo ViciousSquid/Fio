@@ -39,9 +39,53 @@ def context():
     glh.reset_texture_cache()
 
 
+def _patterned_texture(index):
+    """A distinct checkerboard, so UV state is actually visible.
+
+    The shared visual harness loads a 1x1 white texture for every name, which
+    is right for the lighting tests it was written for -- but it makes every UV
+    mapping sample the same texel, so a scale, a shift or a rotation applied
+    wrongly cannot be seen. Anything here that checks the UV path needs a
+    texture with content, or it asserts nothing.
+    """
+    import OpenGL.GL as gl
+
+    size = 16
+    xs = np.arange(size)
+    checker = ((xs[:, None] // 2 + xs[None, :] // 2) % 2).astype(np.uint8)
+    rgba = np.zeros((size, size, 4), dtype=np.uint8)
+    rgba[..., 0] = np.where(checker, 40 + index * 60, 220)
+    rgba[..., 1] = np.where(checker, 220, 30 + index * 40)
+    rgba[..., 2] = np.where(checker, 90, 200 - index * 30)
+    rgba[..., 3] = 255
+    tex = gl.glGenTextures(1)
+    gl.glBindTexture(gl.GL_TEXTURE_2D, tex)
+    gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, size, size, 0,
+                    gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, rgba.tobytes())
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
+    return tex
+
+
 @pytest.fixture
 def renderer(context):
-    made = glh.make_renderer()
+    """A renderer whose textures carry a pattern, unlike the shared harness."""
+    from engine.renderer_F import Renderer_F
+
+    made_textures = {}
+
+    def loader(name, subfolder):
+        tex = made_textures.get(name)
+        if tex is None:
+            tex = _patterned_texture(len(made_textures))
+            made_textures[name] = tex
+        return tex
+
+    made = Renderer_F(loader, 64, 4096, None)
+    made.update_grid_buffers(4096, 64)
+    made.set_sprite_textures({})
     yield made
     try:
         made.cleanup()
@@ -185,3 +229,92 @@ def test_a_hidden_brush_is_absent_from_both(renderer, context):
     hidden_img = context.read_pixels().astype(np.int16)
     assert float(np.abs(lit - hidden_img).mean()) > MAX_MEAN_DIFF, (
         "hiding a brush changed nothing, so the slots are not what is drawn")
+
+
+# ---------------------------------------------------------------------------
+# Submission: one draw per state run, not one per face
+# ---------------------------------------------------------------------------
+
+def _grid_scene(side=12, textures=4):
+    """A scene big enough that per-face submission would be obvious."""
+    import random
+    from editor.things import Light
+
+    random.seed(3)
+    names = ['tex%d.png' % i for i in range(textures)]
+    brushes = []
+    for i in range(side * side):
+        x = (i % side) * 200.0 - side * 100.0
+        z = (i // side) * 200.0 - side * 100.0
+        b = box_brush('g%d' % i, (x, 0.0, z), (128.0, 192.0, 128.0))
+        faces = ('south', 'north', 'west', 'east', 'down', 'top')
+        b['textures'] = {f: random.choice(names) for f in faces}
+        # Per-face UV state, so the instance packing of scale, shift and
+        # rotation is actually under test rather than uniformly default.
+        b['uv_scale'] = {f: [random.choice([1.0, 2.0, 3.0]),
+                             random.choice([1.0, 2.0])] for f in faces[:3]}
+        b['uv_shift'] = {faces[1]: [0.25, 0.5], faces[4]: [0.125, 0.75]}
+        b['uv_angle'] = {faces[2]: 30.0, faces[5]: 90.0}
+        b['uv_natural'] = {faces[3]: True}
+        brushes.append(b)
+    light = make_thing(Light, 'gl', (0, 900, 0), color=[255, 255, 255],
+                       intensity=2.0, radius=8000.0, state='on',
+                       casts_shadows=False)
+    return brushes, [light]
+
+
+def test_faces_are_submitted_per_state_run_not_per_face(renderer, context):
+    """The submission count must follow distinct state, not scene size.
+
+    A run is one texture and one cube face; everything else that used to be a
+    per-face uniform travels as instance data. So a level of any size drawn
+    with T textures costs at most T * 6 submissions for its box brushes -- the
+    Quake 3 backend's rule, that state changes only where the sorted key
+    actually changes.
+    """
+    brushes, things = _grid_scene(side=12, textures=4)
+    _render(renderer, context, brushes, things, numeric=True)
+    stats = renderer.render_stats
+
+    assert stats.visible_tris == len(brushes) * 12, "not all faces were drawn"
+    assert stats.draw_calls <= 4 * 6, (
+        "%d draw calls for %d brushes -- submission is still per face"
+        % (stats.draw_calls, len(brushes)))
+
+
+def test_submission_count_does_not_grow_with_the_scene(renderer, context):
+    small, things = _grid_scene(side=6, textures=4)
+    large, _ = _grid_scene(side=14, textures=4)
+
+    _render(renderer, context, small, things, numeric=True)
+    small_draws = renderer.render_stats.draw_calls
+    _render(renderer, context, large, things, numeric=True)
+    large_draws = renderer.render_stats.draw_calls
+
+    assert len(large) > len(small) * 4
+    assert large_draws == small_draws, (
+        "submissions went from %d to %d as the scene grew %dx; they should "
+        "follow distinct state, not object count"
+        % (small_draws, large_draws, len(large) // len(small)))
+
+
+def test_instanced_and_uniform_submission_draw_the_same_picture(renderer, context):
+    """The instanced path against the per-face uniform path it replaced.
+
+    The fallback still runs on any driver that rejects the instanced attribute
+    interface, so the two have to agree -- and this is what says the instance
+    packing (the normal matrix columns, the UV rotation tucked into a spare w,
+    the scale/shift vec4) is laid out the way the shader reads it.
+    """
+    brushes, things = _grid_scene(side=8, textures=3)
+    instanced = _render(renderer, context, brushes, things, numeric=True)
+
+    saved = renderer.shaders.pop('brush_instanced')
+    try:
+        fallback = _render(renderer, context, brushes, things, numeric=True)
+    finally:
+        renderer.shaders['brush_instanced'] = saved
+
+    assert renderer.render_stats.draw_calls > 100, (
+        "the fallback did not take the per-face path, so this compares nothing")
+    _assert_same_picture(instanced, fallback, "instanced vs per-face uniforms")
