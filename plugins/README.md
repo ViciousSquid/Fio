@@ -31,13 +31,14 @@ the standalone `.fiopak` player.
 
 ## What ships
 
-Two example plugins live in this directory, and they are deliberately different
-in kind:
+Three example plugins live in this directory, and they deliberately cover
+different kinds of extension:
 
 | Plugin | Kind | What it demonstrates |
 |--------|------|----------------------|
 | [`tidy`](tidy/) | **Gameplay** | Pick-up-and-put-away games (books back on the shelf, tidy the museum, sort the warehouse). Entities, I/O ports, a carry/place runtime, a HUD goal. |
 | [`bigworld`](bigworld/) | **Runtime layer** | Cell streaming that keeps only the area around the player active in maps of hundreds of thousands of brushes. Uses the event bus, cross-plugin services, and host wrapping rather than adding entities to place. See its own [README](bigworld/README.md). |
+| [`benchmark`](benchmark/) | **Developer tooling** | Optional live runtime benchmark tooling. Registers the `benchmark` console command and launches the benchmark manager against the existing editor `MainWindow`. |
 
 Between them they exercise nearly the whole API: entity registration and I/O
 (`tidy`), and the open-ended [`PluginHost`](API.md#pluginhost--the-open-ended-engine-seam)
@@ -190,7 +191,7 @@ are in [`API.md`](API.md); here is what each is *for*:
 
 | Object | Handed to | Use it for |
 |--------|-----------|------------|
-| [`EditorAPI`](API.md#editorapi--load-time-registration) | `register(api)` | declare entity types, I/O, property schemas, extra property fields/tabs, renderers |
+| [`EditorAPI`](API.md#editorapi--load-time-registration) | `register(api)` | declare entity types, I/O, property schemas, editor actions/wizards, extra property fields/tabs, renderers |
 | [`RuntimeAPI`](API.md#runtimeapi--per-session-services) | `register_runtime(api)` | register I/O input handlers; query the scene (`entities_of_type`, `things_near`, `raycast_from_crosshair`); `spawn`/`despawn` |
 | [`PluginHost`](API.md#pluginhost--the-open-ended-engine-seam) | `connect(host)` | subscribe to engine events (`host.on(...)`); reach any subsystem (`host.get(...)`); publish/consume services; guarded `host.wrap(...)` |
 | [`TickContext`](API.md#tickcontext--the-per-tick-object) | `on_tick(logic, ctx)` | read input (`ctx.use_pressed`, `ctx.key_down('e')`); drive the HUD (`ctx.set_prompt`, `ctx.toast`) |
@@ -211,13 +212,20 @@ cross-level state through the [`GlobalStore`](API.md#globalstore--cross-level-st
   `model_path` is rendered by the existing model pipeline. Things without one are
   editor-only sprites.
 - **Keep `register()` UI-free.** It runs in headless/engine contexts too — no Qt,
-  no OpenGL.
+  no OpenGL. Registration can declare editor actions and wizards; the callbacks
+  themselves run later in the editor.
 - **Do per-tick work in `on_tick`, and keep it cheap.** `ctx.use_pressed` is the
   edge-triggered interact key for that tick; `ctx.interaction_consumed` tells you
   whether the core already claimed the HUD/use this tick.
 - **Use the HUD helpers, not `logic.current_hud_message`.** `ctx.set_prompt`
   respects priority and won't clobber the core's prompt; `ctx.toast` shows a
   timed message.
+- **Use `extend_io()` when adding I/O to a core entity.** `register_io()`
+  replaces the declarations for an entity type; `extend_io()` preserves the
+  existing ports and adds only missing names.
+- **Use singleton/wizard registration for authoring constraints.**
+  `register_singleton_entity()` prevents duplicate per-map instances, while
+  `register_entity_wizard()` can collect initial properties before placement.
 - **Restore what you mutate.** If you move, hide or disable entities during play,
   put them back in `on_play_stop` so the edited map is unchanged (see
   `TidySession.stop`).
@@ -369,6 +377,8 @@ python -m plugins.bigworld.tests.test_bigworld
 | Want to… | Read |
 |----------|------|
 | Understand the whole system | this file |
+| Add editor actions, singleton entities or creation wizards | [`API.md`](API.md#editorapi--load-time-registration) |
+| Add I/O to a core entity without replacing its ports | [`API.md`](API.md#editorapi--load-time-registration) |
 | Look up a class/method/signature | [`API.md`](API.md) |
 | See the annotated API source | [`api.py`](api.py) |
 | Use the open-ended engine seam | [`host.py`](host.py) / [API §PluginHost](API.md#pluginhost--the-open-ended-engine-seam) |
