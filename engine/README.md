@@ -4,6 +4,8 @@ The runtime engine: world simulation, physics, resource/package loading, numeric
 
 The engine's authoritative gameplay/world state remains object-oriented. Performance-sensitive execution paths increasingly project that state into dense NumPy representations before entering hot loops. Rendering and physics both use this pattern: Python objects provide the API and world model; contiguous numerical arrays provide the execution representation.
 
+---
+
 ### `audio_manager.py`
 Sound effect loading and playback via pygame. Routes through `ResourceManager` for `.fiopak` package compatibility and caches loaded sounds.
 
