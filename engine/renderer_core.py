@@ -19,6 +19,7 @@ Both Renderer_F and Renderer_D inherit from BaseRenderer.
 """
 
 import ctypes
+import re
 import math
 import os
 
@@ -27,8 +28,11 @@ import numpy as np
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 
-from engine.constants import is_water_brush, brush_aabb_bounds
+from engine.constants import (is_water_brush, brush_aabb_bounds,
+                              normalize_color)
 from engine import brush_geometry
+from engine import render_table
+from engine.render_keys import KeyLayout, sort_into_runs
 from engine import shaders
 from engine.shaders import DEFAULT_SHADERS
 from engine.terrain import TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER
@@ -190,16 +194,10 @@ class ShaderLoader:
 
 
 # ---------- Helper ----------
-def normalize_color(rgb, default=None):
-    """Normalise an RGB colour to 0.0-1.0 floats.
-    Accepts [0-255] int or [0.0-1.0] float components.
-    Returns *default* (or [0.8, 0.8, 0.8]) if rgb is None or malformed.
-    """
-    if default is None:
-        default = [0.8, 0.8, 0.8]
-    if not rgb or not isinstance(rgb, (list, tuple)) or len(rgb) < 3:
-        return list(default)
-    return [c / 255.0 if c > 1.0 else c for c in rgb[:3]]
+#: Re-exported so ``from engine.renderer_core import normalize_color`` keeps
+#: working; it lives in engine.constants because the GL-free render projection
+#: needs it too.  See :func:`engine.constants.normalize_color`.
+normalize_color = normalize_color
 
 
 #: Light-array capacity of each lighting shader, so the renderer can never set
@@ -303,6 +301,16 @@ class BaseRenderer:
 
         # GPU-instanced model data. One persistent VBO is shared by all model
         # VAOs; each instance carries a model matrix and normal matrix (112 B).
+        # The shared brush-instance buffer and its VAO. One layout serves every
+        # pass that submits runs (see BRUSH_INSTANCE_ATTRS), so it lives here
+        # rather than on the forward renderer.
+        self._brush_instance_vbo = None
+        self._brush_instance_vao = None
+        self._brush_instance_capacity = 0
+        self._brush_instance_data = np.empty((0, 32), dtype=np.float32)
+        # Reusable model/normal matrix buffers for the batched transform build.
+        self._brush_mat_buf = np.empty((0, 16), dtype=np.float32)
+        self._brush_nmat_buf = np.empty((0, 9), dtype=np.float32)
         self._model_instance_vbo = None
         self._model_instance_capacity = 0
         self._model_instance_data = np.empty((0, 28), dtype=np.float32)
@@ -560,6 +568,9 @@ class BaseRenderer:
         self._preload_lit_uniforms('textured')
         self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'tex_angle', 'tex_shift', 'normalMatrix'])
         self._compile_instanced_model_shaders(lit_vert, lit_frag, tex_vert, tex_frag)
+        self._compile_instanced_brush_shader(tex_vert, tex_frag)
+        self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
+        self._compile_instanced_depth_shader()
 
     def _compile_standard_shaders(self):
         lit_shader = self.shader_loader.compile_shader_program('lit.vert', 'lit.frag')
@@ -578,6 +589,320 @@ class BaseRenderer:
         tex_vert = DEFAULT_SHADERS.get('textured.vert', '')
         tex_frag = DEFAULT_SHADERS.get('textured.frag', '')
         self._compile_instanced_model_shaders(lit_vert, lit_frag, tex_vert, tex_frag)
+        self._compile_instanced_brush_shader(tex_vert, tex_frag)
+        self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
+        self._compile_instanced_depth_shader()
+
+    #: Floats per brush-face instance: a mat4 model matrix, a mat3 normal
+    #: matrix padded to three vec4 (with the face's UV rotation tucked into the
+    #: first spare w), and one vec4 of UV scale and shift.  Eight vec4s, so
+    #: attribute locations 3..10 -- 0..2 are the cube's own position, normal and
+    #: texture coordinate.
+    BRUSH_INSTANCE_FLOATS = 32
+
+    #: Attribute locations 3..10 carry one instance of a brush draw run, and
+    #: mean the same thing for every pass that uses them:
+    #:
+    #:   3..6   mat4 model
+    #:   7..9   mat3 normal matrix, padded to vec4; ``iNormal0.w`` is a spare
+    #:          scalar a pass may use (the textured pass puts the face's UV
+    #:          rotation there)
+    #:   10     vec4 payload, whose meaning is the pass's own (UV scale and
+    #:          shift for textured, colour and alpha for lit)
+    #:
+    #: One layout, one buffer and one VAO serve both passes, which is what
+    #: makes "a run describes the invariant GPU state, the instance array
+    #: describes everything that varies within it" a property of the renderer
+    #: rather than of one pass.
+    BRUSH_INSTANCE_ATTRS = """layout (location = 3) in vec4 iModel0;
+layout (location = 4) in vec4 iModel1;
+layout (location = 5) in vec4 iModel2;
+layout (location = 6) in vec4 iModel3;
+layout (location = 7) in vec4 iNormal0;
+layout (location = 8) in vec4 iNormal1;
+layout (location = 9) in vec4 iNormal2;
+layout (location = 10) in vec4 iPayload;
+
+"""
+
+    #: Vertex-shader uniforms the instanced variants drop, because the value is
+    #: per instance now rather than per draw.
+    _INSTANCED_VERT_DROP = ('uniform mat4 model;', 'uniform mat3 normalMatrix;',
+                            'uniform vec2 tex_scale', 'uniform float tex_angle',
+                            'uniform vec2 tex_shift')
+
+    def _instanced_vertex_source(self, vert, preamble, extra_out=''):
+        """A vertex shader rewritten to take its transform from instance data.
+
+        Shared by the textured and lit brush passes: both start from the
+        ordinary shader and differ only in what they pull out of the payload,
+        so neither can drift from the pass it accelerates.
+        """
+        kept = [line for line in vert.splitlines()
+                if not line.strip().startswith(self._INSTANCED_VERT_DROP)]
+        source = '\n'.join(kept)
+        if 'out vec3 FragPos;' not in source or 'void main() {' not in source:
+            return None
+        source = source.replace(
+            'out vec3 FragPos;',
+            self.BRUSH_INSTANCE_ATTRS + extra_out + 'out vec3 FragPos;', 1)
+        source = source.replace(
+            'void main() {',
+            'void main() {\n'
+            '    mat4 instanceModel = mat4(iModel0, iModel1, iModel2, iModel3);\n'
+            '    mat3 instanceNormal = mat3(iNormal0.xyz, iNormal1.xyz, iNormal2.xyz);\n'
+            + preamble, 1)
+        source = source.replace('model * vec4(aPos, 1.0)',
+                                'instanceModel * vec4(aPos, 1.0)')
+        source = source.replace('normalMatrix * aNormal',
+                                'instanceNormal * aNormal')
+        return source
+
+    def _register_instanced_shader(self, name, vertex_source, fragment_source,
+                                   extra_uniforms=()):
+        """Compile one instanced brush program, or leave it absent.
+
+        Absence is a supported state, not a failure: a driver that rejects the
+        attribute interface simply keeps the per-object path, which every pass
+        retains.
+        """
+        if not vertex_source or not fragment_source:
+            return False
+        try:
+            program = self.shader_loader.compile_from_source(vertex_source,
+                                                             fragment_source)
+        except Exception as exc:
+            print(f'[BaseRenderer] {name} instancing disabled: {exc}')
+            return False
+        self.shaders[name] = program
+        self.uniforms[name] = UniformCache(program)
+        self._preload_lit_uniforms(name)
+        if extra_uniforms:
+            self.uniforms[name].preload(list(extra_uniforms))
+        return True
+
+    def _compile_instanced_depth_shader(self):
+        """Compile the shadow depth shader with an instanced model matrix.
+
+        The depth pass is the purest run/instance split in the renderer: the
+        only thing that varies per caster is its model matrix, and the only
+        thing that varies per run is the cube face's ``lightSpaceMatrix``. So
+        the matrix becomes instance data and the face stays a uniform, and one
+        light's six faces cost six draws instead of six times its caster count.
+
+        The vertex shader takes the same instance attributes as the brush
+        passes, so the same buffer and the same VAO serve it; the normal and
+        payload slots go unused here, which costs a little upload bandwidth and
+        buys one layout for the whole renderer.
+        """
+        vert = DEFAULT_SHADERS.get('depth_cube.vert', '')
+        frag = DEFAULT_SHADERS.get('depth_cube.frag', '')
+        if not vert or not frag:
+            return
+        vertex = self._instanced_vertex_source(vert, preamble='')
+        if vertex is None:
+            return
+        if self._register_instanced_shader(
+                'depth_cube_instanced', vertex, frag,
+                extra_uniforms=['lightSpaceMatrix', 'lightPos', 'far_plane']):
+            print('[BaseRenderer] Shadow depth instancing shader compiled successfully.')
+
+    def _compile_instanced_lit_brush_shader(self, lit_vert, lit_frag):
+        """Compile the flat-shaded brush shader with instanced colour.
+
+        The lit pass had no texture to batch by, so every brush was its own
+        draw carrying four uniform uploads -- model, normal, colour, alpha.
+        Colour and alpha are read in the *fragment* stage, so instancing them
+        means carrying them across as a varying; the rest of the lighting,
+        shadowing and fog code is untouched.
+        """
+        if not lit_vert or not lit_frag:
+            return
+        vertex = self._instanced_vertex_source(
+            lit_vert,
+            preamble='    vInstanceColor = iPayload;\n',
+            extra_out='out vec4 vInstanceColor;\n')
+        if vertex is None:
+            return
+
+        kept = [line for line in lit_frag.splitlines()
+                if not line.strip().startswith(('uniform vec3 object_color;',
+                                                'uniform float alpha;'))]
+        fragment = '\n'.join(kept)
+        if 'in vec3 Normal;' not in fragment:
+            return
+        fragment = fragment.replace('in vec3 Normal;',
+                                    'in vec3 Normal;\nin vec4 vInstanceColor;', 1)
+        fragment, colours = re.subn(r'\bobject_color\b', 'vInstanceColor.rgb',
+                                    fragment)
+        fragment, alphas = re.subn(r'\balpha\b', 'vInstanceColor.a', fragment)
+        if not colours or not alphas:
+            # The shader did not look the way this rewrite assumes; leaving the
+            # program absent keeps the per-brush path rather than compiling
+            # something subtly wrong.
+            return
+        if self._register_instanced_shader('lit_brush_instanced', vertex,
+                                           fragment):
+            print('[BaseRenderer] Lit brush instancing shader compiled successfully.')
+
+    def _frame_transforms(self, table, slots):
+        """Model and normal matrices for *slots*, into reusable buffers.
+
+        One batched build per pass instead of one memoised glm matrix per brush
+        object.  The buffers are grown geometrically and never shrunk, so a
+        steady-state frame allocates nothing.
+        """
+        count = len(slots)
+        if len(self._brush_mat_buf) < count:
+            capacity = max(count, 16, len(self._brush_mat_buf) * 2)
+            self._brush_mat_buf = np.empty((capacity, 16), dtype=np.float32)
+            self._brush_nmat_buf = np.empty((capacity, 9), dtype=np.float32)
+        return render_table.model_matrices(
+            table, slots, self._brush_mat_buf, self._brush_nmat_buf)
+
+    
+
+    def _ensure_brush_instance_buffer(self, count):
+        """Grow the per-face instance VBO and its staging array to *count* rows."""
+        if self._brush_instance_vbo is None:
+            self._brush_instance_vbo = gl.glGenBuffers(1)
+        if count <= self._brush_instance_capacity:
+            return
+        capacity = max(count, 256, self._brush_instance_capacity * 2)
+        self._brush_instance_capacity = capacity
+        self._brush_instance_data = np.empty(
+            (capacity, self.BRUSH_INSTANCE_FLOATS), dtype=np.float32)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, self._brush_instance_data.nbytes,
+                        None, gl.GL_DYNAMIC_DRAW)
+        # The VAO is deliberately left alone. glBufferData reallocates the data
+        # store but keeps the buffer's name, and a VAO's attribute pointers
+        # reference the name with a stride and offset that have not changed --
+        # so the VAO stays valid across a growth. Deleting it here would also
+        # invalidate any handle a caller is holding, which the shadow pass does
+        # across its six faces.
+
+    def _ensure_brush_instance_vao(self):
+        """A VAO over the shared cube VBO plus the per-face instance buffer.
+
+        Deliberately separate from ``vaos['cube']``: the non-instanced path
+        shares that one, and giving it eight enabled divisor-1 attributes would
+        have every ordinary cube draw read an instance buffer it does not use.
+        """
+        if self._brush_instance_vao is not None:
+            return self._brush_instance_vao
+        # The shadow pass asks for the VAO during its setup, before anything
+        # has packed instances, so the buffer may not exist yet.
+        self._ensure_brush_instance_buffer(1)
+        vao = gl.glGenVertexArrays(1)
+        gl.glBindVertexArray(vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._cube_vbo)
+        for location, size, offset in ((0, 3, 0), (1, 3, 12), (2, 2, 24)):
+            gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
+                                     32, ctypes.c_void_p(offset))
+            gl.glEnableVertexAttribArray(location)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
+        stride = self.BRUSH_INSTANCE_FLOATS * 4
+        for location in range(3, 11):
+            gl.glVertexAttribPointer(
+                location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
+                ctypes.c_void_p((location - 3) * 16))
+            gl.glEnableVertexAttribArray(location)
+            gl.glVertexAttribDivisor(location, 1)
+        gl.glBindVertexArray(0)
+        self._brush_instance_vao = vao
+        return vao
+
+    def _point_brush_instances_at(self, base):
+        """Re-aim the instance attributes at instance *base*.
+
+        OpenGL 3.3 has no ``glDrawArraysInstancedBaseInstance``, so a run that
+        starts part way through the buffer is reached by moving the attribute
+        pointers instead. Eight calls per run, against six vertices' worth of
+        draw -- and there are at most six runs per texture.
+        """
+        stride = self.BRUSH_INSTANCE_FLOATS * 4
+        origin = int(base) * stride
+        for location in range(3, 11):
+            gl.glVertexAttribPointer(
+                location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
+                ctypes.c_void_p(origin + (location - 3) * 16))
+
+    def _pack_brush_instances(self, models, normals, rows, spare, payload):
+        """Pack one instance row per draw item, straight from existing arrays.
+
+        The layout is :data:`BaseRenderer.BRUSH_INSTANCE_ATTRS`: the model
+        matrix, the normal matrix padded to three vec4 with one spare scalar,
+        and a payload vec4 whose meaning belongs to the calling pass.  Every
+        field is a vectorised take -- no Python loop, and no going back to an
+        object for a transform that already exists as a column.
+
+        *rows* selects which of *models* / *normals* each instance uses, so one
+        brush appearing as six faces costs six instance rows and one matrix
+        build.
+        """
+        count = len(rows)
+        self._ensure_brush_instance_buffer(count)
+        data = self._brush_instance_data[:count]
+        np.take(models, rows, axis=0, out=data[:, 0:16])
+        if payload is None:
+            payload = 0.0
+        if normals is None:
+            # A pass that writes only depth has no normal to carry; leaving the
+            # slots zero keeps one instance layout for the whole renderer at
+            # the cost of a little upload bandwidth.
+            data[:, 16:28] = 0.0
+        else:
+            item_normals = normals[rows]
+            data[:, 16:19] = item_normals[:, 0:3]
+            data[:, 19] = spare
+            data[:, 20:23] = item_normals[:, 3:6]
+            data[:, 23] = 0.0
+            data[:, 24:27] = item_normals[:, 6:9]
+            data[:, 27] = 0.0
+        data[:, 28:32] = payload
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+        return count
+
+    def _begin_instanced_pass(self, name, projection, view, lights):
+        """Bind an instanced brush program and its per-pass uniform state."""
+        program = self.shaders[name]
+        uniforms = self.uniforms[name]
+        gl.glUseProgram(program)
+        self._current_shader = program
+        self._upload_lights_once(name, lights)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
+                              glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
+                              glm.value_ptr(view))
+        return uniforms
+
+    def _compile_instanced_brush_shader(self, tex_vert, tex_frag):
+        """Compile the textured-brush shader with per-face instanced attributes.
+
+        The per-face state the pass used to upload as uniforms -- model matrix,
+        normal matrix, UV scale, rotation and shift -- becomes instance data,
+        so every face sharing a texture and a cube face index is one
+        ``glDrawArraysInstanced`` instead of one ``glDrawArrays`` and three or
+        four ``glUniform`` calls each.
+
+        The UV scale and shift ride in the payload vec4 and the rotation in the
+        spare ``iNormal0.w``; declaring locals of the shader's original uniform
+        names leaves the UV rotate/scale/shift maths in the body byte for byte
+        what the non-instanced path runs.  Both the desktop and ARM variants
+        have the same vertex interface, so one derivation serves both.
+        """
+        vertex = self._instanced_vertex_source(
+            tex_vert,
+            preamble=('    vec2 tex_scale = iPayload.xy;\n'
+                      '    vec2 tex_shift = iPayload.zw;\n'
+                      '    float tex_angle = iNormal0.w;\n'))
+        if vertex is None:
+            return
+        if self._register_instanced_shader('brush_instanced', vertex, tex_frag,
+                                           extra_uniforms=['texture_diffuse']):
+            print('[BaseRenderer] Brush face instancing shader compiled successfully.')
 
     def _compile_instanced_model_shaders(self, lit_vert, lit_frag, tex_vert, tex_frag):
         """Compile GL 3.3 model shaders whose transforms come from instanced attributes."""
@@ -1721,6 +2046,82 @@ layout (location = 9) in vec4 iNormal2;
             },)
         return result
 
+    def _classify_brush_slots(self, table, slots, config):
+        """Split visible brush slots into the render passes, numerically.
+
+        The array form of ``_sort_objects``' brush half.  That loop asked every
+        visible brush what it was, once per frame -- ``is_water_brush`` alone is
+        six ``str.lower()`` calls and six substring searches per brush -- to
+        reach a verdict that only changes when the brush is edited.  The
+        projection resolved it at edit time into ``class_bits``, so the same
+        split is one mask per class.
+
+        The classes are mutually exclusive in the same order the Python chain
+        tried them (water, then fog, then glass, then glow, then trigger), so
+        ``_brush_class_bits`` sets at most one of them and the masks cannot
+        disagree with what the loop used to decide.
+
+        Returns int32 slot arrays -- no objects are materialised here.
+        """
+        empty = slots[:0]
+        if not len(slots):
+            return {'opaque': empty, 'textured': empty, 'solid': empty,
+                    'transparent': empty, 'water': empty, 'glass': empty,
+                    'fog': empty, 'glow': empty}
+
+        bits = table.class_bits[slots]
+        opaque_mask = (bits & render_table.CLASS_NON_OPAQUE) == 0
+        textured_mask = (bits & render_table.CLASS_TEXTURED) != 0
+        # A trigger volume is drawn as a wireframe while editing and not at all
+        # in play, which is what the old loop's `if not is_play` meant.
+        if config.get('play_mode', False):
+            trigger_mask = np.zeros(len(slots), dtype=bool)
+        else:
+            trigger_mask = (bits & render_table.CLASS_TRIGGER) != 0
+
+        return {
+            'opaque': slots[opaque_mask],
+            'textured': slots[opaque_mask & textured_mask],
+            'solid': slots[opaque_mask & ~textured_mask],
+            'transparent': slots[trigger_mask],
+            'water': slots[(bits & render_table.CLASS_WATER) != 0],
+            'glass': slots[(bits & render_table.CLASS_GLASS) != 0],
+            'fog': slots[(bits & render_table.CLASS_FOG) != 0],
+            'glow': slots[(bits & render_table.CLASS_GLOW) != 0],
+        }
+
+    @staticmethod
+    def _distance_cull_slots(table, slots, cx, cz, limit_sq):
+        """Narrow *slots* to those within *limit_sq* on the XZ plane.
+
+        The broad-phase distance cull, as a mask rather than a compaction.  It
+        used to run over a Python list and rebuild another one an element at a
+        time (``render_cull.cull_by_distance``); the surviving slots are the
+        same answer with no object touched.
+        """
+        if not len(slots):
+            return slots
+        dx = table.center[slots, 0] - cx
+        dz = table.center[slots, 2] - cz
+        return slots[(dx * dx + dz * dz) <= limit_sq]
+
+    @staticmethod
+    def _sort_slots_by_distance(table, slots, cx, cz, reverse=True):
+        """Depth-order *slots* from the projection's centres.
+
+        Replaces reconstructing an array from a list of row views and then
+        rebuilding an object list from the sort order: the positions are
+        already dense, so the sort is one argsort over a gathered distance
+        vector and the result is still slots.
+        """
+        if len(slots) < 2:
+            return slots
+        dx = table.center[slots, 0] - cx
+        dz = table.center[slots, 2] - cz
+        distances = dx * dx + dz * dz
+        order = np.argsort(-distances if reverse else distances, kind="stable")
+        return slots[order]
+
     def _split_opaque(self, brushes):
         textured, solid = [], []
         for b in brushes:
@@ -1767,7 +2168,9 @@ layout (location = 9) in vec4 iNormal2;
         for uniform storage.
         """
         cap = _SHADER_LIGHT_CAPS.get(shader_name, self.MAX_LIGHTS)
-        if self.lowpower_mode and shader_name in ('lit', 'textured', 'lit_instanced', 'textured_instanced'):
+        if self.lowpower_mode and shader_name in ('lit', 'textured', 'lit_instanced',
+                                                  'textured_instanced', 'brush_instanced',
+                                                  'lit_brush_instanced'):
             cap = min(cap, shaders.MAX_LIGHTS_ARM)
         return cap
 
@@ -1838,7 +2241,7 @@ layout (location = 9) in vec4 iNormal2;
 
     def _configure_light_ubo_programs(self):
         for name in ('lit', 'textured', 'lit_instanced', 'textured_instanced',
-                     'water', 'terrain'):
+                     'brush_instanced', 'lit_brush_instanced', 'water', 'terrain'):
             self._configure_light_ubo_program(name)
         self._ensure_light_ubo(self.MAX_LIGHTS)
 
@@ -1937,7 +2340,8 @@ layout (location = 9) in vec4 iNormal2;
         # Keep sampler2D and samplerCube uniforms on distinct texture units.
         # This is one shader-pass operation, never part of the per-draw loop.
         if shader_name in ('lit', 'textured', 'lit_instanced',
-                           'textured_instanced', 'terrain'):
+                           'textured_instanced', 'brush_instanced',
+                           'lit_brush_instanced', 'terrain'):
             self._bind_shadow_maps(self.uniforms[shader_name])
     # --------------------------------------------------------------------------
     # Depth cube-map shadow mapping
@@ -2047,6 +2451,53 @@ layout (location = 9) in vec4 iNormal2;
             gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
             gl.glUniform1i(loc, base + i)
         gl.glActiveTexture(gl.GL_TEXTURE0)
+
+    @staticmethod
+    def _shadow_caster_slots(table, all_slots):
+        """The brushes eligible to cast a shadow, as slots.
+
+        This filter used to be a Python walk over every brush in the level --
+        five dict lookups and ``is_water_brush``'s six-string search each --
+        run every frame, before anything had checked whether a single cube-map
+        actually needed re-rendering.  The verdict changes only when a brush is
+        edited, so the projection resolved it at edit time; here it is one mask.
+        """
+        if not len(all_slots):
+            return all_slots
+        bits = table.class_bits[all_slots]
+        return all_slots[(bits & render_table.CLASS_SHADOW_CASTER) != 0]
+
+    @staticmethod
+    def _casters_in_reach(table, slots, lx, ly, lz, reach):
+        """Caster slots within *reach* of a light, and a signature of them.
+
+        Replaces rebuilding ``np.asarray([b['pos'] for b in brushes])`` and
+        ``[b['size'] ...]`` from the brush dicts every frame: the projection
+        already holds both, so the whole per-light test is
+        ``center[slots]`` and one comparison.
+
+        The signature is the caster geometry itself rather than a tuple
+        reconstructed per brush.  A light's cube-map is valid exactly while the
+        casters in reach of it have not moved or changed shape, which is what
+        these bytes say -- and comparing them is a memcmp over a few kilobytes
+        instead of building thousands of Python tuples.
+        """
+        if not len(slots):
+            return slots, ()
+        center = table.center[slots]
+        dx = center[:, 0] - lx
+        dy = center[:, 1] - ly
+        dz = center[:, 2] - lz
+        # A brush counts when the light reaches its bounding sphere, whose
+        # radius is the largest half-extent -- the same test as before.
+        limit = reach + table.half[slots].max(axis=1)
+        sel = slots[(dx * dx + dy * dy + dz * dz) <= limit * limit]
+        if not len(sel):
+            return sel, ()
+        geometry = np.concatenate((table.center[sel].ravel(),
+                                   table.half[sel].ravel(),
+                                   table.rot[sel].ravel().astype(np.float64)))
+        return sel, (sel.tobytes(), geometry.tobytes())
 
     def _prepare_shadow_caster_batch(self, brushes, models):
         """Build one numeric caster snapshot shared by every shadow light."""
@@ -2168,6 +2619,61 @@ layout (location = 9) in vec4 iNormal2;
         return in_brushes, in_models, (tuple(bkeys), tuple(mkeys))
 
 
+    #: The shadow pass's render key. One field, because one thing cannot vary
+    #: within a depth draw: which cube face is being rendered, since that is
+    #: the light-space matrix. Everything else -- each caster's transform --
+    #: is instance data.
+    #:
+    #: Its items are its *runs*, which is the one place this differs from the
+    #: brush passes. There an item is a face of a brush and the key partitions
+    #: items into runs; here the caster set is identical for all six faces, so
+    #: the six runs share one instance array rather than carving it up. Packing
+    #: the casters once and drawing them six times is the whole saving.
+    SHADOW_RUN_KEY = KeyLayout([('face', 3)])
+
+    def _shadow_face_runs(self):
+        """The six cube faces, as sorted runs.
+
+        Trivial today -- six items, one field, already in order -- and that is
+        the point of routing it through the same machinery rather than a bare
+        ``range(6)``: the ordering is a property of the key, so a second field
+        (batching two lights into one pass, say) changes the layout and nothing
+        else.
+        """
+        keys = self.SHADOW_RUN_KEY.pack(face=np.arange(6, dtype=np.int64))
+        order, starts = sort_into_runs(keys)
+        return self.SHADOW_RUN_KEY.field(keys[order], 'face'), starts
+
+    def _prepare_shadow_instances(self, table, refs, in_brushes, instanced):
+        """Pack one light's cube casters, and hand back its angled ones.
+
+        Returns ``(instance_count, geo_casters)``. The cube casters go into the
+        shared instance buffer as model matrices -- the depth pass writes only
+        depth, so the normal and payload slots stay zero -- and the angled ones
+        come back as objects, because each convex mesh is unique and a run of
+        one instance buys nothing.
+
+        Falls back to treating every caster as an individual object when there
+        is no projection to read, or no instanced depth shader: the per-caster
+        path below still works and is what a driver without the attribute
+        interface gets.
+        """
+        if not instanced or table is None or refs is None or not len(in_brushes):
+            return 0, [refs[int(b)] if (refs is not None and not isinstance(b, dict))
+                       else b for b in in_brushes]
+
+        slots = np.asarray(in_brushes, dtype=np.int32)
+        geometry = (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0
+        cube_slots = slots[~geometry]
+        geo_casters = [refs[int(s)] for s in slots[geometry]]
+        if not len(cube_slots):
+            return 0, geo_casters
+
+        models, _normals = self._frame_transforms(table, cube_slots)
+        rows = np.arange(len(cube_slots), dtype=np.int32)
+        self._pack_brush_instances(models, None, rows, 0.0, 0.0)
+        return len(cube_slots), geo_casters
+
     def render_shadow_maps(self, shadow_lights, brushes, things, config, camera_pos=None):
         """Refresh the depth cube-map for each shadow-casting point light.
 
@@ -2218,19 +2724,35 @@ layout (location = 9) in vec4 iNormal2;
                     break
 
         # ---- Filter casters once & decide which lights are dirty ------------
-        caster_brushes = []
-        for b in brushes:
-            if b.get('hidden') or b.get('is_trigger') or b.get('is_fog') or b.get('operation') == 'subtract':
-                continue
-            if is_water_brush(b) or b.get('shader') in ('Fog', 'Glass', 'Glow'):
-                continue
-            caster_brushes.append(b)
+        # Models keep the object path: they are not projected, and the set is
+        # small enough that it has never been the cost here.
         caster_models = [t for t in things
                          if isinstance(t, Thing) and t.properties.get('model_path')]
 
-        # Build numeric caster positions once; every dirty light reuses them.
-        caster_batch = self._prepare_shadow_caster_batch(
-            caster_brushes, caster_models)
+        table = config.get('render_table')
+        refs = config.get('render_refs')
+        caster_slots = config.get('all_brush_slots')
+        numeric = (table is not None and refs is not None
+                   and caster_slots is not None and len(refs) >= table.count)
+
+        if numeric:
+            caster_slots = self._shadow_caster_slots(table, caster_slots)
+            caster_brushes = None
+            # Brush positions come from the projection, so the only snapshot
+            # still worth building is the models', and it is built once for
+            # every light rather than once per light.
+            caster_batch = self._prepare_shadow_caster_batch((), caster_models)
+        else:
+            caster_brushes = []
+            for b in brushes:
+                if b.get('hidden') or b.get('is_trigger') or b.get('is_fog') or b.get('operation') == 'subtract':
+                    continue
+                if is_water_brush(b) or b.get('shader') in ('Fog', 'Glass', 'Glow'):
+                    continue
+                caster_brushes.append(b)
+            # Build numeric caster positions once; every dirty light reuses them.
+            caster_batch = self._prepare_shadow_caster_batch(
+                caster_brushes, caster_models)
 
         to_render = []   # (light, slot, in_brushes, in_models)
         for l in lights:
@@ -2239,9 +2761,18 @@ layout (location = 9) in vec4 iNormal2;
                 continue
             lx, ly, lz = float(l.pos[0]), float(l.pos[1]), float(l.pos[2])
             radius = max(float(l.get_radius()), 1.0)
-            in_brushes, in_models, caster_keys = self._collect_shadow_casters(
-                caster_brushes, caster_models, lx, ly, lz, radius,
-                batch=caster_batch)
+            if numeric:
+                in_slots, brush_keys = self._casters_in_reach(
+                    table, caster_slots, lx, ly, lz, radius)
+                # Models still go through the object path for their own keys.
+                _, in_models, (_, mkeys) = self._collect_shadow_casters(
+                    (), caster_models, lx, ly, lz, radius, batch=caster_batch)
+                in_brushes = in_slots
+                caster_keys = (brush_keys, mkeys)
+            else:
+                in_brushes, in_models, caster_keys = self._collect_shadow_casters(
+                    caster_brushes, caster_models, lx, ly, lz, radius,
+                    batch=caster_batch)
             sig = (round(lx, 3), round(ly, 3), round(lz, 3), round(radius, 3), caster_keys)
             self._light_shadow_index[id(l)] = slot
             if self._shadow_slot_sig[slot] == sig:
@@ -2281,6 +2812,17 @@ layout (location = 9) in vec4 iNormal2;
 
         model_loc = u['model']
         lsm_loc = u['lightSpaceMatrix']
+        depth_instanced = self.shaders.get('depth_cube_instanced')
+        instance_vao = None
+        inst_lsm_loc = inst_lightpos_loc = inst_far_loc = -1
+        if depth_instanced is not None and self._cube_vbo is not None:
+            iu = self.uniforms['depth_cube_instanced']
+            inst_lsm_loc = iu['lightSpaceMatrix']
+            inst_lightpos_loc = iu['lightPos']
+            inst_far_loc = iu['far_plane']
+            instance_vao = self._ensure_brush_instance_vao()
+        else:
+            depth_instanced = None
         lightpos_loc = u['lightPos']
         far_loc = u['far_plane']
         cube_vao = self.vaos['cube']
@@ -2313,6 +2855,12 @@ layout (location = 9) in vec4 iNormal2;
                 if obj and obj.is_loaded:
                     resolved_models.append((t, obj))
 
+            # Split this light's casters, and pack the cube ones' transforms
+            # once. The caster set is the same for all six faces, so the
+            # instance buffer is filled here rather than inside the loop.
+            cube_instances, geo_casters = self._prepare_shadow_instances(
+                table, refs, in_brushes, depth_instanced is not None)
+
             for face in range(6):
                 gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
                                           gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, cubemap, 0)
@@ -2320,10 +2868,28 @@ layout (location = 9) in vec4 iNormal2;
                 lsm = proj * glm.lookAt(center, center + face_dirs[face][0], face_dirs[face][1])
                 gl.glUniformMatrix4fv(lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
 
-                # Brush casters (shared unit cube VAO, or the brush's own
-                # convex mesh for angled brushes), pre-filtered by reach.
+                # Cube casters: one instanced submission for the whole set.
+                # The instance buffer was packed once for this light, before
+                # the face loop, because the caster set does not vary between
+                # faces -- only the light-space matrix above does.
+                if cube_instances:
+                    gl.glUseProgram(depth_instanced)
+                    gl.glUniformMatrix4fv(inst_lsm_loc, 1, gl.GL_FALSE,
+                                          glm.value_ptr(lsm))
+                    gl.glUniform3f(inst_lightpos_loc, lx, ly, lz)
+                    gl.glUniform1f(inst_far_loc, far_plane)
+                    gl.glBindVertexArray(instance_vao)
+                    self._point_brush_instances_at(0)
+                    gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36,
+                                             cube_instances)
+                    gl.glUseProgram(shader)
+                    gl.glUniformMatrix4fv(lsm_loc, 1, gl.GL_FALSE,
+                                          glm.value_ptr(lsm))
+
+                # Angled casters keep their own mesh, and their own draw: each
+                # convex mesh is unique, so a run would have one member in it.
                 gl.glBindVertexArray(cube_vao)
-                for b in in_brushes:
+                for b in geo_casters:
                     gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE,
                                           glm.value_ptr(self._brush_model_matrix(b)))
                     mesh = self._get_geo_mesh(b)
@@ -3982,5 +4548,6 @@ layout (location = 9) in vec4 iNormal2;
     # --------------------------------------------------------------------------
     # Abstract method (must be overridden by Forward/Deferred)
     # --------------------------------------------------------------------------
-    def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config):
+    def render_scene(self, projection, view, camera_pos, brushes, things,
+                     selected_object, config, clear=True, brush_slots=None):
         raise NotImplementedError("Derived renderer must implement render_scene()")

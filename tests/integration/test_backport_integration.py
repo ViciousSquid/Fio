@@ -64,10 +64,25 @@ def test_shadow_and_portal_passes_use_the_unculled_collections():
 
 
 def test_cull_is_opt_in_and_defaults_to_play_mode():
+    """Both the numeric and the object path gate the cull on the same flag.
+
+    render_scene has two of them now: the main camera pass narrows integer
+    slots into the render projection, and everything else (the split-screen
+    second view, the portal virtual views, the non-threaded editor) still
+    narrows object lists. Neither may cull unless the flag says so, and with
+    the flag absent outside play mode both must pass their input straight
+    through.
+    """
     body = _render_scene_source()
-    assert "config.get('camera_distance_cull', config.get('play_mode', False))" in body
-    # When the flag is absent and not in play mode, the originals pass through.
-    assert "cull_brushes, cull_things = brushes, things" in body
+    guard = "config.get('camera_distance_cull', config.get('play_mode', False))"
+    assert body.count(guard) >= 2, (
+        "every cull site must be gated on the opt-in flag; found %d"
+        % body.count(guard))
+    # Numeric path: the published slots are the starting point, unnarrowed.
+    assert "slots = brush_slots" in body
+    # Object path: the originals pass through.
+    assert "cull_brushes = brushes" in body
+    assert "cull_things = things" in body
 
 
 def test_cull_does_not_mutate_its_input_lists():

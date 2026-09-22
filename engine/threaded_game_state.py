@@ -8,6 +8,57 @@ from collections import deque
 # common empty path avoids allocating a throwaway list on every rendered frame.
 _EMPTY_DRAIN: tuple = ()
 
+class PublishedBrushes:
+    """The published brush list, materialised only if something reads it.
+
+    The logic thread used to end every frame by converting its visibility
+    result back into Python lists -- ``refs[visible_slots].tolist()`` for the
+    visible set and again for every non-hidden brush -- so that the renderer
+    could walk them and rediscover what the dense columns already said.
+
+    The renderer's main camera pass does not walk them any more: it consumes
+    the slots. But three things still want a list, and all three are
+    conditional -- the portal virtual views, the split-screen second view, and
+    any caller running without a projection. So the conversion happens on first
+    access rather than on every frame, and for a frame with no portal and no
+    split-screen it never happens at all.
+
+    ``len()`` and truth-testing are answered from the slot array, because those
+    are what the renderer and the stats overlay actually ask for.
+    """
+
+    __slots__ = ('_refs', '_slots', '_list')
+
+    def __init__(self, refs, slots):
+        self._refs = refs
+        self._slots = slots
+        self._list = None
+
+    def materialise(self):
+        if self._list is None:
+            if len(self._slots):
+                self._list = self._refs[self._slots].tolist()
+            else:
+                self._list = []
+        return self._list
+
+    def __len__(self):
+        return len(self._slots)
+
+    def __bool__(self):
+        return len(self._slots) > 0
+
+    def __iter__(self):
+        return iter(self.materialise())
+
+    def __getitem__(self, index):
+        return self.materialise()[index]
+
+    def __repr__(self):
+        return '<PublishedBrushes %d%s>' % (
+            len(self._slots), '' if self._list is None else ' materialised')
+
+
 class RenderState:
     """
     A snapshot of the game state specifically for the renderer.
@@ -59,6 +110,22 @@ class RenderState:
         self.visible_brush_position_count = 0
         self.visible_thing_positions = np.empty((0, 2), dtype=np.float64)
         self.visible_thing_position_count = 0
+
+        # The dense render projection (engine.render_table.RenderTable) and the
+        # visibility result as integer slots into it. These are what let the
+        # renderer classify, sort and batch numerically instead of walking the
+        # published object lists to rediscover what it already knows. The table
+        # is shared by reference, not copied: its cold columns are immutable
+        # between world-epoch bumps, and its warm columns are refreshed only on
+        # the logic thread.
+        self.render_table = None
+        #: slot -> the render reference for that row: the live brush dict, or
+        #: for a mover or a door the per-frame snapshot. Indexed by the slot
+        #: arrays below, so a consumer converts an index to an object once, at
+        #: the point it actually needs one, rather than up front for everything.
+        self.render_refs = np.empty(0, dtype=object)
+        self.visible_brush_slots = np.empty(0, dtype=np.int32)
+        self.all_brush_slots = np.empty(0, dtype=np.int32)
         
         # HUD / Gameplay
         self.collected_keys = set()
@@ -154,6 +221,14 @@ class RenderState:
         self.all_lights = []
         self.visible_brush_position_count = 0
         self.visible_thing_position_count = 0
+        self.render_table = None
+        #: slot -> the render reference for that row: the live brush dict, or
+        #: for a mover or a door the per-frame snapshot. Indexed by the slot
+        #: arrays below, so a consumer converts an index to an object once, at
+        #: the point it actually needs one, rather than up front for everything.
+        self.render_refs = np.empty(0, dtype=object)
+        self.visible_brush_slots = np.empty(0, dtype=np.int32)
+        self.all_brush_slots = np.empty(0, dtype=np.int32)
         self.collected_keys = set()
         self.hud_message = ""
         self.bullet_marks = []

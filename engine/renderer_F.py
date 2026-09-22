@@ -2,6 +2,7 @@
 engine/renderer_F.py  –  Forward renderer, inherits shared logic from BaseRenderer
 """
 
+import ctypes
 import glm
 import OpenGL.GL as gl
 import numpy as np
@@ -10,6 +11,8 @@ import math
 import os
 
 from .renderer_core import BaseRenderer, normalize_color
+from engine import render_table
+from engine.render_keys import KeyLayout, sort_into_runs
 from engine.brush_geometry import (brush_has_geometry, face_uses_natural_scale,
                                    geometry_signature, natural_repeats)
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
@@ -34,6 +37,19 @@ PORTAL_RENDER_DISTANCE = 2048.0
 # (face_idx * 6). Kept as a module constant so the per-frame texture batch
 # build doesn't allocate a fresh list for every brush.
 _CUBE_FACE_KEYS = ('south', 'north', 'west', 'east', 'down', 'top')
+
+# The render key every brush pass sorts by. Two fields, because two things
+# cannot vary inside one draw: the bound texture, and which of the cube's six
+# faces the draw covers. A pass with no texture packs zero and gets one run,
+# which is the honest answer rather than a special case -- see
+# engine.render_keys for why the key is the boundary at all.
+BRUSH_RUN_KEY = KeyLayout([('texture', 32), ('face', 3)])
+
+# The three fixed colours the lit pass overrides a brush's own colour with.
+# Module constants so the per-brush branch does not build a list every draw.
+_TRIGGER_COLOR = (0.0, 1.0, 1.0)
+_SELECTED_COLOR = (1.0, 1.0, 0.0)
+_SUBTRACT_COLOR = (1.0, 0.0, 0.0)
 
 
 def _light_casts_shadows(light):
@@ -76,6 +92,14 @@ class Renderer_F(BaseRenderer):
         # They stay aligned with the returned brush/Thing lists, so later
         # classification and depth sorting never have to recover positions from
         # Python objects.
+        # Reusable model/normal matrix buffers for the batched transform build.
+        self._brush_mat_buf = np.empty((0, 16), dtype=np.float32)
+        # name id -> GL texture id / (w, h), grown as the projection interns
+        # names. Resolved once per unique name, never per brush.
+        self._gl_tex_by_name_id = np.zeros(0, dtype=np.int32)
+        self._tex_size_by_name_id = np.zeros((0, 2), dtype=np.float32)
+        self._brush_nmat_buf = np.empty((0, 9), dtype=np.float32)
+
         self._cull_brush_pos_buf = np.empty((0, 2), dtype=np.float64)
         self._cull_thing_pos_buf = np.empty((0, 2), dtype=np.float64)
         self._last_cull_brush_positions = None
@@ -154,9 +178,34 @@ class Renderer_F(BaseRenderer):
 
     # ------------------------------------------------------------------
 
-    def draw_lit_brushes_optimized(self, projection, view, camera_pos, brushes, lights, config, is_transparent_pass=False):
-        if not brushes or 'lit' not in self.shaders:
+    @staticmethod
+    def _selected_slot(table, config):
+        """The slot of the selected brush, or -1.
+
+        One dictionary lookup per pass, so the per-brush ``brush is selected``
+        identity compare becomes an integer compare.
+        """
+        selected = config.get('selected_object')
+        if table is None or not isinstance(selected, dict):
+            return -1
+        slot = table.slot_of_id.get(selected.get('id'))
+        return -1 if slot is None else int(slot)
+
+    def draw_lit_brushes_optimized(self, projection, view, camera_pos, brushes,
+                                   lights, config, is_transparent_pass=False,
+                                   table=None, refs=None):
+        """Flat-shaded brushes.
+
+        With *table* and *refs*, ``brushes`` is an array of slots into the
+        dense render projection and nothing here reads a brush dict except to
+        fetch an angled brush's mesh.  Colour, trigger/subtract state and the
+        transform all come from columns; selection is an integer compare.
+        Without them it walks brush dicts, as it always did -- that path still
+        serves the portal virtual views and the non-threaded editor.
+        """
+        if len(brushes) == 0 or 'lit' not in self.shaders:
             return
+        numeric = table is not None and refs is not None
         visible = brushes
         self.render_stats.visible_brushes += len(visible)
         shader, uniforms = self.shaders['lit'], self.uniforms['lit']
@@ -185,6 +234,29 @@ class Renderer_F(BaseRenderer):
             fill_mode = gl.GL_FILL if display_mode != "Wireframe" else gl.GL_LINE
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
 
+        indices = range(len(visible))
+        if numeric:
+            models, normals = self._frame_transforms(table, visible)
+            bits = table.class_bits[visible]
+            colours = table.colour[visible]
+            selected_slot = self._selected_slot(table, config)
+            geometry = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
+            if ('lit_brush_instanced' in self.shaders
+                    and self._cube_vbo is not None and (~geometry).any()):
+                # Every plain box brush in one submission; the angled minority
+                # still needs its own mesh, so it falls through to the loop.
+                self._draw_lit_brushes_instanced(
+                    projection, view, lights, table, visible,
+                    np.flatnonzero(~geometry).astype(np.int32), models, normals,
+                    config, selected_slot)
+                gl.glUseProgram(shader)
+                self._current_shader = shader
+                gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
+                gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
+                gl.glBindVertexArray(self.vaos['cube'])
+                gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
+                indices = [int(i) for i in np.flatnonzero(geometry)]
+
         cube_vao = self.vaos['cube']
         bound_vao = cube_vao
         # Portal virtual scene: cull each brush's interior faces so the oblique
@@ -192,26 +264,56 @@ class Renderer_F(BaseRenderer):
         # meshes wind oppositely, so the culled face is switched alongside the
         # VAO below. No-op in the main pass.
         self._portal_begin_cull(is_geo=False)
-        for brush in visible:
-            model_matrix = self._brush_model_matrix(brush)
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-            if normal_mat_loc > 0:
-                nmat = self._compute_normal_matrix(model_matrix, brush)
-                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(nmat))
-            if brush.get('is_trigger'):
-                color, alpha = [0.0, 1.0, 1.0], 0.3
-            elif brush is selected:
-                color, alpha = [1.0, 1.0, 0.0], 1.0
-            elif brush.get('operation') == 'subtract':
-                color, alpha = [1.0, 0.0, 0.0], 1.0
+        for index in indices:
+            if numeric:
+                slot = int(visible[index])
+                brush = None
+                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[index])
+                if normal_mat_loc > 0:
+                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
+                                          normals[index])
+                row = int(bits[index])
+                if row & render_table.CLASS_TRIGGER:
+                    color, alpha = _TRIGGER_COLOR, 0.3
+                elif slot == selected_slot:
+                    color, alpha = _SELECTED_COLOR, 1.0
+                elif row & render_table.CLASS_SUBTRACT:
+                    color, alpha = _SUBTRACT_COLOR, 1.0
+                else:
+                    color, alpha = colours[index], 1.0
+                has_geometry = bool(row & render_table.CLASS_HAS_GEOMETRY)
             else:
-                brush_tint   = brush.get('tint')
-                brush_colour = brush.get('colour')
-                color = normalize_color(brush_tint) if brush_tint else normalize_color(brush_colour)
-                alpha = 1.0
+                brush = visible[index]
+                model_matrix = self._brush_model_matrix(brush)
+                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE,
+                                      glm.value_ptr(model_matrix))
+                if normal_mat_loc > 0:
+                    nmat = self._compute_normal_matrix(model_matrix, brush)
+                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
+                                          glm.value_ptr(nmat))
+                if brush.get('is_trigger'):
+                    color, alpha = _TRIGGER_COLOR, 0.3
+                elif brush is selected:
+                    color, alpha = _SELECTED_COLOR, 1.0
+                elif brush.get('operation') == 'subtract':
+                    color, alpha = _SUBTRACT_COLOR, 1.0
+                else:
+                    brush_tint   = brush.get('tint')
+                    brush_colour = brush.get('colour')
+                    color = normalize_color(brush_tint) if brush_tint \
+                        else normalize_color(brush_colour)
+                    alpha = 1.0
+                has_geometry = brush_has_geometry(brush)
             gl.glUniform3fv(color_loc, 1, color)
             gl.glUniform1f(alpha_loc, alpha)
-            mesh = self._get_geo_mesh(brush)
+            # An angled brush draws from its own convex mesh, which is built
+            # from the brush's plane set -- the one thing no column holds, and
+            # the only place the numeric path needs an object.
+            mesh = None
+            if has_geometry:
+                if brush is None:
+                    brush = refs[slot]
+                mesh = self._get_geo_mesh(brush)
             if mesh is not None:
                 if bound_vao != mesh.vao:
                     gl.glBindVertexArray(mesh.vao)
@@ -281,9 +383,291 @@ class Renderer_F(BaseRenderer):
                 f'type=0x{attr_type:x}'
             )
 
-    def draw_textured_brushes_optimized(self, projection, view, camera_pos, brushes, lights, config):
-        if not brushes or 'textured' not in self.shaders:
+    def _gl_texture_ids(self, table):
+        """``name id -> GL texture id``, for every name the projection interned.
+
+        The projection is GL-free, so it interns texture *names* to dense ints
+        and the resolution to a GL id happens here, once per unique name, on
+        the thread that has a context.  Tens of entries, not thousands, and the
+        per-face path then reads it as an array.
+        """
+        names = table.texture_names()
+        cached = self._gl_tex_by_name_id
+        if len(cached) >= len(names):
+            return cached
+        grown = np.zeros(len(names), dtype=np.int32)
+        grown[:len(cached)] = cached
+        for name_id in range(len(cached), len(names)):
+            name = names[name_id]
+            grown[name_id] = (
+                self.texture_manager.get(self._tex_cache_path(name))
+                or self.load_texture_callback(name, 'textures') or 0)
+        self._gl_tex_by_name_id = grown
+        return grown
+
+    def _texture_sizes_by_name_id(self, table):
+        """``name id -> (width, height)``, for the NATURAL scale calculation.
+
+        Same shape as :meth:`_gl_texture_ids`: resolved once per unique name so
+        the per-face path is an array read rather than a dict lookup.
+        """
+        names = table.texture_names()
+        cached = self._tex_size_by_name_id
+        if len(cached) >= len(names):
+            return cached
+        grown = np.full((len(names), 2), 128.0, dtype=np.float32)
+        grown[:len(cached)] = cached
+        dims = getattr(self, '_texture_dimensions', {})
+        for name_id in range(len(cached), len(names)):
+            w, h = dims.get(self._tex_cache_path(names[name_id]), (128, 128))
+            grown[name_id] = (w, h)
+        self._tex_size_by_name_id = grown
+        return grown
+
+    @staticmethod
+    def lit_instance_payload(table, row_slots, selected_slot=-1):
+        """Colour and alpha per brush, as the lit pass's instance payload.
+
+        The per-brush path chose these with an if/elif chain: trigger first,
+        then the selected object, then a subtract brush, then the brush's own
+        colour. Here they are masks over one array, so the *write order* is
+        what encodes that priority -- lowest precedence first, because the last
+        write wins. A selected trigger must still read as a trigger.
+
+        Pure NumPy and static, so the priority rules are testable without a GL
+        context; the visual tests then confirm the result actually reaches the
+        screen.
+        """
+        count = len(row_slots)
+        payload = np.ones((count, 4), dtype=np.float32)
+        if not count:
+            return payload
+        bits = table.class_bits[row_slots]
+        payload[:, 0:3] = table.colour[row_slots]
+
+        subtract = (bits & render_table.CLASS_SUBTRACT) != 0
+        if subtract.any():
+            payload[subtract, 0:3] = _SUBTRACT_COLOR
+        if selected_slot >= 0:
+            chosen = row_slots == selected_slot
+            if chosen.any():
+                payload[chosen, 0:3] = _SELECTED_COLOR
+        trigger = (bits & render_table.CLASS_TRIGGER) != 0
+        if trigger.any():
+            payload[trigger, 0:3] = _TRIGGER_COLOR
+            payload[trigger, 3] = 0.3
+        return payload
+
+    def _draw_lit_brushes_instanced(self, projection, view, lights, table,
+                                    slots, cube_rows, models, normals, config,
+                                    selected_slot):
+        """Pack the lit pass's instances and hand its runs to the GPU.
+
+        The lit pass binds no texture and draws the whole cube, so both key
+        fields are zero for every brush and the sort yields exactly one run.
+        That is worth doing through the same machinery rather than short-cut
+        to a single draw: the run count falls out of the data, so when
+        something does start varying per run the pass needs a field in the key
+        and nothing else.
+        """
+        count = len(cube_rows)
+        if not count:
+            return 0
+        row_slots = slots[cube_rows]
+        payload = self.lit_instance_payload(table, row_slots, selected_slot)
+
+        zeros = np.zeros(count, dtype=np.int64)
+        keys = BRUSH_RUN_KEY.pack(texture=zeros, face=zeros)
+        order, run_starts = sort_into_runs(keys)
+        rows = cube_rows[order]
+        payload = payload[order]
+
+        self._pack_brush_instances(models, normals, rows, np.float32(0.0),
+                                   payload)
+        run_texture, run_first = self._run_descriptors(
+            zeros, zeros, run_starts)
+        self._submit_brush_runs('lit_brush_instanced', projection, view,
+                                lights, run_starts, run_texture, run_first, 36)
+        return count
+
+    def _submit_brush_runs(self, program_name, projection, view, lights,
+                           run_starts, run_texture, run_first, vertex_count):
+        """Submit sorted brush runs. The one place brush geometry reaches GL.
+
+        A *run* is a stretch of items whose render key is equal, so everything
+        it contains shares the GPU state that key encodes.  That state is
+        established once here -- the texture bind, and the vertex range the
+        cube face occupies -- and everything that differs inside the run
+        travels as instance data, already packed into the shared buffer.
+
+        What is left between draws is exactly what changed: a texture bind when
+        this run's texture is not the one already bound, and the instance
+        attribute base, which stands in for the base-instance offset OpenGL 3.3
+        does not have.
+
+        *run_texture* may be zero for a pass that binds no texture; the lit
+        pass is such a pass, and passing zero is how it says so rather than by
+        taking a different route to the GPU.
+        """
+        self._begin_instanced_pass(program_name, projection, view, lights)
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+        gl.glBindVertexArray(self._ensure_brush_instance_vao())
+
+        current_tex = None
+        triangles = vertex_count // 3
+        for run in range(len(run_starts) - 1):
+            begin = int(run_starts[run])
+            length = int(run_starts[run + 1]) - begin
+            if length <= 0:
+                continue
+            tex_id = int(run_texture[run])
+            if tex_id and tex_id != current_tex:
+                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                current_tex = tex_id
+                self.render_stats.batched_draws += 1
+            self._point_brush_instances_at(begin)
+            gl.glDrawArraysInstanced(gl.GL_TRIANGLES, int(run_first[run]),
+                                     vertex_count, length)
+            self.render_stats.draw_calls += 1
+            self.render_stats.visible_tris += triangles * length
+        gl.glBindVertexArray(0)
+
+    @staticmethod
+    def _run_descriptors(sorted_texture, sorted_face, run_starts):
+        """Per-run GPU state, read off the first item of each run.
+
+        Every item in a run has the same key by construction, so the first one
+        speaks for all of them. Keeping this separate from the instance arrays
+        is the point: these are the things that cannot vary within a draw.
+        """
+        heads = run_starts[:-1]
+        if not len(heads):
+            empty = np.empty(0, dtype=np.int32)
+            return empty, empty
+        return (sorted_texture[heads].astype(np.int32),
+                (sorted_face[heads] * 6).astype(np.int32))
+
+    def _draw_face_runs_instanced(self, projection, view, lights, models,
+                                  normals, rows, faces, gl_tex, scales, shifts,
+                                  angles, run_starts):
+        """Pack the textured pass's instances and hand its runs to the GPU."""
+        payload = np.empty((len(rows), 4), dtype=np.float32)
+        payload[:, 0:2] = scales
+        payload[:, 2:4] = shifts
+        self._pack_brush_instances(models, normals, rows, angles, payload)
+        run_texture, run_first = self._run_descriptors(gl_tex, faces, run_starts)
+        self._submit_brush_runs('brush_instanced', projection, view, lights,
+                                run_starts, run_texture, run_first, 6)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+
+    def _build_face_batches(self, table, slots, config):
+        """Every drawable cube face of *slots*, ordered so texture binds run out.
+
+        The per-frame work this replaces built a Python tuple ``(brush, face
+        index, face key)`` for each of up to six faces of every visible brush,
+        into a dict of lists keyed by GL texture id -- and in play mode rebuilt
+        all of it every frame, because its cache key was a tuple of ``id(b)``
+        and a mover's snapshot copy changes identity each tick.
+
+        Here the same grouping is a gather and an argsort over columns that
+        already exist.  Returns ``(rows, faces, gl_tex, scale)``: parallel
+        arrays, one entry per face to draw, ordered by texture id so that
+        binding on change is all the batching that is needed.  ``rows`` indexes
+        into *slots* (so the matrix arrays line up), ``faces`` is the cube face
+        index whose six vertices start at ``faces * 6``.
+        """
+        bits = table.class_bits[slots]
+        cube_rows = np.flatnonzero(
+            (bits & render_table.CLASS_HAS_GEOMETRY) == 0).astype(np.int32)
+        if not len(cube_rows):
+            empty_i = np.empty(0, dtype=np.int32)
+            return (empty_i, empty_i, empty_i,
+                    np.empty((0, 2), dtype=np.float32), empty_i)
+
+        cube_slots = slots[cube_rows]
+        name_ids = table.tex_name_id[cube_slots]            # (R, 6)
+
+        drawn = name_ids != render_table.TEX_ID_SKIP        # caulk never draws
+        if config.get('play_mode', False):
+            drawn &= name_ids != render_table.TEX_ID_NODRAW  # nodraw is editor-only
+        drawn &= name_ids >= 0
+
+        row_idx, face_idx = np.nonzero(drawn)
+        if not len(row_idx):
+            empty_i = np.empty(0, dtype=np.int32)
+            return (empty_i, empty_i, empty_i,
+                    np.empty((0, 2), dtype=np.float32), empty_i)
+
+        face_names = name_ids[row_idx, face_idx]
+        gl_tex = self._gl_texture_ids(table)[face_names]
+
+        # The key says what a run must share: the texture, because binding one
+        # is the expensive state change, and the cube face, because a face is
+        # six consecutive vertices addressed by a per-draw parameter rather
+        # than a per-instance one. Everything else that used to vary per face --
+        # the transform, the UV scale, rotation and shift -- is instance data,
+        # so a run is one submission however many brushes are in it.
+        keys = BRUSH_RUN_KEY.pack(texture=gl_tex, face=face_idx)
+        order, run_starts = sort_into_runs(keys)
+        row_idx = row_idx[order]
+        face_idx = face_idx[order].astype(np.int32)
+        gl_tex = gl_tex[order]
+        face_names = face_names[order]
+
+        scale = self._face_uv_scales(table, cube_slots, row_idx, face_idx,
+                                     face_names)
+        return cube_rows[row_idx], face_idx, gl_tex, scale, run_starts
+
+    def _face_uv_scales(self, table, cube_slots, row_idx, face_idx, face_names):
+        """The ``tex_scale`` uniform for each face, as one (F, 2) array.
+
+        Three modes, in the priority the per-face branch used: NATURAL keeps a
+        constant texel size and so is recomputed from the brush's live extent;
+        an authored ``uv_scale`` is used as given; otherwise the texture is
+        stretched 0..1 over the face.
+        """
+        sel_slots = cube_slots[row_idx]
+        natural = table.uv_natural[sel_slots, face_idx]
+        has_scale = table.uv_has_scale[sel_slots, face_idx]
+        tiling = (table.class_bits[sel_slots]
+                  & render_table.CLASS_TEXTURE_TILING) != 0
+        natural = natural | (~has_scale & tiling)
+
+        scale = np.where(
+            has_scale[:, None],
+            table.uv_scale[sel_slots, face_idx],
+            np.float32(1.0)).astype(np.float32)
+
+        if natural.any():
+            size = (table.half[sel_slots] * 2.0).astype(np.float32)
+            # Face order is (south, north, west, east, down, top): the first
+            # pair spans X by Y, the second Z by Y, the third X by Z.
+            extent = np.empty((len(row_idx), 2), dtype=np.float32)
+            side = face_idx < 2
+            end = face_idx > 3
+            mid = ~side & ~end
+            extent[side] = size[side][:, (0, 1)]
+            extent[mid] = size[mid][:, (2, 1)]
+            extent[end] = size[end][:, (0, 2)]
+            tex_size = self._texture_sizes_by_name_id(table)[face_names]
+            np.copyto(scale, extent / np.maximum(tex_size, 1.0),
+                      where=natural[:, None])
+        return scale
+
+    def draw_textured_brushes_optimized(self, projection, view, camera_pos,
+                                        brushes, lights, config,
+                                        table=None, refs=None):
+        """Textured brushes.
+
+        With *table* and *refs*, ``brushes`` is an array of slots and the face
+        batches are built by gathering and sorting columns rather than by
+        walking brush dicts and building a tuple per face.  Without them it
+        takes the object path, which still serves the portal virtual views and
+        the non-threaded editor.
+        """
+        if len(brushes) == 0 or 'textured' not in self.shaders:
             return
+        numeric = table is not None and refs is not None
         visible = brushes
         self.render_stats.visible_brushes += len(visible)
         shader, uniforms = self.shaders['textured'], self.uniforms['textured']
@@ -326,117 +710,155 @@ class Renderer_F(BaseRenderer):
 
         is_play = config.get('play_mode', False)
 
-        # ---- Texture batch cache -----------------------------------------
-        # Angled (convex-geometry) brushes carry per-plane faces instead of
-        # the six cube faces, so they are pulled out of the cube batches and
-        # drawn per-face below.  Their geometry signature is part of the key
-        # so clipping a brush invalidates the cached batches.
-        cache_key = None if is_play else tuple(
-            (id(b), tuple(sorted(b.get('textures', {}).items())), geometry_signature(b))
-            for b in visible
-        )
+        if numeric:
+            slots = visible
+            rows, faces, gl_tex, scales, run_starts = self._build_face_batches(
+                table, slots, config)
+            models, normals = self._frame_transforms(table, slots)
+            sel_slots = slots[rows]
+            angles = np.radians(table.uv_angle[sel_slots, faces])
+            shifts = table.uv_shift[sel_slots, faces]
+            geo_brushes = [refs[int(sl)] for sl in slots[
+                (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0]]
 
-        if not is_play and cache_key == self._tex_batch_cache_key and self._tex_batch_cache is not None:
-            batches, geo_brushes = self._tex_batch_cache
+            instanced = (len(rows) > 0 and 'brush_instanced' in self.shaders
+                         and self._cube_vbo is not None)
+            if instanced:
+                self._draw_face_runs_instanced(
+                    projection, view, lights, models, normals, rows, faces,
+                    gl_tex, scales, shifts, angles, run_starts)
+                # The instanced program is a different one; the angled-brush
+                # loop below runs under the ordinary textured shader, so put it
+                # back and restore its per-draw uniform state.
+                gl.glUseProgram(shader)
+                self._current_shader = shader
+                gl.glActiveTexture(gl.GL_TEXTURE0)
+                gl.glBindVertexArray(self.vaos['cube'])
+                current_tex = None
+                self._portal_begin_cull(is_geo=False)
+            else:
+                self._portal_begin_cull(is_geo=False)
+                if self.debug_gl_state:
+                    self._debug_textured_brush_gl_state()
+
+                current_tex = None
+                last_row = -1
+                for i in range(len(rows)):
+                    tex_id = int(gl_tex[i])
+                    if tex_id != current_tex:
+                        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                        current_tex = tex_id
+                        self.render_stats.batched_draws += 1
+                    row = int(rows[i])
+                    if row != last_row:
+                        gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[row])
+                        if normal_mat_loc > 0:
+                            gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
+                                                  normals[row])
+                        last_row = row
+                    if tex_angle_loc != -1:
+                        gl.glUniform1f(tex_angle_loc, float(angles[i]))
+                    if tex_shift_loc != -1:
+                        gl.glUniform2f(tex_shift_loc, float(shifts[i, 0]),
+                                       float(shifts[i, 1]))
+                    if tex_scale_loc != -1:
+                        gl.glUniform2f(tex_scale_loc, float(scales[i, 0]),
+                                       float(scales[i, 1]))
+                    gl.glDrawArrays(gl.GL_TRIANGLES, int(faces[i]) * 6, 6)
+                    self.render_stats.visible_tris += 2
+                    self.render_stats.draw_calls += 1
         else:
-            batches = defaultdict(list)
-            geo_brushes = []
-            for brush in visible:
-                if brush_has_geometry(brush):
-                    geo_brushes.append(brush)
-                    continue
-                brush_textures = brush.get('textures', {})
-                for i, face_key in enumerate(_CUBE_FACE_KEYS):
-                    tex_name = brush_textures.get(face_key, 'default.png')
-                    if tex_name == 'caulk.jpg':
+            # ---- Texture batch cache -------------------------------------
+            # Angled (convex-geometry) brushes carry per-plane faces instead of
+            # the six cube faces, so they are pulled out of the cube batches and
+            # drawn per-face below.  Their geometry signature is part of the key
+            # so clipping a brush invalidates the cached batches.
+            cache_key = None if is_play else tuple(
+                (id(b), tuple(sorted(b.get('textures', {}).items())), geometry_signature(b))
+                for b in visible
+            )
+
+            if not is_play and cache_key == self._tex_batch_cache_key and self._tex_batch_cache is not None:
+                batches, geo_brushes = self._tex_batch_cache
+            else:
+                batches = defaultdict(list)
+                geo_brushes = []
+                for brush in visible:
+                    if brush_has_geometry(brush):
+                        geo_brushes.append(brush)
                         continue
-                    if is_play and tex_name == 'nodraw.jpg':
-                        continue
-                    tex_id = self.texture_manager.get(self._tex_cache_path(tex_name)) or \
-                             self.load_texture_callback(tex_name, 'textures')
-                    batches[tex_id].append((brush, i, face_key))
-            if not is_play:
-                self._tex_batch_cache     = (batches, geo_brushes)
-                self._tex_batch_cache_key = cache_key
-        # ------------------------------------------------------------------
+                    brush_textures = brush.get('textures', {})
+                    for i, face_key in enumerate(_CUBE_FACE_KEYS):
+                        tex_name = brush_textures.get(face_key, 'default.png')
+                        if tex_name == 'caulk.jpg':
+                            continue
+                        if is_play and tex_name == 'nodraw.jpg':
+                            continue
+                        tex_id = self.texture_manager.get(self._tex_cache_path(tex_name)) or \
+                                 self.load_texture_callback(tex_name, 'textures')
+                        batches[tex_id].append((brush, i, face_key))
+                if not is_play:
+                    self._tex_batch_cache     = (batches, geo_brushes)
+                    self._tex_batch_cache_key = cache_key
 
-        # Portal virtual scene: cull cube-brush interiors so the oblique clip
-        # can't reveal their (dark) back-faces. Cube batches first (GL_FRONT).
-        self._portal_begin_cull(is_geo=False)
+            self._portal_begin_cull(is_geo=False)
+            if self.debug_gl_state:
+                self._debug_textured_brush_gl_state()
 
-        if self.debug_gl_state:
-            self._debug_textured_brush_gl_state()
-
-        current_tex = None
-        # PERF: a brush appears in this loop once per textured face (up to six
-        # times), and each visit re-derived the same two uniform pointers. The
-        # matrices themselves are already memoised on the brush dict by
-        # _brush_model_matrix / _compute_normal_matrix, so only the glm.value_ptr
-        # calls remained; cache those per brush for the duration of this draw.
-        # Holding the pointers is safe precisely because the brush dict keeps the
-        # backing matrix objects alive (_mat_cache / _nmat_cache) -- do not reuse
-        # this pattern anywhere the matrix is a temporary.
-        brush_uniform_ptrs = {}
-        for tex_id, items in batches.items():
-            if tex_id != current_tex:
-                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                current_tex = tex_id
-                self.render_stats.batched_draws += 1
-            for brush, face_idx, face_key in items:
-                self.render_stats.visible_tris += 2
-                brush_id = id(brush)
-                uniform_ptrs = brush_uniform_ptrs.get(brush_id)
-                if uniform_ptrs is None:
-                    model_matrix = self._brush_model_matrix(brush)
-                    model_ptr = glm.value_ptr(model_matrix)
-                    normal_ptr = None
+            current_tex = None
+            brush_uniform_ptrs = {}
+            for tex_id, items in batches.items():
+                if tex_id != current_tex:
+                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                    current_tex = tex_id
+                    self.render_stats.batched_draws += 1
+                for brush, face_idx, face_key in items:
+                    self.render_stats.visible_tris += 2
+                    brush_id = id(brush)
+                    uniform_ptrs = brush_uniform_ptrs.get(brush_id)
+                    if uniform_ptrs is None:
+                        model_matrix = self._brush_model_matrix(brush)
+                        model_ptr = glm.value_ptr(model_matrix)
+                        normal_ptr = None
+                        if normal_mat_loc > 0:
+                            normal_ptr = glm.value_ptr(
+                                self._compute_normal_matrix(model_matrix, brush))
+                        uniform_ptrs = (model_ptr, normal_ptr)
+                        brush_uniform_ptrs[brush_id] = uniform_ptrs
+                    gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, uniform_ptrs[0])
                     if normal_mat_loc > 0:
-                        normal_ptr = glm.value_ptr(
-                            self._compute_normal_matrix(model_matrix, brush))
-                    uniform_ptrs = (model_ptr, normal_ptr)
-                    brush_uniform_ptrs[brush_id] = uniform_ptrs
-                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, uniform_ptrs[0])
-                if normal_mat_loc > 0:
-                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, uniform_ptrs[1])
-                # Per-face surface-inspector transform: free rotation + shift.
-                if tex_angle_loc != -1:
-                    angle = brush.get('uv_angle', {}).get(face_key, 0.0)
-                    gl.glUniform1f(tex_angle_loc, math.radians(angle))
-                if tex_shift_loc != -1:
-                    shift = brush.get('uv_shift', {}).get(face_key, (0.0, 0.0))
-                    gl.glUniform2f(tex_shift_loc, shift[0], shift[1])
-                if tex_scale_loc != -1:
-                    size = brush.get('size', [64, 64, 64])
-                    uv_scale = brush.get('uv_scale', {}).get(face_key)
-                    # --- PRIORITY 1: Natural, a live mode ---
-                    # Recomputed from the brush's current size every frame, so
-                    # resizing reveals more texture at a constant texel size
-                    # instead of stretching what is there.  A brush-wide
-                    # texture_tiling flag means the same thing for every face.
-                    natural = face_uses_natural_scale(brush, face_key) \
-                        or (uv_scale is None and brush.get('texture_tiling', False))
-                    if natural:
-                        tex_name = brush.get('textures', {}).get(face_key, 'default.png')
-                        tex_w, tex_h = getattr(self, '_texture_dimensions', {}).get(
-                            self._tex_cache_path(tex_name), (128, 128))
-                        fi = face_idx
-                        if fi == 0 or fi == 1:   # south, north
-                            extent = (size[0], size[1])
-                        elif fi == 2 or fi == 3:  # west, east
-                            extent = (size[2], size[1])
-                        else:                      # down, top
-                            extent = (size[0], size[2])
-                        scale_x, scale_y = natural_repeats(
-                            extent[0], extent[1], (tex_w, tex_h))
-                    # --- PRIORITY 2: an explicit scale set in the editor ---
-                    elif uv_scale is not None:
-                        scale_x, scale_y = uv_scale[0], uv_scale[1]
-                    # --- PRIORITY 3: FIT mode (stretch 0→1) ---
-                    else:
-                        scale_x, scale_y = 1.0, 1.0
-                    gl.glUniform2f(tex_scale_loc, scale_x, scale_y)
-                gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
-                self.render_stats.draw_calls += 1
+                        gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, uniform_ptrs[1])
+                    if tex_angle_loc != -1:
+                        angle = brush.get('uv_angle', {}).get(face_key, 0.0)
+                        gl.glUniform1f(tex_angle_loc, math.radians(angle))
+                    if tex_shift_loc != -1:
+                        shift = brush.get('uv_shift', {}).get(face_key, (0.0, 0.0))
+                        gl.glUniform2f(tex_shift_loc, shift[0], shift[1])
+                    if tex_scale_loc != -1:
+                        size = brush.get('size', [64, 64, 64])
+                        uv_scale = brush.get('uv_scale', {}).get(face_key)
+                        natural = face_uses_natural_scale(brush, face_key) \
+                            or (uv_scale is None and brush.get('texture_tiling', False))
+                        if natural:
+                            tex_name = brush.get('textures', {}).get(face_key, 'default.png')
+                            tex_w, tex_h = getattr(self, '_texture_dimensions', {}).get(
+                                self._tex_cache_path(tex_name), (128, 128))
+                            fi = face_idx
+                            if fi == 0 or fi == 1:   # south, north
+                                extent = (size[0], size[1])
+                            elif fi == 2 or fi == 3:  # west, east
+                                extent = (size[2], size[1])
+                            else:                      # down, top
+                                extent = (size[0], size[2])
+                            scale_x, scale_y = natural_repeats(
+                                extent[0], extent[1], (tex_w, tex_h))
+                        elif uv_scale is not None:
+                            scale_x, scale_y = uv_scale[0], uv_scale[1]
+                        else:
+                            scale_x, scale_y = 1.0, 1.0
+                        gl.glUniform2f(tex_scale_loc, scale_x, scale_y)
+                    gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
+                    self.render_stats.draw_calls += 1
 
         # ---- Angled brushes: one draw per convex face --------------------
         # Angled faces carry the same per-face rotation and shift box faces do;
@@ -479,9 +901,18 @@ class Renderer_F(BaseRenderer):
         self._portal_end_cull()
         gl.glBindVertexArray(0)
 
-    def draw_glow_brushes(self, projection, view, camera_pos, brushes, lights, config):
-        if not brushes or 'lit' not in self.shaders:
+    def draw_glow_brushes(self, projection, view, camera_pos, brushes, lights,
+                          config, table=None, refs=None):
+        """Overbright brushes.
+
+        With *table* and *refs*, ``brushes`` is an array of slots: the
+        overbright colour was resolved into ``glow_colour`` when the brush was
+        edited, so the per-brush ``[min(c * intensity, 10.0) for c in base]``
+        list comprehension no longer runs per frame.
+        """
+        if len(brushes) == 0 or 'lit' not in self.shaders:
             return
+        numeric = table is not None and refs is not None
         shader, uniforms = self.shaders['lit'], self.uniforms['lit']
         gl.glUseProgram(shader)
         self._current_shader = shader
@@ -500,20 +931,44 @@ class Renderer_F(BaseRenderer):
             normal_mat_loc = -1
         cube_vao = self.vaos['cube']
         bound_vao = cube_vao
-        for brush in brushes:
+
+        if numeric:
+            models, normals = self._frame_transforms(table, brushes)
+            colours = table.glow_colour[brushes]
+            geometry = (table.class_bits[brushes]
+                        & render_table.CLASS_HAS_GEOMETRY) != 0
+
+        for index in range(len(brushes)):
             self.render_stats.visible_tris += 12
-            model_matrix = self._brush_model_matrix(brush)
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-            if normal_mat_loc > 0:
-                nmat = self._compute_normal_matrix(model_matrix, brush)
-                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(nmat))
-            tint = brush.get('tint') or brush.get('colour')
-            base_color = normalize_color(tint, default=[1.0, 1.0, 1.0])
-            intensity  = float(brush.get('glow_intensity', 10.0))
-            overbright = [min(c * intensity, 10.0) for c in base_color]
-            gl.glUniform3fv(color_loc, 1, overbright)
+            if numeric:
+                brush = None
+                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[index])
+                if normal_mat_loc > 0:
+                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
+                                          normals[index])
+                gl.glUniform3fv(color_loc, 1, colours[index])
+                has_geometry = bool(geometry[index])
+            else:
+                brush = brushes[index]
+                model_matrix = self._brush_model_matrix(brush)
+                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE,
+                                      glm.value_ptr(model_matrix))
+                if normal_mat_loc > 0:
+                    nmat = self._compute_normal_matrix(model_matrix, brush)
+                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
+                                          glm.value_ptr(nmat))
+                tint = brush.get('tint') or brush.get('colour')
+                base_color = normalize_color(tint, default=[1.0, 1.0, 1.0])
+                intensity  = float(brush.get('glow_intensity', 10.0))
+                overbright = [min(c * intensity, 10.0) for c in base_color]
+                gl.glUniform3fv(color_loc, 1, overbright)
+                has_geometry = brush_has_geometry(brush)
             gl.glUniform1f(alpha_loc, 1.0)
-            mesh = self._get_geo_mesh(brush)
+            mesh = None
+            if has_geometry:
+                if brush is None:
+                    brush = refs[int(brushes[index])]
+                mesh = self._get_geo_mesh(brush)
             if mesh is not None:
                 if bound_vao != mesh.vao:
                     gl.glBindVertexArray(mesh.vao)
@@ -611,7 +1066,19 @@ class Renderer_F(BaseRenderer):
         return [light for light in lights
                 if light.properties.get('state', 'on') == 'on']
 
-    def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config, clear=True):
+    def render_scene(self, projection, view, camera_pos, brushes, things,
+                     selected_object, config, clear=True, brush_slots=None):
+        """Draw one view.
+
+        *brush_slots* is the visibility result as integer slots into the dense
+        render projection (``config['render_table']``).  When it is supplied,
+        the brush half of the frame -- distance cull, classification into
+        passes, depth ordering -- is done with masks over the projection's
+        columns, and a brush becomes a Python object only where a draw path
+        still needs its dict.  It is passed for the main camera pass only: the
+        split-screen second view and the portal virtual views are drawn from
+        different brush sets, so they take the object path below.
+        """
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDepthFunc(gl.GL_LESS)
@@ -657,42 +1124,104 @@ class Renderer_F(BaseRenderer):
         # would have thrown away. Leaving it off in the editor keeps a large
         # brush whose centre is out of range but whose near end is in shot from
         # blinking out while it is being built.
-        cull_brushes, cull_things = brushes, things
-        cull_brush_positions = config.get('brush_positions')
+        table = config.get('render_table')
+        refs = config.get('render_refs')
+        numeric = (brush_slots is not None and table is not None
+                   and refs is not None and len(refs) >= table.count)
+
+        cull_things = things
         cull_thing_positions = config.get('thing_positions')
-        if cull_brush_positions is not None:
-            cull_brush_positions = cull_brush_positions[:len(cull_brushes)]
         if cull_thing_positions is not None:
             cull_thing_positions = cull_thing_positions[:len(cull_things)]
-        if config.get('camera_distance_cull', config.get('play_mode', False)):
-            cull_brushes, cull_things = self._camera_distance_cull(
-                brushes, things, camera_pos,
+
+        cx = cz = None
+        if camera_pos is not None:
+            cx, cz = _cull_camera_xz(camera_pos)
+
+        if numeric:
+            # ---- brushes: masks over the projection, no objects yet --------
+            slots = brush_slots
+            if (config.get('camera_distance_cull', config.get('play_mode', False))
+                    and cx is not None):
+                slots = self._distance_cull_slots(
+                    table, slots, cx, cz, self.view_distance.distance_sq)
+            groups = self._classify_brush_slots(table, slots, config)
+            if cx is not None:
+                for key in ('transparent', 'water', 'glass'):
+                    groups[key] = self._sort_slots_by_distance(
+                        table, groups[key], cx, cz)
+
+            def _objs(key):
+                # Water, glass and fog carry wide per-object material
+                # parameters and are a handful of volumes even in a busy
+                # level, so they stay on the object path deliberately. The
+                # large-N passes below take slots and never see a dict.
+                return refs[groups[key]].tolist() if len(groups[key]) else []
+
+            opaque_brushes = groups['opaque']
+            textured_opaque = groups['textured']
+            solid_opaque = groups['solid']
+            transparent_brushes = groups['transparent']
+            glow_brushes = groups['glow']
+            water_brushes = _objs('water')
+            glass_brushes = _objs('glass')
+            fog_volumes = _objs('fog')
+
+            # Things keep the object path: they are not projected, and their
+            # render kinds are entity semantics rather than material state.
+            cull_brushes = None
+            if (config.get('camera_distance_cull', config.get('play_mode', False))
+                    and camera_pos is not None):
+                _, cull_things = self._camera_distance_cull(
+                    (), things, camera_pos,
+                    thing_positions=cull_thing_positions)
+                cull_thing_positions = self._last_cull_thing_positions
+
+            models_to_render = self._model_render_buf
+            models_to_render.clear()
+            _, _, sprite_things, _, _, _, _, sort_positions = self._sort_objects(
+                (), cull_things, config,
+                model_out=models_to_render,
+                thing_positions=cull_thing_positions,
+                collect_sort_positions=True,
+            )
+        else:
+            cull_brushes = brushes
+            cull_brush_positions = config.get('brush_positions')
+            if cull_brush_positions is not None:
+                cull_brush_positions = cull_brush_positions[:len(cull_brushes)]
+            if config.get('camera_distance_cull', config.get('play_mode', False)):
+                cull_brushes, cull_things = self._camera_distance_cull(
+                    brushes, things, camera_pos,
+                    brush_positions=cull_brush_positions,
+                    thing_positions=cull_thing_positions,
+                )
+                cull_brush_positions = self._last_cull_brush_positions
+                cull_thing_positions = self._last_cull_thing_positions
+
+            models_to_render = self._model_render_buf
+            models_to_render.clear()
+            (opaque_brushes, transparent_brushes, sprite_things,
+             fog_volumes, water_brushes, glass_brushes, glow_brushes,
+             sort_positions) = self._sort_objects(
+                cull_brushes,
+                cull_things,
+                config,
+                model_out=models_to_render,
                 brush_positions=cull_brush_positions,
                 thing_positions=cull_thing_positions,
+                collect_sort_positions=True,
             )
-            cull_brush_positions = self._last_cull_brush_positions
-            cull_thing_positions = self._last_cull_thing_positions
-
-        models_to_render = self._model_render_buf
-        models_to_render.clear()
-        sort_result = self._sort_objects(
-            cull_brushes,
-            cull_things,
-            config,
-            model_out=models_to_render,
-            brush_positions=cull_brush_positions,
-            thing_positions=cull_thing_positions,
-            collect_sort_positions=True,
-        )
-        (opaque_brushes, transparent_brushes, sprite_things,
-         fog_volumes, water_brushes, glass_brushes, glow_brushes,
-         sort_positions) = sort_result
-        textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
+            textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
 
         # _sort_objects classified the same visible Thing set and kept model
         # Things out of sprite_things, so the billboard pass needs no second
         # Python scan or object-id set.
         final_sprites = sprite_things
+        # Only the numeric path may hand slots to a brush pass; everything else
+        # passes None and the passes take their object path.
+        _tbl = table if numeric else None
+        _refs = refs if numeric else None
         lights = self._get_active_lights(things, config)
         self._frame_lights = lights
 
@@ -781,31 +1310,33 @@ class Renderer_F(BaseRenderer):
         gl.glDisable(gl.GL_BLEND)
         brush_display_mode = config.get('brush_display_mode', 'Textured')
         if current_mode == RENDER_MODE_UNLIT:
-            self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config)
-            self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config)
+            self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl, _refs)
+            self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl, refs=_refs)
         elif current_mode == RENDER_MODE_LIT:
             if brush_display_mode == 'Textured' or brush_display_mode == 'Solid Lit':
-                self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config)
-                self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config)
+                self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl, _refs)
+                self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl, refs=_refs)
             else:
-                self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config)
+                self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl, refs=_refs)
         else:
-            self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config)
-        if glow_brushes:
-            self.draw_glow_brushes(projection, view, camera_pos, glow_brushes, lights, config)
+            self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl, refs=_refs)
+        if len(glow_brushes):
+            self.draw_glow_brushes(projection, view, camera_pos, glow_brushes, lights, config, table=_tbl, refs=_refs)
         if models_to_render:
             self.draw_models(projection, view, camera_pos, models_to_render, lights, config)
         if camera_pos is not None:
-            cx, cz = _cull_camera_xz(camera_pos)
-            if transparent_brushes:
-                transparent_brushes = _sort_by_distance(
-                    transparent_brushes, sort_positions['transparent'], cx, cz)
-            if water_brushes:
-                water_brushes = _sort_by_distance(
-                    water_brushes, sort_positions['water'], cx, cz)
-            if glass_brushes:
-                glass_brushes = _sort_by_distance(
-                    glass_brushes, sort_positions['glass'], cx, cz)
+            if not numeric:
+                # The numeric path ordered these from the projection's centres
+                # before it materialised them; this is the object path's sort.
+                if transparent_brushes:
+                    transparent_brushes = _sort_by_distance(
+                        transparent_brushes, sort_positions['transparent'], cx, cz)
+                if water_brushes:
+                    water_brushes = _sort_by_distance(
+                        water_brushes, sort_positions['water'], cx, cz)
+                if glass_brushes:
+                    glass_brushes = _sort_by_distance(
+                        glass_brushes, sort_positions['glass'], cx, cz)
             if final_sprites:
                 final_sprites = _sort_by_distance(
                     final_sprites, sort_positions['sprites'], cx, cz)
@@ -816,11 +1347,11 @@ class Renderer_F(BaseRenderer):
         gl.glDepthMask(gl.GL_FALSE)
         self.draw_sprites(projection, view, final_sprites, self.sprite_textures, self.instance_textures)
         if current_mode == RENDER_MODE_UNLIT:
-            self.draw_textured_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config)
+            self.draw_textured_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, _tbl, _refs)
         elif current_mode == RENDER_MODE_LIT:
-            self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True)
+            self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl, refs=_refs)
         else:
-            self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True)
+            self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl, refs=_refs)
         if current_mode == RENDER_MODE_LIT:
             self.draw_water_brushes(projection, view, camera_pos, water_brushes, lights, config)
             self.draw_glass_brushes(projection, view, camera_pos, glass_brushes, lights, config)

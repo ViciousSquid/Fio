@@ -1052,6 +1052,26 @@ class QtGameView(QOpenGLWidget):
             getattr(render_state, "visible_brush_positions", None)
             if render_state is not None else None
         )
+        # The dense render projection and the per-slot render references. With
+        # these the main pass classifies, depth-orders and batches brushes from
+        # the projection's columns instead of walking the published object list
+        # to rediscover what it already knows.
+        self._render_config["render_table"] = (
+            getattr(render_state, "render_table", None)
+            if render_state is not None else None
+        )
+        self._render_config["render_refs"] = (
+            getattr(render_state, "render_refs", None)
+            if render_state is not None else None
+        )
+        self._render_config["all_brush_slots"] = (
+            getattr(render_state, "all_brush_slots", None)
+            if render_state is not None else None
+        )
+        _main_brush_slots = (
+            getattr(render_state, "visible_brush_slots", None)
+            if render_state is not None else None
+        )
         self.update_instance_textures(things_to_render)
 
         # Plugin render hooks. Guarded by has_listeners so an unhooked frame
@@ -1093,7 +1113,7 @@ class QtGameView(QOpenGLWidget):
                 _split_proj, self.view_matrix, camera_pos,
                 brushes_to_render, things_to_render,
                 self.selected_object, self._render_config,
-                clear=False
+                clear=False, brush_slots=_main_brush_slots,
             )
 
             if render_state and hasattr(render_state, 'bullet_marks'):
@@ -1141,6 +1161,7 @@ class QtGameView(QOpenGLWidget):
                 self.projection_matrix, self.view_matrix, camera_pos,
                 brushes_to_render, things_to_render,
                 self.selected_object, self._render_config,
+                brush_slots=_main_brush_slots,
             )
             # Native overhead player sprite (top-down mode), depth-tested so
             # walls occlude it correctly.

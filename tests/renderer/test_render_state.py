@@ -330,19 +330,20 @@ def test_a_monster_is_submitted_as_a_render_snapshot(logic):
 
 
 # ---------------------------------------------------------------------------
-# The cull cache
+# The dense render projection
 # ---------------------------------------------------------------------------
 
-def test_the_cull_cache_covers_every_brush_in_the_session(logic):
+def test_the_projection_covers_every_brush_in_the_session(logic):
     brushes = pillar_grid(3, 3, spacing=300.0)
     thread = logic(brushes=brushes)
     thread.set_play_mode(True)
     try:
-        assert thread._cull_n == len(brushes)
-        assert thread._cull_centers.shape == (len(brushes), 3)
+        thread._prepare_render_state()
+        table = thread._render_table
+        assert table.count == len(brushes)
         for index, brush in enumerate(brushes):
-            assert list(thread._cull_centers[index]) == pytest.approx(brush["pos"])
-            assert list(thread._cull_halves[index]) == \
+            assert list(table.center[index]) == pytest.approx(brush["pos"])
+            assert list(table.half[index]) == \
                 pytest.approx([v * 0.5 for v in brush["size"]])
     finally:
         thread.set_play_mode(False)
@@ -354,15 +355,41 @@ def test_only_movers_and_doors_are_marked_dynamic(logic):
     thread = logic(brushes=brushes)
     thread.set_play_mode(True)
     try:
-        assert sorted(thread._cull_dynamic_rows) == [1, 2], (
-            "dynamic rows are %s; only the mover and the door move"
-            % (thread._cull_dynamic_rows,))
+        thread._prepare_render_state()
+        dynamic = sorted(int(i) for i in thread._render_table.dynamic_slots)
+        assert dynamic == [1, 2], (
+            "dynamic slots are %s; only the mover and the door move" % (dynamic,))
     finally:
         thread.set_play_mode(False)
 
 
-def test_hidden_is_not_baked_into_the_cull_cache(logic):
-    """I/O Show/Hide toggles it at runtime, so it is read fresh each frame."""
+def test_visibility_is_published_as_slots_into_the_projection(logic):
+    """The numerical result crosses the thread boundary, not just objects."""
+    brushes = pillar_grid(3, 3, spacing=300.0)
+    thread = logic(brushes=brushes)
+    thread.set_play_mode(True)
+    try:
+        thread._prepare_render_state()
+        state = thread.game_state.get_write_state()
+        table = state.render_table
+        slots = state.visible_brush_slots
+        assert table is thread._render_table
+        assert len(slots) == len(state.visible_brushes)
+        # Every slot indexes the row of the brush it was published beside, so a
+        # consumer can classify from the columns instead of the dicts.
+        for i, brush in enumerate(state.visible_brushes):
+            assert table.ids[int(slots[i])] == brush["id"]
+    finally:
+        thread.set_play_mode(False)
+
+
+def test_hidden_is_not_baked_into_the_projection(logic):
+    """I/O Show/Hide toggles it at runtime, so it is read fresh each frame.
+
+    Big World parks objects through the same flag, with no notification, which
+    is why the projection reads it live rather than caching it -- see
+    engine.spatial.PARKED_HIDDEN_KEY.
+    """
     brush = box_brush("switchable", (0, 0, -400))
     thread = logic(brushes=[brush])
     thread.set_play_mode(True)
@@ -373,9 +400,9 @@ def test_hidden_is_not_baked_into_the_cull_cache(logic):
 
         brush["hidden"] = True
         thread._prepare_render_state()
-        assert thread.game_state.get_write_state().all_brushes == [], (
+        assert len(thread.game_state.get_write_state().all_brushes) == 0, (
             "hiding a brush mid-session did not remove it from the frame; the "
-            "cull cache baked 'hidden' in at play start")
+            "projection baked 'hidden' in instead of reading it live")
     finally:
         thread.set_play_mode(False)
 
@@ -462,3 +489,33 @@ def test_a_render_state_snapshot_is_independent_of_later_writes():
     assert snapshot.hud_message == "one", (
         "a snapshot handed to the renderer changed when the next frame was "
         "published; it now reads %r" % snapshot.hud_message)
+
+
+def test_the_published_brush_lists_are_not_materialised_unless_read(logic):
+    """The frame must not end by converting visibility back into objects.
+
+    The main camera pass consumes slots, so on an ordinary frame nothing asks
+    for a list at all; the portal and split-screen paths, which do, pay for it
+    when they ask.
+    """
+    brushes = pillar_grid(4, 4, spacing=300.0)
+    thread = logic(brushes=brushes)
+    thread.set_play_mode(True)
+    try:
+        thread._prepare_render_state()
+        state = thread.game_state.get_write_state()
+        for published in (state.visible_brushes, state.all_brushes):
+            assert published._list is None, (
+                "the brush list was materialised during _prepare_render_state")
+            # Length and truthiness come from the slots, so the renderer and
+            # the stats overlay can ask without forcing the conversion.
+            assert len(published) >= 0
+            assert bool(published) is (len(published) > 0)
+            assert published._list is None
+
+        # ...and a caller that really wants objects still gets them.
+        materialised = list(state.all_brushes)
+        assert len(materialised) == len(brushes)
+        assert materialised[0] is thread.brushes[0]
+    finally:
+        thread.set_play_mode(False)
