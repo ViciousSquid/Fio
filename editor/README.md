@@ -6,6 +6,8 @@ The editor's gameplay model is based on entity I/O and declarative logic primiti
 
 The event-driven world model is documented in **[`LOGIC.md`](LOGIC.md)**.
 
+---
+
 ### `__init__.py`
 Package initialiser. Bootstraps plugins before maps or the main window are built so plugin-provided entity types, I/O definitions and editor integrations are available throughout the application.
 
