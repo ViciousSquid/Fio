@@ -636,6 +636,37 @@ class EditorState:
 
         return None
 
+    def ensure_entity_ids(self):
+        """Stamp the stable UUID onto any brush or Thing that has not got one.
+
+        Fio assigns ids lazily, at the three points that serialise the scene
+        (save, load, undo checkpoint), because those are where an id earns its
+        keep: it is what lets a dict rebuilt from JSON be recognised as the
+        object it replaced.  A brush a tool has only just appended has
+        therefore not been stamped yet -- ``save_state`` snapshots the scene
+        *before* the operation that creates it.
+
+        Anything that keys a derived structure on the id needs one to exist by
+        the time it looks, so it calls this rather than stamping ids itself:
+        the write stays here, in the module that owns the world, and the
+        derived structure stays read-only with respect to it.
+
+        Uses the same ``setdefault`` semantics as the serialisers, so whoever
+        gets there first wins and an object that already has an id is
+        untouched.  Returns how many ids were assigned.
+        """
+        assigned = 0
+        for brush in self.brushes:
+            if 'id' not in brush:
+                brush['id'] = str(uuid.uuid4())
+                assigned += 1
+        for thing in self.things:
+            props = getattr(thing, 'properties', None)
+            if isinstance(props, dict) and 'id' not in props:
+                props['id'] = str(uuid.uuid4())
+                assigned += 1
+        return assigned
+
     def get_entity_id(self, entity):
         """Return the stable ID of an entity (brush dict or Thing)."""
         if isinstance(entity, dict):
