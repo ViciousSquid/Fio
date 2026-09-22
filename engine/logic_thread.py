@@ -3862,13 +3862,16 @@ class LogicThread(threading.Thread):
         # `brushes` whenever the editor's coarse world epoch moves, and holds
         # nothing that is not already in them.
         table = self._render_table
-        self.editor_state.ensure_entity_ids()
+        world_epoch = getattr(self.editor_state, 'world_epoch', None)
+        # Rows are named by the brush's UUID, so ids have to exist before the
+        # table reconciles -- but only then, not on every frame.
+        if table.needs_reconcile(brushes, world_epoch):
+            self.editor_state.ensure_entity_ids()
         generation = table.generation
         # One Python pass over the brush list, for the only two things that
         # cannot be cached: the live `hidden` flag (Big World parks through it)
         # and an unannounced change to the row set.
-        live_hidden = table.begin_frame(
-            brushes, getattr(self.editor_state, 'world_epoch', None))
+        live_hidden = table.begin_frame(brushes, world_epoch)
         if table.generation != generation:
             refs = np.empty(table.count, dtype=object)
             for i, b in enumerate(brushes):

@@ -313,20 +313,13 @@ class RenderTable:
         """Transform columns for one row.  Cheap; runs per frame for movers."""
         pos = brush.get('pos') or (0.0, 0.0, 0.0)
         size = brush.get('size') or (64.0, 64.0, 64.0)
-        self.center[slot, 0] = pos[0]
-        self.center[slot, 1] = pos[1]
-        self.center[slot, 2] = pos[2]
-        self.half[slot, 0] = size[0] * 0.5
-        self.half[slot, 1] = size[1] * 0.5
-        self.half[slot, 2] = size[2] * 0.5
+        self.center[slot] = pos
+        self.half[slot] = (size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
         angle = brush.get('_rot_angle') or 0.0
         if angle:
             axis = brush.get('rot_axis') or (0.0, 1.0, 0.0)
-            self.rot[slot, 0] = axis[0]
-            self.rot[slot, 1] = axis[1]
-            self.rot[slot, 2] = axis[2]
-            self.rot[slot, 3] = angle
-        else:
+            self.rot[slot] = (axis[0], axis[1], axis[2], angle)
+        elif self.rot[slot, 3]:
             self.rot[slot] = 0.0
 
     def _resolve_cold(self, slot, brush):
@@ -377,30 +370,41 @@ class RenderTable:
 
     # -- synchronisation ---------------------------------------------------
 
+    def needs_reconcile(self, brushes, epoch=None):
+        """Whether the next :meth:`begin_frame` will rebuild the row mapping.
+
+        Two O(1) comparisons.  A caller that has to prepare something before a
+        reconcile -- stamping ids onto brushes that have not got one -- asks
+        this rather than doing that work unconditionally every frame.
+        """
+        return epoch is None or epoch != self._epoch or len(brushes) != self.count
+
     def begin_frame(self, brushes, epoch=None):
         """Bring the table into line with *brushes* and return the live hidden mask.
 
-        This is the whole of the projection's per-frame Python cost, and it is
-        one pass over the brush list doing the only two things that genuinely
-        cannot be cached:
+        This is the whole of the projection's per-frame Python cost: one pass
+        reading the **live** ``hidden`` flag.  Big World parks objects by
+        writing it directly, with no notification, precisely because every
+        per-frame consumer already reads it
+        (:data:`engine.spatial.PARKED_HIDDEN_KEY`), so it is the one field that
+        cannot be cached -- and at one dict lookup per brush it is also the
+        cheapest, which is what makes paying for it per frame the right trade.
 
-        * reading the **live** ``hidden`` flag.  Big World parks objects by
-          writing it directly, with no notification, precisely because every
-          per-frame consumer already reads it
-          (:data:`engine.spatial.PARKED_HIDDEN_KEY`);
-        * noticing that the row set changed without anybody saying so -- a
-          plugin appending a brush, say.  The identity compare is nearly free
-          once the loop is already touching the object.
+        Everything else -- classification, texture resolution, UVs, colour --
+        is behind *epoch*, the world's coarse change counter.  When it moves,
+        the cold columns are re-resolved: O(N) once per editor gesture, never
+        per frame.
 
-        Everything else -- classification, texture resolution, UVs -- is behind
-        *epoch*, the world's coarse change counter.  When it moves, the cold
-        columns are re-resolved: O(N) once per editor gesture, never per frame.
+        The row set is re-derived when the epoch moves or the brush count
+        changes.  Between those, a brush dict *replaced in place* at the same
+        index, by something that bumped no counter, is not noticed -- the same
+        gap ``hidden`` has, and for the same reason: every path that Fio itself
+        has goes through one of EditorState's three hooks or changes the count.
 
         Rows are matched by ``brush['id']``, so a structural change costs a set
         diff rather than a full re-resolution: surviving rows keep the columns
-        they had.  Call :meth:`EditorState.ensure_entity_ids` first; a brush
-        without an id still gets a slot, it just cannot be matched across a
-        reconcile.
+        they had.  Call :meth:`EditorState.ensure_entity_ids` first when
+        :meth:`needs_reconcile` says so.
         """
         n = len(brushes)
         if len(self._hidden_buf) < n:
@@ -408,21 +412,14 @@ class RenderTable:
         hidden = self._hidden_buf[:n]
 
         cold_dirty = epoch is None or epoch != self._epoch
-        structural = cold_dirty or n != self.count
-        table_brushes = self.brushes
-
-        if structural:
-            for i, b in enumerate(brushes):
-                hidden[i] = b.get('hidden', False)
-        else:
-            for i, b in enumerate(brushes):
-                hidden[i] = b.get('hidden', False)
-                if table_brushes[i] is not b:
-                    structural = True
-
-        if structural:
+        if cold_dirty or n != self.count:
             self._reconcile(brushes, cold_dirty)
             self._epoch = epoch
+
+        # One list comprehension and one bulk store. Assigning a NumPy array
+        # element by element from Python costs several times as much, and this
+        # runs over every brush in the level every frame.
+        hidden[:] = [b.get('hidden', False) for b in brushes]
         return hidden
 
     def sync(self, brushes, epoch=None):
