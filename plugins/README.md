@@ -1,4 +1,4 @@
-# The Fio Plugin System
+# Fio Plugin System
 
 Plugins add new gameplay to Fio — new placeable entity types, their I/O, and
 runtime behaviour — **without editing the core editor or engine**. Drop a Python
