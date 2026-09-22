@@ -19,6 +19,7 @@ Both Renderer_F and Renderer_D inherit from BaseRenderer.
 """
 
 import ctypes
+import re
 import math
 import os
 
@@ -557,6 +558,7 @@ class BaseRenderer:
         self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'tex_angle', 'tex_shift', 'normalMatrix'])
         self._compile_instanced_model_shaders(lit_vert, lit_frag, tex_vert, tex_frag)
         self._compile_instanced_brush_shader(tex_vert, tex_frag)
+        self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
 
     def _compile_standard_shaders(self):
         lit_shader = self.shader_loader.compile_shader_program('lit.vert', 'lit.frag')
@@ -576,6 +578,7 @@ class BaseRenderer:
         tex_frag = DEFAULT_SHADERS.get('textured.frag', '')
         self._compile_instanced_model_shaders(lit_vert, lit_frag, tex_vert, tex_frag)
         self._compile_instanced_brush_shader(tex_vert, tex_frag)
+        self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
 
     #: Floats per brush-face instance: a mat4 model matrix, a mat3 normal
     #: matrix padded to three vec4 (with the face's UV rotation tucked into the
@@ -584,80 +587,150 @@ class BaseRenderer:
     #: texture coordinate.
     BRUSH_INSTANCE_FLOATS = 32
 
-    def _compile_instanced_brush_shader(self, tex_vert, tex_frag):
-        """Compile the textured-brush shader with per-face instanced attributes.
-
-        The per-face state the pass used to upload as uniforms -- model matrix,
-        normal matrix, UV scale, rotation and shift -- becomes vertex
-        attributes with divisor 1, so every face sharing a texture and a cube
-        face index can be submitted in one ``glDrawArraysInstanced`` instead of
-        one ``glDrawArrays`` and three or four ``glUniform`` calls each.
-
-        Derived from the ordinary textured shader by substitution, the way
-        :meth:`_compile_instanced_model_shaders` derives its pair, so the two
-        cannot drift in how they light or fog a surface: the fragment shader is
-        literally the same program source.  Both the desktop and the ARM
-        variants have the same vertex interface, so one derivation serves both.
-
-        Failure is not fatal -- an old or quirky driver that rejects the
-        attribute interface simply leaves the shader absent, and the pass falls
-        back to per-face uniform submission.
-        """
-        if not tex_vert or not tex_frag:
-            return
-
-        instance_attrs = """layout (location = 3) in vec4 iModel0;
+    #: Attribute locations 3..10 carry one instance of a brush draw run, and
+    #: mean the same thing for every pass that uses them:
+    #:
+    #:   3..6   mat4 model
+    #:   7..9   mat3 normal matrix, padded to vec4; ``iNormal0.w`` is a spare
+    #:          scalar a pass may use (the textured pass puts the face's UV
+    #:          rotation there)
+    #:   10     vec4 payload, whose meaning is the pass's own (UV scale and
+    #:          shift for textured, colour and alpha for lit)
+    #:
+    #: One layout, one buffer and one VAO serve both passes, which is what
+    #: makes "a run describes the invariant GPU state, the instance array
+    #: describes everything that varies within it" a property of the renderer
+    #: rather than of one pass.
+    BRUSH_INSTANCE_ATTRS = """layout (location = 3) in vec4 iModel0;
 layout (location = 4) in vec4 iModel1;
 layout (location = 5) in vec4 iModel2;
 layout (location = 6) in vec4 iModel3;
 layout (location = 7) in vec4 iNormal0;
 layout (location = 8) in vec4 iNormal1;
 layout (location = 9) in vec4 iNormal2;
-layout (location = 10) in vec4 iFaceUV;
+layout (location = 10) in vec4 iPayload;
 
 """
-        drop = ('uniform mat4 model;', 'uniform mat3 normalMatrix;',
-                'uniform vec2 tex_scale', 'uniform float tex_angle',
-                'uniform vec2 tex_shift')
-        kept = [line for line in tex_vert.splitlines()
-                if not line.strip().startswith(drop)]
+
+    #: Vertex-shader uniforms the instanced variants drop, because the value is
+    #: per instance now rather than per draw.
+    _INSTANCED_VERT_DROP = ('uniform mat4 model;', 'uniform mat3 normalMatrix;',
+                            'uniform vec2 tex_scale', 'uniform float tex_angle',
+                            'uniform vec2 tex_shift')
+
+    def _instanced_vertex_source(self, vert, preamble, extra_out=''):
+        """A vertex shader rewritten to take its transform from instance data.
+
+        Shared by the textured and lit brush passes: both start from the
+        ordinary shader and differ only in what they pull out of the payload,
+        so neither can drift from the pass it accelerates.
+        """
+        kept = [line for line in vert.splitlines()
+                if not line.strip().startswith(self._INSTANCED_VERT_DROP)]
         source = '\n'.join(kept)
-        if 'out vec3 FragPos;' not in source:
-            return
-        source = source.replace('out vec3 FragPos;',
-                                instance_attrs + 'out vec3 FragPos;', 1)
-        # The uniforms are gone, so locals of the same name leave the rest of
-        # the shader body -- the UV rotate/scale/shift maths above all -- byte
-        # for byte what the non-instanced path runs.
+        if 'out vec3 FragPos;' not in source or 'void main() {' not in source:
+            return None
+        source = source.replace(
+            'out vec3 FragPos;',
+            self.BRUSH_INSTANCE_ATTRS + extra_out + 'out vec3 FragPos;', 1)
         source = source.replace(
             'void main() {',
             'void main() {\n'
             '    mat4 instanceModel = mat4(iModel0, iModel1, iModel2, iModel3);\n'
             '    mat3 instanceNormal = mat3(iNormal0.xyz, iNormal1.xyz, iNormal2.xyz);\n'
-            '    vec2 tex_scale = iFaceUV.xy;\n'
-            '    vec2 tex_shift = iFaceUV.zw;\n'
-            '    float tex_angle = iNormal0.w;\n',
-            1)
+            + preamble, 1)
         source = source.replace('model * vec4(aPos, 1.0)',
                                 'instanceModel * vec4(aPos, 1.0)')
-        source = source.replace('normalMatrix * aNormal', 'instanceNormal * aNormal')
+        source = source.replace('normalMatrix * aNormal',
+                                'instanceNormal * aNormal')
+        return source
 
+    def _register_instanced_shader(self, name, vertex_source, fragment_source,
+                                   extra_uniforms=()):
+        """Compile one instanced brush program, or leave it absent.
+
+        Absence is a supported state, not a failure: a driver that rejects the
+        attribute interface simply keeps the per-object path, which every pass
+        retains.
+        """
+        if not vertex_source or not fragment_source:
+            return False
         try:
-            program = self.shader_loader.compile_from_source(source, tex_frag)
-            self.shaders['brush_instanced'] = program
-            self.uniforms['brush_instanced'] = UniformCache(program)
-            self._preload_lit_uniforms('brush_instanced')
-            self.uniforms['brush_instanced'].preload(['texture_diffuse'])
-            print('[BaseRenderer] Brush face instancing shader compiled successfully.')
+            program = self.shader_loader.compile_from_source(vertex_source,
+                                                             fragment_source)
         except Exception as exc:
-            self.uniforms.pop('brush_instanced', None)
-            program = self.shaders.pop('brush_instanced', None)
-            if program:
-                try:
-                    gl.glDeleteProgram(program)
-                except Exception:
-                    pass
-            print(f'[BaseRenderer] Brush face instancing disabled: {exc}')
+            print(f'[BaseRenderer] {name} instancing disabled: {exc}')
+            return False
+        self.shaders[name] = program
+        self.uniforms[name] = UniformCache(program)
+        self._preload_lit_uniforms(name)
+        if extra_uniforms:
+            self.uniforms[name].preload(list(extra_uniforms))
+        return True
+
+    def _compile_instanced_lit_brush_shader(self, lit_vert, lit_frag):
+        """Compile the flat-shaded brush shader with instanced colour.
+
+        The lit pass had no texture to batch by, so every brush was its own
+        draw carrying four uniform uploads -- model, normal, colour, alpha.
+        Colour and alpha are read in the *fragment* stage, so instancing them
+        means carrying them across as a varying; the rest of the lighting,
+        shadowing and fog code is untouched.
+        """
+        if not lit_vert or not lit_frag:
+            return
+        vertex = self._instanced_vertex_source(
+            lit_vert,
+            preamble='    vInstanceColor = iPayload;\n',
+            extra_out='out vec4 vInstanceColor;\n')
+        if vertex is None:
+            return
+
+        kept = [line for line in lit_frag.splitlines()
+                if not line.strip().startswith(('uniform vec3 object_color;',
+                                                'uniform float alpha;'))]
+        fragment = '\n'.join(kept)
+        if 'in vec3 Normal;' not in fragment:
+            return
+        fragment = fragment.replace('in vec3 Normal;',
+                                    'in vec3 Normal;\nin vec4 vInstanceColor;', 1)
+        fragment, colours = re.subn(r'\bobject_color\b', 'vInstanceColor.rgb',
+                                    fragment)
+        fragment, alphas = re.subn(r'\balpha\b', 'vInstanceColor.a', fragment)
+        if not colours or not alphas:
+            # The shader did not look the way this rewrite assumes; leaving the
+            # program absent keeps the per-brush path rather than compiling
+            # something subtly wrong.
+            return
+        if self._register_instanced_shader('lit_brush_instanced', vertex,
+                                           fragment):
+            print('[BaseRenderer] Lit brush instancing shader compiled successfully.')
+
+    def _compile_instanced_brush_shader(self, tex_vert, tex_frag):
+        """Compile the textured-brush shader with per-face instanced attributes.
+
+        The per-face state the pass used to upload as uniforms -- model matrix,
+        normal matrix, UV scale, rotation and shift -- becomes instance data,
+        so every face sharing a texture and a cube face index is one
+        ``glDrawArraysInstanced`` instead of one ``glDrawArrays`` and three or
+        four ``glUniform`` calls each.
+
+        The UV scale and shift ride in the payload vec4 and the rotation in the
+        spare ``iNormal0.w``; declaring locals of the shader's original uniform
+        names leaves the UV rotate/scale/shift maths in the body byte for byte
+        what the non-instanced path runs.  Both the desktop and ARM variants
+        have the same vertex interface, so one derivation serves both.
+        """
+        vertex = self._instanced_vertex_source(
+            tex_vert,
+            preamble=('    vec2 tex_scale = iPayload.xy;\n'
+                      '    vec2 tex_shift = iPayload.zw;\n'
+                      '    float tex_angle = iNormal0.w;\n'))
+        if vertex is None:
+            return
+        if self._register_instanced_shader('brush_instanced', vertex, tex_frag,
+                                           extra_uniforms=['texture_diffuse']):
+            print('[BaseRenderer] Brush face instancing shader compiled successfully.')
 
     def _compile_instanced_model_shaders(self, lit_vert, lit_frag, tex_vert, tex_frag):
         """Compile GL 3.3 model shaders whose transforms come from instanced attributes."""
@@ -1924,7 +1997,8 @@ layout (location = 9) in vec4 iNormal2;
         """
         cap = _SHADER_LIGHT_CAPS.get(shader_name, self.MAX_LIGHTS)
         if self.lowpower_mode and shader_name in ('lit', 'textured', 'lit_instanced',
-                                                  'textured_instanced', 'brush_instanced'):
+                                                  'textured_instanced', 'brush_instanced',
+                                                  'lit_brush_instanced'):
             cap = min(cap, shaders.MAX_LIGHTS_ARM)
         return cap
 
@@ -1995,7 +2069,7 @@ layout (location = 9) in vec4 iNormal2;
 
     def _configure_light_ubo_programs(self):
         for name in ('lit', 'textured', 'lit_instanced', 'textured_instanced',
-                     'brush_instanced', 'water', 'terrain'):
+                     'brush_instanced', 'lit_brush_instanced', 'water', 'terrain'):
             self._configure_light_ubo_program(name)
         self._ensure_light_ubo(self.MAX_LIGHTS)
 
@@ -2094,7 +2168,8 @@ layout (location = 9) in vec4 iNormal2;
         # Keep sampler2D and samplerCube uniforms on distinct texture units.
         # This is one shader-pass operation, never part of the per-draw loop.
         if shader_name in ('lit', 'textured', 'lit_instanced',
-                           'textured_instanced', 'brush_instanced', 'terrain'):
+                           'textured_instanced', 'brush_instanced',
+                           'lit_brush_instanced', 'terrain'):
             self._bind_shadow_maps(self.uniforms[shader_name])
     # --------------------------------------------------------------------------
     # Depth cube-map shadow mapping

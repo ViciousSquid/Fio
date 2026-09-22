@@ -247,11 +247,28 @@ class Renderer_F(BaseRenderer):
             fill_mode = gl.GL_FILL if display_mode != "Wireframe" else gl.GL_LINE
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
 
+        indices = range(len(visible))
         if numeric:
             models, normals = self._frame_transforms(table, visible)
             bits = table.class_bits[visible]
             colours = table.colour[visible]
             selected_slot = self._selected_slot(table, config)
+            geometry = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
+            if ('lit_brush_instanced' in self.shaders
+                    and self._cube_vbo is not None and (~geometry).any()):
+                # Every plain box brush in one submission; the angled minority
+                # still needs its own mesh, so it falls through to the loop.
+                self._draw_lit_brushes_instanced(
+                    projection, view, lights, table, visible,
+                    np.flatnonzero(~geometry).astype(np.int32), models, normals,
+                    config, selected_slot)
+                gl.glUseProgram(shader)
+                self._current_shader = shader
+                gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
+                gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
+                gl.glBindVertexArray(self.vaos['cube'])
+                gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
+                indices = [int(i) for i in np.flatnonzero(geometry)]
 
         cube_vao = self.vaos['cube']
         bound_vao = cube_vao
@@ -260,7 +277,7 @@ class Renderer_F(BaseRenderer):
         # meshes wind oppositely, so the culled face is switched alongside the
         # VAO below. No-op in the main pass.
         self._portal_begin_cull(is_geo=False)
-        for index in range(len(visible)):
+        for index in indices:
             if numeric:
                 slot = int(visible[index])
                 brush = None
@@ -486,28 +503,114 @@ class Renderer_F(BaseRenderer):
                 location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
                 ctypes.c_void_p(origin + (location - 3) * 16))
 
-    def _fill_brush_instances(self, models, normals, rows, angles, scales,
-                              shifts):
-        """Pack one instance per face, straight from the arrays already built.
+    def _pack_brush_instances(self, models, normals, rows, spare, payload):
+        """Pack one instance row per draw item, straight from existing arrays.
 
-        No Python loop and no per-object gather: every field is a vectorised
-        take from the batched transforms and the projection's UV columns.
+        The layout is :data:`BaseRenderer.BRUSH_INSTANCE_ATTRS`: the model
+        matrix, the normal matrix padded to three vec4 with one spare scalar,
+        and a payload vec4 whose meaning belongs to the calling pass.  Every
+        field is a vectorised take -- no Python loop, and no going back to an
+        object for a transform that already exists as a column.
+
+        *rows* selects which of *models* / *normals* each instance uses, so one
+        brush appearing as six faces costs six instance rows and one matrix
+        build.
         """
         count = len(rows)
         self._ensure_brush_instance_buffer(count)
         data = self._brush_instance_data[:count]
         np.take(models, rows, axis=0, out=data[:, 0:16])
-        face_normals = normals[rows]
-        data[:, 16:19] = face_normals[:, 0:3]
-        data[:, 19] = angles              # the UV rotation rides in a spare w
-        data[:, 20:23] = face_normals[:, 3:6]
+        item_normals = normals[rows]
+        data[:, 16:19] = item_normals[:, 0:3]
+        data[:, 19] = spare
+        data[:, 20:23] = item_normals[:, 3:6]
         data[:, 23] = 0.0
-        data[:, 24:27] = face_normals[:, 6:9]
+        data[:, 24:27] = item_normals[:, 6:9]
         data[:, 27] = 0.0
-        data[:, 28:30] = scales
-        data[:, 30:32] = shifts
+        data[:, 28:32] = payload
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+        return count
+
+    def _begin_instanced_pass(self, name, projection, view, lights):
+        """Bind an instanced brush program and its per-pass uniform state."""
+        program = self.shaders[name]
+        uniforms = self.uniforms[name]
+        gl.glUseProgram(program)
+        self._current_shader = program
+        self._upload_lights_once(name, lights)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
+                              glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
+                              glm.value_ptr(view))
+        return uniforms
+
+    @staticmethod
+    def lit_instance_payload(table, row_slots, selected_slot=-1):
+        """Colour and alpha per brush, as the lit pass's instance payload.
+
+        The per-brush path chose these with an if/elif chain: trigger first,
+        then the selected object, then a subtract brush, then the brush's own
+        colour. Here they are masks over one array, so the *write order* is
+        what encodes that priority -- lowest precedence first, because the last
+        write wins. A selected trigger must still read as a trigger.
+
+        Pure NumPy and static, so the priority rules are testable without a GL
+        context; the visual tests then confirm the result actually reaches the
+        screen.
+        """
+        count = len(row_slots)
+        payload = np.ones((count, 4), dtype=np.float32)
+        if not count:
+            return payload
+        bits = table.class_bits[row_slots]
+        payload[:, 0:3] = table.colour[row_slots]
+
+        subtract = (bits & render_table.CLASS_SUBTRACT) != 0
+        if subtract.any():
+            payload[subtract, 0:3] = _SUBTRACT_COLOR
+        if selected_slot >= 0:
+            chosen = row_slots == selected_slot
+            if chosen.any():
+                payload[chosen, 0:3] = _SELECTED_COLOR
+        trigger = (bits & render_table.CLASS_TRIGGER) != 0
+        if trigger.any():
+            payload[trigger, 0:3] = _TRIGGER_COLOR
+            payload[trigger, 3] = 0.3
+        return payload
+
+    def _draw_lit_brushes_instanced(self, projection, view, lights, table,
+                                    slots, cube_rows, models, normals, config,
+                                    selected_slot):
+        """Submit the flat-shaded cube brushes as one instanced draw.
+
+        The lit pass had nothing to batch by -- no texture, and the whole cube
+        in one draw -- so it stayed one submission per brush carrying four
+        uniform uploads: model, normal, colour and alpha. The first two were
+        already columns; the second two become the payload vec4, and with
+        nothing left varying per brush the entire set is one run.
+
+        Instance order is primitive order in GL, so the depth-sorted order the
+        transparent pass relies on survives being collapsed into one draw.
+        """
+        rows = cube_rows
+        count = len(rows)
+        if not count:
+            return 0
+        row_slots = slots[rows]
+        payload = self.lit_instance_payload(table, row_slots, selected_slot)
+
+        self._pack_brush_instances(models, normals, rows,
+                                   np.float32(0.0), payload)
+        vao = self._ensure_brush_instance_vao()
+        self._begin_instanced_pass('lit_brush_instanced', projection, view,
+                                   lights)
+        gl.glBindVertexArray(vao)
+        self._point_brush_instances_at(0)
+        gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, count)
+        gl.glBindVertexArray(0)
+        self.render_stats.draw_calls += 1
+        self.render_stats.visible_tris += 12 * count
         return count
 
     def _draw_face_runs_instanced(self, projection, view, lights, models,
@@ -526,19 +629,14 @@ class Renderer_F(BaseRenderer):
         base pointer, which stands in for the base-instance offset OpenGL 3.3
         does not have.
         """
-        program = self.shaders['brush_instanced']
-        uniforms = self.uniforms['brush_instanced']
-        count = self._fill_brush_instances(models, normals, rows, angles,
-                                           scales, shifts)
+        payload = np.empty((len(rows), 4), dtype=np.float32)
+        payload[:, 0:2] = scales
+        payload[:, 2:4] = shifts
+        count = self._pack_brush_instances(models, normals, rows, angles, payload)
         vao = self._ensure_brush_instance_vao()
 
-        gl.glUseProgram(program)
-        self._current_shader = program
-        self._upload_lights_once('brush_instanced', lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
-                              glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
-                              glm.value_ptr(view))
+        uniforms = self._begin_instanced_pass('brush_instanced', projection,
+                                              view, lights)
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniforms['texture_diffuse'], 0)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)

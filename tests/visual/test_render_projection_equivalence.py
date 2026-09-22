@@ -318,3 +318,117 @@ def test_instanced_and_uniform_submission_draw_the_same_picture(renderer, contex
     assert renderer.render_stats.draw_calls > 100, (
         "the fallback did not take the per-face path, so this compares nothing")
     _assert_same_picture(instanced, fallback, "instanced vs per-face uniforms")
+
+
+# ---------------------------------------------------------------------------
+# The lit (flat-shaded) pass
+# ---------------------------------------------------------------------------
+
+def _solid_scene(side=10):
+    """Untextured brushes, so they take the lit pass rather than the textured."""
+    from editor.things import Light
+
+    brushes = []
+    for i in range(side * side):
+        x = (i % side) * 200.0 - side * 100.0
+        z = (i // side) * 200.0 - side * 100.0
+        b = box_brush('s%d' % i, (x, 0.0, z), (128.0, 192.0, 128.0))
+        b['textures'] = {}
+        b['tint'] = [(i * 37) % 256, (i * 61) % 256, (i * 13) % 256]
+        brushes.append(b)
+    light = make_thing(Light, 'sl', (0, 900, 0), color=[255, 255, 255],
+                       intensity=2.0, radius=8000.0, state='on',
+                       casts_shadows=False)
+    return brushes, [light]
+
+
+def test_the_solid_world_is_one_submission(renderer, context):
+    """Nothing varies per brush that is not instance data, so it is one run."""
+    brushes, things = _solid_scene(side=10)
+    _render(renderer, context, brushes, things, numeric=True)
+    stats = renderer.render_stats
+    assert stats.visible_tris == len(brushes) * 12
+    assert stats.draw_calls == 1, (
+        "%d draw calls for %d flat-shaded brushes" % (stats.draw_calls, len(brushes)))
+
+
+def test_instanced_lit_matches_the_per_brush_path(renderer, context):
+    brushes, things = _solid_scene(side=8)
+    instanced = _render(renderer, context, brushes, things, numeric=True)
+
+    saved = renderer.shaders.pop('lit_brush_instanced')
+    try:
+        fallback = _render(renderer, context, brushes, things, numeric=True)
+    finally:
+        renderer.shaders['lit_brush_instanced'] = saved
+
+    assert renderer.render_stats.draw_calls >= len(brushes), (
+        "the fallback did not take the per-brush path, so this compares nothing")
+    _assert_same_picture(instanced, fallback, "instanced vs per-brush lit")
+
+
+def _override_scene():
+    """Four large brushes, one per colour-override case, filling the view.
+
+    Large and few on purpose: a trigger is drawn by the *transparent* pass, as
+    a wireframe unless the config asks for solid, so a scene of small brushes
+    lets a wrong trigger colour hide in a few pixels of outline.
+    """
+    from editor.things import Light
+
+    brushes = []
+    for i, x in enumerate((-330.0, -110.0, 110.0, 330.0)):
+        b = box_brush('o%d' % i, (x, 0.0, 0.0), (200.0, 320.0, 200.0))
+        b['textures'] = {}
+        b['tint'] = [30, 30, 30]      # dark, so any override is obvious
+        brushes.append(b)
+    brushes[0]['is_trigger'] = True
+    brushes[1]['operation'] = 'subtract'
+    brushes[2]['is_trigger'] = True        # selected below
+    brushes[3]['operation'] = 'subtract'   # selected below
+    light = make_thing(Light, 'ol', (0, 700, 700), color=[255, 255, 255],
+                       intensity=2.0, radius=8000.0, state='on',
+                       casts_shadows=False)
+    return brushes, [light]
+
+
+@pytest.mark.parametrize('selected_index', [None, 2, 3])
+def test_the_colour_overrides_keep_their_priority(renderer, context,
+                                                  selected_index):
+    """trigger over selection over subtract over the brush's own colour.
+
+    The per-brush chain was an if/elif; the instanced path writes masks over a
+    payload, so the *order* of those writes is what encodes the priority. A
+    selected trigger must still read as a trigger, and a selected subtract
+    brush as selected. Triggers are drawn solid here so their colour and their
+    0.3 alpha both reach the image.
+    """
+    import OpenGL.GL as gl
+
+    brushes, things = _override_scene()
+    selected = None if selected_index is None else brushes[selected_index]
+
+    def draw():
+        table, refs, slots = _projection_for(brushes)
+        projection, view, eye = glh.camera_matrices(aspect=1.0)
+        config = glh.render_config(all_brushes=brushes, all_things=things,
+                                   render_table=table, render_refs=refs,
+                                   all_brush_slots=slots,
+                                   selected_object=selected,
+                                   show_triggers_as_solid=True)
+        context.bind()
+        gl.glClearColor(0.0, 0.0, 0.0, 1.0)
+        renderer.render_scene(projection, view, eye, brushes, things, selected,
+                              config, brush_slots=slots)
+        gl.glFinish()
+        return context.read_pixels().astype(np.int16)
+
+    instanced = draw()
+    saved = renderer.shaders.pop('lit_brush_instanced')
+    try:
+        fallback = draw()
+    finally:
+        renderer.shaders['lit_brush_instanced'] = saved
+
+    _assert_same_picture(instanced, fallback,
+                         'selection=%s' % (selected_index,))
