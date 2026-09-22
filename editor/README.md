@@ -1,96 +1,144 @@
 # `editor/`
 
-Fio's event-driven world model — how `LogicState`, `LogicRelay`, `LogicGate`,
-`LogicTimer` and the I/O system compose into gameplay without a scripting
-language — is documented in **[`LOGIC.md`](LOGIC.md)**, along with the 2.4
-architectural review and the comparative notes on TrenchBroom and Source.
+Fio's editor is the authoring side of the same executable-world system as the engine. It edits the authoritative scene/entity representation directly; there is no separate compile or bake stage between editing and play.
+
+The editor's gameplay model is based on entity I/O and declarative logic primitives rather than an embedded scripting language. `LogicState`, `LogicRelay`, `LogicGate`, `LogicTimer` and the rest of the I/O system compose into executable map behaviour.
+
+The event-driven world model is documented in **[`LOGIC.md`](LOGIC.md)**.
 
 ### `__init__.py`
-Package initialiser. Bootstraps the plugin system before any map is loaded or the main window is built, so plugin-provided entity types, I/O definitions, and editor integrations are available everywhere.
+Package initialiser. Bootstraps plugins before maps or the main window are built so plugin-provided entity types, I/O definitions and editor integrations are available throughout the application.
 
 ### `asset_browser.py`
-Texture and model browser with live-rendered thumbnails (OBJ wireframe and GLB previews), FIT / TILE / FACE texture actions, and drag-and-drop support.
+Texture and model browser with live thumbnails, OBJ/GLB previews, FIT / TILE / FACE texture actions and drag-and-drop support.
 
 ### `component_edit.py`
-The shared object/face/edge/vertex model behind Radiant-style direct editing — the single place Fio answers what is under the cursor, which brush side a press is asking to stretch, how dragging a component changes the geometry, and which brushes an area selection catches. `ComponentRef` gives a component an identity that survives a geometry rebuild (a face by its plane index, a vertex or edge by quantised position, each qualified by its brush); `ComponentController` holds the mode, hover, selection and in-flight drag that the 2D views and the 3D viewport both drive, including the press policy so a click means the same thing in either. `PlaneDrag` slides whole face planes and `PointDrag` moves corners and re-derives the plane set from their hull, both snapshotting at mouse-down and recomputing from the total delta so there is one rebuild per mouse move and no accumulated drift. Deliberately Qt-free (NumPy only) so the interaction rules can be tested headlessly; nothing here is called from a render loop, and overlay geometry is cached behind a version counter.
+Shared Radiant-style component editing model for object, face, edge and vertex editing. Defines component identity, hover/selection state, press policy and drag operations used by both the 2D views and 3D viewport.
+
+`PlaneDrag` moves whole face planes; `PointDrag` moves vertices and re-derives the brush plane set. Edits are validated before committing and are based on the total gesture delta, avoiding accumulated drag drift. The module is deliberately Qt-free and uses NumPy for geometry operations.
 
 ### `console_commands.py`
-Debug console command handler. Implements built-in commands (noclip, map, fps, clear, `cam`, etc.) dispatched by the debug console. `cam [overhead|fp] [seconds]` smoothly tweens the play-mode camera between overhead and first person (default 1s; `cam 2` for 2s, `cam 0` for instant). `save`/`load` (with `quicksave`/`qs` and `quickload`/`ql` for the quicksave slot, and `saves` to list them) serialize and restore a play session to `saves/*.fiosave` via the engine's native `savegame` module — `save` requires Play Mode, while `load` from the editor reloads the save's map and enters Play Mode before applying the saved state. Console commands can also be driven from map logic via the `LogicCommand` entity's `RunCommand` input.
+Debug console command handler for commands such as `noclip`, `map`, `fps` and `cam`. Also provides save/load, quicksave/quickload and save-list commands and allows `LogicCommand` map entities to invoke console commands through I/O.
 
 ### `debug_console.py`
-Quake-style drop-down debug console with category filtering, entity-name hyperlinks, I/O event tracing, adjustable font size, command history, and a singleton logger (`debug_log`) used throughout the codebase.
+Quake-style drop-down debug console with category filtering, entity-name links, I/O tracing, font controls, command history and the shared `debug_log` logger.
 
 ### `editor_state.py`
-Central editor model. Stores brushes, things, terrain data, the selection, undo/redo history, and handles serialisation (JSON v2 with I/O connections), lightmap dirty tracking, and legacy format migration. Undo and redo *replace* every brush dict and `Thing` rather than editing them, so the selection is re-resolved by stable id on every restore — both `selected_object` and the `selected_objects` list the rest of the editor acts on. Tools checkpoint at the *start* of a gesture, so `undo()` snapshots the live scene onto the redo stack rather than the checkpoint it pops; `discard_last_checkpoint()` is how a gesture that turned out to change nothing drops its checkpoint without also destroying the redo branch `save_state()` cleared.
+Central editor model. Owns brushes, Things, terrain data, selection, undo/redo and scene serialisation.
+
+Undo/redo replaces scene objects rather than mutating historical objects in place, so references held by the UI are re-resolved by stable identity after a history operation. Gesture tools checkpoint at mouse-down and preserve the redo branch correctly when a gesture is discarded.
 
 ### `face_texture.py`
-Reading and writing one brush face's texture transform, wherever that face happens to keep it: a tagged box side stores its mapping in the brush's per-tag dicts (because the renderer draws those from the shared cube VAO), while a cut face on an angled plane set stores it on the plane itself. Presents both as one thing, so the Surface Inspector and anything else that touches a face's mapping need not care which kind it is. Writes through this module invalidate the brush's derived geometry, since a face winding carries its texture, UV scale and texture basis as well as its shape. Qt-free, so the behaviour is testable without a window.
+Unified face-texture mapping access for box sides and angled brush planes. Reads/writes texture shift, scale and rotation through one interface and invalidates derived brush geometry when a mapping changes.
 
 ### `io_editor_widget.py`
-"Output Connections" panel (Hammer-style) for adding and editing entity I/O connections — target entity, input name, parameter, delay, and fire-once flag.
+Hammer-style Output Connections panel for creating and editing entity I/O connections: target, input, parameter, delay and fire-once behaviour.
 
 ### `io_handlers.py`
-Registers all input handlers for the I/O system. Defines what happens when an input is called on an entity (e.g. `TurnOn`, `Open`, `Kill`, `SetBrightness`) for every entity type — lights, doors, movers, monsters, triggers, speakers, pickups, logic entities, and more. `LogicState`'s operations are parameterised (`Increment  killed,1`) rather than each having their own input, so the set stays small and a map can express something the engine was never told about.
+Registers the runtime input handlers used by the I/O system. Covers gameplay entities, movers, lights, monsters, triggers, pickups, speakers and logic entities.
+
+`LogicState` operations are parameterised (for example, `Increment killed,1`) rather than requiring a separate input for every possible state mutation. This keeps the I/O vocabulary small while allowing maps to express new combinations of behaviour.
 
 ### `state_values.py`
-Fio's state type system, and nothing else: `string`, `int`, `float`, `bool`, `null` and `uuid`, with the parsing that types an I/O parameter, the formatting that puts a value back on the wire, comparison, arithmetic and deterministic store serialisation. Imports nothing — no Qt, no engine, no entity model — so what a stored value *means* is testable on a bare Python install. Legacy string-only stores are never rewritten on load, because comparison and arithmetic already understand them.
+Fio's typed state-value system: `string`, `int`, `float`, `bool`, `null` and `uuid`. Handles parsing, formatting, comparison, arithmetic and deterministic serialisation without importing Qt, the engine or the entity model.
 
 ### `io_system.py`
-Core I/O framework inspired by Half-Life 2's Hammer Editor. Defines `IODef` (input/output definitions), the `IO_REGISTRY` (per-entity-type I/O schema), `OutputConnection` (target + input + delay + parameter), and `IOManager` (runtime dispatcher with delayed firing and fire-once tracking). Also holds the reverse lookup — "what points at this entity?" — as a cached index rebuilt only when a revision counter moves. The index files source *entities*, never their names, and `find_targeting_sources` reads names off the live objects at lookup time, so a rename (which invalidates no connection) can never leave it quoting a name nothing in the scene answers to. Also validates a map's connections (`validate_scene_connections`), reporting a target that is not there, an input the target's type does not accept, and an output the source does not have — the checking lives here, next to the dispatcher whose resolution rules it has to agree with, rather than being reimplemented by each caller. `audit_io_coverage` reconciles the *declaration* (this registry) against the *implementation* (an `IOManager`'s handler table): the two are necessarily separate structures with different lifetimes, so the only way to know a declared input still runs something is to ask. `ABSTRACT_IO` is the one sanctioned exception list, and `tests/io/test_io_contract.py` asserts zero drift — by invoking every declared input for real, not just by comparing tables.
+Core I/O framework. Defines input/output declarations, the per-entity I/O registry, output connections and the runtime dispatcher with delayed firing and fire-once tracking.
+
+It also owns the reverse lookup for “what points at this entity?”, scene connection validation and the declaration/implementation audit that checks registered inputs against the handlers that actually execute them.
 
 ### `logic_graph_widget.py`
-Visual node-graph editor for entity I/O connections. Each named entity becomes a node with output pins (right, orange) and input pins (left, blue); drag-connecting pins creates wiring. Existing `_io_connections` are drawn on open. Supports right-click to delete or edit connection delay/parameter, and Apply (Ctrl+S) to write changes back.
+Visual node-graph editor for entity I/O connections. Displays entities as nodes and I/O connections as wires; supports creating, deleting and editing connection delay/parameters.
 
 ### `logic_wizard.py`
-Guided QWizard for wiring up common I/O scenarios without touching the raw connection editor. Provides ~26 built-in scenarios across four categories: Monster Encounters, Doors & Movers, Environment & Audio, and Complex Logic.
+Guided wizard for common I/O setups, covering monster encounters, doors/movers, environment/audio and more complex logic combinations.
 
 ### `main_window.py`
-Main editor window. Docks all UI panels (2D view, 3D view, property editor, scene hierarchy, asset browser, debug console), builds the menu bar and toolbar, manages play-mode toggling, and displays toast notifications. Owns the shared `ComponentController` both viewports drive, the component-mode switch (object / face / edge / vertex), Radiant's area-selection operations (touching, inside, partial and complete tall), and the clip/split tool. After an undo or redo it re-points everything that holds an object reference — component handles, the Surface Inspector's bound face, the property editor's cached pages and the I/O reverse index — since a history step replaces the objects themselves.
+Main editor window. Hosts the 2D and 3D views, property editor, scene hierarchy, asset browser and debug console, and controls play mode, menus, toolbars and notifications.
+
+It also owns the shared `ComponentController`, component modes, Radiant-style area selection and clip/split tools, and rebinds UI references after undo/redo replaces scene objects.
 
 ### `monster_customise_dialog.py`
-Dialog for assigning custom PNG sprites (idle, shoot, dead frames) and 3D billboard size to an individual Monster entity. Sprite paths are stored relative to the project root under `assets/sprites/monsters/`.
+Dialog for assigning custom Monster sprites and billboard dimensions. Paths are stored relative to the project asset tree.
 
 ### `package_dialog.py`
-Package export metadata dialog. Collects title, author, version, description, banner image, and shows a dependency preview before exporting a `.fiopak` archive.
+Package-export metadata dialog. Collects title, author, version, description and banner data and previews package dependencies.
 
 ### `package_exporter.py`
-`.fiopak` assembler. Performs recursive map dependency resolution, crawls referenced assets (textures, models, sounds), and generates a ZIP archive with a JSON manifest.
+Builds `.fiopak` archives. Resolves map dependencies, crawls referenced assets and writes the package manifest.
 
 ### `procedural_generator.py`
-Procedural map generation UI widget and core generation logic. Builds fully-playable liminal maps with configurable room count, size, wall/floor textures, monster/health spawns, multi-floor support with stairs, and corridor connectivity via A* pathfinding.
+Procedural map-generation UI and core generation logic. Builds playable liminal maps with configurable rooms, dimensions, textures, spawns, multiple floors and corridor connectivity.
 
 ### `procedural_map_gen.py`
-Command-line interface for procedural map generation. Wraps the core generation logic from `procedural_generator.py` and outputs map data as a JSON file, with arguments for size presets, room count, seed, monster count, and floor options.
+Command-line front end for procedural map generation. Wraps the generator and writes map JSON using configurable size, room, seed, monster and floor parameters.
 
 ### `property_editor.py`
-Per-object property panel. Displays and edits position, size, texture/shader, colour, I/O connections, and type-specific properties for the currently selected brush or entity. Built pages are parked in an LRU cache and handed back when the same object is reselected unchanged; the cache key is a signature of everything the panel would read, deliberately excluding position, geometry and the geometry layer's runtime bookkeeping so a drag, rotate or clip costs no rebuild. The I/O revision is folded in, because the "Targeted by" line depends on other entities rather than on this one — which is also why renaming an entity bumps that revision.
+Per-object property panel for position, size, texture/shader, colour, I/O and type-specific properties.
+
+Pages are cached using a signature of the data they actually display, so geometry/position changes do not rebuild unrelated property pages. I/O revision is included because the “Targeted by” information depends on the rest of the scene.
 
 ### `scene_hierarchy.py`
-Tree-view widget listing all brushes and entities in the scene. Supports sorting (default, alphabetical, by type), selection synchronisation with the viewport, and context-menu actions.
+Scene tree listing brushes and entities. Supports sorting, selection synchronisation and context actions.
 
 ### `SettingsWindow.py`
-Application settings dialog with tabbed pages for Editor (autosave, grid), Display (resolution, render settings), Play Modes, Controls (mouse sensitivity), Keyboard (rebindable shortcuts), and Split Screen configuration. Includes Apply & Restart. The Renderer section reports what hardware was detected and exposes Low-power Mode (the former `arm_mode`, still read from the old settings key) and dynamic shadows, both defaulting from `engine.shaders.detect_low_power_arm()` rather than a second copy of the probe.
+Application settings dialog covering editor, display, play modes, controls, keyboard and split-screen configuration. Renderer settings expose low-power mode and dynamic shadows; low-power defaults come from the engine hardware probe rather than a duplicate editor-side detection system.
 
 ### `shortcuts.py`
-Gathers every keyboard shortcut the editor answers to, from the three different places Fio binds keys: QAction and QPushButton shortcuts read live off the menus and toolbar, the user's editable bindings in the config file's `[Shortcuts]` and `[KeyBindings]` sections, and the `keyPressEvent` chains in the main window and the views, which nothing can enumerate and so are declared in `DECLARED`. Discovered entries win over declared ones, so a binding that becomes a real QAction stops being described by a stale declaration.
+Single inventory of editor keyboard shortcuts. Combines shortcuts discoverable from Qt actions/widgets, user-configured bindings and explicitly declared shortcuts for event handlers that Qt cannot enumerate.
 
 ### `shortcuts_window.py`
-Help > Keys: a resizable, scrollable, searchable window listing every shortcut, built from `editor.shortcuts` so nothing is written down twice. A real top-level window rather than a message box, so it can stay open beside the editor while a key is looked up.
+Help > Keys window showing the shortcut inventory from `editor.shortcuts`. It is searchable and can remain open while the user works.
 
 ### `surface_inspector.py`
-Radiant-style floating Surface Inspector for tuning per-face texture mapping in Face mode. Edits horizontal/vertical shift, horizontal/vertical stretch, and rotation for the selected brush face, with configurable step increments and grid-snap, scoped to one face or every face of the selection. A run of spin-box clicks coalesces into a single undo step. It binds to a `(brush, face key)` pair, so the main window re-points it at the live brush after an undo or redo rather than letting it edit an object that is no longer in the scene.
+Radiant-style Surface Inspector for per-face texture mapping. Edits shift, scale and rotation, supports grid-snap and multi-face application, and coalesces repeated spin-box changes into a single undo step.
 
 ### `terrain_editor.py`
-Dedicated terrain parameter editor panel for configuring terrain chunk settings (noise seed, scale, amplitude, texturing).
+Terrain parameter editor for noise seed, scale, amplitude and texturing/chunk settings.
 
 ### `things.py`
-Entity class definitions for all placeable Things: `PlayerStart`, `Light`, `Model`, `Speaker`, `Pickup`, `Monster`, `PathNode`, `Portal`, `LevelChanger`, `LogicGate`, `LogicRelay`, `LogicTimer`, `LogicCommand`, `LogicSpawner`, `LogicCamera`, `LogicState`, and the `TriggerBrush` mixin. Each class defines default properties and I/O registrations. `LogicCommand` runs a console command (from its connection parameter or `command` property) when its `RunCommand` input fires — e.g. a trigger brush wired to run `cam 2`. `LogicState` is Fio's persistent state primitive: typed named values, read, compared and mutated through I/O, persisting across level transitions and shared with plugins through one registry. A class may declare `map_type` when its serialised token differs from its class name.
+Definitions for placeable entities including `PlayerStart`, `Light`, `Model`, `Speaker`, `Pickup`, `Monster`, `PathNode`, `Portal`, `LevelChanger`, `LogicGate`, `LogicRelay`, `LogicTimer`, `LogicCommand`, `LogicSpawner`, `LogicCamera`, `LogicState` and `TriggerBrush`.
+
+Entity classes provide defaults and I/O registration. `LogicState` is the persistent typed-state primitive shared by maps and plugins. `LogicCommand` provides a deliberate bridge from declarative I/O into an explicitly requested debug/play command rather than becoming a general-purpose scripting runtime.
 
 ### `tooltips.py`
-Showing and hiding a panel's tooltips (Settings > Editor > Tooltips). Qt keeps a tooltip on the widget it belongs to, so switching them off means taking the text away and being able to give it back; the original is parked in a Qt dynamic property that travels with the widget, so a panel rebuilt around a stashed widget still knows what its tooltip said. Per-area rather than global, because toolbar tooltips stop being wanted long before the Property Editor's do.
+Per-area tooltip enable/disable support. Original tooltip text is retained on Qt widgets so it can be restored without maintaining a second description table.
 
 ### `ui.py`
-Shared UI helper widgets and utilities used across the editor (common dialogs, styled components, layout helpers).
+Shared Qt UI widgets, dialogs, styling helpers and layout utilities.
 
 ### `view_2d.py`
-Orthographic 2D top-down, front and side editor views. Provides brush drawing, selection, moving, resizing, entity placement, grid snapping, multi-select and marquee selection, free rotation, clone-and-place, and the clip tool's cut line. In component mode the same press-and-drag gesture grabs a face, edge or vertex, and in object mode dragging near a brush side stretches it directly — both through the shared `component_edit` model, so this file owns only the screen-to-world mapping, the cursor and the undo checkpoint.
+Orthographic top, front and side editing views. Handles brush drawing, selection, transforms, grid snapping, marquee selection, rotation, cloning, entity placement and the clip tool's screen-to-world mapping.
+
+Component-mode editing is delegated to `component_edit`, so the 2D view supplies interaction mapping while the shared model owns the actual editing rules.
+
+## Editor architecture
+
+The editor is the authoring interface to the same world that the engine executes:
+
+```
+editor UI
+    ↓
+EditorState / Things / brush geometry
+    ↓
+authoritative map representation
+    ↓
+engine runtime
+    ↓
+play mode / standalone player
+```
+
+The important separation is between **authoring state** and **execution state**. The editor owns the authoritative scene model; the engine derives runtime representations from it as required.
+
+For rendering, this means editor-authored brushes and entities ultimately feed the engine's dense numerical render projection rather than requiring the editor to maintain a separate renderer-specific world.
+
+For gameplay, the editor's I/O connections are the program: entity outputs fire entity inputs, logic primitives transform and route those events, and `LogicState` supplies persistent typed state. No central quest graph or per-frame map scripting runtime is required.
+
+## Design principles
+
+- **Map is the program.** Entity placement, properties and I/O connections describe executable behaviour.
+- **The editor is an engine mode.** Play Mode executes the same authored world rather than exporting to an intermediate compiled representation.
+- **World state has one authority.** Derived caches and numerical projections do not become competing sources of truth.
+- **Direct manipulation is first-class.** Brush geometry can be edited as objects, faces, edges and vertices.
+- **I/O is compositional.** Small primitives and parameterised operations combine instead of requiring a large scripting vocabulary.
+- **The hot path is allowed to be numerical.** The editor remains flexible and object-oriented while the engine projects large homogeneous data into dense execution representations.
