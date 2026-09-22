@@ -262,6 +262,14 @@ entity's `properties['type']` string. *inputs*/*outputs* are lists of
 [`io_def`](#helpers-io_def-key_code-prop) results; `None` entries (produced when
 the I/O system is unavailable) are filtered out.
 
+```python
+def extend_io(self, entity_type: str, inputs=(), outputs=()) -> None
+```
+Add I/O definitions to an entity type the plugin does not own. Existing
+ports are preserved and matching names are not duplicated. Unlike `register_io`,
+this is an additive merge and is recorded so the extension can be replayed if
+the editor's I/O registry is rebuilt.
+
 ### Property schema
 
 ```python
@@ -290,6 +298,24 @@ tab's widget. With *entity_type* the tab appears only for that type; otherwise
 for every entity.
 
 ```python
+def register_singleton_entity(self, entity_type: str) -> None
+```
+Mark *entity_type* as a per-map singleton. Placement paths refuse to add a
+second instance and select the existing one.
+
+```python
+def register_entity_wizard(self, entity_type: str, factory) -> None
+```
+Register a creation wizard. `factory(parent) -> dict | None` runs when the entity
+is placed and returns its initial properties, or `None` to cancel.
+
+```python
+def register_menu_action(self, label: str, callback, tooltip: str = "") -> None
+```
+Add an action to the top of the plugin's editor menu. The callback is dispatched
+only while the plugin is enabled.
+
+```python
 def register_renderer(self, name: str, cls) -> bool
 ```
 Register a swappable renderer class under *name*. Fio's viewport selects its
@@ -305,7 +331,12 @@ renderer ships as a plugin.
 def register_tools_action(self, label: str, callback, tooltip: str = "") -> None
 def register_console_command(self, name: str, callback, help_text: str = "") -> None
 ```
-Register developer-only editor actions and console commands without importing Qt or OpenGL at plugin registration time. Tools callbacks receive `main_window`; console callbacks receive `(args, main_window, logic, play_mode)`. Disabled plugins are not dispatched.
+`register_tools_action` adds an action to Fio's **Tools** menu. Its callback
+receives `main_window`. `register_console_command` adds a plugin-owned debug
+console command; its callback receives `(args, main_window, logic, play_mode)`.
+Both are gated by the plugin's enabled state and are available from API 1.4.0.
+`register_menu_action` above is the plugin-specific menu counterpart for actions
+that belong with the plugin rather than in Tools.
 
 ### Global store & logging
 
@@ -715,7 +746,7 @@ hooks are installed as small guarded monkey-patches in
 
 Saving and loading a **play session** is an engine-native capability, not part
 of the plugin API surface — adding it did **not** bump `API_VERSION` (still
-`1.3.0`). It is documented here because it builds directly on the same
+`1.4.0`). It is documented here because it builds directly on the same
 serialization a plugin already relies on, and because a plugin can drive it
 through the [`PluginHost`](#pluginhost--the-open-ended-engine-seam).
 
@@ -804,7 +835,7 @@ def connect(self, host):
     self._host = host
 
 def on_tick(self, logic, ctx):
-    if ctx.key_down("f5"):
+    if ctx.key_down("f"):
         ok, msg = self._host.logic.save_session("saves/plugin_quick.fiosave")
         ctx.toast(msg)
 ```
