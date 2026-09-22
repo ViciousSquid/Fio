@@ -2,9 +2,7 @@
 
 <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License">  <img src="https://img.shields.io/badge/status-Active%20Development-orange?style=for-the-badge" alt="Status">
 
-# Fio — The World Machine
-
-### Unified World Editor, Real-Time Engine & Game Creation Toolkit inspired by Radiant and Hammer.
+### Unified World Editor, Real-Time Engine & Game Creation Toolkit
 
 **Fio is a real-time world machine for creating, editing and running first-person, top-down and large-scale worlds.**
 
