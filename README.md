@@ -14,6 +14,7 @@ Designed on low-power ARM hardware with an efficiency-first philosophy.
 
 ### What makes Fio different
 
+
 * **Edit and play in the same runtime** — no compile, bake or scene-import pipeline.
 * **The world is executable** — entities, state, spatial relationships and gameplay logic are part of the live world.
 * **Classic brush/CSG editing** with arbitrary convex polyhedra.
@@ -40,8 +41,9 @@ Designed on low-power ARM hardware with an efficiency-first philosophy.
 
 ---
 
-## 🌍 The World Machine
+##  The World Machine
 
+A data-oriented world engine with an object-oriented authoring model
 Fio treats a world as more than a collection of geometry.
 
 A Fio world contains:
@@ -100,7 +102,7 @@ Gameplay can be assembled from **entities, inputs, outputs, state and spatial re
 
 ---
 
-## 🧠 Logic & Gameplay
+## Logic & Gameplay
 
 Fio uses an entity-based gameplay model built around **I/O and LogicState**.
 
@@ -129,7 +131,7 @@ Rather than requiring a central quest or scripting runtime, gameplay can emerge 
 
 ---
 
-## 🌎 Large Worlds
+## Large Worlds
 
 Fio is designed to make large worlds practical on relatively constrained hardware.
 
@@ -150,7 +152,7 @@ This makes large worlds a **simulation problem**, not simply a rendering problem
 
 ---
 
-## ⚡ Numerical Core
+## Numerical Core
 
 Fio is deliberately designed around bulk numerical processing where the workload benefits from it.
 
@@ -173,9 +175,10 @@ Scalar Python remains appropriate for small, irregular or highly stateful operat
 
 ---
 
-## 🎨 Rendering
+##  Rendering
 
-Fio uses a lean **OpenGL 3.3 Core** renderer designed with low-power hardware in mind.
+- Lean **OpenGL 3.3 Core** renderer designed with low-power hardware in mind.
+- Operates directly on NumpY arrays
 
 Features include:
 
@@ -198,7 +201,7 @@ There is no requirement for BSP, VIS/PVS preprocessing or offline visibility com
 
 ---
 
-## 🔧 Under the Hood
+##  Under the Hood
 
 ### Shared runtime state
 
