@@ -25,6 +25,7 @@ from .camera import Camera
 from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
 from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
 from .prop_runtime import PropSession
+from .render_table import RenderTable
 
 # Import Thing subclasses for type checking
 try:
@@ -195,17 +196,12 @@ class LogicThread(threading.Thread):
         # and consumed in _prepare_render_state to blend the view matrix.
         self.camera_transition = None
 
-        # PERF: persistent frustum-cull buffers for play mode. The brush *set*
-        # is fixed for a play session, so AABB centers/half-sizes and the
-        # static/dynamic split are built once (see _build_cull_cache) and only
-        # the mover/door center rows are refreshed each frame — the per-frame
-        # Python gather loop and NumPy array rebuild are skipped entirely.
-        self._cull_valid = False
-        self._cull_n = 0
-        self._cull_centers = None          # (N,3) float64
-        self._cull_halves = None           # (N,3) float64
-        self._cull_row_refs = None         # (N,) object: per-brush render ref
-        self._cull_dynamic_rows = None     # list[int]: indices of movers/doors
+        # The dense render projection (T3) and the per-slot render references
+        # published alongside it.  The table owns the numbers; `_render_refs`
+        # is the object array the renderer is still handed, with movers and
+        # doors replaced by their per-frame snapshot.
+        self._render_table = RenderTable()
+        self._render_refs = np.empty(0, dtype=object)
 
         # Editor camera
         self.editor_camera = Camera()
@@ -965,12 +961,12 @@ class LogicThread(threading.Thread):
 
         Cheap by contract — a counter bump and the per-frame cull buffers —
         because a streaming layer calls it every time the player crosses a cell
-        boundary.  The cull buffers are rebuilt lazily on the next frame, and
-        `hidden` itself is read fresh there, so this costs nothing until a frame
-        actually wants it.
+        boundary.  It really is just the counter: parking writes `hidden` and
+        leaves the brush in the list, so the render projection's row set has not
+        changed, and `hidden` is read live every frame anyway
+        (`engine.render_table.RenderTable.begin_frame`).  Nothing to rebuild.
         """
         self.visibility_changes += 1
-        self._invalidate_cull_cache()
 
     def notify_authored_visibility_changed(self):
         """An object's *authored* hidden/disabled state changed.
@@ -1092,10 +1088,6 @@ class LogicThread(threading.Thread):
             # Build entity caches
             self._build_entity_caches()
 
-            # PERF: build the persistent frustum-cull buffers now that the
-            # brush set for this play session is fixed.
-            self._build_cull_cache()
-
             # Build spatial grid for fast collision queries (monsters + player)
             from .physics import SpatialGrid, PhysicsWorld
             self._spatial_grid = SpatialGrid(cell_size=512.0)
@@ -1170,7 +1162,6 @@ class LogicThread(threading.Thread):
             self._model_collision_brushes = []
             self._physics_body_brushes = []
             self._refresh_collision_brushes_cache()
-            self._invalidate_cull_cache()
             self.current_hud_message = ""
             self.gate_inputs = {}
             self.timer_states = {}
@@ -3751,52 +3742,6 @@ class LogicThread(threading.Thread):
         dist = c @ normals.T + h @ np.abs(normals).T + d  # (N, 6)
         return np.all(dist >= 0.0, axis=1)
 
-    def _build_cull_cache(self):
-        """Precompute persistent per-brush cull buffers for a play session.
-
-        Called once on entering play mode, when the brush set is fixed. Builds
-        NumPy AABB center/half-size arrays and the static-vs-dynamic split so
-        ``_prepare_render_state`` can vectorize culling without rebuilding any
-        Python lists per frame. ``hidden`` is intentionally NOT baked in — it
-        can still toggle at runtime (I/O Show/Hide) and is read per frame.
-        """
-        brushes = self.brushes
-        n = len(brushes)
-        centers = np.zeros((n, 3), dtype=np.float64)
-        halves = np.zeros((n, 3), dtype=np.float64)
-        row_refs = np.empty(n, dtype=object)
-        dynamic_rows = []
-        for i, b in enumerate(brushes):
-            pos = b.get('pos', (0.0, 0.0, 0.0))
-            size = b.get('size', (64.0, 64.0, 64.0))
-            centers[i, 0] = pos[0]; centers[i, 1] = pos[1]; centers[i, 2] = pos[2]
-            halves[i, 0] = size[0] * 0.5
-            halves[i, 1] = size[1] * 0.5
-            halves[i, 2] = size[2] * 0.5
-            if b.get('is_mover', False) or b.get('is_door', False):
-                dynamic_rows.append(i)
-                # Dynamic rows get a fresh snapshot copy each frame; seed with
-                # one now so the buffer is never None if read before the first
-                # refresh.
-                row_refs[i] = b
-            else:
-                row_refs[i] = b  # static: the live dict, ref never changes
-        self._cull_centers = centers
-        self._cull_halves = halves
-        self._cull_row_refs = row_refs
-        # Plain Python list of ints — few entries, iterated in Python each frame.
-        self._cull_dynamic_rows = dynamic_rows
-        self._cull_n = n
-        self._cull_valid = True
-
-    def _invalidate_cull_cache(self):
-        self._cull_valid = False
-        self._cull_centers = None
-        self._cull_halves = None
-        self._cull_row_refs = None
-        self._cull_dynamic_rows = None
-        self._cull_n = 0
-
     # =========================================================================
     # RENDER STATE PREPARATION
     # =========================================================================
@@ -3909,108 +3854,88 @@ class LogicThread(threading.Thread):
 
         brushes = self.brushes
 
-        if self.play_mode and self._cull_valid and self._cull_n == len(brushes):
-            # ---- Fast path (play mode) --------------------------------------
-            # Persistent NumPy buffers built at play start; only mover/door
-            # center rows and their snapshot copies are refreshed here, then
-            # visibility is a pair of vectorized NumPy operations. No per-frame
-            # Python gather loop and no array rebuild.
-            total_count = self._cull_n
-            centers = self._cull_centers
-            halves = self._cull_halves
-            row_refs = self._cull_row_refs
+        # ---- T3: the dense render projection ----------------------------
+        # Fio already paid to describe the world numerically for culling; this
+        # keeps the other half -- what each brush *is* -- numerical too, so the
+        # renderer never has to go back to the dicts to rediscover it.  The
+        # table is a projection, not a second world: it is rebuilt from
+        # `brushes` whenever the editor's coarse world epoch moves, and holds
+        # nothing that is not already in them.
+        table = self._render_table
+        self.editor_state.ensure_entity_ids()
+        generation = table.generation
+        # One Python pass over the brush list, for the only two things that
+        # cannot be cached: the live `hidden` flag (Big World parks through it)
+        # and an unannounced change to the row set.
+        live_hidden = table.begin_frame(
+            brushes, getattr(self.editor_state, 'world_epoch', None))
+        if table.generation != generation:
+            refs = np.empty(table.count, dtype=object)
+            for i, b in enumerate(brushes):
+                refs[i] = b
+            self._render_refs = refs
+        refs = self._render_refs
+        total_count = table.count
 
-            for i in self._cull_dynamic_rows:
+        # ---- warm columns ------------------------------------------------
+        # Movers and doors move every tick and have no per-tick notification,
+        # so their transform columns are re-read unconditionally.  They are
+        # float copies -- no classification, no texture resolution.
+        dynamic_slots = table.dynamic_slots
+        if len(dynamic_slots):
+            table.refresh_transforms(brushes, dynamic_slots)
+            for i in dynamic_slots:
+                i = int(i)
                 b = brushes[i]
-                pos = b['pos']
-                centers[i, 0] = pos[0]; centers[i, 1] = pos[1]; centers[i, 2] = pos[2]
+                # The render thread still reads pos/size off the dict for the
+                # model matrix, so a moving brush is handed over as a snapshot.
+                # Once the draw paths take their transform from table.center /
+                # table.half this copy has no remaining purpose.
                 b_ref = b.copy()
-                b_ref['pos'] = list(pos)
+                b_ref['pos'] = list(b['pos'])
                 b_ref['size'] = list(b['size'])
                 if 'direction' in b:
                     b_ref['direction'] = list(b['direction'])
                 if 'original_pos' in b:
                     b_ref['original_pos'] = list(b['original_pos'])
-                row_refs[i] = b_ref
+                refs[i] = b_ref
 
-            # `hidden` can toggle at runtime (I/O Show/Hide), so read it fresh.
-            keep = np.fromiter(
-                (not b.get('hidden', False) for b in brushes),
-                dtype=bool, count=total_count)
+        if not self.play_mode:
+            # An editor drag mutates pos for hundreds of frames after its one
+            # save_state, so in the editor every row's warm columns are re-read.
+            # This is the cheap half of the table by design; the expensive cold
+            # columns stay behind the epoch.
+            table.refresh_transforms(brushes, range(total_count))
 
-            if self.culling_enabled:
-                in_frustum = self._aabb_in_frustum_batch(frustum_planes, centers, halves)
-                visible_mask = keep & in_frustum
-            else:
-                visible_mask = keep
-
-            all_indices = np.flatnonzero(keep)
-            visible_indices = np.flatnonzero(visible_mask)
-            all_brushes = row_refs[all_indices].tolist()
-            visible_brushes = row_refs[visible_indices].tolist()
-            brush_positions = write_state.ensure_visible_brush_positions(
-                len(visible_brushes))
-            if len(visible_indices):
-                np.take(centers[:, 0], visible_indices,
-                        out=brush_positions[:len(visible_indices), 0])
-                np.take(centers[:, 2], visible_indices,
-                        out=brush_positions[:len(visible_indices), 1])
-            culled_count = total_count - len(visible_brushes)
+        # ---- T4: visibility, as masks over the table ---------------------
+        keep = ~live_hidden
+        if self.culling_enabled and total_count:
+            visible_mask = keep & self._aabb_in_frustum_batch(
+                frustum_planes, table.center[:total_count],
+                table.half[:total_count])
         else:
-            # ---- General path (editor mode / cache miss) --------------------
-            # Gather (b_ref, center, half) for every non-hidden brush in a
-            # single pass, then test all of them against the frustum planes at
-            # once with NumPy. Used in the editor, where the brush set changes.
-            all_brushes = []
-            total_count = 0
-            culled_count = 0
-            centers = []
-            halves = []
-            refs = []
-            for b in brushes:
-                total_count += 1
-                if b.get('hidden', False):
-                    culled_count += 1
-                    continue
-                is_dynamic = b.get('is_mover', False) or b.get('is_door', False)
-                if is_dynamic:
-                    b_ref = b.copy()
-                    b_ref['pos'] = list(b['pos'])
-                    b_ref['size'] = list(b['size'])
-                    if 'direction' in b:
-                        b_ref['direction'] = list(b['direction'])
-                    if 'original_pos' in b:
-                        b_ref['original_pos'] = list(b['original_pos'])
-                else:
-                    b_ref = b
-                all_brushes.append(b_ref)
+            visible_mask = keep
 
-                pos = b.get('pos', [0, 0, 0])
-                size = b.get('size', [64, 64, 64])
-                centers.append((pos[0], pos[1], pos[2]))
-                halves.append((size[0] * 0.5, size[1] * 0.5, size[2] * 0.5))
-                refs.append(b_ref)
+        all_slots = np.flatnonzero(keep)
+        visible_slots = np.flatnonzero(visible_mask)
+        all_brushes = refs[all_slots].tolist()
+        visible_brushes = refs[visible_slots].tolist()
+        culled_count = total_count - len(visible_brushes)
 
-            if self.culling_enabled and refs:
-                visible_mask = self._aabb_in_frustum_batch(frustum_planes, centers, halves)
-                visible_indices = np.flatnonzero(visible_mask)
-                visible_brushes = [refs[int(i)] for i in visible_indices]
-                culled_count += len(refs) - len(visible_brushes)
-                brush_positions = write_state.ensure_visible_brush_positions(
-                    len(visible_brushes))
-                if len(visible_indices):
-                    center_array = np.asarray(centers, dtype=np.float64)
-                    np.take(center_array[:, 0], visible_indices,
-                            out=brush_positions[:len(visible_indices), 0])
-                    np.take(center_array[:, 2], visible_indices,
-                            out=brush_positions[:len(visible_indices), 1])
-            else:
-                visible_brushes = refs
-                brush_positions = write_state.ensure_visible_brush_positions(
-                    len(visible_brushes))
-                if visible_brushes:
-                    center_array = np.asarray(centers, dtype=np.float64)
-                    brush_positions[:len(visible_brushes)] = center_array[:, (0, 2)]
+        brush_positions = write_state.ensure_visible_brush_positions(
+            len(visible_slots))
+        if len(visible_slots):
+            np.take(table.center[:, 0], visible_slots,
+                    out=brush_positions[:len(visible_slots), 0])
+            np.take(table.center[:, 2], visible_slots,
+                    out=brush_positions[:len(visible_slots), 1])
+
+        # The numerical result itself, published rather than thrown away: the
+        # slots index every column of the table, so the renderer can classify,
+        # sort and batch without reconstructing anything.
+        write_state.render_table = table
+        write_state.visible_brush_slots = visible_slots.astype(np.int32)
+        write_state.all_brush_slots = all_slots.astype(np.int32)
 
         write_state.visible_brushes = visible_brushes
         write_state.visible_brush_position_count = len(visible_brushes)

@@ -56,14 +56,20 @@ def test_the_cull_buffers_are_built_once_per_session_not_per_frame(logic):
     thread = logic(brushes=pillar_grid(6, 6, spacing=300.0))
     thread.set_play_mode(True)
     try:
-        centers = thread._cull_centers
-        halves = thread._cull_halves
+        thread._prepare_render_state()
+        table = thread._render_table
+        centers = table.center
+        halves = table.half
+        generation = table.generation
         for _ in range(20):
             thread._prepare_render_state()
-        assert thread._cull_centers is centers, (
-            "the cull centre array was reallocated during a frame; it is built "
-            "once per play session")
-        assert thread._cull_halves is halves
+        assert table.center is centers, (
+            "the projection's centre array was reallocated during a frame; it "
+            "is built once and refreshed in place")
+        assert table.half is halves
+        assert table.generation == generation, (
+            "the projection reconciled during a steady-state frame; the world "
+            "epoch has not moved, so sync should be a couple of comparisons")
     finally:
         thread.set_play_mode(False)
 
@@ -76,20 +82,53 @@ def test_only_dynamic_rows_are_refreshed_each_frame(logic):
     thread.set_play_mode(True)
     try:
         thread._prepare_render_state()
-        static_row = thread._cull_centers[0].copy()
+        table = thread._render_table
+        static_row = table.center[0].copy()
 
-        # Move both brushes behind the cache's back.  Only the mover's row is
-        # meant to follow, because only movers are refreshed per frame.
+        # Move both brushes behind the projection's back.  Only the mover's row
+        # is meant to follow, because only movers are refreshed per frame.
         static["pos"] = [9999.0, 0.0, -400.0]
         mover["pos"] = [8888.0, 0.0, -400.0]
         thread._prepare_render_state()
 
-        assert np.array_equal(thread._cull_centers[0], static_row), (
-            "the static brush's cull row was refreshed; the per-frame loop is "
+        assert np.array_equal(table.center[0], static_row), (
+            "the static brush's row was refreshed; the per-frame loop is "
             "walking every brush, not just the movers")
-        assert thread._cull_centers[1][0] == pytest.approx(8888.0), (
-            "the mover's cull row was not refreshed, so it would be culled "
+        assert table.center[1][0] == pytest.approx(8888.0), (
+            "the mover's row was not refreshed, so it would be culled "
             "against its old position")
+    finally:
+        thread.set_play_mode(False)
+
+
+def test_classification_is_not_re_resolved_per_frame(logic):
+    """The cold columns are the expensive half; they must not move per frame.
+
+    This is the property the whole projection exists for: ``is_water_brush``
+    and the texture scan used to run per visible brush per frame.  Mutating a
+    classification field behind the projection's back and seeing the column
+    stay put is what proves the work is no longer happening.
+    """
+    brush = box_brush("wall", (0, 0, -400))
+    thread = logic(brushes=[brush])
+    thread.set_play_mode(True)
+    try:
+        thread._prepare_render_state()
+        table = thread._render_table
+        before = int(table.class_bits[0])
+
+        brush["shader"] = "Glass"          # no epoch bump: nobody was told
+        for _ in range(10):
+            thread._prepare_render_state()
+        assert int(table.class_bits[0]) == before, (
+            "the classification columns were re-resolved during a frame")
+
+        # ...and the editor's coarse change signal is what picks it up.
+        thread.editor_state.mark_world_changed()
+        thread._prepare_render_state()
+        from engine.render_table import CLASS_GLASS
+        assert int(table.class_bits[0]) & CLASS_GLASS, (
+            "a world-epoch bump did not re-resolve the cold columns")
     finally:
         thread.set_play_mode(False)
 

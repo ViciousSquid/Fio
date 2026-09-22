@@ -59,6 +59,17 @@ class RenderState:
         self.visible_brush_position_count = 0
         self.visible_thing_positions = np.empty((0, 2), dtype=np.float64)
         self.visible_thing_position_count = 0
+
+        # The dense render projection (engine.render_table.RenderTable) and the
+        # visibility result as integer slots into it. These are what let the
+        # renderer classify, sort and batch numerically instead of walking the
+        # published object lists to rediscover what it already knows. The table
+        # is shared by reference, not copied: its cold columns are immutable
+        # between world-epoch bumps, and its warm columns are refreshed only on
+        # the logic thread.
+        self.render_table = None
+        self.visible_brush_slots = np.empty(0, dtype=np.int32)
+        self.all_brush_slots = np.empty(0, dtype=np.int32)
         
         # HUD / Gameplay
         self.collected_keys = set()
@@ -154,6 +165,9 @@ class RenderState:
         self.all_lights = []
         self.visible_brush_position_count = 0
         self.visible_thing_position_count = 0
+        self.render_table = None
+        self.visible_brush_slots = np.empty(0, dtype=np.int32)
+        self.all_brush_slots = np.empty(0, dtype=np.int32)
         self.collected_keys = set()
         self.hud_message = ""
         self.bullet_marks = []

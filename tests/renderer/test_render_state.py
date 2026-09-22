@@ -330,19 +330,20 @@ def test_a_monster_is_submitted_as_a_render_snapshot(logic):
 
 
 # ---------------------------------------------------------------------------
-# The cull cache
+# The dense render projection
 # ---------------------------------------------------------------------------
 
-def test_the_cull_cache_covers_every_brush_in_the_session(logic):
+def test_the_projection_covers_every_brush_in_the_session(logic):
     brushes = pillar_grid(3, 3, spacing=300.0)
     thread = logic(brushes=brushes)
     thread.set_play_mode(True)
     try:
-        assert thread._cull_n == len(brushes)
-        assert thread._cull_centers.shape == (len(brushes), 3)
+        thread._prepare_render_state()
+        table = thread._render_table
+        assert table.count == len(brushes)
         for index, brush in enumerate(brushes):
-            assert list(thread._cull_centers[index]) == pytest.approx(brush["pos"])
-            assert list(thread._cull_halves[index]) == \
+            assert list(table.center[index]) == pytest.approx(brush["pos"])
+            assert list(table.half[index]) == \
                 pytest.approx([v * 0.5 for v in brush["size"]])
     finally:
         thread.set_play_mode(False)
@@ -354,9 +355,30 @@ def test_only_movers_and_doors_are_marked_dynamic(logic):
     thread = logic(brushes=brushes)
     thread.set_play_mode(True)
     try:
-        assert sorted(thread._cull_dynamic_rows) == [1, 2], (
-            "dynamic rows are %s; only the mover and the door move"
-            % (thread._cull_dynamic_rows,))
+        thread._prepare_render_state()
+        dynamic = sorted(int(i) for i in thread._render_table.dynamic_slots)
+        assert dynamic == [1, 2], (
+            "dynamic slots are %s; only the mover and the door move" % (dynamic,))
+    finally:
+        thread.set_play_mode(False)
+
+
+def test_visibility_is_published_as_slots_into_the_projection(logic):
+    """The numerical result crosses the thread boundary, not just objects."""
+    brushes = pillar_grid(3, 3, spacing=300.0)
+    thread = logic(brushes=brushes)
+    thread.set_play_mode(True)
+    try:
+        thread._prepare_render_state()
+        state = thread.game_state.get_write_state()
+        table = state.render_table
+        slots = state.visible_brush_slots
+        assert table is thread._render_table
+        assert len(slots) == len(state.visible_brushes)
+        # Every slot indexes the row of the brush it was published beside, so a
+        # consumer can classify from the columns instead of the dicts.
+        for i, brush in enumerate(state.visible_brushes):
+            assert table.ids[int(slots[i])] == brush["id"]
     finally:
         thread.set_play_mode(False)
 

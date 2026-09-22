@@ -95,6 +95,10 @@ CLASS_TEXTURED        = 1 << 8
 #: Eligible to cast a shadow: solid world geometry, not a trigger/fog/water/
 #: glass/glow volume and not a subtract brush.
 CLASS_SHADOW_CASTER   = 1 << 9
+#: A mover or a door: its transform changes every tick, so it is the row set
+#: whose warm columns are re-read per frame.  Replaces the ``dynamic_rows``
+#: list ``_build_cull_cache`` kept, and comes from the same two flags.
+CLASS_DYNAMIC         = 1 << 10
 
 #: The classes that make a brush something other than plain opaque geometry.
 #: A row with none of these bits set goes in the opaque pass.
@@ -143,6 +147,8 @@ def _brush_class_bits(brush) -> int:
 
     if brush.get('operation') == 'subtract':
         bits |= CLASS_SUBTRACT
+    if brush.get('is_mover', False) or brush.get('is_door', False):
+        bits |= CLASS_DYNAMIC
     if brush_geometry.brush_has_geometry(brush):
         bits |= CLASS_HAS_GEOMETRY
 
@@ -171,7 +177,8 @@ class RenderTable:
     __slots__ = ('generation', 'count', 'ids', 'slot_of_id', 'brushes',
                  'center', 'half', 'rot', 'class_bits', 'tex_name_id',
                  'uv_scale', 'uv_angle', 'uv_shift', 'geo_epoch',
-                 '_tex_ids', '_tex_names', '_epoch')
+                 'dynamic_slots', '_tex_ids', '_tex_names', '_epoch',
+                 '_hidden_buf')
 
     def __init__(self):
         self.generation = 0
@@ -185,9 +192,16 @@ class RenderTable:
         #: :class:`engine.spatial.CellIndex` holds references: the object's data
         #: still lives in exactly one place.  Frame code does not walk this.
         self.brushes: list = []
+        #: Slots of the movers and doors -- the rows whose warm columns are
+        #: re-read per frame.  Recomputed whenever the table reconciles, from
+        #: :data:`CLASS_DYNAMIC`, so it cannot drift from the classification.
+        self.dynamic_slots = np.empty(0, dtype=np.int32)
 
-        self.center = np.zeros((0, 3), dtype=np.float32)
-        self.half = np.zeros((0, 3), dtype=np.float32)
+        # float64 deliberately: this is exactly what _build_cull_cache held,
+        # and the frustum batch casts to float64 internally -- matching the
+        # dtype keeps the cull bit-identical and saves the per-frame cast.
+        self.center = np.zeros((0, 3), dtype=np.float64)
+        self.half = np.zeros((0, 3), dtype=np.float64)
         #: ``[axis_x, axis_y, axis_z, angle_degrees]``; angle 0 for the common
         #: unrotated brush, which is what lets the instance-matrix build stay a
         #: vectorised translate+scale for almost every row.
@@ -208,6 +222,7 @@ class RenderTable:
         self._tex_ids: dict = {}
         self._tex_names: list = []
         self._epoch = None
+        self._hidden_buf = np.empty(0, dtype=bool)
 
     # -- texture name interning -------------------------------------------
 
@@ -315,46 +330,73 @@ class RenderTable:
 
     # -- synchronisation ---------------------------------------------------
 
-    def sync(self, brushes, epoch=None):
-        """Bring the table into line with *brushes*.
+    def begin_frame(self, brushes, epoch=None):
+        """Bring the table into line with *brushes* and return the live hidden mask.
 
-        *epoch* is the world's coarse change counter.  When it is unchanged and
-        the row set still matches, this is a couple of comparisons and returns
-        immediately -- the per-frame case.  When it moves, every row's cold
+        This is the whole of the projection's per-frame Python cost, and it is
+        one pass over the brush list doing the only two things that genuinely
+        cannot be cached:
+
+        * reading the **live** ``hidden`` flag.  Big World parks objects by
+          writing it directly, with no notification, precisely because every
+          per-frame consumer already reads it
+          (:data:`engine.spatial.PARKED_HIDDEN_KEY`);
+        * noticing that the row set changed without anybody saying so -- a
+          plugin appending a brush, say.  The identity compare is nearly free
+          once the loop is already touching the object.
+
+        Everything else -- classification, texture resolution, UVs -- is behind
+        *epoch*, the world's coarse change counter.  When it moves, the cold
         columns are re-resolved: O(N) once per editor gesture, never per frame.
 
-        Rows are matched by ``brush['id']``, so a structural change (a brush
-        added, deleted, or the whole list replaced by undo) costs a set diff
-        rather than a full re-resolution: surviving rows keep the slot and the
-        columns they had.  That is what lets
-        :meth:`LogicThread.notify_visibility_changed` stay as cheap as its
-        contract says it is when Big World streams a cell in or out.
-
-        Every brush must already carry an id -- call
-        :meth:`EditorState.ensure_entity_ids` first.  A brush without one is
-        given a slot but keyed by ``None``, which is harmless for the frame
-        path and detectable by a caller that cares.
+        Rows are matched by ``brush['id']``, so a structural change costs a set
+        diff rather than a full re-resolution: surviving rows keep the columns
+        they had.  Call :meth:`EditorState.ensure_entity_ids` first; a brush
+        without an id still gets a slot, it just cannot be matched across a
+        reconcile.
         """
-        cold_dirty = epoch is None or epoch != self._epoch
         n = len(brushes)
+        if len(self._hidden_buf) < n:
+            self._hidden_buf = np.empty(max(n, 16), dtype=bool)
+        hidden = self._hidden_buf[:n]
 
-        if not cold_dirty and n == self.count:
-            # Fast path: same epoch, same row count.  Verify the row set really
-            # is unchanged with one identity comparison per slot, not a dict
-            # rebuild -- the list is the same object frame to frame in the
-            # common case, so this is a cheap pointer walk.
-            same = True
-            table_brushes = self.brushes
-            for i in range(n):
-                if table_brushes[i] is not brushes[i]:
-                    same = False
+        cold_dirty = epoch is None or epoch != self._epoch
+        structural = cold_dirty or n != self.count
+        table_brushes = self.brushes
+
+        if structural:
+            for i, b in enumerate(brushes):
+                hidden[i] = b.get('hidden', False)
+        else:
+            for i, b in enumerate(brushes):
+                hidden[i] = b.get('hidden', False)
+                if table_brushes[i] is not b:
+                    structural = True
+
+        if structural:
+            self._reconcile(brushes, cold_dirty)
+            self._epoch = epoch
+        return hidden
+
+    def sync(self, brushes, epoch=None):
+        """Reconcile without reading ``hidden``.  Returns whether it did.
+
+        :meth:`begin_frame` is what the render path calls; this is for callers
+        that want the columns brought up to date on their own schedule (tests,
+        and anything preparing a pass outside the frame loop).
+        """
+        before = self.generation
+        cold_dirty = epoch is None or epoch != self._epoch
+        structural = cold_dirty or len(brushes) != self.count
+        if not structural:
+            for i, b in enumerate(brushes):
+                if self.brushes[i] is not b:
+                    structural = True
                     break
-            if same:
-                return False
-
-        self._reconcile(brushes, cold_dirty)
-        self._epoch = epoch
-        return True
+        if structural:
+            self._reconcile(brushes, cold_dirty)
+            self._epoch = epoch
+        return self.generation != before
 
     def _reconcile(self, brushes, cold_dirty):
         """Rebuild the slot mapping, preserving the cold columns that survive.
@@ -409,6 +451,8 @@ class RenderTable:
                            if bid is not None}
         self.brushes = list(brushes)
         self.count = n
+        self.dynamic_slots = np.flatnonzero(
+            self.class_bits[:n] & CLASS_DYNAMIC).astype(np.int32)
         self.generation += 1
 
     def refresh_transforms(self, brushes, slots):
@@ -423,20 +467,16 @@ class RenderTable:
 
     # -- derived views -----------------------------------------------------
 
-    def live_hidden(self, brushes, out=None):
-        """The *live* ``hidden`` flag per row, as a bool array.
+    def live_hidden(self, brushes):
+        """The live ``hidden`` flag per row, without reconciling.
 
-        Read fresh every frame on purpose: Big World parks objects by writing
-        ``hidden`` directly, with no notification, precisely because every
-        per-frame consumer already reads it.  This is the one column that
-        cannot be cached, and it is one dict ``get`` per brush -- the cheapest
-        field in the table, which is what makes paying for it per frame the
-        right trade.
+        The frame path gets this from :meth:`begin_frame`, which reads it in
+        the same pass it checks the row set in.  This is for everything else.
         """
         n = len(brushes)
-        if out is None or len(out) < n:
-            out = np.empty(n, dtype=bool)
-        np.copyto(out[:n], np.fromiter(
-            (bool(b.get('hidden', False)) for b in brushes),
-            dtype=bool, count=n))
-        return out[:n]
+        if len(self._hidden_buf) < n:
+            self._hidden_buf = np.empty(max(n, 16), dtype=bool)
+        out = self._hidden_buf[:n]
+        for i, b in enumerate(brushes):
+            out[i] = b.get('hidden', False)
+        return out

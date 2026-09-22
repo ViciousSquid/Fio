@@ -245,16 +245,28 @@ def test_leaving_play_mode_removes_the_model_collision_pseudo_brushes(logic):
     assert thread._collision_brushes_cache == thread.brushes
 
 
-def test_the_cull_cache_is_invalidated_when_play_mode_ends(logic):
-    thread = logic(brushes=room())
+def test_the_render_projection_survives_the_play_mode_round_trip(logic):
+    """The projection is not a play-session artefact.
+
+    The cull buffers it replaced were built on entering play and released on
+    leaving, because they only served the play-mode fast path.  The projection
+    serves both modes, so it is not torn down -- but it must still describe the
+    world correctly on the other side of the switch.
+    """
+    brushes = room()
+    thread = logic(brushes=brushes)
     thread.set_play_mode(True)
-    assert thread._cull_valid is True, "the cull cache was not built on entry"
+    thread._prepare_render_state()
+    table = thread._render_table
+    assert table.count == len(brushes)
 
     thread.set_play_mode(False)
+    thread._prepare_render_state()
 
-    assert thread._cull_valid is False
-    assert thread._cull_centers is None, (
-        "the cull buffers still hold arrays sized for the finished session")
+    assert table.count == len(brushes)
+    for index, brush in enumerate(brushes):
+        assert table.ids[index] == brush["id"]
+        assert list(table.center[index]) == pytest.approx(brush["pos"])
 
 
 # ---------------------------------------------------------------------------

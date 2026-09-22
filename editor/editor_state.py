@@ -60,6 +60,10 @@ class EditorState:
     """Manages all the data for the current level being edited."""
 
     def __init__(self):
+        #: Coarse "something about the world changed" counter -- see
+        #: :meth:`mark_world_changed`.  Set before anything that bumps it can
+        #: run, because save_state() is reachable during construction.
+        self.world_epoch = 0
         self.brushes = []
         self.things = []
         self.selected_object = None
@@ -87,6 +91,29 @@ class EditorState:
     # =========================================================================
 
 
+    def mark_world_changed(self) -> None:
+        """Bump the coarse "something about the world changed" counter.
+
+        A derived structure that resolves expensive per-object data -- the
+        renderer's dense projection above all -- has to know when to re-resolve
+        it without inspecting every object every frame.  This counter is that
+        signal: monotonic, one integer, and cheap enough to compare per frame.
+
+        It is bumped from three places, all of them here, so nothing outside
+        this module has to remember to call it:
+
+        * :meth:`save_state`, which every tool calls at the start of a gesture;
+        * :meth:`_invalidate_entity_caches`, which undo, redo, load and clear
+          go through;
+        * :meth:`mark_lighting_dirty`, which is what a tool holding one undo
+          checkpoint open across a burst of edits calls per edit -- the Surface
+          Inspector being the one that does.
+
+        Deliberately coarse.  It says *something* changed, not what; a consumer
+        that wants to be finer-grained tracks its own per-row dirty set on top.
+        """
+        self.world_epoch += 1
+
     def mark_lighting_dirty(self) -> None:
         """
         Call whenever static geometry or static lights change so the next
@@ -94,6 +121,10 @@ class EditorState:
 
         Safe to call even when the lightmap system is unavailable.
         """
+        # A tool that holds one undo checkpoint open across a burst of edits
+        # (the Surface Inspector) calls this per edit, so it is the signal that
+        # catches what save_state alone would miss.
+        self.world_epoch += 1
         if self.bake_state is not None:
             self.bake_state.mark_dirty()
 
@@ -183,6 +214,7 @@ class EditorState:
         identity or contents cannot see it happen and would go on showing the
         entities that used to be there.
         """
+        self.mark_world_changed()
         if IO_AVAILABLE:
             try:
                 from .io_system import bump_io_revision
@@ -470,6 +502,7 @@ class EditorState:
         record of what the scene now looks like.  :meth:`undo` therefore has to
         capture the live scene itself — see the note there.
         """
+        self.mark_world_changed()
         # Keep the redo branch we are about to drop, so an operation that turns
         # out to change nothing can put it back (see discard_last_checkpoint).
         self._discarded_redo = list(self.redo_stack)
