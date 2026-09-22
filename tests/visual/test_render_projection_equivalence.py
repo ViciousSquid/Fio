@@ -485,3 +485,101 @@ def test_texture_is_the_coarsest_field_so_each_binds_once(renderer, context):
     assert renderer.render_stats.batched_draws == textures, (
         "%d texture binds for %d textures -- the key is not grouping by "
         "texture first" % (renderer.render_stats.batched_draws, textures))
+
+
+# ---------------------------------------------------------------------------
+# The shadow depth pass
+# ---------------------------------------------------------------------------
+
+def _caster_scene(count, casts=True):
+    """Enough casters to exceed the instance buffer's initial capacity."""
+    from editor.things import Light
+
+    brushes = []
+    side = int(count ** 0.5) + 1
+    for i in range(count):
+        x = (i % side) * 110.0 - side * 55.0
+        z = (i // side) * 110.0 - side * 55.0
+        b = box_brush('c%d' % i, (x, 0.0, z), (64.0, 96.0, 64.0))
+        b['textures'] = {}
+        brushes.append(b)
+    light = make_thing(Light, 'caster_light', (0.0, 600.0, 0.0),
+                       color=[255, 255, 255], intensity=2.0, radius=6000.0,
+                       state='on', casts_shadows=casts)
+    return brushes, [light]
+
+
+def test_a_dirty_light_costs_six_submissions_not_six_per_caster(renderer, context):
+    """The caster set does not vary between cube faces; only the matrix does.
+
+    So the casters are packed once and drawn six times, rather than six times
+    per caster -- which is what made the depth pass 96% of a frame's draw calls
+    whenever a light or a mover moved.
+    """
+    import OpenGL.GL as gl
+
+    brushes, things = _caster_scene(120)
+    table, refs, slots = _projection_for(brushes)
+    config = glh.render_config(all_brushes=brushes, all_things=things,
+                               render_table=table, render_refs=refs,
+                               all_brush_slots=slots, shadows_enabled=True)
+    lights = [t for t in things]
+
+    calls = []
+    real = gl.glDrawArraysInstanced
+    plain = []
+    real_plain = gl.glDrawArrays
+    gl.glDrawArraysInstanced = lambda *a, **k: (calls.append(1), real(*a, **k))[1]
+    gl.glDrawArrays = lambda *a, **k: (plain.append(1), real_plain(*a, **k))[1]
+    try:
+        context.bind()
+        renderer.render_shadow_maps(lights, brushes, things, config, None)
+        gl.glFinish()
+    finally:
+        gl.glDrawArraysInstanced = real
+        gl.glDrawArrays = real_plain
+
+    assert len(calls) == 6, (
+        "%d instanced submissions for one light's six faces" % len(calls))
+    assert not plain, (
+        "%d per-caster draws remain on the cube path" % len(plain))
+
+
+def test_more_casters_than_the_buffers_initial_capacity(renderer, context):
+    """Growing the instance buffer must not invalidate a held VAO.
+
+    The shadow pass takes the VAO once and uses it across all six faces, so a
+    growth that recreated it would leave the pass drawing with a deleted name.
+    The brush passes never hit this because they fetch the VAO after packing;
+    every scene in the suite was also small enough to fit the initial capacity,
+    which is exactly why this is pinned at a size that is not.
+    """
+    import OpenGL.GL as gl
+
+    brushes, things = _caster_scene(400)
+    table, refs, slots = _projection_for(brushes)
+    config = glh.render_config(all_brushes=brushes, all_things=things,
+                               render_table=table, render_refs=refs,
+                               all_brush_slots=slots, shadows_enabled=True)
+    assert len(brushes) > 256, "the point is to exceed the initial capacity"
+
+    with glh.no_gl_errors("rendering shadows for more casters than fit"):
+        context.bind()
+        renderer.render_shadow_maps(list(things), brushes, things, config, None)
+        gl.glFinish()
+
+
+def test_shadowed_output_survives_the_instanced_depth_pass(renderer, context):
+    """Against the per-caster path, through the image a light actually casts."""
+    brushes, things = _caster_scene(40)
+    instanced = _render(renderer, context, brushes, things, numeric=True,
+                        shadows_enabled=True)
+
+    saved = renderer.shaders.pop('depth_cube_instanced')
+    renderer._shadow_slot_sig = [None] * len(renderer._shadow_slot_sig)
+    try:
+        fallback = _render(renderer, context, brushes, things, numeric=True,
+                           shadows_enabled=True)
+    finally:
+        renderer.shaders['depth_cube_instanced'] = saved
+    _assert_same_picture(instanced, fallback, "instanced vs per-caster depth")

@@ -96,12 +96,6 @@ class Renderer_F(BaseRenderer):
         self._brush_mat_buf = np.empty((0, 16), dtype=np.float32)
         # name id -> GL texture id / (w, h), grown as the projection interns
         # names. Resolved once per unique name, never per brush.
-        # Per-face instancing: one VBO of instance rows, and a VAO binding it
-        # alongside the shared cube geometry.
-        self._brush_instance_vbo = None
-        self._brush_instance_vao = None
-        self._brush_instance_capacity = 0
-        self._brush_instance_data = np.empty((0, 32), dtype=np.float32)
         self._gl_tex_by_name_id = np.zeros(0, dtype=np.int32)
         self._tex_size_by_name_id = np.zeros((0, 2), dtype=np.float32)
         self._brush_nmat_buf = np.empty((0, 9), dtype=np.float32)
@@ -183,21 +177,6 @@ class Renderer_F(BaseRenderer):
             return self._identity_mat3
 
     # ------------------------------------------------------------------
-
-    def _frame_transforms(self, table, slots):
-        """Model and normal matrices for *slots*, into reusable buffers.
-
-        One batched build per pass instead of one memoised glm matrix per brush
-        object.  The buffers are grown geometrically and never shrunk, so a
-        steady-state frame allocates nothing.
-        """
-        count = len(slots)
-        if len(self._brush_mat_buf) < count:
-            capacity = max(count, 16, len(self._brush_mat_buf) * 2)
-            self._brush_mat_buf = np.empty((capacity, 16), dtype=np.float32)
-            self._brush_nmat_buf = np.empty((capacity, 9), dtype=np.float32)
-        return render_table.model_matrices(
-            table, slots, self._brush_mat_buf, self._brush_nmat_buf)
 
     @staticmethod
     def _selected_slot(table, config):
@@ -444,114 +423,6 @@ class Renderer_F(BaseRenderer):
             grown[name_id] = (w, h)
         self._tex_size_by_name_id = grown
         return grown
-
-    def _ensure_brush_instance_buffer(self, count):
-        """Grow the per-face instance VBO and its staging array to *count* rows."""
-        if self._brush_instance_vbo is None:
-            self._brush_instance_vbo = gl.glGenBuffers(1)
-        if count <= self._brush_instance_capacity:
-            return
-        capacity = max(count, 256, self._brush_instance_capacity * 2)
-        self._brush_instance_capacity = capacity
-        self._brush_instance_data = np.empty(
-            (capacity, BaseRenderer.BRUSH_INSTANCE_FLOATS), dtype=np.float32)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, self._brush_instance_data.nbytes,
-                        None, gl.GL_DYNAMIC_DRAW)
-        # The VAO's instance pointers refer to the old buffer object only by
-        # name, which has not changed -- but the stride and offsets have to be
-        # re-specified against the new storage, so drop the VAO and rebuild it.
-        if self._brush_instance_vao is not None:
-            try:
-                gl.glDeleteVertexArrays(1, [self._brush_instance_vao])
-            except Exception:
-                pass
-            self._brush_instance_vao = None
-
-    def _ensure_brush_instance_vao(self):
-        """A VAO over the shared cube VBO plus the per-face instance buffer.
-
-        Deliberately separate from ``vaos['cube']``: the non-instanced path
-        shares that one, and giving it eight enabled divisor-1 attributes would
-        have every ordinary cube draw read an instance buffer it does not use.
-        """
-        if self._brush_instance_vao is not None:
-            return self._brush_instance_vao
-        vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._cube_vbo)
-        for location, size, offset in ((0, 3, 0), (1, 3, 12), (2, 2, 24)):
-            gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
-                                     32, ctypes.c_void_p(offset))
-            gl.glEnableVertexAttribArray(location)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
-        stride = BaseRenderer.BRUSH_INSTANCE_FLOATS * 4
-        for location in range(3, 11):
-            gl.glVertexAttribPointer(
-                location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
-                ctypes.c_void_p((location - 3) * 16))
-            gl.glEnableVertexAttribArray(location)
-            gl.glVertexAttribDivisor(location, 1)
-        gl.glBindVertexArray(0)
-        self._brush_instance_vao = vao
-        return vao
-
-    def _point_brush_instances_at(self, base):
-        """Re-aim the instance attributes at instance *base*.
-
-        OpenGL 3.3 has no ``glDrawArraysInstancedBaseInstance``, so a run that
-        starts part way through the buffer is reached by moving the attribute
-        pointers instead. Eight calls per run, against six vertices' worth of
-        draw -- and there are at most six runs per texture.
-        """
-        stride = BaseRenderer.BRUSH_INSTANCE_FLOATS * 4
-        origin = int(base) * stride
-        for location in range(3, 11):
-            gl.glVertexAttribPointer(
-                location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
-                ctypes.c_void_p(origin + (location - 3) * 16))
-
-    def _pack_brush_instances(self, models, normals, rows, spare, payload):
-        """Pack one instance row per draw item, straight from existing arrays.
-
-        The layout is :data:`BaseRenderer.BRUSH_INSTANCE_ATTRS`: the model
-        matrix, the normal matrix padded to three vec4 with one spare scalar,
-        and a payload vec4 whose meaning belongs to the calling pass.  Every
-        field is a vectorised take -- no Python loop, and no going back to an
-        object for a transform that already exists as a column.
-
-        *rows* selects which of *models* / *normals* each instance uses, so one
-        brush appearing as six faces costs six instance rows and one matrix
-        build.
-        """
-        count = len(rows)
-        self._ensure_brush_instance_buffer(count)
-        data = self._brush_instance_data[:count]
-        np.take(models, rows, axis=0, out=data[:, 0:16])
-        item_normals = normals[rows]
-        data[:, 16:19] = item_normals[:, 0:3]
-        data[:, 19] = spare
-        data[:, 20:23] = item_normals[:, 3:6]
-        data[:, 23] = 0.0
-        data[:, 24:27] = item_normals[:, 6:9]
-        data[:, 27] = 0.0
-        data[:, 28:32] = payload
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
-        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
-        return count
-
-    def _begin_instanced_pass(self, name, projection, view, lights):
-        """Bind an instanced brush program and its per-pass uniform state."""
-        program = self.shaders[name]
-        uniforms = self.uniforms[name]
-        gl.glUseProgram(program)
-        self._current_shader = program
-        self._upload_lights_once(name, lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
-                              glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
-                              glm.value_ptr(view))
-        return uniforms
 
     @staticmethod
     def lit_instance_payload(table, row_slots, selected_slot=-1):
