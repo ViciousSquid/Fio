@@ -29,6 +29,7 @@ from OpenGL.GL.shaders import compileProgram, compileShader
 
 from engine.constants import is_water_brush, brush_aabb_bounds
 from engine import brush_geometry
+from engine import render_table
 from engine import shaders
 from engine.shaders import DEFAULT_SHADERS
 from engine.terrain import TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER
@@ -1721,6 +1722,82 @@ layout (location = 9) in vec4 iNormal2;
             },)
         return result
 
+    def _classify_brush_slots(self, table, slots, config):
+        """Split visible brush slots into the render passes, numerically.
+
+        The array form of ``_sort_objects``' brush half.  That loop asked every
+        visible brush what it was, once per frame -- ``is_water_brush`` alone is
+        six ``str.lower()`` calls and six substring searches per brush -- to
+        reach a verdict that only changes when the brush is edited.  The
+        projection resolved it at edit time into ``class_bits``, so the same
+        split is one mask per class.
+
+        The classes are mutually exclusive in the same order the Python chain
+        tried them (water, then fog, then glass, then glow, then trigger), so
+        ``_brush_class_bits`` sets at most one of them and the masks cannot
+        disagree with what the loop used to decide.
+
+        Returns int32 slot arrays -- no objects are materialised here.
+        """
+        empty = slots[:0]
+        if not len(slots):
+            return {'opaque': empty, 'textured': empty, 'solid': empty,
+                    'transparent': empty, 'water': empty, 'glass': empty,
+                    'fog': empty, 'glow': empty}
+
+        bits = table.class_bits[slots]
+        opaque_mask = (bits & render_table.CLASS_NON_OPAQUE) == 0
+        textured_mask = (bits & render_table.CLASS_TEXTURED) != 0
+        # A trigger volume is drawn as a wireframe while editing and not at all
+        # in play, which is what the old loop's `if not is_play` meant.
+        if config.get('play_mode', False):
+            trigger_mask = np.zeros(len(slots), dtype=bool)
+        else:
+            trigger_mask = (bits & render_table.CLASS_TRIGGER) != 0
+
+        return {
+            'opaque': slots[opaque_mask],
+            'textured': slots[opaque_mask & textured_mask],
+            'solid': slots[opaque_mask & ~textured_mask],
+            'transparent': slots[trigger_mask],
+            'water': slots[(bits & render_table.CLASS_WATER) != 0],
+            'glass': slots[(bits & render_table.CLASS_GLASS) != 0],
+            'fog': slots[(bits & render_table.CLASS_FOG) != 0],
+            'glow': slots[(bits & render_table.CLASS_GLOW) != 0],
+        }
+
+    @staticmethod
+    def _distance_cull_slots(table, slots, cx, cz, limit_sq):
+        """Narrow *slots* to those within *limit_sq* on the XZ plane.
+
+        The broad-phase distance cull, as a mask rather than a compaction.  It
+        used to run over a Python list and rebuild another one an element at a
+        time (``render_cull.cull_by_distance``); the surviving slots are the
+        same answer with no object touched.
+        """
+        if not len(slots):
+            return slots
+        dx = table.center[slots, 0] - cx
+        dz = table.center[slots, 2] - cz
+        return slots[(dx * dx + dz * dz) <= limit_sq]
+
+    @staticmethod
+    def _sort_slots_by_distance(table, slots, cx, cz, reverse=True):
+        """Depth-order *slots* from the projection's centres.
+
+        Replaces reconstructing an array from a list of row views and then
+        rebuilding an object list from the sort order: the positions are
+        already dense, so the sort is one argsort over a gathered distance
+        vector and the result is still slots.
+        """
+        if len(slots) < 2:
+            return slots
+        dx = table.center[slots, 0] - cx
+        dz = table.center[slots, 2] - cz
+        distances = dx * dx + dz * dz
+        order = np.argsort(-distances if reverse else distances, kind="stable")
+        return slots[order]
+
     def _split_opaque(self, brushes):
         textured, solid = [], []
         for b in brushes:
@@ -2048,6 +2125,53 @@ layout (location = 9) in vec4 iNormal2;
             gl.glUniform1i(loc, base + i)
         gl.glActiveTexture(gl.GL_TEXTURE0)
 
+    @staticmethod
+    def _shadow_caster_slots(table, all_slots):
+        """The brushes eligible to cast a shadow, as slots.
+
+        This filter used to be a Python walk over every brush in the level --
+        five dict lookups and ``is_water_brush``'s six-string search each --
+        run every frame, before anything had checked whether a single cube-map
+        actually needed re-rendering.  The verdict changes only when a brush is
+        edited, so the projection resolved it at edit time; here it is one mask.
+        """
+        if not len(all_slots):
+            return all_slots
+        bits = table.class_bits[all_slots]
+        return all_slots[(bits & render_table.CLASS_SHADOW_CASTER) != 0]
+
+    @staticmethod
+    def _casters_in_reach(table, slots, lx, ly, lz, reach):
+        """Caster slots within *reach* of a light, and a signature of them.
+
+        Replaces rebuilding ``np.asarray([b['pos'] for b in brushes])`` and
+        ``[b['size'] ...]`` from the brush dicts every frame: the projection
+        already holds both, so the whole per-light test is
+        ``center[slots]`` and one comparison.
+
+        The signature is the caster geometry itself rather than a tuple
+        reconstructed per brush.  A light's cube-map is valid exactly while the
+        casters in reach of it have not moved or changed shape, which is what
+        these bytes say -- and comparing them is a memcmp over a few kilobytes
+        instead of building thousands of Python tuples.
+        """
+        if not len(slots):
+            return slots, ()
+        center = table.center[slots]
+        dx = center[:, 0] - lx
+        dy = center[:, 1] - ly
+        dz = center[:, 2] - lz
+        # A brush counts when the light reaches its bounding sphere, whose
+        # radius is the largest half-extent -- the same test as before.
+        limit = reach + table.half[slots].max(axis=1)
+        sel = slots[(dx * dx + dy * dy + dz * dz) <= limit * limit]
+        if not len(sel):
+            return sel, ()
+        geometry = np.concatenate((table.center[sel].ravel(),
+                                   table.half[sel].ravel(),
+                                   table.rot[sel].ravel().astype(np.float64)))
+        return sel, (sel.tobytes(), geometry.tobytes())
+
     def _prepare_shadow_caster_batch(self, brushes, models):
         """Build one numeric caster snapshot shared by every shadow light."""
         if brushes:
@@ -2218,19 +2342,35 @@ layout (location = 9) in vec4 iNormal2;
                     break
 
         # ---- Filter casters once & decide which lights are dirty ------------
-        caster_brushes = []
-        for b in brushes:
-            if b.get('hidden') or b.get('is_trigger') or b.get('is_fog') or b.get('operation') == 'subtract':
-                continue
-            if is_water_brush(b) or b.get('shader') in ('Fog', 'Glass', 'Glow'):
-                continue
-            caster_brushes.append(b)
+        # Models keep the object path: they are not projected, and the set is
+        # small enough that it has never been the cost here.
         caster_models = [t for t in things
                          if isinstance(t, Thing) and t.properties.get('model_path')]
 
-        # Build numeric caster positions once; every dirty light reuses them.
-        caster_batch = self._prepare_shadow_caster_batch(
-            caster_brushes, caster_models)
+        table = config.get('render_table')
+        refs = config.get('render_refs')
+        caster_slots = config.get('all_brush_slots')
+        numeric = (table is not None and refs is not None
+                   and caster_slots is not None and len(refs) >= table.count)
+
+        if numeric:
+            caster_slots = self._shadow_caster_slots(table, caster_slots)
+            caster_brushes = None
+            # Brush positions come from the projection, so the only snapshot
+            # still worth building is the models', and it is built once for
+            # every light rather than once per light.
+            caster_batch = self._prepare_shadow_caster_batch((), caster_models)
+        else:
+            caster_brushes = []
+            for b in brushes:
+                if b.get('hidden') or b.get('is_trigger') or b.get('is_fog') or b.get('operation') == 'subtract':
+                    continue
+                if is_water_brush(b) or b.get('shader') in ('Fog', 'Glass', 'Glow'):
+                    continue
+                caster_brushes.append(b)
+            # Build numeric caster positions once; every dirty light reuses them.
+            caster_batch = self._prepare_shadow_caster_batch(
+                caster_brushes, caster_models)
 
         to_render = []   # (light, slot, in_brushes, in_models)
         for l in lights:
@@ -2239,9 +2379,18 @@ layout (location = 9) in vec4 iNormal2;
                 continue
             lx, ly, lz = float(l.pos[0]), float(l.pos[1]), float(l.pos[2])
             radius = max(float(l.get_radius()), 1.0)
-            in_brushes, in_models, caster_keys = self._collect_shadow_casters(
-                caster_brushes, caster_models, lx, ly, lz, radius,
-                batch=caster_batch)
+            if numeric:
+                in_slots, brush_keys = self._casters_in_reach(
+                    table, caster_slots, lx, ly, lz, radius)
+                # Models still go through the object path for their own keys.
+                _, in_models, (_, mkeys) = self._collect_shadow_casters(
+                    (), caster_models, lx, ly, lz, radius, batch=caster_batch)
+                in_brushes = in_slots
+                caster_keys = (brush_keys, mkeys)
+            else:
+                in_brushes, in_models, caster_keys = self._collect_shadow_casters(
+                    caster_brushes, caster_models, lx, ly, lz, radius,
+                    batch=caster_batch)
             sig = (round(lx, 3), round(ly, 3), round(lz, 3), round(radius, 3), caster_keys)
             self._light_shadow_index[id(l)] = slot
             if self._shadow_slot_sig[slot] == sig:
@@ -2324,6 +2473,11 @@ layout (location = 9) in vec4 iNormal2;
                 # convex mesh for angled brushes), pre-filtered by reach.
                 gl.glBindVertexArray(cube_vao)
                 for b in in_brushes:
+                    # Numeric path: in_brushes is a slot array, and a slot
+                    # becomes an object only here, where the draw needs the
+                    # brush's plane set for its mesh.
+                    if refs is not None and not isinstance(b, dict):
+                        b = refs[int(b)]
                     gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE,
                                           glm.value_ptr(self._brush_model_matrix(b)))
                     mesh = self._get_geo_mesh(b)
@@ -3982,5 +4136,6 @@ layout (location = 9) in vec4 iNormal2;
     # --------------------------------------------------------------------------
     # Abstract method (must be overridden by Forward/Deferred)
     # --------------------------------------------------------------------------
-    def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config):
+    def render_scene(self, projection, view, camera_pos, brushes, things,
+                     selected_object, config, clear=True, brush_slots=None):
         raise NotImplementedError("Derived renderer must implement render_scene()")

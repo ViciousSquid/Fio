@@ -611,7 +611,19 @@ class Renderer_F(BaseRenderer):
         return [light for light in lights
                 if light.properties.get('state', 'on') == 'on']
 
-    def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config, clear=True):
+    def render_scene(self, projection, view, camera_pos, brushes, things,
+                     selected_object, config, clear=True, brush_slots=None):
+        """Draw one view.
+
+        *brush_slots* is the visibility result as integer slots into the dense
+        render projection (``config['render_table']``).  When it is supplied,
+        the brush half of the frame -- distance cull, classification into
+        passes, depth ordering -- is done with masks over the projection's
+        columns, and a brush becomes a Python object only where a draw path
+        still needs its dict.  It is passed for the main camera pass only: the
+        split-screen second view and the portal virtual views are drawn from
+        different brush sets, so they take the object path below.
+        """
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDepthFunc(gl.GL_LESS)
@@ -657,37 +669,94 @@ class Renderer_F(BaseRenderer):
         # would have thrown away. Leaving it off in the editor keeps a large
         # brush whose centre is out of range but whose near end is in shot from
         # blinking out while it is being built.
-        cull_brushes, cull_things = brushes, things
-        cull_brush_positions = config.get('brush_positions')
+        table = config.get('render_table')
+        refs = config.get('render_refs')
+        numeric = (brush_slots is not None and table is not None
+                   and refs is not None and len(refs) >= table.count)
+
+        cull_things = things
         cull_thing_positions = config.get('thing_positions')
-        if cull_brush_positions is not None:
-            cull_brush_positions = cull_brush_positions[:len(cull_brushes)]
         if cull_thing_positions is not None:
             cull_thing_positions = cull_thing_positions[:len(cull_things)]
-        if config.get('camera_distance_cull', config.get('play_mode', False)):
-            cull_brushes, cull_things = self._camera_distance_cull(
-                brushes, things, camera_pos,
+
+        cx = cz = None
+        if camera_pos is not None:
+            cx, cz = _cull_camera_xz(camera_pos)
+
+        if numeric:
+            # ---- brushes: masks over the projection, no objects yet --------
+            slots = brush_slots
+            if (config.get('camera_distance_cull', config.get('play_mode', False))
+                    and cx is not None):
+                slots = self._distance_cull_slots(
+                    table, slots, cx, cz, self.view_distance.distance_sq)
+            groups = self._classify_brush_slots(table, slots, config)
+            if cx is not None:
+                for key in ('transparent', 'water', 'glass'):
+                    groups[key] = self._sort_slots_by_distance(
+                        table, groups[key], cx, cz)
+
+            def _objs(key):
+                # The one index-to-object conversion left on the brush path,
+                # and it happens per pass, on what is actually drawn, rather
+                # than up front for everything visible.
+                return refs[groups[key]].tolist() if len(groups[key]) else []
+
+            opaque_brushes = _objs('opaque')
+            textured_opaque = _objs('textured')
+            solid_opaque = _objs('solid')
+            transparent_brushes = _objs('transparent')
+            water_brushes = _objs('water')
+            glass_brushes = _objs('glass')
+            fog_volumes = _objs('fog')
+            glow_brushes = _objs('glow')
+
+            # Things keep the object path: they are not projected, and their
+            # render kinds are entity semantics rather than material state.
+            cull_brushes = None
+            if (config.get('camera_distance_cull', config.get('play_mode', False))
+                    and camera_pos is not None):
+                _, cull_things = self._camera_distance_cull(
+                    (), things, camera_pos,
+                    thing_positions=cull_thing_positions)
+                cull_thing_positions = self._last_cull_thing_positions
+
+            models_to_render = self._model_render_buf
+            models_to_render.clear()
+            _, _, sprite_things, _, _, _, _, sort_positions = self._sort_objects(
+                (), cull_things, config,
+                model_out=models_to_render,
+                thing_positions=cull_thing_positions,
+                collect_sort_positions=True,
+            )
+        else:
+            cull_brushes = brushes
+            cull_brush_positions = config.get('brush_positions')
+            if cull_brush_positions is not None:
+                cull_brush_positions = cull_brush_positions[:len(cull_brushes)]
+            if config.get('camera_distance_cull', config.get('play_mode', False)):
+                cull_brushes, cull_things = self._camera_distance_cull(
+                    brushes, things, camera_pos,
+                    brush_positions=cull_brush_positions,
+                    thing_positions=cull_thing_positions,
+                )
+                cull_brush_positions = self._last_cull_brush_positions
+                cull_thing_positions = self._last_cull_thing_positions
+
+            models_to_render = self._model_render_buf
+            models_to_render.clear()
+            (opaque_brushes, transparent_brushes, sprite_things,
+             fog_volumes, water_brushes, glass_brushes, glow_brushes,
+             sort_positions) = self._sort_objects(
+                cull_brushes,
+                cull_things,
+                config,
+                model_out=models_to_render,
                 brush_positions=cull_brush_positions,
                 thing_positions=cull_thing_positions,
+                collect_sort_positions=True,
             )
-            cull_brush_positions = self._last_cull_brush_positions
-            cull_thing_positions = self._last_cull_thing_positions
-
-        models_to_render = self._model_render_buf
-        models_to_render.clear()
-        sort_result = self._sort_objects(
-            cull_brushes,
-            cull_things,
-            config,
-            model_out=models_to_render,
-            brush_positions=cull_brush_positions,
-            thing_positions=cull_thing_positions,
-            collect_sort_positions=True,
-        )
-        (opaque_brushes, transparent_brushes, sprite_things,
-         fog_volumes, water_brushes, glass_brushes, glow_brushes,
-         sort_positions) = sort_result
-        textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
+            textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
 
         # _sort_objects classified the same visible Thing set and kept model
         # Things out of sprite_things, so the billboard pass needs no second
@@ -796,16 +865,18 @@ class Renderer_F(BaseRenderer):
         if models_to_render:
             self.draw_models(projection, view, camera_pos, models_to_render, lights, config)
         if camera_pos is not None:
-            cx, cz = _cull_camera_xz(camera_pos)
-            if transparent_brushes:
-                transparent_brushes = _sort_by_distance(
-                    transparent_brushes, sort_positions['transparent'], cx, cz)
-            if water_brushes:
-                water_brushes = _sort_by_distance(
-                    water_brushes, sort_positions['water'], cx, cz)
-            if glass_brushes:
-                glass_brushes = _sort_by_distance(
-                    glass_brushes, sort_positions['glass'], cx, cz)
+            if not numeric:
+                # The numeric path ordered these from the projection's centres
+                # before it materialised them; this is the object path's sort.
+                if transparent_brushes:
+                    transparent_brushes = _sort_by_distance(
+                        transparent_brushes, sort_positions['transparent'], cx, cz)
+                if water_brushes:
+                    water_brushes = _sort_by_distance(
+                        water_brushes, sort_positions['water'], cx, cz)
+                if glass_brushes:
+                    glass_brushes = _sort_by_distance(
+                        glass_brushes, sort_positions['glass'], cx, cz)
             if final_sprites:
                 final_sprites = _sort_by_distance(
                     final_sprites, sort_positions['sprites'], cx, cz)

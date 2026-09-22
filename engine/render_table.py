@@ -99,6 +99,10 @@ CLASS_SHADOW_CASTER   = 1 << 9
 #: whose warm columns are re-read per frame.  Replaces the ``dynamic_rows``
 #: list ``_build_cull_cache`` kept, and comes from the same two flags.
 CLASS_DYNAMIC         = 1 << 10
+#: Brush-wide ``texture_tiling``: every face without an explicit scale keeps a
+#: constant texel size.  Read per face per frame by the textured pass, so it is
+#: resolved here with the rest of the material state.
+CLASS_TEXTURE_TILING  = 1 << 11
 
 #: The classes that make a brush something other than plain opaque geometry.
 #: A row with none of these bits set goes in the opaque pass.
@@ -149,6 +153,8 @@ def _brush_class_bits(brush) -> int:
         bits |= CLASS_SUBTRACT
     if brush.get('is_mover', False) or brush.get('is_door', False):
         bits |= CLASS_DYNAMIC
+    if brush.get('texture_tiling', False):
+        bits |= CLASS_TEXTURE_TILING
     if brush_geometry.brush_has_geometry(brush):
         bits |= CLASS_HAS_GEOMETRY
 
@@ -176,7 +182,8 @@ class RenderTable:
 
     __slots__ = ('generation', 'count', 'ids', 'slot_of_id', 'brushes',
                  'center', 'half', 'rot', 'class_bits', 'tex_name_id',
-                 'uv_scale', 'uv_angle', 'uv_shift', 'geo_epoch',
+                 'uv_scale', 'uv_angle', 'uv_shift', 'uv_natural',
+                 'uv_has_scale', 'geo_epoch',
                  'dynamic_slots', '_tex_ids', '_tex_names', '_epoch',
                  '_hidden_buf')
 
@@ -212,6 +219,14 @@ class RenderTable:
         self.uv_scale = np.zeros((0, 6, 2), dtype=np.float32)
         self.uv_angle = np.zeros((0, 6), dtype=np.float32)
         self.uv_shift = np.zeros((0, 6, 2), dtype=np.float32)
+        #: Per face: the texture keeps a constant texel size, recomputed from
+        #: the brush's live extent every time it is drawn.  A *mode*, so it
+        #: cannot be baked into uv_scale -- but whether the mode is on is
+        #: material state, and that is what lives here.
+        self.uv_natural = np.zeros((0, 6), dtype=bool)
+        #: Per face: an explicit uv_scale was authored.  Distinguishes "no
+        #: scale set, fall back to FIT" from a scale that happens to be zero.
+        self.uv_has_scale = np.zeros((0, 6), dtype=bool)
         #: The brush's geometry epoch at the time the row was resolved, so a
         #: consumer caching GPU data per row can tell a stale mesh from a live
         #: one without re-deriving ``geometry_signature``.  0 for box brushes.
@@ -268,6 +283,8 @@ class RenderTable:
         self.uv_scale = grow(self.uv_scale)
         self.uv_angle = grow(self.uv_angle)
         self.uv_shift = grow(self.uv_shift)
+        self.uv_natural = grow(self.uv_natural)
+        self.uv_has_scale = grow(self.uv_has_scale)
         self.geo_epoch = grow(self.geo_epoch)
 
     # -- row resolution ----------------------------------------------------
@@ -309,15 +326,15 @@ class RenderTable:
             self.tex_name_id[slot, i] = self.intern_texture(
                 textures.get(face, TEX_DEFAULT))
             scale = uv_scale.get(face)
+            self.uv_has_scale[slot, i] = scale is not None
             if scale is None:
-                # Sentinel for "no explicit scale": the renderer decides
-                # between NATURAL and FIT from the brush's live size, which is
-                # a warm property, so it cannot be baked here.
-                self.uv_scale[slot, i, 0] = 0.0
-                self.uv_scale[slot, i, 1] = 0.0
+                self.uv_scale[slot, i, 0] = 1.0
+                self.uv_scale[slot, i, 1] = 1.0
             else:
                 self.uv_scale[slot, i, 0] = scale[0]
                 self.uv_scale[slot, i, 1] = scale[1]
+            self.uv_natural[slot, i] = brush_geometry.face_uses_natural_scale(
+                brush, face)
             self.uv_angle[slot, i] = uv_angle.get(face, 0.0)
             shift = uv_shift.get(face) or (0.0, 0.0)
             self.uv_shift[slot, i, 0] = shift[0]
@@ -438,7 +455,8 @@ class RenderTable:
             src = np.asarray(move_src, dtype=np.intp)
             dst = np.asarray(move_dst, dtype=np.intp)
             for arr in (self.class_bits, self.tex_name_id, self.uv_scale,
-                        self.uv_angle, self.uv_shift, self.geo_epoch):
+                        self.uv_angle, self.uv_shift, self.uv_natural,
+                        self.uv_has_scale, self.geo_epoch):
                 arr[dst] = arr[src]
 
         for slot, brush in enumerate(brushes):

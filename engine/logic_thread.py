@@ -3934,6 +3934,7 @@ class LogicThread(threading.Thread):
         # slots index every column of the table, so the renderer can classify,
         # sort and batch without reconstructing anything.
         write_state.render_table = table
+        write_state.render_refs = refs
         write_state.visible_brush_slots = visible_slots.astype(np.int32)
         write_state.all_brush_slots = all_slots.astype(np.int32)
 

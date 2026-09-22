@@ -68,6 +68,11 @@ class RenderState:
         # between world-epoch bumps, and its warm columns are refreshed only on
         # the logic thread.
         self.render_table = None
+        #: slot -> the render reference for that row: the live brush dict, or
+        #: for a mover or a door the per-frame snapshot. Indexed by the slot
+        #: arrays below, so a consumer converts an index to an object once, at
+        #: the point it actually needs one, rather than up front for everything.
+        self.render_refs = np.empty(0, dtype=object)
         self.visible_brush_slots = np.empty(0, dtype=np.int32)
         self.all_brush_slots = np.empty(0, dtype=np.int32)
         
@@ -166,6 +171,11 @@ class RenderState:
         self.visible_brush_position_count = 0
         self.visible_thing_position_count = 0
         self.render_table = None
+        #: slot -> the render reference for that row: the live brush dict, or
+        #: for a mover or a door the per-frame snapshot. Indexed by the slot
+        #: arrays below, so a consumer converts an index to an object once, at
+        #: the point it actually needs one, rather than up front for everything.
+        self.render_refs = np.empty(0, dtype=object)
         self.visible_brush_slots = np.empty(0, dtype=np.int32)
         self.all_brush_slots = np.empty(0, dtype=np.int32)
         self.collected_keys = set()
