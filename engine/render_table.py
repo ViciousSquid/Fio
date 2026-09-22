@@ -65,7 +65,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from engine.constants import is_water_brush
+from engine.constants import is_water_brush, normalize_color
 from engine.spatial import authored_hidden
 from engine import brush_geometry
 
@@ -183,7 +183,7 @@ class RenderTable:
     __slots__ = ('generation', 'count', 'ids', 'slot_of_id', 'brushes',
                  'center', 'half', 'rot', 'class_bits', 'tex_name_id',
                  'uv_scale', 'uv_angle', 'uv_shift', 'uv_natural',
-                 'uv_has_scale', 'geo_epoch',
+                 'uv_has_scale', 'colour', 'glow_colour', 'geo_epoch',
                  'dynamic_slots', '_tex_ids', '_tex_names', '_epoch',
                  '_hidden_buf')
 
@@ -227,6 +227,13 @@ class RenderTable:
         #: Per face: an explicit uv_scale was authored.  Distinguishes "no
         #: scale set, fall back to FIT" from a scale that happens to be zero.
         self.uv_has_scale = np.zeros((0, 6), dtype=bool)
+        #: The brush's flat-shaded colour, already normalised to 0..1: the
+        #: tint if it has one, else its colour, else the default grey. Read
+        #: per brush per frame by the lit pass, and changed only by an edit.
+        self.colour = np.zeros((0, 3), dtype=np.float32)
+        #: The Glow pass's overbright colour -- base colour times intensity,
+        #: clamped -- resolved here for the same reason.
+        self.glow_colour = np.zeros((0, 3), dtype=np.float32)
         #: The brush's geometry epoch at the time the row was resolved, so a
         #: consumer caching GPU data per row can tell a stale mesh from a live
         #: one without re-deriving ``geometry_signature``.  0 for box brushes.
@@ -285,6 +292,8 @@ class RenderTable:
         self.uv_shift = grow(self.uv_shift)
         self.uv_natural = grow(self.uv_natural)
         self.uv_has_scale = grow(self.uv_has_scale)
+        self.colour = grow(self.colour)
+        self.glow_colour = grow(self.glow_colour)
         self.geo_epoch = grow(self.geo_epoch)
 
     # -- row resolution ----------------------------------------------------
@@ -339,6 +348,16 @@ class RenderTable:
             shift = uv_shift.get(face) or (0.0, 0.0)
             self.uv_shift[slot, i, 0] = shift[0]
             self.uv_shift[slot, i, 1] = shift[1]
+
+        tint = brush.get('tint')
+        base = normalize_color(tint) if tint else normalize_color(
+            brush.get('colour'))
+        self.colour[slot] = base
+        intensity = float(brush.get('glow_intensity', 10.0))
+        glow_base = normalize_color(tint or brush.get('colour'),
+                                    default=[1.0, 1.0, 1.0])
+        for k in range(3):
+            self.glow_colour[slot, k] = min(glow_base[k] * intensity, 10.0)
 
         if self.class_bits[slot] & CLASS_HAS_GEOMETRY:
             self.geo_epoch[slot] = brush_geometry._brush_epoch(brush)
@@ -456,7 +475,8 @@ class RenderTable:
             dst = np.asarray(move_dst, dtype=np.intp)
             for arr in (self.class_bits, self.tex_name_id, self.uv_scale,
                         self.uv_angle, self.uv_shift, self.uv_natural,
-                        self.uv_has_scale, self.geo_epoch):
+                        self.uv_has_scale, self.colour, self.glow_colour,
+                        self.geo_epoch):
                 arr[dst] = arr[src]
 
         for slot, brush in enumerate(brushes):
@@ -498,3 +518,92 @@ class RenderTable:
         for i, b in enumerate(brushes):
             out[i] = b.get('hidden', False)
         return out
+
+
+def model_matrices(table, slots, out_model=None, out_normal=None):
+    """Model and normal matrices for *slots*, built as arrays.
+
+    ``M = T(centre) * R(axis, angle) * S(size)`` -- the same matrix
+    ``Renderer_F._brush_model_matrix`` memoises on each brush dict, except that
+    this builds the whole batch at once from columns that already exist instead
+    of asking every object for its transform.
+
+    Almost every brush in a Fio level is unrotated, and there that collapses to
+    a diagonal plus a translation: six stores per row and no trigonometry, for
+    the entire visible set in a handful of NumPy operations.  The rotated
+    minority is filled in afterwards, one row at a time, which is what it costs
+    anywhere.
+
+    Returns ``(models (V, 16), normals (V, 9))`` as float32, laid out
+    column-major -- the layout ``glUniformMatrix4fv`` and ``glUniformMatrix3fv``
+    read directly, and the layout an instance buffer wants.
+
+    The normal matrix is ``transpose(inverse(mat3(M)))``, which for ``R * S``
+    is ``R * S**-1``; a zero extent degenerates to zero rather than infinity,
+    matching the identity fallback the scalar path used on a singular matrix.
+    """
+    count = len(slots)
+    if out_model is not None and len(out_model) >= count:
+        models = out_model[:count]
+        models.fill(0.0)
+    else:
+        models = np.zeros((count, 16), dtype=np.float32)
+    if out_normal is not None and len(out_normal) >= count:
+        normals = out_normal[:count]
+        normals.fill(0.0)
+    else:
+        normals = np.zeros((count, 9), dtype=np.float32)
+    if not count:
+        return models, normals
+
+    centre = table.center[slots]
+    size = table.half[slots] * 2.0
+    inv_size = np.divide(1.0, size, out=np.zeros_like(size), where=size != 0.0)
+
+    # --- the unrotated case, for every row ---------------------------------
+    models[:, 0] = size[:, 0]
+    models[:, 5] = size[:, 1]
+    models[:, 10] = size[:, 2]
+    models[:, 12:15] = centre
+    models[:, 15] = 1.0
+    normals[:, 0] = inv_size[:, 0]
+    normals[:, 4] = inv_size[:, 1]
+    normals[:, 8] = inv_size[:, 2]
+
+    # --- and the rotated rows on top ---------------------------------------
+    rot = table.rot[slots]
+    rotated = np.flatnonzero(rot[:, 3] != 0.0)
+    if len(rotated):
+        axis = rot[rotated, :3].astype(np.float64)
+        length = np.linalg.norm(axis, axis=1)
+        # A degenerate axis means no rotation, exactly as the scalar path's
+        # `if glm.length(axis) > 0.001` guard decided.
+        usable = length > 0.001
+        rotated = rotated[usable]
+        if len(rotated):
+            axis = axis[usable] / length[usable, None]
+            angle = np.radians(rot[rotated, 3].astype(np.float64))
+            cos_a = np.cos(angle)[:, None]
+            sin_a = np.sin(angle)[:, None]
+            one_c = 1.0 - cos_a
+            ux, uy, uz = axis[:, 0:1], axis[:, 1:2], axis[:, 2:3]
+            # Rodrigues, as (rows, cols) of the 3x3 rotation.
+            r = np.empty((len(rotated), 3, 3), dtype=np.float64)
+            r[:, 0, 0] = (cos_a + ux * ux * one_c)[:, 0]
+            r[:, 0, 1] = (ux * uy * one_c - uz * sin_a)[:, 0]
+            r[:, 0, 2] = (ux * uz * one_c + uy * sin_a)[:, 0]
+            r[:, 1, 0] = (uy * ux * one_c + uz * sin_a)[:, 0]
+            r[:, 1, 1] = (cos_a + uy * uy * one_c)[:, 0]
+            r[:, 1, 2] = (uy * uz * one_c - ux * sin_a)[:, 0]
+            r[:, 2, 0] = (uz * ux * one_c - uy * sin_a)[:, 0]
+            r[:, 2, 1] = (uz * uy * one_c + ux * sin_a)[:, 0]
+            r[:, 2, 2] = (cos_a + uz * uz * one_c)[:, 0]
+
+            rs = size[rotated]
+            ri = inv_size[rotated]
+            for col in range(3):
+                for row in range(3):
+                    models[rotated, col * 4 + row] = r[:, row, col] * rs[:, col]
+                    normals[rotated, col * 3 + row] = r[:, row, col] * ri[:, col]
+
+    return models, normals

@@ -133,3 +133,20 @@ def brush_aabb_bounds(brush):
     brush['_aabb_bounds'] = bounds
     brush['_aabb_sig'] = sig
     return bounds
+
+def normalize_color(rgb, default=None):
+    """Normalise an RGB colour to 0.0-1.0 floats.
+
+    Accepts [0-255] int or [0.0-1.0] float components.  Returns *default* (or
+    ``[0.8, 0.8, 0.8]``) if *rgb* is None or malformed.
+
+    Lives here rather than in the renderer because the dense render projection
+    resolves brush colours at edit time and must not import a module that pulls
+    in OpenGL.  ``engine.renderer_core`` re-exports it, so every existing
+    caller is unaffected and there is still one definition.
+    """
+    if default is None:
+        default = [0.8, 0.8, 0.8]
+    if not rgb or not isinstance(rgb, (list, tuple)) or len(rgb) < 3:
+        return list(default)
+    return [c / 255.0 if c > 1.0 else c for c in rgb[:3]]

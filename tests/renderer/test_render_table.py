@@ -217,3 +217,93 @@ def test_columns_are_a_pure_projection():
                  'uv_angle', 'uv_shift', 'uv_scale', 'geo_epoch'):
         np.testing.assert_array_equal(getattr(first, name)[:first.count],
                                       getattr(second, name)[:second.count])
+
+
+# ---------------------------------------------------------------------------
+# Transforms built as arrays
+# ---------------------------------------------------------------------------
+
+def _glm_reference(brush):
+    """The matrix pair Renderer_F._brush_model_matrix / _compute_normal_matrix
+    produce for a brush, flattened column-major as value_ptr would give them."""
+    import glm
+    m = glm.translate(glm.mat4(1.0), glm.vec3(*brush['pos']))
+    angle = brush.get('_rot_angle')
+    if angle:
+        axis = glm.vec3(*brush.get('rot_axis', [0, 1, 0]))
+        if glm.length(axis) > 0.001:
+            m = glm.rotate(m, glm.radians(float(angle)), glm.normalize(axis))
+    m = glm.scale(m, glm.vec3(*brush['size']))
+    try:
+        n = glm.transpose(glm.inverse(glm.mat3(m)))
+    except Exception:
+        n = glm.mat3(1.0)
+    flat_m = np.array([m[c][r] for c in range(4) for r in range(4)], dtype=np.float32)
+    flat_n = np.array([n[c][r] for c in range(3) for r in range(3)], dtype=np.float32)
+    return flat_m, flat_n
+
+
+def test_model_matrices_match_the_glm_path_they_replace():
+    """The batched build has to agree with the per-brush one it supersedes.
+
+    If it does not, brushes render in the wrong place -- so this compares
+    against glm for the unrotated case, several rotation axes, and the
+    degenerate axis the scalar path guarded with `glm.length(axis) > 0.001`.
+    """
+    brushes = [
+        _brush(id='plain', pos=[10, 20, 30], size=[64, 128, 32]),
+        _brush(id='yaw', pos=[-5, 0, 7], size=[100, 100, 100],
+               _rot_angle=45.0, rot_axis=[0, 1, 0]),
+        _brush(id='diag', pos=[0, 0, 0], size=[16, 16, 16],
+               _rot_angle=30.0, rot_axis=[1, 1, 0]),
+        _brush(id='roll', pos=[3, 4, 5], size=[8, 8, 8],
+               _rot_angle=90.0, rot_axis=[0, 0, 1]),
+        _brush(id='degenerate', pos=[1, 2, 3], size=[64, 64, 64],
+               _rot_angle=12.0, rot_axis=[0.0, 0.0, 0.0]),
+    ]
+    t = _synced(brushes)
+    models, normals = rt.model_matrices(t, np.arange(len(brushes), dtype=np.int32))
+    for i, brush in enumerate(brushes):
+        ref_m, ref_n = _glm_reference(brush)
+        np.testing.assert_allclose(models[i], ref_m, atol=2e-4,
+                                   err_msg='model matrix for %s' % brush['id'])
+        np.testing.assert_allclose(normals[i], ref_n, atol=2e-4,
+                                   err_msg='normal matrix for %s' % brush['id'])
+
+
+def test_model_matrices_reuse_the_buffers_they_are_given():
+    t = _synced([_brush(id='a'), _brush(id='b')])
+    slots = np.arange(2, dtype=np.int32)
+    mbuf = np.zeros((8, 16), dtype=np.float32)
+    nbuf = np.zeros((8, 9), dtype=np.float32)
+    models, normals = rt.model_matrices(t, slots, mbuf, nbuf)
+    assert models.base is mbuf
+    assert normals.base is nbuf
+
+
+def test_a_zero_extent_gives_a_zero_normal_not_an_infinity():
+    t = _synced([_brush(id='flat', size=[64, 0, 64])])
+    _, normals = rt.model_matrices(t, np.zeros(1, dtype=np.int32))
+    assert np.isfinite(normals).all()
+
+
+# ---------------------------------------------------------------------------
+# Colour
+# ---------------------------------------------------------------------------
+
+def test_colour_column_resolves_tint_over_colour_over_default():
+    brushes = [_brush(id='tinted', tint=[255, 0, 0], colour=[0, 255, 0]),
+               _brush(id='coloured', colour=[0, 255, 0]),
+               _brush(id='bare')]
+    t = _synced(brushes)
+    np.testing.assert_allclose(t.colour[0], [1.0, 0.0, 0.0], atol=1e-6)
+    np.testing.assert_allclose(t.colour[1], [0.0, 1.0, 0.0], atol=1e-6)
+    np.testing.assert_allclose(t.colour[2], [0.8, 0.8, 0.8], atol=1e-6)
+
+
+def test_glow_colour_is_the_overbright_the_glow_pass_computed():
+    t = _synced([_brush(id='g', shader='Glow', tint=[255, 128, 0],
+                        glow_intensity=4.0)])
+    # base * intensity, clamped at 10 -- what draw_glow_brushes did per frame.
+    np.testing.assert_allclose(t.glow_colour[0],
+                               [4.0, min(0.50196078 * 4.0, 10.0), 0.0], atol=1e-5)

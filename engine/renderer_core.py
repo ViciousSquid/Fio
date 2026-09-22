@@ -27,7 +27,8 @@ import numpy as np
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 
-from engine.constants import is_water_brush, brush_aabb_bounds
+from engine.constants import (is_water_brush, brush_aabb_bounds,
+                              normalize_color)
 from engine import brush_geometry
 from engine import render_table
 from engine import shaders
@@ -191,16 +192,10 @@ class ShaderLoader:
 
 
 # ---------- Helper ----------
-def normalize_color(rgb, default=None):
-    """Normalise an RGB colour to 0.0-1.0 floats.
-    Accepts [0-255] int or [0.0-1.0] float components.
-    Returns *default* (or [0.8, 0.8, 0.8]) if rgb is None or malformed.
-    """
-    if default is None:
-        default = [0.8, 0.8, 0.8]
-    if not rgb or not isinstance(rgb, (list, tuple)) or len(rgb) < 3:
-        return list(default)
-    return [c / 255.0 if c > 1.0 else c for c in rgb[:3]]
+#: Re-exported so ``from engine.renderer_core import normalize_color`` keeps
+#: working; it lives in engine.constants because the GL-free render projection
+#: needs it too.  See :func:`engine.constants.normalize_color`.
+normalize_color = normalize_color
 
 
 #: Light-array capacity of each lighting shader, so the renderer can never set
