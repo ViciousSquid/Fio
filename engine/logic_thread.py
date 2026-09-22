@@ -19,7 +19,7 @@ import glm
 import math
 import os
 
-from .threaded_game_state import ThreadedGameState
+from .threaded_game_state import ThreadedGameState, PublishedBrushes
 from .player import Player
 from .camera import Camera
 from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
@@ -3918,9 +3918,12 @@ class LogicThread(threading.Thread):
 
         all_slots = np.flatnonzero(keep)
         visible_slots = np.flatnonzero(visible_mask)
-        all_brushes = refs[all_slots].tolist()
-        visible_brushes = refs[visible_slots].tolist()
-        culled_count = total_count - len(visible_brushes)
+        # Published as views over the slots, not as lists: the conversion back
+        # to Python objects happens only if something actually reads one, and
+        # on the main camera path nothing does.
+        all_brushes = PublishedBrushes(refs, all_slots)
+        visible_brushes = PublishedBrushes(refs, visible_slots)
+        culled_count = total_count - len(visible_slots)
 
         brush_positions = write_state.ensure_visible_brush_positions(
             len(visible_slots))

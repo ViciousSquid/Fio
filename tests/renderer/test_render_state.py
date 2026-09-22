@@ -383,8 +383,13 @@ def test_visibility_is_published_as_slots_into_the_projection(logic):
         thread.set_play_mode(False)
 
 
-def test_hidden_is_not_baked_into_the_cull_cache(logic):
-    """I/O Show/Hide toggles it at runtime, so it is read fresh each frame."""
+def test_hidden_is_not_baked_into_the_projection(logic):
+    """I/O Show/Hide toggles it at runtime, so it is read fresh each frame.
+
+    Big World parks objects through the same flag, with no notification, which
+    is why the projection reads it live rather than caching it -- see
+    engine.spatial.PARKED_HIDDEN_KEY.
+    """
     brush = box_brush("switchable", (0, 0, -400))
     thread = logic(brushes=[brush])
     thread.set_play_mode(True)
@@ -395,9 +400,9 @@ def test_hidden_is_not_baked_into_the_cull_cache(logic):
 
         brush["hidden"] = True
         thread._prepare_render_state()
-        assert thread.game_state.get_write_state().all_brushes == [], (
+        assert len(thread.game_state.get_write_state().all_brushes) == 0, (
             "hiding a brush mid-session did not remove it from the frame; the "
-            "cull cache baked 'hidden' in at play start")
+            "projection baked 'hidden' in instead of reading it live")
     finally:
         thread.set_play_mode(False)
 
@@ -484,3 +489,33 @@ def test_a_render_state_snapshot_is_independent_of_later_writes():
     assert snapshot.hud_message == "one", (
         "a snapshot handed to the renderer changed when the next frame was "
         "published; it now reads %r" % snapshot.hud_message)
+
+
+def test_the_published_brush_lists_are_not_materialised_unless_read(logic):
+    """The frame must not end by converting visibility back into objects.
+
+    The main camera pass consumes slots, so on an ordinary frame nothing asks
+    for a list at all; the portal and split-screen paths, which do, pay for it
+    when they ask.
+    """
+    brushes = pillar_grid(4, 4, spacing=300.0)
+    thread = logic(brushes=brushes)
+    thread.set_play_mode(True)
+    try:
+        thread._prepare_render_state()
+        state = thread.game_state.get_write_state()
+        for published in (state.visible_brushes, state.all_brushes):
+            assert published._list is None, (
+                "the brush list was materialised during _prepare_render_state")
+            # Length and truthiness come from the slots, so the renderer and
+            # the stats overlay can ask without forcing the conversion.
+            assert len(published) >= 0
+            assert bool(published) is (len(published) > 0)
+            assert published._list is None
+
+        # ...and a caller that really wants objects still gets them.
+        materialised = list(state.all_brushes)
+        assert len(materialised) == len(brushes)
+        assert materialised[0] is thread.brushes[0]
+    finally:
+        thread.set_play_mode(False)
