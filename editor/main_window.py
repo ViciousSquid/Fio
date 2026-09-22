@@ -3333,6 +3333,16 @@ class MainWindow(QMainWindow):
                 self.save_state()
                 pasted = copy.deepcopy(self._brush_clipboard)
 
+                # A paste is a new entity, not the one that was copied.
+                # clone_selected_object and the clip tool both re-stamp the
+                # UUID for the same reason: two live objects sharing one id
+                # make find_entity_by_id -- and every I/O target_id routed
+                # through it -- resolve to whichever comes first in the list.
+                if isinstance(pasted, dict):
+                    pasted['id'] = str(uuid.uuid4())
+                else:
+                    pasted.properties['id'] = str(uuid.uuid4())
+
                 # Offset the pasted object so it doesn't sit exactly on top
                 offset = self.grid_size_spinbox.value()
                 if isinstance(pasted, dict):
