@@ -432,3 +432,56 @@ def test_the_colour_overrides_keep_their_priority(renderer, context,
 
     _assert_same_picture(instanced, fallback,
                          'selection=%s' % (selected_index,))
+
+
+# ---------------------------------------------------------------------------
+# The render key is the boundary
+# ---------------------------------------------------------------------------
+
+def _distinct_texture_face_pairs(renderer, brushes, table, slots, config):
+    """How many (texture, face) pairs the scene actually contains."""
+    rows, faces, gl_tex, _scales, _starts = renderer._build_face_batches(
+        table, slots, config)
+    return len({(int(t), int(f)) for t, f in zip(gl_tex, faces)}), len(set(
+        int(t) for t in gl_tex))
+
+
+def test_one_submission_per_distinct_key_no_more_no_fewer(renderer, context):
+    """The run count is the number of distinct keys, by construction.
+
+    Fewer would mean two different GPU states got merged into one draw; more
+    would mean the sort is not actually grouping. Either is invisible in the
+    image, so neither is caught by comparing pixels.
+    """
+    brushes, things = _grid_scene(side=10, textures=5)
+    _render(renderer, context, brushes, things, numeric=True)
+    table, refs, slots = _projection_for(brushes)
+    config = glh.render_config(all_brushes=brushes, all_things=things,
+                               render_table=table, render_refs=refs,
+                               all_brush_slots=slots)
+    pairs, _textures = _distinct_texture_face_pairs(renderer, brushes, table,
+                                                    slots, config)
+    assert renderer.render_stats.draw_calls == pairs, (
+        "%d draw calls for %d distinct (texture, face) keys"
+        % (renderer.render_stats.draw_calls, pairs))
+
+
+def test_texture_is_the_coarsest_field_so_each_binds_once(renderer, context):
+    """Field order in the key decides how often the expensive state changes.
+
+    Sorting by face before texture yields exactly the same picture and exactly
+    the same number of runs -- but every texture is then bound once per face
+    rather than once. Nothing about the image would show it, so the bind count
+    is what pins the layout.
+    """
+    brushes, things = _grid_scene(side=10, textures=5)
+    _render(renderer, context, brushes, things, numeric=True)
+    table, refs, slots = _projection_for(brushes)
+    config = glh.render_config(all_brushes=brushes, all_things=things,
+                               render_table=table, render_refs=refs,
+                               all_brush_slots=slots)
+    _pairs, textures = _distinct_texture_face_pairs(renderer, brushes, table,
+                                                    slots, config)
+    assert renderer.render_stats.batched_draws == textures, (
+        "%d texture binds for %d textures -- the key is not grouping by "
+        "texture first" % (renderer.render_stats.batched_draws, textures))

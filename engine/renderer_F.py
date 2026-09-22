@@ -12,6 +12,7 @@ import os
 
 from .renderer_core import BaseRenderer, normalize_color
 from engine import render_table
+from engine.render_keys import KeyLayout, sort_into_runs
 from engine.brush_geometry import (brush_has_geometry, face_uses_natural_scale,
                                    geometry_signature, natural_repeats)
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
@@ -36,6 +37,13 @@ PORTAL_RENDER_DISTANCE = 2048.0
 # (face_idx * 6). Kept as a module constant so the per-frame texture batch
 # build doesn't allocate a fresh list for every brush.
 _CUBE_FACE_KEYS = ('south', 'north', 'west', 'east', 'down', 'top')
+
+# The render key every brush pass sorts by. Two fields, because two things
+# cannot vary inside one draw: the bound texture, and which of the cube's six
+# faces the draw covers. A pass with no texture packs zero and gets one run,
+# which is the honest answer rather than a special case -- see
+# engine.render_keys for why the key is the boundary at all.
+BRUSH_RUN_KEY = KeyLayout([('texture', 32), ('face', 3)])
 
 # The three fixed colours the lit pass overrides a brush's own colour with.
 # Module constants so the per-brush branch does not build a list every draw.
@@ -582,84 +590,104 @@ class Renderer_F(BaseRenderer):
     def _draw_lit_brushes_instanced(self, projection, view, lights, table,
                                     slots, cube_rows, models, normals, config,
                                     selected_slot):
-        """Submit the flat-shaded cube brushes as one instanced draw.
+        """Pack the lit pass's instances and hand its runs to the GPU.
 
-        The lit pass had nothing to batch by -- no texture, and the whole cube
-        in one draw -- so it stayed one submission per brush carrying four
-        uniform uploads: model, normal, colour and alpha. The first two were
-        already columns; the second two become the payload vec4, and with
-        nothing left varying per brush the entire set is one run.
-
-        Instance order is primitive order in GL, so the depth-sorted order the
-        transparent pass relies on survives being collapsed into one draw.
+        The lit pass binds no texture and draws the whole cube, so both key
+        fields are zero for every brush and the sort yields exactly one run.
+        That is worth doing through the same machinery rather than short-cut
+        to a single draw: the run count falls out of the data, so when
+        something does start varying per run the pass needs a field in the key
+        and nothing else.
         """
-        rows = cube_rows
-        count = len(rows)
+        count = len(cube_rows)
         if not count:
             return 0
-        row_slots = slots[rows]
+        row_slots = slots[cube_rows]
         payload = self.lit_instance_payload(table, row_slots, selected_slot)
 
-        self._pack_brush_instances(models, normals, rows,
-                                   np.float32(0.0), payload)
-        vao = self._ensure_brush_instance_vao()
-        self._begin_instanced_pass('lit_brush_instanced', projection, view,
-                                   lights)
-        gl.glBindVertexArray(vao)
-        self._point_brush_instances_at(0)
-        gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36, count)
-        gl.glBindVertexArray(0)
-        self.render_stats.draw_calls += 1
-        self.render_stats.visible_tris += 12 * count
+        zeros = np.zeros(count, dtype=np.int64)
+        keys = BRUSH_RUN_KEY.pack(texture=zeros, face=zeros)
+        order, run_starts = sort_into_runs(keys)
+        rows = cube_rows[order]
+        payload = payload[order]
+
+        self._pack_brush_instances(models, normals, rows, np.float32(0.0),
+                                   payload)
+        run_texture, run_first = self._run_descriptors(
+            zeros, zeros, run_starts)
+        self._submit_brush_runs('lit_brush_instanced', projection, view,
+                                lights, run_starts, run_texture, run_first, 36)
         return count
 
-    def _draw_face_runs_instanced(self, projection, view, lights, models,
-                                  normals, rows, faces, gl_tex, scales, shifts,
-                                  angles, run_starts):
-        """Submit the face batches as one instanced draw per state run.
+    def _submit_brush_runs(self, program_name, projection, view, lights,
+                           run_starts, run_texture, run_first, vertex_count):
+        """Submit sorted brush runs. The one place brush geometry reaches GL.
 
-        Every face used to be its own ``glDrawArrays`` preceded by three or
-        four ``glUniform`` calls, because the transform and the UV state were
-        uniforms and a uniform cannot vary within a draw. They are instance
-        attributes now, so a run -- one texture, one cube face, any number of
-        brushes -- is a single submission.
+        A *run* is a stretch of items whose render key is equal, so everything
+        it contains shares the GPU state that key encodes.  That state is
+        established once here -- the texture bind, and the vertex range the
+        cube face occupies -- and everything that differs inside the run
+        travels as instance data, already packed into the shared buffer.
 
-        What remains between draws is exactly what genuinely changed: a texture
-        bind when the run's texture differs from the last, and the attribute
-        base pointer, which stands in for the base-instance offset OpenGL 3.3
+        What is left between draws is exactly what changed: a texture bind when
+        this run's texture is not the one already bound, and the instance
+        attribute base, which stands in for the base-instance offset OpenGL 3.3
         does not have.
-        """
-        payload = np.empty((len(rows), 4), dtype=np.float32)
-        payload[:, 0:2] = scales
-        payload[:, 2:4] = shifts
-        count = self._pack_brush_instances(models, normals, rows, angles, payload)
-        vao = self._ensure_brush_instance_vao()
 
-        uniforms = self._begin_instanced_pass('brush_instanced', projection,
-                                              view, lights)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glUniform1i(uniforms['texture_diffuse'], 0)
+        *run_texture* may be zero for a pass that binds no texture; the lit
+        pass is such a pass, and passing zero is how it says so rather than by
+        taking a different route to the GPU.
+        """
+        self._begin_instanced_pass(program_name, projection, view, lights)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        gl.glBindVertexArray(vao)
+        gl.glBindVertexArray(self._ensure_brush_instance_vao())
 
         current_tex = None
+        triangles = vertex_count // 3
         for run in range(len(run_starts) - 1):
             begin = int(run_starts[run])
             length = int(run_starts[run + 1]) - begin
             if length <= 0:
                 continue
-            tex_id = int(gl_tex[begin])
-            if tex_id != current_tex:
+            tex_id = int(run_texture[run])
+            if tex_id and tex_id != current_tex:
                 gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                 current_tex = tex_id
                 self.render_stats.batched_draws += 1
             self._point_brush_instances_at(begin)
-            gl.glDrawArraysInstanced(gl.GL_TRIANGLES, int(faces[begin]) * 6, 6,
-                                     length)
+            gl.glDrawArraysInstanced(gl.GL_TRIANGLES, int(run_first[run]),
+                                     vertex_count, length)
             self.render_stats.draw_calls += 1
-            self.render_stats.visible_tris += 2 * length
+            self.render_stats.visible_tris += triangles * length
         gl.glBindVertexArray(0)
-        return count
+
+    @staticmethod
+    def _run_descriptors(sorted_texture, sorted_face, run_starts):
+        """Per-run GPU state, read off the first item of each run.
+
+        Every item in a run has the same key by construction, so the first one
+        speaks for all of them. Keeping this separate from the instance arrays
+        is the point: these are the things that cannot vary within a draw.
+        """
+        heads = run_starts[:-1]
+        if not len(heads):
+            empty = np.empty(0, dtype=np.int32)
+            return empty, empty
+        return (sorted_texture[heads].astype(np.int32),
+                (sorted_face[heads] * 6).astype(np.int32))
+
+    def _draw_face_runs_instanced(self, projection, view, lights, models,
+                                  normals, rows, faces, gl_tex, scales, shifts,
+                                  angles, run_starts):
+        """Pack the textured pass's instances and hand its runs to the GPU."""
+        payload = np.empty((len(rows), 4), dtype=np.float32)
+        payload[:, 0:2] = scales
+        payload[:, 2:4] = shifts
+        self._pack_brush_instances(models, normals, rows, angles, payload)
+        run_texture, run_first = self._run_descriptors(gl_tex, faces, run_starts)
+        self._submit_brush_runs('brush_instanced', projection, view, lights,
+                                run_starts, run_texture, run_first, 6)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
 
     def _build_face_batches(self, table, slots, config):
         """Every drawable cube face of *slots*, ordered so texture binds run out.
@@ -702,30 +730,18 @@ class Renderer_F(BaseRenderer):
         face_names = name_ids[row_idx, face_idx]
         gl_tex = self._gl_texture_ids(table)[face_names]
 
-        # Sorting is the batching, and the key says what a run must share: the
-        # texture, because that is a bind, and the cube face, because a face is
-        # six consecutive vertices and `first` is a per-draw parameter rather
+        # The key says what a run must share: the texture, because binding one
+        # is the expensive state change, and the cube face, because a face is
+        # six consecutive vertices addressed by a per-draw parameter rather
         # than a per-instance one. Everything else that used to vary per face --
-        # the transform, the UV scale, rotation and shift -- travels as instance
-        # data, so a run can be one submission however many brushes are in it.
-        sort_key = gl_tex.astype(np.int64) * 8 + face_idx
-        order = np.argsort(sort_key, kind='stable')
+        # the transform, the UV scale, rotation and shift -- is instance data,
+        # so a run is one submission however many brushes are in it.
+        keys = BRUSH_RUN_KEY.pack(texture=gl_tex, face=face_idx)
+        order, run_starts = sort_into_runs(keys)
         row_idx = row_idx[order]
         face_idx = face_idx[order].astype(np.int32)
         gl_tex = gl_tex[order]
         face_names = face_names[order]
-
-        # Run boundaries, from the sorted key: one entry per contiguous stretch
-        # sharing a texture and a face. This is the Quake 3 backend's rule --
-        # state changes only where the decoded key actually changes -- with the
-        # comparison done once over the whole array instead of per surface.
-        sorted_key = sort_key[order]
-        starts = np.empty(len(sorted_key) + 1, dtype=np.int32)
-        starts[0] = 0
-        boundaries = np.flatnonzero(sorted_key[1:] != sorted_key[:-1]) + 1
-        starts[1:len(boundaries) + 1] = boundaries
-        starts[len(boundaries) + 1] = len(sorted_key)
-        run_starts = starts[:len(boundaries) + 2]
 
         scale = self._face_uv_scales(table, cube_slots, row_idx, face_idx,
                                      face_names)
