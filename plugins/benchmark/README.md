@@ -2,7 +2,10 @@
 
 The Fio Benchmark plugin provides an in-engine performance testing environment for measuring Fio's real-world rendering and world-simulation performance.
 
-It is designed to benchmark the **actual Fio runtime and editor viewport**, rather than running a separate synthetic engine or a simplified benchmark implementation.
+Primarily designed to test your worlds during development
+
+It also includes tests designed to benchmark the **actual Fio runtime and editor viewport**
+
 
 ## What it benchmarks
 
