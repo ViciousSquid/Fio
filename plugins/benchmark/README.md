@@ -120,22 +120,6 @@ when comparing results between Fio versions.
 
 For meaningful regression testing, compare repeated runs rather than relying on a single instantaneous FPS value.
 
-## Development benchmarks
-
-The plugin is also useful during Fio development.
-
-Performance-sensitive changes can be tested against the same workload before and after an implementation change. This is particularly useful for changes involving:
-
-* NumPy-based batch processing
-* Distance culling
-* Visibility determination
-* Rendering
-* Large-world workloads
-* Entity processing
-* Spatial queries
-* View-distance and fog behaviour
-
-The benchmark should measure the production path wherever possible. Optimisations should therefore be evaluated using the same code path that Fio uses during normal Play mode.
 
 ## Design philosophy
 
