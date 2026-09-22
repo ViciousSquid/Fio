@@ -1,6 +1,6 @@
 # Fio Plugin System
 
-Plugins add new gameplay to Fio — new placeable entity types, their I/O, and
+Plugins add new concepts to Fio: new placeable entity types, their I/O, and
 runtime behaviour — **without editing the core editor or engine**. Drop a Python
 package into this `plugins/` directory and it is discovered automatically at
 startup, wired into the editor's menus, property panel, I/O editor, serializer
