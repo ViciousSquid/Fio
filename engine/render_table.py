@@ -124,6 +124,12 @@ TEX_DEFAULT = 'default.png'
 #: Interned id meaning "no texture on this face".
 TEX_NONE = -1
 
+#: Fixed interned ids for the names every table pre-interns, so a consumer can
+#: test for "never draw this face" and "drop this face in play" numerically.
+TEX_ID_DEFAULT = 0
+TEX_ID_SKIP = 1
+TEX_ID_NODRAW = 2
+
 
 def _brush_class_bits(brush) -> int:
     """The classification word for one brush.
@@ -243,6 +249,11 @@ class RenderTable:
         # the renderer maps them to GL texture ids once per unique name.
         self._tex_ids: dict = {}
         self._tex_names: list = []
+        # Interned up front so their ids are fixed constants the renderer can
+        # compare against. It must never intern a name itself: the table is
+        # written on the logic thread only.
+        for _name in (TEX_DEFAULT, TEX_SKIP, TEX_NODRAW):
+            self.intern_texture(_name)
         self._epoch = None
         self._hidden_buf = np.empty(0, dtype=bool)
 
