@@ -392,8 +392,8 @@ def test_a_malformed_sprite_size_falls_back_rather_than_raising():
     assert list(table.sprite_size[0]) == [32.0, 32.0]
 
 
-def test_only_the_warm_rows_are_re_resolved_per_frame(monkeypatch):
-    """The cold/warm split, counted rather than assumed."""
+def _count_resolves(monkeypatch):
+    """Count how often the expensive recipe build actually runs."""
     calls = []
     real = et.sprite_candidates
 
@@ -402,8 +402,22 @@ def test_only_the_warm_rows_are_re_resolved_per_frame(monkeypatch):
         return real(thing)
 
     monkeypatch.setattr(et, 'sprite_candidates', counted)
+    return calls
+
+
+def test_a_steady_frame_re_resolves_no_sprite_at_all(monkeypatch):
+    """The recipe build formats keys and splits asset paths; it must not run
+    on a frame where nothing about any sprite has changed.
+
+    Ten times the cost of checking whether the inputs moved, measured at
+    2.39 ms against 0.195 ms over 961 warm rows -- so "warm" has to mean
+    "re-checked", not "rebuilt".
+    """
+    calls = _count_resolves(monkeypatch)
     things = [make_thing(Light, 'l'), make_thing(Monster, 'm'),
-              make_thing(LogicRelay, 'r'), make_thing(Pickup, 'p')]
+              make_thing(LogicRelay, 'r'), make_thing(Pickup, 'p'),
+              make_thing(Prop, 'prop', render_mode='billboard',
+                         sprite_path='s.png')]
     table = EntityTable()
     table.begin_frame(things, epoch=1)
     calls.clear()
@@ -411,10 +425,75 @@ def test_only_the_warm_rows_are_re_resolved_per_frame(monkeypatch):
     for _ in range(5):
         table.begin_frame(things, epoch=1)
 
-    assert set(calls) == {'Monster', 'Pickup'}, (
-        "resolved %s per frame; only the rows whose sprite can change without "
-        "an edit should be" % sorted(set(calls)))
-    assert len(calls) == 10, "expected two warm rows over five frames"
+    assert calls == [], (
+        "%d sprite recipes were rebuilt over five unchanged frames" % len(calls))
+
+
+def test_a_warm_row_is_re_resolved_when_its_state_moves(monkeypatch):
+    calls = _count_resolves(monkeypatch)
+    grunt = make_thing(Monster, 'grunt', monster_type='human')
+    lamp = make_thing(Light, 'lamp')
+    table = EntityTable()
+    table.begin_frame([grunt, lamp], epoch=1)
+    calls.clear()
+
+    grunt.properties['is_shooting'] = True
+    table.begin_frame([grunt, lamp], epoch=1)
+
+    assert calls == ['Monster'], (
+        "expected exactly the monster to be re-resolved, got %s" % (calls,))
+    assert _keys(table, 0) == ['msprite_human_<None>_shoot_']
+
+
+def test_a_cold_row_is_never_re_resolved_by_a_frame(monkeypatch):
+    """A Light's sprite cannot change without an edit, so a frame must not ask."""
+    calls = _count_resolves(monkeypatch)
+    lamp = make_thing(Light, 'lamp')
+    table = EntityTable()
+    table.begin_frame([lamp], epoch=1)
+    calls.clear()
+
+    lamp.properties['sprite_path'] = 'changed.png'   # nobody was told
+    for _ in range(5):
+        table.begin_frame([lamp], epoch=1)
+
+    assert calls == [], "a cold row was re-resolved during a frame"
+
+
+@pytest.mark.parametrize('cls,field,value', [
+    (Monster, 'dead', True),
+    (Monster, 'is_shooting', True),
+    (Monster, 'monster_type', 'alien'),
+    (Monster, 'variant', 'red'),
+    (Monster, 'custom_idle', 'assets/sprites/x.png'),
+    (Pickup, 'item_type', 'gun1'),
+    (Pickup, 'key_name', 'blue_key'),
+    (Pickup, 'custom_sprite', 'assets/sprites/x.png'),
+    (LogicGate, 'logic_type', 'or'),
+    (Prop, 'render_mode', 'billboard'),
+    (Prop, 'sprite_path', 'assets/sprites/x.png'),
+])
+def test_every_field_the_identity_reads_is_in_the_state_check(cls, field, value):
+    """A field the recipe reads but the state check does not would freeze.
+
+    The check is what decides whether to rebuild, so anything the rebuild
+    consults has to be in it -- otherwise the sprite silently stops following
+    that field, which is the failure mode the old per-frame rebuild could not
+    have.
+    """
+    thing = make_thing(cls, 'e', render_mode='billboard',
+                       sprite_path='assets/sprites/pickup.png')
+    before_state = et.sprite_state(thing)
+    before_keys = et.sprite_candidates(thing)
+
+    thing.properties[field] = value
+    after_state = et.sprite_state(thing)
+    after_keys = et.sprite_candidates(thing)
+
+    if after_keys != before_keys:
+        assert after_state != before_state, (
+            "%s.%s changes the sprite recipe but not the state check, so the "
+            "column would never notice" % (cls.__name__, field))
 
 
 def test_identical_recipes_intern_to_one_id():

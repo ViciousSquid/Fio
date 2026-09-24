@@ -302,6 +302,44 @@ def sprite_candidates(thing):
     return tuple(out)
 
 
+def sprite_state(thing):
+    """The mutable inputs a warm row's sprite identity is derived from.
+
+    :func:`sprite_candidates` is not cheap -- it formats cache keys and splits
+    asset paths -- and running it every frame for every warm row costs ten
+    times what checking whether its inputs moved costs (2.39 ms against
+    0.195 ms at 961 warm rows).  Almost every frame the answer is that nothing
+    moved.
+
+    So this is the question asked first, and it is deliberately the same set of
+    fields ``update_instance_textures`` hashes to decide whether *its* overrides
+    are stale: the two were always answering the same question, and the answer
+    belongs next to the column it guards.  ``None`` for a row that is not warm.
+    """
+    if isinstance(thing, dict):
+        if 'monster_type' not in thing:
+            return None
+        return (thing.get('dead'), thing.get('is_shooting'),
+                thing.get('monster_type'), thing.get('variant'),
+                thing.get('custom_idle'), thing.get('custom_shoot'),
+                thing.get('custom_dead'))
+    props = _props_of(thing)
+    if Monster is not None and isinstance(thing, Monster):
+        return (props.get('dead'), props.get('is_shooting'),
+                props.get('monster_type'), props.get('variant'),
+                props.get('custom_idle'), props.get('custom_shoot'),
+                props.get('custom_dead'))
+    if Pickup is not None and isinstance(thing, Pickup):
+        # get_sprite_path() reads all three, through is_key()/is_gun().
+        return (props.get('item_type'), props.get('key_name'),
+                props.get('custom_sprite'))
+    if LogicGate is not None and isinstance(thing, LogicGate):
+        return (props.get('logic_type'),)
+    if Prop is not None and isinstance(thing, Prop):
+        return (props.get('render_mode'), props.get('sprite_path'))
+    return None
+
+
 def sprite_size(thing):
     """The billboard's world size, in the order ``draw_sprites`` decides it."""
     if isinstance(thing, dict):
@@ -389,7 +427,7 @@ class EntityTable:
                  'pos', 'class_bits', 'light_slots', 'monster_slots',
                  'pickup_slots', 'sprite_size', 'sprite_key_id',
                  'warm_sprite_slots', '_sprite_ids', '_sprite_recipes',
-                 '_epoch', '_hidden_buf')
+                 '_sprite_state', '_epoch', '_hidden_buf')
 
     def __init__(self):
         self.generation = 0
@@ -430,6 +468,10 @@ class EntityTable:
         # texture ids once per unique recipe on the thread that has a context.
         self._sprite_ids: dict = {}
         self._sprite_recipes: list = []
+        #: slot -> the state tuple its sprite identity was last resolved from.
+        #: A plain list: it is compared per warm row per frame and never
+        #: indexed numerically.
+        self._sprite_state: list = []
 
         self._epoch = None
         self._hidden_buf = np.empty(0, dtype=bool)
@@ -545,11 +587,19 @@ class EntityTable:
 
         # The warm half of sprite identity: a monster's frame, a gate's type,
         # a pickup's item, a prop's representation.  Bounded by the rows that
-        # can actually change, not by the entity count.
+        # can actually change -- and within those, by the rows that actually
+        # did, because re-deriving the recipe is ten times the cost of asking
+        # whether its inputs moved.
+        state_cache = self._sprite_state
         for slot in self.warm_sprite_slots:
             slot = int(slot)
+            thing = things[slot]
+            state = sprite_state(thing)
+            if state == state_cache[slot]:
+                continue
+            state_cache[slot] = state
             self.sprite_key_id[slot] = self.intern_sprite(
-                sprite_candidates(things[slot]))
+                sprite_candidates(thing))
 
         if len(self._hidden_buf) < n:
             self._hidden_buf = np.empty(max(n, 16), dtype=bool)
@@ -593,6 +643,7 @@ class EntityTable:
         self._resize(max(n, 16))
 
         ids = [None] * n
+        states = [None] * n
         for slot, thing in enumerate(things):
             props = getattr(thing, 'properties', None)
             ids[slot] = props.get('id') if isinstance(props, dict) else None
@@ -601,7 +652,9 @@ class EntityTable:
             self.sprite_size[slot] = sprite_size(thing)
             self.sprite_key_id[slot] = self.intern_sprite(
                 sprite_candidates(thing))
+            states[slot] = sprite_state(thing)
 
+        self._sprite_state = states
         self.ids = ids
         self.slot_of_id = {eid: slot for slot, eid in enumerate(ids)
                            if eid is not None}
@@ -624,6 +677,7 @@ class EntityTable:
             self.sprite_size[slot] = sprite_size(thing)
             self.sprite_key_id[slot] = self.intern_sprite(
                 sprite_candidates(thing))
+            self._sprite_state[slot] = sprite_state(thing)
 
 
 _EMPTY: dict = {}
