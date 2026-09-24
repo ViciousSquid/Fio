@@ -21,6 +21,50 @@ class SpatialGrid:
     ``self.cells`` is that index's bucket dict, read directly by the query
     methods below — no wrapper sits on the collision hot path.
     """
+    #: Candidate brushes a ray must have before line of sight tests them as
+    #: dense rows instead of walking them in Python.
+    #:
+    #: The dense narrow phase runs about forty NumPy operations per ray, and
+    #: their dispatch does not care how many rows they touch: it costs tens of
+    #: microseconds a ray whether the ray has twenty candidates or two
+    #: thousand. The scalar walk costs per brush, and exits on the first one
+    #: that blocks. Neither is faster in general -- one is a fixed fee, the
+    #: other a per-brush price -- so the only question is how many candidates
+    #: the ray has, and this number is where the answer changes.
+    #:
+    #: Measured over 240 rays, in two scenes (bare brushes, and the same
+    #: densities inside a room, which changes how often the walk exits early):
+    #:
+    #: ===========  ===========  ==========  ===========  ==========
+    #: cands/ray    scalar (A)   dense (A)   scalar (B)   dense (B)
+    #: ===========  ===========  ==========  ===========  ==========
+    #:         13        2.1 ms     13.6 ms            -           -
+    #:         39        5.0 ms     14.2 ms            -           -
+    #:        185             -           -      10.2 ms    17.7 ms
+    #:        272             -           -      14.4 ms    17.7 ms
+    #:        341       36.0 ms     18.4 ms            -           -
+    #:        355             -           -      19.8 ms    18.6 ms
+    #:        500       52.5 ms     19.9 ms            -           -
+    #:        935      105.4 ms     26.1 ms            -           -
+    #: ===========  ===========  ==========  ===========  ==========
+    #:
+    #: The two scenes cross over in different places -- somewhere between 270
+    #: and 400 -- and inside that range the measurement is not stable enough to
+    #: pick a point from, so this is chosen by which mistake is cheaper rather
+    #: than by averaging. Set too low, the worst case seen is 1.2x; set too
+    #: high, 2x. Hence the low end of the band.
+    #:
+    #: What the number actually guards is much further down. Exact cell
+    #: traversal brought a real AI tick to ~27 candidates per ray, an order of
+    #: magnitude below anything here, and at that size the fixed fee made the
+    #: dense path 3.3x slower than the walk it was meant to beat.
+    #:
+    #: Re-measure with ``tests/performance/test_los_threshold_benchmark.py``.
+    #: Set it on the class or an instance to try another value; both paths
+    #: answer identically, so it is purely a speed knob, and zero -- always
+    #: dense -- is a legal setting.
+    LOS_DENSE_MIN_CANDIDATES = 256
+
     def __init__(self, cell_size=CELL_SIZE):
         self.cell_size = cell_size
         self._index = CellIndex(cell_size)
@@ -370,10 +414,10 @@ class SpatialGrid:
             append((cx, cz))
         return cells
 
-    def _los_dense(self, start, ray_dir, ray_len, table, slots_by_cell):
-        """Line of sight over the projection's rows.
+    def _los_dense(self, start, ray_dir, ray_len, table, slots_by_cell, coords):
+        """Line of sight over the projection's rows, when there are enough of them.
 
-        Same traversal (:meth:`_cells_along_ray`), same candidate set, same
+        Same candidate set as the walk, from the same traversal, and the same
         arithmetic -- expressed over arrays. The three phases the scalar path
         spends its time in become: ``concatenate`` the cells' slot arrays,
         ``np.unique`` in place of the ``id()`` set, one gather of
@@ -387,17 +431,27 @@ class SpatialGrid:
         bit (verified over 2000 random brushes); the arithmetic afterwards is
         float64, exactly as the scalar path's is once it has read the tuple.
 
-        Returns ``None`` if the projection cannot be read consistently, which
-        tells the caller to take the scalar path for this ray.
+        Returns ``None`` if this ray is not worth the array work, or if the
+        projection cannot be read consistently. Either way the caller takes the
+        scalar path, which answers the same thing.
         """
         get = slots_by_cell.get
         parts = []
-        for coord in self._cells_along_ray(start, ray_dir, ray_len):
+        candidates = 0
+        for coord in coords:
             found = get(coord)
             if found is not None:
                 parts.append(found)
-        if not parts:
-            return True
+                candidates += len(found)
+        if not parts or candidates < self.LOS_DENSE_MIN_CANDIDATES:
+            # Too few rows to earn the dispatch. The scalar walk gets this ray,
+            # over the cells already traversed, and answers the same thing --
+            # a ray with no candidates at all included, which is why the empty
+            # set is handled here rather than by an early `return True`. It is
+            # spelled separately from the count so that a threshold of zero
+            # means "always dense" and is safe to set, which is how the tests
+            # and the benchmark force the path.
+            return None
 
         slots = np.unique(parts[0] if len(parts) == 1 else np.concatenate(parts))
 
@@ -489,15 +543,21 @@ class SpatialGrid:
         ``tests/physics/test_line_of_sight.py``.
 
         *table* is an optional :class:`engine.render_table.RenderTable`. Given
-        one, the candidates are gathered as dense rows and tested in a handful
-        of NumPy operations (:meth:`_los_dense`); without one -- or when the
-        grid holds a brush the table cannot address -- the per-brush path below
-        runs unchanged. Both reach the same answer; see
+        one, and a ray with at least :data:`LOS_DENSE_MIN_CANDIDATES` candidate
+        brushes, they are tested as dense rows in a handful of NumPy operations
+        (:meth:`_los_dense`). Below that count -- or without a table, or when
+        the grid holds a brush the table cannot address -- the per-brush path
+        below runs unchanged. Both reach the same answer; see
         ``tests/physics/test_line_of_sight.py``.
 
-        The cell traversal is identical either way -- both call
-        :meth:`_cells_along_ray`, so the two paths cannot drift apart on which
-        brushes they consider, only on how they test them.
+        Which one is faster is a question about the candidate set, not about
+        the scene or the hardware, so the count decides it: the array work is
+        a fixed per-ray fee, the walk is a per-brush cost that can exit early.
+        The constant carries the measurements.
+
+        The cell traversal is the same either way -- it happens once, here, and
+        is handed to whichever narrow phase takes the ray, so the two cannot
+        drift apart on which brushes they consider, only on how they test them.
         """
         ray_dir = end - start
         ray_len = glm.length(ray_dir)
@@ -505,9 +565,13 @@ class SpatialGrid:
             return True
         ray_dir = ray_dir / ray_len
 
+        # Walked once, and handed to whichever narrow phase takes the ray.
+        coords = self._cells_along_ray(start, ray_dir, ray_len)
+
         slots_by_cell = self.cell_slots(table)
         if slots_by_cell is not None:
-            dense = self._los_dense(start, ray_dir, ray_len, table, slots_by_cell)
+            dense = self._los_dense(start, ray_dir, ray_len, table,
+                                    slots_by_cell, coords)
             if dense is not None:
                 return dense
 
@@ -525,7 +589,7 @@ class SpatialGrid:
         cells = self.cells
         seen = set()
         seen_add = seen.add
-        for coord in self._cells_along_ray(start, ray_dir, ray_len):
+        for coord in coords:
             for brush in cells.get(coord, ()):
                 bid = id(brush)
                 if bid in seen:

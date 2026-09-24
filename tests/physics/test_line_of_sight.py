@@ -47,12 +47,30 @@ def _world(brushes):
     return grid, table
 
 
+@contextlib.contextmanager
+def _forcing_dense(grid):
+    """Send every ray down the dense narrow phase, whatever its size.
+
+    Production picks between the two narrow phases on candidate count, and a
+    test scene is far below the threshold -- so without this every "dense"
+    assertion in this file would quietly be running the scalar walk and
+    comparing it with itself. Zero means "always dense"; the gate is a speed
+    knob and both paths answer the same, which is what these tests establish.
+    """
+    grid.LOS_DENSE_MIN_CANDIDATES = 0
+    try:
+        yield
+    finally:
+        del grid.LOS_DENSE_MIN_CANDIDATES
+
+
 def _both(grid, table, start, end):
-    """(scalar answer, dense answer) for one ray."""
+    """(scalar answer, dense answer) for one ray, one narrow phase each."""
     scalar = grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end),
                                     _intersect_ray_aabb, None)
-    dense = grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end),
-                                   _intersect_ray_aabb, table)
+    with _forcing_dense(grid):
+        dense = grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end),
+                                       _intersect_ray_aabb, table)
     return scalar, dense
 
 
@@ -663,3 +681,149 @@ def test_the_traversal_agrees_with_the_fan_over_a_random_sweep():
     assert 30 < blocked < 570, (
         "only %d of 600 rays were blocked -- the sweep is not exercising both "
         "answers" % blocked)
+
+
+# ---------------------------------------------------------------------------
+# Choosing a narrow phase
+#
+# The dense path costs a fixed ~58us of NumPy dispatch per ray and the scalar
+# walk costs per brush, so which is faster is a question about the size of the
+# candidate set. `LOS_DENSE_MIN_CANDIDATES` is where the answer changes. It is
+# a speed knob and nothing else: the tests here pin that the answer does not
+# depend on it, and that the count it compares against is the one the ray
+# actually has.
+# ---------------------------------------------------------------------------
+
+def _path_taken(grid, table, start, end):
+    """('dense'|'scalar', answer) -- which narrow phase decided this ray."""
+    taken = []
+    real = SpatialGrid._los_dense
+
+    def spy(self, *args, **kwargs):
+        out = real(self, *args, **kwargs)
+        taken.append("scalar" if out is None else "dense")
+        return out
+
+    SpatialGrid._los_dense = spy
+    try:
+        answer = grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end),
+                                        _intersect_ray_aabb, table)
+    finally:
+        SpatialGrid._los_dense = real
+    return (taken[0] if taken else "scalar"), answer
+
+
+def _candidate_count(grid, table, start, end):
+    """The number the gate compares against, counted the way the gate does."""
+    direction = glm.vec3(*end) - glm.vec3(*start)
+    length = glm.length(direction)
+    slots_by_cell = grid.cell_slots(table)
+    total = 0
+    for coord in grid._cells_along_ray(glm.vec3(*start), direction / length,
+                                       length):
+        found = slots_by_cell.get(coord)
+        if found is not None:
+            total += len(found)
+    return total
+
+
+def _crowded_world(n=40):
+    """Enough brushes in one cell to sit either side of a small threshold."""
+    brushes = [box_brush("b%d" % i, (60.0 + i * 3.0, 0.0, 200.0 + i * 2.0),
+                         (24.0, 200.0, 24.0)) for i in range(n)]
+    return _world(brushes)
+
+
+def test_the_gate_counts_the_candidates_the_ray_actually_has():
+    grid, table = _crowded_world()
+    start, end = (20.0, 0.0, 20.0), (400.0, 0.0, 400.0)
+    counted = _candidate_count(grid, table, start, end)
+    assert counted > 2, "the fixture stopped being crowded"
+
+    grid.LOS_DENSE_MIN_CANDIDATES = counted
+    assert _path_taken(grid, table, start, end)[0] == "dense", (
+        "a ray with exactly the threshold count took the scalar path; the gate "
+        "is off by one or is counting something else")
+    grid.LOS_DENSE_MIN_CANDIDATES = counted + 1
+    assert _path_taken(grid, table, start, end)[0] == "scalar", (
+        "a ray one candidate short of the threshold still took the dense path")
+
+
+def test_both_sides_of_the_threshold_give_the_same_answer():
+    """The gate is a speed knob. Sweep it across the boundary and past it."""
+    rng = np.random.default_rng(97)
+    brushes = [box_brush("b%d" % i, tuple(rng.uniform(-900, 900, 3)),
+                         tuple(rng.uniform(24, 260, 3))) for i in range(150)]
+    grid, table = _world(brushes)
+
+    rays = []
+    for _ in range(120):
+        rays.append((tuple(rng.uniform(-1100, 1100, 3)),
+                     tuple(rng.uniform(-1100, 1100, 3))))
+
+    blocked = 0
+    for start, end in rays:
+        if glm.length(glm.vec3(*end) - glm.vec3(*start)) < 0.001:
+            continue
+        counted = _candidate_count(grid, table, start, end)
+        answers = {}
+        for threshold in (0, max(0, counted - 1), counted, counted + 1,
+                          counted + 1000):
+            grid.LOS_DENSE_MIN_CANDIDATES = threshold
+            path, answer = _path_taken(grid, table, start, end)
+            answers[threshold] = (path, answer)
+        distinct = {a for _, a in answers.values()}
+        assert len(distinct) == 1, (
+            "the ray %s -> %s with %d candidates answered %s depending on the "
+            "threshold: %s" % (start, end, counted, distinct, answers))
+        assert answers[0][0] == "dense" or counted == 0
+        assert answers[counted + 1000][0] == "scalar"
+        blocked += not distinct.pop()
+
+    assert 10 < blocked < 110, (
+        "only %d of 120 rays were blocked -- the sweep is not exercising both "
+        "answers" % blocked)
+
+
+def test_the_default_threshold_leaves_a_normal_scene_on_the_scalar_walk():
+    """The regression this constant exists for.
+
+    Exact cell traversal cut a real tick to ~27 candidates a ray. At that size
+    the dense path's fixed dispatch made it 3.3x slower than the walk, so the
+    default must not send an ordinary scene down it.
+    """
+    rng = np.random.default_rng(13)
+    brushes = [box_brush("b%d" % i, tuple(rng.uniform(-2000, 2000, 3)),
+                         tuple(rng.uniform(32, 256, 3))) for i in range(600)]
+    grid, table = _world(brushes)
+
+    counts, dense_rays = [], 0
+    for _ in range(200):
+        start = tuple(rng.uniform(-1800, 1800, 3))
+        end = tuple(rng.uniform(-1800, 1800, 3))
+        if glm.length(glm.vec3(*end) - glm.vec3(*start)) < 0.001:
+            continue
+        counts.append(_candidate_count(grid, table, start, end))
+        dense_rays += _path_taken(grid, table, start, end)[0] == "dense"
+
+    assert max(counts) < SpatialGrid.LOS_DENSE_MIN_CANDIDATES, (
+        "a 600-brush scene reached %d candidates on one ray, at or above the "
+        "%d threshold -- either the scene got denser or the constant moved"
+        % (max(counts), SpatialGrid.LOS_DENSE_MIN_CANDIDATES))
+    assert dense_rays == 0, (
+        "%d of %d rays took the dense path in an ordinary scene"
+        % (dense_rays, len(counts)))
+
+
+def test_an_unaddressable_brush_still_beats_the_gate():
+    """Order matters: the fail-safe is not something the threshold can skip."""
+    brushes = [box_brush("wall", (0.0, 0.0, 0.0), (32.0, 256.0, 512.0))]
+    grid, table = _world(brushes)
+    brushes[0]["id"] = "not-in-the-table"
+    grid.populate(brushes)
+
+    grid.LOS_DENSE_MIN_CANDIDATES = 0
+    path, answer = _path_taken(grid, table, (-300, 0, 0), (300, 0, 0))
+    assert path == "scalar", (
+        "a brush the table cannot address was tested as a row anyway")
+    assert answer is False, "the occluder went missing"
