@@ -128,6 +128,106 @@ def test_camera_cull_exempts_lights_and_portals_and_tracks_positions():
     assert brushes == [far_brush, near_brush]  # inputs untouched
 
 
+def test_the_slot_cull_exempts_the_same_lights_and_portals():
+    """The numeric path states the exemption as a mask; same answer required.
+
+    ``_cull_keep_thing`` is what kept lighting and portal rendering out of the
+    distance cull on the object path.  The entity projection expresses it as
+    :data:`engine.entity_table.ENT_CULL_EXEMPT`, and an exemption that drifted
+    would silently unlight a scene at range -- or, the other way, keep every
+    monster in the world alive in the sprite pass.
+    """
+    import numpy as np
+    from editor.things import Light, Monster, Portal, Thing
+    from engine import entity_table as et
+    from engine.renderer_core import BaseRenderer
+
+    far = [50000.0, 0.0, 0.0]
+    things = [Thing(pos=list(far)), Light(pos=list(far)), Portal(pos=list(far)),
+              Monster(pos=list(far)), Thing(pos=[5.0, 0.0, 5.0])]
+    table = et.EntityTable()
+    table.begin_frame(things, epoch=1)
+    slots = np.arange(table.count, dtype=np.int32)
+
+    kept = BaseRenderer._distance_cull_thing_slots(
+        table, slots, 0.0, 0.0, 1000.0 * 1000.0)
+
+    assert [int(i) for i in kept] == [1, 2, 4], (
+        "kept rows %s; the far Light (1) and Portal (2) are exempt and the "
+        "near Thing (4) is in range, but the far Thing (0) and the far "
+        "Monster (3) are not" % ([int(i) for i in kept],))
+
+
+def _numeric_config(count=2):
+    """The four entity-projection keys plus the brush ones, as published."""
+    import numpy as np
+    from editor.things import Light
+    from engine.entity_table import EntityTable
+    from engine.render_table import RenderTable
+
+    brushes = [{'id': 'b%d' % i, 'pos': [0.0, 0.0, 0.0], 'size': [64.0] * 3}
+               for i in range(count)]
+    btable = RenderTable()
+    btable.sync(brushes, 1)
+    brefs = np.empty(count, dtype=object)
+    for i, b in enumerate(brushes):
+        brefs[i] = b
+
+    things = [Light(pos=[0.0, 0.0, 0.0]) for _ in range(count)]
+    etable = EntityTable()
+    hidden = etable.begin_frame(things, 1)
+    erefs = np.empty(count, dtype=object)
+    for i, t in enumerate(things):
+        erefs[i] = t
+
+    config = {
+        'render_table': btable, 'render_refs': brefs,
+        'entity_table': etable, 'entity_refs': erefs,
+        'visible_thing_slots': np.arange(count, dtype=np.int32),
+        'thing_hidden': hidden,
+    }
+    return config, np.arange(count, dtype=np.int32)
+
+
+def _bare_renderer(with_instancing=True):
+    from engine.renderer_F import Renderer_F
+
+    r = Renderer_F.__new__(Renderer_F)
+    r.shaders = {'sprite_instanced': 1} if with_instancing else {}
+    return r
+
+
+def test_the_sprite_predicate_needs_the_whole_projection():
+    """Every key has to arrive, or the object path runs and needs its overrides.
+
+    The view skips building the per-entity texture overrides when this says the
+    billboards will be instanced. A predicate that said yes on an incomplete
+    projection would withhold overrides the object path still reads.
+    """
+    config, slots = _numeric_config()
+    r = _bare_renderer()
+    assert r.will_instance_sprites(config, slots) is True
+
+    for key in ('render_table', 'render_refs', 'entity_table', 'entity_refs',
+                'visible_thing_slots', 'thing_hidden'):
+        missing = dict(config)
+        missing[key] = None
+        assert r.will_instance_sprites(missing, slots) is False, (
+            "the predicate said the sprites would be instanced with %r absent"
+            % key)
+
+    assert r.will_instance_sprites(config, None) is False, (
+        "without brush slots the frame is on the object path entirely")
+
+
+def test_the_sprite_predicate_respects_a_driver_without_instancing():
+    config, slots = _numeric_config()
+    assert _bare_renderer(with_instancing=False).will_instance_sprites(
+        config, slots) is False, (
+        "a driver that rejected the instanced program still needs the object "
+        "path, and the object path needs the overrides")
+
+
 def glm_vec(x, y, z):
     import glm
     return glm.vec3(x, y, z)

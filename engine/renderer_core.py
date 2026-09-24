@@ -32,6 +32,7 @@ from engine.constants import (is_water_brush, brush_aabb_bounds,
                               normalize_color)
 from engine import brush_geometry
 from engine import render_table
+from engine import entity_table as entity_projection
 from engine.render_keys import KeyLayout, sort_into_runs
 from engine import shaders
 from engine.shaders import DEFAULT_SHADERS
@@ -306,6 +307,14 @@ class BaseRenderer:
         # rather than on the forward renderer.
         self._brush_instance_vbo = None
         self._brush_instance_vao = None
+        self._sprite_instance_vbo = None
+        self._sprite_instance_vao = None
+        self._sprite_instance_capacity = 0
+        self._sprite_gl_by_id = np.zeros(0, dtype=np.int32)
+        self._sprite_instance_base = 0
+        self._sprite_recipes_seen = None
+        self._sprite_instance_data = np.empty(
+            (0, 5), dtype=np.float32)
         self._brush_instance_capacity = 0
         self._brush_instance_data = np.empty((0, 32), dtype=np.float32)
         # Reusable model/normal matrix buffers for the batched transform build.
@@ -571,6 +580,7 @@ class BaseRenderer:
         self._compile_instanced_brush_shader(tex_vert, tex_frag)
         self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
         self._compile_instanced_depth_shader()
+        self._compile_instanced_sprite_shader()
 
     def _compile_standard_shaders(self):
         lit_shader = self.shader_loader.compile_shader_program('lit.vert', 'lit.frag')
@@ -592,6 +602,7 @@ class BaseRenderer:
         self._compile_instanced_brush_shader(tex_vert, tex_frag)
         self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
         self._compile_instanced_depth_shader()
+        self._compile_instanced_sprite_shader()
 
     #: Floats per brush-face instance: a mat4 model matrix, a mat3 normal
     #: matrix padded to three vec4 (with the face's UV rotation tucked into the
@@ -706,6 +717,112 @@ layout (location = 10) in vec4 iPayload;
                 'depth_cube_instanced', vertex, frag,
                 extra_uniforms=['lightSpaceMatrix', 'lightPos', 'far_plane']):
             print('[BaseRenderer] Shadow depth instancing shader compiled successfully.')
+
+    #: Per-instance attributes the sprite pass carries: the billboard's centre
+    #: and its world size.  Five floats, against the two uniform uploads and
+    #: the draw call each sprite used to cost.
+    SPRITE_INSTANCE_FLOATS = 5
+
+    def _compile_instanced_sprite_shader(self):
+        """Compile the billboard shader with its centre and size per instance.
+
+        The sprite pass was the last one submitting per object: one
+        ``glDrawArrays`` and two uniform uploads for every billboard in range,
+        where the brush passes had long since collapsed to one draw per state
+        run.  Instancing it is the same trade they made -- what cannot vary
+        within a draw (the texture) stays a bind, and what does (where the
+        billboard is and how big) becomes instance data.
+
+        Derived from ``sprite.vert`` by rewriting the two uniforms into
+        attributes rather than written out again, so the billboard's
+        camera-facing maths cannot drift from the path it accelerates.
+        """
+        vert = DEFAULT_SHADERS.get('sprite.vert', '')
+        frag = DEFAULT_SHADERS.get('sprite.frag', '')
+        if not vert or not frag:
+            return
+        kept = [line for line in vert.splitlines()
+                if not line.strip().startswith(('uniform vec3 sprite_pos_world',
+                                                'uniform vec2 sprite_size'))]
+        source = '\n'.join(kept)
+        if 'out vec2 TexCoords;' not in source:
+            return
+        source = source.replace(
+            'out vec2 TexCoords;',
+            'layout (location = 1) in vec3 iSpritePos;\n'
+            'layout (location = 2) in vec2 iSpriteSize;\n'
+            'out vec2 TexCoords;', 1)
+        source = source.replace('sprite_pos_world', 'iSpritePos')
+        source = source.replace('sprite_size.x', 'iSpriteSize.x')
+        source = source.replace('sprite_size.y', 'iSpriteSize.y')
+        if 'iSpritePos' not in source or 'iSpriteSize.x' not in source:
+            # The shader did not look the way this rewrite assumes; leaving the
+            # program absent keeps the per-sprite path, which every caller has.
+            return
+        if self._register_instanced_shader('sprite_instanced', source, frag,
+                                           extra_uniforms=['projection', 'view',
+                                                           'sprite_texture']):
+            print('[BaseRenderer] Sprite instancing shader compiled successfully.')
+
+    def _ensure_sprite_instance_buffer(self, count):
+        """Grow the sprite instance VBO and its staging array to *count* rows."""
+        if self._sprite_instance_vbo is None:
+            self._sprite_instance_vbo = gl.glGenBuffers(1)
+        if count <= self._sprite_instance_capacity:
+            return
+        capacity = max(count, 256, self._sprite_instance_capacity * 2)
+        self._sprite_instance_capacity = capacity
+        self._sprite_instance_data = np.empty(
+            (capacity, self.SPRITE_INSTANCE_FLOATS), dtype=np.float32)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, self._sprite_instance_data.nbytes,
+                        None, gl.GL_DYNAMIC_DRAW)
+        # As with the brush buffer, the VAO is left alone: glBufferData keeps
+        # the buffer's name and the VAO's pointers reference the name.
+
+    def _ensure_sprite_instance_vao(self):
+        """A VAO over the shared billboard quad plus the instance buffer.
+
+        Separate from ``vaos['sprite']`` for the reason the brush pass keeps
+        its own: the per-sprite path shares that one, and giving it two enabled
+        divisor-1 attributes would have every ordinary billboard draw read an
+        instance buffer it does not use.
+        """
+        if self._sprite_instance_vao is not None:
+            return self._sprite_instance_vao
+        self._ensure_sprite_instance_buffer(1)
+        vao = gl.glGenVertexArrays(1)
+        gl.glBindVertexArray(vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_vbo)
+        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+        gl.glEnableVertexAttribArray(0)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
+        stride = self.SPRITE_INSTANCE_FLOATS * 4
+        for location, size, offset in ((1, 3, 0), (2, 2, 12)):
+            gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
+                                     stride, ctypes.c_void_p(offset))
+            gl.glEnableVertexAttribArray(location)
+            gl.glVertexAttribDivisor(location, 1)
+        gl.glBindVertexArray(0)
+        self._sprite_instance_vao = vao
+        return vao
+
+    def _point_sprite_instances_at(self, base):
+        """Re-aim the sprite instance attributes at instance *base*.
+
+        OpenGL 3.3 has no ``glDrawArraysInstancedBaseInstance``, so a run that
+        starts part way through the buffer is reached by moving the pointers --
+        the same two calls per run the brush pass makes eight of.
+        """
+        stride = self.SPRITE_INSTANCE_FLOATS * 4
+        base = int(base)
+        #: Which instance the attributes currently point at. Read by the
+        #: submission tests to recover what a run actually drew.
+        self._sprite_instance_base = base
+        origin = base * stride
+        for location, size, offset in ((1, 3, 0), (2, 2, 12)):
+            gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
+                                     stride, ctypes.c_void_p(origin + offset))
 
     def _compile_instanced_lit_brush_shader(self, lit_vert, lit_frag):
         """Compile the flat-shaded brush shader with instanced colour.
@@ -1571,6 +1688,141 @@ layout (location = 9) in vec4 iNormal2;
     def set_instance_textures(self, textures):
         self.instance_textures = textures
 
+    def _sprite_gl_ids(self, table):
+        """``sprite id -> GL texture id``, for every recipe the table interned.
+
+        The entity projection is GL-free, so it interns sprite *recipes* --
+        ordered candidate cache keys and how to load each -- and the resolution
+        to a GL id happens here, once per unique recipe, on the thread that has
+        a context.  Exactly the shape :meth:`Renderer_F._gl_texture_ids` has for
+        brush face textures.
+
+        Each candidate is tried in the order the object path tried it: look the
+        key up in the shared sprite-texture cache, and on a miss load the file
+        if the recipe names one.  A recipe no candidate satisfies resolves to
+        0, which is how the object path's "this sprite has no texture, draw
+        nothing" is said numerically.
+        """
+        recipes = table.sprite_recipes()
+        if recipes is not self._sprite_recipes_seen:
+            # A different projection, so a different id space -- a new play
+            # session builds a new EntityTable while the renderer outlives it.
+            # Identity of the recipe list is the cheapest way to notice, and
+            # the list outlives nothing: holding it does not keep the table.
+            self._sprite_recipes_seen = recipes
+            self._sprite_gl_by_id = np.zeros(0, dtype=np.int32)
+        cached = self._sprite_gl_by_id
+        if len(cached) >= len(recipes):
+            return cached
+        grown = np.zeros(len(recipes), dtype=np.int32)
+        grown[:len(cached)] = cached
+        for sprite_id in range(len(cached), len(recipes)):
+            grown[sprite_id] = self._resolve_sprite_recipe(recipes[sprite_id])
+        self._sprite_gl_by_id = grown
+        return grown
+
+    def _resolve_sprite_recipe(self, candidates):
+        """The GL texture id for one interned candidate list, or 0."""
+        for key, filename, subfolder, cache in candidates:
+            if key:
+                tex_id = self.sprite_textures.get(key)
+                if tex_id:
+                    return int(tex_id)
+            if not filename:
+                continue
+            tex_id = self.load_texture(filename, subfolder)
+            if tex_id:
+                if cache and key:
+                    self.sprite_textures[key] = tex_id
+                return int(tex_id)
+        return 0
+
+    #: The sprite pass's render key. Texture is the whole of it: it is the only
+    #: GPU state a billboard establishes, and everything else about a sprite --
+    #: where it is, how big -- is per-instance by construction.
+    SPRITE_KEY_LAYOUT = KeyLayout([('texture', 32)])
+
+    def draw_sprites_instanced(self, projection, view, table, slots,
+                               gl_ids=None):
+        """The sprite pass over dense columns: one draw per texture run.
+
+        *slots* are rows of an :class:`engine.entity_table.EntityTable`, already
+        classified into the sprite pass and depth-ordered.  Everything this
+        needs is a column read: the centre from ``pos``, the size from
+        ``sprite_size``, the texture from ``sprite_key_id`` through
+        :meth:`_sprite_gl_ids`.  No entity is touched.
+
+        Rows whose texture resolves to 0 are dropped, which is what the object
+        path's ``if tex_id:`` did.  The rest are sorted by texture into runs --
+        :func:`engine.render_keys.sort_into_runs`, stable, so the depth order
+        the caller established survives inside each run -- and each run is one
+        ``glDrawArraysInstanced`` over a slice of the packed buffer.
+
+        Returns the number of sprites submitted, so a caller can tell an empty
+        pass from a skipped one.
+        """
+        if 'sprite_instanced' not in self.shaders or not len(slots):
+            return 0
+        if gl_ids is None:
+            gl_ids = self._sprite_gl_ids(table)
+
+        key_ids = table.sprite_key_id[slots]
+        drawn = key_ids >= 0
+        if len(gl_ids):
+            textures = np.where(drawn, gl_ids[np.where(drawn, key_ids, 0)], 0)
+        else:
+            textures = np.zeros(len(slots), dtype=np.int32)
+        drawn &= textures > 0
+        if not drawn.any():
+            return 0
+        slots = slots[drawn]
+        textures = textures[drawn].astype(np.int64)
+
+        keys = self.SPRITE_KEY_LAYOUT.pack(texture=textures)
+        order, run_starts = sort_into_runs(keys)
+
+        count = len(order)
+        self._ensure_sprite_instance_buffer(count)
+        data = self._sprite_instance_data[:count]
+        sorted_slots = slots[order]
+        data[:, 0:3] = table.pos[sorted_slots]
+        data[:, 3:5] = table.sprite_size[sorted_slots]
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+
+        shader, uniforms = (self.shaders['sprite_instanced'],
+                            self.uniforms['sprite_instanced'])
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        # Billboards are unlit, so they never reach _upload_lights_once -- they
+        # still need fogging, exactly as the per-sprite path does.
+        self._upload_env_uniforms('sprite_instanced')
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
+                              glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
+                              glm.value_ptr(view))
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['sprite_texture'], 0)
+        gl.glBindVertexArray(self._ensure_sprite_instance_vao())
+
+        run_texture = textures[order][run_starts[:-1]]
+        current_tex = None
+        for run in range(len(run_starts) - 1):
+            begin = int(run_starts[run])
+            length = int(run_starts[run + 1]) - begin
+            if length <= 0:
+                continue
+            tex_id = int(run_texture[run])
+            if tex_id != current_tex:
+                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                current_tex = tex_id
+                self.render_stats.batched_draws += 1
+            self._point_sprite_instances_at(begin)
+            gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, length)
+            self.render_stats.draw_calls += 1
+        gl.glBindVertexArray(0)
+        return count
+
     def draw_sprites(self, projection, view, things_to_draw, sprite_textures, instance_textures=None):
         if not things_to_draw or 'sprite' not in self.shaders:
             return
@@ -2089,6 +2341,24 @@ layout (location = 9) in vec4 iNormal2;
             'fog': slots[(bits & render_table.CLASS_FOG) != 0],
             'glow': slots[(bits & render_table.CLASS_GLOW) != 0],
         }
+
+    @staticmethod
+    def _distance_cull_thing_slots(table, slots, cx, cz, limit_sq):
+        """:meth:`_distance_cull_slots` with the Thing pass's exemption.
+
+        Lights and Portals survive the cull at any distance, because lighting
+        and portal rendering are deliberately unaffected by it -- the predicate
+        ``_cull_keep_thing`` states that for the object path, and this is the
+        same statement as a mask over :data:`engine.entity_table.ENT_CULL_EXEMPT`.
+        """
+        if not len(slots):
+            return slots
+        dx = table.pos[slots, 0] - cx
+        dz = table.pos[slots, 2] - cz
+        near = (dx * dx + dz * dz) <= limit_sq
+        exempt = (table.class_bits[slots]
+                  & entity_projection.ENT_CULL_EXEMPT) != 0
+        return slots[near | exempt]
 
     @staticmethod
     def _distance_cull_slots(table, slots, cx, cz, limit_sq):

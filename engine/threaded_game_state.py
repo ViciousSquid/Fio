@@ -110,6 +110,16 @@ class RenderState:
         self.visible_brush_position_count = 0
         self.visible_thing_positions = np.empty((0, 2), dtype=np.float64)
         self.visible_thing_position_count = 0
+        # The entity half of the dense projection (engine.entity_table), with
+        # the slots the frame published and the live hidden mask it read.  The
+        # renderer classifies entities into passes from these rather than
+        # re-deriving each one's kind; None outside a projected frame, where it
+        # takes the object path.
+        self.entity_table = None
+        self.entity_refs = None
+        self.visible_thing_slots = None
+        self.thing_hidden = None
+        self.has_portals = False
 
         # The dense render projection (engine.render_table.RenderTable) and the
         # visibility result as integer slots into it. These are what let the
@@ -221,6 +231,11 @@ class RenderState:
         self.all_lights = []
         self.visible_brush_position_count = 0
         self.visible_thing_position_count = 0
+        self.entity_table = None
+        self.entity_refs = None
+        self.visible_thing_slots = None
+        self.thing_hidden = None
+        self.has_portals = False
         self.render_table = None
         #: slot -> the render reference for that row: the live brush dict, or
         #: for a mover or a door the per-frame snapshot. Indexed by the slot

@@ -50,6 +50,17 @@ Player movement and collision controller: first-person movement, noclip, gravity
 ### `qt_game_view.py`
 Qt `QOpenGLWidget` that owns the GL viewport and frame/update orchestration. Handles input dispatch, play-mode switching, HUD drawing, split-screen layout and renderer selection.
 
+### `entity_table.py`
+Dense numerical projection of the entity list — the entity half of `render_table.py`. One row per `Thing`, addressed by an integer slot and named by the entity's existing UUID, with a `uint16` class column resolving what the renderer used to re-derive per entity per frame (PathNode / Portal / Pickup / Light / Prop / the entity-sprite classes, plus `model_path`, `render_mode` and `sprite_path`) and a position column refreshed in bulk.
+
+Split by change frequency, exactly as the brush table is: the class column moves only when the world epoch does, positions are re-read every frame, and `hidden` is never cached — Big World parks entities by writing it with no notification, so every per-frame consumer has to see it live.
+
+`classify_slots` is the array form of `_sort_objects`' Thing half: the model and sprite passes come out as slot arrays, from masks over the class column and the live hidden mask, with no entity touched.
+
+Sprites add three more columns, and are where the cold/warm split is made explicit rather than assumed. Position is warm and size is cold, both straightforwardly; a sprite's *texture* is neither, because a monster's frame follows `dead`/`is_shooting` and a gate's, a pickup's and a prop's follow properties that change without an edit. Those rows — and only those — re-resolve their sprite identity every frame; everything else resolves once. The identity is a *name*, interned to a dense integer exactly as `render_table` interns face textures, and the renderer turns it into a GL texture id on the thread that has a context.
+
+This is deliberately not pushed into `render_table.py`, whose texture column is wholly cold. Two projections with two refresh disciplines is the honest shape; one projection that had to explain when its texture column could be trusted would not be.
+
 ### `render_cull.py`
 GL-free numerical render-distance culling. Operates on contiguous position data, uses squared-distance arithmetic and reusable scratch buffers, and forms the broad phase before frustum/classification and draw-key processing. Shadow and portal paths can deliberately bypass this broad-phase cull.
 
@@ -73,7 +84,7 @@ Dynamic-light capacity comes from `engine.shaders`; shader light limits are clam
 ### `renderer_F.py`
 Fio's production forward renderer. Implements the frame passes and brush batching, including lit/textured/glow brush paths, forward lighting, point-light shadow cube maps, portal virtual views and render-mode switching.
 
-The renderer consumes the dense numerical render representation and turns equal-key runs into GPU submissions.
+The renderer consumes the dense numerical render representation and turns equal-key runs into GPU submissions. Billboards go the same way: `draw_sprites_instanced` reads position, size and texture from the entity projection's columns, packs one instance row per sprite and submits one `glDrawArraysInstanced` per texture run, so a scene's sprite pass costs a handful of GL calls rather than three per billboard. `draw_sprites` remains as the per-object reference, and is what the editor, the portal virtual views and the split-screen second view still take.
 
 ### `savegame.py`
 Native play-session save/load. Serialises player state, entity/mover state, trigger/pickup progress and I/O state to `.fiosave` files and restores it on a freshly loaded map.
@@ -123,7 +134,7 @@ equal-key runs / packed payloads
 OpenGL
 ```
 
-The renderer therefore is not merely a collection of Python draw calls with NumPy sprinkled around it. `render_table.py`, `render_cull.py` and `render_keys.py` form a numerical frontend between the flexible world model and the GPU backend.
+The renderer therefore is not merely a collection of Python draw calls with NumPy sprinkled around it. `render_table.py`, `entity_table.py`, `render_cull.py` and `render_keys.py` form a numerical frontend between the flexible world model and the GPU backend. Brushes and entities are projected the same way and on the same refresh discipline, so neither half of the world is re-interrogated object by object once a frame starts.
 
 The same principle is used by `physics.py`: simulation state is dense and contiguous while `PhysicsBody` remains a convenient object/API handle.
 
@@ -136,7 +147,7 @@ QtGameView
     ↓
 Renderer_F
     ↓
-render_table / render_cull / render_keys
+render_table / entity_table / render_cull / render_keys
     ↓
 BaseRenderer / OpenGL resources
     ↓
