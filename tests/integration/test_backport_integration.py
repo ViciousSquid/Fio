@@ -128,6 +128,36 @@ def test_camera_cull_exempts_lights_and_portals_and_tracks_positions():
     assert brushes == [far_brush, near_brush]  # inputs untouched
 
 
+def test_the_slot_cull_exempts_the_same_lights_and_portals():
+    """The numeric path states the exemption as a mask; same answer required.
+
+    ``_cull_keep_thing`` is what kept lighting and portal rendering out of the
+    distance cull on the object path.  The entity projection expresses it as
+    :data:`engine.entity_table.ENT_CULL_EXEMPT`, and an exemption that drifted
+    would silently unlight a scene at range -- or, the other way, keep every
+    monster in the world alive in the sprite pass.
+    """
+    import numpy as np
+    from editor.things import Light, Monster, Portal, Thing
+    from engine import entity_table as et
+    from engine.renderer_core import BaseRenderer
+
+    far = [50000.0, 0.0, 0.0]
+    things = [Thing(pos=list(far)), Light(pos=list(far)), Portal(pos=list(far)),
+              Monster(pos=list(far)), Thing(pos=[5.0, 0.0, 5.0])]
+    table = et.EntityTable()
+    table.begin_frame(things, epoch=1)
+    slots = np.arange(table.count, dtype=np.int32)
+
+    kept = BaseRenderer._distance_cull_thing_slots(
+        table, slots, 0.0, 0.0, 1000.0 * 1000.0)
+
+    assert [int(i) for i in kept] == [1, 2, 4], (
+        "kept rows %s; the far Light (1) and Portal (2) are exempt and the "
+        "near Thing (4) is in range, but the far Thing (0) and the far "
+        "Monster (3) are not" % ([int(i) for i in kept],))
+
+
 def glm_vec(x, y, z):
     import glm
     return glm.vec3(x, y, z)

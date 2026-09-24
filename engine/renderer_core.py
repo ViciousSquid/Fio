@@ -32,6 +32,7 @@ from engine.constants import (is_water_brush, brush_aabb_bounds,
                               normalize_color)
 from engine import brush_geometry
 from engine import render_table
+from engine import entity_table as entity_projection
 from engine.render_keys import KeyLayout, sort_into_runs
 from engine import shaders
 from engine.shaders import DEFAULT_SHADERS
@@ -2089,6 +2090,24 @@ layout (location = 9) in vec4 iNormal2;
             'fog': slots[(bits & render_table.CLASS_FOG) != 0],
             'glow': slots[(bits & render_table.CLASS_GLOW) != 0],
         }
+
+    @staticmethod
+    def _distance_cull_thing_slots(table, slots, cx, cz, limit_sq):
+        """:meth:`_distance_cull_slots` with the Thing pass's exemption.
+
+        Lights and Portals survive the cull at any distance, because lighting
+        and portal rendering are deliberately unaffected by it -- the predicate
+        ``_cull_keep_thing`` states that for the object path, and this is the
+        same statement as a mask over :data:`engine.entity_table.ENT_CULL_EXEMPT`.
+        """
+        if not len(slots):
+            return slots
+        dx = table.pos[slots, 0] - cx
+        dz = table.pos[slots, 2] - cz
+        near = (dx * dx + dz * dz) <= limit_sq
+        exempt = (table.class_bits[slots]
+                  & entity_projection.ENT_CULL_EXEMPT) != 0
+        return slots[near | exempt]
 
     @staticmethod
     def _distance_cull_slots(table, slots, cx, cz, limit_sq):

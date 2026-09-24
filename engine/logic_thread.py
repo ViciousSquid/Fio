@@ -26,6 +26,7 @@ from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
 from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
 from .prop_runtime import PropSession
 from .render_table import RenderTable
+from .entity_table import EntityTable
 
 # Import Thing subclasses for type checking
 try:
@@ -201,6 +202,12 @@ class LogicThread(threading.Thread):
         # is the object array the renderer is still handed, with movers and
         # doors replaced by their per-frame snapshot.
         self._render_table = RenderTable()
+        # The entity half of the same projection.  Entities move every
+        # tick and their classification does not, so the table splits
+        # those two costs the way the brush one does.
+        self._entity_table = EntityTable()
+        self._entity_refs = np.empty(0, dtype=object)
+        self._entity_all_slots = np.empty(0, dtype=np.int32)
         self._render_refs = np.empty(0, dtype=object)
 
         # Editor camera
@@ -3950,37 +3957,67 @@ class LogicThread(threading.Thread):
         write_state.total_brushes = total_count
         write_state.culled_brushes = culled_count
 
-        visible_things = []
-        all_lights = []
+        # ---- the entity half of the projection ---------------------------
+        # What used to be one Python pass per entity per frame -- two NumPy
+        # scalar stores, three isinstance tests and a list append each -- is a
+        # bulk position store, a live `hidden` read, and masks over columns.
+        things = self.things
+        etable = self._entity_table
+        entity_generation = etable.generation
+        thing_hidden = etable.begin_frame(things, world_epoch)
+        if etable.generation != entity_generation:
+            erefs = np.empty(etable.count, dtype=object)
+            for i, t in enumerate(things):
+                erefs[i] = t
+            self._entity_refs = erefs
+            self._entity_all_slots = np.arange(etable.count, dtype=np.int32)
+        erefs = self._entity_refs
+        thing_count = etable.count
+
+        # A Monster is handed to the renderer as a render snapshot, because the
+        # AI thread is free to move it while the frame is being drawn.  Those
+        # rows are the entity table's dynamic rows, and refreshing them is the
+        # only per-entity work left that is not a column operation.
+        for i in etable.monster_slots:
+            erefs[i] = things[i].get_render_snapshot()
+
+        # A collected pickup is not published.  Only pickup rows can be
+        # collected, so the filter costs pickups rather than entities -- on a
+        # map with no pickups it costs nothing at all.
+        visible_thing_slots = self._entity_all_slots
+        if (self.play_mode and self.collected_pickups
+                and len(etable.pickup_slots)):
+            collected = self.collected_pickups
+            dropped = [int(i) for i in etable.pickup_slots
+                       if id(things[int(i)]) in collected]
+            if dropped:
+                keep_things = np.ones(thing_count, dtype=bool)
+                keep_things[dropped] = False
+                visible_thing_slots = np.flatnonzero(keep_things).astype(np.int32)
+
+        visible_count = len(visible_thing_slots)
         visible_thing_positions = write_state.ensure_visible_thing_positions(
-            len(self.things))
-        visible_thing_count = 0
-        for thing in self.things:
-            if self.play_mode and Pickup and isinstance(thing, Pickup) and id(thing) in self.collected_pickups:
-                continue
-            if hasattr(thing.pos, 'x'):
-                thing.pos = [thing.pos.x, thing.pos.y, thing.pos.z]
+            visible_count)
+        if visible_count:
+            np.take(etable.pos[:, 0], visible_thing_slots,
+                    out=visible_thing_positions[:visible_count, 0])
+            np.take(etable.pos[:, 2], visible_thing_slots,
+                    out=visible_thing_positions[:visible_count, 1])
 
-            # Publish only the X/Z pair needed by the renderer's broad-phase
-            # distance test. This is a snapshot derived from the authoritative
-            # Thing.pos; it is never written back to the entity.
-            pos = thing.pos
-            visible_thing_positions[visible_thing_count, 0] = float(pos[0])
-            visible_thing_positions[visible_thing_count, 1] = float(pos[2])
-            visible_thing_count += 1
-
-            if Light is not None and isinstance(thing, Light):
-                all_lights.append(thing)
-
-            if isinstance(thing, MonsterThing):
-                visible_things.append(thing.get_render_snapshot())
-            else:
-                visible_things.append(thing)
+        all_lights = (erefs[etable.light_slots].tolist()
+                      if len(etable.light_slots) else [])
+        visible_things = (erefs[visible_thing_slots].tolist()
+                          if visible_count else [])
 
         write_state.visible_things = visible_things
-        write_state.visible_thing_position_count = visible_thing_count
-        write_state.all_things = list(self.things)
+        write_state.visible_thing_position_count = visible_count
+        write_state.all_things = list(things)
         write_state.all_lights = all_lights
+        # The numerical result itself, for the renderer's entity classification.
+        write_state.entity_table = etable
+        write_state.entity_refs = erefs
+        write_state.visible_thing_slots = visible_thing_slots
+        write_state.thing_hidden = thing_hidden
         write_state.timestamp = time.perf_counter()
 
         # ── Player 2 render state ─────────────────────────────────────────────

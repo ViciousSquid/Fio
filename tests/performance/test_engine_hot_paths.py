@@ -133,6 +133,60 @@ def test_classification_is_not_re_resolved_per_frame(logic):
         thread.set_play_mode(False)
 
 
+def test_entity_classification_is_not_re_resolved_per_frame(logic):
+    """The entity projection's cold column, held to the same rule as the brush one.
+
+    ``_sort_objects`` asked every entity what it was on every frame -- four
+    isinstance tests, a ``str().lower()`` and a tuple compare each.  The column
+    answering instead is only worth having if it stays put between edits.
+    """
+    from engine import entity_table as et
+
+    thing = make_thing(Light, "lamp", (0, 100, 0))
+    thread = logic(things=[thing])
+    thread.set_play_mode(True)
+    try:
+        thread._prepare_render_state()
+        table = thread._entity_table
+        before = int(table.class_bits[0])
+
+        thing.properties["render_mode"] = "billboard"   # nobody was told
+        thing.properties["sprite_path"] = "s.png"
+        for _ in range(10):
+            thread._prepare_render_state()
+        assert int(table.class_bits[0]) == before, (
+            "the entity classification column was re-resolved during a frame")
+
+        thread.editor_state.mark_world_changed()
+        thread._prepare_render_state()
+        assert int(table.class_bits[0]) & et.ENT_MODE_BILLBOARD, (
+            "a world-epoch bump did not re-resolve the entity column")
+    finally:
+        thread.set_play_mode(False)
+
+
+def test_only_monster_rows_are_republished_each_frame(logic):
+    """Entities whose reference cannot change are handed over by identity."""
+    lamp = make_thing(Light, "lamp", (0, 100, 0))
+    grunt = make_thing(Monster, "grunt", (0, 96, -300))
+    thread = logic(things=[lamp, grunt])
+    thread.set_play_mode(True)
+    try:
+        thread._prepare_render_state()
+        first = list(thread.game_state.get_write_state().visible_things)
+        thread._prepare_render_state()
+        second = list(thread.game_state.get_write_state().visible_things)
+
+        assert first[0] is second[0] is lamp, (
+            "a Light was copied between frames; only Monsters need a snapshot")
+        assert first[1] is not second[1], (
+            "the Monster snapshot was not refreshed, so the renderer would "
+            "read a frame-old copy")
+        assert list(thread._entity_table.monster_slots) == [1]
+    finally:
+        thread.set_play_mode(False)
+
+
 def test_the_frustum_test_is_one_batched_numpy_pass(logic):
     """Not a Python loop over brushes, and not one array per plane."""
     thread = logic()

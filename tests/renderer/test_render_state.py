@@ -20,7 +20,7 @@ import pytest
 pytest.importorskip("PyQt5", reason="the logic thread pulls in editor.things")
 
 from editor.editor_state import EditorState             # noqa: E402
-from editor.things import Light, Monster                # noqa: E402
+from editor.things import Light, Monster, Pickup        # noqa: E402
 from engine.logic_thread import LogicThread             # noqa: E402
 from engine.threaded_game_state import RenderState, ThreadedGameState  # noqa: E402
 from tests.helpers.worlds import box_brush, make_thing, pillar_grid  # noqa: E402
@@ -519,3 +519,95 @@ def test_the_published_brush_lists_are_not_materialised_unless_read(logic):
         assert materialised[0] is thread.brushes[0]
     finally:
         thread.set_play_mode(False)
+
+
+# ---------------------------------------------------------------------------
+# The dense entity projection
+# ---------------------------------------------------------------------------
+
+def test_the_entity_projection_reaches_the_renderer(logic):
+    """The production handoff: the renderer classifies from these or not at all.
+
+    Everything the numeric entity path needs has to arrive on the render state
+    together -- the table, the per-slot references, the published slots and the
+    live hidden mask.  Any one of them missing and ``render_scene`` silently
+    falls back to walking the entity list, which is the thing this replaced.
+    """
+    things = [make_thing(Light, "lamp", (0, 100, 0)),
+              make_thing(Monster, "grunt", (0, 96, -300))]
+    thread = logic(things=things)
+    thread.set_play_mode(True)
+    try:
+        thread._prepare_render_state()
+        state = thread.game_state.get_write_state()
+
+        assert state.entity_table is thread._entity_table
+        assert state.entity_refs is not None
+        assert state.visible_thing_slots is not None
+        assert state.thing_hidden is not None
+        assert len(state.entity_refs) >= state.entity_table.count
+        assert len(state.thing_hidden) >= state.entity_table.count
+    finally:
+        thread.set_play_mode(False)
+
+
+def test_entity_slots_index_the_rows_they_were_published_beside(logic):
+    lamp = make_thing(Light, "lamp", (100, 200, -300))
+    monster = make_thing(Monster, "grunt", (-50, 96, 700))
+    thread = logic(things=[lamp, monster])
+
+    thread._prepare_render_state()
+    state = thread.game_state.get_write_state()
+    table, slots = state.entity_table, state.visible_thing_slots
+
+    assert len(slots) == len(state.visible_things)
+    assert table.ids[int(slots[0])] == lamp.properties["id"]
+    assert table.ids[int(slots[1])] == monster.properties["id"]
+    # The position column is the same numbers the XZ snapshot carries.
+    assert np.allclose(table.pos[int(slots[0])], lamp.pos)
+
+
+def test_a_monster_row_is_republished_as_a_snapshot_every_frame(logic):
+    """The AI thread moves monsters, so the renderer must read a stable copy."""
+    monster = make_thing(Monster, "grunt", (0, 96, -300))
+    thread = logic(things=[monster])
+
+    thread._prepare_render_state()
+    first = thread.game_state.get_write_state().visible_things[0]
+    assert first is not monster
+    assert first["pos"] == [0.0, 96.0, -300.0]
+
+    monster.pos = [10.0, 96.0, -300.0]
+    thread._prepare_render_state()
+    second = thread.game_state.get_write_state().visible_things[0]
+    assert second["pos"] == [10.0, 96.0, -300.0]
+    assert first["pos"] == [0.0, 96.0, -300.0], (
+        "the previous frame's snapshot was mutated under the renderer")
+
+
+def test_a_collected_pickup_is_not_published(logic):
+    keep = make_thing(Light, "lamp", (0, 100, 0))
+    taken = make_thing(Pickup, "medkit", (200, 0, 0))
+    thread = logic(things=[keep, taken])
+    thread.set_play_mode(True)
+    try:
+        thread.collected_pickups.add(id(taken))
+        thread._prepare_render_state()
+        state = thread.game_state.get_write_state()
+
+        assert list(state.visible_things) == [keep]
+        assert state.visible_thing_position_count == 1
+        assert len(state.visible_thing_slots) == 1
+    finally:
+        thread.set_play_mode(False)
+
+
+def test_the_light_list_comes_off_the_projection_not_a_scan(logic):
+    lamp = make_thing(Light, "lamp", (0, 100, 0))
+    thread = logic(things=[lamp, make_thing(Monster, "grunt", (0, 96, -300))])
+
+    thread._prepare_render_state()
+    state = thread.game_state.get_write_state()
+
+    assert state.all_lights == [lamp]
+    assert list(thread._entity_table.light_slots) == [0]

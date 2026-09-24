@@ -1072,6 +1072,17 @@ class QtGameView(QOpenGLWidget):
             getattr(render_state, "visible_brush_slots", None)
             if render_state is not None else None
         )
+        # The entity half of the same projection: with it, the main pass splits
+        # entities into the model and sprite passes from their class column
+        # rather than asking each one what it is.
+        for _key, _field in (("entity_table", "entity_table"),
+                             ("entity_refs", "entity_refs"),
+                             ("visible_thing_slots", "visible_thing_slots"),
+                             ("thing_hidden", "thing_hidden")):
+            self._render_config[_key] = (
+                getattr(render_state, _field, None)
+                if render_state is not None else None
+            )
         self.update_instance_textures(things_to_render)
 
         # Plugin render hooks. Guarded by has_listeners so an unhooked frame

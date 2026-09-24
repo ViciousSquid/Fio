@@ -50,6 +50,13 @@ Player movement and collision controller: first-person movement, noclip, gravity
 ### `qt_game_view.py`
 Qt `QOpenGLWidget` that owns the GL viewport and frame/update orchestration. Handles input dispatch, play-mode switching, HUD drawing, split-screen layout and renderer selection.
 
+### `entity_table.py`
+Dense numerical projection of the entity list — the entity half of `render_table.py`. One row per `Thing`, addressed by an integer slot and named by the entity's existing UUID, with a `uint16` class column resolving what the renderer used to re-derive per entity per frame (PathNode / Portal / Pickup / Light / Prop / the entity-sprite classes, plus `model_path`, `render_mode` and `sprite_path`) and a position column refreshed in bulk.
+
+Split by change frequency, exactly as the brush table is: the class column moves only when the world epoch does, positions are re-read every frame, and `hidden` is never cached — Big World parks entities by writing it with no notification, so every per-frame consumer has to see it live.
+
+`classify_slots` is the array form of `_sort_objects`' Thing half: the model and sprite passes come out as slot arrays, from masks over the class column and the live hidden mask, with no entity touched.
+
 ### `render_cull.py`
 GL-free numerical render-distance culling. Operates on contiguous position data, uses squared-distance arithmetic and reusable scratch buffers, and forms the broad phase before frustum/classification and draw-key processing. Shadow and portal paths can deliberately bypass this broad-phase cull.
 
@@ -123,7 +130,7 @@ equal-key runs / packed payloads
 OpenGL
 ```
 
-The renderer therefore is not merely a collection of Python draw calls with NumPy sprinkled around it. `render_table.py`, `render_cull.py` and `render_keys.py` form a numerical frontend between the flexible world model and the GPU backend.
+The renderer therefore is not merely a collection of Python draw calls with NumPy sprinkled around it. `render_table.py`, `entity_table.py`, `render_cull.py` and `render_keys.py` form a numerical frontend between the flexible world model and the GPU backend. Brushes and entities are projected the same way and on the same refresh discipline, so neither half of the world is re-interrogated object by object once a frame starts.
 
 The same principle is used by `physics.py`: simulation state is dense and contiguous while `PhysicsBody` remains a convenient object/API handle.
 
@@ -136,7 +143,7 @@ QtGameView
     ↓
 Renderer_F
     ↓
-render_table / render_cull / render_keys
+render_table / entity_table / render_cull / render_keys
     ↓
 BaseRenderer / OpenGL resources
     ↓

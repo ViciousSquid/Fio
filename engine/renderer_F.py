@@ -12,6 +12,7 @@ import os
 
 from .renderer_core import BaseRenderer, normalize_color
 from engine import render_table
+from engine import entity_table as entity_projection
 from engine.render_keys import KeyLayout, sort_into_runs
 from engine.brush_geometry import (brush_has_geometry, face_uses_natural_scale,
                                    geometry_signature, natural_repeats)
@@ -1129,6 +1130,16 @@ class Renderer_F(BaseRenderer):
         numeric = (brush_slots is not None and table is not None
                    and refs is not None and len(refs) >= table.count)
 
+        etable = config.get('entity_table')
+        erefs = config.get('entity_refs')
+        thing_slots = config.get('visible_thing_slots')
+        thing_hidden = config.get('thing_hidden')
+        entities_numeric = (numeric and etable is not None and erefs is not None
+                            and thing_slots is not None
+                            and thing_hidden is not None
+                            and len(erefs) >= etable.count
+                            and len(thing_hidden) >= etable.count)
+
         cull_things = things
         cull_thing_positions = config.get('thing_positions')
         if cull_thing_positions is not None:
@@ -1167,24 +1178,54 @@ class Renderer_F(BaseRenderer):
             glass_brushes = _objs('glass')
             fog_volumes = _objs('fog')
 
-            # Things keep the object path: they are not projected, and their
-            # render kinds are entity semantics rather than material state.
             cull_brushes = None
-            if (config.get('camera_distance_cull', config.get('play_mode', False))
-                    and camera_pos is not None):
-                _, cull_things = self._camera_distance_cull(
-                    (), things, camera_pos,
-                    thing_positions=cull_thing_positions)
-                cull_thing_positions = self._last_cull_thing_positions
-
             models_to_render = self._model_render_buf
             models_to_render.clear()
-            _, _, sprite_things, _, _, _, _, sort_positions = self._sort_objects(
-                (), cull_things, config,
-                model_out=models_to_render,
-                thing_positions=cull_thing_positions,
-                collect_sort_positions=True,
-            )
+            if entities_numeric:
+                # ---- entities: the same treatment, over their own columns ---
+                # An entity's render kind is a resolution of its class and
+                # three authored properties, which is as static as a brush's
+                # shader; only `hidden` and where it stands change per frame.
+                # So the pass split is masks over the entity projection, and an
+                # entity becomes a Python object once, at the end, for the two
+                # passes that still draw from dicts.
+                tslots = thing_slots
+                if (config.get('camera_distance_cull',
+                               config.get('play_mode', False))
+                        and cx is not None):
+                    tslots = self._distance_cull_thing_slots(
+                        etable, tslots, cx, cz, self.view_distance.distance_sq)
+                model_slots, sprite_slots = entity_projection.classify_slots(
+                    etable, tslots, thing_hidden,
+                    config.get('play_mode', False),
+                    config.get('show_sprites_in_play_mode', False))
+                if cx is not None:
+                    sprite_slots = self._sort_slots_by_distance(
+                        etable, sprite_slots, cx, cz)
+                if len(model_slots):
+                    models_to_render.extend(erefs[model_slots].tolist())
+                sprite_things = (erefs[sprite_slots].tolist()
+                                 if len(sprite_slots) else [])
+                sort_positions = None
+            else:
+                # Things keep the object path when no entity projection was
+                # published -- the editor's non-threaded view, and any caller
+                # handing over a Thing list of its own.
+                if (config.get('camera_distance_cull',
+                               config.get('play_mode', False))
+                        and camera_pos is not None):
+                    _, cull_things = self._camera_distance_cull(
+                        (), things, camera_pos,
+                        thing_positions=cull_thing_positions)
+                    cull_thing_positions = self._last_cull_thing_positions
+
+                _, _, sprite_things, _, _, _, _, sort_positions = \
+                    self._sort_objects(
+                        (), cull_things, config,
+                        model_out=models_to_render,
+                        thing_positions=cull_thing_positions,
+                        collect_sort_positions=True,
+                    )
         else:
             cull_brushes = brushes
             cull_brush_positions = config.get('brush_positions')
@@ -1337,7 +1378,9 @@ class Renderer_F(BaseRenderer):
                 if glass_brushes:
                     glass_brushes = _sort_by_distance(
                         glass_brushes, sort_positions['glass'], cx, cz)
-            if final_sprites:
+            if final_sprites and sort_positions is not None:
+                # The numeric path ordered the sprite slots from the entity
+                # projection before materialising them.
                 final_sprites = _sort_by_distance(
                     final_sprites, sort_positions['sprites'], cx, cz)
         if not config.get('play_mode', False):

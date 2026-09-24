@@ -105,7 +105,27 @@ def _projection_for(brushes):
     return table, refs, slots
 
 
-def _render(renderer, context, brushes, things, numeric, **overrides):
+def _entity_projection_for(live, published):
+    """The entity projection the logic thread publishes beside the brush one.
+
+    Mirrors production exactly, including the asymmetry that matters: the table
+    is built over the *authoritative* Thing list, while the per-slot references
+    hold what is actually handed to the renderer -- a render-snapshot dict for
+    every Monster row.
+    """
+    from engine.entity_table import EntityTable
+
+    table = EntityTable()
+    hidden = table.begin_frame(live, 1)
+    refs = np.empty(len(published), dtype=object)
+    for i, thing in enumerate(published):
+        refs[i] = thing
+    slots = np.arange(table.count, dtype=np.int32)
+    return table, refs, slots, hidden
+
+
+def _render(renderer, context, brushes, things, numeric, live_things=None,
+            **overrides):
     import OpenGL.GL as gl
 
     projection, view, eye = glh.camera_matrices(aspect=1.0)
@@ -118,6 +138,14 @@ def _render(renderer, context, brushes, things, numeric, **overrides):
         config["render_refs"] = refs
         config["all_brush_slots"] = slots
         brush_slots = slots
+        # Both halves of the projection, as the logic thread publishes them:
+        # the numeric path in production never has one without the other.
+        etable, erefs, eslots, ehidden = _entity_projection_for(
+            live_things if live_things is not None else things, things)
+        config["entity_table"] = etable
+        config["entity_refs"] = erefs
+        config["visible_thing_slots"] = eslots
+        config["thing_hidden"] = ehidden
     context.bind()
     gl.glClearColor(0.0, 0.0, 0.0, 1.0)
     renderer.render_scene(projection, view, eye, brushes, things, None, config,
@@ -205,6 +233,124 @@ def test_the_two_paths_agree_with_a_shadow_casting_light(renderer, context):
     objects_img = _render(renderer, context, brushes, things, numeric=False)
     slots_img = _render(renderer, context, brushes, things, numeric=True)
     _assert_same_picture(objects_img, slots_img, "shadowed scene")
+
+
+def _entity_scene():
+    """A scene whose *entities* exercise the passes the projection took over.
+
+    One of each verdict the classification chain can reach: a sprite entity, a
+    billboard, a pickup, a path node (drawn by nothing), and the light.
+    """
+    from editor.things import Light, Monster, PathNode, Pickup, Thing
+
+    brushes = [box_brush("floor", (0, -16, 0), (1024, 32, 1024))]
+    things = [
+        make_thing(Monster, "grunt", (-160, 64, 0), monster_type="human"),
+        make_thing(Pickup, "medkit", (0, 48, 0), item_type="health"),
+        make_thing(Thing, "billboard", (160, 64, 0),
+                   render_mode="billboard", sprite_path="assets/sprites/x.png"),
+        make_thing(PathNode, "node", (0, 32, 200)),
+        make_thing(Light, "entity_light", (0, 300, 300),
+                   color=[255, 255, 255], intensity=2.0, radius=1400.0,
+                   state="on", casts_shadows=False),
+    ]
+    return brushes, things
+
+
+def _submitted_entities(renderer, context, brushes, published, live, numeric,
+                        **overrides):
+    """What the sprite and model passes are actually handed, by identity.
+
+    Pixels are the right check for the brush half, where every pass rasterises.
+    They are the wrong one here: the visual harness has no sprite atlas, so a
+    billboard classified into the wrong pass draws nothing either way and the
+    image is identical while the classification is broken.  Capturing the
+    submissions instead is sensitive to exactly what this change decides --
+    which entity goes to which pass, and in what order.
+    """
+    captured = {'sprites': None, 'models': None}
+
+    def _sprites(projection, view, things_to_draw, *args, **kwargs):
+        captured['sprites'] = list(things_to_draw)
+
+    def _models(projection, view, camera_pos, models, lights, config):
+        captured['models'] = list(models)
+
+    original = (renderer.draw_sprites, renderer.draw_models)
+    renderer.draw_sprites, renderer.draw_models = _sprites, _models
+    try:
+        _render(renderer, context, brushes, published, numeric=numeric,
+                live_things=live, **overrides)
+    finally:
+        renderer.draw_sprites, renderer.draw_models = original
+    return captured
+
+
+def _assert_same_submissions(objects, slots, what):
+    for key in ('sprites', 'models'):
+        want = [id(o) for o in (objects[key] or [])]
+        got = [id(o) for o in (slots[key] or [])]
+        assert want == got, (
+            "%s: the object path submitted %d %s and the numeric path %d, or "
+            "in a different order -- the two are not classifying entities the "
+            "same way" % (what, len(want), key, len(got)))
+
+
+def test_the_two_paths_submit_the_same_entities(renderer, context):
+    """The entity half of the projection, end to end through render_scene.
+
+    A monster reaches the renderer as a snapshot dict, a pickup and a billboard
+    through different branches of the chain, and a path node through none of
+    them -- so a mask that mixes those up changes what is submitted.
+    """
+    brushes, things = _entity_scene()
+    # A Monster is published as its render snapshot; that is what the object
+    # path is handed in production, so it is what it is handed here.
+    published = [t.get_render_snapshot() if type(t).__name__ == "Monster" else t
+                 for t in things]
+    objects = _submitted_entities(renderer, context, brushes, published, things,
+                                  numeric=False)
+    slots = _submitted_entities(renderer, context, brushes, published, things,
+                                numeric=True)
+    assert objects['sprites'], "the object path submitted no sprites at all"
+    _assert_same_submissions(objects, slots, "entity scene")
+
+
+def test_a_hidden_entity_is_absent_from_both(renderer, context):
+    """`hidden` is the one entity field read live, so both paths must see it."""
+    from editor.things import Thing
+
+    brushes, things = _entity_scene()
+    published = [t.get_render_snapshot() if type(t).__name__ == "Monster" else t
+                 for t in things]
+    for thing in published:
+        if isinstance(thing, Thing):
+            thing.properties["hidden"] = True
+    objects = _submitted_entities(renderer, context, brushes, published, things,
+                                  numeric=False)
+    slots = _submitted_entities(renderer, context, brushes, published, things,
+                                numeric=True)
+    _assert_same_submissions(objects, slots, "hidden entities")
+
+
+def test_the_numeric_path_depth_orders_sprites_like_the_object_path(renderer,
+                                                                    context):
+    """Far to near, from the projection's positions rather than a row list."""
+    from editor.things import Light, Pickup
+
+    brushes = [box_brush("floor", (0, -16, 0), (1024, 32, 1024))]
+    things = [make_thing(Pickup, "near", (0, 48, 300), item_type="health"),
+              make_thing(Pickup, "far", (0, 48, -300), item_type="health"),
+              make_thing(Pickup, "mid", (0, 48, 0), item_type="health"),
+              make_thing(Light, "l", (0, 300, 300), color=[255, 255, 255],
+                         intensity=2.0, radius=1400.0, state="on",
+                         casts_shadows=False)]
+    objects = _submitted_entities(renderer, context, brushes, things, things,
+                                  numeric=False)
+    slots = _submitted_entities(renderer, context, brushes, things, things,
+                                numeric=True)
+    assert len(objects['sprites']) > 1, "nothing to order"
+    _assert_same_submissions(objects, slots, "sprite depth order")
 
 
 def test_a_hidden_brush_is_absent_from_both(renderer, context):
