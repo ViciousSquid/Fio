@@ -283,3 +283,153 @@ def _assert_same_entities(want, got, table, things, what):
     assert [id(o) for o in want] == [id(o) for o in got], (
         "%s: same entities, different order -- the sprite pass is depth "
         "ordered afterwards, but the pre-sort order still has to match" % what)
+
+
+# ---------------------------------------------------------------------------
+# Sprite identity: the warm column
+# ---------------------------------------------------------------------------
+
+def _keys(table, slot):
+    """The cache keys of a row's sprite candidates, in order."""
+    sid = int(table.sprite_key_id[slot])
+    if sid < 0:
+        return None
+    return [c[0] for c in table.sprite_recipes()[sid]]
+
+
+def test_a_portal_draws_no_sprite():
+    """The sprite pass has always skipped Portals; the column says so."""
+    table = _synced([make_thing(Portal, 'p')])
+    assert int(table.sprite_key_id[0]) == et.SPRITE_NONE
+    assert _keys(table, 0) is None
+
+
+def test_a_monsters_sprite_key_names_its_current_frame():
+    grunt = make_thing(Monster, 'grunt', monster_type='human')
+    table = _synced([grunt])
+    assert _keys(table, 0) == ['msprite_human_<None>_idle_']
+
+    grunt.properties['is_shooting'] = True
+    table.begin_frame([grunt], epoch=1)
+    assert _keys(table, 0) == ['msprite_human_<None>_shoot_']
+
+    grunt.properties['dead'] = True
+    table.begin_frame([grunt], epoch=1)
+    assert _keys(table, 0) == ['msprite_human_<None>_dead_'], (
+        "dead wins over shooting, as the object path's chain decides it")
+
+
+def test_a_variant_monster_falls_back_to_the_base_folder():
+    """Two load attempts, in the order draw_sprites makes them."""
+    grunt = make_thing(Monster, 'grunt', monster_type='human', variant='red')
+    table = _synced([grunt])
+    sid = int(table.sprite_key_id[0])
+    recipe = table.sprite_recipes()[sid]
+    assert [c[2] for c in recipe] == ['sprites/monsters/human/red',
+                                      'sprites/monsters/human']
+    assert {c[0] for c in recipe} == {'msprite_human_red_idle_'}
+
+
+def test_a_custom_monster_sprite_is_loaded_from_its_own_path():
+    grunt = make_thing(Monster, 'grunt', monster_type='human',
+                       custom_idle='assets/sprites/mine/idle.png')
+    table = _synced([grunt])
+    recipe = table.sprite_recipes()[int(table.sprite_key_id[0])]
+    assert recipe == (('msprite_human_<None>_idle_assets/sprites/mine/idle.png',
+                       'idle.png', 'sprites/mine', True),)
+
+
+def test_a_logic_gates_sprite_follows_its_type():
+    gate = make_thing(LogicGate, 'g', logic_type='and')
+    table = _synced([gate])
+    assert _keys(table, 0)[0] == 'logic_and'
+
+    gate.properties['logic_type'] = 'or'
+    table.begin_frame([gate], epoch=1)
+    assert _keys(table, 0)[0] == 'logic_or'
+
+
+def test_the_override_is_tried_before_the_classs_shared_sprite():
+    """The two chains, in the order the object path runs them."""
+    gate = make_thing(LogicGate, 'g', logic_type='and')
+    table = _synced([gate])
+    assert _keys(table, 0) == ['logic_and', 'LogicGate'], (
+        "the per-entity override must be tried first and the class texture "
+        "second, or a gate would draw whatever the first gate loaded")
+
+
+def test_an_entity_with_no_sprite_source_is_lookup_only():
+    """No filename means the renderer must never load for this row."""
+    table = _synced([make_thing(Light, 'l')])
+    recipe = table.sprite_recipes()[int(table.sprite_key_id[0])]
+    assert recipe == (('Light', '', '', False),)
+
+
+def test_sprite_sizes_match_what_draw_sprites_chose():
+    lamp = make_thing(Light, 'l')
+    grunt = make_thing(Monster, 'm', sprite_width=96, sprite_height=160)
+    billboard = make_thing(Thing, 'b', render_mode='billboard',
+                           sprite_path='s.png', sprite_size=[48.0, 72.0])
+    plain = make_thing(LogicRelay, 'r')
+    table = _synced([lamp, grunt, billboard, plain])
+    assert list(table.sprite_size[0]) == [16.0, 16.0]
+    assert list(table.sprite_size[1]) == [96.0, 160.0]
+    assert list(table.sprite_size[2]) == [48.0, 72.0]
+    assert list(table.sprite_size[3]) == [32.0, 32.0]
+
+
+def test_a_light_keeps_its_marker_size_even_with_a_sprite_path():
+    """The size ladder tests Light first; that order is the contract."""
+    lamp = make_thing(Light, 'l', sprite_path='s.png', sprite_size=[99.0, 99.0])
+    table = _synced([lamp])
+    assert list(table.sprite_size[0]) == [16.0, 16.0]
+
+
+def test_a_malformed_sprite_size_falls_back_rather_than_raising():
+    thing = make_thing(Thing, 'b', render_mode='billboard',
+                       sprite_path='s.png', sprite_size='nonsense')
+    table = _synced([thing])
+    assert list(table.sprite_size[0]) == [32.0, 32.0]
+
+
+def test_only_the_warm_rows_are_re_resolved_per_frame(monkeypatch):
+    """The cold/warm split, counted rather than assumed."""
+    calls = []
+    real = et.sprite_candidates
+
+    def counted(thing):
+        calls.append(type(thing).__name__)
+        return real(thing)
+
+    monkeypatch.setattr(et, 'sprite_candidates', counted)
+    things = [make_thing(Light, 'l'), make_thing(Monster, 'm'),
+              make_thing(LogicRelay, 'r'), make_thing(Pickup, 'p')]
+    table = EntityTable()
+    table.begin_frame(things, epoch=1)
+    calls.clear()
+
+    for _ in range(5):
+        table.begin_frame(things, epoch=1)
+
+    assert set(calls) == {'Monster', 'Pickup'}, (
+        "resolved %s per frame; only the rows whose sprite can change without "
+        "an edit should be" % sorted(set(calls)))
+    assert len(calls) == 10, "expected two warm rows over five frames"
+
+
+def test_identical_recipes_intern_to_one_id():
+    """Two pickups of the same kind share a run, so they share an id."""
+    table = _synced([make_thing(Pickup, 'a', item_type='health'),
+                     make_thing(Pickup, 'b', item_type='health')])
+    assert table.sprite_key_id[0] == table.sprite_key_id[1]
+    assert len(table.sprite_recipes()) == 1
+
+
+def test_sprite_columns_are_a_pure_projection():
+    things = [make_thing(Monster, 'm'), make_thing(Light, 'l'),
+              make_thing(Pickup, 'p'), make_thing(Portal, 'pt')]
+    first, second = _synced(things), _synced(things)
+    assert np.array_equal(first.sprite_size[:first.count],
+                          second.sprite_size[:second.count])
+    assert ([_keys(first, i) for i in range(first.count)]
+            == [_keys(second, i) for i in range(second.count)])

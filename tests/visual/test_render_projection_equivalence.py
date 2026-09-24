@@ -86,7 +86,9 @@ def renderer(context):
     made = Renderer_F(loader, 64, 4096, None)
     made.update_grid_buffers(4096, 64)
     made.set_sprite_textures({})
+    _ENTITY_TABLES.clear()
     yield made
+    _ENTITY_TABLES.clear()
     try:
         made.cleanup()
     except Exception:
@@ -105,23 +107,60 @@ def _projection_for(brushes):
     return table, refs, slots
 
 
-def _entity_projection_for(live, published):
+def _entity_projection_for(live, published, table=None):
     """The entity projection the logic thread publishes beside the brush one.
 
     Mirrors production exactly, including the asymmetry that matters: the table
     is built over the *authoritative* Thing list, while the per-slot references
     hold what is actually handed to the renderer -- a render-snapshot dict for
     every Monster row.
+
+    *table* is reused across frames the way a play session reuses one, so the
+    warm sprite column is exercised on a live table rather than on a fresh one
+    that has never seen the entity before.
     """
     from engine.entity_table import EntityTable
 
-    table = EntityTable()
+    table = table if table is not None else EntityTable()
     hidden = table.begin_frame(live, 1)
     refs = np.empty(len(published), dtype=object)
     for i, thing in enumerate(published):
         refs[i] = thing
     slots = np.arange(table.count, dtype=np.int32)
     return table, refs, slots, hidden
+
+
+#: One projection per test, as a play session has one per session. Reset by
+#: the renderer fixture so tests cannot leak interned ids into each other.
+_ENTITY_TABLES = {}
+
+
+class _InstanceTextureHost:
+    """The handful of attributes ``QtGameView.update_instance_textures`` uses.
+
+    The object path has two halves in production: this one, which runs on the
+    Qt thread and resolves the per-entity texture override, and
+    ``draw_sprites``, which falls back to the texture shared by a class.  A
+    reference that ran only the second half would be a weaker renderer than the
+    one Fio ships, and the comparison would flatter the dense path.  So the
+    real function is driven here against a stub rather than reimplemented.
+    """
+
+    def __init__(self, renderer):
+        self.renderer = renderer
+        self.sprite_textures = renderer.sprite_textures
+        self._instance_tex_hash = None
+
+    def load_texture(self, filename, subfolder):
+        return self.renderer.load_texture(filename, subfolder)
+
+
+def _apply_instance_textures(renderer, published):
+    """Run the production override resolution, as the Qt thread would."""
+    from engine.qt_game_view import QtGameView
+
+    host = _InstanceTextureHost(renderer)
+    QtGameView.update_instance_textures(host, published)
 
 
 def _render(renderer, context, brushes, things, numeric, live_things=None,
@@ -132,6 +171,10 @@ def _render(renderer, context, brushes, things, numeric, live_things=None,
     config = glh.render_config(all_brushes=brushes, all_things=things,
                                **overrides)
     brush_slots = None
+    # The object path's first half. It runs every frame in production, before
+    # the renderer sees anything, so it runs here for both paths -- what it
+    # populates is a renderer-level cache, not a per-path one.
+    _apply_instance_textures(renderer, things)
     if numeric:
         table, refs, slots = _projection_for(brushes)
         config["render_table"] = table
@@ -141,7 +184,9 @@ def _render(renderer, context, brushes, things, numeric, live_things=None,
         # Both halves of the projection, as the logic thread publishes them:
         # the numeric path in production never has one without the other.
         etable, erefs, eslots, ehidden = _entity_projection_for(
-            live_things if live_things is not None else things, things)
+            live_things if live_things is not None else things, things,
+            _ENTITY_TABLES.get('current'))
+        _ENTITY_TABLES['current'] = etable
         config["entity_table"] = etable
         config["entity_refs"] = erefs
         config["visible_thing_slots"] = eslots
@@ -257,43 +302,114 @@ def _entity_scene():
     return brushes, things
 
 
-def _submitted_entities(renderer, context, brushes, published, live, numeric,
-                        **overrides):
-    """What the sprite and model passes are actually handed, by identity.
+import contextlib
 
-    Pixels are the right check for the brush half, where every pass rasterises.
-    They are the wrong one here: the visual harness has no sprite atlas, so a
-    billboard classified into the wrong pass draws nothing either way and the
-    image is identical while the classification is broken.  Capturing the
-    submissions instead is sensitive to exactly what this change decides --
-    which entity goes to which pass, and in what order.
+
+@contextlib.contextmanager
+def _capture_sprite_submissions(renderer, out):
+    """Record every billboard that reaches the GPU, from either sprite path.
+
+    Pixels are the wrong instrument for the entity half -- the visual harness
+    has no sprite atlas, so a misclassified billboard draws nothing either way
+    and the image is identical while the classification is broken.  What both
+    paths do have in common is the GL boundary: each ends up establishing a
+    texture and submitting a quad at a world position and size.  Capturing
+    that is sensitive to exactly what the dense path changed, and it compares
+    the per-sprite path and the instanced one on equal terms.
     """
-    captured = {'sprites': None, 'models': None}
+    import engine.renderer_core as rc
 
-    def _sprites(projection, view, things_to_draw, *args, **kwargs):
-        captured['sprites'] = list(things_to_draw)
+    state = {'tex': 0, 'pos': None, 'size': None}
+    real = (rc.gl.glBindTexture, rc.gl.glUniform3fv, rc.gl.glUniform2f,
+            rc.gl.glDrawArrays, rc.gl.glDrawArraysInstanced)
 
-    def _models(projection, view, camera_pos, models, lights, config):
-        captured['models'] = list(models)
+    def bind(target, tex_id, *a, **k):
+        state['tex'] = int(tex_id)
+        return real[0](target, tex_id, *a, **k)
 
-    original = (renderer.draw_sprites, renderer.draw_models)
-    renderer.draw_sprites, renderer.draw_models = _sprites, _models
+    def u3(loc, count, value, *a, **k):
+        state['pos'] = tuple(round(float(v), 3) for v in value)
+        return real[1](loc, count, value, *a, **k)
+
+    def u2(loc, x, y, *a, **k):
+        state['size'] = (round(float(x), 3), round(float(y), 3))
+        return real[2](loc, x, y, *a, **k)
+
+    def draw(mode, first, count, *a, **k):
+        # The per-sprite path: one quad per billboard, its state in uniforms.
+        out.append(state['pos'] + state['size'] + (state['tex'],))
+        return real[3](mode, first, count, *a, **k)
+
+    def draw_instanced(mode, first, count, instances, *a, **k):
+        # The instanced path: one draw per texture run, its state in the
+        # packed buffer the renderer just uploaded.
+        base = renderer._sprite_instance_base
+        rows = renderer._sprite_instance_data[base:base + instances]
+        for row in rows:
+            out.append((round(float(row[0]), 3), round(float(row[1]), 3),
+                        round(float(row[2]), 3), round(float(row[3]), 3),
+                        round(float(row[4]), 3), state['tex']))
+        return real[4](mode, first, count, instances, *a, **k)
+
+    (rc.gl.glBindTexture, rc.gl.glUniform3fv, rc.gl.glUniform2f,
+     rc.gl.glDrawArrays, rc.gl.glDrawArraysInstanced) = (
+        bind, u3, u2, draw, draw_instanced)
+    try:
+        yield
+    finally:
+        (rc.gl.glBindTexture, rc.gl.glUniform3fv, rc.gl.glUniform2f,
+         rc.gl.glDrawArrays, rc.gl.glDrawArraysInstanced) = real
+
+
+def _submitted(renderer, context, brushes, published, live, numeric,
+               **overrides):
+    """Sprites, models and draw-call count for one path through render_scene."""
+    sprites, models, draws = [], [], {'n': 0}
+
+    real_sprite = renderer.draw_sprites
+    real_inst = renderer.draw_sprites_instanced
+    real_models = renderer.draw_models
+
+    def with_capture(fn):
+        def wrapped(*a, **k):
+            before = len(sprites)
+            with _capture_sprite_submissions(renderer, sprites):
+                result = fn(*a, **k)
+            draws['n'] += len(sprites) - before
+            return result
+        return wrapped
+
+    def cap_models(projection, view, camera_pos, models_in, lights, config):
+        models.extend(models_in)
+
+    renderer.draw_sprites = with_capture(real_sprite)
+    renderer.draw_sprites_instanced = with_capture(real_inst)
+    renderer.draw_models = cap_models
     try:
         _render(renderer, context, brushes, published, numeric=numeric,
                 live_things=live, **overrides)
     finally:
-        renderer.draw_sprites, renderer.draw_models = original
-    return captured
+        renderer.draw_sprites = real_sprite
+        renderer.draw_sprites_instanced = real_inst
+        renderer.draw_models = real_models
+    return sprites, models
 
 
 def _assert_same_submissions(objects, slots, what):
-    for key in ('sprites', 'models'):
-        want = [id(o) for o in (objects[key] or [])]
-        got = [id(o) for o in (slots[key] or [])]
-        assert want == got, (
-            "%s: the object path submitted %d %s and the numeric path %d, or "
-            "in a different order -- the two are not classifying entities the "
-            "same way" % (what, len(want), key, len(got)))
+    o_sprites, o_models = objects
+    s_sprites, s_models = slots
+    assert [id(m) for m in o_models] == [id(m) for m in s_models], (
+        "%s: the two paths submitted different models" % what)
+    # The instanced path regroups depth-ordered sprites into texture runs, so
+    # the sequence differs by construction; the *set* of billboards drawn, with
+    # their transforms and textures, may not.
+    assert sorted(o_sprites) == sorted(s_sprites), (
+        "%s: the object path submitted %d billboards and the instanced path "
+        "%d, or with different positions, sizes or textures.\n  only object: "
+        "%s\n  only instanced: %s"
+        % (what, len(o_sprites), len(s_sprites),
+           sorted(set(o_sprites) - set(s_sprites))[:4],
+           sorted(set(s_sprites) - set(o_sprites))[:4]))
 
 
 def test_the_two_paths_submit_the_same_entities(renderer, context):
@@ -308,11 +424,11 @@ def test_the_two_paths_submit_the_same_entities(renderer, context):
     # path is handed in production, so it is what it is handed here.
     published = [t.get_render_snapshot() if type(t).__name__ == "Monster" else t
                  for t in things]
-    objects = _submitted_entities(renderer, context, brushes, published, things,
-                                  numeric=False)
-    slots = _submitted_entities(renderer, context, brushes, published, things,
-                                numeric=True)
-    assert objects['sprites'], "the object path submitted no sprites at all"
+    objects = _submitted(renderer, context, brushes, published, things,
+                         numeric=False)
+    slots = _submitted(renderer, context, brushes, published, things,
+                       numeric=True)
+    assert objects[0], "the object path submitted no billboards at all"
     _assert_same_submissions(objects, slots, "entity scene")
 
 
@@ -326,16 +442,113 @@ def test_a_hidden_entity_is_absent_from_both(renderer, context):
     for thing in published:
         if isinstance(thing, Thing):
             thing.properties["hidden"] = True
-    objects = _submitted_entities(renderer, context, brushes, published, things,
-                                  numeric=False)
-    slots = _submitted_entities(renderer, context, brushes, published, things,
-                                numeric=True)
+    objects = _submitted(renderer, context, brushes, published, things,
+                         numeric=False)
+    slots = _submitted(renderer, context, brushes, published, things,
+                       numeric=True)
     _assert_same_submissions(objects, slots, "hidden entities")
 
 
-def test_the_numeric_path_depth_orders_sprites_like_the_object_path(renderer,
-                                                                    context):
-    """Far to near, from the projection's positions rather than a row list."""
+def test_a_monsters_frame_follows_its_live_state(renderer, context):
+    """The warm half: a monster that starts shooting must change texture.
+
+    This is the field the cold projection deliberately does not hold, so if the
+    warm refresh stopped running the sprite would freeze on its idle frame.
+    """
+    from editor.things import Light, Monster
+
+    brushes = [box_brush("floor", (0, -16, 0), (1024, 32, 1024))]
+    grunt = make_thing(Monster, "grunt", (0, 64, 0), monster_type="human")
+    things = [grunt, make_thing(Light, "l", (0, 300, 300),
+                                color=[255, 255, 255], intensity=2.0,
+                                radius=1400.0, state="on", casts_shadows=False)]
+
+    def run():
+        published = [t.get_render_snapshot() if isinstance(t, Monster) else t
+                     for t in things]
+        objects = _submitted(renderer, context, brushes, published, things,
+                             numeric=False)
+        slots = _submitted(renderer, context, brushes, published, things,
+                           numeric=True)
+        _assert_same_submissions(objects, slots, "monster frame")
+        return slots[0]
+
+    idle = run()
+    grunt.properties["is_shooting"] = True
+    shooting = run()
+    grunt.properties["is_shooting"] = False
+    grunt.properties["dead"] = True
+    dead = run()
+
+    textures = {idle[0][5] if idle else None,
+                shooting[0][5] if shooting else None,
+                dead[0][5] if dead else None}
+    assert len(textures) == 3, (
+        "idle, shooting and dead resolved to %d distinct textures, not 3 -- "
+        "the warm sprite column is not following the monster's state"
+        % len(textures))
+
+
+def test_a_retextured_billboard_changes_what_is_submitted(renderer, context):
+    """A prop switching representation is warm state too."""
+    from editor.things import Light
+    from engine.prop_entity import Prop
+
+    brushes = [box_brush("floor", (0, -16, 0), (1024, 32, 1024))]
+    prop = make_thing(Prop, "crate", (0, 64, 0), render_mode="billboard",
+                      sprite_path="assets/sprites/pickup.png")
+    things = [prop, make_thing(Light, "l", (0, 300, 300),
+                               color=[255, 255, 255], intensity=2.0,
+                               radius=1400.0, state="on", casts_shadows=False)]
+
+    def run():
+        objects = _submitted(renderer, context, brushes, things, things,
+                             numeric=False)
+        slots = _submitted(renderer, context, brushes, things, things,
+                           numeric=True)
+        _assert_same_submissions(objects, slots, "prop representation")
+        return slots[0]
+
+    run()
+    prop.properties["sprite_path"] = "assets/sprites/logic_relay.png"
+    run()
+
+
+def test_a_moved_sprite_follows_its_position_and_size(renderer, context):
+    """Transforms are the warm column; the instances must track them."""
+    from editor.things import Light, Pickup
+
+    brushes = [box_brush("floor", (0, -16, 0), (1024, 32, 1024))]
+    pickup = make_thing(Pickup, "medkit", (0, 48, 0), item_type="health")
+    things = [pickup, make_thing(Light, "l", (0, 300, 300),
+                                 color=[255, 255, 255], intensity=2.0,
+                                 radius=1400.0, state="on",
+                                 casts_shadows=False)]
+
+    def run():
+        objects = _submitted(renderer, context, brushes, things, things,
+                             numeric=False)
+        slots = _submitted(renderer, context, brushes, things, things,
+                           numeric=True)
+        _assert_same_submissions(objects, slots, "sprite transform")
+        return slots[0]
+
+    first = run()
+    pickup.pos = [256.0, 96.0, -128.0]
+    moved = run()
+    assert first != moved, "the instance data did not follow the move"
+    assert any(row[0:3] == (256.0, 96.0, -128.0) for row in moved), (
+        "no instance was submitted at the moved position; got %s" % (moved,))
+
+
+def test_depth_order_survives_being_grouped_into_a_run(renderer, context):
+    """Grouping by texture must not reorder within a run.
+
+    Billboards are drawn back to front, and `sort_into_runs` is a stable sort
+    precisely so that the depth order the caller established survives being
+    regrouped. Same texture here, so everything lands in one run and the
+    instance order is the depth order.
+    """
     from editor.things import Light, Pickup
 
     brushes = [box_brush("floor", (0, -16, 0), (1024, 32, 1024))]
@@ -345,12 +558,140 @@ def test_the_numeric_path_depth_orders_sprites_like_the_object_path(renderer,
               make_thing(Light, "l", (0, 300, 300), color=[255, 255, 255],
                          intensity=2.0, radius=1400.0, state="on",
                          casts_shadows=False)]
-    objects = _submitted_entities(renderer, context, brushes, things, things,
-                                  numeric=False)
-    slots = _submitted_entities(renderer, context, brushes, things, things,
-                                numeric=True)
-    assert len(objects['sprites']) > 1, "nothing to order"
+    objects = _submitted(renderer, context, brushes, things, things,
+                         numeric=False)
+    slots = _submitted(renderer, context, brushes, things, things,
+                       numeric=True)
     _assert_same_submissions(objects, slots, "sprite depth order")
+
+    pickups = [row for row in slots[0] if row[1] == 48.0]
+    assert len(pickups) == 3, "expected the three pickups, got %s" % (pickups,)
+    zs = [row[2] for row in pickups]
+    assert zs == sorted(zs), (
+        "billboards were submitted in z order %s; the camera looks down -z, so "
+        "far to near is ascending z and the run reordered them" % (zs,))
+
+
+def test_instanced_billboards_are_fogged_like_the_per_sprite_ones(renderer,
+                                                                  context):
+    """The one thing a submission capture cannot see.
+
+    Billboards are unlit, so fog is the only environment state the sprite pass
+    uploads, and it is applied in the fragment shader from ``FragPos`` -- a
+    varying the instanced vertex shader has to keep emitting.  Two paths that
+    submit identical instances can still differ here.
+
+    Deliberately a scene of nothing but billboards: with a floor in shot, the
+    fog on the floor would dominate the image and the comparison would pass
+    while saying nothing about sprites.
+    """
+    from editor.things import Light, Monster, Pickup
+
+    things = [make_thing(Monster, "grunt", (-160, 64, -300), monster_type="human"),
+              make_thing(Pickup, "medkit", (0, 48, -300), item_type="health"),
+              make_thing(Light, "l", (0, 300, 0), color=[255, 255, 255],
+                         intensity=2.0, radius=1400.0, state="on",
+                         casts_shadows=False)]
+    published = [t.get_render_snapshot() if type(t).__name__ == "Monster" else t
+                 for t in things]
+
+    # A band that brackets the billboards rather than saturating past them:
+    # with everything fully fogged, a shader that lost FragPos would look
+    # identical to one that kept it, and the test would prove nothing.
+    renderer.view_distance.fog_enabled = True
+    # The camera sits ~457 units from the origin and ~732 from the
+    # billboards, so this band fogs them differently -- which is the whole
+    # point: a shader that lost FragPos would fog them by the wrong distance.
+    renderer.view_distance.fog_start = 400.0
+    renderer.view_distance.fog_end = 900.0
+    fogged = _render(renderer, context, [], published, numeric=True,
+                     live_things=things)
+    assert not glh.is_blank(fogged), "no billboard reached the framebuffer"
+    renderer.view_distance.fog_enabled = False
+    clear = _render(renderer, context, [], published, numeric=True,
+                    live_things=things)
+    assert float(np.abs(fogged - clear).mean()) > 0.2, (
+        "turning fog off changed nothing, so this test cannot tell whether "
+        "the instanced billboards are fogged at all")
+
+    renderer.view_distance.fog_enabled = True
+    objects_img = _render(renderer, context, [], published, numeric=False,
+                          live_things=things)
+    slots_img = _render(renderer, context, [], published, numeric=True,
+                        live_things=things)
+    # Both paths run the same fragment shader over the same quads, so this is
+    # not "close enough" -- it is the same picture.
+    diff = float(np.abs(objects_img - slots_img).mean())
+    assert diff == 0.0, (
+        "the instanced billboards differ from the per-sprite ones by %.4f mean "
+        "levels; they should be pixel-identical" % diff)
+
+
+def test_sprites_are_one_draw_per_texture_not_one_per_sprite(renderer, context):
+    """The point of the change, asserted as work rather than as time."""
+    import engine.renderer_core as rc
+    from editor.things import Light, Pickup
+
+    brushes = [box_brush("floor", (0, -16, 0), (1024, 32, 1024))]
+    things = [make_thing(Pickup, "p%d" % i, (i * 40 - 400, 48, 0),
+                         item_type="health") for i in range(20)]
+    things.append(make_thing(Light, "l", (0, 300, 300), color=[255, 255, 255],
+                             intensity=2.0, radius=1400.0, state="on",
+                             casts_shadows=False))
+
+    counts = {}
+
+    def count_path(numeric):
+        calls = {'draws': 0, 'instances': 0}
+        real_draw = rc.gl.glDrawArrays
+        real_inst = rc.gl.glDrawArraysInstanced
+
+        def d(mode, first, count, *a, **k):
+            calls['draws'] += 1
+            return real_draw(mode, first, count, *a, **k)
+
+        def di(mode, first, count, instances, *a, **k):
+            calls['draws'] += 1
+            calls['instances'] += instances
+            return real_inst(mode, first, count, instances, *a, **k)
+
+        real_sprites = renderer.draw_sprites
+        real_isprites = renderer.draw_sprites_instanced
+
+        def wrap(fn):
+            def w(*a, **k):
+                rc.gl.glDrawArrays, rc.gl.glDrawArraysInstanced = d, di
+                try:
+                    return fn(*a, **k)
+                finally:
+                    (rc.gl.glDrawArrays,
+                     rc.gl.glDrawArraysInstanced) = real_draw, real_inst
+            return w
+
+        renderer.draw_sprites = wrap(real_sprites)
+        renderer.draw_sprites_instanced = wrap(real_isprites)
+        try:
+            _render(renderer, context, brushes, things, numeric=numeric,
+                    live_things=things)
+        finally:
+            renderer.draw_sprites = real_sprites
+            renderer.draw_sprites_instanced = real_isprites
+        return calls
+
+    counts['object'] = count_path(False)
+    counts['numeric'] = count_path(True)
+
+    drawn = counts['object']['draws']
+    assert drawn >= 20, ("the object path drew %d billboards; the scene has 21 "
+                         "and this test asserts nothing if they are skipped"
+                         % drawn)
+    assert counts['numeric']['draws'] <= 3, (
+        "the instanced path made %d draw calls for %d billboards; the whole "
+        "point is one per texture run"
+        % (counts['numeric']['draws'], counts['numeric']['instances']))
+    assert counts['numeric']['instances'] == drawn, (
+        "%d billboards were instanced but the object path drew %d"
+        % (counts['numeric']['instances'], drawn))
 
 
 def test_a_hidden_brush_is_absent_from_both(renderer, context):

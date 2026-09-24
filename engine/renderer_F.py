@@ -1139,6 +1139,12 @@ class Renderer_F(BaseRenderer):
                             and thing_hidden is not None
                             and len(erefs) >= etable.count
                             and len(thing_hidden) >= etable.count)
+        # The billboard pass takes its instances from the same columns, unless
+        # the driver rejected the instanced program -- in which case the
+        # per-sprite path is still there and the slots are materialised for it.
+        sprites_numeric = (entities_numeric
+                           and 'sprite_instanced' in self.shaders)
+        sprite_slots = None
 
         cull_things = things
         cull_thing_positions = config.get('thing_positions')
@@ -1204,9 +1210,15 @@ class Renderer_F(BaseRenderer):
                         etable, sprite_slots, cx, cz)
                 if len(model_slots):
                     models_to_render.extend(erefs[model_slots].tolist())
-                sprite_things = (erefs[sprite_slots].tolist()
-                                 if len(sprite_slots) else [])
                 sort_positions = None
+                if sprites_numeric:
+                    # The sprite pass reads the columns directly, so the slots
+                    # never become objects. Materialising them here would undo
+                    # the point of classifying them numerically.
+                    sprite_things = []
+                else:
+                    sprite_things = (erefs[sprite_slots].tolist()
+                                     if len(sprite_slots) else [])
             else:
                 # Things keep the object path when no entity projection was
                 # published -- the editor's non-threaded view, and any caller
@@ -1388,7 +1400,10 @@ class Renderer_F(BaseRenderer):
         self.draw_portal_wireframes(projection, view, things, config.get('play_mode', False))
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
-        self.draw_sprites(projection, view, final_sprites, self.sprite_textures, self.instance_textures)
+        if sprites_numeric:
+            self.draw_sprites_instanced(projection, view, etable, sprite_slots)
+        else:
+            self.draw_sprites(projection, view, final_sprites, self.sprite_textures, self.instance_textures)
         if current_mode == RENDER_MODE_UNLIT:
             self.draw_textured_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, _tbl, _refs)
         elif current_mode == RENDER_MODE_LIT:

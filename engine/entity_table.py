@@ -75,6 +75,7 @@ head-less test -- still imports this module.
 
 from __future__ import annotations
 
+import os
 from itertools import chain
 
 import numpy as np
@@ -85,10 +86,11 @@ import numpy as np
 try:
     from editor.things import (Thing, PathNode, Portal, Pickup, Prop, Monster,
                                LogicGate, LogicRelay, LogicTimer, LevelChanger,
-                               Light)
+                               Light, LogicSpawner, LogicCamera)
 except ImportError:                                   # pragma: no cover
     Thing = PathNode = Portal = Pickup = Prop = Monster = None
     LogicGate = LogicRelay = LogicTimer = LevelChanger = Light = None
+    LogicSpawner = LogicCamera = None
 
 
 # --------------------------------------------------------------------------
@@ -134,6 +136,12 @@ ENT_MONSTER         = 1 << 10
 #: also carries, because the distance cull exempts Portals and Lights and must
 #: not exempt monsters.
 ENT_PORTAL          = 1 << 11
+#: This row's *sprite identity* can change without an edit, so it is re-resolved
+#: every frame.  Exactly the classes ``update_instance_textures`` re-hashes per
+#: frame -- a monster's sprite follows ``dead``/``is_shooting``, a gate's its
+#: type, a pickup's its item, a prop's its representation.  Everything else
+#: resolves its sprite once, at reconcile.
+ENT_SPRITE_WARM     = 1 << 12
 
 #: Never dropped by the broad-phase distance cull, whatever its distance --
 #: ``Renderer_F._cull_keep_thing``'s predicate, as bits.  Lighting and portal
@@ -148,13 +156,170 @@ BIT_NAMES = (
     (ENT_MODE_BILLBOARD, 'MODE_BILLBOARD'), (ENT_HAS_SPRITE, 'HAS_SPRITE'),
     (ENT_PICKUP, 'PICKUP'), (ENT_ENTITY_SPRITE, 'ENTITY_SPRITE'),
     (ENT_PROP, 'PROP'), (ENT_LIGHT, 'LIGHT'), (ENT_MONSTER, 'MONSTER'),
-    (ENT_PORTAL, 'PORTAL'),
+    (ENT_PORTAL, 'PORTAL'), (ENT_SPRITE_WARM, 'SPRITE_WARM'),
 )
 
 
 def describe(bits) -> str:
     """The set bits of a classification word, for a readable assertion."""
     return '|'.join(name for bit, name in BIT_NAMES if bits & bit) or 'NONE'
+
+
+# --------------------------------------------------------------------------
+# Sprite identity -- the warm half
+# --------------------------------------------------------------------------
+#
+# A sprite's *position* is warm and its *size* is cold, both straightforwardly.
+# Its texture is neither: a monster's sprite is chosen from `dead` and
+# `is_shooting` every frame, and a logic gate's, a pickup's and a prop's from
+# properties the renderer already re-reads every frame to decide whether its
+# instance-texture cache is stale.  So sprite identity is resolved per frame for
+# those rows and at reconcile for everything else -- the same cold/warm split
+# the brush projection makes, drawn in a different place because entities are
+# a different kind of thing.  It is deliberately NOT pushed into
+# :mod:`engine.render_table`, whose texture column is wholly cold.
+#
+# What is resolved here is a *name*, never a GL id: a tuple of candidate cache
+# keys and the recipe for loading each, interned to a dense integer exactly as
+# :meth:`engine.render_table.RenderTable.intern_texture` interns face textures.
+# The renderer turns that integer into a GL texture id on its own thread.
+
+#: Interned id meaning "this row draws no sprite" -- a Portal (which the sprite
+#: pass has always skipped) or an entity with no sprite at all.
+SPRITE_NONE = -1
+
+#: A candidate is ``(cache_key, filename, subfolder, cache)``.  The renderer
+#: tries each in order: look ``cache_key`` up in its sprite-texture cache, and
+#: if that misses and ``filename`` is set, load it -- storing the result under
+#: ``cache_key`` when ``cache`` is true.  The ordered list is how the object
+#: path's "instance-texture override, else the class's shared sprite" is said
+#: as data rather than as control flow.
+_LOOKUP_ONLY = ('', '', False)
+
+
+def _monster_sprite_candidates(props):
+    """The monster branch of ``draw_sprites``, as candidates.
+
+    Monsters reach the renderer as render-snapshot dicts, so this reads the
+    same four fields that branch reads and builds the same ``msprite_`` cache
+    key -- which is what makes the two paths resolve to one texture rather than
+    to two that happen to look alike.
+    """
+    if props.get('dead'):
+        custom, sprite_type = props.get('custom_dead', ''), 'dead'
+    elif props.get('is_shooting'):
+        custom, sprite_type = props.get('custom_shoot', ''), 'shoot'
+    else:
+        custom, sprite_type = props.get('custom_idle', ''), 'idle'
+
+    mtype = props.get('monster_type', 'human')
+    variant = props.get('variant', '<None>')
+    key = 'msprite_%s_%s_%s_%s' % (mtype, variant, sprite_type, custom)
+
+    if custom:
+        clean = custom.replace('assets/', '', 1)
+        return ((key, os.path.basename(clean), os.path.dirname(clean), True),)
+
+    filename = '%s.png' % sprite_type
+    if variant and variant != '<None>':
+        # The variant folder first, the base folder as the fallback -- the two
+        # load attempts the object path makes, in the order it makes them.
+        return ((key, filename, 'sprites/monsters/%s/%s' % (mtype, variant), True),
+                (key, filename, 'sprites/monsters/%s' % mtype, True))
+    return ((key, filename, 'sprites/monsters/%s' % mtype, True),)
+
+
+def _split_asset_path(path):
+    """``(filename, subfolder)`` for an authored ``assets/``-relative path."""
+    rel = str(path).replace('assets/', '', 1)
+    return os.path.basename(rel), os.path.dirname(rel)
+
+
+def sprite_candidates(thing):
+    """How this entity's sprite texture is found, as an ordered candidate list.
+
+    Reproduces two chains that between them decide every sprite Fio draws:
+    ``QtGameView.update_instance_textures``, which resolves the per-entity
+    override, and ``BaseRenderer.draw_sprites``, which falls back to the
+    texture shared by everything of that class.  Returns ``None`` for a row the
+    sprite pass draws nothing for.
+    """
+    if isinstance(thing, dict):
+        return _monster_sprite_candidates(thing) if 'monster_type' in thing else None
+    if Portal is not None and isinstance(thing, Portal):
+        return None            # the sprite pass has always skipped Portals
+    props = _props_of(thing)
+    if Monster is not None and isinstance(thing, Monster):
+        return _monster_sprite_candidates(props)
+
+    out = []
+    # -- the per-entity override, in update_instance_textures' own order ----
+    if LogicGate is not None and isinstance(thing, LogicGate):
+        ltype = str(props.get('logic_type', 'and')).lower()
+        out.append(('logic_%s' % ltype, 'logic_%s.png' % ltype, 'sprites', True))
+    elif Prop is not None and isinstance(thing, Prop):
+        if str(props.get('render_mode', 'model')).lower() == 'billboard':
+            path = str(props.get('sprite_path', '') or '')
+            if path:
+                key = 'propsprite__%s' % path.replace('/', '__').replace('.', '_')
+                filename, subfolder = _split_asset_path(path)
+                out.append((key, filename, subfolder, True))
+    elif Pickup is not None and isinstance(thing, Pickup):
+        if thing.is_key():
+            # Lookup only: update_instance_textures never loads this one, so a
+            # key sprite that was never registered falls through to the class
+            # texture rather than being loaded here.
+            out.append(('key_%s' % thing.get_key_name(),) + _LOOKUP_ONLY[:2]
+                       + (False,))
+        elif props.get('custom_sprite'):
+            custom = str(props.get('custom_sprite'))
+            filename = os.path.basename(custom.replace('\\', '/'))
+            # Loaded but not cached under a key of its own, as the object path
+            # does -- load_texture has its own cache, so this is not a re-read.
+            out.append(('', filename, 'sprites', False))
+    elif LevelChanger is not None and isinstance(thing, LevelChanger):
+        out.append(('LevelChanger',) + _LOOKUP_ONLY[:2] + (False,))
+        out.append(('logic_relay',) + _LOOKUP_ONLY[:2] + (False,))
+
+    # -- and then the class's shared sprite, which draw_sprites falls back to -
+    class_name = type(thing).__name__
+    if LogicSpawner is not None and isinstance(thing, LogicSpawner):
+        out.append(('LogicSpawner', 'logic_spawner.png', 'sprites', True))
+    elif LogicCamera is not None and isinstance(thing, LogicCamera):
+        out.append(('LogicCamera', 'logic_camera.png', 'sprites', True))
+    elif Pickup is not None and isinstance(thing, Pickup):
+        path = thing.get_sprite_path()
+        if path:
+            filename, subfolder = _split_asset_path(path)
+            out.append((class_name, filename, subfolder, True))
+        else:
+            out.append((class_name,) + _LOOKUP_ONLY[:2] + (False,))
+    elif props.get('sprite_path'):
+        filename, subfolder = _split_asset_path(props.get('sprite_path'))
+        out.append((class_name, filename, subfolder, True))
+    else:
+        out.append((class_name,) + _LOOKUP_ONLY[:2] + (False,))
+    return tuple(out)
+
+
+def sprite_size(thing):
+    """The billboard's world size, in the order ``draw_sprites`` decides it."""
+    if isinstance(thing, dict):
+        return (float(thing.get('sprite_width', 128)),
+                float(thing.get('sprite_height', 128)))
+    props = _props_of(thing)
+    if Monster is not None and isinstance(thing, Monster):
+        return (float(props.get('sprite_width', 128)),
+                float(props.get('sprite_height', 128)))
+    if Light is not None and isinstance(thing, Light):
+        return (16.0, 16.0)
+    if props.get('sprite_path'):
+        size = props.get('sprite_size', [32.0, 32.0])
+        try:
+            return (float(size[0]), float(size[1]))
+        except (TypeError, ValueError, IndexError):
+            return (32.0, 32.0)
+    return (32.0, 32.0)
 
 
 def _entity_class_bits(thing) -> int:
@@ -206,6 +371,10 @@ def _entity_class_bits(thing) -> int:
         bits |= ENT_PROP
     if Light is not None and isinstance(thing, Light):
         bits |= ENT_LIGHT
+    warm_types = tuple(c for c in (Monster, LogicGate, Pickup, Prop)
+                       if c is not None)
+    if warm_types and isinstance(thing, warm_types):
+        bits |= ENT_SPRITE_WARM
     return bits
 
 
@@ -218,7 +387,9 @@ class EntityTable:
 
     __slots__ = ('generation', 'count', 'ids', 'slot_of_id', 'things',
                  'pos', 'class_bits', 'light_slots', 'monster_slots',
-                 'pickup_slots', '_epoch', '_hidden_buf')
+                 'pickup_slots', 'sprite_size', 'sprite_key_id',
+                 'warm_sprite_slots', '_sprite_ids', '_sprite_recipes',
+                 '_epoch', '_hidden_buf')
 
     def __init__(self):
         self.generation = 0
@@ -245,8 +416,45 @@ class EntityTable:
         #: to consider, so that filter costs pickups rather than entities.
         self.pickup_slots = np.empty(0, dtype=np.int32)
 
+        #: The billboard's world size.  Cold: it comes from authored properties.
+        self.sprite_size = np.zeros((0, 2), dtype=np.float32)
+        #: Interned sprite identity, :data:`SPRITE_NONE` for a row that draws
+        #: none.  Cold for most rows and re-resolved every frame for
+        #: :attr:`warm_sprite_slots`; see the module's sprite-identity section.
+        self.sprite_key_id = np.full((0,), SPRITE_NONE, dtype=np.int32)
+        #: Rows whose sprite identity is re-resolved per frame.
+        self.warm_sprite_slots = np.empty(0, dtype=np.int32)
+
+        # Candidate-list intern table.  GL-free, like the brush table's texture
+        # names: these are ids for *recipes*, and the renderer maps them to GL
+        # texture ids once per unique recipe on the thread that has a context.
+        self._sprite_ids: dict = {}
+        self._sprite_recipes: list = []
+
         self._epoch = None
         self._hidden_buf = np.empty(0, dtype=bool)
+
+    # -- sprite identity interning ----------------------------------------
+
+    def intern_sprite(self, candidates) -> int:
+        """The dense id for a candidate list, assigning one on first sight."""
+        if not candidates:
+            return SPRITE_NONE
+        sid = self._sprite_ids.get(candidates)
+        if sid is None:
+            sid = len(self._sprite_recipes)
+            self._sprite_ids[candidates] = sid
+            self._sprite_recipes.append(candidates)
+        return sid
+
+    def sprite_recipes(self) -> list:
+        """Interned candidate lists, indexed by id.
+
+        The renderer walks this once per new recipe to build its ``sprite id ->
+        GL texture id`` array.  Tens of entries in a level, not thousands, and
+        never touched per sprite.
+        """
+        return self._sprite_recipes
 
     @property
     def center(self):
@@ -274,6 +482,14 @@ class EntityTable:
         if len(self.class_bits):
             bits[:len(self.class_bits)] = self.class_bits
         self.class_bits = bits
+        size = np.zeros((n, 2), dtype=np.float32)
+        if len(self.sprite_size):
+            size[:len(self.sprite_size)] = self.sprite_size
+        self.sprite_size = size
+        keys = np.full((n,), SPRITE_NONE, dtype=np.int32)
+        if len(self.sprite_key_id):
+            keys[:len(self.sprite_key_id)] = self.sprite_key_id
+        self.sprite_key_id = keys
 
     # -- synchronisation ---------------------------------------------------
 
@@ -327,6 +543,14 @@ class EntityTable:
                     if type(p) is not list:
                         things[i].pos = [float(p[0]), float(p[1]), float(p[2])]
 
+        # The warm half of sprite identity: a monster's frame, a gate's type,
+        # a pickup's item, a prop's representation.  Bounded by the rows that
+        # can actually change, not by the entity count.
+        for slot in self.warm_sprite_slots:
+            slot = int(slot)
+            self.sprite_key_id[slot] = self.intern_sprite(
+                sprite_candidates(things[slot]))
+
         if len(self._hidden_buf) < n:
             self._hidden_buf = np.empty(max(n, 16), dtype=bool)
         hidden = self._hidden_buf[:n]
@@ -374,6 +598,9 @@ class EntityTable:
             ids[slot] = props.get('id') if isinstance(props, dict) else None
             self.class_bits[slot] = _entity_class_bits(thing)
             self.pos[slot] = _pos_of(thing)
+            self.sprite_size[slot] = sprite_size(thing)
+            self.sprite_key_id[slot] = self.intern_sprite(
+                sprite_candidates(thing))
 
         self.ids = ids
         self.slot_of_id = {eid: slot for slot, eid in enumerate(ids)
@@ -384,12 +611,19 @@ class EntityTable:
         self.light_slots = np.flatnonzero(bits & ENT_LIGHT).astype(np.int32)
         self.monster_slots = np.flatnonzero(bits & ENT_MONSTER).astype(np.int32)
         self.pickup_slots = np.flatnonzero(bits & ENT_PICKUP).astype(np.int32)
+        self.warm_sprite_slots = np.flatnonzero(
+            bits & ENT_SPRITE_WARM).astype(np.int32)
         self.generation += 1
 
     def refresh_rows(self, things, slots):
-        """Re-resolve the cold column for *slots* after a semantic change."""
+        """Re-resolve the cold columns for *slots* after a semantic change."""
         for slot in slots:
-            self.class_bits[slot] = _entity_class_bits(things[slot])
+            slot = int(slot)
+            thing = things[slot]
+            self.class_bits[slot] = _entity_class_bits(thing)
+            self.sprite_size[slot] = sprite_size(thing)
+            self.sprite_key_id[slot] = self.intern_sprite(
+                sprite_candidates(thing))
 
 
 _EMPTY: dict = {}
