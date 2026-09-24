@@ -19,6 +19,9 @@ the same grid and compare, with the cases most likely to separate them:
   rewrites per tick.
 """
 
+import contextlib
+import math
+
 import numpy as np
 import pytest
 
@@ -327,4 +330,336 @@ def test_the_two_paths_agree_over_a_random_sweep():
                                                 disagreements[0]))
     assert 20 < blocked < 380, (
         "only %d of 400 rays were blocked -- the sweep is not exercising both "
+        "answers" % blocked)
+
+
+# ---------------------------------------------------------------------------
+# The cell traversal
+#
+# The grid used to sample the ray every `cell_size` and test each sample's
+# eight neighbours; it now steps the cell boundaries the ray actually crosses.
+# The fan is gone from the engine, so the reference lives here: `_fan_cells` is
+# the traversal it did, and `_fan_answer` runs the *real* line of sight with
+# only that swapped in. Nothing else differs between reference and subject, so
+# a disagreement is the traversal's and nothing else's.
+# ---------------------------------------------------------------------------
+
+def _fan_cells(grid, start, ray_dir, ray_len):
+    """The pre-DDA traversal: sampled points, each with its eight neighbours."""
+    cell_size = grid.cell_size
+    steps = max(1, int(ray_len / cell_size) + 2)
+    out = []
+    for i in range(steps + 1):
+        t = min(i / float(steps), 1.0) * ray_len
+        pt = start + ray_dir * t
+        cx = int(math.floor(pt.x / cell_size))
+        cz = int(math.floor(pt.z / cell_size))
+        for dx in (-1, 0, 1):
+            for dz in (-1, 0, 1):
+                out.append((cx + dx, cz + dz))
+    return out
+
+
+def _sampled_cells(grid, start, ray_dir, ray_len):
+    """The same sampling with the fan removed -- i.e. the bug the fan hid."""
+    cell_size = grid.cell_size
+    steps = max(1, int(ray_len / cell_size) + 2)
+    out = []
+    for i in range(steps + 1):
+        t = min(i / float(steps), 1.0) * ray_len
+        pt = start + ray_dir * t
+        out.append((int(math.floor(pt.x / cell_size)),
+                    int(math.floor(pt.z / cell_size))))
+    return out
+
+
+@contextlib.contextmanager
+def _traversal(fn):
+    """Run line of sight with `fn` deciding which cells the ray visits."""
+    real = SpatialGrid._cells_along_ray
+    SpatialGrid._cells_along_ray = fn
+    try:
+        yield
+    finally:
+        SpatialGrid._cells_along_ray = real
+
+
+def _fan_answer(grid, table, start, end):
+    with _traversal(_fan_cells):
+        return grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end),
+                                      _intersect_ray_aabb, table)
+
+
+def _sampled_answer(grid, table, start, end):
+    with _traversal(_sampled_cells):
+        return grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end),
+                                      _intersect_ray_aabb, table)
+
+
+def _matches_the_fan(grid, table, start, end, what):
+    """Both of today's paths must answer what the fan answered."""
+    reference = _fan_answer(grid, table, start, end)
+    scalar, dense = _both(grid, table, start, end)
+    assert scalar == reference, (
+        "%s: the fan said %s and the per-brush path now says %s for %s -> %s"
+        % (what, reference, scalar, start, end))
+    assert dense == reference, (
+        "%s: the fan said %s and the dense path now says %s for %s -> %s"
+        % (what, reference, dense, start, end))
+    return reference
+
+
+def _walk(grid, start, end):
+    """The cells the traversal reports for a segment, in order."""
+    direction = glm.vec3(*end) - glm.vec3(*start)
+    length = glm.length(direction)
+    return grid._cells_along_ray(glm.vec3(*start), direction / length, length)
+
+
+# --- the case the fan existed for ------------------------------------------
+
+#: A ray that leaves cell (0,0) across x=512 and re-enters across z=512, so it
+#: clips the corner of cell (1,0) between two sample points. Derived by
+#: stepping the old sampler: with this length the samples land in (0,0) and
+#: then (1,1), and (1,0) -- the only cell this brush is filed under -- is never
+#: looked at without the fan.
+_GAP_START = (10.0, 0.0, 10.0)
+_GAP_END = (3726.0, 0.0, 3355.0)
+_GAP_BRUSH = ("clip", (540.0, 0.0, 490.0), (40.0, 256.0, 36.0))
+
+
+def test_the_sampling_gap_the_fan_was_added_for_is_real():
+    """Guard the guard: without the fan, plain sampling misses this brush.
+
+    If this ever starts passing as visible==False, the case has stopped being
+    a gap and the test below it is no longer proving anything.
+    """
+    grid, table = _world([box_brush(*_GAP_BRUSH)])
+
+    sampled = _sampled_cells(grid, glm.vec3(*_GAP_START),
+                             glm.normalize(glm.vec3(*_GAP_END)
+                                           - glm.vec3(*_GAP_START)),
+                             glm.length(glm.vec3(*_GAP_END)
+                                        - glm.vec3(*_GAP_START)))
+    assert (1, 0) not in sampled, (
+        "the sampled points now include (1,0), so this ray no longer skips a "
+        "cell and cannot demonstrate the gap")
+    assert _sampled_answer(grid, table, _GAP_START, _GAP_END) is True, (
+        "sampling alone was supposed to miss the occluder")
+    assert _fan_answer(grid, table, _GAP_START, _GAP_END) is False, (
+        "the fan was supposed to catch it")
+
+
+def test_the_traversal_closes_the_sampling_gap():
+    """The reason the fan can go: the skipped cell is now walked, not guessed."""
+    grid, table = _world([box_brush(*_GAP_BRUSH)])
+
+    assert (1, 0) in _walk(grid, _GAP_START, _GAP_END), (
+        "the traversal skipped the cell the ray crosses")
+    assert _matches_the_fan(grid, table, _GAP_START, _GAP_END,
+                            "the diagonal straddle") is False
+
+
+# --- the traversal's own shape ---------------------------------------------
+
+def test_a_ray_inside_one_cell_visits_only_that_cell():
+    grid = SpatialGrid()
+    assert _walk(grid, (100, 0, 100), (300, 0, 200)) == [(0, 0)]
+
+
+def test_a_vertical_ray_visits_only_the_column_it_is_in():
+    """No XZ movement at all -- the degenerate case of the stepping loop."""
+    grid = SpatialGrid()
+    assert _walk(grid, (100, -500, 100), (100, 500, 100)) == [(0, 0)]
+
+
+def test_the_walk_is_contiguous_and_ends_where_the_ray_does():
+    """Every step moves one cell on one axis, and the last is the end cell."""
+    rng = np.random.default_rng(5)
+    grid = SpatialGrid()
+    for _ in range(300):
+        start = tuple(rng.uniform(-3000, 3000, 3))
+        end = tuple(rng.uniform(-3000, 3000, 3))
+        if glm.length(glm.vec3(*end) - glm.vec3(*start)) < 0.001:
+            continue
+        cells = _walk(grid, start, end)
+        assert cells[0] == (int(math.floor(start[0] / grid.cell_size)),
+                            int(math.floor(start[2] / grid.cell_size)))
+        assert cells[-1] == (int(math.floor(end[0] / grid.cell_size)),
+                             int(math.floor(end[2] / grid.cell_size)))
+        for a, b in zip(cells, cells[1:]):
+            step = abs(a[0] - b[0]) + abs(a[1] - b[1])
+            assert step == 1, (
+                "the walk jumped from %s to %s -- a skipped cell is a missed "
+                "occluder, which is the bug the fan was covering" % (a, b))
+
+
+def test_the_walk_never_misses_a_cell_the_ray_is_inside():
+    """Densely sample the segment; every sample's cell must be in the walk.
+
+    This is the property the whole change rests on, checked directly rather
+    than inferred: brushes are filed under every cell they overlap, so a ray
+    that is ever inside a cell must look in it.
+    """
+    rng = np.random.default_rng(23)
+    grid = SpatialGrid()
+    for _ in range(200):
+        start = glm.vec3(*rng.uniform(-2000, 2000, 3))
+        end = glm.vec3(*rng.uniform(-2000, 2000, 3))
+        length = glm.length(end - start)
+        if length < 0.001:
+            continue
+        walked = set(_walk(grid, tuple(start), tuple(end)))
+        for i in range(2001):
+            pt = start + (end - start) * (i / 2000.0)
+            cell = (int(math.floor(pt.x / grid.cell_size)),
+                    int(math.floor(pt.z / grid.cell_size)))
+            assert cell in walked, (
+                "the ray %s -> %s passes through %s, which the walk %s does "
+                "not visit" % (tuple(start), tuple(end), cell, sorted(walked)))
+
+
+@pytest.mark.parametrize("name,start,end", [
+    ("+x", (-1300.0, 0.0, 100.0), (1300.0, 0.0, 100.0)),
+    ("-x", (1300.0, 0.0, 100.0), (-1300.0, 0.0, 100.0)),
+    ("+z", (100.0, 0.0, -1300.0), (100.0, 0.0, 1300.0)),
+    ("-z", (100.0, 0.0, 1300.0), (100.0, 0.0, -1300.0)),
+    ("+x+z", (-1300.0, 0.0, -1300.0), (1300.0, 0.0, 1300.0)),
+    ("-x-z", (1300.0, 0.0, 1300.0), (-1300.0, 0.0, -1300.0)),
+    ("+x-z", (-1300.0, 0.0, 1300.0), (1300.0, 0.0, -1300.0)),
+    ("-x+z", (1300.0, 0.0, -1300.0), (-1300.0, 0.0, 1300.0)),
+])
+def test_every_direction_walks_the_same_cells_either_way(name, start, end):
+    """A segment's cells do not depend on which end you start from."""
+    grid = SpatialGrid()
+    assert set(_walk(grid, start, end)) == set(_walk(grid, end, start)), name
+
+
+@pytest.mark.parametrize("name,start,end", [
+    ("+x", (-1300.0, 0.0, 100.0), (1300.0, 0.0, 100.0)),
+    ("-x", (1300.0, 0.0, 100.0), (-1300.0, 0.0, 100.0)),
+    ("+z", (100.0, 0.0, -1300.0), (100.0, 0.0, 1300.0)),
+    ("-z", (100.0, 0.0, 1300.0), (100.0, 0.0, -1300.0)),
+    ("+x+z", (-1300.0, 0.0, -1300.0), (1300.0, 0.0, 1300.0)),
+    ("-x-z", (1300.0, 0.0, 1300.0), (-1300.0, 0.0, -1300.0)),
+    ("+x-z", (-1300.0, 0.0, 1300.0), (1300.0, 0.0, -1300.0)),
+    ("-x+z", (1300.0, 0.0, -1300.0), (-1300.0, 0.0, 1300.0)),
+])
+def test_every_direction_answers_what_the_fan_answered(name, start, end):
+    rng = np.random.default_rng(31)
+    brushes = [box_brush("b%d" % i, tuple(rng.uniform(-1200, 1200, 3)),
+                         tuple(rng.uniform(32, 400, 3))) for i in range(60)]
+    grid, table = _world(brushes)
+    _matches_the_fan(grid, table, start, end, name)
+
+
+# --- boundaries, corners and grazes ----------------------------------------
+
+def test_a_ray_that_starts_exactly_on_a_cell_boundary():
+    """floor() puts the origin in the upper cell; the walk must start there."""
+    grid, table = _world([box_brush("a", (700.0, 0.0, 100.0), (64.0, 256.0, 64.0)),
+                          box_brush("b", (300.0, 0.0, 100.0), (64.0, 256.0, 64.0))])
+    assert _walk(grid, (512.0, 0.0, 100.0), (900.0, 0.0, 100.0))[0] == (1, 0)
+    _matches_the_fan(grid, table, (512.0, 0.0, 100.0), (900.0, 0.0, 100.0),
+                     "starting on the boundary, forwards")
+    _matches_the_fan(grid, table, (512.0, 0.0, 100.0), (100.0, 0.0, 100.0),
+                     "starting on the boundary, backwards")
+
+
+def test_a_ray_running_along_a_cell_boundary():
+    """Degenerate: the ray never leaves the seam between two cell columns."""
+    brushes = [box_brush("b%d" % i, (512.0, 0.0, i * 300.0 - 600.0),
+                         (64.0, 256.0, 64.0)) for i in range(5)]
+    grid, table = _world(brushes)
+    _matches_the_fan(grid, table, (512.0, 0.0, -900.0), (512.0, 0.0, 900.0),
+                     "along the x=512 seam")
+
+
+def test_a_ray_through_an_exact_grid_corner():
+    """All four cells are touched at one point; the tie must not pick two."""
+    brushes = [box_brush("nw", (400.0, 0.0, 600.0), (64.0, 256.0, 64.0)),
+               box_brush("ne", (600.0, 0.0, 600.0), (64.0, 256.0, 64.0)),
+               box_brush("sw", (400.0, 0.0, 400.0), (64.0, 256.0, 64.0)),
+               box_brush("se", (600.0, 0.0, 400.0), (64.0, 256.0, 64.0))]
+    grid, table = _world(brushes)
+
+    cells = set(_walk(grid, (12.0, 0.0, 12.0), (1012.0, 0.0, 1012.0)))
+    for corner in ((0, 0), (1, 0), (0, 1), (1, 1)):
+        assert corner in cells, (
+            "the ray crosses the corner at (512,512) but the walk skipped %s; "
+            "a brush filed only there would be invisible" % (corner,))
+    _matches_the_fan(grid, table, (12.0, 0.0, 12.0), (1012.0, 0.0, 1012.0),
+                     "straight through the corner")
+
+
+def test_a_brush_spanning_several_cells_is_found_from_any_of_them():
+    """A long wall is filed under every cell it crosses; each must block."""
+    brushes = [box_brush("wall", (0.0, 0.0, 0.0), (32.0, 512.0, 3000.0))]
+    grid, table = _world(brushes)
+    for z in (-1400.0, -700.0, 0.0, 700.0, 1400.0):
+        assert _matches_the_fan(grid, table, (-400.0, 0.0, z), (400.0, 0.0, z),
+                                "through the wall at z=%g" % z) is False
+
+
+def test_a_walk_through_empty_cells_is_clear():
+    """Most cells hold nothing; `get` misses and the ray must still answer."""
+    grid, table = _world([box_brush("far", (9000.0, 0.0, 9000.0))])
+    assert len(set(_walk(grid, (-2000, 0, -2000), (2000, 0, 2000)))) > 4
+    assert _matches_the_fan(grid, table, (-2000, 0, -2000), (2000, 0, 2000),
+                            "across empty cells") is True
+
+
+def test_grazing_rays_answer_what_the_fan_answered():
+    """Rays aimed at a face, an edge and a corner of the same brush."""
+    brushes = [box_brush("box", (600.0, 0.0, 600.0), (200.0, 200.0, 200.0))]
+    grid, table = _world(brushes)
+    for dx in (-100.0, -100.0000001, -99.9999999, 0.0, 100.0, 100.0000001):
+        for dz in (-100.0, 0.0, 100.0, 100.0000001):
+            start = (600.0 + dx, 0.0, -400.0)
+            end = (600.0 + dx, 0.0, 1600.0)
+            _matches_the_fan(grid, table, start, end,
+                             "grazing at dx=%r dz=%r" % (dx, dz))
+    for dy in (-100.0, -99.9999999, 0.0, 99.9999999, 100.0):
+        _matches_the_fan(grid, table, (-400.0, dy, 600.0), (1600.0, dy, 600.0),
+                         "grazing the top/bottom face at dy=%r" % dy)
+
+
+def test_short_and_long_rays_answer_what_the_fan_answered():
+    rng = np.random.default_rng(101)
+    brushes = [box_brush("b%d" % i, tuple(rng.uniform(-4000, 4000, 3)),
+                         tuple(rng.uniform(32, 600, 3))) for i in range(200)]
+    grid, table = _world(brushes)
+    for reach in (1.0, 20.0, 400.0, 512.0, 513.0, 2000.0, 9000.0):
+        for _ in range(40):
+            start = rng.uniform(-3000, 3000, 3)
+            direction = rng.normal(size=3)
+            direction /= np.linalg.norm(direction)
+            _matches_the_fan(grid, table, tuple(start),
+                             tuple(start + direction * reach),
+                             "a ray of %g units" % reach)
+
+
+def test_the_traversal_agrees_with_the_fan_over_a_random_sweep():
+    """Breadth. Brushes small enough that a missed cell is a changed answer."""
+    rng = np.random.default_rng(77)
+    brushes = [box_brush("b%d" % i, tuple(rng.uniform(-2500, 2500, 3)),
+                         tuple(rng.uniform(16, 200, 3))) for i in range(400)]
+    grid, table = _world(brushes)
+
+    differed = []
+    blocked = 0
+    for _ in range(600):
+        start = tuple(rng.uniform(-2600, 2600, 3))
+        end = tuple(rng.uniform(-2600, 2600, 3))
+        reference = _fan_answer(grid, table, start, end)
+        scalar, dense = _both(grid, table, start, end)
+        if scalar != reference or dense != reference:
+            differed.append((start, end, reference, scalar, dense))
+        blocked += not reference
+
+    assert not differed, (
+        "%d of 600 rays changed answer; first (start, end, fan, scalar, dense) "
+        "= %s" % (len(differed), differed[0]))
+    assert 30 < blocked < 570, (
+        "only %d of 600 rays were blocked -- the sweep is not exercising both "
         "answers" % blocked)

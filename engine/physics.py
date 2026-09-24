@@ -273,15 +273,111 @@ class SpatialGrid:
                         return True
         return False
 
+    def _cells_along_ray(self, start, ray_dir, ray_len):
+        """Every cell the ray's XZ projection crosses, start cell first.
+
+        Amanatides & Woo. This replaces a point sample every ``cell_size``
+        along the ray plus that sample's eight neighbours, which is what the
+        grid did for years and is where line of sight spent most of its time:
+        the fan visited 9.5 cells where the ray crossed 1.2, and the candidate
+        set it produced was 173 brushes per ray against the 27 the ray's own
+        cells hold.
+
+        **Why the fan was there, and why this is not a weakening of it.**  The
+        sampled points miss cells: a ray crossing a corner diagonally can skip
+        from one cell to the cell diagonally opposite without either being
+        sampled, so a brush filed only in the cell between them was never
+        tested.  The fan hid that by testing everything nearby.  Stepping the
+        boundaries instead means no cell is skipped in the first place -- and
+        because :meth:`engine.spatial.CellIndex.insert` files a brush under
+        *every* cell its XZ footprint overlaps, a brush the ray actually
+        intersects is by construction in the bucket of a cell the ray is
+        inside.  Exact traversal is therefore not merely as good as the fan; it
+        is what the fan was approximating.
+
+        The one place that reasoning is delicate is a ray crossing exactly
+        through a grid corner, where it touches all four cells at a single
+        point and float comparison has to break the tie.  Rather than let the
+        rounding pick, a tie steps both axes and yields both of the cells the
+        corner separates -- the conservative answer, at the cost of two extra
+        dict lookups on the rays that are geometrically exact enough to hit it.
+        """
+        cell_size = self.cell_size
+        x0 = start.x
+        z0 = start.z
+        dx = ray_dir.x * ray_len
+        dz = ray_dir.z * ray_len
+        cx = int(math.floor(x0 / cell_size))
+        cz = int(math.floor(z0 / cell_size))
+        cells = [(cx, cz)]
+
+        # The exact number of single-axis steps between the two end cells.
+        # Using it as the loop bound keeps the walk correct without trusting
+        # the accumulated `t` to land on the far cell: a step is taken because
+        # a boundary is still between here and the end, not because a float
+        # said so.
+        remaining = (abs(int(math.floor((x0 + dx) / cell_size)) - cx) +
+                     abs(int(math.floor((z0 + dz) / cell_size)) - cz))
+        if not remaining:
+            return cells
+
+        # `t` is the fraction of the segment travelled, so the tie tolerance
+        # below is scale free -- it means "within a billionth of the ray's
+        # length of the corner", not a distance in world units.
+        if dx > 0.0:
+            step_x = 1
+            t_max_x = ((cx + 1) * cell_size - x0) / dx
+            t_delta_x = cell_size / dx
+        elif dx < 0.0:
+            step_x = -1
+            t_max_x = (cx * cell_size - x0) / dx
+            t_delta_x = -cell_size / dx
+        else:
+            step_x = 0
+            t_max_x = t_delta_x = float('inf')
+
+        if dz > 0.0:
+            step_z = 1
+            t_max_z = ((cz + 1) * cell_size - z0) / dz
+            t_delta_z = cell_size / dz
+        elif dz < 0.0:
+            step_z = -1
+            t_max_z = (cz * cell_size - z0) / dz
+            t_delta_z = -cell_size / dz
+        else:
+            step_z = 0
+            t_max_z = t_delta_z = float('inf')
+
+        append = cells.append
+        while remaining > 0:
+            if remaining > 1 and abs(t_max_x - t_max_z) <= 1e-9:
+                # Dead on a corner. Both single-axis neighbours are touched.
+                append((cx + step_x, cz))
+                append((cx, cz + step_z))
+                cx += step_x
+                cz += step_z
+                t_max_x += t_delta_x
+                t_max_z += t_delta_z
+                remaining -= 2
+            elif t_max_x < t_max_z:
+                cx += step_x
+                t_max_x += t_delta_x
+                remaining -= 1
+            else:
+                cz += step_z
+                t_max_z += t_delta_z
+                remaining -= 1
+            append((cx, cz))
+        return cells
+
     def _los_dense(self, start, ray_dir, ray_len, table, slots_by_cell):
         """Line of sight over the projection's rows.
 
-        Same traversal, same candidate set, same arithmetic -- expressed over
-        arrays. The three phases the scalar path spends its time in become:
-
-        ``concatenate`` the cells' slot arrays, ``np.unique`` in place of the
-        ``id()`` set, one gather of ``center``/``half``, and one slab test over
-        all candidates at once.
+        Same traversal (:meth:`_cells_along_ray`), same candidate set, same
+        arithmetic -- expressed over arrays. The three phases the scalar path
+        spends its time in become: ``concatenate`` the cells' slot arrays,
+        ``np.unique`` in place of the ``id()`` set, one gather of
+        ``center``/``half``, and one slab test over all candidates at once.
 
         **The float32 is not incidental.** ``brush_aabb_bounds`` builds its
         bounds through ``glm.vec3``, which is float32, and the slab test is a
@@ -294,20 +390,12 @@ class SpatialGrid:
         Returns ``None`` if the projection cannot be read consistently, which
         tells the caller to take the scalar path for this ray.
         """
-        cell_size = self.cell_size
-        steps = max(1, int(ray_len / cell_size) + 2)
         get = slots_by_cell.get
         parts = []
-        for i in range(steps + 1):
-            t = min(i / float(steps), 1.0) * ray_len
-            pt = start + ray_dir * t
-            cx = int(math.floor(pt.x / cell_size))
-            cz = int(math.floor(pt.z / cell_size))
-            for dx in (-1, 0, 1):
-                for dz in (-1, 0, 1):
-                    found = get((cx + dx, cz + dz))
-                    if found is not None:
-                        parts.append(found)
+        for coord in self._cells_along_ray(start, ray_dir, ray_len):
+            found = get(coord)
+            if found is not None:
+                parts.append(found)
         if not parts:
             return True
 
@@ -392,8 +480,13 @@ class SpatialGrid:
         """Return True if ray from start to end hits no solid wall brush.
         Uses the grid to only test brushes in cells the ray passes through.
 
-        FIX#11: Now checks neighbouring cells at each sample point to avoid
-        missing brushes that straddle cell boundaries on diagonal rays.
+        The cells are the ones the ray crosses, stepped boundary by boundary
+        (:meth:`_cells_along_ray`). This used to be a point sample every
+        ``cell_size`` plus that sample's eight neighbours -- a fan wide enough
+        to cover the cells the sampling skipped. Stepping the boundaries skips
+        none, so the fan has nothing left to cover; the equivalence, including
+        the diagonal-straddle case the fan was added for, is held by
+        ``tests/physics/test_line_of_sight.py``.
 
         *table* is an optional :class:`engine.render_table.RenderTable`. Given
         one, the candidates are gathered as dense rows and tested in a handful
@@ -402,9 +495,9 @@ class SpatialGrid:
         runs unchanged. Both reach the same answer; see
         ``tests/physics/test_line_of_sight.py``.
 
-        The cell traversal is identical either way. Narrowing it is a separate
-        question from how the candidates are tested, and is deliberately not
-        touched here.
+        The cell traversal is identical either way -- both call
+        :meth:`_cells_along_ray`, so the two paths cannot drift apart on which
+        brushes they consider, only on how they test them.
         """
         ray_dir = end - start
         ray_len = glm.length(ray_dir)
@@ -426,82 +519,72 @@ class SpatialGrid:
         ox, oy, oz = start.x, start.y, start.z
         rdx, rdy, rdz = ray_dir.x, ray_dir.y, ray_dir.z
         limit = ray_len - 0.1
-        cell_size = self.cell_size
 
-        # Gather cells along the ray path + neighbours. Test each unique brush
-        # immediately so no temporary candidate list or second traversal is needed.
-        steps = max(1, int(ray_len / cell_size) + 2)
+        # Walk the cells the ray crosses. Test each unique brush immediately so
+        # no temporary candidate list or second traversal is needed.
         cells = self.cells
         seen = set()
         seen_add = seen.add
-        for i in range(steps + 1):
-            t = min(i / float(steps), 1.0) * ray_len
-            pt = start + ray_dir * t
-            cx = int(math.floor(pt.x / cell_size))
-            cz = int(math.floor(pt.z / cell_size))
-            # FIX#11: Check the cell AND its 8 neighbours to catch brushes
-            # that straddle cell boundaries on diagonal rays.
-            for dx in (-1, 0, 1):
-                for dz in (-1, 0, 1):
-                    for brush in cells.get((cx + dx, cz + dz), ()):
-                        bid = id(brush)
-                        if bid in seen:
-                            continue
-                        seen_add(bid)
-                        b0, b1, b2, b3, b4, b5 = brush_aabb_bounds(brush)
-                        # --- ray/AABB slab test (matches intersect_ray_aabb) ---
-                        t_min = 0.0
-                        t_max = 10000.0
-                        # X
-                        if -1e-6 < rdx < 1e-6:
-                            if ox < b0 or ox > b3:
-                                continue
-                        else:
-                            inv = 1.0 / rdx
-                            ta = (b0 - ox) * inv
-                            tb = (b3 - ox) * inv
-                            if ta > tb:
-                                ta, tb = tb, ta
-                            if ta > t_min:
-                                t_min = ta
-                            if tb < t_max:
-                                t_max = tb
-                            if t_min > t_max:
-                                continue
-                        # Y
-                        if -1e-6 < rdy < 1e-6:
-                            if oy < b1 or oy > b4:
-                                continue
-                        else:
-                            inv = 1.0 / rdy
-                            ta = (b1 - oy) * inv
-                            tb = (b4 - oy) * inv
-                            if ta > tb:
-                                ta, tb = tb, ta
-                            if ta > t_min:
-                                t_min = ta
-                            if tb < t_max:
-                                t_max = tb
-                            if t_min > t_max:
-                                continue
-                        # Z
-                        if -1e-6 < rdz < 1e-6:
-                            if oz < b2 or oz > b5:
-                                continue
-                        else:
-                            inv = 1.0 / rdz
-                            ta = (b2 - oz) * inv
-                            tb = (b5 - oz) * inv
-                            if ta > tb:
-                                ta, tb = tb, ta
-                            if ta > t_min:
-                                t_min = ta
-                            if tb < t_max:
-                                t_max = tb
-                            if t_min > t_max:
-                                continue
-                        if t_min < limit:
-                            return False
+        for coord in self._cells_along_ray(start, ray_dir, ray_len):
+            for brush in cells.get(coord, ()):
+                bid = id(brush)
+                if bid in seen:
+                    continue
+                seen_add(bid)
+                b0, b1, b2, b3, b4, b5 = brush_aabb_bounds(brush)
+                # --- ray/AABB slab test (matches intersect_ray_aabb) ---
+                t_min = 0.0
+                t_max = 10000.0
+                # X
+                if -1e-6 < rdx < 1e-6:
+                    if ox < b0 or ox > b3:
+                        continue
+                else:
+                    inv = 1.0 / rdx
+                    ta = (b0 - ox) * inv
+                    tb = (b3 - ox) * inv
+                    if ta > tb:
+                        ta, tb = tb, ta
+                    if ta > t_min:
+                        t_min = ta
+                    if tb < t_max:
+                        t_max = tb
+                    if t_min > t_max:
+                        continue
+                # Y
+                if -1e-6 < rdy < 1e-6:
+                    if oy < b1 or oy > b4:
+                        continue
+                else:
+                    inv = 1.0 / rdy
+                    ta = (b1 - oy) * inv
+                    tb = (b4 - oy) * inv
+                    if ta > tb:
+                        ta, tb = tb, ta
+                    if ta > t_min:
+                        t_min = ta
+                    if tb < t_max:
+                        t_max = tb
+                    if t_min > t_max:
+                        continue
+                # Z
+                if -1e-6 < rdz < 1e-6:
+                    if oz < b2 or oz > b5:
+                        continue
+                else:
+                    inv = 1.0 / rdz
+                    ta = (b2 - oz) * inv
+                    tb = (b5 - oz) * inv
+                    if ta > tb:
+                        ta, tb = tb, ta
+                    if ta > t_min:
+                        t_min = ta
+                    if tb < t_max:
+                        t_max = tb
+                    if t_min > t_max:
+                        continue
+                if t_min < limit:
+                    return False
         return True
 
 
