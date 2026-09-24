@@ -1158,7 +1158,14 @@ class MonsterAI:
     def _has_line_of_sight(self, start: glm.vec3, end: glm.vec3) -> bool:
         """Return True if ray from start to end hits no solid wall brush."""
         if self._grid:
-            return self._grid.has_line_of_sight(start, end, self.lt.intersect_ray_aabb)
+            # The dense render projection, when the logic thread has published
+            # one: line of sight then tests the candidate brushes as rows
+            # rather than as dicts. The grid falls back to its own per-brush
+            # path when there is no table, or when it holds a brush the table
+            # cannot address.
+            return self._grid.has_line_of_sight(
+                start, end, self.lt.intersect_ray_aabb,
+                getattr(self.lt, '_render_table', None))
 
         # Fallback: full brush scan (should not happen in play mode)
         ray_dir = end - start
