@@ -1067,6 +1067,43 @@ class Renderer_F(BaseRenderer):
         return [light for light in lights
                 if light.properties.get('state', 'on') == 'on']
 
+    def entities_are_numeric(self, config, brush_slots):
+        """Whether this frame can classify entities from the projection.
+
+        Everything the numeric entity path needs has to arrive together -- the
+        table, the per-slot references, the published slots and the live hidden
+        mask -- and the brush half has to be numeric too, because the two are
+        published by the same pass and a frame with one and not the other is a
+        frame something went wrong in.
+        """
+        if brush_slots is None:
+            return False
+        table = config.get('render_table')
+        refs = config.get('render_refs')
+        if table is None or refs is None or len(refs) < table.count:
+            return False
+        etable = config.get('entity_table')
+        erefs = config.get('entity_refs')
+        thing_slots = config.get('visible_thing_slots')
+        thing_hidden = config.get('thing_hidden')
+        return (etable is not None and erefs is not None
+                and thing_slots is not None and thing_hidden is not None
+                and len(erefs) >= etable.count
+                and len(thing_hidden) >= etable.count)
+
+    def will_instance_sprites(self, config, brush_slots):
+        """Whether the billboard pass will read columns rather than objects.
+
+        Asked by :meth:`render_scene` to choose the path, and by the view that
+        drives it to decide whether the per-entity texture overrides are worth
+        building at all -- the instanced pass resolves its own textures and
+        never reads them.  One predicate for both, because a view that guessed
+        differently from the renderer would either rebuild overrides nothing
+        reads or withhold ones the object path still needs.
+        """
+        return (self.entities_are_numeric(config, brush_slots)
+                and 'sprite_instanced' in self.shaders)
+
     def render_scene(self, projection, view, camera_pos, brushes, things,
                      selected_object, config, clear=True, brush_slots=None):
         """Draw one view.
@@ -1134,16 +1171,11 @@ class Renderer_F(BaseRenderer):
         erefs = config.get('entity_refs')
         thing_slots = config.get('visible_thing_slots')
         thing_hidden = config.get('thing_hidden')
-        entities_numeric = (numeric and etable is not None and erefs is not None
-                            and thing_slots is not None
-                            and thing_hidden is not None
-                            and len(erefs) >= etable.count
-                            and len(thing_hidden) >= etable.count)
+        entities_numeric = self.entities_are_numeric(config, brush_slots)
         # The billboard pass takes its instances from the same columns, unless
         # the driver rejected the instanced program -- in which case the
         # per-sprite path is still there and the slots are materialised for it.
-        sprites_numeric = (entities_numeric
-                           and 'sprite_instanced' in self.shaders)
+        sprites_numeric = self.will_instance_sprites(config, brush_slots)
         sprite_slots = None
 
         cull_things = things

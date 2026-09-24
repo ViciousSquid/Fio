@@ -627,6 +627,58 @@ def test_instanced_billboards_are_fogged_like_the_per_sprite_ones(renderer,
         "levels; they should be pixel-identical" % diff)
 
 
+def test_the_predicate_agrees_with_the_path_the_frame_actually_takes(renderer,
+                                                                    context):
+    """The invariant the override gate rests on.
+
+    ``QtGameView`` skips building the per-entity texture overrides when
+    ``will_instance_sprites`` says the billboards will be instanced. If that
+    ever disagreed with what ``render_scene`` does, a frame would take the
+    object path with overrides nobody rebuilt -- so the two are checked against
+    each other rather than trusted to stay in step.
+    """
+    brushes, things = _entity_scene()
+    published = [t.get_render_snapshot() if type(t).__name__ == "Monster" else t
+                 for t in things]
+
+    for numeric in (False, True):
+        used = {'object': False, 'instanced': False}
+        real_sprites = renderer.draw_sprites
+        real_inst = renderer.draw_sprites_instanced
+
+        def mark(key, fn):
+            def wrapped(*a, **k):
+                used[key] = True
+                return fn(*a, **k)
+            return wrapped
+
+        renderer.draw_sprites = mark('object', real_sprites)
+        renderer.draw_sprites_instanced = mark('instanced', real_inst)
+        predicted = {}
+        real_predicate = renderer.will_instance_sprites
+
+        def record(config, brush_slots):
+            answer = real_predicate(config, brush_slots)
+            predicted['answer'] = answer
+            return answer
+
+        renderer.will_instance_sprites = record
+        try:
+            _render(renderer, context, brushes, published, numeric=numeric,
+                    live_things=things)
+        finally:
+            renderer.draw_sprites = real_sprites
+            renderer.draw_sprites_instanced = real_inst
+            renderer.will_instance_sprites = real_predicate
+
+        assert predicted['answer'] == used['instanced'], (
+            "numeric=%s: the predicate said instanced=%s and the frame used "
+            "instanced=%s" % (numeric, predicted['answer'], used['instanced']))
+        assert used['object'] != used['instanced'], (
+            "numeric=%s: the frame took %s sprite path(s); exactly one is "
+            "right" % (numeric, int(used['object']) + int(used['instanced'])))
+
+
 def test_sprites_are_one_draw_per_texture_not_one_per_sprite(renderer, context):
     """The point of the change, asserted as work rather than as time."""
     import engine.renderer_core as rc

@@ -1083,7 +1083,35 @@ class QtGameView(QOpenGLWidget):
                 getattr(render_state, _field, None)
                 if render_state is not None else None
             )
-        self.update_instance_textures(things_to_render)
+        _splitscreen = (
+            self.play_mode
+            and getattr(self, 'splitscreen_mode', False)
+            and render_state is not None
+            and getattr(render_state, 'splitscreen_active', False)
+        )
+        # The per-entity sprite-texture overrides exist for the object
+        # billboard path. The instanced pass resolves its own textures from the
+        # entity projection and never reads them, so on a frame that is wholly
+        # instanced this is a walk over every entity producing a dict nothing
+        # consumes -- 0.18 ms at 961 entities, measured. Three things still
+        # take the object path and are asked about rather than assumed: the
+        # main pass itself (the renderer's own predicate), the split-screen
+        # second view, and the portal virtual views.
+        _instanced_sprites = (
+            render_state is not None
+            and self.renderer is not None
+            and not getattr(render_state, 'has_portals', False)
+            and not _splitscreen
+            and self.renderer.will_instance_sprites(
+                self._render_config, _main_brush_slots)
+        )
+        if _instanced_sprites:
+            # Nothing rebuilt this frame, so the cached hash no longer
+            # describes the overrides. Clearing it makes the next frame that
+            # does need them rebuild rather than reuse a stale set.
+            self._instance_tex_hash = None
+        else:
+            self.update_instance_textures(things_to_render)
 
         # Plugin render hooks. Guarded by has_listeners so an unhooked frame
         # pays a single dict lookup and builds no payload — see the render.*
@@ -1095,12 +1123,6 @@ class QtGameView(QOpenGLWidget):
                        projection=self.projection_matrix, view=self.view_matrix,
                        camera_pos=camera_pos, play_mode=self.play_mode)
 
-        _splitscreen = (
-            self.play_mode
-            and getattr(self, 'splitscreen_mode', False)
-            and render_state is not None
-            and getattr(render_state, 'splitscreen_active', False)
-        )
         if _splitscreen:
             _w, _h = self.width(), self.height()
             _half = _w // 2

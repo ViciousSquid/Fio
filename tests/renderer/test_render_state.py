@@ -611,3 +611,22 @@ def test_the_light_list_comes_off_the_projection_not_a_scan(logic):
 
     assert state.all_lights == [lamp]
     assert list(thread._entity_table.light_slots) == [0]
+
+
+def test_whether_the_map_has_portals_is_published(logic):
+    """The portal virtual views draw sprites through the object path, so the
+    view deciding whether to skip the texture overrides has to know."""
+    pytest.importorskip("editor.things")
+    from editor.things import Portal
+
+    plain = logic(things=[make_thing(Light, "lamp", (0, 100, 0))])
+    plain._prepare_render_state()
+    assert plain.game_state.get_write_state().has_portals is False
+
+    with_portal = logic(things=[make_thing(Portal, "door", (0, 0, 0))])
+    with_portal.set_play_mode(True)
+    try:
+        with_portal._prepare_render_state()
+        assert with_portal.game_state.get_write_state().has_portals is True
+    finally:
+        with_portal.set_play_mode(False)
