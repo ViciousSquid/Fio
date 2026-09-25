@@ -1137,7 +1137,7 @@ layout (location = 9) in vec4 iNormal2;
         uniforms = self.uniforms['water']
         uniforms.preload([
             'projection', 'view', 'model', 'time', 'viewPos',
-            'normalMap', 'sceneColor', 'reflectionCube', 'reflectionEnabled',
+            'normalMap', 'sceneColor', 'reflectionTexture', 'reflectionMatrix', 'reflectionEnabled',
             'screenSize', 'waterOpacity', 'waterReflectivity',
             'waterTint', 'distortionStrength', 'refractionIndex',
             'roughness', 'fresnelIntensity', 'normalMatrix',
@@ -2059,7 +2059,7 @@ layout (location = 9) in vec4 iNormal2;
 
         reflection_unit = self.WATER_REFLECTION_TEXTURE_UNIT
         gl.glActiveTexture(gl.GL_TEXTURE0 + reflection_unit)
-        gl.glUniform1i(uniforms['reflectionCube'], reflection_unit)
+        gl.glUniform1i(uniforms['reflectionTexture'], reflection_unit)
 
         opacity_loc = uniforms['waterOpacity']
         reflectivity_loc = uniforms['waterReflectivity']
@@ -2125,13 +2125,13 @@ layout (location = 9) in vec4 iNormal2;
                 if bool(reflection_flags[i]) else 0
             )
             if reflection_tex:
-                gl.glBindTexture(
-                    gl.GL_TEXTURE_CUBE_MAP,
-                    reflection_tex,
-                )
+                gl.glBindTexture(gl.GL_TEXTURE_2D, reflection_tex)
+                gl.glUniformMatrix4fv(
+                    uniforms['reflectionMatrix'], 1, gl.GL_FALSE,
+                    glm.value_ptr(self._water_reflection_matrices[slot]))
                 gl.glUniform1i(reflection_enabled_loc, 1)
             else:
-                gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+                gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
                 gl.glUniform1i(reflection_enabled_loc, 0)
 
             mesh = (
