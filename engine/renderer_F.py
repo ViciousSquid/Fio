@@ -920,9 +920,7 @@ class Renderer_F(BaseRenderer):
         # brush whose centre is out of range but whose near end is in shot from
         # blinking out while it is being built.
         table = config.get('render_table')
-        refs = config.get('render_refs')
-        if (brush_slots is None or table is None or refs is None
-                or len(refs) < table.count):
+        if brush_slots is None or table is None:
             raise RuntimeError(
                 "Fio 2.5 renderer requires dense RenderTable brush slots")
 
@@ -976,7 +974,6 @@ class Renderer_F(BaseRenderer):
             config.get('show_sprites_in_play_mode', False))
 
         _tbl = table
-        _refs = refs
         lights = self._get_active_lights(things, config)
         self._frame_lights = lights
 
