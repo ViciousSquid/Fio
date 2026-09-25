@@ -1463,7 +1463,7 @@ class Renderer_F(BaseRenderer):
         elif current_mode == RENDER_MODE_LIT:
             self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl)
         else:
-            self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl, refs=_refs)
+            self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl)
         if current_mode == RENDER_MODE_LIT:
             self._render_water_reflection_probes(
                 _tbl, water_brushes, lights, config)
