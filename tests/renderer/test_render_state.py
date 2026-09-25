@@ -284,6 +284,23 @@ def test_visible_things_stays_lazy_until_an_object_consumer_reads_it(logic):
     assert visible._list is not None
 
 
+def test_all_lights_stays_lazy_until_light_consumer_reads_it(logic):
+    lamp = make_thing(Light, "lamp", (100, 200, -300))
+    monster = make_thing(Monster, "grunt", (-50, 96, -700))
+    thread = logic(things=[lamp, monster])
+
+    thread._prepare_render_state()
+
+    published = thread.game_state.get_write_state()
+    lights = published.all_lights
+    assert lights._list is None
+    assert len(lights) == 1
+    assert lights._list is None
+
+    assert lights[0] is lamp
+    assert lights._list is not None
+
+
 def test_visible_thing_positions_are_contiguous_and_aligned_with_snapshots(logic):
     lamp = make_thing(Light, "lamp", (100, 200, -300))
     monster = make_thing(Monster, "grunt", (-50, 96, 700))
