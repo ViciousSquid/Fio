@@ -11,11 +11,14 @@ from tests.helpers.worlds import angled_brush, box_brush
 def test_geometry_id_is_dense_and_box_brushes_keep_the_sentinel():
     convex = angled_brush("convex")
     box = box_brush("box")
+    second = angled_brush("second")
     table = RenderTable()
-    table.sync([box, convex], 1)
+    table.sync([box, convex, second], 1)
 
-    assert table.geometry_id.tolist() == [-1, 1]
+    assert table.geometry_id.tolist()[:3] == [-1, 0, 1]
+    assert len(table.geometry_records) == 2
     assert table.class_bits[1] & CLASS_HAS_GEOMETRY
+    assert table.class_bits[2] & CLASS_HAS_GEOMETRY
 
 
 def test_geometry_id_follows_row_compaction():
@@ -27,20 +30,23 @@ def test_geometry_id_follows_row_compaction():
     table.sync([convex], 1)
 
     assert table.geometry_id.tolist()[:1] == [0]
+    assert len(table.geometry_records) == 1
     assert table.geometry_id[table.slot_of_id[convex["id"]]] == 0
 
 
 def test_geometry_handle_moves_with_a_surviving_row():
     a = angled_brush("a")
     b = box_brush("b")
+    c = angled_brush("c")
     table = RenderTable()
-    table.sync([a, b], 1)
+    table.sync([a, b, c], 1)
 
-    table.sync([b, a], 1)
+    table.sync([c, b, a], 1)
 
-    slot = table.slot_of_id[a["id"]]
-    assert slot == 1
-    assert table.geometry_id[slot] == slot
+    assert table.geometry_id.tolist()[:3] == [0, -1, 1]
+    assert len(table.geometry_records) == 2
+    assert table.geometry_id[table.slot_of_id[a["id"]]] == 1
+    assert table.geometry_id[table.slot_of_id[c["id"]]] == 0
 
 
 def test_dense_geometry_mesh_preparation_uses_handles_not_refs():
@@ -54,8 +60,9 @@ def test_dense_geometry_mesh_preparation_uses_handles_not_refs():
         def __init__(self):
             self.calls = []
 
-        def _get_geo_mesh(self, brush, geometry_id=None, geometry_generation=None):
-            self.calls.append((brush, geometry_id, geometry_generation))
+        def _get_geo_mesh_record(
+                self, record, geometry_id=None, geometry_generation=None):
+            self.calls.append((record, geometry_id, geometry_generation))
             return "mesh"
 
     probe = Probe()
@@ -63,7 +70,8 @@ def test_dense_geometry_mesh_preparation_uses_handles_not_refs():
         probe, table, np.array([0], dtype=np.int32))
 
     assert meshes == {0: "mesh"}
-    assert probe.calls == [(convex, 0, table.generation)]
+    assert probe.calls == [(table.geometry_records[0], 0, table.generation)]
+    assert probe.calls[0][0] is not convex
 
 
 def test_dense_render_paths_have_no_convex_refs_slot_lookup():
