@@ -1084,19 +1084,6 @@ class Renderer_F(BaseRenderer):
                 and len(erefs) >= etable.count
                 and len(thing_hidden) >= etable.count)
 
-    def will_instance_sprites(self, config, brush_slots):
-        """Whether the billboard pass will read columns rather than objects.
-
-        Asked by :meth:`render_scene` to choose the path, and by the view that
-        drives it to decide whether the per-entity texture overrides are worth
-        building at all -- the instanced pass resolves its own textures and
-        never reads them.  One predicate for both, because a view that guessed
-        differently from the renderer would either rebuild overrides nothing
-        reads or withhold ones the object path still needs.
-        """
-        return (self.entities_are_numeric(config, brush_slots)
-                and 'sprite_instanced' in self.shaders)
-
     def render_scene(self, projection, view, camera_pos, brushes, things,
                      selected_object, config, clear=True, brush_slots=None):
         """Draw one view.
@@ -1165,10 +1152,8 @@ class Renderer_F(BaseRenderer):
         thing_slots = config.get('visible_thing_slots')
         thing_hidden = config.get('thing_hidden')
         entities_numeric = self.entities_are_numeric(config, brush_slots)
-        # The billboard pass takes its instances from the same columns, unless
-        # the driver rejected the instanced program -- in which case the
-        # per-sprite path is still there and the slots are materialised for it.
-        sprites_numeric = self.will_instance_sprites(config, brush_slots)
+        # Sprites are a dense execution path now. There is deliberately no
+        # per-Thing fallback: EntityTable is the renderer boundary.
         sprite_slots = None
         numeric_model_slots = None
 
@@ -1225,19 +1210,8 @@ class Renderer_F(BaseRenderer):
                     etable, tslots, thing_hidden,
                     config.get('play_mode', False),
                     config.get('show_sprites_in_play_mode', False))
-                if cx is not None and not sprites_numeric:
-                    # The legacy object sprite path still needs the projection's
-                    # depth order. Instanced sprites fuse depth and texture
-                    # grouping into one numeric sort at the GPU boundary.
-                    sprite_slots = self._sort_slots_by_distance(
-                        etable, sprite_slots, cx, cz)
                 numeric_model_slots = model_slots
                 sort_positions = None
-                sprite_things = (
-                    []
-                    if sprites_numeric else
-                    (erefs[sprite_slots].tolist() if len(sprite_slots) else [])
-                )
             else:
                 # No entity projection was published; keep the old object path.
                 if (config.get('camera_distance_cull',
@@ -1286,18 +1260,7 @@ class Renderer_F(BaseRenderer):
                     etable, tslots, thing_hidden,
                     config.get('play_mode', False),
                     config.get('show_sprites_in_play_mode', False))
-                if cx is not None and not sprites_numeric:
-                    # The legacy object sprite path still needs the projection's
-                    # depth order. Instanced sprites fuse depth and texture
-                    # grouping into one numeric sort at the GPU boundary.
-                    sprite_slots = self._sort_slots_by_distance(
-                        etable, sprite_slots, cx, cz)
                 numeric_model_slots = model_slots
-                sprite_things = (
-                    []
-                    if sprites_numeric else
-                    (erefs[sprite_slots].tolist() if len(sprite_slots) else [])
-                )
                 sort_positions = None
                 # Run the brush-only object sorter. It now cannot touch Things.
                 (opaque_brushes, transparent_brushes, _ignored,
@@ -1324,11 +1287,8 @@ class Renderer_F(BaseRenderer):
                 )
                 textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
 
-        # The entity projection has already split model/sprite rows, so the
-        # billboard pass needs no second Python scan or object-id set.
-        final_sprites = sprite_things
-        # Only the numeric path may hand slots to a brush pass; everything else
-        # passes None and the passes take their object path.
+        # Only the numeric brush projection may hand slots to a brush pass;
+        # entity sprites are always submitted from EntityTable columns.
         _tbl = table if numeric else None
         _refs = refs if numeric else None
         lights = self._get_active_lights(things, config)
@@ -1392,7 +1352,7 @@ class Renderer_F(BaseRenderer):
                                       if self._brush_visible_in_frustum(planes, b)]
                         except Exception:
                             pass  # never let culling break the portal view
-                        _opaque, _transparent, _sprites, _fog, _water, _glass, _glow = \
+                        _opaque, _transparent, _ignored_sprites, _fog, _water, _glass, _glow = \
                             self._sort_objects(all_br, all_th, cfg)
 
                         _t_opaque, _solid = self._split_opaque(_opaque)
@@ -1404,7 +1364,18 @@ class Renderer_F(BaseRenderer):
                         else:
                             self.draw_lit_brushes_optimized(proj, vw, cam, _opaque, _lights, cfg)
 
-                        self.draw_sprites(proj, vw, _sprites, self.sprite_textures, self.instance_textures)
+                        portal_etable = cfg.get('entity_table')
+                        portal_hidden = cfg.get('thing_hidden')
+                        if portal_etable is not None and portal_hidden is not None:
+                            portal_slots = np.arange(
+                                portal_etable.count, dtype=np.int32)
+                            _, portal_sprite_slots = entity_projection.classify_slots(
+                                portal_etable, portal_slots, portal_hidden,
+                                cfg.get('play_mode', False),
+                                cfg.get('show_sprites_in_play_mode', False))
+                            self.draw_sprites_instanced(
+                                proj, vw, portal_etable, portal_sprite_slots,
+                                camera_pos=cam)
                     self.draw_portals(
                         portal_things,
                         projection, view, camera_pos,
@@ -1455,23 +1426,17 @@ class Renderer_F(BaseRenderer):
                 if glass_brushes:
                     glass_brushes = _sort_by_distance(
                         glass_brushes, sort_positions['glass'], cx, cz)
-            if (final_sprites and sort_positions is not None
-                    and not entities_numeric):
-                # Object-path sprites still need their legacy distance order.
-                # Numeric entity sprites were already ordered as slots before
-                # any objects were materialised.
-                final_sprites = _sort_by_distance(
-                    final_sprites, sort_positions['sprites'], cx, cz)
         if not config.get('play_mode', False):
             self.draw_path_node_cubes(projection, view, things)
         self.draw_portal_wireframes(projection, view, things, config.get('play_mode', False))
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
-        if sprites_numeric:
+        # The sprite renderer has one path: dense EntityTable columns -> GL
+        # instanced draws. Missing projection data is a caller error, not a
+        # reason to resurrect the object renderer.
+        if entities_numeric and sprite_slots is not None:
             self.draw_sprites_instanced(
                 projection, view, etable, sprite_slots, camera_pos=camera_pos)
-        else:
-            self.draw_sprites(projection, view, final_sprites, self.sprite_textures, self.instance_textures)
         if current_mode == RENDER_MODE_UNLIT:
             self.draw_textured_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, _tbl, _refs)
         elif current_mode == RENDER_MODE_LIT:
