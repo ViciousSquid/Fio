@@ -325,6 +325,7 @@ class BaseRenderer:
         self._sprite_draw_mask = np.empty(0, dtype=bool)
         self._sprite_depth_scratch = np.empty(0, dtype=np.float64)
         self._sprite_depth_aux_scratch = np.empty(0, dtype=np.float64)
+        self._sprite_sorted_slots_scratch = np.empty(0, dtype=np.int32)
         self._brush_instance_capacity = 0
         self._brush_instance_data = np.empty((0, 32), dtype=np.float32)
         # Reusable model/normal matrix buffers for the batched transform build.
@@ -1780,6 +1781,7 @@ layout (location = 9) in vec4 iNormal2;
             self._sprite_draw_mask = np.empty(grown, dtype=bool)
             self._sprite_depth_scratch = np.empty(grown, dtype=np.float64)
             self._sprite_depth_aux_scratch = np.empty(grown, dtype=np.float64)
+            self._sprite_sorted_slots_scratch = np.empty(grown, dtype=np.int32)
 
         key_ids = self._sprite_key_scratch[:slot_count]
         textures = self._sprite_texture_scratch[:slot_count]
@@ -1826,7 +1828,8 @@ layout (location = 9) in vec4 iNormal2;
         count = len(order)
         self._ensure_sprite_instance_buffer(count)
         data = self._sprite_instance_data[:count]
-        sorted_slots = slots[order]
+        sorted_slots = self._sprite_sorted_slots_scratch[:count]
+        np.take(slots, order, out=sorted_slots)
         # Gather directly into the reusable GPU staging buffer.  The explicit
         # out= avoids a temporary (N,3)/(N,2) array on every sprite frame.
         np.take(table.pos, sorted_slots, axis=0, out=data[:, 0:3])
