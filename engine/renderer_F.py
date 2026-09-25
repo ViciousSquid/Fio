@@ -1362,7 +1362,7 @@ class Renderer_F(BaseRenderer):
             self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl, refs=_refs)
         elif current_mode == RENDER_MODE_LIT:
             if brush_display_mode == 'Textured' or brush_display_mode == 'Solid Lit':
-                self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl, _refs)
+                self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl)
                 self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl, refs=_refs)
             else:
                 self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl, refs=_refs)
@@ -1406,7 +1406,7 @@ class Renderer_F(BaseRenderer):
             self.draw_sprites_instanced(
                 projection, view, etable, sprite_slots, camera_pos=camera_pos)
         if current_mode == RENDER_MODE_UNLIT:
-            self.draw_textured_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, _tbl, _refs)
+            self.draw_textured_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, _tbl)
         elif current_mode == RENDER_MODE_LIT:
             self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl, refs=_refs)
         else:
