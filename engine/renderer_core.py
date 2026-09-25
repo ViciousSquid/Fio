@@ -3064,8 +3064,10 @@ layout (location = 9) in vec4 iNormal2;
         Cube-maps are cached per slot: a light's map is only re-rendered when the
         light or one of its in-range casters actually moves.  A fully static scene
         therefore does *zero* GPU shadow work after the first frame — only the
-        cheap CPU signature check runs.  Populates ``self._light_shadow_index``
-        (id(light) -> slot) every frame so the lighting shaders sample correctly.
+        cheap CPU signature check runs. Dense EntityTable calls use the light's
+        entity slot as the identity; direct legacy callers retain object ids.
+        ``self._light_shadow_index`` is therefore keyed by the same identity
+        used by the light UBO.
         """
         self._light_shadow_index = {}
         if not self._shadow_cubemaps or 'depth_cube' not in self.shaders:
