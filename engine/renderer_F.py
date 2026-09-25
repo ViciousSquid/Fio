@@ -45,17 +45,6 @@ _SELECTED_COLOR = (1.0, 1.0, 0.0)
 _SUBTRACT_COLOR = (1.0, 0.0, 0.0)
 
 
-def _light_casts_shadows(light):
-    """True if a light should cast depth cube-map shadows.
-
-    Robust to the flag being stored as a real bool or as a string
-    (``"true"``/``"false"``) in saved maps."""
-    val = light.properties.get('casts_shadows', False)
-    if isinstance(val, str):
-        return val.strip().lower() in ('1', 'true', 'yes', 'on')
-    return bool(val)
-
-
 class Renderer_F(BaseRenderer):
     def __init__(self, texture_loader, initial_grid_size, initial_world_size, config=None):
         super().__init__(texture_loader, initial_grid_size, initial_world_size, config)
@@ -1117,23 +1106,12 @@ class Renderer_F(BaseRenderer):
         # scene geometry so every lit/textured/terrain draw can sample them.
         self._light_shadow_index = {}
         if current_mode == RENDER_MODE_LIT and self.shadows_enabled:
-            if isinstance(lights, tuple) and len(lights) == 2:
-                light_table, light_slots = lights
-                shadow_slots = light_slots[
-                    light_table.light_casts_shadows[light_slots]]
-                shadow_lights = (light_table, shadow_slots)
-            else:
-                shadow_lights = [l for l in lights if _light_casts_shadows(l)]
-            shadow_count = (
-                len(shadow_lights[1])
-                if isinstance(shadow_lights, tuple) else len(shadow_lights)
-            )
-            if shadow_count:
-                shadow_brushes = config.get('all_brushes', brushes)
-                shadow_things = config.get('all_things', things)
+            light_table, light_slots = lights
+            shadow_slots = light_slots[
+                light_table.light_casts_shadows[light_slots]]
+            if len(shadow_slots):
                 self.render_shadow_maps(
-                    shadow_lights, shadow_brushes, shadow_things,
-                    config, camera_pos)
+                    (light_table, shadow_slots), config, camera_pos)
 
         terrain = config.get('terrain', None)
         if terrain and terrain.enabled:
