@@ -4140,78 +4140,107 @@ layout (location = 9) in vec4 iNormal2;
         gl.glBindVertexArray(0)
         gl.glUseProgram(0)
 
-    def draw_portal_wireframes(self, projection, view, things, play_mode=False):
-        if 'simple' not in self.shaders:
+    def draw_portal_wireframes(self, projection, view, portal_table,
+                               portal_slots, play_mode=False):
+        """Draw portal editor wireframes directly from EntityTable columns.
+
+        Portal rendering has one numerical source of truth: topology, aperture
+        geometry, active/fade state, colour and rim visibility all live in the
+        dense entity projection. This overlay deliberately does not accept a
+        Thing collection, so the renderer cannot fall back to the old
+        Portal-object walk.
+        """
+        if 'simple' not in self.shaders or portal_table is None:
+            return
+        if portal_slots is None:
+            return
+        portal_slots = np.asarray(portal_slots, dtype=np.int32)
+        if not len(portal_slots):
             return
 
-        portal_things = [t for t in things if isinstance(t, Portal) and t.properties.get('show_rim', True)]
-        if not portal_things:
+        show = portal_table.portal_show_rim[portal_slots]
+        slots = portal_slots[show]
+        if not len(slots):
             return
 
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glUniformMatrix4fv(
+            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(
+            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
         gl.glUniform1f(uniforms['alpha'], 1.0)
 
-        # Outline VAO
         if self._portal_outline_vao is None:
             self._portal_outline_vao = gl.glGenVertexArrays(1)
             self._portal_outline_vbo = gl.glGenBuffers(1)
             gl.glBindVertexArray(self._portal_outline_vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_outline_vbo)
-            gl.glBufferData(gl.GL_ARRAY_BUFFER, 4*3*4, None, gl.GL_DYNAMIC_DRAW)
-            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, 4 * 3 * 4,
+                            None, gl.GL_DYNAMIC_DRAW)
+            gl.glVertexAttribPointer(
+                0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
             gl.glEnableVertexAttribArray(0)
             gl.glBindVertexArray(0)
-        # Normal arrow VAO
+
         if self._portal_normal_vao is None:
             self._portal_normal_vao = gl.glGenVertexArrays(1)
             self._portal_normal_vbo = gl.glGenBuffers(1)
             gl.glBindVertexArray(self._portal_normal_vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_normal_vbo)
-            gl.glBufferData(gl.GL_ARRAY_BUFFER, 2*3*4, None, gl.GL_DYNAMIC_DRAW)
-            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, 2 * 3 * 4,
+                            None, gl.GL_DYNAMIC_DRAW)
+            gl.glVertexAttribPointer(
+                0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
             gl.glEnableVertexAttribArray(0)
             gl.glBindVertexArray(0)
 
         gl.glLineWidth(1.0)
         model_loc = uniforms['model']
         color_loc = uniforms['color']
-        gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
+        gl.glUniformMatrix4fv(
+            model_loc, 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
 
-        for portal in portal_things:
-            raw = portal.properties.get('color', [255, 255, 255])
-            color = normalize_color(raw, default=[1.0,1.0,1.0])
-            r,g,b = color
-            if not portal.is_active():
-                r,g,b = r*0.4, g*0.4, b*0.4
+        for slot_value in slots:
+            slot = int(slot_value)
+            r, g, b = portal_table.portal_color[slot]
+            if not bool(portal_table.portal_active[slot]):
+                r, g, b = r * 0.4, g * 0.4, b * 0.4
 
-            # Red wireframe for unlinked or broken portal pairs
-            target_name = portal.properties.get('portal_target', '')
-            target_exists = target_name and any(
-                isinstance(t, Portal) and t.properties.get('name') == target_name
-                for t in things
-                if t is not portal
-            )
-            if not target_exists:
-                r, g, b = 0.86, 0.24, 0.24  # red — no valid target
-            corners = portal.get_corners_world()
-            vdata = np.array(corners, dtype=np.float32).flatten()
+            # The target link is already resolved to an integer slot. A missing
+            # target is one scalar comparison, not a second Portal object scan.
+            if int(portal_table.portal_target_slot[slot]) < 0:
+                r, g, b = 0.86, 0.24, 0.24
+
+            corners = self._portal_slot_corners(portal_table, slot)
+            vdata = np.asarray(corners, dtype=np.float32).reshape(-1)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_outline_vbo)
             gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, vdata.nbytes, vdata)
-            gl.glUniform3f(color_loc, r, g, b)
+            gl.glUniform3f(color_loc, float(r), float(g), float(b))
             gl.glBindVertexArray(self._portal_outline_vao)
             gl.glDrawArrays(gl.GL_LINE_LOOP, 0, 4)
 
-            # normal arrow
-            cx = float(portal.pos[0]); cy = float(portal.pos[1]); cz = float(portal.pos[2])
-            nx, ny, nz = portal.get_normal()
-            arrow_len = portal.get_width() * 0.4
-            nline = np.array([cx, cy, cz, cx+nx*arrow_len, cy+ny*arrow_len, cz+nz*arrow_len], dtype=np.float32)
+            basis = portal_table.portal_basis[slot]
+            normal = basis[2]
+            pos = portal_table.pos[slot]
+            arrow_len = float(portal_table.portal_width_height[slot, 0]) * 0.4
+            nline = np.asarray(
+                (
+                    float(pos[0]), float(pos[1]), float(pos[2]),
+                    float(pos[0] + normal[0] * arrow_len),
+                    float(pos[1] + normal[1] * arrow_len),
+                    float(pos[2] + normal[2] * arrow_len),
+                ),
+                dtype=np.float32,
+            )
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_normal_vbo)
             gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, nline.nbytes, nline)
-            gl.glUniform3f(color_loc, min(1.0, r*1.6), min(1.0, g*1.6), min(1.0, b*1.6))
+            gl.glUniform3f(
+                color_loc,
+                min(1.0, float(r) * 1.6),
+                min(1.0, float(g) * 1.6),
+                min(1.0, float(b) * 1.6),
+            )
             gl.glBindVertexArray(self._portal_normal_vao)
             gl.glDrawArrays(gl.GL_LINES, 0, 2)
 
