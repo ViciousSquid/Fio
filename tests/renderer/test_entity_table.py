@@ -388,6 +388,66 @@ def _keys(table, slot):
     return list(dict.fromkeys(c[0] for c in table.sprite_recipes()[sid]))
 
 
+def test_portal_target_is_resolved_to_an_integer_entity_slot():
+    a = make_thing(Portal, 'A')
+    b = make_thing(Portal, 'B')
+    a.properties['portal_target'] = 'B'
+    table = _synced([a, b])
+
+    assert table.portal_slots.tolist() == [0, 1]
+    assert table.portal_target_slot.tolist() == [1, -1]
+
+
+def test_portal_authored_state_is_dense_and_geometry_is_shared():
+    portal = make_thing(
+        Portal, 'P', (10.0, 20.0, 30.0),
+        width=192.0, height=320.0, rotation=[45.0, 20.0, 10.0],
+        portal_direction='reverse', color=[64, 128, 255], show_rim=False,
+    )
+    table = _synced([portal])
+
+    assert np.allclose(table.portal_width_height[0], [192.0, 320.0])
+    assert int(table.portal_direction[0]) == et.PORTAL_DIRECTION_REVERSE
+    assert np.allclose(table.portal_color[0], [64/255.0, 128/255.0, 1.0])
+    assert bool(table.portal_show_rim[0]) is False
+    assert np.allclose(table.portal_basis[0], np.asarray(portal.get_basis()))
+
+
+def test_portal_live_state_refreshes_without_reconciling():
+    portal = make_thing(Portal, 'P')
+    table = _synced([portal])
+    generation = table.generation
+
+    portal.properties['active'] = False
+    portal._fade_alpha = 0.25
+    portal.pos = [100.0, 200.0, 300.0]
+    portal.set_yaw_degrees(90.0)
+    table.begin_frame([portal], epoch=1)
+
+    assert table.generation == generation
+    assert bool(table.portal_active[0]) is False
+    assert np.isclose(table.portal_fade[0], 0.25)
+    assert np.allclose(table.pos[0], [100.0, 200.0, 300.0])
+    assert np.allclose(table.portal_basis[0], np.asarray(portal.get_basis()))
+
+
+def test_shared_portal_transform_matches_the_authoring_wrapper():
+    from engine.portal_transform import map_direction, map_point
+
+    a = make_thing(Portal, 'A', (10.0, 20.0, 30.0), rotation=[30.0, 15.0, 5.0])
+    b = make_thing(Portal, 'B', (-80.0, 12.0, 140.0), rotation=[-70.0, -10.0, 20.0])
+    point = (25.0, 60.0, -12.0)
+    direction = (0.3, -0.4, 0.5)
+
+    assert np.allclose(
+        map_point(a.pos, a.get_basis(), b.pos, b.get_basis(), point),
+        a.map_point(b, *point),
+    )
+    assert np.allclose(
+        map_direction(a.get_basis(), b.get_basis(), direction),
+        a.map_direction(b, *direction),
+    )
+
 def test_a_portal_draws_no_sprite():
     """The sprite pass has always skipped Portals; the column says so."""
     table = _synced([make_thing(Portal, 'p')])
