@@ -1832,14 +1832,13 @@ layout (location = 9) in vec4 iNormal2;
         gl.glUniform1i(uniforms['sprite_texture'], 0)
         gl.glBindVertexArray(self._ensure_sprite_instance_vao())
 
-        run_texture = textures[order][run_starts[:-1]]
         current_tex = None
         for run in range(len(run_starts) - 1):
             begin = int(run_starts[run])
             length = int(run_starts[run + 1]) - begin
             if length <= 0:
                 continue
-            tex_id = int(run_texture[run])
+            tex_id = int(textures[order[run_starts[run]]])
             if tex_id != current_tex:
                 gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                 current_tex = tex_id
