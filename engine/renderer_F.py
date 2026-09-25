@@ -106,8 +106,8 @@ class Renderer_F(BaseRenderer):
         return -1 if slot is None else int(slot)
 
     def draw_lit_brushes_optimized(self, projection, view, camera_pos, brushes,
-                                   lights, config, is_transparent_pass=False,
-                                   table):
+                                   lights, config, table,
+                                   is_transparent_pass=False):
         """Draw lit brush slots from dense RenderTable columns.
 
         Transforms, material state, selection and geometry IDs all come from
