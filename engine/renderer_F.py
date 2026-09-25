@@ -1052,7 +1052,14 @@ class Renderer_F(BaseRenderer):
 
 
     def _get_active_lights(self, things, config):
-        """Return active Light objects without rescanning the full Thing set in play mode."""
+        """Return active lights as dense EntityTable slots when available."""
+        table = config.get('entity_table')
+        if table is not None and hasattr(table, 'light_color'):
+            slots = table.light_slots
+            if len(slots):
+                slots = slots[table.light_enabled[slots]]
+            return (table, slots)
+
         lights = config.get('all_lights')
         if lights is None:
             # Non-threaded editor fallback. The Thing collection normally stays
@@ -1063,7 +1070,6 @@ class Renderer_F(BaseRenderer):
                 self._light_collection_key = key
             lights = self._light_collection
 
-        # State can change through I/O without changing the light collection.
         return [light for light in lights
                 if light.properties.get('state', 'on') == 'on']
 
@@ -1311,11 +1317,22 @@ class Renderer_F(BaseRenderer):
         # scene geometry so every lit/textured/terrain draw can sample them.
         self._light_shadow_index = {}
         if current_mode == RENDER_MODE_LIT and self.shadows_enabled:
-            shadow_lights = [l for l in lights if _light_casts_shadows(l)]
-            if shadow_lights:
+            if isinstance(lights, tuple) and len(lights) == 2:
+                light_table, light_slots = lights
+                shadow_lights = (
+                    light_table,
+                    light_slots[light_table.light_casts_shadows[light_slots]],
+                )
+            else:
+                shadow_lights = [l for l in lights if _light_casts_shadows(l)]
+            shadow_count = (len(shadow_lights[1])
+                            if isinstance(shadow_lights, tuple) else len(shadow_lights))
+            if shadow_count:
                 shadow_brushes = config.get('all_brushes', brushes)
                 shadow_things = config.get('all_things', things)
-                self.render_shadow_maps(shadow_lights, shadow_brushes, shadow_things, config, camera_pos)
+                self.render_shadow_maps(
+                    shadow_lights, shadow_brushes, shadow_things,
+                    config, camera_pos)
 
         terrain = config.get('terrain', None)
         if terrain and terrain.enabled:
