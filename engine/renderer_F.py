@@ -1441,9 +1441,11 @@ class Renderer_F(BaseRenderer):
                 if glass_brushes:
                     glass_brushes = _sort_by_distance(
                         glass_brushes, sort_positions['glass'], cx, cz)
-            if final_sprites and sort_positions is not None:
-                # The numeric path ordered the sprite slots from the entity
-                # projection before materialising them.
+            if (final_sprites and sort_positions is not None
+                    and not entities_numeric):
+                # Object-path sprites still need their legacy distance order.
+                # Numeric entity sprites were already ordered as slots before
+                # any objects were materialised.
                 final_sprites = _sort_by_distance(
                     final_sprites, sort_positions['sprites'], cx, cz)
         if not config.get('play_mode', False):
