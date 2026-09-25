@@ -132,6 +132,15 @@ def test_epoch_bump_re_resolves_cold_columns():
     assert t.class_bits[0] & rt.CLASS_GLASS
 
 
+def test_dirty_journal_only_re_resolves_marked_row():
+    a, b = _brush(id='a'), _brush(id='b', shader='Glass')
+    t = _synced([a, b], epoch=1)
+    a['shader'] = 'Glow'
+    assert t.sync([a, b], 2, dirty_objects={id(a)}) is True
+    assert t.class_bits[0] & rt.CLASS_GLOW
+    assert t.class_bits[1] & rt.CLASS_GLASS
+
+
 def test_structural_change_keeps_survivors_cold_columns():
     """A row that survives is not re-resolved -- that is what keeps a
     structural change from costing a full level re-classification."""
@@ -139,14 +148,18 @@ def test_structural_change_keeps_survivors_cold_columns():
     t = _synced([a, b], epoch=1)
     assert t.class_bits[t.slot_of_id['a']] & rt.CLASS_GLASS
 
-    # Mutate 'a' behind the table's back, then force a structural change at the
-    # same epoch by inserting a new brush ahead of it.
-    a['shader'] = 'Glow'
+    # Mutate the survivor behind the table's back, then force a structural
+    # change at the same epoch by inserting a new brush ahead of it. The
+    # survivor's source data now disagrees with its cache, so the assertion
+    # below only passes if the row really was preserved rather than re-resolved.
+    b['shader'] = 'Glow'
     c = _brush(id='c', is_trigger=True)
     assert t.sync([c, a, b], 1) is True
 
     slot_a = t.slot_of_id['a']
     assert t.class_bits[slot_a] & rt.CLASS_GLASS      # survivor: not re-resolved
+    slot_b = t.slot_of_id['b']
+    assert not (t.class_bits[slot_b] & rt.CLASS_GLOW)  # mutated survivor kept its cache
     assert t.class_bits[t.slot_of_id['c']] & rt.CLASS_TRIGGER   # new row: resolved
     assert t.slot_of_id['b'] == 2
 
@@ -307,3 +320,77 @@ def test_glow_colour_is_the_overbright_the_glow_pass_computed():
     # base * intensity, clamped at 10 -- what draw_glow_brushes did per frame.
     np.testing.assert_allclose(t.glow_colour[0],
                                [4.0, min(0.50196078 * 4.0, 10.0), 0.0], atol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Special volume material state
+# ---------------------------------------------------------------------------
+
+def test_special_volume_state_is_projected_as_dense_numeric_columns():
+    brushes = [
+        _brush(
+            id='water',
+            shader='Water',
+            water_tint=[0.1, 0.2, 0.3],
+            water_opacity=0.7,
+            water_reflectivity=0.8,
+            water_wave_height=0.6,
+            water_wave_enabled=False,
+            water_plane=True,
+        ),
+        _brush(
+            id='glass',
+            shader='Glass',
+            glass_color=[0.4, 0.5, 0.6],
+            glass_opacity=0.25,
+            glass_distortion=0.2,
+            glass_refraction=1.33,
+            glass_roughness=0.1,
+            glass_fresnel=0.9,
+        ),
+        _brush(
+            id='fog',
+            shader='Fog',
+            fog_color=[0.2, 0.3, 0.4],
+            fog_density=2.0,
+            fog_noise_scale=0.07,
+        ),
+    ]
+    t = _synced(brushes)
+
+    np.testing.assert_allclose(t.water_tint[0], [0.1, 0.2, 0.3])
+    np.testing.assert_allclose(t.water_params[0], [0.7, 0.8, 0.6, 0.0])
+    assert bool(t.water_plane[0])
+
+    np.testing.assert_allclose(t.glass_color[1], [0.4, 0.5, 0.6])
+    np.testing.assert_allclose(t.glass_params[1], [0.25, 0.2, 1.33, 0.1, 0.9])
+
+    np.testing.assert_allclose(t.fog_color[2], [0.2, 0.3, 0.4])
+    np.testing.assert_allclose(t.fog_params[2], [2.0, 0.07])
+
+
+def test_special_volume_state_moves_with_a_surviving_row():
+    water = _brush(
+        id='water',
+        shader='Water',
+        water_tint=[1.0, 0.2, 0.3],
+        water_opacity=0.7,
+    )
+    other = _brush(id='other')
+    t = _synced([water, other], epoch=1)
+
+    old = t.slot_of_id['water']
+    t.sync([other, water], epoch=1)
+
+    new = t.slot_of_id['water']
+    assert old != new
+    np.testing.assert_allclose(t.water_tint[new], [1.0, 0.2, 0.3])
+    assert t.water_params[new, 0] == pytest.approx(0.7)
+
+
+def test_special_volume_state_refreshes_on_epoch_change():
+    water = _brush(id='water', shader='Water', water_opacity=0.5)
+    t = _synced([water], epoch=1)
+    water['water_opacity'] = 0.9
+    t.sync([water], epoch=2)
+    assert t.water_params[0, 0] == pytest.approx(0.9)

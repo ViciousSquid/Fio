@@ -1369,9 +1369,29 @@ class PropertyEditor(QWidget):
             ('glass_refraction', "Refraction:", 1.5, "Index of refraction (1.0=air, 1.5=glass, 2.4=diamond)"),
             ('glass_roughness', "Roughness:", 0.0, "Surface roughness (0=clear, 1=frosted)"),
         ):
-            slider, label = _make_slider(self, brush.get(key, default), 0, 100 if 'refraction' not in key else 250,
-                                         fmt="{:.2f}", callback=lambda v, k=key: self.update_object_prop(k, v),
-                                         tooltip=tip)
+            if key == 'glass_refraction':
+                # IOR is 1.00..2.50, in hundredths. The generic slider helper
+                # treats ranges above 100 as raw integers, which would quantise
+                # the material's advertised 1.50-style values to whole numbers.
+                ior = float(brush.get(key, default))
+                slider = QSlider(Qt.Horizontal)
+                slider.setRange(100, 250)
+                slider.setValue(max(100, min(250, int(round(ior * 100)))))
+                label = QLabel(f"{ior:.2f}")
+
+                def _on_ior_change(v, _slider=slider, _label=label):
+                    real = v / 100.0
+                    _label.setText(f"{real:.2f}")
+                    self.update_object_prop('glass_refraction', real)
+
+                slider.valueChanged.connect(_on_ior_change)
+                slider.setToolTip(tip)
+            else:
+                slider, label = _make_slider(
+                    self, brush.get(key, default), 0, 100,
+                    fmt="{:.2f}",
+                    callback=lambda v, k=key: self.update_object_prop(k, v),
+                    tooltip=tip)
             dist_form.addRow(label_txt, _hbox(slider, label, stretch=False))
             self._widgets[f'{key}_slider'] = slider
         layout.addWidget(dist_group)
@@ -1697,6 +1717,19 @@ class PropertyEditor(QWidget):
                             model_path_edit = model_path_widget.findChild(QLineEdit)
                             if model_path_edit is not None:
                                 model_path_edit.setText(default_model)
+                    elif not is_model:
+                        # Billboard is the Prop's default visual representation.
+                        # Switching away from a model deliberately restores the
+                        # stock appearance rather than leaving stale model-era
+                        # asset state to decide what the editor shows.
+                        default_sprite = 'assets/sprites/pickup.png'
+                        self.update_object_prop('sprite_path', default_sprite)
+                        self.update_object_prop('sprite_size', [32.0, 32.0])
+                        sprite_edit.setText(default_sprite)
+                        for spin, value in zip(sprite_inputs, (32.0, 32.0)):
+                            spin.blockSignals(True)
+                            spin.setValue(value)
+                            spin.blockSignals(False)
                     for row in (model_path_row, scale_row, rotation_row):
                         set_form_row_visible(row, is_model)
                     for row in (sprite_path_row, sprite_size_row):
@@ -4110,6 +4143,12 @@ class PropertyEditor(QWidget):
                     except (ValueError, TypeError):
                         value = 0.0
             self.current_object.properties[key] = value
+
+        # Property edits are live scene mutations, not merely UI state.  The
+        # dense render/entity projections cache their cold columns behind the
+        # editor's world epoch, so journal this exact object immediately.
+        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'mark_world_changed'):
+            self.editor.state.mark_world_changed([self.current_object])
 
         if key == 'name' and _io_system is not None:
             # A name is read by every *other* entity's panel — the "Targeted by"

@@ -13,6 +13,7 @@ import json
 import copy
 import datetime
 import uuid
+import threading
 from collections import deque
 from .things import Thing
 from editor.things import update_all_counters_from_entities
@@ -63,7 +64,15 @@ class EditorState:
         #: Coarse "something about the world changed" counter -- see
         #: :meth:`mark_world_changed`.  Set before anything that bumps it can
         #: run, because save_state() is reachable during construction.
+        self._render_dirty_lock = threading.RLock()
         self.world_epoch = 0
+        # Object ids whose render-facing cold columns changed in the current
+        # editor transaction. _render_dirty_all is used for reload/undo,
+        # where the object identities themselves are replaced.
+        self._render_dirty_objects = set()
+        self._render_dirty_epoch_by_id = {}
+        self._render_dirty_all = False
+        self._render_dirty_all_epoch = -1
         self.brushes = []
         self.things = []
         self.selected_object = None
@@ -91,8 +100,64 @@ class EditorState:
     # =========================================================================
 
 
-    def mark_world_changed(self) -> None:
-        """Bump the coarse "something about the world changed" counter.
+    def mark_render_dirty(self, *objects) -> None:
+        """Mark specific objects whose render-facing cold state changed."""
+        with self._render_dirty_lock:
+            if self._render_dirty_all:
+                # The global invalidation already covers every row, but remember
+                # the later epoch so a frame snapshot cannot consume an edit that
+                # happened after it was captured.
+                self._render_dirty_all_epoch = self.world_epoch
+                return
+            epoch = self.world_epoch
+            for obj in objects:
+                if obj is not None:
+                    obj_id = id(obj)
+                    self._render_dirty_objects.add(obj_id)
+                    self._render_dirty_epoch_by_id[obj_id] = epoch
+
+    def render_dirty_snapshot(self):
+        """Capture the render dirtiness and its epoch as one frame boundary."""
+        with self._render_dirty_lock:
+            if self._render_dirty_all:
+                dirty = None
+            else:
+                dirty = set(self._render_dirty_objects)
+            return self.world_epoch, dirty
+
+    def clear_render_dirty(self, snapshot=None) -> None:
+        """Consume only render dirtiness covered by a previously captured snapshot."""
+        with self._render_dirty_lock:
+            if snapshot is None:
+                # Backward-compatible immediate consume for callers that do not
+                # participate in the frame-boundary protocol.
+                self._render_dirty_objects.clear()
+                self._render_dirty_epoch_by_id.clear()
+                self._render_dirty_all = False
+                self._render_dirty_all_epoch = -1
+                return
+
+            cutoff_epoch, _dirty = snapshot
+
+            # A later global invalidation belongs to a later frame and must survive.
+            if (self._render_dirty_all
+                    and self._render_dirty_all_epoch <= cutoff_epoch):
+                self._render_dirty_all = False
+                self._render_dirty_all_epoch = -1
+
+            # A row dirtied again after the snapshot has a later epoch and must not
+            # be consumed by this frame. This also handles the same object being
+            # edited twice across the snapshot boundary.
+            for obj_id in tuple(self._render_dirty_objects):
+                if self._render_dirty_epoch_by_id.get(obj_id, cutoff_epoch) <= cutoff_epoch:
+                    self._render_dirty_objects.discard(obj_id)
+                    self._render_dirty_epoch_by_id.pop(obj_id, None)
+
+    def mark_world_changed(self, objects=None) -> None:
+        """Bump the world revision and journal the affected render rows.
+
+        objects is the precise editor transaction path. A bare call remains
+        the conservative global invalidation used by external callers/tests.
 
         A derived structure that resolves expensive per-object data -- the
         renderer's dense projection above all -- has to know when to re-resolve
@@ -112,9 +177,17 @@ class EditorState:
         Deliberately coarse.  It says *something* changed, not what; a consumer
         that wants to be finer-grained tracks its own per-row dirty set on top.
         """
-        self.world_epoch += 1
+        with self._render_dirty_lock:
+            self.world_epoch += 1
+            if objects is None or not objects:
+                self._render_dirty_objects.clear()
+                self._render_dirty_epoch_by_id.clear()
+                self._render_dirty_all = True
+                self._render_dirty_all_epoch = self.world_epoch
+            else:
+                self.mark_render_dirty(*objects)
 
-    def mark_lighting_dirty(self) -> None:
+    def mark_lighting_dirty(self, objects=None) -> None:
         """
         Call whenever static geometry or static lights change so the next
         Play automatically triggers a rebake.
@@ -124,7 +197,9 @@ class EditorState:
         # A tool that holds one undo checkpoint open across a burst of edits
         # (the Surface Inspector) calls this per edit, so it is the signal that
         # catches what save_state alone would miss.
-        self.world_epoch += 1
+        if objects is None:
+            objects = getattr(self, "selected_objects", ())
+        self.mark_world_changed(objects)
         if self.bake_state is not None:
             self.bake_state.mark_dirty()
 
@@ -140,7 +215,7 @@ class EditorState:
         if brush.get('lightmap_static') == static:
             return  # no change
         brush['lightmap_static'] = static
-        self.mark_lighting_dirty()
+        self.mark_lighting_dirty([brush])
 
     def count_static_brushes(self) -> int:
         return sum(1 for b in self.brushes if b.get('lightmap_static', False))
@@ -165,7 +240,7 @@ class EditorState:
         self.save_state()
         if _geo_clip_brush(brush, normal, offset, keep_positive=keep_positive,
                            texture=texture, uv_scale=uv_scale):
-            self.mark_lighting_dirty()
+            self.mark_lighting_dirty([brush])
             return True
         # Nothing changed -> discard the undo snapshot we just pushed.
         self.discard_last_checkpoint()
@@ -175,7 +250,7 @@ class EditorState:
         """Rotate ``brush`` about ``pivot`` (default: its centre), making it angled."""
         self.save_state()
         if _geo_rotate_brush(brush, angle_deg, axis, pivot=pivot):
-            self.mark_lighting_dirty()
+            self.mark_lighting_dirty([brush])
             return True
         self.discard_last_checkpoint()
         return False
@@ -188,7 +263,7 @@ class EditorState:
         brush.pop('geometry', None)
         brush.pop('_geo_cache', None)
         brush.pop('_geo_cache_sig', None)
-        self.mark_lighting_dirty()
+        self.mark_lighting_dirty([brush])
 
     def simplify_brush_geometry(self, brush: dict) -> None:
         """If a geometry brush is really an axis-aligned box, drop to pos/size."""
@@ -214,7 +289,12 @@ class EditorState:
         identity or contents cannot see it happen and would go on showing the
         entities that used to be there.
         """
-        self.mark_world_changed()
+        with self._render_dirty_lock:
+            self._render_dirty_objects.clear()
+            self._render_dirty_epoch_by_id.clear()
+            self._render_dirty_all = True
+            self._render_dirty_all_epoch = self.world_epoch
+            self.mark_world_changed()
         if IO_AVAILABLE:
             try:
                 from .io_system import bump_io_revision
@@ -502,7 +582,7 @@ class EditorState:
         record of what the scene now looks like.  :meth:`undo` therefore has to
         capture the live scene itself — see the note there.
         """
-        self.mark_world_changed()
+        self.mark_world_changed(getattr(self, "selected_objects", ()))
         # Keep the redo branch we are about to drop, so an operation that turns
         # out to change nothing can put it back (see discard_last_checkpoint).
         self._discarded_redo = list(self.redo_stack)

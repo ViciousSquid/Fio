@@ -531,10 +531,20 @@ class EditorAPI:
 
         Fio's viewport already selects its renderer from a class registry; this
         drops *cls* in so it appears as a render mode and can be activated. *cls*
-        must implement the renderer interface (``render_scene``, ``draw_models``,
-        ``cleanup``, a ``lod_manager``, …). Returns True if registered (False in
-        a headless/player context with no viewport). This is how a whole new
-        renderer — e.g. a deferred one — ships as a plugin.
+        must implement the renderer interface (``render_scene``,
+        ``draw_models_instanced``, ``render_shadow_maps``, ``cleanup``,
+        a ``lod_manager``, …).
+
+        The production shadow seam is
+        ``render_shadow_maps(shadow_lights, config, camera_pos=None)`` where
+        ``shadow_lights`` is the dense ``(EntityTable, light_slots)`` tuple.
+        Shadow caster selection and transforms come from ``RenderTable`` and
+        ``EntityTable`` slots; authored Brush/Thing/Light collections are not
+        part of the shadow API.
+
+        Returns True if registered (False in a headless/player context with no
+        viewport). This is how a whole new renderer — e.g. a deferred one —
+        ships as a plugin.
         """
         try:
             from engine.qt_game_view import register_renderer

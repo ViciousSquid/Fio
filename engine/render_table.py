@@ -72,6 +72,18 @@ from engine import brush_geometry
 # --------------------------------------------------------------------------
 # Classification bits
 # --------------------------------------------------------------------------
+
+class GeometryRecord:
+    """Dense cold render record for one convex geometry-table entry."""
+    __slots__ = ('signature', 'convex', 'origin', 'scale', 'natural_scale')
+
+    def __init__(self, signature, convex, origin, scale, natural_scale):
+        self.signature = signature
+        self.convex = convex
+        self.origin = origin
+        self.scale = scale
+        self.natural_scale = natural_scale
+
 #
 # One uint16 per brush replacing the chain of dict lookups, string comparisons
 # and substring searches ``_sort_objects`` and ``_split_opaque`` run per visible
@@ -189,8 +201,11 @@ class RenderTable:
     __slots__ = ('generation', 'count', 'ids', 'slot_of_id', 'brushes',
                  'center', 'half', 'rot', 'class_bits', 'tex_name_id',
                  'uv_scale', 'uv_angle', 'uv_shift', 'uv_natural',
-                 'uv_has_scale', 'colour', 'glow_colour', 'geo_epoch',
-                 'dynamic_slots', '_tex_ids', '_tex_names', '_epoch',
+                 'uv_has_scale', 'colour', 'glow_colour', 'geo_epoch', 'geometry_id',
+                 'water_tint', 'water_params', 'water_plane',
+                 'glass_color', 'glass_params',
+                 'fog_color', 'fog_params',
+                 'dynamic_slots', 'geometry_records', '_tex_ids', '_tex_names', '_epoch',
                  '_hidden_buf')
 
     def __init__(self):
@@ -209,6 +224,9 @@ class RenderTable:
         #: re-read per frame.  Recomputed whenever the table reconciles, from
         #: :data:`CLASS_DYNAMIC`, so it cannot drift from the classification.
         self.dynamic_slots = np.empty(0, dtype=np.int32)
+        #: Dense geometry records keyed directly by geometry_id. AABB
+        #: brushes have no record; their geometry_id stays -1.
+        self.geometry_records: list = []
 
         # float64 deliberately: this is exactly what _build_cull_cache held,
         # and the frustum batch casts to float64 internally -- matching the
@@ -244,6 +262,26 @@ class RenderTable:
         #: consumer caching GPU data per row can tell a stale mesh from a live
         #: one without re-deriving ``geometry_signature``.  0 for box brushes.
         self.geo_epoch = np.zeros((0,), dtype=np.int64)
+        #: Dense row handle for convex/custom geometry.  ``-1`` means the
+        #: shared box VAO; for a geometry row this is the row's slot, so the
+        #: renderer can prepare the mesh once at the cache boundary and then
+        #: draw from a pure integer column in the hot loop.
+        self.geometry_id = np.full((0,), -1, dtype=np.int32)
+
+        # Special-brush render state. These are narrow numerical projections of
+        # the authored dictionaries consumed by the water/glass/fog shaders.
+        # Params are deliberately packed so the renderer can gather a whole
+        # pass without materialising Brush objects.
+        self.water_tint = np.zeros((0, 3), dtype=np.float32)
+        # opacity, reflectivity, wave_height, wave_enabled
+        self.water_params = np.zeros((0, 4), dtype=np.float32)
+        self.water_plane = np.zeros((0,), dtype=bool)
+        self.glass_color = np.zeros((0, 3), dtype=np.float32)
+        # opacity, distortion, refraction, roughness, fresnel
+        self.glass_params = np.zeros((0, 5), dtype=np.float32)
+        self.fog_color = np.zeros((0, 3), dtype=np.float32)
+        # density, noise_scale
+        self.fog_params = np.zeros((0, 2), dtype=np.float32)
 
         # Texture-name intern table.  GL-free: these are ids for *names*, and
         # the renderer maps them to GL texture ids once per unique name.
@@ -282,12 +320,14 @@ class RenderTable:
     # -- capacity ----------------------------------------------------------
 
     def _resize(self, n):
-        """Grow every column to hold *n* rows, preserving existing contents."""
-        if n <= len(self.center):
+        """Grow capacity geometrically; never resize for an ordinary append."""
+        capacity = len(self.center)
+        if n <= capacity:
             return
+        grown = max(16, capacity * 2, n)
 
         def grow(arr, fill=0):
-            shape = (n,) + arr.shape[1:]
+            shape = (grown,) + arr.shape[1:]
             new = np.full(shape, fill, dtype=arr.dtype)
             if len(arr):
                 new[:len(arr)] = arr
@@ -306,6 +346,32 @@ class RenderTable:
         self.colour = grow(self.colour)
         self.glow_colour = grow(self.glow_colour)
         self.geo_epoch = grow(self.geo_epoch)
+        self.geometry_id = grow(self.geometry_id, -1)
+        self.water_tint = grow(self.water_tint)
+        self.water_params = grow(self.water_params)
+        self.water_plane = grow(self.water_plane)
+        self.glass_color = grow(self.glass_color)
+        self.glass_params = grow(self.glass_params)
+        self.fog_color = grow(self.fog_color)
+        self.fog_params = grow(self.fog_params)
+
+    def _resolve_geometry(self, slot, brush):
+        """Materialise one dense cold geometry record from an authored brush."""
+        if not (self.class_bits[slot] & CLASS_HAS_GEOMETRY):
+            self.geometry_records[slot] = None
+            return
+        convex = brush_geometry.get_convex(brush)
+        if convex is None or not convex.is_valid:
+            self.geometry_records[slot] = None
+            return
+        pos = brush.get('pos') or (0.0, 0.0, 0.0)
+        size = brush.get('size') or (64.0, 64.0, 64.0)
+        origin = np.asarray(pos, dtype=np.float64).copy()
+        scale = np.asarray([max(abs(float(s)), 1e-6) for s in size], dtype=np.float64)
+        natural = {id(face): bool(brush_geometry.face_uses_natural_scale(
+            brush, face.get('face'), face)) for face in convex.faces}
+        self.geometry_records[slot] = GeometryRecord(
+            brush_geometry.geometry_signature(brush), convex, origin, scale, natural)
 
     # -- row resolution ----------------------------------------------------
 
@@ -365,8 +431,40 @@ class RenderTable:
 
         if self.class_bits[slot] & CLASS_HAS_GEOMETRY:
             self.geo_epoch[slot] = brush_geometry._brush_epoch(brush)
+            self.geometry_id[slot] = slot
         else:
             self.geo_epoch[slot] = 0
+            self.geometry_id[slot] = -1
+        self._resolve_geometry(slot, brush)
+
+        # Water / glass / fog shader state. Defaults deliberately match the
+        # renderer's former brush.get(...) fallbacks.
+        water_tint = brush.get('water_tint', [0.0, 0.4, 0.6])
+        self.water_tint[slot] = normalize_color(water_tint)
+        self.water_params[slot] = (
+            float(brush.get('water_opacity', 0.5)),
+            float(brush.get('water_reflectivity', 0.5)),
+            float(brush.get('water_wave_height', 0.5)),
+            1.0 if brush.get('water_wave_enabled', True) else 0.0,
+        )
+        self.water_plane[slot] = bool(brush.get('water_plane', False))
+
+        self.glass_color[slot] = normalize_color(
+            brush.get('glass_color', [0.7, 0.85, 0.95]))
+        self.glass_params[slot] = (
+            float(brush.get('glass_opacity', 0.3)),
+            float(brush.get('glass_distortion', 0.5)),
+            float(brush.get('glass_refraction', 1.5)),
+            float(brush.get('glass_roughness', 0.0)),
+            float(brush.get('glass_fresnel', 0.5)),
+        )
+
+        self.fog_color[slot] = normalize_color(
+            brush.get('fog_color', [0.5, 0.6, 0.7]))
+        self.fog_params[slot] = (
+            float(brush.get('fog_density', 0.01)),
+            float(brush.get('fog_noise_scale', 0.01)),
+        )
 
     # -- synchronisation ---------------------------------------------------
 
@@ -379,7 +477,7 @@ class RenderTable:
         """
         return epoch is None or epoch != self._epoch or len(brushes) != self.count
 
-    def begin_frame(self, brushes, epoch=None):
+    def begin_frame(self, brushes, epoch=None, dirty_objects=None):
         """Bring the table into line with *brushes* and return the live hidden mask.
 
         This is the whole of the projection's per-frame Python cost: one pass
@@ -396,10 +494,9 @@ class RenderTable:
         per frame.
 
         The row set is re-derived when the epoch moves or the brush count
-        changes.  Between those, a brush dict *replaced in place* at the same
-        index, by something that bumped no counter, is not noticed -- the same
-        gap ``hidden`` has, and for the same reason: every path that Fio itself
-        has goes through one of EditorState's three hooks or changes the count.
+        changes. When an editor transaction supplies its dirty-object journal,
+        only those rows lose their cold columns; unrelated survivors keep their
+        cached classification/material state.
 
         Rows are matched by ``brush['id']``, so a structural change costs a set
         diff rather than a full re-resolution: surviving rows keep the columns
@@ -413,7 +510,7 @@ class RenderTable:
 
         cold_dirty = epoch is None or epoch != self._epoch
         if cold_dirty or n != self.count:
-            self._reconcile(brushes, cold_dirty)
+            self._reconcile(brushes, cold_dirty, dirty_objects)
             self._epoch = epoch
 
         # One list comprehension and one bulk store. Assigning a NumPy array
@@ -422,7 +519,7 @@ class RenderTable:
         hidden[:] = [b.get('hidden', False) for b in brushes]
         return hidden
 
-    def sync(self, brushes, epoch=None):
+    def sync(self, brushes, epoch=None, dirty_objects=None):
         """Reconcile without reading ``hidden``.  Returns whether it did.
 
         :meth:`begin_frame` is what the render path calls; this is for callers
@@ -438,19 +535,17 @@ class RenderTable:
                     structural = True
                     break
         if structural:
-            self._reconcile(brushes, cold_dirty)
+            self._reconcile(brushes, cold_dirty, dirty_objects)
             self._epoch = epoch
         return self.generation != before
 
-    def _reconcile(self, brushes, cold_dirty):
+    def _reconcile(self, brushes, cold_dirty, dirty_objects=None):
         """Rebuild the slot mapping, preserving the cold columns that survive.
 
         A row *survives* when the brush now at some slot is the same object,
-        under the same id, as one the table already held.  Its classification
-        cannot have changed without the epoch moving, so its cold columns are
-        carried across rather than re-resolved -- which is what keeps a
-        structural change (a brush appended by a plugin, a streaming layer
-        reordering the list) from costing a full re-resolution of the level.
+        under the same id, and is not in the transaction dirty-object journal.
+        Structural changes therefore move untouched rows without re-resolving
+        their materials or classification.
         """
         n = len(brushes)
         self._resize(max(n, 16))
@@ -458,6 +553,13 @@ class RenderTable:
         old_slot_of_id = self.slot_of_id
         old_brushes = self.brushes
         old_count = len(old_brushes)
+        old_geometry_records = self.geometry_records
+        old_geometry_ids = self.geometry_id[:old_count].copy()
+        old_geometry_by_slot = [None] * old_count
+        for old_slot, gid in enumerate(old_geometry_ids):
+            gid = int(gid)
+            if 0 <= gid < len(old_geometry_records):
+                old_geometry_by_slot[old_slot] = old_geometry_records[gid]
 
         new_ids = [None] * n
         survivors = set()          # slots whose cold columns are already right
@@ -466,7 +568,12 @@ class RenderTable:
         for slot, brush in enumerate(brushes):
             bid = brush.get('id')
             new_ids[slot] = bid
-            if cold_dirty or bid is None:
+            if bid is None:
+                continue
+            if dirty_objects is None:
+                if cold_dirty:
+                    continue
+            elif id(brush) in dirty_objects:
                 continue
             old = old_slot_of_id.get(bid)
             if old is None or old >= old_count or old_brushes[old] is not brush:
@@ -484,13 +591,40 @@ class RenderTable:
             for arr in (self.class_bits, self.tex_name_id, self.uv_scale,
                         self.uv_angle, self.uv_shift, self.uv_natural,
                         self.uv_has_scale, self.colour, self.glow_colour,
-                        self.geo_epoch):
+                        self.geo_epoch, self.geometry_id, self.water_tint, self.water_params,
+                        self.water_plane, self.glass_color, self.glass_params,
+                        self.fog_color, self.fog_params):
                 arr[dst] = arr[src]
+
+        # Reconstruct the temporary slot-indexed geometry view needed while
+        # cold rows are being resolved. The published representation below is
+        # compact: only actual convex rows occupy geometry-record slots.
+        new_geometry_records = [None] * n
+        for slot in survivors:
+            old = old_slot_of_id.get(new_ids[slot])
+            if old is not None and old < len(old_geometry_by_slot):
+                new_geometry_records[slot] = old_geometry_by_slot[old]
+        self.geometry_records = new_geometry_records
 
         for slot, brush in enumerate(brushes):
             self._resolve_warm(slot, brush)
             if slot not in survivors:
                 self._resolve_cold(slot, brush)
+
+        # Publish a genuinely dense geometry index. geometry_id is an index
+        # into geometry_records, not a RenderTable row number. This keeps AABB
+        # brushes completely out of the geometry record table.
+        self.geometry_id[:n] = -1
+        geo_slots = np.flatnonzero(
+            self.class_bits[:n] & CLASS_HAS_GEOMETRY).astype(np.int32)
+        dense_records = []
+        for slot in geo_slots:
+            record = self.geometry_records[int(slot)]
+            if record is None:
+                continue
+            self.geometry_id[int(slot)] = len(dense_records)
+            dense_records.append(record)
+        self.geometry_records = dense_records
 
         self.ids = new_ids
         self.slot_of_id = {bid: slot for slot, bid in enumerate(new_ids)

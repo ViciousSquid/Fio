@@ -109,24 +109,33 @@ class KeyLayout:
         return (np.asarray(keys, dtype=np.int64) >> shift) & mask
 
 
-def sort_into_runs(keys):
-    """Sort *keys* and report the boundaries of each equal-key stretch.
+def sort_into_runs(keys, secondary=None):
+    """Sort a primary key and report the boundaries of each equal-key stretch.
 
-    Returns ``(order, starts)``: *order* is a stable argsort, so items sharing
-    a key keep the order they arrived in -- which is what lets a depth-sorted
-    input stay depth-sorted within its run -- and *starts* has one more entry
-    than there are runs, so run *i* covers ``starts[i]:starts[i + 1]``.
+    With no secondary key this is a stable argsort. With one, NumPy's stable
+    lexicographic sort orders by the primary key first and the secondary key
+    within it. That lets the renderer establish both depth order and texture
+    grouping in one numeric sort rather than sorting the same slots twice.
 
-    The boundary scan is one vectorised comparison over the sorted array rather
-    than a per-item test, which is the only thing this does differently from
-    the backend it is modelled on.
+    Run boundaries are still defined only by the primary key: the secondary
+    key is a tie-breaker, never part of the state that requires a separate draw.
     """
     keys = np.asarray(keys)
     count = len(keys)
     if not count:
         return (np.empty(0, dtype=np.intp), np.zeros(1, dtype=np.int32))
-    order = np.argsort(keys, kind='stable')
-    boundaries = np.flatnonzero(keys[order][1:] != keys[order][:-1]) + 1
+
+    if secondary is None:
+        order = np.argsort(keys, kind='stable')
+    else:
+        secondary = np.asarray(secondary)
+        if len(secondary) != count:
+            raise ValueError("secondary key must have the same length as keys")
+        order = np.lexsort((secondary, keys))
+
+    sorted_keys = keys[order]
+    boundaries = np.flatnonzero(
+        sorted_keys[1:] != sorted_keys[:-1]) + 1
     starts = np.empty(len(boundaries) + 2, dtype=np.int32)
     starts[0] = 0
     starts[1:-1] = boundaries

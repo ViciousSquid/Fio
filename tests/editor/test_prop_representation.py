@@ -93,13 +93,15 @@ def test_an_authored_model_is_never_replaced(panel):
         "switching representation overwrote the author's own model")
 
 
-def test_switching_back_to_billboard_adds_no_mesh(panel):
+def test_switching_back_to_billboard_restores_the_default_sprite(panel):
     prop = Prop(pos=[0, 0, 0])
     combo = representation_combo(panel, prop)
     combo.setCurrentText('Model')
     combo.setCurrentText('Billboard Sprite')
 
     assert prop.properties['render_mode'] == 'billboard'
+    assert prop.properties['sprite_path'] == 'assets/sprites/pickup.png'
+    assert prop.properties['sprite_size'] == [32.0, 32.0]
 
 
 def test_the_model_path_field_shows_the_default(panel):

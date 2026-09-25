@@ -275,7 +275,7 @@ class ConsoleCommandHandler:
     def cmd_monster_kill(self, args):
         """
         Usage: monster_kill <monster_name>
-        Instantly kills the named monster (sets health to 0, marks dead/hidden, fires OnDeath).
+        Instantly kills the named monster (sets health to 0, marks dead, fires OnDeath).
         """
         if not args:
             debug_log("Error", "Usage: monster_kill <monster_name>")
@@ -296,7 +296,6 @@ class ConsoleCommandHandler:
         # Kill the monster
         entity.properties['health'] = 0
         entity.properties['dead'] = True
-        entity.properties['hidden'] = True
 
         # Fire I/O output if available
         try:
@@ -308,7 +307,7 @@ class ConsoleCommandHandler:
         except Exception as e:
             debug_log("Warning", f"Could not fire OnDeath: {e}")
 
-        debug_log("Info", f"Monster '{name}' killed (health set to 0, hidden=True)")
+        debug_log("Info", f"Monster '{name}' killed (health set to 0, dead=True)")
         self.main_window.update_all_ui()
 
     def cmd_monster_revive(self, args):

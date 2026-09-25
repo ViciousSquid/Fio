@@ -30,8 +30,12 @@ def register_renderer(name, cls):
     deferred one) without editing the engine: a plugin calls
     ``api.register_renderer("Deferred", DeferredRenderer)`` and it becomes an
     available render mode. *cls* must implement the renderer interface the
-    viewport drives (``render_scene``, ``draw_models``, ``render_shadow_maps``,
-    ``set_sprite_textures``, ``cleanup``, a ``lod_manager``, …). Returns True.
+    viewport drives (``render_scene``, ``draw_models_instanced``,
+    ``render_shadow_maps``, ``set_sprite_textures``, ``cleanup``, a
+    ``lod_manager``, …). ``render_shadow_maps`` receives the dense
+    ``(EntityTable, light_slots)`` state plus render config; it must consume
+    ``RenderTable``/``EntityTable`` slots rather than authored
+    Brush/Thing/Light collections. Returns True.
     """
     _RENDERER_CLASSES[str(name)] = cls
     return True
@@ -44,6 +48,7 @@ def available_renderers():
 from engine import brush_geometry
 from editor import component_edit
 from engine.threaded_game_state import ThreadedGameState, RenderState
+from engine.entity_table import EntityTable
 from engine.view_distance import ViewDistance
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
@@ -82,6 +87,10 @@ class QtGameView(QOpenGLWidget):
         self.setFormat(fmt)
 
         self.editor = editor
+        # Non-threaded editor views use the same dense entity projection as the
+        # threaded renderer. There is no Portal-object rendering fallback.
+        self._editor_entity_table = EntityTable()
+        self._editor_entity_refs = np.empty(0, dtype=object)
 
         self.brush_display_mode = "Solid Lit"
         # Play-mode camera: "First Person" or "Overhead" (native top-down),
@@ -1037,9 +1046,23 @@ class QtGameView(QOpenGLWidget):
         if render_state and hasattr(render_state, 'all_lights'):
             self._render_config["all_lights"] = render_state.all_lights
         else:
-            # Editor/non-threaded fallback: Renderer_F maintains a cached
-            # light collection keyed to the Thing-list identity/size.
             self._render_config["all_lights"] = None
+            etable = self._editor_entity_table
+            generation = etable.generation
+            hidden = etable.begin_frame(
+                things_to_render,
+                getattr(self.editor.state, 'world_epoch', None),
+            )
+            if etable.generation != generation:
+                self._editor_entity_refs = np.empty(
+                    etable.count, dtype=object)
+                for _i, _thing in enumerate(things_to_render):
+                    self._editor_entity_refs[_i] = _thing
+            self._render_config["entity_table"] = etable
+            self._render_config["entity_refs"] = self._editor_entity_refs
+            self._render_config["visible_thing_slots"] = (
+                np.arange(etable.count, dtype=np.int32))
+            self._render_config["thing_hidden"] = hidden
 
         # The render-state position buffer is a derived snapshot of
         # authoritative Thing.pos values. It is aligned with things_to_render
@@ -1089,19 +1112,13 @@ class QtGameView(QOpenGLWidget):
             and render_state is not None
             and getattr(render_state, 'splitscreen_active', False)
         )
-        # The per-entity sprite-texture overrides exist for the object
-        # billboard path. The instanced pass resolves its own textures from the
-        # entity projection and never reads them, so on a frame that is wholly
-        # instanced this is a walk over every entity producing a dict nothing
-        # consumes -- 0.18 ms at 961 entities, measured. Three things still
-        # take the object path and are asked about rather than assumed: the
-        # main pass itself (the renderer's own predicate), the split-screen
-        # second view, and the portal virtual views.
+        # The instanced pass resolves sprite textures from the EntityTable and
+        # never reads the Thing objects.  Portal and split-screen views consume
+        # the same dense table, so the presence of portals is no longer a reason
+        # to rebuild the old object-path texture map.
         _instanced_sprites = (
             render_state is not None
             and self.renderer is not None
-            and not getattr(render_state, 'has_portals', False)
-            and not _splitscreen
             and self.renderer.will_instance_sprites(
                 self._render_config, _main_brush_slots)
         )
@@ -1879,10 +1896,6 @@ class QtGameView(QOpenGLWidget):
                     fallback_key = 'logic_relay'
                     if fallback_key in self.sprite_textures:
                         instance_textures[id(thing)] = self.sprite_textures[fallback_key]
-            elif isinstance(thing, Portal):
-                tex_key = 'Portal'
-                if tex_key in self.sprite_textures:
-                    instance_textures[id(thing)] = self.sprite_textures[tex_key]
         self.renderer.set_instance_textures(instance_textures)
 
     def toggle_play_mode(self, player_start_pos, player_start_angle, physics_enabled=True):

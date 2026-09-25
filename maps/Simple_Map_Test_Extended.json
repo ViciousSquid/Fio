@@ -1609,7 +1609,12 @@
             "shader": "Glass",
             "is_fog": false,
             "is_trigger": false,
-            "id": "dfbafd27-8f25-4040-84b6-5dc08063917b"
+            "id": "dfbafd27-8f25-4040-84b6-5dc08063917b",
+            "glass_opacity": 0.42,
+            "glass_distortion": 0.98,
+            "glass_refraction": 2.45,
+            "glass_roughness": 0.22,
+            "glass_fresnel": 0.39
         },
         {
             "pos": [
@@ -1944,7 +1949,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -1959,7 +1965,8 @@
                 "type": "playerstart",
                 "name": "PlayerStart_1",
                 "angle": 0.0,
-                "id": "86adcd90-887a-4dec-a869-0bcff0fd94cc"
+                "id": "86adcd90-887a-4dec-a869-0bcff0fd94cc",
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -1989,7 +1996,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2019,7 +2027,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2049,7 +2058,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2079,7 +2089,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2109,7 +2120,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2139,7 +2151,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2169,7 +2182,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2191,7 +2205,8 @@
                 "respawn_time": 20.0,
                 "key_name": "blue_key",
                 "custom_sprite": "assets/sprites/gun1.png",
-                "id": "bf40606e-a530-4a0c-9d96-b532638bbb05"
+                "id": "bf40606e-a530-4a0c-9d96-b532638bbb05",
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2221,7 +2236,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -2240,7 +2256,9 @@
                 "delay": 0.0,
                 "fade_time": 0.5,
                 "show_radius": false,
-                "radius": 128.0
+                "radius": 128.0,
+                "io_enabled": true,
+                "usable": false
             },
             "io_connections": []
         },
@@ -2265,7 +2283,15 @@
                 "sprite_height": 192,
                 "sight": 512,
                 "non_hostile": false,
-                "monster_id": 0
+                "monster_id": 0,
+                "io_enabled": true,
+                "patrol": false,
+                "patrol_target": "",
+                "patrol_mode": "loop",
+                "variant": "<None>",
+                "can_hear": true,
+                "dead": false,
+                "team": ""
             },
             "io_connections": []
         },
@@ -2290,9 +2316,18 @@
                 "sprite_height": 160,
                 "sight": 512,
                 "non_hostile": false,
-                "monster_id": 0
+                "monster_id": 0,
+                "io_enabled": true,
+                "patrol": false,
+                "patrol_target": "",
+                "patrol_mode": "loop",
+                "variant": "<None>",
+                "can_hear": true,
+                "dead": false,
+                "team": ""
             },
             "io_connections": []
         }
-    ]
+    ],
+    "created": "2026-09-25T23:20:12"
 }

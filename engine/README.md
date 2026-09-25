@@ -81,10 +81,12 @@ This is a derived execution representation, not a second source of truth. It exi
 
 Dynamic-light capacity comes from `engine.shaders`; shader light limits are clamped to the capacity actually declared by each shader.
 
+Shadow rendering is part of the dense execution boundary. `render_shadow_maps(shadow_lights, config, camera_pos=None)` receives a dense `(EntityTable, light_slots)` light set and selects brush casters from `RenderTable` slots and model casters from `EntityTable` slots. The shadow pass does not traverse authored `Brush`, `Thing` or `Light` collections.
+
 ### `renderer_F.py`
 Fio's production forward renderer. Implements the frame passes and brush batching, including lit/textured/glow brush paths, forward lighting, point-light shadow cube maps, portal virtual views and render-mode switching.
 
-The renderer consumes the dense numerical render representation and turns equal-key runs into GPU submissions. Billboards go the same way: `draw_sprites_instanced` reads position, size and texture from the entity projection's columns, packs one instance row per sprite and submits one `glDrawArraysInstanced` per texture run, so a scene's sprite pass costs a handful of GL calls rather than three per billboard. `draw_sprites` remains as the per-object reference, and is what the editor, the portal virtual views and the split-screen second view still take.
+The renderer consumes the dense numerical render representation and turns equal-key runs into GPU submissions. Billboards go the same way: `draw_sprites_instanced` reads position, size and texture from the entity projection's columns, packs one instance row per sprite and submits one `glDrawArraysInstanced` per texture run. The object-level sprite renderer has been removed; editor, portal and split-screen views all consume the same dense EntityTable sprite representation.
 
 ### `savegame.py`
 Native play-session save/load. Serialises player state, entity/mover state, trigger/pickup progress and I/O state to `.fiosave` files and restores it on a freshly loaded map.

@@ -78,7 +78,10 @@ from __future__ import annotations
 import os
 from itertools import chain
 
+import glm
 import numpy as np
+
+from .portal_transform import basis_from_rotation
 
 # Defensive, as everywhere else in engine/: editor.things pulls in PyQt5, and
 # the standalone player tier does not have it.  A tier without the classes
@@ -149,6 +152,11 @@ ENT_SPRITE_WARM     = 1 << 12
 #: projection.
 ENT_CULL_EXEMPT = ENT_LIGHT | ENT_PORTAL
 
+# Numeric portal direction codes.  3 means both directions.
+PORTAL_DIRECTION_FORWARD = 1
+PORTAL_DIRECTION_REVERSE = 2
+PORTAL_DIRECTION_BOTH = 3
+
 #: Indexable for debug text and test failure messages.
 BIT_NAMES = (
     (ENT_SKIP, 'SKIP'), (ENT_ALWAYS_SPRITE, 'ALWAYS_SPRITE'),
@@ -198,12 +206,15 @@ _LOOKUP_ONLY = ('', '', False)
 
 
 def _monster_sprite_candidates(props):
-    """The monster branch of ``draw_sprites``, as candidates.
+    """The monster sprite branch, expressed as numeric texture candidates.
 
     Monsters reach the renderer as render-snapshot dicts, so this reads the
-    same four fields that branch reads and builds the same ``msprite_`` cache
-    key -- which is what makes the two paths resolve to one texture rather than
-    to two that happen to look alike.
+    same four state fields that branch reads and builds the same ``msprite_``
+    cache key.  The recipe also carries the fallback behaviour of
+    ``Monster.get_sprite_path()``: a missing dead/shoot frame falls back to
+    idle rather than making the monster disappear.  The renderer tries the
+    candidates in order and caches the first one that actually loads, so this
+    stays GL-free and does not add per-frame filesystem checks.
     """
     if props.get('dead'):
         custom, sprite_type = props.get('custom_dead', ''), 'dead'
@@ -216,32 +227,44 @@ def _monster_sprite_candidates(props):
     variant = props.get('variant', '<None>')
     key = 'msprite_%s_%s_%s_%s' % (mtype, variant, sprite_type, custom)
 
+    candidates = []
     if custom:
         clean = custom.replace('assets/', '', 1)
-        return ((key, os.path.basename(clean), os.path.dirname(clean), True),)
+        candidates.append(
+            (key, os.path.basename(clean), os.path.dirname(clean), True))
 
     filename = '%s.png' % sprite_type
+    base_folder = 'sprites/monsters/%s' % mtype
     if variant and variant != '<None>':
-        # The variant folder first, the base folder as the fallback -- the two
-        # load attempts the object path makes, in the order it makes them.
-        return ((key, filename, 'sprites/monsters/%s/%s' % (mtype, variant), True),
-                (key, filename, 'sprites/monsters/%s' % mtype, True))
-    return ((key, filename, 'sprites/monsters/%s' % mtype, True),)
+        variant_folder = '%s/%s' % (base_folder, variant)
+        # Match Monster.get_sprite_path(): variant first, then base.
+        candidates.append((key, filename, variant_folder, True))
+        candidates.append((key, filename, base_folder, True))
+        # get_sprite_path() falls back to the chosen idle frame when the
+        # requested dead/shoot frame does not exist.
+        if sprite_type != 'idle':
+            candidates.append((key, 'idle.png', variant_folder, True))
+            candidates.append((key, 'idle.png', base_folder, True))
+    else:
+        candidates.append((key, filename, base_folder, True))
+        if sprite_type != 'idle':
+            candidates.append((key, 'idle.png', base_folder, True))
+
+    return tuple(candidates)
+
 
 
 def _split_asset_path(path):
-    """``(filename, subfolder)`` for an authored ``assets/``-relative path."""
+    """Return ``(filename, subfolder)`` for an authored ``assets/`` path."""
     rel = str(path).replace('assets/', '', 1)
     return os.path.basename(rel), os.path.dirname(rel)
-
 
 def sprite_candidates(thing):
     """How this entity's sprite texture is found, as an ordered candidate list.
 
     Reproduces two chains that between them decide every sprite Fio draws:
-    ``QtGameView.update_instance_textures``, which resolves the per-entity
-    override, and ``BaseRenderer.draw_sprites``, which falls back to the
-    texture shared by everything of that class.  Returns ``None`` for a row the
+    the dense sprite projection, which resolves the per-entity override
+    and class texture recipe before the renderer reaches OpenGL.  Returns ``None`` for a row the
     sprite pass draws nothing for.
     """
     if isinstance(thing, dict):
@@ -300,44 +323,6 @@ def sprite_candidates(thing):
     else:
         out.append((class_name,) + _LOOKUP_ONLY[:2] + (False,))
     return tuple(out)
-
-
-def sprite_state(thing):
-    """The mutable inputs a warm row's sprite identity is derived from.
-
-    :func:`sprite_candidates` is not cheap -- it formats cache keys and splits
-    asset paths -- and running it every frame for every warm row costs ten
-    times what checking whether its inputs moved costs (2.39 ms against
-    0.195 ms at 961 warm rows).  Almost every frame the answer is that nothing
-    moved.
-
-    So this is the question asked first, and it is deliberately the same set of
-    fields ``update_instance_textures`` hashes to decide whether *its* overrides
-    are stale: the two were always answering the same question, and the answer
-    belongs next to the column it guards.  ``None`` for a row that is not warm.
-    """
-    if isinstance(thing, dict):
-        if 'monster_type' not in thing:
-            return None
-        return (thing.get('dead'), thing.get('is_shooting'),
-                thing.get('monster_type'), thing.get('variant'),
-                thing.get('custom_idle'), thing.get('custom_shoot'),
-                thing.get('custom_dead'))
-    props = _props_of(thing)
-    if Monster is not None and isinstance(thing, Monster):
-        return (props.get('dead'), props.get('is_shooting'),
-                props.get('monster_type'), props.get('variant'),
-                props.get('custom_idle'), props.get('custom_shoot'),
-                props.get('custom_dead'))
-    if Pickup is not None and isinstance(thing, Pickup):
-        # get_sprite_path() reads all three, through is_key()/is_gun().
-        return (props.get('item_type'), props.get('key_name'),
-                props.get('custom_sprite'))
-    if LogicGate is not None and isinstance(thing, LogicGate):
-        return (props.get('logic_type'),)
-    if Prop is not None and isinstance(thing, Prop):
-        return (props.get('render_mode'), props.get('sprite_path'))
-    return None
 
 
 def sprite_size(thing):
@@ -416,6 +401,83 @@ def _entity_class_bits(thing) -> int:
     return bits
 
 
+def _model_recipe(thing):
+    """Return the cold model draw recipe for one entity, or ``None``."""
+    props = _props_of(thing)
+    model_path = props.get('model_path')
+    if not model_path:
+        return None
+    model_path = str(model_path)
+    manual_texture = props.get('texture')
+    if not manual_texture:
+        return (model_path, None, None)
+    colour = props.get('color', [0.8, 0.8, 0.8])
+    try:
+        colour = (float(colour[0]), float(colour[1]), float(colour[2]))
+    except (TypeError, ValueError, IndexError):
+        colour = (0.8, 0.8, 0.8)
+    return (model_path, str(manual_texture), colour)
+
+
+def _model_transform_columns(thing):
+    """Resolve a model's cold rotation/scale matrices with zero translation."""
+    props = _props_of(thing)
+    rot = props.get('rotation', [0.0, 0.0, 0.0])
+    scale = props.get('scale', 1.0)
+    scale_vec = (scale, scale, scale) if isinstance(scale, (int, float)) else scale
+    try:
+        mat = glm.rotate(glm.mat4(1.0), glm.radians(float(rot[1])), glm.vec3(0, 1, 0))
+        mat = glm.rotate(mat, glm.radians(float(rot[0])), glm.vec3(1, 0, 0))
+        mat = glm.rotate(mat, glm.radians(float(rot[2])), glm.vec3(0, 0, 1))
+        mat = glm.scale(mat, glm.vec3(*scale_vec))
+        normal = glm.transpose(glm.inverse(glm.mat3(mat)))
+    except Exception:
+        mat = glm.mat4(1.0)
+        normal = glm.mat3(1.0)
+    model = np.array([
+        mat[0][0], mat[0][1], mat[0][2], 0.0,
+        mat[1][0], mat[1][1], mat[1][2], 0.0,
+        mat[2][0], mat[2][1], mat[2][2], 0.0,
+        mat[3][0], mat[3][1], mat[3][2], 1.0,
+    ], dtype=np.float32)
+    normal_np = np.array([
+        normal[0][0], normal[0][1], normal[0][2], 0.0,
+        normal[1][0], normal[1][1], normal[1][2], 0.0,
+        normal[2][0], normal[2][1], normal[2][2], 0.0,
+    ], dtype=np.float32)
+    return model, normal_np
+
+
+def _light_props(thing):
+    props = getattr(thing, 'properties', thing if isinstance(thing, dict) else {})
+    return props if isinstance(props, dict) else {}
+
+
+def _light_float(thing, key, default):
+    try:
+        return float(_light_props(thing).get(key, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _light_bool(thing, key, default=False):
+    value = _light_props(thing).get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    return bool(value)
+
+
+def _light_color_of(thing):
+    value = _light_props(thing).get('colour', [255, 255, 255])
+    try:
+        rgb = np.asarray(value[:3], dtype=np.float32)
+        if rgb.size != 3:
+            raise ValueError
+        return np.clip(rgb / 255.0, 0.0, 1.0)
+    except (TypeError, ValueError, IndexError):
+        return np.asarray((1.0, 1.0, 1.0), dtype=np.float32)
+
+
 class EntityTable:
     """A dense, disposable projection of a Thing list.
 
@@ -424,10 +486,15 @@ class EntityTable:
     """
 
     __slots__ = ('generation', 'count', 'ids', 'slot_of_id', 'things',
-                 'pos', 'class_bits', 'light_slots', 'monster_slots',
-                 'pickup_slots', 'sprite_size', 'sprite_key_id',
-                 'warm_sprite_slots', '_sprite_ids', '_sprite_recipes',
-                 '_sprite_state', '_epoch', '_hidden_buf')
+                 'pos', 'class_bits', 'light_slots', 'light_color',
+                 'light_params', 'light_enabled', 'light_casts_shadows',
+                 'portal_slots', 'portal_target_slot', 'portal_active',
+                 'portal_direction', 'portal_width_height', 'portal_basis',
+                 'portal_fade', 'portal_color', 'portal_show_rim',
+                 'monster_slots', 'pickup_slots', 'sprite_size', 'sprite_key_id',
+                 'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
+                 '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
+                 '_epoch', '_hidden_buf')
 
     def __init__(self):
         self.generation = 0
@@ -444,9 +511,29 @@ class EntityTable:
         # compared and combined without a cast.
         self.pos = np.zeros((0, 3), dtype=np.float64)
         self.class_bits = np.zeros((0,), dtype=np.uint16)
+        #: Dense portal topology/render columns. Target links are resolved to
+        #: integer entity slots at reconcile; transforms are refreshed only for
+        #: portal rows so moving/parented portals stay numeric in the renderer.
+        self.portal_slots = np.empty(0, dtype=np.int32)
+        self.portal_target_slot = np.full((0,), -1, dtype=np.int32)
+        self.portal_active = np.zeros((0,), dtype=bool)
+        self.portal_direction = np.zeros((0,), dtype=np.uint8)
+        self.portal_width_height = np.zeros((0, 2), dtype=np.float32)
+        self.portal_basis = np.zeros((0, 3, 3), dtype=np.float64)
+        self.portal_fade = np.zeros((0,), dtype=np.float32)
+        self.portal_color = np.ones((0, 3), dtype=np.float32)
+        self.portal_show_rim = np.zeros((0,), dtype=bool)
 
         #: Slots of the Lights -- the frame's light list, without a scan.
         self.light_slots = np.empty(0, dtype=np.int32)
+        #: Per-light GL colour, normalized to 0..1. Warm: I/O may change it.
+        self.light_color = np.zeros((0, 3), dtype=np.float32)
+        #: Per-light (intensity, radius). Warm because gameplay can mutate both.
+        self.light_params = np.zeros((0, 2), dtype=np.float32)
+        #: Live on/off state, kept numeric so GL never needs the Light object.
+        self.light_enabled = np.zeros((0,), dtype=bool)
+        #: Shadow participation, normalized from bool/string authored state.
+        self.light_casts_shadows = np.zeros((0,), dtype=bool)
         #: Slots of the Monsters, whose published reference is a fresh snapshot
         #: each frame.  The entity half of ``RenderTable.dynamic_slots``.
         self.monster_slots = np.empty(0, dtype=np.int32)
@@ -454,15 +541,19 @@ class EntityTable:
         #: to consider, so that filter costs pickups rather than entities.
         self.pickup_slots = np.empty(0, dtype=np.int32)
 
-        #: The billboard's world size.  Cold: it comes from authored properties.
+        #: The billboard's world size. Cold: it comes from authored properties.
         self.sprite_size = np.zeros((0, 2), dtype=np.float32)
-        #: Interned sprite identity, :data:`SPRITE_NONE` for a row that draws
-        #: none.  Cold for most rows and re-resolved every frame for
-        #: :attr:`warm_sprite_slots`; see the module's sprite-identity section.
+        #: Dense sprite recipe id per entity slot.  -1 means no sprite.
         self.sprite_key_id = np.full((0,), SPRITE_NONE, dtype=np.int32)
-        #: Rows whose sprite identity is re-resolved per frame.
-        self.warm_sprite_slots = np.empty(0, dtype=np.int32)
-
+        #: Dense model recipe id per entity slot.  -1 means no model.
+        self.model_recipe_id = np.full((0,), -1, dtype=np.int32)
+        #: Cold model transform, flattened as a mat4 per entity slot.
+        self.model_base_matrix = np.zeros((0, 16), dtype=np.float32)
+        #: Cold normal transform, flattened as a 3x3 matrix padded to 12 floats.
+        self.model_normal_matrix = np.zeros((0, 12), dtype=np.float32)
+        #: Interned sprite identity, :data:`SPRITE_NONE` for a row that draws
+        #: none. Authored sprite identity is cold; Monster snapshots update it
+        #: directly when the logic thread publishes them.
         # Candidate-list intern table.  GL-free, like the brush table's texture
         # names: these are ids for *recipes*, and the renderer maps them to GL
         # texture ids once per unique recipe on the thread that has a context.
@@ -471,7 +562,8 @@ class EntityTable:
         #: slot -> the state tuple its sprite identity was last resolved from.
         #: A plain list: it is compared per warm row per frame and never
         #: indexed numerically.
-        self._sprite_state: list = []
+        self._model_ids = {}
+        self._model_recipes = []
 
         self._epoch = None
         self._hidden_buf = np.empty(0, dtype=bool)
@@ -490,13 +582,27 @@ class EntityTable:
         return sid
 
     def sprite_recipes(self) -> list:
-        """Interned candidate lists, indexed by id.
-
-        The renderer walks this once per new recipe to build its ``sprite id ->
-        GL texture id`` array.  Tens of entries in a level, not thousands, and
-        never touched per sprite.
-        """
+        """Interned candidate lists, indexed by id."""
         return self._sprite_recipes
+
+    def intern_model_recipe(self, recipe) -> int:
+        if recipe is None:
+            return -1
+        mid = self._model_ids.get(recipe)
+        if mid is None:
+            mid = len(self._model_recipes)
+            self._model_ids[recipe] = mid
+            self._model_recipes.append(recipe)
+        return mid
+
+    def model_recipes(self) -> list:
+        """Interned model recipes, indexed by dense entity column id."""
+        return self._model_recipes
+
+    def update_monster_snapshot(self, slot, snapshot):
+        """Publish a Monster render snapshot into numeric sprite columns."""
+        self.sprite_size[slot] = sprite_size(snapshot)
+        self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(snapshot))
 
     @property
     def center(self):
@@ -516,22 +622,98 @@ class EntityTable:
     def _resize(self, n):
         if n <= len(self.pos):
             return
-        grown = np.zeros((n, 3), dtype=np.float64)
+        grown = max(16, len(self.pos) * 2, n)
+
+        pos = np.zeros((grown, 3), dtype=np.float64)
         if len(self.pos):
-            grown[:len(self.pos)] = self.pos
-        self.pos = grown
-        bits = np.zeros((n,), dtype=np.uint16)
+            pos[:len(self.pos)] = self.pos
+        self.pos = pos
+
+        bits = np.zeros((grown,), dtype=np.uint16)
         if len(self.class_bits):
             bits[:len(self.class_bits)] = self.class_bits
         self.class_bits = bits
-        size = np.zeros((n, 2), dtype=np.float32)
+
+        light_color = np.zeros((grown, 3), dtype=np.float32)
+        if len(self.light_color):
+            light_color[:len(self.light_color)] = self.light_color
+        self.light_color = light_color
+        light_params = np.zeros((grown, 2), dtype=np.float32)
+        if len(self.light_params):
+            light_params[:len(self.light_params)] = self.light_params
+        self.light_params = light_params
+        light_enabled = np.zeros((grown,), dtype=bool)
+        if len(self.light_enabled):
+            light_enabled[:len(self.light_enabled)] = self.light_enabled
+        self.light_enabled = light_enabled
+        light_casts = np.zeros((grown,), dtype=bool)
+        if len(self.light_casts_shadows):
+            light_casts[:len(self.light_casts_shadows)] = self.light_casts_shadows
+        self.light_casts_shadows = light_casts
+        size = np.zeros((grown, 2), dtype=np.float32)
         if len(self.sprite_size):
             size[:len(self.sprite_size)] = self.sprite_size
         self.sprite_size = size
-        keys = np.full((n,), SPRITE_NONE, dtype=np.int32)
+
+        keys = np.full((grown,), SPRITE_NONE, dtype=np.int32)
         if len(self.sprite_key_id):
             keys[:len(self.sprite_key_id)] = self.sprite_key_id
         self.sprite_key_id = keys
+
+        model_ids = np.full((grown,), -1, dtype=np.int32)
+        if len(self.model_recipe_id):
+            model_ids[:len(self.model_recipe_id)] = self.model_recipe_id
+        self.model_recipe_id = model_ids
+
+        base = np.zeros((grown, 16), dtype=np.float32)
+        if len(self.model_base_matrix):
+            base[:len(self.model_base_matrix)] = self.model_base_matrix
+        self.model_base_matrix = base
+
+        normal = np.zeros((grown, 12), dtype=np.float32)
+        if len(self.model_normal_matrix):
+            normal[:len(self.model_normal_matrix)] = self.model_normal_matrix
+        self.model_normal_matrix = normal
+
+        ptarget = np.full((grown,), -1, dtype=np.int32)
+        if len(self.portal_target_slot):
+            ptarget[:len(self.portal_target_slot)] = self.portal_target_slot
+        self.portal_target_slot = ptarget
+
+        pactive = np.zeros((grown,), dtype=bool)
+        if len(self.portal_active):
+            pactive[:len(self.portal_active)] = self.portal_active
+        self.portal_active = pactive
+
+        pdirection = np.zeros((grown,), dtype=np.uint8)
+        if len(self.portal_direction):
+            pdirection[:len(self.portal_direction)] = self.portal_direction
+        self.portal_direction = pdirection
+
+        psize = np.zeros((grown, 2), dtype=np.float32)
+        if len(self.portal_width_height):
+            psize[:len(self.portal_width_height)] = self.portal_width_height
+        self.portal_width_height = psize
+
+        pbasis = np.zeros((grown, 3, 3), dtype=np.float64)
+        if len(self.portal_basis):
+            pbasis[:len(self.portal_basis)] = self.portal_basis
+        self.portal_basis = pbasis
+
+        pfade = np.zeros((grown,), dtype=np.float32)
+        if len(self.portal_fade):
+            pfade[:len(self.portal_fade)] = self.portal_fade
+        self.portal_fade = pfade
+
+        pcolor = np.ones((grown, 3), dtype=np.float32)
+        if len(self.portal_color):
+            pcolor[:len(self.portal_color)] = self.portal_color
+        self.portal_color = pcolor
+
+        prim = np.zeros((grown,), dtype=bool)
+        if len(self.portal_show_rim):
+            prim[:len(self.portal_show_rim)] = self.portal_show_rim
+        self.portal_show_rim = prim
 
     # -- synchronisation ---------------------------------------------------
 
@@ -543,7 +725,7 @@ class EntityTable:
         """
         return epoch is None or epoch != self._epoch or len(things) != self.count
 
-    def begin_frame(self, things, epoch=None):
+    def begin_frame(self, things, epoch=None, dirty_objects=None):
         """Bring the table into line with *things*; return the live hidden mask.
 
         The whole of the projection's per-frame Python cost: one comprehension
@@ -557,7 +739,7 @@ class EntityTable:
         """
         n = len(things)
         if self.needs_reconcile(things, epoch):
-            self._reconcile(things)
+            self._reconcile(things, dirty_objects=dirty_objects)
             self._epoch = epoch
 
         if n:
@@ -585,21 +767,30 @@ class EntityTable:
                     if type(p) is not list:
                         things[i].pos = [float(p[0]), float(p[1]), float(p[2])]
 
-        # The warm half of sprite identity: a monster's frame, a gate's type,
-        # a pickup's item, a prop's representation.  Bounded by the rows that
-        # can actually change -- and within those, by the rows that actually
-        # did, because re-deriving the recipe is ten times the cost of asking
-        # whether its inputs moved.
-        state_cache = self._sprite_state
-        for slot in self.warm_sprite_slots:
-            slot = int(slot)
-            thing = things[slot]
-            state = sprite_state(thing)
-            if state == state_cache[slot]:
-                continue
-            state_cache[slot] = state
-            self.sprite_key_id[slot] = self.intern_sprite(
-                sprite_candidates(thing))
+        # Authored sprite identity is cold. Dynamic Monster sprite identity is
+        # published from the existing snapshot path, avoiding a second object walk.
+        # Portal state is the other small live entity family; keep it numeric so
+        # secondary render views never need Portal objects.
+        self._refresh_portal_live(things)
+
+        # Light state is render state, not renderer metadata. Refresh only the
+        # light rows each frame because I/O may toggle or retune a light without
+        # changing the world epoch, while position is already refreshed above.
+        if len(self.light_slots):
+            ls = self.light_slots
+            light_rows = [things[int(i)] for i in ls]
+            self.light_color[ls] = np.asarray(
+                [_light_color_of(t) for t in light_rows], dtype=np.float32)
+            self.light_params[ls] = np.asarray(
+                [[_light_float(t, 'intensity', 1.0),
+                  _light_float(t, 'radius', 512.0)] for t in light_rows],
+                dtype=np.float32)
+            self.light_enabled[ls] = np.asarray(
+                [_light_bool(t, 'state', True) for t in light_rows], dtype=bool)
+            self.light_casts_shadows[ls] = np.asarray(
+                [_light_bool(t, 'casts_shadows', False) for t in light_rows],
+                dtype=bool)
+
 
         if len(self._hidden_buf) < n:
             self._hidden_buf = np.empty(max(n, 16), dtype=bool)
@@ -614,7 +805,7 @@ class EntityTable:
                 hidden[:] = [_props_of(t).get('hidden', False) for t in things]
         return hidden
 
-    def sync(self, things, epoch=None) -> bool:
+    def sync(self, things, epoch=None, dirty_objects=None) -> bool:
         """Reconcile without reading ``hidden``.  Returns whether it did.
 
         :meth:`begin_frame` is what the render path calls; this is for callers
@@ -633,28 +824,56 @@ class EntityTable:
                     structural = True
                     break
         if structural:
-            self._reconcile(things)
+            self._reconcile(things, dirty_objects=dirty_objects)
             self._epoch = epoch
         return self.generation != before
 
-    def _reconcile(self, things):
-        """Rebuild the row mapping and re-resolve the cold column."""
+    def _reconcile(self, things, dirty_objects=None):
+        """Rebuild slot mapping while preserving untouched cold entity rows."""
         n = len(things)
         self._resize(max(n, 16))
 
+        old_slot_of_id = self.slot_of_id
+        old_things = self.things
+        old_count = len(old_things)
         ids = [None] * n
-        states = [None] * n
-        for slot, thing in enumerate(things):
-            props = getattr(thing, 'properties', None)
-            ids[slot] = props.get('id') if isinstance(props, dict) else None
-            self.class_bits[slot] = _entity_class_bits(thing)
-            self.pos[slot] = _pos_of(thing)
-            self.sprite_size[slot] = sprite_size(thing)
-            self.sprite_key_id[slot] = self.intern_sprite(
-                sprite_candidates(thing))
-            states[slot] = sprite_state(thing)
+        survivors = set()
+        move_src, move_dst = [], []
 
-        self._sprite_state = states
+        for slot, thing in enumerate(things):
+            eid = _props_of(thing).get('id')
+            ids[slot] = eid
+            if eid is None:
+                continue
+            if dirty_objects is None or id(thing) in dirty_objects:
+                continue
+            old = old_slot_of_id.get(eid)
+            if old is None or old >= old_count or old_things[old] is not thing:
+                continue
+            survivors.add(slot)
+            if old != slot:
+                move_src.append(old)
+                move_dst.append(slot)
+
+        if move_src:
+            src = np.asarray(move_src, dtype=np.intp)
+            dst = np.asarray(move_dst, dtype=np.intp)
+            for arr in (self.class_bits, self.light_color, self.light_params,
+                        self.light_enabled, self.light_casts_shadows,
+                        self.sprite_size, self.sprite_key_id,
+                        self.model_recipe_id, self.model_base_matrix,
+                        self.model_normal_matrix, self.portal_target_slot,
+                        self.portal_active, self.portal_direction,
+                        self.portal_width_height, self.portal_basis,
+                        self.portal_fade, self.portal_color,
+                        self.portal_show_rim):
+                arr[dst] = arr[src]
+
+        for slot, thing in enumerate(things):
+            self.pos[slot] = _pos_of(thing)
+            if slot not in survivors:
+                self._resolve_entity_cold(slot, thing)
+
         self.ids = ids
         self.slot_of_id = {eid: slot for slot, eid in enumerate(ids)
                            if eid is not None}
@@ -662,22 +881,121 @@ class EntityTable:
         self.count = n
         bits = self.class_bits[:n]
         self.light_slots = np.flatnonzero(bits & ENT_LIGHT).astype(np.int32)
+        self.portal_slots = np.flatnonzero(bits & ENT_PORTAL).astype(np.int32)
         self.monster_slots = np.flatnonzero(bits & ENT_MONSTER).astype(np.int32)
         self.pickup_slots = np.flatnonzero(bits & ENT_PICKUP).astype(np.int32)
-        self.warm_sprite_slots = np.flatnonzero(
-            bits & ENT_SPRITE_WARM).astype(np.int32)
+        self._resolve_portal_links(things)
         self.generation += 1
 
+
+    def _resolve_portal_links(self, things):
+        """Resolve authored portal names to integer entity slots."""
+        self.portal_target_slot[:self.count] = -1
+        if not len(self.portal_slots):
+            return
+        name_to_slot = {
+            _props_of(thing).get('name'): slot
+            for slot, thing in enumerate(things)
+            if _props_of(thing).get('name')
+        }
+        for slot_value in self.portal_slots:
+            slot = int(slot_value)
+            target = _props_of(things[slot]).get('portal_target', '')
+            target_slot = name_to_slot.get(target, -1)
+            if (target_slot >= 0
+                    and (self.class_bits[target_slot] & ENT_PORTAL)):
+                self.portal_target_slot[slot] = int(target_slot)
+
+    @staticmethod
+    def _portal_direction_code(value):
+        value = str(value or 'both').strip().lower()
+        if value == 'forward':
+            return PORTAL_DIRECTION_FORWARD
+        if value == 'reverse':
+            return PORTAL_DIRECTION_REVERSE
+        if value == 'both':
+            return PORTAL_DIRECTION_BOTH
+        return 0
+
+    def _refresh_portal_live(self, things):
+        """Refresh only runtime-mutated portal state."""
+        if not len(self.portal_slots):
+            return
+        for slot_value in self.portal_slots:
+            slot = int(slot_value)
+            thing = things[slot]
+            props = _props_of(thing)
+            self.portal_active[slot] = _bool_property(
+                props.get('active', True), True)
+            self.portal_fade[slot] = float(
+                max(0.0, min(1.0, _float_property(
+                    getattr(thing, '_fade_alpha', 1.0), 1.0))))
+            # Parent movers can change a portal's world orientation at runtime.
+            # Authored dimensions, direction, rim and colour remain cold.
+            self.portal_basis[slot] = np.asarray(
+                basis_from_rotation(props.get(
+                    'rotation', [props.get('angle', 0.0), 0.0, 0.0])),
+                dtype=np.float64)
+
+    def _resolve_entity_cold(self, slot, thing):
+        """Resolve authored render state for one entity row."""
+        self.class_bits[slot] = _entity_class_bits(thing)
+
+        # Sprite identity/size is cold for authored entities.  This must be
+        # resolved at the same edit boundary as class_bits/model_recipe_id:
+        # switching a Prop model -> billboard changes the render class and the
+        # sprite recipe without changing the entity row itself.
+        self.sprite_size[slot] = sprite_size(thing)
+        self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(thing))
+
+        # Model rendering is part of the dense entity projection too. The
+        # classifier already sends Model-mode entities here, so their cold
+        # recipe and transform columns must be populated at the same cache
+        # boundary. Leaving model_recipe_id at its sentinel value (-1) makes
+        # draw_models_instanced silently skip an otherwise valid model slot.
+        recipe_id = self.intern_model_recipe(_model_recipe(thing))
+        self.model_recipe_id[slot] = recipe_id
+        if recipe_id >= 0:
+            model, normal = _model_transform_columns(thing)
+            self.model_base_matrix[slot] = model
+            self.model_normal_matrix[slot] = normal
+        else:
+            # Clear stale state when an edited entity loses its model_path.
+            self.model_base_matrix[slot].fill(0.0)
+            self.model_base_matrix[slot, 15] = 1.0
+            self.model_normal_matrix[slot].fill(0.0)
+            self.model_normal_matrix[slot, 0] = 1.0
+            self.model_normal_matrix[slot, 5] = 1.0
+            self.model_normal_matrix[slot, 10] = 1.0
+
+        if self.class_bits[slot] & ENT_PORTAL:
+            props = _props_of(thing)
+            self.portal_direction[slot] = self._portal_direction_code(
+                props.get('portal_direction', 'both'))
+            self.portal_width_height[slot] = (
+                max(16.0, _float_property(props.get('width', 128.0), 128.0)),
+                max(16.0, _float_property(props.get('height', 256.0), 256.0)),
+            )
+            colour = props.get('color', [255, 255, 255])
+            try:
+                rgb = np.asarray(colour[:3], dtype=np.float32) / 255.0
+                if rgb.size != 3:
+                    raise ValueError
+                self.portal_color[slot] = np.clip(rgb, 0.0, 1.0)
+            except (TypeError, ValueError, IndexError):
+                self.portal_color[slot] = 1.0
+            self.portal_show_rim[slot] = _bool_property(
+                props.get('show_rim', True), True)
+            self.portal_basis[slot] = np.asarray(
+                basis_from_rotation(props.get(
+                    'rotation', [props.get('angle', 0.0), 0.0, 0.0])),
+                dtype=np.float64)
+
     def refresh_rows(self, things, slots):
-        """Re-resolve the cold columns for *slots* after a semantic change."""
+        """Re-resolve cold render columns for *slots* after an editor change."""
         for slot in slots:
             slot = int(slot)
-            thing = things[slot]
-            self.class_bits[slot] = _entity_class_bits(thing)
-            self.sprite_size[slot] = sprite_size(thing)
-            self.sprite_key_id[slot] = self.intern_sprite(
-                sprite_candidates(thing))
-            self._sprite_state[slot] = sprite_state(thing)
+            self._resolve_entity_cold(slot, things[slot])
 
 
 _EMPTY: dict = {}
@@ -689,6 +1007,21 @@ def _props_of(thing) -> dict:
     if isinstance(props, dict):
         return props
     return thing if isinstance(thing, dict) else _EMPTY
+
+
+def _bool_property(value, default=False):
+    if value is None:
+        return bool(default)
+    if isinstance(value, str):
+        return value.strip().lower() not in ('false', '0', 'no')
+    return bool(value)
+
+
+def _float_property(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def _pos_of(thing):

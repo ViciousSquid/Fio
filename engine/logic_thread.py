@@ -19,7 +19,7 @@ import glm
 import math
 import os
 
-from .threaded_game_state import ThreadedGameState, PublishedBrushes
+from .threaded_game_state import ThreadedGameState, PublishedBrushes, PublishedEntities
 from .player import Player
 from .camera import Camera
 from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
@@ -27,6 +27,7 @@ from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIM
 from .prop_runtime import PropSession
 from .render_table import RenderTable
 from .entity_table import EntityTable
+from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
 
 # Import Thing subclasses for type checking
 try:
@@ -113,6 +114,8 @@ Key_Control = 0x01000021
 # Portal transit cooldown — prevents the player from oscillating back and
 # forth between two portals if they are very close together (seconds).
 _PORTAL_TRANSIT_COOLDOWN = 0.5
+# Keep the camera continuous across a portal plane; collision handles any later correction.
+_PORTAL_PLAYER_EXIT_EPSILON = 0.05
 
 # Noise "loudness" multipliers scale a monster's hearing range per event.
 # 1.0 = heard out to the full sensory radius (gunshots); water splashes are
@@ -199,8 +202,8 @@ class LogicThread(threading.Thread):
 
         # The dense render projection (T3) and the per-slot render references
         # published alongside it.  The table owns the numbers; `_render_refs`
-        # is the object array the renderer is still handed, with movers and
-        # doors replaced by their per-frame snapshot.
+        # is the object-reference escape hatch used only where a renderer path
+        # still needs authored object data (for example, convex brush planes).
         self._render_table = RenderTable()
         # The entity half of the same projection.  Entities move every
         # tick and their classification does not, so the table splits
@@ -379,7 +382,10 @@ class LogicThread(threading.Thread):
         # Portal name → Portal lookup cache; rebuilt on play start and when
         # the things list changes.  Avoids an O(n) rebuild every physics tick.
         self._portal_things: List = []
-        self._portals_by_name: Dict[str, object] = {}
+        # Portal slots use the same enumerate(self.things) address space as
+        # EntityTable.  Links are resolved once when the topology cache changes.
+        self._portal_slots = np.empty(0, dtype=np.int32)
+        self._portal_target_slots = np.empty(0, dtype=np.int32)
 
         self.level_complete_ui = None
 
@@ -486,16 +492,32 @@ class LogicThread(threading.Thread):
         self._timer_things = [t for t in self.things if LogicTimer and isinstance(t, LogicTimer)]
 
         # PERF: portals, for the same reason again.  _update_portals ticks every
-        # portal's fade every frame, which used to mean an isinstance scan of
-        # the entire thing list per frame on a map with no portals at all.  The
-        # name index is derived here too, in the same pass, so the two can never
-        # disagree about which portals exist.
-        self._portal_things = [t for t in self.things if Portal and isinstance(t, Portal)]
-        self._portals_by_name = {}
-        for t in self._portal_things:
-            n = t.properties.get('name', '')
-            if n:
-                self._portals_by_name[n] = t
+        # portal's fade every frame, but the traversal relation itself is also
+        # cached numerically.  The slot space is exactly enumerate(self.things),
+        # which is the EntityTable slot space published to the renderer.
+        self._portal_things = []
+        portal_slots = []
+        portal_target_slots = []
+        name_to_slot = {
+            t.properties.get('name'): slot
+            for slot, t in enumerate(self.things)
+            if t.properties.get('name')
+        }
+        for slot, t in enumerate(self.things):
+            if not (Portal and isinstance(t, Portal)):
+                continue
+            self._portal_things.append(t)
+            portal_slots.append(slot)
+            target_name = t.properties.get('portal_target', '')
+            target_slot = name_to_slot.get(target_name, -1)
+            if (target_slot >= 0 and Portal
+                    and isinstance(self.things[target_slot], Portal)):
+                portal_target_slots.append(target_slot)
+            else:
+                portal_target_slots.append(-1)
+        self._portal_slots = np.asarray(portal_slots, dtype=np.int32)
+        self._portal_target_slots = np.asarray(
+            portal_target_slots, dtype=np.int32)
 
     def _find_entity_by_name(self, name: str):
         if not name:
@@ -1956,61 +1978,52 @@ class LogicThread(threading.Thread):
     def _update_portals(self, delta: float):
         """
         Detect and execute player transit through active portal pairs.
+
+        Portal links are integer slot relations resolved at topology-cache
+        rebuild time; the per-tick traversal no longer resolves portal names.
         """
         if Portal is None or not self.player:
             return
-        if not self._portal_things:
-            # No portals in this map: nothing to fade, nothing to cross, and no
-            # cooldowns to decay (they are only ever written below).
+        if not len(self._portal_things):
             return
 
-        # Tick fade transitions for every portal each frame, off the list built
-        # by _build_entity_caches — walking the portals, not the level.
-        for t in self._portal_things:
-            t.tick_fade(delta)
+        for portal in self._portal_things:
+            portal.tick_fade(delta)
 
-        # Decay all active cooldowns
         for pid in list(self._portal_cooldowns):
             self._portal_cooldowns[pid] -= delta
             if self._portal_cooldowns[pid] <= 0.0:
                 del self._portal_cooldowns[pid]
 
-        portals_by_name = self._portals_by_name
-
         cur = (float(self.player.pos.x), float(self.player.pos.y), float(self.player.pos.z))
         prev = self._portal_prev_player_pos
         if prev is None:
             prev = cur
-        # Player half-extents — used for radius-aware exit clearance so the body
-        # never emerges embedded in the wall behind the destination.
-        half = getattr(self.player, '_half', None)
-        try:
-            hx, hy, hz = float(half.x), float(half.y), float(half.z)
-        except AttributeError:
-            hx, hy, hz = 25.0, 50.0, 25.0
 
-        for portal_a in list(portals_by_name.values()):
+
+        for portal_index, portal_slot in enumerate(self._portal_slots):
+            portal_a = self.things[int(portal_slot)]
             if not portal_a.is_active():
                 continue
-            target_name = portal_a.properties.get('portal_target', '')
-            if not target_name:
+            if portal_index >= len(self._portal_target_slots):
                 continue
-            portal_b = portals_by_name.get(target_name)
-            if portal_b is None or not portal_b.is_active():
+            target_slot = int(self._portal_target_slots[portal_index])
+            if target_slot < 0:
+                continue
+            portal_b = self.things[target_slot]
+            if not portal_b.is_active():
                 continue
             if id(portal_a) in self._portal_cooldowns:
                 continue
 
             hit = self._segment_crosses_aperture(portal_a, prev, cur)
             if hit is not None:
-                self._execute_portal_transit(portal_a, portal_b, hx, hy, hz)
-                cd = getattr(Portal, 'TRANSIT_COOLDOWN', _PORTAL_TRANSIT_COOLDOWN)
+                self._execute_portal_transit(portal_a, portal_b)
+                cd = getattr(
+                    Portal, 'TRANSIT_COOLDOWN', _PORTAL_TRANSIT_COOLDOWN)
                 self._portal_cooldowns[id(portal_a)] = cd
                 self._portal_cooldowns[id(portal_b)] = cd
                 if self.io_manager:
-                    # Fire both output names so connections made against either
-                    # the canonical 'OnTeleport' pin (logic graph editor / IO
-                    # registry) or the legacy 'OnPlayerEnter' pin both trigger.
                     self.io_manager.fire_output(portal_a, 'OnTeleport')
                     self.io_manager.fire_output(portal_a, 'OnPlayerEnter')
                 debug_log(
@@ -2018,11 +2031,8 @@ class LogicThread(threading.Thread):
                     f"Player transited '{portal_a.properties.get('name')}' "
                     f"→ '{portal_b.properties.get('name')}'"
                 )
-                break  # one transit per frame; player pos has now jumped
+                break
 
-        # Store the post-update position so next frame's segment starts here.
-        # After a transit that is the emerged position, so the paired portal
-        # won't see a bogus crossing.
         self._portal_prev_player_pos = (
             float(self.player.pos.x), float(self.player.pos.y), float(self.player.pos.z)
         )
@@ -2053,25 +2063,30 @@ class LogicThread(threading.Thread):
             return hit
         return None
 
-    def _execute_portal_transit(self, portal_a, portal_b, hx=25.0, hy=50.0, hz=25.0):
+    def _execute_portal_transit(self, portal_a, portal_b):
         """Teleport the player through portal_a to portal_b using the portal's
         shared link transform, so this exactly matches the view the renderer
         draws through the aperture.  Position, velocity and look direction are
         all carried through, including pitch for tilted/floor portals."""
         p = self.player.pos
         # Position and velocity through the shared transform.
-        tx, ty, tz = portal_a.map_point(portal_b, float(p.x), float(p.y), float(p.z))
-        vx, vy, vz = portal_a.map_direction(
-            portal_b, float(self.player.velocity.x),
-            float(self.player.velocity.y), float(self.player.velocity.z))
+        tx, ty, tz = portal_map_point(
+            portal_a.pos, portal_a.get_basis(),
+            portal_b.pos, portal_b.get_basis(),
+            (float(p.x), float(p.y), float(p.z)))
+        vx, vy, vz = portal_map_direction(
+            portal_a.get_basis(), portal_b.get_basis(),
+            (float(self.player.velocity.x), float(self.player.velocity.y), float(self.player.velocity.z)))
 
-        # Push out along the destination normal by the body's extent along that
-        # normal plus a small clearance, so we never spawn inside the far wall.
+        # Preserve the mapped position.  A body-sized exit offset makes the
+        # camera visibly jump when walking through an otherwise door-like portal.
+        # The portal plane itself is the transition surface; the collision system
+        # owns any subsequent world penetration correction.
         bnx, bny, bnz = portal_b.get_normal()
-        clearance = abs(bnx) * hx + abs(bny) * hy + abs(bnz) * hz + Portal.EXIT_CLEARANCE
-        self.player.pos = glm.vec3(tx + bnx * clearance,
-                                   ty + bny * clearance,
-                                   tz + bnz * clearance)
+        epsilon = _PORTAL_PLAYER_EXIT_EPSILON
+        self.player.pos = glm.vec3(tx + bnx * epsilon,
+                                   ty + bny * epsilon,
+                                   tz + bnz * epsilon)
         self.player.velocity = glm.vec3(vx, vy, vz)
 
         # Re-derive yaw (and pitch) from the transformed look direction so the
@@ -2081,7 +2096,8 @@ class LogicThread(threading.Thread):
         fx = math.sin(angle) * math.cos(pitch)
         fy = math.sin(pitch)
         fz = math.cos(angle) * math.cos(pitch)
-        mfx, mfy, mfz = portal_a.map_direction(portal_b, fx, fy, fz)
+        mfx, mfy, mfz = portal_map_direction(
+            portal_a.get_basis(), portal_b.get_basis(), (fx, fy, fz))
         self.player.angle = math.atan2(mfx, mfz)
         if hasattr(self.player, 'pitch'):
             self.player.pitch = math.asin(max(-1.0, min(1.0, mfy)))
@@ -2089,31 +2105,32 @@ class LogicThread(threading.Thread):
         self._plugin_emit("portal_transit", portal_from=portal_a, portal_to=portal_b)
 
     def _transit_projectile_through_portals(self, proj, prev_pos):
-        """Teleport a monster projectile through any active portal pair whose
-        aperture its movement segment crossed this frame.  Position and
-        velocity are carried through the shared link transform, so a fireball
-        that flies into portal A comes out of portal B on course.
-
-        No cooldown is needed: the projectile emerges in front of B travelling
-        *away* from it, so the front-to-back crossing test cannot re-fire on the
-        following frame (its stored prev position becomes the emerged point)."""
-        if Portal is None or not self._portals_by_name:
+        """Teleport a monster projectile through the cached portal relations."""
+        if Portal is None or not len(self._portal_things):
             return
         cur = (proj['pos'][0], proj['pos'][1], proj['pos'][2])
-        for portal_a in self._portals_by_name.values():
+        for portal_index, portal_slot in enumerate(self._portal_slots):
+            portal_a = self.things[int(portal_slot)]
             if not portal_a.is_active():
                 continue
-            target_name = portal_a.properties.get('portal_target', '')
-            if not target_name:
+            if portal_index >= len(self._portal_target_slots):
                 continue
-            portal_b = self._portals_by_name.get(target_name)
-            if portal_b is None or not portal_b.is_active():
+            target_slot = int(self._portal_target_slots[portal_index])
+            if target_slot < 0:
                 continue
-            if self._segment_crosses_aperture(portal_a, prev_pos, cur) is None:
+            portal_b = self.things[target_slot]
+            if not portal_b.is_active():
                 continue
-            npx, npy, npz = portal_a.map_point(portal_b, cur[0], cur[1], cur[2])
-            nvx, nvy, nvz = portal_a.map_direction(
-                portal_b, proj['vel'][0], proj['vel'][1], proj['vel'][2])
+            if self._segment_crosses_aperture(
+                    portal_a, prev_pos, cur) is None:
+                continue
+            npx, npy, npz = portal_map_point(
+                portal_a.pos, portal_a.get_basis(),
+                portal_b.pos, portal_b.get_basis(),
+                (cur[0], cur[1], cur[2]))
+            nvx, nvy, nvz = portal_map_direction(
+                portal_a.get_basis(), portal_b.get_basis(),
+                (proj['vel'][0], proj['vel'][1], proj['vel'][2]))
             bnx, bny, bnz = portal_b.get_normal()
             proj['pos'][0] = npx + bnx * Portal.EXIT_CLEARANCE
             proj['pos'][1] = npy + bny * Portal.EXIT_CLEARANCE
@@ -3869,16 +3886,22 @@ class LogicThread(threading.Thread):
         # `brushes` whenever the editor's coarse world epoch moves, and holds
         # nothing that is not already in them.
         table = self._render_table
-        world_epoch = getattr(self.editor_state, 'world_epoch', None)
+        render_dirty_snapshot = self.editor_state.render_dirty_snapshot()
+        world_epoch, render_dirty = render_dirty_snapshot
         # Rows are named by the brush's UUID, so ids have to exist before the
         # table reconciles -- but only then, not on every frame.
-        if table.needs_reconcile(brushes, world_epoch):
+        # Stable ids are needed when rows are first created/replaced, not
+        # for ordinary epoch bumps. Avoid walking the whole scene on every edit.
+        if (table.needs_reconcile(brushes, world_epoch)
+                and (len(brushes) != table.count
+                     or any(b.get('id') is None for b in brushes))):
             self.editor_state.ensure_entity_ids()
         generation = table.generation
         # One Python pass over the brush list, for the only two things that
         # cannot be cached: the live `hidden` flag (Big World parks through it)
         # and an unannounced change to the row set.
-        live_hidden = table.begin_frame(brushes, world_epoch)
+        live_hidden = table.begin_frame(
+            brushes, world_epoch, dirty_objects=render_dirty)
         if table.generation != generation:
             refs = np.empty(table.count, dtype=object)
             for i, b in enumerate(brushes):
@@ -3889,26 +3912,14 @@ class LogicThread(threading.Thread):
 
         # ---- warm columns ------------------------------------------------
         # Movers and doors move every tick and have no per-tick notification,
-        # so their transform columns are re-read unconditionally.  They are
-        # float copies -- no classification, no texture resolution.
+        # so their transform columns are re-read unconditionally.  The table
+        # is the render-thread snapshot of that state: do not copy the source
+        # brush dictionaries here.  Main-camera transform paths consume
+        # table.center / table.half / table.rot, while the object reference is
+        # only an escape hatch for data the table does not yet contain.
         dynamic_slots = table.dynamic_slots
         if len(dynamic_slots):
             table.refresh_transforms(brushes, dynamic_slots)
-            for i in dynamic_slots:
-                i = int(i)
-                b = brushes[i]
-                # The render thread still reads pos/size off the dict for the
-                # model matrix, so a moving brush is handed over as a snapshot.
-                # Once the draw paths take their transform from table.center /
-                # table.half this copy has no remaining purpose.
-                b_ref = b.copy()
-                b_ref['pos'] = list(b['pos'])
-                b_ref['size'] = list(b['size'])
-                if 'direction' in b:
-                    b_ref['direction'] = list(b['direction'])
-                if 'original_pos' in b:
-                    b_ref['original_pos'] = list(b['original_pos'])
-                refs[i] = b_ref
 
         if not self.play_mode:
             # An editor drag mutates pos for hundreds of frames after its one
@@ -3948,8 +3959,8 @@ class LogicThread(threading.Thread):
         # sort and batch without reconstructing anything.
         write_state.render_table = table
         write_state.render_refs = refs
-        write_state.visible_brush_slots = visible_slots.astype(np.int32)
-        write_state.all_brush_slots = all_slots.astype(np.int32)
+        write_state.visible_brush_slots = visible_slots
+        write_state.all_brush_slots = all_slots
 
         write_state.visible_brushes = visible_brushes
         write_state.visible_brush_position_count = len(visible_brushes)
@@ -3964,7 +3975,8 @@ class LogicThread(threading.Thread):
         things = self.things
         etable = self._entity_table
         entity_generation = etable.generation
-        thing_hidden = etable.begin_frame(things, world_epoch)
+        thing_hidden = etable.begin_frame(
+            things, world_epoch, dirty_objects=render_dirty)
         if etable.generation != entity_generation:
             erefs = np.empty(etable.count, dtype=object)
             for i, t in enumerate(things):
@@ -3974,12 +3986,16 @@ class LogicThread(threading.Thread):
         erefs = self._entity_refs
         thing_count = etable.count
 
+        self.editor_state.clear_render_dirty(render_dirty_snapshot)
+
         # A Monster is handed to the renderer as a render snapshot, because the
         # AI thread is free to move it while the frame is being drawn.  Those
         # rows are the entity table's dynamic rows, and refreshing them is the
         # only per-entity work left that is not a column operation.
         for i in etable.monster_slots:
-            erefs[i] = things[i].get_render_snapshot()
+            snapshot = things[i].get_render_snapshot()
+            erefs[i] = snapshot
+            etable.update_monster_snapshot(int(i), snapshot)
 
         # A collected pickup is not published.  Only pickup rows can be
         # collected, so the filter costs pickups rather than entities -- on a
@@ -3993,7 +4009,7 @@ class LogicThread(threading.Thread):
             if dropped:
                 keep_things = np.ones(thing_count, dtype=bool)
                 keep_things[dropped] = False
-                visible_thing_slots = np.flatnonzero(keep_things).astype(np.int32)
+                visible_thing_slots = np.flatnonzero(keep_things)
 
         visible_count = len(visible_thing_slots)
         visible_thing_positions = write_state.ensure_visible_thing_positions(
@@ -4004,22 +4020,22 @@ class LogicThread(threading.Thread):
             np.take(etable.pos[:, 2], visible_thing_slots,
                     out=visible_thing_positions[:visible_count, 1])
 
-        all_lights = (erefs[etable.light_slots].tolist()
-                      if len(etable.light_slots) else [])
-        visible_things = (erefs[visible_thing_slots].tolist()
-                          if visible_count else [])
+        # Lights still need their authored object state (colour, intensity,
+        # state, etc.) during GL setup, but do not materialise them on the logic
+        # thread. Keep the dense selection published and let the actual light
+        # consumer materialise it when required.
+        all_lights = PublishedEntities(erefs, etable.light_slots)
+        # Keep the dense slot selection authoritative. Object materialisation is
+        # deferred until a legacy/secondary consumer actually iterates it.
+        visible_things = PublishedEntities(erefs, visible_thing_slots)
 
         write_state.visible_things = visible_things
         write_state.visible_thing_position_count = visible_count
         write_state.all_things = list(things)
         write_state.all_lights = all_lights
-        # The numerical result itself, for the renderer's entity classification.
-        # Whether any portal exists at all. The portal virtual views draw
-        # their sprites through the object path, so a view deciding whether to
-        # skip the per-entity texture overrides has to know. Read off the
-        # entity cache rather than by scanning, like every other per-tick
-        # portal question.
-        write_state.has_portals = bool(self._portal_things)
+        # Portal existence is a numeric projection fact; the renderer reads
+        # the published portal slot vector directly.
+        write_state.has_portals = bool(len(etable.portal_slots))
         write_state.entity_table = etable
         write_state.entity_refs = erefs
         write_state.visible_thing_slots = visible_thing_slots

@@ -135,6 +135,90 @@ def test_an_added_entity_reconciles_without_an_epoch_bump():
     assert len(table.monster_slots) == 1
 
 
+def test_light_render_state_stays_dense_and_tracks_motion_and_io():
+    lamp = make_thing(
+        Light, 'lamp', (10.0, 20.0, 30.0),
+        colour=[64, 128, 255], intensity=2.5, radius=900.0, state='on')
+    table = _synced([lamp])
+
+    assert np.allclose(table.light_color[0], [64 / 255.0, 128 / 255.0, 1.0])
+    assert np.allclose(table.light_params[0], [2.5, 900.0])
+    assert bool(table.light_enabled[0]) is True
+
+    lamp.pos = [110.0, 220.0, 330.0]
+    lamp.properties['colour'] = [255, 32, 16]
+    lamp.properties['intensity'] = 0.75
+    lamp.properties['radius'] = 1200.0
+    lamp.properties['state'] = 'off'
+    table.begin_frame([lamp], epoch=1)
+
+    assert np.allclose(table.pos[0], [110.0, 220.0, 330.0])
+    assert np.allclose(table.light_color[0], [1.0, 32 / 255.0, 16 / 255.0])
+    assert np.allclose(table.light_params[0], [0.75, 1200.0])
+    assert bool(table.light_enabled[0]) is False
+
+
+def test_rendered_portal_aperture_is_inset_without_changing_physical_size():
+    """The render aperture is smaller, while authored portal dimensions stay intact."""
+    pytest.importorskip("OpenGL")
+    from engine.renderer_core import BaseRenderer
+
+    portal = make_thing(
+        Portal, 'portal', (10.0, 20.0, 30.0),
+        width=128.0, height=256.0,
+    )
+    table = _synced([portal])
+
+    authored = BaseRenderer._portal_slot_corners(table, 0)
+    rendered = BaseRenderer._portal_slot_corners(
+        table, 0, BaseRenderer.PORTAL_APERTURE_INSET)
+
+    authored_width = np.linalg.norm(
+        np.asarray(authored[1]) - np.asarray(authored[0]))
+    authored_height = np.linalg.norm(
+        np.asarray(authored[3]) - np.asarray(authored[0]))
+    rendered_width = np.linalg.norm(
+        np.asarray(rendered[1]) - np.asarray(rendered[0]))
+    rendered_height = np.linalg.norm(
+        np.asarray(rendered[3]) - np.asarray(rendered[0]))
+
+    assert np.isclose(authored_width, 128.0)
+    assert np.isclose(authored_height, 256.0)
+    assert np.isclose(rendered_width, 120.0)
+    assert np.isclose(rendered_height, 248.0)
+    assert np.isclose(table.portal_width_height[0, 0], 128.0)
+    assert np.isclose(table.portal_width_height[0, 1], 256.0)
+
+def test_renderer_consumes_active_lights_as_entity_slots():
+    pytest.importorskip("OpenGL")
+    from engine.renderer_F import Renderer_F
+
+    on = make_thing(Light, 'on', state='on')
+    off = make_thing(Light, 'off', state='off')
+    table = _synced([on, off])
+    renderer = Renderer_F.__new__(Renderer_F)
+
+    packet = renderer._get_active_lights(
+        [on, off],
+        {'entity_table': table, 'all_lights': []},
+    )
+
+    assert isinstance(packet, tuple)
+    assert packet[0] is table
+    assert packet[1].tolist() == [0]
+    assert not any(isinstance(x, Light) for x in packet[1])
+
+
+def test_light_shadow_flag_is_normalised_in_the_projection():
+    lamp = make_thing(Light, 'lamp', casts_shadows='true')
+    table = _synced([lamp])
+    assert bool(table.light_casts_shadows[0]) is True
+
+    lamp.properties['casts_shadows'] = 'off'
+    table.begin_frame([lamp], epoch=1)
+    assert bool(table.light_casts_shadows[0]) is False
+
+
 def test_positions_refresh_every_frame_without_reconciling():
     monster = make_thing(Monster, 'grunt', (0.0, 0.0, 0.0))
     table = _synced([monster])
@@ -188,6 +272,90 @@ def test_the_columns_are_a_pure_projection():
     assert np.array_equal(first.class_bits[:first.count],
                           second.class_bits[:second.count])
     assert np.array_equal(first.pos[:first.count], second.pos[:second.count])
+
+
+def test_monster_snapshot_updates_sprite_key_without_reconciling():
+    monster = make_thing(Monster, 'grunt')
+    table = _synced([monster])
+    generation = table.generation
+    before = int(table.sprite_key_id[0])
+
+    snapshot = monster.get_render_snapshot()
+    snapshot['dead'] = True
+    snapshot['is_shooting'] = False
+    table.update_monster_snapshot(0, snapshot)
+
+    assert table.generation == generation
+    assert int(table.sprite_key_id[0]) != before
+
+
+def test_model_prop_enters_the_dense_model_pass_with_its_recipe():
+    prop = make_thing(
+        Prop, 'oil-drum',
+        model_path='assets/models/oil_drum.obj',
+        render_mode='model',
+        rotation=[0.0, 45.0, 0.0],
+        scale=1.5,
+    )
+    table = _synced([prop])
+    hidden = table.begin_frame([prop], epoch=1)
+    slots = np.arange(table.count, dtype=np.int32)
+
+    model_slots, sprite_slots = et.classify_slots(
+        table, slots, hidden, is_play=True, show_sprites=False)
+
+    assert model_slots.tolist() == [0]
+    assert sprite_slots.tolist() == []
+    recipe_id = int(table.model_recipe_id[0])
+    assert recipe_id >= 0
+    assert table.model_recipes()[recipe_id][0] == 'assets/models/oil_drum.obj'
+    assert not np.allclose(table.model_base_matrix[0], 0.0)
+
+
+def test_prop_switching_model_to_billboard_refreshes_dense_sprite_columns():
+    prop = make_thing(
+        Prop, 'oil-drum',
+        model_path='assets/models/oil_drum.obj',
+        render_mode='model',
+        sprite_path='assets/sprites/pickup.png',
+    )
+    table = _synced([prop])
+    model_recipe = int(table.model_recipe_id[0])
+    assert model_recipe >= 0
+    assert int(table.sprite_key_id[0]) >= 0
+
+    prop.properties['render_mode'] = 'billboard'
+    table.refresh_rows([prop], [0])
+
+    assert int(table.class_bits[0]) & et.ENT_MODE_BILLBOARD
+    assert not int(table.class_bits[0]) & et.ENT_MODE_MODEL
+    assert int(table.sprite_key_id[0]) >= 0
+    sid = int(table.sprite_key_id[0])
+    assert table.sprite_recipes()[sid][0][1] == 'pickup.png'
+    assert np.allclose(table.sprite_size[0], [32.0, 32.0])
+
+
+def test_model_state_is_cold_and_position_is_separate():
+    thing = make_thing(
+        Prop, 'model',
+        model_path='crate.glb',
+        rotation=[15.0, 30.0, 45.0],
+        scale=2.0,
+        pos=[10.0, 20.0, 30.0],
+    )
+    table = _synced([thing])
+    assert table.model_recipe_id[0] >= 0
+    assert np.isclose(table.model_base_matrix[0, 3], 0.0)
+    assert np.isclose(table.model_base_matrix[0, 7], 0.0)
+    assert np.isclose(table.model_base_matrix[0, 11], 0.0)
+    assert np.isclose(table.model_base_matrix[0, 15], 1.0)
+
+    base = table.model_base_matrix[0].copy()
+    thing.pos = [100.0, 200.0, 300.0]
+    table.begin_frame([thing], epoch=1)
+
+    np.testing.assert_array_equal(table.model_base_matrix[0], base)
+    np.testing.assert_allclose(table.pos[0], [100.0, 200.0, 300.0])
 
 
 # ---------------------------------------------------------------------------
@@ -290,12 +458,72 @@ def _assert_same_entities(want, got, table, things, what):
 # ---------------------------------------------------------------------------
 
 def _keys(table, slot):
-    """The cache keys of a row's sprite candidates, in order."""
+    """The unique cache keys of a row's sprite recipe, in order."""
     sid = int(table.sprite_key_id[slot])
     if sid < 0:
         return None
-    return [c[0] for c in table.sprite_recipes()[sid]]
+    return list(dict.fromkeys(c[0] for c in table.sprite_recipes()[sid]))
 
+
+def test_portal_target_is_resolved_to_an_integer_entity_slot():
+    a = make_thing(Portal, 'A')
+    b = make_thing(Portal, 'B')
+    a.properties['portal_target'] = 'B'
+    table = _synced([a, b])
+
+    assert table.portal_slots.tolist() == [0, 1]
+    assert table.portal_target_slot.tolist() == [1, -1]
+
+
+def test_portal_authored_state_is_dense_and_geometry_is_shared():
+    portal = make_thing(
+        Portal, 'P', (10.0, 20.0, 30.0),
+        width=192.0, height=320.0, rotation=[45.0, 20.0, 10.0],
+        portal_direction='reverse', color=[64, 128, 255], show_rim=False,
+    )
+    table = _synced([portal])
+
+    assert np.allclose(table.portal_width_height[0], [192.0, 320.0])
+    assert int(table.portal_direction[0]) == et.PORTAL_DIRECTION_REVERSE
+    assert np.allclose(table.portal_color[0], [64/255.0, 128/255.0, 1.0])
+    assert bool(table.portal_show_rim[0]) is False
+    assert np.allclose(table.portal_basis[0], np.asarray(portal.get_basis()))
+
+
+def test_portal_live_state_refreshes_without_reconciling():
+    portal = make_thing(Portal, 'P')
+    table = _synced([portal])
+    generation = table.generation
+
+    portal.properties['active'] = False
+    portal._fade_alpha = 0.25
+    portal.pos = [100.0, 200.0, 300.0]
+    portal.set_yaw_degrees(90.0)
+    table.begin_frame([portal], epoch=1)
+
+    assert table.generation == generation
+    assert bool(table.portal_active[0]) is False
+    assert np.isclose(table.portal_fade[0], 0.25)
+    assert np.allclose(table.pos[0], [100.0, 200.0, 300.0])
+    assert np.allclose(table.portal_basis[0], np.asarray(portal.get_basis()))
+
+
+def test_shared_portal_transform_matches_the_authoring_wrapper():
+    from engine.portal_transform import map_direction, map_point
+
+    a = make_thing(Portal, 'A', (10.0, 20.0, 30.0), rotation=[30.0, 15.0, 5.0])
+    b = make_thing(Portal, 'B', (-80.0, 12.0, 140.0), rotation=[-70.0, -10.0, 20.0])
+    point = (25.0, 60.0, -12.0)
+    direction = (0.3, -0.4, 0.5)
+
+    assert np.allclose(
+        map_point(a.pos, a.get_basis(), b.pos, b.get_basis(), point),
+        a.map_point(b, *point),
+    )
+    assert np.allclose(
+        map_direction(a.get_basis(), b.get_basis(), direction),
+        a.map_direction(b, *direction),
+    )
 
 def test_a_portal_draws_no_sprite():
     """The sprite pass has always skipped Portals; the column says so."""
@@ -317,6 +545,20 @@ def test_a_monsters_sprite_key_names_its_current_frame():
     table.begin_frame([grunt], epoch=1)
     assert _keys(table, 0) == ['msprite_human_<None>_dead_'], (
         "dead wins over shooting, as the object path's chain decides it")
+
+
+
+def test_a_dead_monster_keeps_an_idle_fallback_if_dead_frame_is_missing():
+    """The numeric recipe must not drop the monster when dead.png is absent."""
+    grunt = make_thing(Monster, 'grunt', monster_type='human')
+    grunt.properties['dead'] = True
+    table = _synced([grunt])
+    recipe = table.sprite_recipes()[int(table.sprite_key_id[0])]
+
+    assert [c[1:] for c in recipe] == [
+        ('dead.png', 'sprites/monsters/human', True),
+        ('idle.png', 'sprites/monsters/human', True),
+    ]
 
 
 def test_a_variant_monster_falls_back_to_the_base_folder():

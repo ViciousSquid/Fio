@@ -1186,10 +1186,11 @@ class MainWindow(QMainWindow):
         """Drop the copies where they are.  Returns ``True`` if one was pending."""
         if not self.clone_placement:
             return False
-        count = len(self.clone_placement['objects'])
+        objects = list(self.clone_placement['objects'])
+        count = len(objects)
         self.clone_placement = None
         self.unsaved_changes = True
-        self.state.mark_lighting_dirty()
+        self.state.mark_lighting_dirty(objects)
         self.show_toast("Placed %d copy(s)" % count)
         self.update_all_ui()
         return True
@@ -2893,6 +2894,7 @@ class MainWindow(QMainWindow):
         ]
 
         caulked_faces = 0
+        changed_brushes = []
         for brush in brushes:
             # Ensure textures dict exists
             if 'textures' not in brush:
@@ -2905,9 +2907,11 @@ class MainWindow(QMainWindow):
 
                 if self._is_face_occluded(brush, face, brushes):
                     brush['textures'][face] = 'nodraw.jpg'
+                    changed_brushes.append(brush)
                     caulked_faces += 1
 
-        if caulked_faces > 0:
+        if changed_brushes:
+            self.state.mark_lighting_dirty(changed_brushes)
             self.update_views()
             self.show_toast(f"Autocaulk applied: caulked {caulked_faces} face(s)", duration=5000)
         else:

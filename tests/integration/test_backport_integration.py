@@ -50,17 +50,13 @@ def test_cull_output_feeds_only_sort_objects():
     assert len(main) == 1, "main camera pass must sort the culled collections"
 
 
-def test_shadow_and_portal_passes_use_the_unculled_collections():
-    """The shadow/portal passes must still see the full scene."""
+def test_shadow_and_portal_passes_use_dense_unculled_collections():
+    """Shadow maps use the full dense caster projections, not camera-cull output."""
     body = _render_scene_source()
-    # Locate the shadow-map render call and confirm it uses the originals.
-    assert "render_shadow_maps(shadow_lights, shadow_brushes, shadow_things" in body
-    # shadow_brushes/shadow_things must not be derived from the culled lists.
-    for line in body.splitlines():
-        s = line.strip()
-        if s.startswith("shadow_brushes") or s.startswith("shadow_things"):
-            assert "cull_brushes" not in s and "cull_things" not in s, \
-                f"shadow collection built from culled data: {s}"
+    assert "self.render_shadow_maps(" in body
+    assert "(light_table, shadow_slots), config, camera_pos" in body
+    assert "shadow_brushes" not in body
+    assert "shadow_things" not in body
 
 
 def test_cull_is_opt_in_and_defaults_to_play_mode():
@@ -158,79 +154,29 @@ def test_the_slot_cull_exempts_the_same_lights_and_portals():
         "Monster (3) are not" % ([int(i) for i in kept],))
 
 
-def _numeric_config(count=2):
-    """The four entity-projection keys plus the brush ones, as published."""
-    import numpy as np
-    from editor.things import Light
-    from engine.entity_table import EntityTable
-    from engine.render_table import RenderTable
-
-    brushes = [{'id': 'b%d' % i, 'pos': [0.0, 0.0, 0.0], 'size': [64.0] * 3}
-               for i in range(count)]
-    btable = RenderTable()
-    btable.sync(brushes, 1)
-    brefs = np.empty(count, dtype=object)
-    for i, b in enumerate(brushes):
-        brefs[i] = b
-
-    things = [Light(pos=[0.0, 0.0, 0.0]) for _ in range(count)]
-    etable = EntityTable()
-    hidden = etable.begin_frame(things, 1)
-    erefs = np.empty(count, dtype=object)
-    for i, t in enumerate(things):
-        erefs[i] = t
-
-    config = {
-        'render_table': btable, 'render_refs': brefs,
-        'entity_table': etable, 'entity_refs': erefs,
-        'visible_thing_slots': np.arange(count, dtype=np.int32),
-        'thing_hidden': hidden,
-    }
-    return config, np.arange(count, dtype=np.int32)
+def test_shadow_lights_use_entity_slots_on_numeric_path():
+    """Shadow-map light state must not materialise Light objects."""
+    body = _render_scene_source()
+    assert "shadow_lights = (light_table, shadow_slots)" in body
+    assert "light_refs = config.get('entity_refs')" not in body
+    assert "shadow_lights = [light_refs[int(s)]" not in body
 
 
-def _bare_renderer(with_instancing=True):
-    from engine.renderer_F import Renderer_F
-
-    r = Renderer_F.__new__(Renderer_F)
-    r.shaders = {'sprite_instanced': 1} if with_instancing else {}
-    return r
-
-
-def test_the_sprite_predicate_needs_the_whole_projection():
-    """Every key has to arrive, or the object path runs and needs its overrides.
-
-    The view skips building the per-entity texture overrides when this says the
-    billboards will be instanced. A predicate that said yes on an incomplete
-    projection would withhold overrides the object path still reads.
-    """
-    config, slots = _numeric_config()
-    r = _bare_renderer()
-    assert r.will_instance_sprites(config, slots) is True
-
-    for key in ('render_table', 'render_refs', 'entity_table', 'entity_refs',
-                'visible_thing_slots', 'thing_hidden'):
-        missing = dict(config)
-        missing[key] = None
-        assert r.will_instance_sprites(missing, slots) is False, (
-            "the predicate said the sprites would be instanced with %r absent"
-            % key)
-
-    assert r.will_instance_sprites(config, None) is False, (
-        "without brush slots the frame is on the object path entirely")
+def test_legacy_per_object_sprite_renderer_is_gone():
+    """Sprite rendering has one execution boundary: EntityTable -> instancing."""
+    core = _read("engine/renderer_core.py")
+    forward = _read("engine/renderer_F.py")
+    assert "def draw_sprites(" not in core
+    assert ".draw_sprites(" not in forward
+    assert "will_instance_sprites" not in forward
 
 
-def test_the_sprite_predicate_respects_a_driver_without_instancing():
-    config, slots = _numeric_config()
-    assert _bare_renderer(with_instancing=False).will_instance_sprites(
-        config, slots) is False, (
-        "a driver that rejected the instanced program still needs the object "
-        "path, and the object path needs the overrides")
-
-
-def glm_vec(x, y, z):
-    import glm
-    return glm.vec3(x, y, z)
+def test_entity_projection_is_the_sprite_renderer_input():
+    """The forward renderer must submit sprites through draw_sprites_instanced."""
+    body = _render_scene_source()
+    assert "self.draw_sprites_instanced(" in body
+    assert "self.draw_sprites(" not in body
+    assert "entity_projection.classify_slots(" in body
 
 
 # ---------------------------------------------------------------------------
@@ -509,3 +455,22 @@ def test_mover_position_types_survive_a_json_round_trip():
     pos = [original[i] + (direction[i] * distance) * factor for i in range(3)]
     text = json.dumps({"pos": pos})          # would raise on np.float64
     assert json.loads(text)["pos"] == pos
+
+
+def test_special_brush_passes_do_not_materialise_dense_slots():
+    """Water, glass and fog must stay in RenderTable through render submission."""
+    src = _read("engine/renderer_F.py")
+    assert "water_brushes = groups['water']" in src
+    assert "glass_brushes = groups['glass']" in src
+    assert "fog_volumes = groups['fog']" in src
+    assert "water_brushes = _objs('water')" not in src
+    assert "glass_brushes = _objs('glass')" not in src
+    assert "fog_volumes = _objs('fog')" not in src
+
+    core = _read("engine/renderer_core.py")
+    assert "table.water_params[brushes]" in core
+    assert "table.glass_params[brushes]" in core
+    assert "table.fog_params[brushes]" in core
+    assert "brush.get('water_opacity'" in core
+    assert "brush.get('glass_opacity'" in core
+    assert "brush.get('fog_density'" in core
