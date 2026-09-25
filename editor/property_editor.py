@@ -4111,6 +4111,12 @@ class PropertyEditor(QWidget):
                         value = 0.0
             self.current_object.properties[key] = value
 
+        # Property edits are live scene mutations, not merely UI state.  The
+        # dense render/entity projections cache their cold columns behind the
+        # editor's world epoch, so journal this exact object immediately.
+        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'mark_world_changed'):
+            self.editor.state.mark_world_changed([self.current_object])
+
         if key == 'name' and _io_system is not None:
             # A name is read by every *other* entity's panel — the "Targeted by"
             # list quotes it, and name-addressed connections resolve through it —
