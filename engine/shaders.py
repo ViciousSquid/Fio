@@ -650,7 +650,8 @@ uniform mat4 projection;
 uniform highp vec3 viewPos;
 uniform sampler2D normalMap;
 uniform sampler2D sceneColor;
-uniform samplerCube reflectionCube;
+uniform sampler2D reflectionTexture;
+uniform mat4 reflectionMatrix;
 uniform highp float time;
 
 uniform float waterOpacity;
@@ -862,20 +863,56 @@ void main()
     vec3 R = reflect(-viewDir, N);
     vec3 reflection = skyColor(R);
 
-    // The reflection cubemap is captured immediately above the water surface.
-    // A probe hundreds of units above the water sees a fundamentally different
-    // environment: above-water reflection rays mostly hit the sky, while
-    // underwater rays can still hit the captured world. That produces the
-    // characteristic "reflection only appears when I enter the water" failure.
+    // Planar reflection: project the actual top-face world position into
+    // the scene rendered from the camera mirrored across this water plane.
+    // This is a 2D render-to-texture, not an environment/cubemap lookup, so
+    // nearby geometry stays spatially tied to the water surface.
     if (reflectionEnabled == 1 && topFace > 0.5) {
-        float lod = clamp(roughness * 5.0, 0.0, 5.0);
-        reflection = textureLod(reflectionCube, R, lod).rgb;
+        highp vec4 reflectionClip =
+            reflectionMatrix * vec4(FragPos, 1.0);
+        if (reflectionClip.w > 0.0001) {
+            highp vec2 reflectionUV =
+                reflectionClip.xy / reflectionClip.w * 0.5 + 0.5;
+            if (reflectionUV.x > 0.0 && reflectionUV.x < 1.0 &&
+                reflectionUV.y > 0.0 && reflectionUV.y < 1.0) {
+                highp vec2 reflectionWarp =
+                    normalize(mat3(view) * N).xy *
+                    distortionStrength * 0.018;
+                reflectionUV = clamp(
+                    reflectionUV + reflectionWarp,
+                    vec2(0.001),
+                    vec2(0.999)
+                );
+                reflection = texture(
+                    reflectionTexture, reflectionUV).rgb;
+                if (roughness > 0.001) {
+                    highp vec2 blurStep =
+                        roughness * 2.0 / max(screenSize, vec2(1.0));
+                    reflection += texture(
+                        reflectionTexture,
+                        clamp(
+                            reflectionUV + vec2(blurStep.x, 0.0),
+                            vec2(0.001), vec2(0.999))).rgb;
+                    reflection += texture(
+                        reflectionTexture,
+                        clamp(
+                            reflectionUV - vec2(blurStep.x, 0.0),
+                            vec2(0.001), vec2(0.999))).rgb;
+                    reflection += texture(
+                        reflectionTexture,
+                        clamp(
+                            reflectionUV + vec2(0.0, blurStep.y),
+                            vec2(0.001), vec2(0.999))).rgb;
+                    reflection /= 4.0;
+                }
+            }
+        }
     }
 
     // Keep authored reflectivity visible at normal viewing angles. Physical
     // water Fresnel starts around 2%, which is too weak to make the optional
-    // environment probe perceptible from above on its own; grazing angles still
-    // get the full Fresnel response.
+    // reflection perceptible from above on its own; grazing angles still get
+    // the full Fresnel response.
     float reflectionWeight = max(
         fresnel,
         clamp(waterReflectivity, 0.0, 1.0) * 0.5
