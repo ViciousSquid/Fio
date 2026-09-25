@@ -4367,10 +4367,10 @@ layout (location = 9) in vec4 iNormal2;
             if portal_b < 0:
                 continue
             direction = self._portal_direction(portal_table, portal_a)
-            if direction in (entity_table.PORTAL_DIRECTION_FORWARD, entity_table.PORTAL_DIRECTION_BOTH) and rendered < self.MAX_PORTALS:
+            if direction in (entity_projection.PORTAL_DIRECTION_FORWARD, entity_projection.PORTAL_DIRECTION_BOTH) and rendered < self.MAX_PORTALS:
                 self._draw_one_portal(portal_table, portal_a, portal_b, projection, main_view, camera_pos, config, draw_scene_fn, pv, portal_slots, depth=1)
                 rendered += 1
-            if direction in (entity_table.PORTAL_DIRECTION_REVERSE, entity_table.PORTAL_DIRECTION_BOTH) and rendered < self.MAX_PORTALS:
+            if direction in (entity_projection.PORTAL_DIRECTION_REVERSE, entity_projection.PORTAL_DIRECTION_BOTH) and rendered < self.MAX_PORTALS:
                 self._draw_one_portal(portal_table, portal_b, portal_a, projection, main_view, camera_pos, config, draw_scene_fn, pv, portal_slots, depth=1)
                 rendered += 1
         gl.glDisable(gl.GL_SCISSOR_TEST)
