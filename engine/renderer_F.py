@@ -1224,7 +1224,10 @@ class Renderer_F(BaseRenderer):
                     etable, tslots, thing_hidden,
                     config.get('play_mode', False),
                     config.get('show_sprites_in_play_mode', False))
-                if cx is not None:
+                if cx is not None and not sprites_numeric:
+                    # The legacy object sprite path still needs the projection's
+                    # depth order. Instanced sprites fuse depth and texture
+                    # grouping into one numeric sort at the GPU boundary.
                     sprite_slots = self._sort_slots_by_distance(
                         etable, sprite_slots, cx, cz)
                 if len(model_slots):
@@ -1283,7 +1286,10 @@ class Renderer_F(BaseRenderer):
                     etable, tslots, thing_hidden,
                     config.get('play_mode', False),
                     config.get('show_sprites_in_play_mode', False))
-                if cx is not None:
+                if cx is not None and not sprites_numeric:
+                    # The legacy object sprite path still needs the projection's
+                    # depth order. Instanced sprites fuse depth and texture
+                    # grouping into one numeric sort at the GPU boundary.
                     sprite_slots = self._sort_slots_by_distance(
                         etable, sprite_slots, cx, cz)
                 if len(model_slots):
@@ -1454,7 +1460,8 @@ class Renderer_F(BaseRenderer):
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
         if sprites_numeric:
-            self.draw_sprites_instanced(projection, view, etable, sprite_slots)
+            self.draw_sprites_instanced(
+                projection, view, etable, sprite_slots, camera_pos=camera_pos)
         else:
             self.draw_sprites(projection, view, final_sprites, self.sprite_textures, self.instance_textures)
         if current_mode == RENDER_MODE_UNLIT:
