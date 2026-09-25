@@ -8,6 +8,14 @@ import copy
 import os
 import math
 import uuid
+
+from engine.portal_transform import (
+    basis_from_rotation as _portal_basis_from_rotation,
+    map_point as _portal_map_point,
+    map_direction as _portal_map_direction,
+    corners as _portal_corners,
+    contains_point as _portal_contains_point,
+)
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt
 import ast
@@ -1492,28 +1500,15 @@ class Portal(Thing):
         self.properties['rotation'][0] = yaw
         self.properties['angle'] = yaw
 
-    def get_basis(self):
-        """
-        Return the portal's orthonormal frame as ``(right, up, normal)`` where
-        each axis is a 3-tuple of floats.  Built from yaw/pitch/roll via
-        ``R = Ry(yaw) @ Rx(pitch) @ Rz(roll)`` applied to the base frame
-        right=(1,0,0), up=(0,1,0), normal=(0,0,1).
 
-        With pitch = roll = 0 this reduces exactly to the historical
-        horizontal-facing portal: normal = (sin yaw, 0, cos yaw),
-        right = (cos yaw, 0, -sin yaw), up = (0, 1, 0).  ``normal`` points out
-        of the front face (toward the viewer that approaches the portal).
-        """
-        yaw = self.get_yaw_radians()
-        pitch = self.get_pitch_radians()
-        roll = self.get_roll_radians()
-        cy, sy = math.cos(yaw), math.sin(yaw)
-        cp, sp = math.cos(pitch), math.sin(pitch)
-        cr, sr = math.cos(roll), math.sin(roll)
-        right  = (cy * cr + sy * sp * sr,  cp * sr,  -sy * cr + cy * sp * sr)
-        up     = (-cy * sr + sy * sp * cr, cp * cr,   sy * sr + cy * sp * cr)
-        normal = (sy * cp,                 -sp,       cy * cp)
-        return right, up, normal
+    def get_basis(self):
+        """Return the portal frame from the shared engine-level transform."""
+        return _portal_basis_from_rotation(
+            self.properties.get(
+                'rotation',
+                [self.properties.get('angle', 0.0), 0.0, 0.0],
+            )
+        )
 
     def set_parent_local_transform(self, mover_pos, mover_yaw) -> None:
         """Compute and store local position and yaw offset from the mover's current transform."""
@@ -1534,37 +1529,12 @@ class Portal(Thing):
         """
         return self.get_basis()[2]
 
+
     def get_corners_world(self):
-        """
-        Return the four world-space corners of the portal aperture as a list
-        of [x, y, z] triples, winding counter-clockwise when viewed from the
-        front:  [bottom-left, bottom-right, top-right, top-left].
-        Used by the renderer to build the stencil mask quad.
-        """
-        px, py, pz = self.pos
-        w2 = self.get_width()  / 2.0
-        h2 = self.get_height() / 2.0
-        (rx, ry, rz), (ux, uy, uz), _ = self.get_basis()
-
-        return [
-            [px - rx * w2 - ux * h2, py - ry * w2 - uy * h2, pz - rz * w2 - uz * h2],
-            [px + rx * w2 - ux * h2, py + ry * w2 - uy * h2, pz + rz * w2 - uz * h2],
-            [px + rx * w2 + ux * h2, py + ry * w2 + uy * h2, pz + rz * w2 + uz * h2],
-            [px - rx * w2 + ux * h2, py - ry * w2 + uy * h2, pz - rz * w2 + uz * h2],
-        ]
-
-    # ── Shared portal link transform ──────────────────────────────────────────
-    # These two methods are the single source of truth for how space maps from
-    # this portal to its destination.  BOTH the renderer's virtual camera and
-    # the logic thread's teleport call them, so the view you look *through* and
-    # the frame you *teleport into* can never disagree (previously each computed
-    # its own, subtly different, rotation).
-    #
-    # The map is the standard portal transform  M_dest · flip · M_self^-1  where
-    # flip is a 180° rotation about the aperture's up axis — i.e. mirror the
-    # right and normal local components.  A point just past this portal's plane
-    # therefore lands just in front of the destination, and a velocity heading
-    # into this portal emerges heading out of the destination.
+        """Return the shared engine-level aperture corners."""
+        return _portal_corners(
+            self.pos, self.get_basis(), self.get_width(), self.get_height()
+        )
 
     def _local_of(self, x: float, y: float, z: float):
         """World point → (right, up, normal) coordinates in this portal's frame."""
@@ -1576,40 +1546,27 @@ class Portal(Thing):
                 dx * u[0] + dy * u[1] + dz * u[2],
                 dx * n[0] + dy * n[1] + dz * n[2])
 
+
     def map_point(self, dest, x: float, y: float, z: float):
-        """Map a world-space point through this portal to ``dest``."""
-        lr, lu, ln = self._local_of(x, y, z)
-        lr, ln = -lr, -ln  # 180° about up
-        r, u, n = dest.get_basis()
-        return (dest.pos[0] + lr * r[0] + lu * u[0] + ln * n[0],
-                dest.pos[1] + lr * r[1] + lu * u[1] + ln * n[1],
-                dest.pos[2] + lr * r[2] + lu * u[2] + ln * n[2])
+        """Map a world point through the shared engine transform."""
+        return _portal_map_point(
+            self.pos, self.get_basis(), dest.pos, dest.get_basis(), (x, y, z)
+        )
+
 
     def map_direction(self, dest, x: float, y: float, z: float):
-        """Map a world-space direction/velocity through this portal to ``dest``
-        (rotation only, no translation)."""
-        r, u, n = self.get_basis()
-        lr = x * r[0] + y * r[1] + z * r[2]
-        lu = x * u[0] + y * u[1] + z * u[2]
-        ln = x * n[0] + y * n[1] + z * n[2]
-        lr, ln = -lr, -ln
-        r2, u2, n2 = dest.get_basis()
-        return (lr * r2[0] + lu * u2[0] + ln * n2[0],
-                lr * r2[1] + lu * u2[1] + ln * n2[1],
-                lr * r2[2] + lu * u2[2] + ln * n2[2])
+        """Map a world direction through the shared engine transform."""
+        return _portal_map_direction(
+            self.get_basis(), dest.get_basis(), (x, y, z)
+        )
+
 
     def contains_point(self, x: float, y: float, z: float, margin: float = 0.0) -> bool:
-        """True when the world point projects inside the aperture rectangle.
-
-        ``margin`` grows the rectangle on every side — pass the transiting
-        body's radius so something is only considered "through" once its centre
-        clears the frame, avoiding half-in/half-out pops.  Uses the full
-        yaw/pitch/roll basis so tilted portals test correctly.
-        """
-        lr, lu, _ = self._local_of(x, y, z)
-        hw = self.get_width()  / 2.0 + margin
-        hh = self.get_height() / 2.0 + margin
-        return abs(lr) <= hw and abs(lu) <= hh
+        """Return whether a point lies inside the shared aperture shape."""
+        return _portal_contains_point(
+            self.pos, self.get_basis(), self.get_width(), self.get_height(),
+            (x, y, z), margin,
+        )
 
     def tick_fade(self, delta: float) -> None:
         """Advance _fade_alpha toward _fade_target.  Called every logic tick."""
