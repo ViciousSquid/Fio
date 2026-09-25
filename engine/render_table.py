@@ -224,6 +224,8 @@ class RenderTable:
         #: re-read per frame.  Recomputed whenever the table reconciles, from
         #: :data:`CLASS_DYNAMIC`, so it cannot drift from the classification.
         self.dynamic_slots = np.empty(0, dtype=np.int32)
+        #: Dense geometry records keyed directly by geometry_id. AABB
+        #: brushes have no record; their geometry_id stays -1.
         self.geometry_records: list = []
 
         # float64 deliberately: this is exactly what _build_cull_cache held,
@@ -552,6 +554,12 @@ class RenderTable:
         old_brushes = self.brushes
         old_count = len(old_brushes)
         old_geometry_records = self.geometry_records
+        old_geometry_ids = self.geometry_id[:old_count].copy()
+        old_geometry_by_slot = [None] * old_count
+        for old_slot, gid in enumerate(old_geometry_ids):
+            gid = int(gid)
+            if 0 <= gid < len(old_geometry_records):
+                old_geometry_by_slot[old_slot] = old_geometry_records[gid]
 
         new_ids = [None] * n
         survivors = set()          # slots whose cold columns are already right
@@ -588,10 +596,14 @@ class RenderTable:
                         self.fog_color, self.fog_params):
                 arr[dst] = arr[src]
 
+        # Reconstruct the temporary slot-indexed geometry view needed while
+        # cold rows are being resolved. The published representation below is
+        # compact: only actual convex rows occupy geometry-record slots.
         new_geometry_records = [None] * n
-        for old, new in zip(move_src, move_dst):
-            if old < len(old_geometry_records):
-                new_geometry_records[new] = old_geometry_records[old]
+        for slot in survivors:
+            old = old_slot_of_id.get(new_ids[slot])
+            if old is not None and old < len(old_geometry_by_slot):
+                new_geometry_records[slot] = old_geometry_by_slot[old]
         self.geometry_records = new_geometry_records
 
         for slot, brush in enumerate(brushes):
@@ -599,13 +611,17 @@ class RenderTable:
             if slot not in survivors:
                 self._resolve_cold(slot, brush)
 
-        # Geometry handles are dense row identities. Recompute them after
-        # structural compaction so a surviving convex brush never retains the
-        # slot it occupied in the previous generation.
+        # Publish a genuinely dense geometry index. geometry_id is an index
+        # into geometry_records, not a RenderTable row number. This keeps AABB
+        # brushes completely out of the geometry record table.
         self.geometry_id[:n] = -1
         geo_slots = np.flatnonzero(
             self.class_bits[:n] & CLASS_HAS_GEOMETRY).astype(np.int32)
-        self.geometry_id[geo_slots] = geo_slots
+        dense_records = []
+        for gid, slot in enumerate(geo_slots):
+            dense_records.append(self.geometry_records[int(slot)])
+            self.geometry_id[int(slot)] = gid
+        self.geometry_records = dense_records
 
         self.ids = new_ids
         self.slot_of_id = {bid: slot for slot, bid in enumerate(new_ids)
