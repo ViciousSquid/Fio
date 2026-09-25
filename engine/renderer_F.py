@@ -1459,7 +1459,10 @@ class Renderer_F(BaseRenderer):
                         glass_brushes, sort_positions['glass'], cx, cz)
         if not config.get('play_mode', False):
             self.draw_path_node_cubes(projection, view, things)
-        self.draw_portal_wireframes(projection, view, things, config.get('play_mode', False))
+        if etable is not None:
+            self.draw_portal_wireframes(
+                projection, view, etable, etable.portal_slots,
+                config.get('play_mode', False))
         gl.glEnable(gl.GL_BLEND)
         gl.glDepthMask(gl.GL_FALSE)
         # The sprite renderer has one path: dense EntityTable columns -> GL
