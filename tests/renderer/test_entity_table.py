@@ -289,6 +289,29 @@ def test_monster_snapshot_updates_sprite_key_without_reconciling():
     assert int(table.sprite_key_id[0]) != before
 
 
+def test_model_prop_enters_the_dense_model_pass_with_its_recipe():
+    prop = make_thing(
+        Prop, 'oil-drum',
+        model_path='assets/models/oil_drum.obj',
+        render_mode='model',
+        rotation=[0.0, 45.0, 0.0],
+        scale=1.5,
+    )
+    table = _synced([prop])
+    hidden = table.begin_frame([prop], epoch=1)
+    slots = np.arange(table.count, dtype=np.int32)
+
+    model_slots, sprite_slots = et.classify_slots(
+        table, slots, hidden, is_play=True, show_sprites=False)
+
+    assert model_slots.tolist() == [0]
+    assert sprite_slots.tolist() == []
+    recipe_id = int(table.model_recipe_id[0])
+    assert recipe_id >= 0
+    assert table.model_recipes()[recipe_id][0] == 'assets/models/oil_drum.obj'
+    assert not np.allclose(table.model_base_matrix[0], 0.0)
+
+
 def test_model_state_is_cold_and_position_is_separate():
     thing = make_thing(
         Prop, 'model',
