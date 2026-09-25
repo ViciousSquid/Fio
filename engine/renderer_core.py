@@ -2680,28 +2680,20 @@ layout (location = 9) in vec4 iNormal2;
             self._shadow_cubemaps = []
 
     def _ensure_water_reflection_resources(self):
-        """Create the shared render target used by high-quality water reflections."""
+        """Create the shared planar-reflection framebuffer."""
         if self._water_reflection_fbo and self._water_reflection_depth:
             return True
         try:
             size = self.WATER_REFLECTION_SIZE
             self._water_reflection_fbo = int(gl.glGenFramebuffers(1))
             self._water_reflection_depth = int(gl.glGenRenderbuffers(1))
-
             gl.glBindRenderbuffer(gl.GL_RENDERBUFFER, self._water_reflection_depth)
             gl.glRenderbufferStorage(
                 gl.GL_RENDERBUFFER, gl.GL_DEPTH_COMPONENT24, size, size)
-
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._water_reflection_fbo)
             gl.glFramebufferRenderbuffer(
-                gl.GL_FRAMEBUFFER,
-                gl.GL_DEPTH_ATTACHMENT,
-                gl.GL_RENDERBUFFER,
-                self._water_reflection_depth,
-            )
-            # No colour attachment exists until a specific water cubemap face
-            # is selected. The capture path validates completeness after it
-            # attaches that face.
+                gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
+                gl.GL_RENDERBUFFER, self._water_reflection_depth)
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, 0)
             gl.glBindRenderbuffer(gl.GL_RENDERBUFFER, 0)
             return True
@@ -2716,46 +2708,28 @@ layout (location = 9) in vec4 iNormal2;
             self._water_reflection_fbo = None
             return False
 
-    def _ensure_water_reflection_cubemap(self, slot):
-        """Return the 256x256 RGBA cubemap owned by dense water slot."""
+    def _ensure_water_reflection_texture(self, slot):
+        """Return the 256x256 RGBA 2D reflection texture for a water slot."""
         slot = int(slot)
-        existing = self._water_reflection_cubemaps.get(slot)
+        existing = self._water_reflection_textures.get(slot)
         if existing:
             return existing
         tex = int(gl.glGenTextures(1))
-        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, tex)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, tex)
         size = self.WATER_REFLECTION_SIZE
-        for face in range(6):
-            gl.glTexImage2D(
-                gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
-                0,
-                gl.GL_RGBA8,
-                size,
-                size,
-                0,
-                gl.GL_RGBA,
-                gl.GL_UNSIGNED_BYTE,
-                None,
-            )
-        gl.glTexParameteri(
-            gl.GL_TEXTURE_CUBE_MAP,
-            gl.GL_TEXTURE_MIN_FILTER,
-            gl.GL_LINEAR_MIPMAP_LINEAR,
-        )
-        gl.glTexParameteri(
-            gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
-        gl.glTexParameteri(
-            gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
-        gl.glTexParameteri(
-            gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
-        gl.glTexParameteri(
-            gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_R, gl.GL_CLAMP_TO_EDGE)
-        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
-        self._water_reflection_cubemaps[slot] = tex
+        gl.glTexImage2D(
+            gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, size, size, 0,
+            gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+        self._water_reflection_textures[slot] = tex
         return tex
 
     def _water_reflection_texture(self, slot):
-        return self._water_reflection_cubemaps.get(int(slot), 0)
+        return self._water_reflection_textures.get(int(slot), 0)
 
     def _bind_shadow_maps(self, uniforms):
         """Bind shadow samplers to dedicated texture units.
