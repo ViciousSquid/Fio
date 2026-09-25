@@ -3870,6 +3870,7 @@ class LogicThread(threading.Thread):
         # nothing that is not already in them.
         table = self._render_table
         world_epoch = getattr(self.editor_state, 'world_epoch', None)
+        render_dirty = self.editor_state.render_dirty_snapshot()
         # Rows are named by the brush's UUID, so ids have to exist before the
         # table reconciles -- but only then, not on every frame.
         if table.needs_reconcile(brushes, world_epoch):
@@ -3878,7 +3879,8 @@ class LogicThread(threading.Thread):
         # One Python pass over the brush list, for the only two things that
         # cannot be cached: the live `hidden` flag (Big World parks through it)
         # and an unannounced change to the row set.
-        live_hidden = table.begin_frame(brushes, world_epoch)
+        live_hidden = table.begin_frame(
+            brushes, world_epoch, dirty_objects=render_dirty)
         if table.generation != generation:
             refs = np.empty(table.count, dtype=object)
             for i, b in enumerate(brushes):
@@ -3964,7 +3966,8 @@ class LogicThread(threading.Thread):
         things = self.things
         etable = self._entity_table
         entity_generation = etable.generation
-        thing_hidden = etable.begin_frame(things, world_epoch)
+        thing_hidden = etable.begin_frame(
+            things, world_epoch, dirty_objects=render_dirty)
         if etable.generation != entity_generation:
             erefs = np.empty(etable.count, dtype=object)
             for i, t in enumerate(things):
@@ -3973,6 +3976,8 @@ class LogicThread(threading.Thread):
             self._entity_all_slots = np.arange(etable.count, dtype=np.int32)
         erefs = self._entity_refs
         thing_count = etable.count
+
+        self.editor_state.clear_render_dirty()
 
         # A Monster is handed to the renderer as a render snapshot, because the
         # AI thread is free to move it while the frame is being drawn.  Those
