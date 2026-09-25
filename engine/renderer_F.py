@@ -865,7 +865,7 @@ class Renderer_F(BaseRenderer):
         """Render optional environment cubemaps for visible reflected water rows.
 
         Each enabled water row owns a 256x256 RGBA cubemap. The capture point is
-        256 world units above the authored top surface. The capture scene uses
+        just above the authored top surface. The capture scene uses
         the same dense RenderTable/EntityTable draw passes as the main renderer,
         but deliberately omits water, glass, fog volumes and portals so the
         probe never reflects its own optical pass or recurses through secondary
@@ -943,9 +943,9 @@ class Renderer_F(BaseRenderer):
             for slot_value in reflection_slots:
                 slot = int(slot_value)
                 cubemap = self._ensure_water_reflection_cubemap(slot)
-                probe_height = max(
-                    float(table.water_reflection_height[slot]),
-                    1.0,
+                probe_height = min(
+                    max(float(table.water_reflection_height[slot]), 0.05),
+                    4.0,
                 )
                 probe = glm.vec3(
                     float(table.center[slot, 0]),
