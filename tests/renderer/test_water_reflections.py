@@ -37,5 +37,5 @@ def test_water_reflection_geometry_is_optional_and_fixed():
     from engine.renderer_core import BaseRenderer
 
     assert BaseRenderer.WATER_REFLECTION_SIZE == 256
-    assert BaseRenderer.WATER_REFLECTION_PROBE_HEIGHT == 256.0
+    assert BaseRenderer.WATER_REFLECTION_PROBE_HEIGHT == 0.5
     assert BaseRenderer.WATER_REFLECTION_TEXTURE_UNIT == 3
