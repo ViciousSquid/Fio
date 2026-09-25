@@ -600,7 +600,6 @@ class RenderTable:
                         self.uv_has_scale, self.colour, self.glow_colour,
                         self.geo_epoch, self.geometry_id, self.water_tint, self.water_params,
                         self.water_plane, self.water_reflections,
-                        self.water_reflection_height,
                         self.glass_color, self.glass_params,
                         self.fog_color, self.fog_params):
                 arr[dst] = arr[src]
