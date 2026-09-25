@@ -26,6 +26,7 @@ from editor.io_system import OutputConnection  # noqa: E402
 from editor.property_editor import PropertyEditor  # noqa: E402
 from editor.things import Light  # noqa: E402
 from engine import brush_geometry as bg  # noqa: E402
+from engine.render_table import RenderTable  # noqa: E402
 
 # Qt tier: PyQt5 must be importable.  No display and no GPU - the suite runs
 # against the offscreen platform plugin.
@@ -179,6 +180,34 @@ def test_a_displayed_property_change_does_rebuild(panel):
 
     assert page_of(editor) is not first
     assert editor._widgets['name_input'].text() == 'renamed'
+
+
+def test_property_edit_marks_the_dense_render_row_dirty(panel):
+    """Cold RenderTable material columns must see live Surface Inspector edits."""
+    host, editor = panel
+    brush = make_brush(
+        glass_color=[0.7, 0.85, 0.95],
+        glass_opacity=0.3,
+        glass_distortion=0.5,
+        glass_refraction=1.5,
+        glass_roughness=0.0,
+        glass_fresnel=0.5,
+        shader='Glass',
+    )
+    host.state.brushes.append(brush)
+
+    editor.set_object(brush)
+    before_epoch = host.state.world_epoch
+    editor.update_object_prop('glass_refraction', 2.4)
+
+    epoch, dirty = host.state.render_dirty_snapshot()
+    assert epoch == before_epoch + 1
+    assert id(brush) in dirty
+    assert brush['glass_refraction'] == 2.4
+
+    table = RenderTable()
+    table.begin_frame(host.state.brushes, epoch, dirty_objects=dirty)
+    assert table.glass_params[0].tolist() == [0.3, 0.5, 2.4, 0.0, 0.5]
 
 
 def test_toggling_a_behaviour_rebuilds_for_the_new_tabs(panel):
