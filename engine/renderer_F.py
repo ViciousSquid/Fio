@@ -312,9 +312,7 @@ class Renderer_F(BaseRenderer):
             # the only place the numeric path needs an object.
             mesh = None
             if has_geometry:
-                if brush is None:
-                    brush = refs[slot]
-                mesh = self._get_geo_mesh(brush)
+                mesh = geo_meshes.get(int(table.geometry_id[slot]))
             if mesh is not None:
                 if bound_vao != mesh.vao:
                     gl.glBindVertexArray(mesh.vao)
@@ -719,8 +717,8 @@ class Renderer_F(BaseRenderer):
             sel_slots = slots[rows]
             angles = np.radians(table.uv_angle[sel_slots, faces])
             shifts = table.uv_shift[sel_slots, faces]
-            geo_brushes = [refs[int(sl)] for sl in slots[
-                (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0]]
+            geo_slots = slots[(table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0]
+            geo_meshes = self._prepare_geo_meshes(table, geo_slots)
 
             instanced = (len(rows) > 0 and 'brush_instanced' in self.shaders
                          and self._cube_vbo is not None)
@@ -866,18 +864,22 @@ class Renderer_F(BaseRenderer):
         # they are set per run below rather than forced to zero here.
         # Convex-geometry meshes wind the opposite way to the cube (GL_BACK).
         self._portal_set_cull(is_geo=True)
-        for brush in geo_brushes:
-            mesh = self._get_geo_mesh(brush)
+        for slot_value in geo_slots if numeric else []:
+            gid = int(table.geometry_id[int(slot_value)])
+            mesh = geo_meshes.get(gid)
             if mesh is None:
-                continue  # degenerate plane set — nothing to draw
-            model_matrix = self._brush_model_matrix(brush)
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-            if normal_mat_loc > 0:
-                nmat = self._compute_normal_matrix(model_matrix, brush)
-                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(nmat))
+                continue
+            row_model = models[int(np.flatnonzero(slots == slot_value)[0])] if False else None
+            model_matrix = rt_model = None
+            if numeric:
+                row_model = models[int(np.flatnonzero(slots == slot_value)[0])]
+                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, row_model)
+                if normal_mat_loc > 0:
+                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
+                                          normals[int(np.flatnonzero(slots == slot_value)[0])])
             gl.glBindVertexArray(mesh.vao)
             for run in mesh.runs:
-                tex_name = self._geo_run_texture(brush, run)
+                tex_name = self._geo_run_texture(run)
                 if tex_name == 'caulk.jpg':
                     continue
                 if is_play and tex_name == 'nodraw.jpg':
@@ -888,10 +890,10 @@ class Renderer_F(BaseRenderer):
                     gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                     current_tex = tex_id
                 if tex_scale_loc != -1:
-                    su, sv = self._geo_run_tex_scale(brush, run, tex_name)
+                    su, sv = self._geo_run_tex_scale(run, tex_name)
                     gl.glUniform2f(tex_scale_loc, su, sv)
                 if tex_angle_loc != -1 or tex_shift_loc != -1:
-                    angle, shift_u, shift_v = self._geo_run_tex_transform(brush, run)
+                    angle, shift_u, shift_v = self._geo_run_tex_transform(run)
                     if tex_angle_loc != -1:
                         gl.glUniform1f(tex_angle_loc, angle)
                     if tex_shift_loc != -1:
@@ -938,6 +940,7 @@ class Renderer_F(BaseRenderer):
             colours = table.glow_colour[brushes]
             geometry = (table.class_bits[brushes]
                         & render_table.CLASS_HAS_GEOMETRY) != 0
+            geo_meshes = self._prepare_geo_meshes(table, brushes)
 
         for index in range(len(brushes)):
             self.render_stats.visible_tris += 12
@@ -967,9 +970,7 @@ class Renderer_F(BaseRenderer):
             gl.glUniform1f(alpha_loc, 1.0)
             mesh = None
             if has_geometry:
-                if brush is None:
-                    brush = refs[int(brushes[index])]
-                mesh = self._get_geo_mesh(brush)
+                mesh = geo_meshes.get(int(table.geometry_id[int(brushes[index])]))
             if mesh is not None:
                 if bound_vao != mesh.vao:
                     gl.glBindVertexArray(mesh.vao)
