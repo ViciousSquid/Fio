@@ -19,7 +19,7 @@ import glm
 import math
 import os
 
-from .threaded_game_state import ThreadedGameState, PublishedBrushes
+from .threaded_game_state import ThreadedGameState, PublishedBrushes, PublishedEntities
 from .player import Player
 from .camera import Camera
 from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
@@ -4005,8 +4005,9 @@ class LogicThread(threading.Thread):
 
         all_lights = (erefs[etable.light_slots].tolist()
                       if len(etable.light_slots) else [])
-        visible_things = (erefs[visible_thing_slots].tolist()
-                          if visible_count else [])
+        # Keep the dense slot selection authoritative. Object materialisation is
+        # deferred until a legacy/secondary consumer actually iterates it.
+        visible_things = PublishedEntities(erefs, visible_thing_slots)
 
         write_state.visible_things = visible_things
         write_state.visible_thing_position_count = visible_count
