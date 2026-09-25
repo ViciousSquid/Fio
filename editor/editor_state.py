@@ -68,7 +68,9 @@ class EditorState:
         # editor transaction. _render_dirty_all is used for reload/undo,
         # where the object identities themselves are replaced.
         self._render_dirty_objects = set()
+        self._render_dirty_epoch_by_id = {}
         self._render_dirty_all = False
+        self._render_dirty_all_epoch = -1
         self.brushes = []
         self.things = []
         self.selected_object = None
@@ -100,20 +102,47 @@ class EditorState:
         """Mark specific objects whose render-facing cold state changed."""
         if self._render_dirty_all:
             return
+        epoch = self.world_epoch
         for obj in objects:
             if obj is not None:
-                self._render_dirty_objects.add(id(obj))
+                obj_id = id(obj)
+                self._render_dirty_objects.add(obj_id)
+                self._render_dirty_epoch_by_id[obj_id] = epoch
 
     def render_dirty_snapshot(self):
-        """Return the current render dirtiness without consuming it."""
+        """Capture the render dirtiness and its epoch as one frame boundary."""
         if self._render_dirty_all:
-            return None
-        return set(self._render_dirty_objects)
+            dirty = None
+        else:
+            dirty = set(self._render_dirty_objects)
+        return self.world_epoch, dirty
 
-    def clear_render_dirty(self) -> None:
-        """Consume render dirtiness after both dense projections have synced."""
-        self._render_dirty_objects.clear()
-        self._render_dirty_all = False
+    def clear_render_dirty(self, snapshot=None) -> None:
+        """Consume only render dirtiness covered by a previously captured snapshot."""
+        if snapshot is None:
+            # Backward-compatible immediate consume for callers that do not
+            # participate in the frame-boundary protocol.
+            self._render_dirty_objects.clear()
+            self._render_dirty_epoch_by_id.clear()
+            self._render_dirty_all = False
+            self._render_dirty_all_epoch = -1
+            return
+
+        cutoff_epoch, _dirty = snapshot
+
+        # A later global invalidation belongs to a later frame and must survive.
+        if (self._render_dirty_all
+                and self._render_dirty_all_epoch <= cutoff_epoch):
+            self._render_dirty_all = False
+            self._render_dirty_all_epoch = -1
+
+        # A row dirtied again after the snapshot has a later epoch and must not
+        # be consumed by this frame. This also handles the same object being
+        # edited twice across the snapshot boundary.
+        for obj_id in tuple(self._render_dirty_objects):
+            if self._render_dirty_epoch_by_id.get(obj_id, cutoff_epoch) <= cutoff_epoch:
+                self._render_dirty_objects.discard(obj_id)
+                self._render_dirty_epoch_by_id.pop(obj_id, None)
 
     def mark_world_changed(self, objects=None) -> None:
         """Bump the world revision and journal the affected render rows.
@@ -142,11 +171,13 @@ class EditorState:
         self.world_epoch += 1
         if objects is None or not objects:
             self._render_dirty_objects.clear()
+            self._render_dirty_epoch_by_id.clear()
             self._render_dirty_all = True
+            self._render_dirty_all_epoch = self.world_epoch
         else:
             self.mark_render_dirty(*objects)
 
-    def mark_lighting_dirty(self) -> None:
+    def mark_lighting_dirty(self, objects=None) -> None:
         """
         Call whenever static geometry or static lights change so the next
         Play automatically triggers a rebake.
@@ -156,7 +187,9 @@ class EditorState:
         # A tool that holds one undo checkpoint open across a burst of edits
         # (the Surface Inspector) calls this per edit, so it is the signal that
         # catches what save_state alone would miss.
-        self.mark_world_changed(getattr(self, "selected_objects", ()))
+        if objects is None:
+            objects = getattr(self, "selected_objects", ())
+        self.mark_world_changed(objects)
         if self.bake_state is not None:
             self.bake_state.mark_dirty()
 
@@ -247,7 +280,9 @@ class EditorState:
         entities that used to be there.
         """
         self._render_dirty_objects.clear()
+        self._render_dirty_epoch_by_id.clear()
         self._render_dirty_all = True
+        self._render_dirty_all_epoch = self.world_epoch
         self.mark_world_changed()
         if IO_AVAILABLE:
             try:
