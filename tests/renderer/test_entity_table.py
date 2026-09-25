@@ -158,6 +158,37 @@ def test_light_render_state_stays_dense_and_tracks_motion_and_io():
     assert bool(table.light_enabled[0]) is False
 
 
+def test_rendered_portal_aperture_is_inset_without_changing_physical_size():
+    """The render aperture is smaller, while authored portal dimensions stay intact."""
+    pytest.importorskip("OpenGL")
+    from engine.renderer_core import BaseRenderer
+
+    portal = make_thing(
+        Portal, 'portal', (10.0, 20.0, 30.0),
+        width=128.0, height=256.0,
+    )
+    table = _synced([portal])
+
+    authored = BaseRenderer._portal_slot_corners(table, 0)
+    rendered = BaseRenderer._portal_slot_corners(
+        table, 0, BaseRenderer.PORTAL_APERTURE_INSET)
+
+    authored_width = np.linalg.norm(
+        np.asarray(authored[1]) - np.asarray(authored[0]))
+    authored_height = np.linalg.norm(
+        np.asarray(authored[3]) - np.asarray(authored[0]))
+    rendered_width = np.linalg.norm(
+        np.asarray(rendered[1]) - np.asarray(rendered[0]))
+    rendered_height = np.linalg.norm(
+        np.asarray(rendered[3]) - np.asarray(rendered[0]))
+
+    assert np.isclose(authored_width, 128.0)
+    assert np.isclose(authored_height, 256.0)
+    assert np.isclose(rendered_width, 120.0)
+    assert np.isclose(rendered_height, 248.0)
+    assert np.isclose(table.portal_width_height[0, 0], 128.0)
+    assert np.isclose(table.portal_width_height[0, 1], 256.0)
+
 def test_renderer_consumes_active_lights_as_entity_slots():
     pytest.importorskip("OpenGL")
     from engine.renderer_F import Renderer_F
