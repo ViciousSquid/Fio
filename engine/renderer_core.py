@@ -1661,13 +1661,25 @@ layout (location = 9) in vec4 iNormal2;
         if not (self.shaders.get('lit_instanced') or self.shaders.get('textured_instanced')):
             return 0
 
+        # Model rendering has always been double-sided at the renderer level.
+        # Brush passes are free to leave face culling enabled for their own
+        # geometry, but OBJ winding is authored per asset and must not make a
+        # valid model vanish in the entity pass.
+        cull_was_enabled = gl.glIsEnabled(gl.GL_CULL_FACE)
+        gl.glDisable(gl.GL_CULL_FACE)
+
         count = len(slots)
         if count == 1:
             # Keep the singleton path numeric but use the already-proven uniform
             # model submission instead of depending on instanced vertex
             # attributes for a draw that gains nothing from instancing.
-            return 1 if self._draw_dense_model_single(
+            drawn = 1 if self._draw_dense_model_single(
                 projection, view, table, slots[0], lights) else 0
+            if cull_was_enabled:
+                gl.glEnable(gl.GL_CULL_FACE)
+            else:
+                gl.glDisable(gl.GL_CULL_FACE)
+            return drawn
         if len(self._model_recipe_scratch) < count:
             grown = max(64, len(self._model_recipe_scratch) * 2, count)
             self._model_recipe_scratch = np.empty(grown, dtype=np.int32)
@@ -1778,6 +1790,10 @@ layout (location = 9) in vec4 iNormal2;
                 self.render_stats.batched_draws += 1
 
         gl.glBindVertexArray(0)
+        if cull_was_enabled:
+            gl.glEnable(gl.GL_CULL_FACE)
+        else:
+            gl.glDisable(gl.GL_CULL_FACE)
         return count
 
 
