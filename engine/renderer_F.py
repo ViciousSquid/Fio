@@ -29,11 +29,6 @@ from engine.render_cull import (
     cull_by_distance as _cull_by_distance,
     sort_by_distance as _sort_by_distance)
 
-# Beyond this distance from the camera a portal's virtual view is not rendered
-# (the aperture just shows its fade/rim). Portals are still discovered for I/O
-# and transit regardless.
-PORTAL_RENDER_DISTANCE = 2048.0
-
 # Cube face order — index maps to the face's 6-vertex run in the cube VAO
 # (face_idx * 6). Kept as a module constant so the per-frame texture batch
 # build doesn't allocate a fresh list for every brush.
@@ -1082,7 +1077,7 @@ class Renderer_F(BaseRenderer):
         gl.glDepthFunc(gl.GL_LESS)
         if clear:
             # FIX: Don't clear color when rendering a portal virtual view
-            if getattr(self, '_portal_virtual_view', None) is not None:
+            if getattr(self, '_portal_scene_pass', False):
                 gl.glClear(gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
             else:
                 gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT | gl.GL_STENCIL_BUFFER_BIT)
@@ -1111,8 +1106,9 @@ class Renderer_F(BaseRenderer):
         # Broad-phase distance cull (main camera pass only): feed the main
         # camera's slot/object classification a range-limited view of the scene,
         # on top of the frustum cull it already applies downstream. The original
-        # brush/Thing lists remain intact for shadow rendering and portal
-        # discovery/metadata; portal virtual scenes consume the published tables.
+        # Brush/Thing lists remain intact only for systems that still require
+        # authoring/runtime objects; portal scene contents consume the published
+        # dense tables exclusively.
         # default; a caller can force it on/off via 'camera_distance_cull'.
         #
         # This is the cheap *approximation* of the view distance -- it drops an
