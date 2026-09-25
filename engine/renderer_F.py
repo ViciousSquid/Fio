@@ -1112,10 +1112,11 @@ class Renderer_F(BaseRenderer):
             gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         self.draw_grid(projection, view, self.grid_indices_count,
                       config.get('play_mode', False), config.get('grid_visible', True))
-        # Broad-phase distance cull (main camera pass only): feed _sort_objects a
-        # range-limited view of the scene, on top of the frustum cull it already
-        # applies downstream. The original brushes/things lists are left intact
-        # for the shadow and portal passes below. Enabled in play mode by
+        # Broad-phase distance cull (main camera pass only): feed the main
+        # camera's slot/object classification a range-limited view of the scene,
+        # on top of the frustum cull it already applies downstream. The original
+        # brush/Thing lists remain intact for shadow rendering and portal
+        # discovery/metadata; portal virtual scenes consume the published tables.
         # default; a caller can force it on/off via 'camera_distance_cull'.
         #
         # This is the cheap *approximation* of the view distance -- it drops an
