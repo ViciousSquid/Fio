@@ -1311,9 +1311,12 @@ class Renderer_F(BaseRenderer):
             )
             if len(portal_slots):
                 try:
-                    def _portal_draw_scene(proj, vw, cam, _br, _th, _lights, cfg):
+                    def _portal_draw_scene(view_state, cfg):
                         # Fog and all scene classification remain driven by the
                         # virtual camera and the same dense tables as the main view.
+                        proj = view_state.projection
+                        vw = view_state.view
+                        cam = view_state.camera_pos
                         saved_cam = self._frame_camera_pos
                         self._frame_camera_pos = self._camera_xyz(cam)
                         try:
@@ -1339,7 +1342,7 @@ class Renderer_F(BaseRenderer):
                                     refs=cfg.get('render_refs'))
                             if portal_table is not None and len(portal_sprite_slots):
                                 self.draw_sprites_instanced(
-                                    proj, vw, portal_table.__class__ is None and cfg.get('entity_table') or cfg.get('entity_table'),
+                                    proj, vw, cfg.get('entity_table'),
                                     portal_sprite_slots,
                                     camera_pos=cam)
                         finally:
