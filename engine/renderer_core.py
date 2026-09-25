@@ -1645,7 +1645,6 @@ layout (location = 9) in vec4 iNormal2;
             draws += 1
 
         gl.glBindVertexArray(0)
-        self.render_stats.visible_tris += (obj.vertex_count // 3)
         return draws
 
 
