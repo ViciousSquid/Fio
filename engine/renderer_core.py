@@ -48,7 +48,7 @@ from engine.portal_transform import (
     contains_point as _portal_contains_point,
 )
 from editor.things import (
-    Thing, PathNode, Portal, Pickup, Prop, Monster, LogicGate, LogicRelay,
+    Thing, PathNode, Pickup, Prop, Monster, LogicGate, LogicRelay,
     LogicTimer, LevelChanger, Light, LogicSpawner, LogicCamera,
 )
 
@@ -2656,11 +2656,6 @@ layout (location = 9) in vec4 iNormal2;
         for i, t in enumerate(things):
             pos = thing_positions[i] if thing_positions is not None else None
             if PathNode is not None and isinstance(t, PathNode):
-                continue
-            if Portal is not None and isinstance(t, Portal):
-                sprites.append(t)
-                if sprite_pos is not None:
-                    sprite_pos.append(pos)
                 continue
             if isinstance(t, dict) and 'monster_type' in t:
                 sprites.append(t)
