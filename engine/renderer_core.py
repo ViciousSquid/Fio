@@ -448,9 +448,9 @@ class BaseRenderer:
         self._water_surface_ebo = None
         self._water_surface_index_count = 0
 
-        # Angled-brush (convex geometry) meshes, keyed by id(brush).  Entries
-        # are rebuilt when a brush's plane set changes and dropped after going
-        # unused for a while (see _begin_geo_frame).
+        # Convex geometry meshes, keyed by (RenderTable generation, geometry_id).
+        # Entries are rebuilt when the dense geometry signature changes and
+        # dropped after going unused for a while (see _begin_geo_frame).
         self._geo_mesh_cache = {}
         self._geo_mesh_frame = 0
 
