@@ -274,8 +274,7 @@ class BaseRenderer:
     SHADOW_MAP_SIZE = 384         # per-face resolution of each depth cube-map
     SHADOW_TEXTURE_UNIT_BASE = 4   # shadow cube-maps bind to units 4..(4+MAX_SHADOW_LIGHTS-1)
     WATER_REFLECTION_SIZE = 256
-    WATER_REFLECTION_PROBE_HEIGHT = 0.5
-    WATER_REFLECTION_TEXTURE_UNIT = 3
+        WATER_REFLECTION_TEXTURE_UNIT = 3
 
     #: Uniform names of the shared distance-fog / global-ambient block
     #: (engine.shaders.FOG_GLSL). Preloaded for every shader that splices it in,
@@ -298,7 +297,8 @@ class BaseRenderer:
         # 256x256 depth target used while filling all six faces.
         self._water_reflection_fbo = None
         self._water_reflection_depth = None
-        self._water_reflection_cubemaps = {}
+        self._water_reflection_textures = {}
+        self._water_reflection_matrices = {}
 
         self.load_texture_callback = texture_loader
         self._identity_mat4 = glm.mat4(1.0)
@@ -4681,12 +4681,13 @@ layout (location = 9) in vec4 iNormal2;
         self._shadow_slot_sig = [None] * self.MAX_SHADOW_LIGHTS
         self._light_shadow_index = {}
 
-        if self._water_reflection_cubemaps:
+        if self._water_reflection_textures:
             try:
-                gl.glDeleteTextures(list(self._water_reflection_cubemaps.values()))
+                gl.glDeleteTextures(list(self._water_reflection_textures.values()))
             except Exception:
                 pass
-            self._water_reflection_cubemaps.clear()
+            self._water_reflection_textures.clear()
+        self._water_reflection_matrices.clear()
         if self._water_reflection_depth:
             try:
                 gl.glDeleteRenderbuffers(1, [self._water_reflection_depth])
