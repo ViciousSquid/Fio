@@ -8,38 +8,20 @@ from collections import deque
 # common empty path avoids allocating a throwaway list on every rendered frame.
 _EMPTY_DRAIN: tuple = ()
 
-class PublishedBrushes:
-    """The published brush list, materialised only if something reads it.
+class PublishedObjects:
+    """Lazy object view over a dense slot selection."""
 
-    The logic thread used to end every frame by converting its visibility
-    result back into Python lists -- ``refs[visible_slots].tolist()`` for the
-    visible set and again for every non-hidden brush -- so that the renderer
-    could walk them and rediscover what the dense columns already said.
+    __slots__ = ('_refs', '_slots', '_list', '_label')
 
-    The renderer's main camera pass does not walk them any more: it consumes
-    the slots. But three things still want a list, and all three are
-    conditional -- the portal virtual views, the split-screen second view, and
-    any caller running without a projection. So the conversion happens on first
-    access rather than on every frame, and for a frame with no portal and no
-    split-screen it never happens at all.
-
-    ``len()`` and truth-testing are answered from the slot array, because those
-    are what the renderer and the stats overlay actually ask for.
-    """
-
-    __slots__ = ('_refs', '_slots', '_list')
-
-    def __init__(self, refs, slots):
+    def __init__(self, refs, slots, label="PublishedObjects"):
         self._refs = refs
         self._slots = slots
         self._list = None
+        self._label = label
 
     def materialise(self):
         if self._list is None:
-            if len(self._slots):
-                self._list = self._refs[self._slots].tolist()
-            else:
-                self._list = []
+            self._list = self._refs[self._slots].tolist() if len(self._slots) else []
         return self._list
 
     def __len__(self):
@@ -55,9 +37,19 @@ class PublishedBrushes:
         return self.materialise()[index]
 
     def __repr__(self):
-        return '<PublishedBrushes %d%s>' % (
-            len(self._slots), '' if self._list is None else ' materialised')
+        return '<%s %d%s>' % (self._label, len(self._slots), '' if self._list is None else ' materialised')
 
+
+class PublishedBrushes(PublishedObjects):
+    __slots__ = ()
+    def __init__(self, refs, slots):
+        super().__init__(refs, slots, "PublishedBrushes")
+
+
+class PublishedEntities(PublishedObjects):
+    __slots__ = ()
+    def __init__(self, refs, slots):
+        super().__init__(refs, slots, "PublishedEntities")
 
 class RenderState:
     """
