@@ -44,6 +44,7 @@ def available_renderers():
 from engine import brush_geometry
 from editor import component_edit
 from engine.threaded_game_state import ThreadedGameState, RenderState
+from engine.entity_table import EntityTable
 from engine.view_distance import ViewDistance
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
@@ -82,6 +83,10 @@ class QtGameView(QOpenGLWidget):
         self.setFormat(fmt)
 
         self.editor = editor
+        # Non-threaded editor views use the same dense entity projection as the
+        # threaded renderer. There is no Portal-object rendering fallback.
+        self._editor_entity_table = EntityTable()
+        self._editor_entity_refs = np.empty(0, dtype=object)
 
         self.brush_display_mode = "Solid Lit"
         # Play-mode camera: "First Person" or "Overhead" (native top-down),
@@ -1037,9 +1042,23 @@ class QtGameView(QOpenGLWidget):
         if render_state and hasattr(render_state, 'all_lights'):
             self._render_config["all_lights"] = render_state.all_lights
         else:
-            # Editor/non-threaded fallback: Renderer_F maintains a cached
-            # light collection keyed to the Thing-list identity/size.
             self._render_config["all_lights"] = None
+            etable = self._editor_entity_table
+            generation = etable.generation
+            hidden = etable.begin_frame(
+                things_to_render,
+                getattr(self.editor.state, 'world_epoch', None),
+            )
+            if etable.generation != generation:
+                self._editor_entity_refs = np.empty(
+                    etable.count, dtype=object)
+                for _i, _thing in enumerate(things_to_render):
+                    self._editor_entity_refs[_i] = _thing
+            self._render_config["entity_table"] = etable
+            self._render_config["entity_refs"] = self._editor_entity_refs
+            self._render_config["visible_thing_slots"] = (
+                np.arange(etable.count, dtype=np.int32))
+            self._render_config["thing_hidden"] = hidden
 
         # The render-state position buffer is a derived snapshot of
         # authoritative Thing.pos values. It is aligned with things_to_render
