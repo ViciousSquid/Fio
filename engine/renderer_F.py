@@ -24,10 +24,7 @@ from editor.things import Thing, Light
 # the live radius on self.view_distance (engine.view_distance); this module
 # applies the pair to the MAIN camera pass only -- never to the shadow or portal
 # passes, which keep using the full scene. See _camera_distance_cull below.
-from engine.render_cull import (
-    camera_xz as _cull_camera_xz,
-    cull_by_distance as _cull_by_distance,
-    sort_by_distance as _sort_by_distance)
+from engine.render_cull import camera_xz as _cull_camera_xz
 
 # Cube face order — index maps to the face's 6-vertex run in the cube VAO
 # (face_idx * 6). Kept as a module constant so the per-frame texture batch
@@ -79,11 +76,6 @@ class Renderer_F(BaseRenderer):
         # list or perform a second Python walk over the visible Thing set.
         self._model_render_buf = []
 
-        # Reusable object-reference buffers for the camera distance cull.
-        # Keeping these on the renderer avoids rebuilding the result lists.
-        self._cull_brush_buf = []
-        self._cull_thing_buf = []
-
         # Persistent numeric buffers for the camera distance-cull output.
         # They stay aligned with the returned brush/Thing lists, so later
         # classification and depth sorting never have to recover positions from
@@ -96,10 +88,6 @@ class Renderer_F(BaseRenderer):
         self._tex_size_by_name_id = np.zeros((0, 2), dtype=np.float32)
         self._brush_nmat_buf = np.empty((0, 9), dtype=np.float32)
 
-        self._cull_brush_pos_buf = np.empty((0, 2), dtype=np.float64)
-        self._cull_thing_pos_buf = np.empty((0, 2), dtype=np.float64)
-        self._last_cull_brush_positions = None
-        self._last_cull_thing_positions = None
 
     # ------------------------------------------------------------------
     # Matrix helpers – cached on the brush dict itself
