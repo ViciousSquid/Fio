@@ -1076,12 +1076,6 @@ class Renderer_F(BaseRenderer):
         published by the same pass and a frame with one and not the other is a
         frame something went wrong in.
         """
-        if brush_slots is None:
-            return False
-        table = config.get('render_table')
-        refs = config.get('render_refs')
-        if table is None or refs is None or len(refs) < table.count:
-            return False
         etable = config.get('entity_table')
         erefs = config.get('entity_refs')
         thing_slots = config.get('visible_thing_slots')
@@ -1203,8 +1197,7 @@ class Renderer_F(BaseRenderer):
             def _objs(key):
                 # Water, glass and fog carry wide per-object material
                 # parameters and are a handful of volumes even in a busy
-                # level, so they stay on the object path deliberately. The
-                # large-N passes below take slots and never see a dict.
+                # level, so they stay on the object path deliberately.
                 return refs[groups[key]].tolist() if len(groups[key]) else []
 
             opaque_brushes = groups['opaque']
@@ -1219,14 +1212,9 @@ class Renderer_F(BaseRenderer):
             cull_brushes = None
             models_to_render = self._model_render_buf
             models_to_render.clear()
+
             if entities_numeric:
-                # ---- entities: the same treatment, over their own columns ---
-                # An entity's render kind is a resolution of its class and
-                # three authored properties, which is as static as a brush's
-                # shader; only `hidden` and where it stands change per frame.
-                # So the pass split is masks over the entity projection, and an
-                # entity becomes a Python object once, at the end, for the two
-                # passes that still draw from dicts.
+                # ---- entities: masks over the dense projection -------------
                 tslots = thing_slots
                 if (config.get('camera_distance_cull',
                                config.get('play_mode', False))
@@ -1243,18 +1231,13 @@ class Renderer_F(BaseRenderer):
                 if len(model_slots):
                     models_to_render.extend(erefs[model_slots].tolist())
                 sort_positions = None
-                if sprites_numeric:
-                    # The sprite pass reads the columns directly, so the slots
-                    # never become objects. Materialising them here would undo
-                    # the point of classifying them numerically.
-                    sprite_things = []
-                else:
-                    sprite_things = (erefs[sprite_slots].tolist()
-                                     if len(sprite_slots) else [])
+                sprite_things = (
+                    []
+                    if sprites_numeric else
+                    (erefs[sprite_slots].tolist() if len(sprite_slots) else [])
+                )
             else:
-                # Things keep the object path when no entity projection was
-                # published -- the editor's non-threaded view, and any caller
-                # handing over a Thing list of its own.
+                # No entity projection was published; keep the old object path.
                 if (config.get('camera_distance_cull',
                                config.get('play_mode', False))
                         and camera_pos is not None):
@@ -1263,8 +1246,7 @@ class Renderer_F(BaseRenderer):
                         thing_positions=cull_thing_positions)
                     cull_thing_positions = self._last_cull_thing_positions
 
-                _, _, sprite_things, _, _, _, _, sort_positions = \
-                    self._sort_objects(
+                (_, _, sprite_things, _, _, _, _, sort_positions) =                     self._sort_objects(
                         (), cull_things, config,
                         model_out=models_to_render,
                         thing_positions=cull_thing_positions,
@@ -1286,18 +1268,57 @@ class Renderer_F(BaseRenderer):
 
             models_to_render = self._model_render_buf
             models_to_render.clear()
-            (opaque_brushes, transparent_brushes, sprite_things,
-             fog_volumes, water_brushes, glass_brushes, glow_brushes,
-             sort_positions) = self._sort_objects(
-                cull_brushes,
-                cull_things,
-                config,
-                model_out=models_to_render,
-                brush_positions=cull_brush_positions,
-                thing_positions=cull_thing_positions,
-                collect_sort_positions=True,
-            )
-            textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
+
+            if entities_numeric:
+                # The entity projection is independent of the brush projection.
+                # Use it even for secondary/editor views that do not have brush
+                # slot publication. This is the final escape hatch for the old
+                # per-Thing sprite classification.
+                tslots = thing_slots
+                if (config.get('camera_distance_cull',
+                               config.get('play_mode', False))
+                        and camera_pos is not None):
+                    tslots = self._distance_cull_thing_slots(
+                        etable, tslots, cx, cz, self.view_distance.distance_sq)
+                model_slots, sprite_slots = entity_projection.classify_slots(
+                    etable, tslots, thing_hidden,
+                    config.get('play_mode', False),
+                    config.get('show_sprites_in_play_mode', False))
+                if cx is not None:
+                    sprite_slots = self._sort_slots_by_distance(
+                        etable, sprite_slots, cx, cz)
+                if len(model_slots):
+                    models_to_render.extend(erefs[model_slots].tolist())
+                sprite_things = (
+                    []
+                    if sprites_numeric else
+                    (erefs[sprite_slots].tolist() if len(sprite_slots) else [])
+                )
+                sort_positions = None
+                # Run the brush-only object sorter. It now cannot touch Things.
+                (opaque_brushes, transparent_brushes, _ignored,
+                 fog_volumes, water_brushes, glass_brushes, glow_brushes,
+                 brush_sort_positions) = self._sort_objects(
+                    cull_brushes, (), config,
+                    model_out=None,
+                    brush_positions=cull_brush_positions,
+                    collect_sort_positions=True,
+                )
+                sort_positions = sort_positions or brush_sort_positions
+                textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
+            else:
+                (opaque_brushes, transparent_brushes, sprite_things,
+                 fog_volumes, water_brushes, glass_brushes, glow_brushes,
+                 sort_positions) = self._sort_objects(
+                    cull_brushes,
+                    cull_things,
+                    config,
+                    model_out=models_to_render,
+                    brush_positions=cull_brush_positions,
+                    thing_positions=cull_thing_positions,
+                    collect_sort_positions=True,
+                )
+                textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
 
         # _sort_objects classified the same visible Thing set and kept model
         # Things out of sprite_things, so the billboard pass needs no second
