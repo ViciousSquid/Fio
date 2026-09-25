@@ -1197,20 +1197,17 @@ class Renderer_F(BaseRenderer):
                     groups[key] = self._sort_slots_by_distance(
                         table, groups[key], cx, cz)
 
-            def _objs(key):
-                # Water, glass and fog carry wide per-object material
-                # parameters and are a handful of volumes even in a busy
-                # level, so they stay on the object path deliberately.
-                return refs[groups[key]].tolist() if len(groups[key]) else []
-
+            # Special volumes are dense slots too. Their shader material state
+            # is projected by RenderTable; only convex geometry crosses back to
+            # a Brush reference inside the pass.
             opaque_brushes = groups['opaque']
             textured_opaque = groups['textured']
             solid_opaque = groups['solid']
             transparent_brushes = groups['transparent']
             glow_brushes = groups['glow']
-            water_brushes = _objs('water')
-            glass_brushes = _objs('glass')
-            fog_volumes = _objs('fog')
+            water_brushes = groups['water']
+            glass_brushes = groups['glass']
+            fog_volumes = groups['fog']
 
             cull_brushes = None
             models_to_render = self._model_render_buf
@@ -1474,9 +1471,12 @@ class Renderer_F(BaseRenderer):
         else:
             self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl, refs=_refs)
         if current_mode == RENDER_MODE_LIT:
-            self.draw_water_brushes(projection, view, camera_pos, water_brushes, lights, config)
-            self.draw_glass_brushes(projection, view, camera_pos, glass_brushes, lights, config)
-            self.draw_fog_volumes(projection, view, camera_pos, fog_volumes, lights, config)
+            self.draw_water_brushes(projection, view, camera_pos, water_brushes, lights, config,
+                                     table=_tbl, refs=_refs)
+            self.draw_glass_brushes(projection, view, camera_pos, glass_brushes, lights, config,
+                                     table=_tbl, refs=_refs)
+            self.draw_fog_volumes(projection, view, camera_pos, fog_volumes, lights, config,
+                                  table=_tbl, refs=_refs)
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDisable(gl.GL_DEPTH_TEST)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
