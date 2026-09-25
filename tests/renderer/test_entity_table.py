@@ -135,6 +135,39 @@ def test_an_added_entity_reconciles_without_an_epoch_bump():
     assert len(table.monster_slots) == 1
 
 
+def test_light_render_state_stays_dense_and_tracks_motion_and_io():
+    lamp = make_thing(
+        Light, 'lamp', (10.0, 20.0, 30.0),
+        colour=[64, 128, 255], intensity=2.5, radius=900.0, state='on')
+    table = _synced([lamp])
+
+    assert np.allclose(table.light_color[0], [64 / 255.0, 128 / 255.0, 1.0])
+    assert np.allclose(table.light_params[0], [2.5, 900.0])
+    assert bool(table.light_enabled[0]) is True
+
+    lamp.pos = [110.0, 220.0, 330.0]
+    lamp.properties['colour'] = [255, 32, 16]
+    lamp.properties['intensity'] = 0.75
+    lamp.properties['radius'] = 1200.0
+    lamp.properties['state'] = 'off'
+    table.begin_frame([lamp], epoch=1)
+
+    assert np.allclose(table.pos[0], [110.0, 220.0, 330.0])
+    assert np.allclose(table.light_color[0], [1.0, 32 / 255.0, 16 / 255.0])
+    assert np.allclose(table.light_params[0], [0.75, 1200.0])
+    assert bool(table.light_enabled[0]) is False
+
+
+def test_light_shadow_flag_is_normalised_in_the_projection():
+    lamp = make_thing(Light, 'lamp', casts_shadows='true')
+    table = _synced([lamp])
+    assert bool(table.light_casts_shadows[0]) is True
+
+    lamp.properties['casts_shadows'] = 'off'
+    table.begin_frame([lamp], epoch=1)
+    assert bool(table.light_casts_shadows[0]) is False
+
+
 def test_positions_refresh_every_frame_without_reconciling():
     monster = make_thing(Monster, 'grunt', (0.0, 0.0, 0.0))
     table = _synced([monster])
