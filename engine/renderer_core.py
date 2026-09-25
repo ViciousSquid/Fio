@@ -4438,7 +4438,7 @@ layout (location = 9) in vec4 iNormal2;
         return self._get_geo_mesh_record(record, geometry_id=geometry_id,
                                          geometry_generation=geometry_generation)
 
-        @staticmethod
+    @staticmethod
     def _geo_uv_axes(n):
         """World axes a face's planar UVs project onto, by dominant normal
         axis.  Matches the cube VAO's orientation (v runs up walls).
