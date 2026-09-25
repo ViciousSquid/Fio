@@ -2287,7 +2287,7 @@ layout (location = 9) in vec4 iNormal2;
         gl.glDisable(gl.GL_CULL_FACE)
         gl.glBindVertexArray(0)
         return
-    def draw_fog_volumes(self, projection, view, camera_pos, brushes, lights, config):
+    def draw_fog_volumes(self, projection, view, camera_pos, brushes, lights, config, *, table):
         if len(brushes) == 0 or 'fog' not in self.shaders:
             return
         gl.glEnable(gl.GL_BLEND)
