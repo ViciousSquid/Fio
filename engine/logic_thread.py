@@ -199,8 +199,8 @@ class LogicThread(threading.Thread):
 
         # The dense render projection (T3) and the per-slot render references
         # published alongside it.  The table owns the numbers; `_render_refs`
-        # is the object array the renderer is still handed, with movers and
-        # doors replaced by their per-frame snapshot.
+        # is the object-reference escape hatch used only where a renderer path
+        # still needs authored object data (for example, convex brush planes).
         self._render_table = RenderTable()
         # The entity half of the same projection.  Entities move every
         # tick and their classification does not, so the table splits
@@ -3895,26 +3895,14 @@ class LogicThread(threading.Thread):
 
         # ---- warm columns ------------------------------------------------
         # Movers and doors move every tick and have no per-tick notification,
-        # so their transform columns are re-read unconditionally.  They are
-        # float copies -- no classification, no texture resolution.
+        # so their transform columns are re-read unconditionally.  The table
+        # is the render-thread snapshot of that state: do not copy the source
+        # brush dictionaries here.  Main-camera transform paths consume
+        # table.center / table.half / table.rot, while the object reference is
+        # only an escape hatch for data the table does not yet contain.
         dynamic_slots = table.dynamic_slots
         if len(dynamic_slots):
             table.refresh_transforms(brushes, dynamic_slots)
-            for i in dynamic_slots:
-                i = int(i)
-                b = brushes[i]
-                # The render thread still reads pos/size off the dict for the
-                # model matrix, so a moving brush is handed over as a snapshot.
-                # Once the draw paths take their transform from table.center /
-                # table.half this copy has no remaining purpose.
-                b_ref = b.copy()
-                b_ref['pos'] = list(b['pos'])
-                b_ref['size'] = list(b['size'])
-                if 'direction' in b:
-                    b_ref['direction'] = list(b['direction'])
-                if 'original_pos' in b:
-                    b_ref['original_pos'] = list(b['original_pos'])
-                refs[i] = b_ref
 
         if not self.play_mode:
             # An editor drag mutates pos for hundreds of frames after its one
