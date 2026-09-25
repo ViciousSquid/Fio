@@ -74,3 +74,27 @@ def test_dense_render_paths_have_no_convex_refs_slot_lookup():
     assert "refs[slot]" not in renderer_f
     assert "refs[int(brushes[index])]" not in renderer_f
     assert "refs[int(s)]" not in renderer_core
+
+
+def test_shadow_preparation_returns_dense_convex_slots():
+    from engine.renderer_core import BaseRenderer
+
+    box = box_brush("box")
+    convex = angled_brush("convex")
+    table = RenderTable()
+    table.sync([box, convex], 1)
+
+    class Probe:
+        def _frame_transforms(self, table, slots):
+            return np.zeros((len(slots), 16), dtype=np.float32), None
+
+        def _pack_brush_instances(self, models, normals, rows, selected, alpha):
+            self.packed = len(rows)
+
+    probe = Probe()
+    count, geo_slots = BaseRenderer._prepare_shadow_instances(
+        probe, table, None, np.array([0, 1], dtype=np.int32), True)
+
+    assert count == 1
+    assert geo_slots == [1]
+    assert probe.packed == 1
