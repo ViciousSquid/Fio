@@ -862,15 +862,25 @@ void main()
     vec3 R = reflect(-viewDir, N);
     vec3 reflection = skyColor(R);
 
-    // High quality reflection uses the world captured from a probe 256 units
-    // above the authored water surface. Only horizontal water surfaces sample
-    // it; vertical pool walls retain the cheap procedural environment.
+    // The reflection cubemap is captured immediately above the water surface.
+    // A probe hundreds of units above the water sees a fundamentally different
+    // environment: above-water reflection rays mostly hit the sky, while
+    // underwater rays can still hit the captured world. That produces the
+    // characteristic "reflection only appears when I enter the water" failure.
     if (reflectionEnabled == 1 && topFace > 0.5) {
         float lod = clamp(roughness * 5.0, 0.0, 5.0);
         reflection = textureLod(reflectionCube, R, lod).rgb;
     }
 
-    vec3 color = mix(transmission, reflection, fresnel);
+    // Keep authored reflectivity visible at normal viewing angles. Physical
+    // water Fresnel starts around 2%, which is too weak to make the optional
+    // environment probe perceptible from above on its own; grazing angles still
+    // get the full Fresnel response.
+    float reflectionWeight = max(
+        fresnel,
+        clamp(waterReflectivity, 0.0, 1.0) * 0.5
+    );
+    vec3 color = mix(transmission, reflection, reflectionWeight);
 
     // ------------------------------------------------------------------
     // Dynamic lights / specular / foam.
