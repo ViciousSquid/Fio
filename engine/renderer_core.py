@@ -1318,39 +1318,20 @@ layout (location = 9) in vec4 iNormal2;
         self._ensure_terrain_textures(terrain)
         if not terrain.shader_program:
             self.setup_terrain_shader(terrain)
-        dense_lights = (isinstance(lights, tuple) and len(lights) == 2
-                        and hasattr(lights[0], 'light_color'))
-        if dense_lights:
-            light_table, light_slots = lights
-            terrain_lights = (light_table, light_slots)
-            max_terrain_lights = shaders.MAX_LIGHTS_TERRAIN
-            if len(light_slots) > max_terrain_lights:
-                cx, cy, cz = self._camera_xyz(camera_pos)
-                dx = light_table.pos[light_slots, 0] - cx
-                dy = light_table.pos[light_slots, 1] - cy
-                dz = light_table.pos[light_slots, 2] - cz
-                order = np.argsort(dx * dx + dy * dy + dz * dz, kind='stable')
-                terrain_lights = (
-                    light_table,
-                    light_slots[order[:max_terrain_lights]],
-                )
-        else:
-            terrain_lights = list(lights) if lights else []
-            max_terrain_lights = shaders.MAX_LIGHTS_TERRAIN
-            if len(terrain_lights) > max_terrain_lights:
-                cx, cy, cz = self._camera_xyz(camera_pos)
-                terrain_lights.sort(
-                    key=lambda light: (
-                        (float(light.pos[0]) - cx) ** 2 +
-                        (float(light.pos[1]) - cy) ** 2 +
-                        (float(light.pos[2]) - cz) ** 2
-                    )
-                )
-                terrain_lights = terrain_lights[:max_terrain_lights]
-        # _upload_lights_once() updates regular uniforms, so the terrain program
-        # must be current before that upload. update_and_render() binds it again
-        # for the actual draw, but it is too late for the uniform writes above.
-        gl.glUseProgram(terrain.shader_program)
+        if not (isinstance(lights, tuple) and len(lights) == 2
+                and hasattr(lights[0], 'light_color')):
+            raise TypeError("terrain rendering requires (LightTable, slots)")
+        light_table, light_slots = lights
+        max_terrain_lights = shaders.MAX_LIGHTS_TERRAIN
+        terrain_lights = (light_table, light_slots)
+        if len(light_slots) > max_terrain_lights:
+            cx, cy, cz = self._camera_xyz(camera_pos)
+            dx = light_table.pos[light_slots, 0] - cx
+            dy = light_table.pos[light_slots, 1] - cy
+            dz = light_table.pos[light_slots, 2] - cz
+            order = np.argsort(dx * dx + dy * dy + dz * dz, kind='stable')
+            terrain_lights = (light_table, light_slots[order[:max_terrain_lights]])
+
         self._current_shader = terrain.shader_program
         self._upload_lights_once('terrain', terrain_lights)
         active_lights_count = (
@@ -1495,34 +1476,7 @@ layout (location = 9) in vec4 iNormal2;
         gl.glBindVertexArray(0)
         self._model_instanced_vaos.add(key)
 
-    def _fill_model_instance_buffer(self, things):
-        count = len(things)
-        self._ensure_model_instance_buffer(count)
-        out = self._model_instance_data[:count]
-        for i, thing in enumerate(things):
-            mat = self._thing_model_matrix(thing)
-            model_np = getattr(thing, '_render_model_mat_np_cache', None)
-            normal_np = getattr(thing, '_render_model_nmat_np_cache', None)
-            if model_np is None or normal_np is None:
-                normal = getattr(thing, '_render_model_nmat_cache', self._identity_mat3)
-                model_np = np.array([
-                    mat[0][0], mat[0][1], mat[0][2], mat[0][3],
-                    mat[1][0], mat[1][1], mat[1][2], mat[1][3],
-                    mat[2][0], mat[2][1], mat[2][2], mat[2][3],
-                    mat[3][0], mat[3][1], mat[3][2], mat[3][3],
-                ], dtype=np.float32)
-                normal_np = np.array([                    normal[0][0], normal[0][1], normal[0][2], 0.0,
-                    normal[1][0], normal[1][1], normal[1][2], 0.0,
-                    normal[2][0], normal[2][1], normal[2][2], 0.0,
-                ], dtype=np.float32)
-                thing._render_model_mat_np_cache = model_np
-                thing._render_model_nmat_np_cache = normal_np
-            out[i, :16] = model_np
-            out[i, 16:28] = normal_np
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._model_instance_vbo)
-        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, out)
-
-    def _fill_model_instance_buffer_numeric(self, table, slots):
+        def _fill_model_instance_buffer_numeric(self, table, slots):
         """Gather model transforms directly from dense entity columns."""
         count = len(slots)
         self._ensure_model_instance_buffer(count)
@@ -2057,8 +2011,7 @@ layout (location = 9) in vec4 iNormal2;
             amp = 1.2
         return min(amp, size[1] * 0.45, 30.0)
 
-    def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config,
-                           table=None, refs=None):
+    def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config):
         """Draw water from dense RenderTable state when available.
 
         *brushes* is a slot array on the numeric path. Only convex geometry
@@ -2068,7 +2021,6 @@ layout (location = 9) in vec4 iNormal2;
             return
         if not getattr(self, 'water_enabled', True):
             return
-        numeric = table is not None and refs is not None
         shader, uniforms = self.shaders['water'], self.uniforms['water']
         gl.glUseProgram(shader)
         self._upload_lights_once('water', lights)
@@ -2148,48 +2100,6 @@ layout (location = 9) in vec4 iNormal2;
                 self.render_stats.draw_calls += 1
             gl.glBindVertexArray(0)
             return
-
-        for brush in brushes:
-            model_matrix = self._brush_model_matrix(brush)
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-            if normal_mat_loc >= 0:
-                normal_mat = self._compute_normal_matrix(model_matrix, brush)
-                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
-            gl.glUniform1f(opacity_loc, brush.get('water_opacity', 0.5))
-            gl.glUniform1f(reflectivity_loc, brush.get('water_reflectivity', 0.5))
-            gl.glUniform3fv(tint_loc, 1, brush.get('water_tint', [0.0, 0.4, 0.6]))
-            size = brush.get('size', [64, 64, 64])
-            gl.glUniform3f(brush_size_loc, float(size[0]), float(size[1]), float(size[2]))
-            gl.glUniform1f(wave_amp_loc, self._water_wave_amplitude(brush))
-            mesh = self._get_geo_mesh(brush)
-            if mesh is not None:
-                top_count = mesh.count - mesh.side_count
-                gl.glBindVertexArray(mesh.vao)
-                if not brush.get('water_plane', False):
-                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.side_count)
-                if mesh.has_flat_top and surface_vao:
-                    gl.glBindVertexArray(surface_vao)
-                    gl.glDrawElements(gl.GL_TRIANGLES, self._water_surface_index_count,
-                                      gl.GL_UNSIGNED_INT, None)
-                elif top_count:
-                    gl.glDrawArrays(gl.GL_TRIANGLES, mesh.side_count, top_count)
-                elif brush.get('water_plane', False):
-                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
-                self.render_stats.draw_calls += 1
-                continue
-            if not brush.get('water_plane', False):
-                gl.glBindVertexArray(cube_vao)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
-            if surface_vao:
-                gl.glBindVertexArray(surface_vao)
-                gl.glDrawElements(gl.GL_TRIANGLES, self._water_surface_index_count,
-                                  gl.GL_UNSIGNED_INT, None)
-            else:
-                gl.glBindVertexArray(cube_vao)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
-            self.render_stats.draw_calls += 1
-        gl.glBindVertexArray(0)
-
     def _capture_glass_scene(self):
         """Copy the current framebuffer into the glass transmission texture.
 
@@ -2226,11 +2136,9 @@ layout (location = 9) in vec4 iNormal2;
             gl.GL_TEXTURE_2D, 0, 0, 0, x, y, width, height)
         return width, height
 
-    def draw_glass_brushes(self, projection, view, camera_pos, brushes, lights, config,
-                           table=None, refs=None):
+    def draw_glass_brushes(self, projection, view, camera_pos, brushes, lights, config):
         if len(brushes) == 0 or 'glass' not in self.shaders:
             return
-        numeric = table is not None and refs is not None
         shader, uniforms = self.shaders['glass'], self.uniforms['glass']
         gl.glUseProgram(shader)
         self._upload_env_uniforms('glass')
@@ -2295,41 +2203,9 @@ layout (location = 9) in vec4 iNormal2;
             gl.glDisable(gl.GL_CULL_FACE)
             gl.glBindVertexArray(0)
             return
-
-        for brush in brushes:
-            model_matrix = self._brush_model_matrix(brush)
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-            if normal_mat_loc > 0:
-                normal_mat = self._compute_normal_matrix(model_matrix, brush)
-                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
-            glass_color = brush.get('glass_color', [0.7, 0.85, 0.95])
-            opacity = brush.get('glass_opacity', 0.3)
-            distortion = brush.get('glass_distortion', 0.5)
-            refraction = brush.get('glass_refraction', 1.5)
-            roughness = brush.get('glass_roughness', 0.0)
-            fresnel = brush.get('glass_fresnel', 0.5)
-            gl.glUniform3fv(water_color_loc, 1, glass_color)
-            gl.glUniform1f(distortion_loc, distortion)
-            gl.glUniform1f(fresnel_loc, fresnel)
-            gl.glUniform1f(opacity_loc, opacity)
-            gl.glUniform1f(refraction_loc, refraction)
-            gl.glUniform1f(roughness_loc, roughness)
-            mesh = self._get_geo_mesh(brush)
-            if mesh is not None:
-                gl.glBindVertexArray(mesh.vao)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
-                gl.glBindVertexArray(self.vaos['cube'])
-            else:
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
-            self.render_stats.draw_calls += 1
-        gl.glDisable(gl.GL_CULL_FACE)
-        gl.glBindVertexArray(0)
-
-    def draw_fog_volumes(self, projection, view, camera_pos, brushes, lights, config,
-                         table=None, refs=None):
+    def draw_fog_volumes(self, projection, view, camera_pos, brushes, lights, config):
         if len(brushes) == 0 or 'fog' not in self.shaders:
             return
-        numeric = table is not None and refs is not None
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         shader, uniforms = self.shaders['fog'], self.uniforms['fog']
@@ -2391,40 +2267,6 @@ layout (location = 9) in vec4 iNormal2;
             gl.glBindVertexArray(0)
             gl.glActiveTexture(gl.GL_TEXTURE0)
             return
-
-        for brush in brushes:
-            model_matrix = self._brush_model_matrix(brush)
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-            inv_matrix = glm.inverse(model_matrix)
-            gl.glUniformMatrix4fv(inv_model_loc, 1, gl.GL_FALSE, glm.value_ptr(inv_matrix))
-            f_color = brush.get('fog_color', [0.5, 0.6, 0.7])
-            gl.glUniform1f(density_loc, brush.get('fog_density', 0.01))
-            gl.glUniform3fv(fog_color_loc, 1, f_color)
-            gl.glUniform1f(noise_scale_loc, brush.get('fog_noise_scale', 0.01))
-            gl.glUniform3fv(object_color_loc, 1, f_color)
-            gl.glUniform1f(alpha_loc, 0.4)
-            mesh = self._get_geo_mesh(brush)
-            if mesh is not None:
-                gl.glBindVertexArray(mesh.vao)
-                gl.glCullFace(gl.GL_FRONT)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
-                gl.glCullFace(gl.GL_BACK)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
-                gl.glBindVertexArray(self.vaos['cube'])
-            else:
-                gl.glCullFace(gl.GL_FRONT)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
-                gl.glCullFace(gl.GL_BACK)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
-        gl.glDisable(gl.GL_CULL_FACE)
-        gl.glBindVertexArray(0)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-
-    # --------------------------------------------------------------------------
-    # Helpers for sorting and matrix utilities
-    # --------------------------------------------------------------------------
     def _classify_brush_slots(self, table, slots, config):
         """Split visible brush slots into the render passes, numerically.
 
@@ -2660,17 +2502,11 @@ layout (location = 9) in vec4 iNormal2;
             self._light_ubo_key = ()
             return
 
-        dense = (isinstance(lights, tuple) and len(lights) == 2
-                 and hasattr(lights[0], 'light_color'))
-        if dense:
-            table, slots = lights
-            # Position/parameters are warm columns and may change while the
-            # slot set stays identical. render_scene clears this key once per
-            # frame, so the same dense packet is uploaded once then shared by
-            # all lighting passes.
-            key = ('dense', id(table), table.generation, count)
-        else:
-            key = tuple(id(light) for light in lights[:count])
+        if not (isinstance(lights, tuple) and len(lights) == 2
+                and hasattr(lights[0], 'light_color')):
+            raise TypeError("light upload requires (LightTable, slots)")
+        table, slots = lights
+        key = ('dense', id(table), table.generation, count, tuple(int(x) for x in slots[:count]))
         if self._light_ubo_key == key:
             return
 
@@ -2680,40 +2516,18 @@ layout (location = 9) in vec4 iNormal2;
         active['params'].fill(0.0)
         active['indices'].fill(0)
 
-        if (isinstance(lights, tuple) and len(lights) == 2
-                and hasattr(lights[0], 'light_color')):
-            table, slots = lights
-            active_lights = slots[:count]
-            active['position'][:, :3] = table.pos[active_lights].astype(
-                np.float32, copy=False)
-            active['position'][:, 3] = 1.0
-            active['color'][:, :3] = table.light_color[active_lights]
-            active['color'][:, 3] = 1.0
-            active['params'][:, :2] = table.light_params[active_lights]
-            shadow_indices = np.fromiter(
-                (self._light_shadow_index.get(int(slot), -1)
-                 for slot in active_lights),
-                dtype=np.int32,
-                count=count,
-            )
-        else:
-            active_lights = lights[:count]
-            positions = np.asarray([light.pos for light in active_lights], dtype=np.float32)
-            colors = np.asarray([light.get_color() for light in active_lights], dtype=np.float32)
-            params = np.asarray(
-                [[light.get_intensity(), light.get_radius()] for light in active_lights],
-                dtype=np.float32,
-            )
-            shadow_indices = np.fromiter(
-                (self._light_shadow_index.get(id(light), -1) for light in active_lights),
-                dtype=np.int32,
-                count=count,
-            )
-            active['position'][:, :3] = positions
-            active['position'][:, 3] = 1.0
-            active['color'][:, :3] = colors
-            active['color'][:, 3] = 1.0
-            active['params'][:, :2] = params
+        table, slots = lights
+        active_lights = slots[:count]
+        active['position'][:, :3] = table.pos[active_lights].astype(np.float32, copy=False)
+        active['position'][:, 3] = 1.0
+        active['color'][:, :3] = table.light_color[active_lights]
+        active['color'][:, 3] = 1.0
+        active['params'][:, :2] = table.light_params[active_lights]
+        shadow_indices = np.fromiter(
+            (self._light_shadow_index.get(int(slot), -1) for slot in active_lights),
+            dtype=np.int32,
+            count=count,
+        )
 
         active['indices'][:, 0] = shadow_indices
 
@@ -2735,30 +2549,22 @@ layout (location = 9) in vec4 iNormal2;
         # Fog/ambient remain regular uniforms because they are not shared light
         # state.
         self._upload_env_uniforms(shader_name)
+        if not (isinstance(lights, tuple) and len(lights) == 2
+                and hasattr(lights[0], 'light_color')):
+            raise TypeError("light upload requires (LightTable, slots)")
+        table, slots = lights
         cap = self._shader_light_cap(shader_name)
-        num_lights = min(
-            len(lights[1]) if (isinstance(lights, tuple) and len(lights) == 2
-                               and hasattr(lights[0], 'light_color'))
-            else len(lights),
-            cap,
-        )
+        num_lights = min(len(slots), cap)
 
-        # Bind the shared block for this program even when the light list itself
-        # is unchanged. The UBO contents are uploaded only when the light IDs
-        # change for the frame/pass.
         self._ensure_light_ubo(num_lights)
         gl.glBindBufferBase(
             gl.GL_UNIFORM_BUFFER,
             shaders.LIGHT_UBO_BINDING,
             self._light_ubo,
         )
-        if (isinstance(lights, tuple) and len(lights) == 2
-                and hasattr(lights[0], 'light_color')):
-            self._frame_lights_uploaded[shader_name] = (
-                id(lights[0]), lights[0].generation,
-                tuple(int(x) for x in lights[1][:cap]))
-        else:
-            self._frame_lights_uploaded[shader_name] = tuple(map(id, lights[:cap]))
+        self._frame_lights_uploaded[shader_name] = (
+            id(table), table.generation,
+            tuple(int(x) for x in slots[:cap]))
         gl.glUniform1i(self.uniforms[shader_name]['active_lights'], num_lights)
         self._upload_light_ubo(lights, num_lights)
 
@@ -4418,27 +4224,7 @@ layout (location = 9) in vec4 iNormal2;
             self._geo_mesh_cache[cache_key] = new
         return new
 
-    def _get_geo_mesh(self, brush, geometry_id=None, geometry_generation=None):
-        """Legacy/editor bridge for callers that still own a Brush."""
-        if not brush_geometry.brush_has_geometry(brush):
-            return None
-        convex = brush_geometry.get_convex(brush)
-        if convex is None or not convex.is_valid:
-            return None
-        from engine.render_table import GeometryRecord
-        pos = brush.get('pos') or (0.0, 0.0, 0.0)
-        size = brush.get('size') or (64.0, 64.0, 64.0)
-        record = GeometryRecord(
-            brush_geometry.geometry_signature(brush), convex,
-            np.asarray(pos, dtype=np.float64).copy(),
-            np.asarray([max(abs(float(s)), 1e-6) for s in size], dtype=np.float64),
-            {id(face): bool(brush_geometry.face_uses_natural_scale(
-                brush, face.get('face'), face)) for face in convex.faces},
-        )
-        return self._get_geo_mesh_record(record, geometry_id=geometry_id,
-                                         geometry_generation=geometry_generation)
-
-    @staticmethod
+        @staticmethod
     def _geo_uv_axes(n):
         """World axes a face's planar UVs project onto, by dominant normal
         axis.  Matches the cube VAO's orientation (v runs up walls).
