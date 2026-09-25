@@ -201,8 +201,8 @@ class Renderer_F(BaseRenderer):
         dense render projection and nothing here reads a brush dict except to
         fetch an angled brush's mesh.  Colour, trigger/subtract state and the
         transform all come from columns; selection is an integer compare.
-        Without them it walks brush dicts, as it always did -- that path still
-        serves the portal virtual views and the non-threaded editor.
+        Without them it walks brush dicts, which is now limited to the
+        non-threaded editor and other callers that explicitly lack a projection.
         """
         if len(brushes) == 0 or 'lit' not in self.shaders:
             return
@@ -1012,18 +1012,74 @@ class Renderer_F(BaseRenderer):
         return (self.entities_are_numeric(config, brush_slots)
                 and 'sprite_instanced' in self.shaders)
 
+    def _portal_numeric_scene_inputs(self, projection, view, config):
+        """Resolve a portal virtual scene entirely from the dense projections.
+
+        The portal camera itself still uses Portal objects for its link
+        transform and aperture geometry, but the world seen through that
+        camera never falls back to _sort_objects or reconstructs a brush or
+        entity list.  all_brush_slots is already the live-hidden-filtered
+        world projection published by the logic thread; the virtual frustum
+        is applied as a vector mask over RenderTable.center/half.
+        EntityTable supplies the entity classification and live hidden
+        filtering for the sprite pass.
+        """
+        table = config.get('render_table')
+        if table is None:
+            raise RuntimeError("Portal virtual view requires RenderTable")
+
+        slots = config.get('all_brush_slots')
+        if slots is None:
+            slots = np.empty(0, dtype=np.int32)
+        else:
+            slots = np.asarray(slots, dtype=np.int32)
+
+        if len(slots):
+            planes = self._frustum_planes(projection * view)
+            centres = table.center[slots]
+            radii = np.linalg.norm(table.half[slots], axis=1)
+            keep = np.ones(len(slots), dtype=bool)
+            for a, b, c, d in planes:
+                keep &= (
+                    a * centres[:, 0]
+                    + b * centres[:, 1]
+                    + c * centres[:, 2]
+                    + d
+                ) >= -radii
+            slots = slots[keep]
+
+        groups = self._classify_brush_slots(table, slots, config)
+
+        etable = config.get('entity_table')
+        thing_slots = config.get('visible_thing_slots')
+        thing_hidden = config.get('thing_hidden')
+        if (etable is not None and thing_slots is not None
+                and thing_hidden is not None):
+            thing_slots = np.asarray(thing_slots, dtype=np.int32)
+            _, sprite_slots = entity_projection.classify_slots(
+                etable,
+                thing_slots,
+                thing_hidden,
+                config.get('play_mode', False),
+                config.get('show_sprites_in_play_mode', False),
+            )
+        else:
+            sprite_slots = np.empty(0, dtype=np.int32)
+
+        lights = self._get_active_lights((), config)
+        return table, groups, sprite_slots, lights
+
     def render_scene(self, projection, view, camera_pos, brushes, things,
                      selected_object, config, clear=True, brush_slots=None):
         """Draw one view.
 
         *brush_slots* is the visibility result as integer slots into the dense
-        render projection (``config['render_table']``).  When it is supplied,
+        render projection (config['render_table']).  When it is supplied,
         the brush half of the frame -- distance cull, classification into
         passes, depth ordering -- is done with masks over the projection's
-        columns, and a brush becomes a Python object only where a draw path
-        still needs its dict.  It is passed for the main camera pass only: the
-        split-screen second view and the portal virtual views are drawn from
-        different brush sets, so they take the object path below.
+        columns.  The portal virtual views consume the same projection too:
+        their virtual frustum narrows all_brush_slots numerically before
+        the normal numeric brush/entity passes run.
         """
         current_mode = config.get('render_mode', RENDER_MODE_LIT)
         gl.glEnable(gl.GL_DEPTH_TEST)
@@ -1277,39 +1333,33 @@ class Renderer_F(BaseRenderer):
                             self._frame_lights_uploaded.clear()
 
                     def _portal_draw_scene_inner(proj, vw, cam, br, th, sel, cfg):
-                        # Re-sort from the FULL unculled brush set, but cull it
-                        # against the VIRTUAL camera frustum first — otherwise
-                        # every portal re-shades the entire level. Sphere-based
-                        # test is conservative, so nothing visible is dropped.
-                        all_br = cfg.get('all_brushes', br)
-                        all_th = cfg.get('all_things', th)
-                        try:
-                            planes = self._frustum_planes(proj * vw)
-                            all_br = [b for b in all_br
-                                      if self._brush_visible_in_frustum(planes, b)]
-                        except Exception:
-                            pass  # never let culling break the portal view
-                        _opaque, _transparent, _ignored_sprites, _fog, _water, _glass, _glow = \
-                            self._sort_objects(all_br, all_th, cfg)
-
-                        _t_opaque, _solid = self._split_opaque(_opaque)
+                        # The virtual camera consumes the same dense projections
+                        # as the main camera. No object sorting or scene-list
+                        # reconstruction occurs here.
+                        portal_table, portal_groups, portal_sprite_slots, portal_lights = (
+                            self._portal_numeric_scene_inputs(proj, vw, cfg)
+                        )
+                        _t_opaque = portal_groups['textured']
+                        _solid = portal_groups['solid']
+                        _opaque = portal_groups['opaque']
                         _t_brush_mode = cfg.get('brush_display_mode', 'Textured')
-                        _lights = self._get_active_lights(all_th, cfg)
+
                         if _t_brush_mode in ('Textured', 'Solid Lit'):
-                            self.draw_textured_brushes_optimized(proj, vw, cam, _t_opaque, _lights, cfg, cfg.get('render_table'))
-                            self.draw_lit_brushes_optimized(proj, vw, cam, _solid, _lights, cfg)
+                            self.draw_textured_brushes_optimized(
+                                proj, vw, cam, _t_opaque, portal_lights,
+                                cfg, portal_table)
+                            self.draw_lit_brushes_optimized(
+                                proj, vw, cam, _solid, portal_lights, cfg,
+                                table=portal_table,
+                                refs=cfg.get('render_refs'))
                         else:
-                            self.draw_lit_brushes_optimized(proj, vw, cam, _opaque, _lights, cfg)
+                            self.draw_lit_brushes_optimized(
+                                proj, vw, cam, _opaque, portal_lights, cfg,
+                                table=portal_table,
+                                refs=cfg.get('render_refs'))
 
                         portal_etable = cfg.get('entity_table')
-                        portal_hidden = cfg.get('thing_hidden')
-                        if portal_etable is not None and portal_hidden is not None:
-                            portal_slots = np.arange(
-                                portal_etable.count, dtype=np.int32)
-                            _, portal_sprite_slots = entity_projection.classify_slots(
-                                portal_etable, portal_slots, portal_hidden,
-                                cfg.get('play_mode', False),
-                                cfg.get('show_sprites_in_play_mode', False))
+                        if portal_etable is not None and len(portal_sprite_slots):
                             self.draw_sprites_instanced(
                                 proj, vw, portal_etable, portal_sprite_slots,
                                 camera_pos=cam)
