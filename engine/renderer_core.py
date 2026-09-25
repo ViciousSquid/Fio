@@ -391,8 +391,6 @@ class BaseRenderer:
         # Cached editor-mode light collection. Threaded/play mode supplies
         # an authoritative all_lights list through RenderState; this fallback
         # avoids rescanning every Thing on every editor frame.
-        self._light_collection_key = None
-        self._light_collection = []
 
         # Per‑frame caches
         self._frame_lights = []        # shader_name -> tuple of light ids uploaded this frame; cleared at
