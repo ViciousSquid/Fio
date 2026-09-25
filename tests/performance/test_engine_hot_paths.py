@@ -449,6 +449,7 @@ def test_portal_transit_keeps_player_at_mapped_plane_not_body_clearance(logic):
     from editor.things import Portal
     from engine.player import Player
     from engine.portal_transform import map_direction, map_point
+    import glm
 
     portal_a = Portal(pos=[0.0, 0.0, 0.0], properties={
         'name': 'A', 'portal_target': 'B',
@@ -460,8 +461,8 @@ def test_portal_transit_keeps_player_at_mapped_plane_not_body_clearance(logic):
     })
     thread = logic(brushes=[], things=[portal_a, portal_b])
     player = Player(0.0, -10.0, 0.0)
-    player.pos = __import__('glm').vec3(0.0, 20.0, -4.0)
-    player.velocity = __import__('glm').vec3(0.0, 0.0, -120.0)
+    player.pos = glm.vec3(0.0, 20.0, -4.0)
+    player.velocity = glm.vec3(0.0, 0.0, -120.0)
     thread.set_player(player)
     thread.set_play_mode(True)
     try:
@@ -483,6 +484,7 @@ def test_portal_transit_keeps_player_at_mapped_plane_not_body_clearance(logic):
         assert np.allclose(tuple(thread.player.velocity), expected_velocity)
     finally:
         thread.set_play_mode(False)
+
 
 def test_a_map_with_no_portals_pays_nothing_for_the_portal_system(logic):
     from engine.player import Player
