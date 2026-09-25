@@ -251,6 +251,10 @@ class BaseRenderer:
     ])
     MAX_PORTALS = 4      # maximum portal apertures rendered per frame
     PORTAL_RENDER_DISTANCE = 2048.0
+    # Render-only inset for the portal aperture.  Physical portal size and
+    # transit geometry remain authored; this keeps coplanar floor/wall edges
+    # from bleeding into the portal image at its boundary.
+    PORTAL_APERTURE_INSET = 4.0
 
     # How many times a portal may be seen recursively through another portal.
     # 1 = classic single virtual view (default; identical to the original
@@ -4339,10 +4343,20 @@ layout (location = 9) in vec4 iNormal2;
         basis = table.portal_basis[int(slot)]
         return basis[0], basis[1], basis[2]
 
-    @staticmethod
-    def _portal_slot_corners(table, slot):
-        return _portal_corners(table.pos[int(slot)], BaseRenderer._portal_slot_basis(table, slot),
-                               table.portal_width_height[int(slot), 0], table.portal_width_height[int(slot), 1])
+    @classmethod
+    def _portal_slot_corners(cls, table, slot, inset=0.0):
+        width = float(table.portal_width_height[int(slot), 0])
+        height = float(table.portal_width_height[int(slot), 1])
+        inset = max(0.0, float(inset))
+        # Keep the render aperture valid even for unusually small authored portals.
+        max_inset = max(0.0, 0.5 * min(width, height) - 8.0)
+        inset = min(inset, max_inset)
+        return _portal_corners(
+            table.pos[int(slot)],
+            cls._portal_slot_basis(table, slot),
+            width - inset * 2.0,
+            height - inset * 2.0,
+        )
 
     @staticmethod
     def _portal_slot_contains(table, slot, point):
@@ -4381,7 +4395,8 @@ layout (location = 9) in vec4 iNormal2;
         gl.glClear(gl.GL_STENCIL_BUFFER_BIT)
 
     def _draw_one_portal(self, portal_table, portal_a, portal_b, projection, main_view, camera_pos, config, draw_scene_fn, pv, portal_slots, depth=1):
-        corners_a = self._portal_slot_corners(portal_table, portal_a)
+        corners_a = self._portal_slot_corners(
+            portal_table, portal_a, self.PORTAL_APERTURE_INSET)
         proj_ptr = glm.value_ptr(projection)
         view_ptr = glm.value_ptr(main_view)
         fade_a = float(portal_table.portal_fade[portal_a])
