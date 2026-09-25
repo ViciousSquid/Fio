@@ -2726,21 +2726,9 @@ layout (location = 9) in vec4 iNormal2;
                 gl.GL_RENDERBUFFER,
                 self._water_reflection_depth,
             )
-            gl.glDrawBuffer(gl.GL_COLOR_ATTACHMENT0)
-            gl.glReadBuffer(gl.GL_COLOR_ATTACHMENT0)
-            status = gl.glCheckFramebufferStatus(gl.GL_FRAMEBUFFER)
-            if status != gl.GL_FRAMEBUFFER_COMPLETE:
-                print(
-                    f"[Water] reflection FBO incomplete "
-                    f"(0x{status:x}); reflections disabled"
-                )
-                gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, 0)
-                gl.glDeleteRenderbuffers(1, [self._water_reflection_depth])
-                gl.glDeleteFramebuffers(1, [self._water_reflection_fbo])
-                self._water_reflection_depth = None
-                self._water_reflection_fbo = None
-                return False
-
+            # No colour attachment exists until a specific water cubemap face
+            # is selected. The capture path validates completeness after it
+            # attaches that face.
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, 0)
             gl.glBindRenderbuffer(gl.GL_RENDERBUFFER, 0)
             return True
