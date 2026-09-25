@@ -541,13 +541,27 @@ class EntityTable:
         return sid
 
     def sprite_recipes(self) -> list:
-        """Interned candidate lists, indexed by id.
-
-        The renderer walks this once per new recipe to build its ``sprite id ->
-        GL texture id`` array.  Tens of entries in a level, not thousands, and
-        never touched per sprite.
-        """
+        """Interned candidate lists, indexed by id."""
         return self._sprite_recipes
+
+    def intern_model_recipe(self, recipe) -> int:
+        if recipe is None:
+            return -1
+        mid = self._model_ids.get(recipe)
+        if mid is None:
+            mid = len(self._model_recipes)
+            self._model_ids[recipe] = mid
+            self._model_recipes.append(recipe)
+        return mid
+
+    def model_recipes(self) -> list:
+        """Interned model recipes, indexed by dense entity column id."""
+        return self._model_recipes
+
+    def update_monster_snapshot(self, slot, snapshot):
+        """Publish a Monster render snapshot into numeric sprite columns."""
+        self.sprite_size[slot] = sprite_size(snapshot)
+        self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(snapshot))
 
     @property
     def center(self):
@@ -588,6 +602,21 @@ class EntityTable:
         if len(self.sprite_key_id):
             keys[:len(self.sprite_key_id)] = self.sprite_key_id
         self.sprite_key_id = keys
+
+        model_ids = np.full((grown,), -1, dtype=np.int32)
+        if len(self.model_recipe_id):
+            model_ids[:len(self.model_recipe_id)] = self.model_recipe_id
+        self.model_recipe_id = model_ids
+
+        base = np.zeros((grown, 16), dtype=np.float32)
+        if len(self.model_base_matrix):
+            base[:len(self.model_base_matrix)] = self.model_base_matrix
+        self.model_base_matrix = base
+
+        normal = np.zeros((grown, 12), dtype=np.float32)
+        if len(self.model_normal_matrix):
+            normal[:len(self.model_normal_matrix)] = self.model_normal_matrix
+        self.model_normal_matrix = normal
 
     # -- synchronisation ---------------------------------------------------
 
