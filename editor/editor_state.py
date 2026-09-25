@@ -115,8 +115,11 @@ class EditorState:
         self._render_dirty_objects.clear()
         self._render_dirty_all = False
 
-    def mark_world_changed(self) -> None:
-        """Bump the coarse "something about the world changed" counter.
+    def mark_world_changed(self, objects=None) -> None:
+        """Bump the world revision and journal the affected render rows.
+
+        objects is the precise editor transaction path. A bare call remains
+        the conservative global invalidation used by external callers/tests.
 
         A derived structure that resolves expensive per-object data -- the
         renderer's dense projection above all -- has to know when to re-resolve
@@ -137,7 +140,11 @@ class EditorState:
         that wants to be finer-grained tracks its own per-row dirty set on top.
         """
         self.world_epoch += 1
-        self.mark_render_dirty(*getattr(self, "selected_objects", ()))
+        if objects is None:
+            self._render_dirty_objects.clear()
+            self._render_dirty_all = True
+        else:
+            self.mark_render_dirty(*objects)
 
     def mark_lighting_dirty(self) -> None:
         """
@@ -149,8 +156,7 @@ class EditorState:
         # A tool that holds one undo checkpoint open across a burst of edits
         # (the Surface Inspector) calls this per edit, so it is the signal that
         # catches what save_state alone would miss.
-        self.world_epoch += 1
-        self.mark_render_dirty(*getattr(self, "selected_objects", ()))
+        self.mark_world_changed(getattr(self, "selected_objects", ()))
         if self.bake_state is not None:
             self.bake_state.mark_dirty()
 
@@ -530,7 +536,7 @@ class EditorState:
         record of what the scene now looks like.  :meth:`undo` therefore has to
         capture the live scene itself — see the note there.
         """
-        self.mark_world_changed()
+        self.mark_world_changed(getattr(self, "selected_objects", ()))
         # Keep the redo branch we are about to drop, so an operation that turns
         # out to change nothing can put it back (see discard_last_checkpoint).
         self._discarded_redo = list(self.redo_stack)
