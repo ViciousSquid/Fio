@@ -4617,13 +4617,6 @@ layout (location = 9) in vec4 iNormal2;
         if depth < self.MAX_PORTAL_RECURSION:
             self._draw_nested_portals(portal_table,portal_a,portal_b,clip_proj,virtual_view,virtual_cam,config,draw_scene_fn,portal_slots,depth+1)
 
-        # The virtual scene used the shared depth buffer in destination-camera
-        # space.  Flatten that depth back to the source portal plane before the
-        # main scene resumes, so foreground main-world geometry can occlude the
-        # portal correctly without being compared against unrelated destination
-        # geometry depths.
-        self._portal_flatten_depth(corners_a, projection, main_view, depth)
-
         if bool(portal_table.portal_show_rim[portal_a]):
             gl.glEnable(gl.GL_STENCIL_TEST); gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glStencilMask(0x00); gl.glEnable(gl.GL_BLEND); gl.glBlendFunc(gl.GL_SRC_ALPHA,gl.GL_ONE)
             r,g,b=portal_table.portal_color[portal_a]; self._portal_upload_quad(corners_a); gl.glUseProgram(self._portal_rim_shader)
@@ -4633,6 +4626,10 @@ layout (location = 9) in vec4 iNormal2;
             gl.glEnable(gl.GL_STENCIL_TEST); gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glStencilMask(0x00); gl.glEnable(gl.GL_BLEND); gl.glBlendFunc(gl.GL_SRC_ALPHA,gl.GL_ONE_MINUS_SRC_ALPHA)
             self._portal_upload_quad(corners_a); gl.glUseProgram(self._portal_rim_shader); gl.glUniformMatrix4fv(self._portal_rim_proj_loc,1,gl.GL_FALSE,proj_ptr); gl.glUniformMatrix4fv(self._portal_rim_view_loc,1,gl.GL_FALSE,view_ptr); gl.glUniform4f(self._portal_rim_color_loc,0.0,0.0,0.0,1.0-fade_a)
             gl.glBindVertexArray(self._portal_quad_vao); gl.glDrawArrays(gl.GL_TRIANGLE_FAN,0,4); gl.glDisable(gl.GL_BLEND)
+
+        # Replace destination-camera depth with the real source aperture depth
+        # after all portal colour/rim/fade work is complete.
+        self._portal_flatten_depth(corners_a, projection, main_view, depth)
         gl.glDisable(gl.GL_STENCIL_TEST); gl.glDisable(gl.GL_SCISSOR_TEST); gl.glBindVertexArray(0)
 
     def _draw_nested_portals(self, portal_table, from_a, from_b, projection, view, cam, config, draw_scene_fn, portal_slots, depth):
