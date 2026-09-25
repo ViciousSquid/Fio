@@ -4003,8 +4003,11 @@ class LogicThread(threading.Thread):
             np.take(etable.pos[:, 2], visible_thing_slots,
                     out=visible_thing_positions[:visible_count, 1])
 
-        all_lights = (erefs[etable.light_slots].tolist()
-                      if len(etable.light_slots) else [])
+        # Lights still need their authored object state (colour, intensity,
+        # state, etc.) during GL setup, but do not materialise them on the logic
+        # thread. Keep the dense selection published and let the actual light
+        # consumer materialise it when required.
+        all_lights = PublishedEntities(erefs, etable.light_slots)
         # Keep the dense slot selection authoritative. Object materialisation is
         # deferred until a legacy/secondary consumer actually iterates it.
         visible_things = PublishedEntities(erefs, visible_thing_slots)
