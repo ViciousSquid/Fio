@@ -4,7 +4,7 @@ engine/renderer_core.py  –  Base renderer with shared logic for Forward/Deferr
 Provides:
     • Texture management (load_texture, preload_level_textures)
     • Grid drawing (update_grid_buffers, draw_grid)
-    • Sprite rendering (draw_sprites, with per‑instance textures)
+    • Sprite rendering (dense instanced EntityTable path)
     • Model loading & drawing (draw_models)
     • Water / Glass / Fog volume rendering
     • Terrain rendering
@@ -365,12 +365,6 @@ class BaseRenderer:
         # the start of every render_scene() so animated lights stay fresh.
         self._frame_lights_uploaded = {}
         self._current_shader = None
-
-        # PERF: memoized monster-sprite texture-key strings, keyed by the
-        # (type, variant, sprite_type, custom) tuple that determines them —
-        # avoids rebuilding the same f-string every frame for every visible
-        # monster (draw_sprites runs once per visible monster per frame).
-        self._sprite_tex_key_cache = {}
 
         # Light data now travels through the shared std140 UBO; no per-slot
         # uniform-name table is needed on the render path.
@@ -2019,141 +2013,6 @@ layout (location = 9) in vec4 iNormal2;
             self.render_stats.draw_calls += 1
         gl.glBindVertexArray(0)
         return count
-
-    def draw_sprites(self, projection, view, things_to_draw, sprite_textures, instance_textures=None):
-        if not things_to_draw or 'sprite' not in self.shaders:
-            return
-
-        shader, uniforms = self.shaders['sprite'], self.uniforms['sprite']
-        gl.glUseProgram(shader)
-        # Billboards are unlit, so they never reach _upload_lights_once — they
-        # still need fogging, or a distant monster would hang un-faded in front
-        # of fully fogged geometry.
-        self._upload_env_uniforms('sprite')
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glUniform1i(uniforms['sprite_texture'], 0)
-        pos_loc, size_loc = uniforms['sprite_pos_world'], uniforms['sprite_size']
-        gl.glBindVertexArray(self.vaos['sprite'])
-
-        current_tex = None
-        for thing in things_to_draw:
-            if Portal is not None and isinstance(thing, Portal):
-                continue
-
-            # Monster snapshot dict
-            if isinstance(thing, dict) and 'dead' in thing:
-                if thing.get('dead'):
-                    custom = thing.get('custom_dead', '')
-                    sprite_type = 'dead'
-                elif thing.get('is_shooting'):
-                    custom = thing.get('custom_shoot', '')
-                    sprite_type = 'shoot'
-                else:
-                    custom = thing.get('custom_idle', '')
-                    sprite_type = 'idle'
-
-                mtype = thing.get('monster_type', 'human')
-                variant = thing.get('variant', '<None>')
-                key_tuple = (mtype, variant, sprite_type, custom)
-                tex_key = self._sprite_tex_key_cache.get(key_tuple)
-                if tex_key is None:
-                    tex_key = f"msprite_{mtype}_{variant}_{sprite_type}_{custom}"
-                    self._sprite_tex_key_cache[key_tuple] = tex_key
-                tex_id = sprite_textures.get(tex_key)
-                if tex_id is None:
-                    if custom:
-                        custom_clean = custom.replace('assets/', '', 1)
-                        subfolder = os.path.dirname(custom_clean)
-                        filename = os.path.basename(custom_clean)
-                    else:
-                        if variant and variant != '<None>':
-                            subfolder = f"sprites/monsters/{mtype}/{variant}"
-                        else:
-                            subfolder = f"sprites/monsters/{mtype}"
-                        filename = f"{sprite_type}.png"
-                    tex_id = self.load_texture(filename, subfolder)
-                    if not tex_id and variant and variant != '<None>':
-                        subfolder = f"sprites/monsters/{mtype}"
-                        tex_id = self.load_texture(filename, subfolder)
-                    if tex_id:
-                        self.sprite_textures[tex_key] = tex_id
-
-                if tex_id and tex_id != current_tex:
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                    current_tex = tex_id
-
-                gl.glUniform3fv(pos_loc, 1, thing['pos'])
-                w = thing.get('sprite_width', 128)
-                h = thing.get('sprite_height', 128)
-                gl.glUniform2f(size_loc, float(w), float(h))
-                gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
-                continue
-
-            tex_id = None
-            if instance_textures:
-                tex_id = instance_textures.get(id(thing))
-
-
-            if tex_id is None:
-                class_name = thing.__class__.__name__
-                tex_id = sprite_textures.get(class_name)
-                if tex_id is None:
-                    if isinstance(thing, LogicSpawner):
-                        tex_id = self.load_texture('logic_spawner.png', 'sprites')
-                        if tex_id: self.sprite_textures['LogicSpawner'] = tex_id
-                    elif isinstance(thing, LogicCamera):
-                        tex_id = self.load_texture('logic_camera.png', 'sprites')
-                        if tex_id: self.sprite_textures['LogicCamera'] = tex_id
-
-                    elif isinstance(thing, Pickup):
-                        sprite_path = thing.get_sprite_path()
-                        if sprite_path:
-                            subfolder = os.path.dirname(sprite_path.replace('assets/', '', 1))
-                            filename = os.path.basename(sprite_path)
-                            tex_id = self.load_texture(filename, subfolder)
-                            if tex_id:
-                                sprite_textures[class_name] = tex_id
-                    elif getattr(thing, 'properties', {}).get('sprite_path'):
-                        sprite_path = thing.properties.get('sprite_path')
-                        subfolder = os.path.dirname(sprite_path.replace('assets/', '', 1))
-                        filename = os.path.basename(sprite_path)
-                        tex_id = self.load_texture(filename, subfolder)
-                        if tex_id:
-                            sprite_textures[class_name] = tex_id
-                    elif isinstance(thing, Monster):
-                        sprite_path = thing.get_sprite_path()
-                        if sprite_path:
-                            subfolder = os.path.dirname(sprite_path.replace('assets/', '', 1))
-                            filename = os.path.basename(sprite_path)
-                            tex_id = self.load_texture(filename, subfolder)
-                            if tex_id:
-                                sprite_textures[class_name] = tex_id
-
-                    else:
-                        tex_id = sprite_textures.get(class_name)
-
-            if tex_id:
-                if tex_id != current_tex:
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                    current_tex = tex_id
-                gl.glUniform3fv(pos_loc, 1, thing.pos)
-                if isinstance(thing, Light):
-                    gl.glUniform2f(size_loc, 16.0, 16.0)
-                elif getattr(thing, 'properties', {}).get('sprite_path'):
-                    size = thing.properties.get('sprite_size', [32.0, 32.0])
-                    try:
-                        gl.glUniform2f(size_loc, float(size[0]), float(size[1]))
-                    except (TypeError, ValueError, IndexError):
-                        gl.glUniform2f(size_loc, 32.0, 32.0)
-                elif isinstance(thing, (LogicSpawner, LogicCamera)):
-                    gl.glUniform2f(size_loc, 32.0, 32.0)
-                else:
-                    gl.glUniform2f(size_loc, 32.0, 32.0)
-                gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
-
-        gl.glBindVertexArray(0)
 
     # --------------------------------------------------------------------------
     # Water / Glass / Fog
