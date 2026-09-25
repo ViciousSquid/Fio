@@ -1397,9 +1397,8 @@ class Portal(Thing):
     # Duration of a full fade-in or fade-out transition (seconds).
     FADE_DURATION = 0.35
 
-    # Minimum clearance (world units) pushed along the destination normal when a
-    # body emerges, so it never spawns embedded in the wall behind portal B.
-    # Call sites add the body's own half-depth on top of this.
+    # Minimum projectile exit clearance along the destination normal. Player
+    # transit uses a near-zero plane epsilon so crossing remains visually continuous.
     EXIT_CLEARANCE = 8.0
 
     def __init__(self, pos=None, properties=None):
