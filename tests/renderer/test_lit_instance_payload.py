@@ -22,6 +22,8 @@ from engine.render_table import RenderTable
 from engine.renderer_F import (Renderer_F, _TRIGGER_COLOR, _SELECTED_COLOR,
                                _SUBTRACT_COLOR)
 
+pytestmark = pytest.mark.gl
+
 
 def _brush(bid, **kw):
     b = {'id': bid, 'pos': [0.0, 0.0, 0.0], 'size': [64.0, 64.0, 64.0],
