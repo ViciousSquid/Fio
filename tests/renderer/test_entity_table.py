@@ -158,6 +158,26 @@ def test_light_render_state_stays_dense_and_tracks_motion_and_io():
     assert bool(table.light_enabled[0]) is False
 
 
+def test_renderer_consumes_active_lights_as_entity_slots():
+    pytest.importorskip("OpenGL")
+    from engine.renderer_F import Renderer_F
+
+    on = make_thing(Light, 'on', state='on')
+    off = make_thing(Light, 'off', state='off')
+    table = _synced([on, off])
+    renderer = Renderer_F.__new__(Renderer_F)
+
+    packet = renderer._get_active_lights(
+        [on, off],
+        {'entity_table': table, 'all_lights': []},
+    )
+
+    assert isinstance(packet, tuple)
+    assert packet[0] is table
+    assert packet[1].tolist() == [0]
+    assert not any(isinstance(x, Light) for x in packet[1])
+
+
 def test_light_shadow_flag_is_normalised_in_the_projection():
     lamp = make_thing(Light, 'lamp', casts_shadows='true')
     table = _synced([lamp])
