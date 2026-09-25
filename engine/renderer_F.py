@@ -874,7 +874,7 @@ class Renderer_F(BaseRenderer):
                 row = int(geo_rows[geo_i])
                 gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[row])
                 if normal_mat_loc > 0:
-                    gl.glUniformMatrix3fv(gl.gl_FALSE, 1, gl.GL_FALSE,
+                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
                                           normals[row])
                 gl.glBindVertexArray(mesh.vao)
                 for run in mesh.runs:
