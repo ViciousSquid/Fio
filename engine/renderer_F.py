@@ -1042,12 +1042,26 @@ class Renderer_F(BaseRenderer):
         groups = self._classify_brush_slots(table, slots, config)
 
         etable = config.get('entity_table')
-        thing_slots = config.get('visible_thing_slots')
         thing_hidden = config.get('thing_hidden')
-        if (etable is not None and thing_slots is not None
-                and thing_hidden is not None):
-            thing_slots = np.asarray(thing_slots, dtype=np.int32)
-            _, sprite_slots = entity_projection.classify_slots(
+        # Portal cameras see the world from a different frustum.  Their entity
+        # input therefore starts from the dense world slot set, not the main
+        # camera's already-published visible selection.  Hidden/collected rows
+        # are filtered numerically; no Thing objects are materialised.
+        if etable is not None and thing_hidden is not None:
+            thing_slots = np.arange(etable.count, dtype=np.int32)
+            if len(thing_slots):
+                entity_planes = planes if len(slots) or len(planes) else np.asarray(
+                    self._frustum_planes(projection * view), dtype=np.float64)
+                centres = etable.pos[thing_slots]
+                distances = centres @ entity_planes[:, :3].T + entity_planes[:, 3]
+                radii = np.maximum(
+                    etable.sprite_size[thing_slots].max(axis=1) * 0.5, 1.0)
+                model_rows = etable.model_recipe_id[thing_slots] >= 0
+                radii[model_rows] = np.maximum(radii[model_rows], 128.0)
+                entity_visible = np.all(
+                    distances >= -radii[:, None], axis=1)
+                thing_slots = thing_slots[entity_visible]
+            model_slots, sprite_slots = entity_projection.classify_slots(
                 etable,
                 thing_slots,
                 thing_hidden,
@@ -1055,21 +1069,8 @@ class Renderer_F(BaseRenderer):
                 config.get('show_sprites_in_play_mode', False),
             )
         else:
+            model_slots = np.empty(0, dtype=np.int32)
             sprite_slots = np.empty(0, dtype=np.int32)
-
-        # Models are an entity-table pass too.  Their recipe, base transform,
-        # normal matrix, position and representation are already projected; the
-        # virtual camera must not materialise EntityTable refs just to rediscover
-        # which entities are models.
-        model_slots, sprite_slots = entity_projection.classify_slots(
-            etable,
-            thing_slots,
-            thing_hidden,
-            config.get('play_mode', False),
-            config.get('show_sprites_in_play_mode', False),
-        ) if (etable is not None and thing_slots is not None
-              and thing_hidden is not None) else (
-                  np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32))
 
         lights = self._get_active_lights((), config)
         return table, groups, model_slots, sprite_slots, lights
