@@ -1170,6 +1170,7 @@ class Renderer_F(BaseRenderer):
         # per-sprite path is still there and the slots are materialised for it.
         sprites_numeric = self.will_instance_sprites(config, brush_slots)
         sprite_slots = None
+        numeric_model_slots = None
 
         cull_things = things
         cull_thing_positions = config.get('thing_positions')
@@ -1230,8 +1231,7 @@ class Renderer_F(BaseRenderer):
                     # grouping into one numeric sort at the GPU boundary.
                     sprite_slots = self._sort_slots_by_distance(
                         etable, sprite_slots, cx, cz)
-                if len(model_slots):
-                    models_to_render.extend(erefs[model_slots].tolist())
+                numeric_model_slots = model_slots
                 sort_positions = None
                 sprite_things = (
                     []
@@ -1292,8 +1292,7 @@ class Renderer_F(BaseRenderer):
                     # grouping into one numeric sort at the GPU boundary.
                     sprite_slots = self._sort_slots_by_distance(
                         etable, sprite_slots, cx, cz)
-                if len(model_slots):
-                    models_to_render.extend(erefs[model_slots].tolist())
+                numeric_model_slots = model_slots
                 sprite_things = (
                     []
                     if sprites_numeric else
@@ -1432,7 +1431,16 @@ class Renderer_F(BaseRenderer):
             self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl, refs=_refs)
         if len(glow_brushes):
             self.draw_glow_brushes(projection, view, camera_pos, glow_brushes, lights, config, table=_tbl, refs=_refs)
-        if models_to_render:
+        if numeric_model_slots is not None and len(numeric_model_slots):
+            if (self.shaders.get('lit_instanced')
+                    or self.shaders.get('textured_instanced')):
+                self.draw_models_instanced(
+                    projection, view, camera_pos, etable, numeric_model_slots,
+                    lights, config)
+            else:
+                models_to_render.extend(erefs[numeric_model_slots].tolist())
+                self.draw_models(projection, view, camera_pos, models_to_render, lights, config)
+        elif models_to_render:
             self.draw_models(projection, view, camera_pos, models_to_render, lights, config)
         if camera_pos is not None:
             if not numeric:
