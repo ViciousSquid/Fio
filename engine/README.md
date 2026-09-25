@@ -88,7 +88,7 @@ Shadow rendering is part of the dense execution boundary. `render_shadow_maps(sh
 ### `renderer_F.py`
 Fio's production forward renderer. Implements the frame passes and brush batching, including lit/textured/glow brush paths, forward lighting, point-light shadow cube maps, portal virtual views and render-mode switching.
 
-The renderer consumes the dense numerical render representation and turns equal-key runs into GPU submissions. Billboards go the same way: `draw_sprites_instanced` reads position, size and texture from the entity projection's columns, packs one instance row per sprite and submits one `glDrawArraysInstanced` per texture run. The object-level sprite renderer has been removed; editor, portal and split-screen views all consume the same dense EntityTable sprite representation.
+The renderer consumes the dense numerical render representation and turns equal-key runs into GPU submissions. Optional water reflection probes use a 256×256 cubemap and a per-water `Cubemap height` value (default 256 world units) to place the probe above the surface; the value is projected through RenderTable and does not require a Brush lookup during capture. Billboards go the same way: `draw_sprites_instanced` reads position, size and texture from the entity projection's columns, packs one instance row per sprite and submits one `glDrawArraysInstanced` per texture run. The object-level sprite renderer has been removed; editor, portal and split-screen views all consume the same dense EntityTable sprite representation.
 
 ### `savegame.py`
 Native play-session save/load. Serialises player state, entity/mover state, trigger/pickup progress and I/O state to `.fiosave` files and restores it on a freshly loaded map.
