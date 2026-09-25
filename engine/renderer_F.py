@@ -1057,8 +1057,22 @@ class Renderer_F(BaseRenderer):
         else:
             sprite_slots = np.empty(0, dtype=np.int32)
 
+        # Models are an entity-table pass too.  Their recipe, base transform,
+        # normal matrix, position and representation are already projected; the
+        # virtual camera must not materialise EntityTable refs just to rediscover
+        # which entities are models.
+        model_slots, sprite_slots = entity_projection.classify_slots(
+            etable,
+            thing_slots,
+            thing_hidden,
+            config.get('play_mode', False),
+            config.get('show_sprites_in_play_mode', False),
+        ) if (etable is not None and thing_slots is not None
+              and thing_hidden is not None) else (
+                  np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32))
+
         lights = self._get_active_lights((), config)
-        return table, groups, sprite_slots, lights
+        return table, groups, model_slots, sprite_slots, lights
 
     def render_scene(self, projection, view, camera_pos, brushes, things,
                      selected_object, config, clear=True, brush_slots=None):
@@ -1316,31 +1330,76 @@ class Renderer_F(BaseRenderer):
                         saved_cam = self._frame_camera_pos
                         self._frame_camera_pos = self._camera_xyz(cam)
                         try:
-                            portal_table, portal_groups, portal_sprite_slots, portal_lights = (
-                                self._portal_numeric_scene_inputs(proj, vw, cfg)
-                            )
-                            textured = portal_groups['textured']
-                            solid = portal_groups['solid']
-                            opaque = portal_groups['opaque']
+                            (portal_table, portal_groups,
+                             portal_model_slots, portal_sprite_slots,
+                             portal_lights) = self._portal_numeric_scene_inputs(
+                                 proj, vw, cfg)
                             mode = cfg.get('brush_display_mode', 'Textured')
+                            p_refs = cfg.get('render_refs')
+
+                            # Match the main numeric scene pipeline: every brush
+                            # material class consumes the same projected slots,
+                            # narrowed only by the virtual camera frustum.
                             if mode in ('Textured', 'Solid Lit'):
                                 self.draw_textured_brushes_optimized(
-                                    proj, vw, cam, textured, portal_lights, cfg,
+                                    proj, vw, cam,
+                                    portal_groups['textured'], portal_lights, cfg,
                                     portal_table)
                                 self.draw_lit_brushes_optimized(
-                                    proj, vw, cam, solid, portal_lights, cfg,
-                                    table=portal_table,
-                                    refs=cfg.get('render_refs'))
+                                    proj, vw, cam,
+                                    portal_groups['solid'], portal_lights, cfg,
+                                    table=portal_table, refs=p_refs)
                             else:
                                 self.draw_lit_brushes_optimized(
-                                    proj, vw, cam, opaque, portal_lights, cfg,
-                                    table=portal_table,
-                                    refs=cfg.get('render_refs'))
-                            if portal_table is not None and len(portal_sprite_slots):
+                                    proj, vw, cam,
+                                    portal_groups['opaque'], portal_lights, cfg,
+                                    table=portal_table, refs=p_refs)
+
+                            # Entity models use the same dense recipe/transform
+                            # projection as the main camera.  No erefs[...] and no
+                            # Thing list are materialised for the portal scene.
+                            if len(portal_model_slots):
+                                self.draw_models_instanced(
+                                    proj, vw, cam,
+                                    cfg.get('entity_table'),
+                                    portal_model_slots,
+                                    portal_lights, cfg)
+
+                            # Match the remaining dense material passes.
+                            if len(portal_groups['glow']):
+                                self.draw_glow_brushes(
+                                    proj, vw, cam,
+                                    portal_groups['glow'], portal_lights, cfg,
+                                    table=portal_table, refs=p_refs)
+
+                            if len(portal_sprite_slots):
                                 self.draw_sprites_instanced(
                                     proj, vw, cfg.get('entity_table'),
-                                    portal_sprite_slots,
-                                    camera_pos=cam)
+                                    portal_sprite_slots, camera_pos=cam)
+
+                            gl.glEnable(gl.GL_BLEND)
+                            gl.glDepthMask(gl.GL_FALSE)
+                            if mode == RENDER_MODE_UNLIT:
+                                self.draw_textured_brushes_optimized(
+                                    proj, vw, cam,
+                                    portal_groups['transparent'], portal_lights, cfg,
+                                    portal_table)
+                            else:
+                                self.draw_lit_brushes_optimized(
+                                    proj, vw, cam,
+                                    portal_groups['transparent'], portal_lights, cfg,
+                                    is_transparent_pass=True,
+                                    table=portal_table, refs=p_refs)
+                            self.draw_water_brushes(
+                                proj, vw, cam, portal_groups['water'], portal_lights, cfg,
+                                table=portal_table, refs=p_refs)
+                            self.draw_glass_brushes(
+                                proj, vw, cam, portal_groups['glass'], portal_lights, cfg,
+                                table=portal_table, refs=p_refs)
+                            self.draw_fog_volumes(
+                                proj, vw, cam, portal_groups['fog'], portal_lights, cfg,
+                                table=portal_table, refs=p_refs)
+                            gl.glDepthMask(gl.GL_TRUE)
                         finally:
                             self._frame_camera_pos = saved_cam
                             self._frame_lights_uploaded.clear()
