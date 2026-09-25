@@ -35,6 +35,8 @@ from engine import render_table
 from engine import entity_table as entity_projection
 from engine.render_keys import KeyLayout, sort_into_runs
 from engine import shaders
+
+_BASE_RENDERER_PREFIX = "\x1b[38;2;240;128;0m[BaseRenderer]\x1b[0m"
 from engine.shaders import DEFAULT_SHADERS
 from engine.terrain import TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER
 from engine.view_distance import ViewDistance
@@ -723,7 +725,7 @@ layout (location = 10) in vec4 iPayload;
         if self._register_instanced_shader(
                 'depth_cube_instanced', vertex, frag,
                 extra_uniforms=['lightSpaceMatrix', 'lightPos', 'far_plane']):
-            print('[BaseRenderer] Shadow depth instancing shader compiled successfully.')
+            print(f'{_BASE_RENDERER_PREFIX} Shadow depth instancing shader compiled successfully.')
 
     #: Per-instance attributes the sprite pass carries: the billboard's centre
     #: and its world size.  Five floats, against the two uniform uploads and
@@ -769,7 +771,7 @@ layout (location = 10) in vec4 iPayload;
         if self._register_instanced_shader('sprite_instanced', source, frag,
                                            extra_uniforms=['projection', 'view',
                                                            'sprite_texture']):
-            print('[BaseRenderer] Sprite instancing shader compiled successfully.')
+            print(f'{_BASE_RENDERER_PREFIX} Sprite instancing shader compiled successfully.')
 
     def _ensure_sprite_instance_buffer(self, count):
         """Grow the sprite instance VBO and its staging array to *count* rows."""
@@ -867,7 +869,7 @@ layout (location = 10) in vec4 iPayload;
             return
         if self._register_instanced_shader('lit_brush_instanced', vertex,
                                            fragment):
-            print('[BaseRenderer] Lit brush instancing shader compiled successfully.')
+            print(f'{_BASE_RENDERER_PREFIX} Lit brush instancing shader compiled successfully.')
 
     def _frame_transforms(self, table, slots):
         """Model and normal matrices for *slots*, into reusable buffers.
@@ -1026,7 +1028,7 @@ layout (location = 10) in vec4 iPayload;
             return
         if self._register_instanced_shader('brush_instanced', vertex, tex_frag,
                                            extra_uniforms=['texture_diffuse']):
-            print('[BaseRenderer] Brush face instancing shader compiled successfully.')
+            print(f'{_BASE_RENDERER_PREFIX} Brush face instancing shader compiled successfully.')
 
     def _compile_instanced_model_shaders(self, lit_vert, lit_frag, tex_vert, tex_frag):
         """Compile GL 3.3 model shaders whose transforms come from instanced attributes."""
@@ -1070,7 +1072,7 @@ layout (location = 9) in vec4 iNormal2;
             self._preload_lit_uniforms('textured_instanced')
             self.uniforms['textured_instanced'].preload(
                 ['texture_diffuse', 'tex_scale', 'tex_angle', 'tex_shift', 'normalMatrix'])
-            print('[BaseRenderer] GPU model instancing shaders compiled successfully.')
+            print(f'{_BASE_RENDERER_PREFIX} GPU model instancing shaders compiled successfully.')
         except Exception as exc:
             # The ordinary model shaders remain authoritative if an older/quirky
             # driver rejects the instanced attribute interface.
