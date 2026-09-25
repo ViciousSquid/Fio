@@ -1717,6 +1717,19 @@ class PropertyEditor(QWidget):
                             model_path_edit = model_path_widget.findChild(QLineEdit)
                             if model_path_edit is not None:
                                 model_path_edit.setText(default_model)
+                    elif not is_model:
+                        # Billboard is the Prop's default visual representation.
+                        # Switching away from a model deliberately restores the
+                        # stock appearance rather than leaving stale model-era
+                        # asset state to decide what the editor shows.
+                        default_sprite = 'assets/sprites/pickup.png'
+                        self.update_object_prop('sprite_path', default_sprite)
+                        self.update_object_prop('sprite_size', [32.0, 32.0])
+                        sprite_edit.setText(default_sprite)
+                        for spin, value in zip(sprite_inputs, (32.0, 32.0)):
+                            spin.blockSignals(True)
+                            spin.setValue(value)
+                            spin.blockSignals(False)
                     for row in (model_path_row, scale_row, rotation_row):
                         set_form_row_visible(row, is_model)
                     for row in (sprite_path_row, sprite_size_row):
