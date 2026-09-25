@@ -2004,7 +2004,8 @@ class LogicThread(threading.Thread):
         except AttributeError:
             hx, hy, hz = 25.0, 50.0, 25.0
 
-        for portal_index, portal_a in enumerate(self._portal_things):
+        for portal_index, portal_slot in enumerate(self._portal_slots):
+            portal_a = self.things[int(portal_slot)]
             if not portal_a.is_active():
                 continue
             if portal_index >= len(self._portal_target_slots):
@@ -2110,7 +2111,8 @@ class LogicThread(threading.Thread):
         if Portal is None or not len(self._portal_things):
             return
         cur = (proj['pos'][0], proj['pos'][1], proj['pos'][2])
-        for portal_index, portal_a in enumerate(self._portal_things):
+        for portal_index, portal_slot in enumerate(self._portal_slots):
+            portal_a = self.things[int(portal_slot)]
             if not portal_a.is_active():
                 continue
             if portal_index >= len(self._portal_target_slots):
