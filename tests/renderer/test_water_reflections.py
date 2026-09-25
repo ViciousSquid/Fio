@@ -7,7 +7,8 @@ def test_water_shader_has_glass_style_optical_inputs():
     src = shaders.DEFAULT_SHADERS['water.frag']
     for uniform in (
         'sceneColor',
-        'reflectionCube',
+        'reflectionTexture',
+        'reflectionMatrix',
         'reflectionEnabled',
         'screenSize',
         'distortionStrength',
@@ -26,16 +27,17 @@ def test_water_shader_performs_screen_space_refraction():
     assert 'screenUV' in src
 
 
-def test_water_shader_supports_real_environment_reflections():
+def test_water_shader_supports_planar_reflections():
     src = shaders.DEFAULT_SHADERS['water.frag']
-    assert 'samplerCube reflectionCube' in src
+    assert 'sampler2D reflectionTexture' in src
+    assert 'uniform mat4 reflectionMatrix' in src
     assert 'reflectionEnabled == 1' in src
-    assert 'textureLod(reflectionCube, R, lod)' in src
+    assert 'reflectionMatrix * vec4(FragPos, 1.0)' in src
 
 
 def test_water_reflection_geometry_is_optional_and_fixed():
     from engine.renderer_core import BaseRenderer
 
     assert BaseRenderer.WATER_REFLECTION_SIZE == 256
-    assert BaseRenderer.WATER_REFLECTION_PROBE_HEIGHT == 0.5
+    assert not hasattr(BaseRenderer, 'WATER_REFLECTION_PROBE_HEIGHT')
     assert BaseRenderer.WATER_REFLECTION_TEXTURE_UNIT == 3
