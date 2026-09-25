@@ -1298,72 +1298,61 @@ class Renderer_F(BaseRenderer):
         terrain = config.get('terrain', None)
         if terrain and terrain.enabled:
             self.render_terrain(projection, view, camera_pos, terrain, lights)
-        if config.get('play_mode', False) and Portal is not None and self._portal_gl_ready:
-            # Use ALL things for portal discovery, not just frustum-visible ones.
-            # But only render portal cameras when player is within 2048 units.
-            all_things = config.get('all_things', things)
-            portal_things = []
-            for t in all_things:
-                if not isinstance(t, Portal):
-                    continue
-                # Include if active OR still mid-fade (fading out but not yet hidden)
-                if not t.is_active() and getattr(t, '_fade_alpha', 0.0) <= 0.01:
-                    continue
-                # Distance check: only render virtual camera if player is close enough
-                portal_pos = glm.vec3(*t.pos)
-                dist_sq = glm.distance2(portal_pos, camera_pos)
-                if dist_sq <= (PORTAL_RENDER_DISTANCE * PORTAL_RENDER_DISTANCE):
-                    portal_things.append(t)
-            if portal_things:
+        if (config.get('play_mode', False)
+                and self._portal_gl_ready):
+            # Portal discovery is a numeric EntityTable selection. No Thing
+            # scan, name dictionary, or Portal object materialisation occurs
+            # on the render hot path.
+            portal_table = config.get('entity_table')
+            portal_slots = (
+                portal_table.portal_slots
+                if portal_table is not None and hasattr(portal_table, 'portal_slots')
+                else np.empty(0, dtype=np.int32)
+            )
+            if len(portal_slots):
                 try:
-                    def _portal_draw_scene(proj, vw, cam, br, th, sel, cfg):
-                        # Fog the virtual view from the *virtual* eye: a portal
-                        # shows the world as seen from its far end, so measuring
-                        # from the real camera would fog the aperture by how far
-                        # away the portal is rather than by what is through it.
-                        _saved_cam = self._frame_camera_pos
+                    def _portal_draw_scene(proj, vw, cam, _br, _th, _lights, cfg):
+                        # Fog and all scene classification remain driven by the
+                        # virtual camera and the same dense tables as the main view.
+                        saved_cam = self._frame_camera_pos
                         self._frame_camera_pos = self._camera_xyz(cam)
                         try:
-                            _portal_draw_scene_inner(proj, vw, cam, br, th, sel, cfg)
+                            portal_table, portal_groups, portal_sprite_slots, portal_lights = (
+                                self._portal_numeric_scene_inputs(proj, vw, cfg)
+                            )
+                            textured = portal_groups['textured']
+                            solid = portal_groups['solid']
+                            opaque = portal_groups['opaque']
+                            mode = cfg.get('brush_display_mode', 'Textured')
+                            if mode in ('Textured', 'Solid Lit'):
+                                self.draw_textured_brushes_optimized(
+                                    proj, vw, cam, textured, portal_lights, cfg,
+                                    portal_table)
+                                self.draw_lit_brushes_optimized(
+                                    proj, vw, cam, solid, portal_lights, cfg,
+                                    table=portal_table,
+                                    refs=cfg.get('render_refs'))
+                            else:
+                                self.draw_lit_brushes_optimized(
+                                    proj, vw, cam, opaque, portal_lights, cfg,
+                                    table=portal_table,
+                                    refs=cfg.get('render_refs'))
+                            if portal_table is not None and len(portal_sprite_slots):
+                                self.draw_sprites_instanced(
+                                    proj, vw, portal_table.__class__ is None and cfg.get('entity_table') or cfg.get('entity_table'),
+                                    portal_sprite_slots,
+                                    camera_pos=cam)
                         finally:
-                            self._frame_camera_pos = _saved_cam
+                            self._frame_camera_pos = saved_cam
                             self._frame_lights_uploaded.clear()
 
-                    def _portal_draw_scene_inner(proj, vw, cam, br, th, sel, cfg):
-                        # The virtual camera consumes the same dense projections
-                        # as the main camera. No object sorting or scene-list
-                        # reconstruction occurs here.
-                        portal_table, portal_groups, portal_sprite_slots, portal_lights = (
-                            self._portal_numeric_scene_inputs(proj, vw, cfg)
-                        )
-                        _t_opaque = portal_groups['textured']
-                        _solid = portal_groups['solid']
-                        _opaque = portal_groups['opaque']
-                        _t_brush_mode = cfg.get('brush_display_mode', 'Textured')
-
-                        if _t_brush_mode in ('Textured', 'Solid Lit'):
-                            self.draw_textured_brushes_optimized(
-                                proj, vw, cam, _t_opaque, portal_lights,
-                                cfg, portal_table)
-                            self.draw_lit_brushes_optimized(
-                                proj, vw, cam, _solid, portal_lights, cfg,
-                                table=portal_table,
-                                refs=cfg.get('render_refs'))
-                        else:
-                            self.draw_lit_brushes_optimized(
-                                proj, vw, cam, _opaque, portal_lights, cfg,
-                                table=portal_table,
-                                refs=cfg.get('render_refs'))
-
-                        portal_etable = cfg.get('entity_table')
-                        if portal_etable is not None and len(portal_sprite_slots):
-                            self.draw_sprites_instanced(
-                                proj, vw, portal_etable, portal_sprite_slots,
-                                camera_pos=cam)
                     self.draw_portals(
-                        portal_things,
-                        projection, view, camera_pos,
-                        brushes, things, lights, config,
+                        portal_table,
+                        portal_slots,
+                        projection,
+                        view,
+                        camera_pos,
+                        config,
                         _portal_draw_scene,
                     )
                     self._proj_ptr = glm.value_ptr(projection)
