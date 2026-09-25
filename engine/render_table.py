@@ -74,7 +74,7 @@ from engine import brush_geometry
 # --------------------------------------------------------------------------
 
 class GeometryRecord:
-    """Dense cold render record for one convex brush geometry slot."""
+    """Dense cold render record for one convex geometry-table entry."""
     __slots__ = ('signature', 'convex', 'origin', 'scale', 'natural_scale')
 
     def __init__(self, signature, convex, origin, scale, natural_scale):
