@@ -3869,13 +3869,15 @@ class LogicThread(threading.Thread):
         # `brushes` whenever the editor's coarse world epoch moves, and holds
         # nothing that is not already in them.
         table = self._render_table
-        world_epoch = getattr(self.editor_state, 'world_epoch', None)
-        render_dirty = self.editor_state.render_dirty_snapshot()
+        render_dirty_snapshot = self.editor_state.render_dirty_snapshot()
+        world_epoch, render_dirty = render_dirty_snapshot
         # Rows are named by the brush's UUID, so ids have to exist before the
         # table reconciles -- but only then, not on every frame.
         # Stable ids are needed when rows are first created/replaced, not
         # for ordinary epoch bumps. Avoid walking the whole scene on every edit.
-        if len(brushes) != table.count:
+        if (table.needs_reconcile(brushes, world_epoch)
+                and (len(brushes) != table.count
+                     or any(b.get('id') is None for b in brushes))):
             self.editor_state.ensure_entity_ids()
         generation = table.generation
         # One Python pass over the brush list, for the only two things that
@@ -3979,7 +3981,7 @@ class LogicThread(threading.Thread):
         erefs = self._entity_refs
         thing_count = etable.count
 
-        self.editor_state.clear_render_dirty()
+        self.editor_state.clear_render_dirty(render_dirty_snapshot)
 
         # A Monster is handed to the renderer as a render snapshot, because the
         # AI thread is free to move it while the frame is being drawn.  Those
