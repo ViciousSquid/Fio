@@ -321,7 +321,6 @@ class BaseRenderer:
         # owns these arrays so steady-state drawing does not allocate key/mask/
         # texture arrays per frame.
         self._sprite_key_scratch = np.empty(0, dtype=np.int32)
-        self._sprite_index_scratch = np.empty(0, dtype=np.int32)
         self._sprite_texture_scratch = np.empty(0, dtype=np.int32)
         self._sprite_draw_mask = np.empty(0, dtype=bool)
         self._brush_instance_capacity = 0
@@ -1752,7 +1751,7 @@ layout (location = 9) in vec4 iNormal2;
     SPRITE_KEY_LAYOUT = KeyLayout([('texture', 32)])
 
     def draw_sprites_instanced(self, projection, view, table, slots,
-                               gl_ids=None):
+                               gl_ids=None, camera_pos=None):
         """The sprite pass over dense columns: one draw per texture run.
 
         *slots* are rows of an :class:`engine.entity_table.EntityTable`, already
@@ -1779,20 +1778,18 @@ layout (location = 9) in vec4 iNormal2;
         if len(self._sprite_key_scratch) < slot_count:
             grown = max(64, len(self._sprite_key_scratch) * 2, slot_count)
             self._sprite_key_scratch = np.empty(grown, dtype=np.int32)
-            self._sprite_index_scratch = np.empty(grown, dtype=np.int32)
             self._sprite_texture_scratch = np.empty(grown, dtype=np.int32)
             self._sprite_draw_mask = np.empty(grown, dtype=bool)
 
         key_ids = self._sprite_key_scratch[:slot_count]
-        indices = self._sprite_index_scratch[:slot_count]
         textures = self._sprite_texture_scratch[:slot_count]
         drawn = self._sprite_draw_mask[:slot_count]
 
         np.take(table.sprite_key_id, slots, out=key_ids)
         drawn[:] = key_ids >= 0
         if len(gl_ids):
-            np.maximum(key_ids, 0, out=indices)
-            np.take(gl_ids, indices, out=textures)
+            np.maximum(key_ids, 0, out=key_ids)
+            np.take(gl_ids, key_ids, out=textures)
             drawn &= textures > 0
         else:
             drawn.fill(False)
@@ -1804,9 +1801,18 @@ layout (location = 9) in vec4 iNormal2;
             slots = slots[drawn]
             textures = textures[drawn]
 
-        # Texture id is already the complete sprite render key.  Keep it dense
-        # through the sort instead of repacking an identical int64 key array.
-        order, run_starts = sort_into_runs(textures)
+        # Texture is the draw key. The old path depth-sorted the slots and
+        # then stable-sorted those same slots again by texture. Keep both
+        # requirements numeric and let one stable lexicographic sort establish
+        # texture runs with back-to-front depth order inside each run.
+        if camera_pos is None:
+            order, run_starts = sort_into_runs(textures)
+        else:
+            cx, _, cz = self._camera_xyz(camera_pos)
+            dx = table.pos[slots, 0] - cx
+            dz = table.pos[slots, 2] - cz
+            depth_sq = dx * dx + dz * dz
+            order, run_starts = sort_into_runs(textures, secondary=-depth_sq)
 
         count = len(order)
         self._ensure_sprite_instance_buffer(count)
