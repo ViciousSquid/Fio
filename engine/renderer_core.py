@@ -2817,45 +2817,6 @@ layout (location = 9) in vec4 iNormal2;
             self._shadow_fbo = None
             self._shadow_cubemaps = []
 
-    def _thing_model_matrix(self, thing):
-        """Return a cached model matrix for a model-carrying Thing."""
-        props = getattr(thing, 'properties', {})
-        pos = thing.pos
-        rot = props.get('rotation', [0, 0, 0])
-        scale = props.get('scale', 1.0)
-        scale_key = (scale, scale, scale) if isinstance(scale, (int, float)) else tuple(scale)
-        key = (pos[0], pos[1], pos[2], tuple(rot), scale_key)
-        if getattr(thing, '_render_model_mat_key', None) == key:
-            return thing._render_model_mat_cache
-
-        scale_vec = (scale, scale, scale) if isinstance(scale, (int, float)) else scale
-        mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
-        mat = glm.rotate(mat, glm.radians(rot[1]), glm.vec3(0, 1, 0))
-        mat = glm.rotate(mat, glm.radians(rot[0]), glm.vec3(1, 0, 0))
-        mat = glm.rotate(mat, glm.radians(rot[2]), glm.vec3(0, 0, 1))
-        mat = glm.scale(mat, glm.vec3(*scale_vec))
-        try:
-            normal = glm.transpose(glm.inverse(glm.mat3(mat)))
-        except Exception:
-            normal = self._identity_mat3
-        thing._render_model_mat_key = key
-        thing._render_model_mat_cache = mat
-        thing._render_model_nmat_cache = normal
-        # Numpy copies are generated only when the transform changes; the
-        # instanced renderer can then copy cached arrays into one GPU batch.
-        thing._render_model_mat_np_cache = np.array([
-            mat[0][0], mat[0][1], mat[0][2], mat[0][3],
-            mat[1][0], mat[1][1], mat[1][2], mat[1][3],
-            mat[2][0], mat[2][1], mat[2][2], mat[2][3],
-            mat[3][0], mat[3][1], mat[3][2], mat[3][3],
-        ], dtype=np.float32)
-        thing._render_model_nmat_np_cache = np.array([
-            normal[0][0], normal[0][1], normal[0][2], 0.0,
-            normal[1][0], normal[1][1], normal[1][2], 0.0,
-            normal[2][0], normal[2][1], normal[2][2], 0.0,
-        ], dtype=np.float32)
-        return mat
-
     def _bind_shadow_maps(self, uniforms):
         """Bind shadow samplers to dedicated texture units.
 
@@ -2924,59 +2885,6 @@ layout (location = 9) in vec4 iNormal2;
                                    table.rot[sel].ravel().astype(np.float64)))
         return sel, (sel.tobytes(), geometry.tobytes())
 
-    def _prepare_shadow_caster_batch(self, brushes, models):
-        """Build one numeric caster snapshot shared by every shadow light."""
-        if brushes:
-            brush_positions = np.asarray(
-                [b.get('pos', (0.0, 0.0, 0.0)) for b in brushes],
-                dtype=np.float64,
-            )
-            brush_sizes = np.asarray(
-                [b.get('size', (64.0, 64.0, 64.0)) for b in brushes],
-                dtype=np.float64,
-            )
-            brush_radii = 0.5 * np.max(brush_sizes, axis=1)
-            brush_keys = [
-                (
-                    tuple(b.get('pos', (0.0, 0.0, 0.0))),
-                    tuple(b.get('size', (64.0, 64.0, 64.0))),
-                    b.get('_rot_angle'),
-                    tuple(b.get('rot_axis')) if b.get('rot_axis') else None,
-                )
-                for b in brushes
-            ]
-        else:
-            brush_positions = np.empty((0, 3), dtype=np.float64)
-            brush_radii = np.empty((0,), dtype=np.float64)
-            brush_keys = []
-
-        if models:
-            model_positions = np.asarray(
-                [tuple(t.pos) for t in models],
-                dtype=np.float64,
-            )
-            model_keys = []
-            for t in models:
-                props = t.properties
-                scale = props.get('scale', 1.0)
-                scale_key = scale if isinstance(scale, (int, float)) else tuple(scale)
-                model_keys.append(
-                    (
-                        tuple(t.pos),
-                        props.get('model_path'),
-                        tuple(props.get('rotation', (0, 0, 0))),
-                        scale_key,
-                    )
-                )
-        else:
-            model_positions = np.empty((0, 3), dtype=np.float64)
-            model_keys = []
-
-        return (
-            brush_positions, brush_radii, brush_keys,
-            model_positions, model_keys,
-        )
-
     @staticmethod
     def _dense_shadow_model_slots(table, hidden=None):
         """Return model-entity slots eligible to cast shadows.
@@ -3031,73 +2939,6 @@ layout (location = 9) in vec4 iNormal2;
         )
         return slots, signature
 
-    def _collect_shadow_casters(self, brushes, models, lx, ly, lz, reach,
-                                batch=None):
-        """Return casters within reach, using one NumPy distance pass per light."""
-        if batch is not None:
-            (brush_positions, brush_radii, brush_keys,
-             model_positions, model_keys) = batch
-
-            in_brushes = []
-            if len(brushes):
-                dx = brush_positions[:, 0] - lx
-                dy = brush_positions[:, 1] - ly
-                dz = brush_positions[:, 2] - lz
-                limit = reach + brush_radii
-                visible = (dx * dx + dy * dy + dz * dz) <= (limit * limit)
-                indices = np.flatnonzero(visible)
-                in_brushes = [brushes[int(i)] for i in indices]
-                bkeys = tuple(brush_keys[int(i)] for i in indices)
-            else:
-                bkeys = ()
-
-            in_models = []
-            if len(models):
-                dx = model_positions[:, 0] - lx
-                dy = model_positions[:, 1] - ly
-                dz = model_positions[:, 2] - lz
-                visible = (dx * dx + dy * dy + dz * dz) <= (reach * reach * 4.0)
-                indices = np.flatnonzero(visible)
-                in_models = [models[int(i)] for i in indices]
-                mkeys = tuple(model_keys[int(i)] for i in indices)
-            else:
-                mkeys = ()
-
-            return in_brushes, in_models, (bkeys, mkeys)
-
-        # Legacy/API-compatible scalar path for callers that don't provide the
-        # shared batch snapshot.
-        in_brushes, bkeys = [], []
-        for b in brushes:
-            pos = b.get('pos', (0, 0, 0))
-            size = b.get('size', (64, 64, 64))
-            br = 0.5 * max(size[0], size[1], size[2])
-            dx = pos[0] - lx; dy = pos[1] - ly; dz = pos[2] - lz
-            limit = reach + br
-            if (dx * dx + dy * dy + dz * dz) > limit * limit:
-                continue
-            in_brushes.append(b)
-            bkeys.append((pos[0], pos[1], pos[2], size[0], size[1], size[2],
-                          b.get('_rot_angle'),
-                          tuple(b.get('rot_axis')) if b.get('rot_axis') else None))
-
-        in_models, mkeys = [], []
-        reach4_sq = reach * reach * 4.0
-        for t in models:
-            pos = t.pos
-            dx = pos[0] - lx; dy = pos[1] - ly; dz = pos[2] - lz
-            if (dx * dx + dy * dy + dz * dz) > reach4_sq:
-                continue
-            in_models.append(t)
-            props = t.properties
-            scale = props.get('scale', 1.0)
-            scale_key = scale if isinstance(scale, (int, float)) else tuple(scale)
-            mkeys.append((pos[0], pos[1], pos[2], props.get('model_path'),
-                          tuple(props.get('rotation', (0, 0, 0))), scale_key))
-
-        return in_brushes, in_models, (tuple(bkeys), tuple(mkeys))
-
-
     #: The shadow pass's render key. One field, because one thing cannot vary
     #: within a depth draw: which cube face is being rendered, since that is
     #: the light-space matrix. Everything else -- each caster's transform --
@@ -3123,92 +2964,85 @@ layout (location = 9) in vec4 iNormal2;
         order, starts = sort_into_runs(keys)
         return self.SHADOW_RUN_KEY.field(keys[order], 'face'), starts
 
-    def _prepare_shadow_instances(self, table, refs, in_brushes, instanced):
-        """Pack cube casters and return dense convex geometry slots.
+    def _prepare_shadow_instances(self, table, in_brushes, instanced):
+        """Pack dense brush casters and return dense convex geometry slots.
 
-        Convex casters are identified by ``RenderTable.geometry_id``.  The
-        Brush source is resolved only later by ``_prepare_geo_meshes`` at the
-        cache boundary; the six-face shadow draw loop consumes integer handles.
-        Legacy object callers retain their original object path.
+        All inputs are RenderTable slots. No Brush reference is reconstructed
+        here; geometry rows remain integer geometry_id handles and AABB rows
+        use the shared instanced cube buffer.
         """
-        if not instanced or table is None or not len(in_brushes):
-            return 0, [(None, refs[int(b)] if (refs is not None and not isinstance(b, dict))
-                       else b) for b in in_brushes]
+        if table is None or not len(in_brushes):
+            return np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
 
         slots = np.asarray(in_brushes, dtype=np.int32)
-        geometry = (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0
+        geometry = (
+            (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0
+        )
         cube_slots = slots[~geometry]
         geo_slots = slots[geometry]
-        if not len(cube_slots):
-            return 0, [int(s) for s in geo_slots]
 
-        models, _normals = self._frame_transforms(table, cube_slots)
-        rows = np.arange(len(cube_slots), dtype=np.int32)
-        self._pack_brush_instances(models, None, rows, 0.0, 0.0)
-        return len(cube_slots), [int(s) for s in geo_slots]
-    def render_shadow_maps(self, shadow_lights, brushes, things, config, camera_pos=None):
-        """Refresh the depth cube-map for each shadow-casting point light.
+        if instanced and len(cube_slots):
+            models, _normals = self._frame_transforms(table, cube_slots)
+            rows = np.arange(len(cube_slots), dtype=np.int32)
+            self._pack_brush_instances(models, None, rows, 0.0, 0.0)
 
-        Cube-maps are cached per slot: a light's map is only re-rendered when the
-        light or one of its in-range casters actually moves.  A fully static scene
-        therefore does *zero* GPU shadow work after the first frame — only the
-        cheap CPU signature check runs. Dense EntityTable calls use the light's
-        entity slot as the identity; direct legacy callers retain object ids.
-        ``self._light_shadow_index`` is therefore keyed by the same identity
-        used by the light UBO.
+        return cube_slots, geo_slots
+    def render_shadow_maps(self, shadow_lights, config, camera_pos=None):
+        """Refresh depth cube-maps from dense RenderTable/EntityTable state.
+
+        The shadow renderer has one data boundary: authored objects are
+        projected first, then shadow selection, cache signatures and draw
+        transforms operate only on integer slots and NumPy columns.
         """
         self._light_shadow_index = {}
         if not self._shadow_cubemaps or 'depth_cube' not in self.shaders:
             return
-        dense_lights = (
-            isinstance(shadow_lights, tuple)
-            and len(shadow_lights) == 2
-            and hasattr(shadow_lights[0], 'light_color')
-        )
-        if dense_lights:
-            light_table, light_slots = shadow_lights
-            lights = np.asarray(light_slots, dtype=np.int32)
-        else:
-            light_table = None
-            lights = list(shadow_lights)
+
+        if (not isinstance(shadow_lights, tuple)
+                or len(shadow_lights) != 2):
+            raise RuntimeError(
+                "Fio 2.5.6 shadow rendering requires dense EntityTable lights")
+        light_table, light_slots = shadow_lights
+        if not hasattr(light_table, 'light_color'):
+            raise RuntimeError(
+                "Fio 2.5.6 shadow rendering requires EntityTable light state")
+        lights = np.asarray(light_slots, dtype=np.int32)
 
         if not len(lights):
-            # Release every slot so a light enabled later re-renders cleanly.
             for s in range(self.MAX_SHADOW_LIGHTS):
                 self._shadow_slot_owner[s] = None
                 self._shadow_slot_sig[s] = None
             return
 
-        # Over budget? Keep the shadow lights nearest the camera.  Dense lights
-        # are sorted with NumPy; no Light objects are needed to make this choice.
+        table = config.get('render_table')
+        caster_slots = config.get('all_brush_slots')
+        entity_table = config.get('entity_table')
+        entity_hidden = config.get('thing_hidden')
+        if table is None or caster_slots is None:
+            raise RuntimeError(
+                "Fio 2.5.6 shadow rendering requires RenderTable state")
+        if entity_table is None:
+            raise RuntimeError(
+                "Fio 2.5.6 shadow rendering requires EntityTable state")
+
+        caster_slots = self._shadow_caster_slots(
+            table, np.asarray(caster_slots, dtype=np.int32))
+        dense_model_slots = self._dense_shadow_model_slots(
+            entity_table, entity_hidden)
+
         if len(lights) > self.MAX_SHADOW_LIGHTS:
             if camera_pos is not None:
                 cx, cy, cz = self._camera_xyz(camera_pos)
-                if dense_lights:
-                    dx = light_table.pos[lights, 0] - cx
-                    dy = light_table.pos[lights, 1] - cy
-                    dz = light_table.pos[lights, 2] - cz
-                    order = np.argsort(dx * dx + dy * dy + dz * dz, kind='stable')
-                    lights = lights[order[:self.MAX_SHADOW_LIGHTS]]
-                else:
-                    lights.sort(
-                        key=lambda l: (
-                            (l.pos[0] - cx) ** 2 +
-                            (l.pos[1] - cy) ** 2 +
-                            (l.pos[2] - cz) ** 2
-                        )
-                    )
-                    lights = lights[:self.MAX_SHADOW_LIGHTS]
+                dx = light_table.pos[lights, 0] - cx
+                dy = light_table.pos[lights, 1] - cy
+                dz = light_table.pos[lights, 2] - cz
+                order = np.argsort(
+                    dx * dx + dy * dy + dz * dz, kind='stable')
+                lights = lights[order[:self.MAX_SHADOW_LIGHTS]]
             else:
                 lights = lights[:self.MAX_SHADOW_LIGHTS]
 
-        # ---- Stable slot assignment (a light keeps its slot across frames) ---
-        # Dense EntityTable slots are the identity here.  The legacy path keeps
-        # using object ids for direct render_shadow_maps() callers.
-        light_keys = (
-            [int(s) for s in lights]
-            if dense_lights else [id(l) for l in lights]
-        )
+        light_keys = [int(s) for s in lights]
         current_ids = set(light_keys)
         for s in range(self.MAX_SHADOW_LIGHTS):
             if self._shadow_slot_owner[s] not in current_ids:
@@ -3232,113 +3066,41 @@ layout (location = 9) in vec4 iNormal2;
                     light_slot[key] = s
                     break
 
-        # ---- Filter casters once & decide which lights are dirty ------------
-        table = config.get('render_table')
-        refs = config.get('render_refs')
-        caster_slots = config.get('all_brush_slots')
-        numeric = (table is not None and refs is not None
-                   and caster_slots is not None and len(refs) >= table.count)
-
-        entity_table = config.get('entity_table')
-        entity_hidden = config.get('thing_hidden')
-        dense_entities = (
-            entity_table is not None
-            and hasattr(entity_table, 'model_recipe_id')
-            and hasattr(entity_table, 'model_base_matrix')
-            and hasattr(entity_table, 'pos')
-        )
-
-        if numeric:
-            caster_slots = self._shadow_caster_slots(table, caster_slots)
-            caster_brushes = None
-            if dense_entities:
-                caster_batch = self._prepare_shadow_caster_batch((), ())
-            else:
-                caster_models = [t for t in things
-                                 if isinstance(t, Thing) and t.properties.get('model_path')]
-                caster_batch = self._prepare_shadow_caster_batch(
-                    (), caster_models)
-        else:
-            caster_brushes = []
-            for b in brushes:
-                if (b.get('hidden') or b.get('is_trigger')
-                        or b.get('is_fog') or b.get('operation') == 'subtract'):
-                    continue
-                if is_water_brush(b) or b.get('shader') in ('Fog', 'Glass', 'Glow'):
-                    continue
-                caster_brushes.append(b)
-            caster_models = [t for t in things
-                             if isinstance(t, Thing) and t.properties.get('model_path')]
-            caster_batch = self._prepare_shadow_caster_batch(
-                caster_brushes, caster_models)
-
-        if dense_entities:
-            dense_model_slots = self._dense_shadow_model_slots(
-                entity_table, entity_hidden)
-        else:
-            dense_model_slots = None
-            caster_models = [t for t in things
-                             if isinstance(t, Thing) and t.properties.get('model_path')]
-
-        # Dense entries are (EntityTable slot, shadow slot, brush slots,
-        # model objects, signature). Legacy entries retain the Light object.
         to_render = []
         for light_key in light_keys:
             shadow_slot = light_slot.get(light_key)
             if shadow_slot is None:
                 continue
 
-            if dense_lights:
-                light_slot_value = int(light_key)
-                lx = float(light_table.pos[light_slot_value, 0])
-                ly = float(light_table.pos[light_slot_value, 1])
-                lz = float(light_table.pos[light_slot_value, 2])
-                radius = max(float(light_table.light_params[light_slot_value, 1]), 1.0)
-                light_identity = light_slot_value
-            else:
-                light = next(l for l in lights if id(l) == light_key)
-                lx, ly, lz = (float(light.pos[0]), float(light.pos[1]),
-                              float(light.pos[2]))
-                radius = max(float(light.get_radius()), 1.0)
-                light_identity = light_key
+            light_slot_value = int(light_key)
+            lx = float(light_table.pos[light_slot_value, 0])
+            ly = float(light_table.pos[light_slot_value, 1])
+            lz = float(light_table.pos[light_slot_value, 2])
+            radius = max(
+                float(light_table.light_params[light_slot_value, 1]), 1.0)
 
-            if numeric:
-                in_slots, brush_keys = self._casters_in_reach(
-                    table, caster_slots, lx, ly, lz, radius)
-                if dense_entities:
-                    in_models, mkeys = self._collect_dense_shadow_models(
-                        entity_table, dense_model_slots,
-                        lx, ly, lz, radius)
-                else:
-                    _, in_models, (_, mkeys) = self._collect_shadow_casters(
-                        (), caster_models, lx, ly, lz, radius, batch=caster_batch)
-                in_brushes = in_slots
-                caster_keys = (brush_keys, mkeys)
-            else:
-                light = next(l for l in lights if id(l) == light_key)
-                in_brushes, in_models, caster_keys = self._collect_shadow_casters(
-                    caster_brushes, caster_models, lx, ly, lz, radius,
-                    batch=caster_batch)
+            in_slots, brush_keys = self._casters_in_reach(
+                table, caster_slots, lx, ly, lz, radius)
+            in_models, model_keys = self._collect_dense_shadow_models(
+                entity_table, dense_model_slots, lx, ly, lz, radius)
 
             sig = (
                 round(lx, 3), round(ly, 3), round(lz, 3),
-                round(radius, 3), caster_keys,
+                round(radius, 3), brush_keys, model_keys,
             )
-            self._light_shadow_index[light_identity] = shadow_slot
+            self._light_shadow_index[light_slot_value] = shadow_slot
             if self._shadow_slot_sig[shadow_slot] == sig:
                 continue
             to_render.append((
-                light_identity, shadow_slot, in_brushes, in_models, sig,
+                light_slot_value, shadow_slot, in_slots, in_models, sig,
                 lx, ly, lz, radius,
             ))
 
-        # ---- Save GL state we are about to clobber -------------------------
         prev_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
         prev_vp = gl.glGetIntegerv(gl.GL_VIEWPORT)
         scissor_was = bool(gl.glIsEnabled(gl.GL_SCISSOR_TEST))
         cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
         blend_was = bool(gl.glIsEnabled(gl.GL_BLEND))
-
         prev_program = int(gl.glGetIntegerv(gl.GL_CURRENT_PROGRAM))
         prev_shader = self._current_shader
         shader = self.shaders['depth_cube']
@@ -3356,8 +3118,6 @@ layout (location = 9) in vec4 iNormal2;
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDepthFunc(gl.GL_LESS)
-        # No face culling: brush cube winding isn't guaranteed and models may be
-        # single-sided/open. The shader-side depth bias handles self-shadowing.
         gl.glDisable(gl.GL_CULL_FACE)
 
         model_loc = u['model']
@@ -3371,13 +3131,10 @@ layout (location = 9) in vec4 iNormal2;
             inst_lightpos_loc = iu['lightPos']
             inst_far_loc = iu['far_plane']
             instance_vao = self._ensure_brush_instance_vao()
-        else:
-            depth_instanced = None
         lightpos_loc = u['lightPos']
         far_loc = u['far_plane']
         cube_vao = self.vaos['cube']
 
-        # Cube-face look-at basis (standard GL cube-map orientation).
         face_dirs = (
             (glm.vec3( 1, 0, 0), glm.vec3(0, -1,  0)),
             (glm.vec3(-1, 0, 0), glm.vec3(0, -1,  0)),
@@ -3387,115 +3144,102 @@ layout (location = 9) in vec4 iNormal2;
             (glm.vec3( 0, 0,-1), glm.vec3(0, -1,  0)),
         )
 
-        for light_identity, slot, in_brushes, in_models, sig, lx, ly, lz, far_plane in to_render:
+        for (light_identity, slot, in_brushes, in_models, sig,
+             lx, ly, lz, far_plane) in to_render:
             center = glm.vec3(lx, ly, lz)
             far_plane = max(float(far_plane), 1.0)
             near_plane = max(far_plane * 0.002, 1.0)
-            proj = glm.perspective(glm.radians(90.0), 1.0, near_plane, far_plane)
+            proj = glm.perspective(
+                glm.radians(90.0), 1.0, near_plane, far_plane)
             cubemap = self._shadow_cubemaps[slot]
 
             gl.glUniform3f(lightpos_loc, lx, ly, lz)
             gl.glUniform1f(far_loc, far_plane)
 
-            # Resolve model resources once (not once per face). Dense entity
-            # slots carry the model recipe; only the renderer's cached GPU
-            # resource is materialised here, never the authored Thing.
+            recipes = entity_table.model_recipes()
             resolved_models = []
-            if dense_entities:
-                recipes = entity_table.model_recipes()
-                for slot_value in in_models:
-                    slot_value = int(slot_value)
-                    recipe_id = int(entity_table.model_recipe_id[slot_value])
-                    if recipe_id < 0 or recipe_id >= len(recipes):
-                        continue
-                    model_path = recipes[recipe_id][0]
-                    obj = self.load_model(model_path)
-                    if obj and obj.is_loaded:
-                        resolved_models.append((slot_value, obj))
-            else:
-                for t in in_models:
-                    obj = self.load_model(t.properties.get('model_path'))
-                    if obj and obj.is_loaded:
-                        resolved_models.append((t, obj))
+            for slot_value in in_models:
+                slot_value = int(slot_value)
+                recipe_id = int(entity_table.model_recipe_id[slot_value])
+                if recipe_id < 0 or recipe_id >= len(recipes):
+                    continue
+                model_path = recipes[recipe_id][0]
+                obj = self.load_model(model_path)
+                if obj and obj.is_loaded:
+                    resolved_models.append((slot_value, obj))
 
-            # Split this light's casters, and pack the cube ones' transforms
-            # once. The caster set is the same for all six faces, so the
-            # instance buffer is filled here rather than inside the loop.
-            cube_instances, geo_casters = self._prepare_shadow_instances(
-                table, refs, in_brushes, depth_instanced is not None)
+            cube_slots, geo_slots = self._prepare_shadow_instances(
+                table, in_brushes, depth_instanced is not None)
 
             for face in range(6):
-                gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
-                                          gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, cubemap, 0)
+                gl.glFramebufferTexture2D(
+                    gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
+                    gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, cubemap, 0)
                 gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
-                lsm = proj * glm.lookAt(center, center + face_dirs[face][0], face_dirs[face][1])
-                gl.glUniformMatrix4fv(lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
+                lsm = proj * glm.lookAt(
+                    center, center + face_dirs[face][0], face_dirs[face][1])
+                gl.glUniformMatrix4fv(
+                    lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
 
-                # Cube casters: one instanced submission for the whole set.
-                # The instance buffer was packed once for this light, before
-                # the face loop, because the caster set does not vary between
-                # faces -- only the light-space matrix above does.
-                if cube_instances:
+                if len(cube_slots) and depth_instanced is not None:
                     gl.glUseProgram(depth_instanced)
-                    gl.glUniformMatrix4fv(inst_lsm_loc, 1, gl.GL_FALSE,
-                                          glm.value_ptr(lsm))
+                    gl.glUniformMatrix4fv(
+                        inst_lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
                     gl.glUniform3f(inst_lightpos_loc, lx, ly, lz)
                     gl.glUniform1f(inst_far_loc, far_plane)
                     gl.glBindVertexArray(instance_vao)
                     self._point_brush_instances_at(0)
-                    gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 36,
-                                             cube_instances)
+                    gl.glDrawArraysInstanced(
+                        gl.GL_TRIANGLES, 0, 36, len(cube_slots))
                     gl.glUseProgram(shader)
-                    gl.glUniformMatrix4fv(lsm_loc, 1, gl.GL_FALSE,
-                                          glm.value_ptr(lsm))
+                    gl.glUniformMatrix4fv(
+                        lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
+                elif len(cube_slots):
+                    cube_models, _ = self._frame_transforms(table, cube_slots)
+                    gl.glBindVertexArray(cube_vao)
+                    for i in range(len(cube_slots)):
+                        gl.glUniformMatrix4fv(
+                            model_loc, 1, gl.GL_FALSE, cube_models[i])
+                        gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
 
-                # Angled casters keep their own mesh, and their own draw:
-                # each convex mesh is unique, so a run would have one member
-                # in it. The mesh remains object-backed, but its transform is
-                # projected: this is what lets dynamic brushes stop requiring
-                # per-frame dictionary snapshots.
                 gl.glBindVertexArray(cube_vao)
-                if geo_casters:
-                    geo_slots = np.asarray(geo_casters, dtype=np.int32)
+                if len(geo_slots):
                     geo_meshes = self._prepare_geo_meshes(table, geo_slots)
-                    geo_models, _geo_normals = self._frame_transforms(table, geo_slots)
+                    geo_models, _geo_normals = self._frame_transforms(
+                        table, geo_slots)
                     for geo_i, slot_value in enumerate(geo_slots):
-                        mesh = geo_meshes.get(int(table.geometry_id[int(slot_value)]))
+                        mesh = geo_meshes.get(
+                            int(table.geometry_id[int(slot_value)]))
                         if mesh is None:
                             continue
-                        gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE,
-                                              geo_models[geo_i])
+                        gl.glUniformMatrix4fv(
+                            model_loc, 1, gl.GL_FALSE, geo_models[geo_i])
                         gl.glBindVertexArray(mesh.vao)
-                        gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
+                        gl.glDrawArrays(
+                            gl.GL_TRIANGLES, 0, mesh.count)
                         gl.glBindVertexArray(cube_vao)
-                # Model casters.
-                for model_ref, obj in resolved_models:
-                    if dense_entities:
-                        slot_value = int(model_ref)
-                        base = np.asarray(
-                            entity_table.model_base_matrix[slot_value],
-                            dtype=np.float32,
-                        ).copy()
-                        base[12:15] = np.asarray(
-                            entity_table.pos[slot_value],
-                            dtype=np.float32,
-                        )
-                        gl.glUniformMatrix4fv(
-                            model_loc, 1, gl.GL_FALSE, base)
-                    else:
-                        gl.glUniformMatrix4fv(
-                            model_loc, 1, gl.GL_FALSE,
-                            glm.value_ptr(self._thing_model_matrix(model_ref)))
-                    gl.glBindVertexArray(obj.vao)
-                    if getattr(obj, 'ebo', None) is not None and getattr(obj, 'index_count', 0):
-                        gl.glDrawElements(gl.GL_TRIANGLES, obj.index_count, gl.GL_UNSIGNED_INT, None)
-                    else:
-                        gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
 
-            # Mark the slot valid only once its 6 faces are actually drawn.
+                for slot_value, obj in resolved_models:
+                    slot_value = int(slot_value)
+                    base = np.asarray(
+                        entity_table.model_base_matrix[slot_value],
+                        dtype=np.float32).copy()
+                    base[12:15] = np.asarray(
+                        entity_table.pos[slot_value], dtype=np.float32)
+                    gl.glUniformMatrix4fv(
+                        model_loc, 1, gl.GL_FALSE, base)
+                    gl.glBindVertexArray(obj.vao)
+                    if (getattr(obj, 'ebo', None) is not None
+                            and getattr(obj, 'index_count', 0)):
+                        gl.glDrawElements(
+                            gl.GL_TRIANGLES, obj.index_count,
+                            gl.GL_UNSIGNED_INT, None)
+                    else:
+                        gl.glDrawArrays(
+                            gl.GL_TRIANGLES, 0, obj.vertex_count)
+
             self._shadow_slot_sig[slot] = sig
 
-        # ---- Restore state -------------------------------------------------
         gl.glBindVertexArray(0)
         gl.glCullFace(gl.GL_BACK)
         if cull_was:
@@ -3507,12 +3251,13 @@ layout (location = 9) in vec4 iNormal2;
         else:
             gl.glDisable(gl.GL_BLEND)
         gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, prev_fbo)
-        gl.glViewport(int(prev_vp[0]), int(prev_vp[1]), int(prev_vp[2]), int(prev_vp[3]))
+        gl.glViewport(
+            int(prev_vp[0]), int(prev_vp[1]),
+            int(prev_vp[2]), int(prev_vp[3]))
         if scissor_was:
             gl.glEnable(gl.GL_SCISSOR_TEST)
         gl.glUseProgram(prev_program)
         self._current_shader = prev_shader
-
     def _resolve_model_texture_path(self, material, texture_name):
         """
         Resolve a texture path from an MTL material.
