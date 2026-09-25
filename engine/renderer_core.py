@@ -5,13 +5,13 @@ Provides:
     • Texture management (load_texture, preload_level_textures)
     • Grid drawing (update_grid_buffers, draw_grid)
     • Sprite rendering (dense instanced EntityTable path)
-    • Model loading & drawing (draw_models)
+    • Model loading & dense instanced drawing
     • Water / Glass / Fog volume rendering
     • Terrain rendering
     • Editor helpers (gizmo, selection outline, face highlight, connection lines,
       path node cubes, portal wireframes)
     • Projected shadows
-    • Sorting / splitting helpers
+    • Dense slot classification / sorting helpers
     • VAO creation for cube, sprite, grid, gizmo, etc.
     • Shader management (compilation, hot‑reload, light upload)
 
@@ -1854,174 +1854,6 @@ layout (location = 9) in vec4 iNormal2;
             current_shader = shader_name
         return current_shader
 
-    def _draw_model_batch_instanced(self, batch, projection, view, lights, current_shader):
-        shader_name = batch['shader'] + '_instanced'
-        current_shader = self._prepare_model_shader(
-            shader_name, projection, view, lights, current_shader)
-        if current_shader != shader_name:
-            return current_shader
-
-        obj = batch['obj']
-        things = batch['things']
-        u = self.uniforms[shader_name]
-        if batch['shader'] == 'textured':
-            gl.glBindTexture(gl.GL_TEXTURE_2D, batch.get('texture_id', 0))
-        else:
-            color = batch.get('color', (0.8, 0.8, 0.8))
-            gl.glUniform3fv(u['object_color'], 1, color)
-            gl.glUniform1f(u['alpha'], 1.0)
-
-        self._fill_model_instance_buffer(things)
-        self._ensure_model_instance_vao(obj.vao)
-        gl.glBindVertexArray(obj.vao)
-        group = batch.get('group')
-        if group is not None:
-            if group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
-                gl.glDrawElementsInstanced(
-                    gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
-                    ctypes.c_void_p(group['start'] * 4), len(things))
-            else:
-                gl.glDrawArraysInstanced(
-                    gl.GL_TRIANGLES, group['start'], group['count'], len(things))
-        else:
-            gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, obj.vertex_count, len(things))
-        self.render_stats.draw_calls += 1
-        self.render_stats.batched_draws += 1
-        return current_shader
-
-    def _draw_model_batch_single(self, batch, projection, view, lights, current_shader):
-        shader_name = batch['shader']
-        current_shader = self._prepare_model_shader(
-            shader_name, projection, view, lights, current_shader)
-        if current_shader != shader_name:
-            return current_shader
-
-        obj = batch['obj']
-        thing = batch['things'][0]
-        mat = self._thing_model_matrix(thing)
-        normal_mat = getattr(thing, '_render_model_nmat_cache', self._identity_mat3)
-        u = self.uniforms[shader_name]
-        if shader_name == 'textured':
-            gl.glBindTexture(gl.GL_TEXTURE_2D, batch.get('texture_id', 0))
-        else:
-            color = batch.get('color', (0.8, 0.8, 0.8))
-            gl.glUniform3fv(u['object_color'], 1, color)
-            gl.glUniform1f(u['alpha'], 1.0)
-        gl.glUniformMatrix4fv(u['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
-        normal_loc = u.get('normalMatrix', -1)
-        if normal_loc >= 0:
-            gl.glUniformMatrix3fv(normal_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
-        gl.glBindVertexArray(obj.vao)
-        group = batch.get('group')
-        if group is not None:
-            if group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
-                gl.glDrawElements(gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
-                                  ctypes.c_void_p(group['start'] * 4))
-            else:
-                gl.glDrawArrays(gl.GL_TRIANGLES, group['start'], group['count'])
-        else:
-            gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
-        self.render_stats.draw_calls += 1
-        return current_shader
-
-    def draw_models(self, projection, view, camera_pos, models, lights, config):
-        if not models:
-            return
-
-        lit_shader = self.shaders.get('lit')
-        textured_shader = self.shaders.get('textured')
-        if not lit_shader and not textured_shader:
-            return
-
-        cull_was_enabled = gl.glIsEnabled(gl.GL_CULL_FACE)
-        gl.glDisable(gl.GL_CULL_FACE)
-
-        # Build material/mesh batches once. Identical model geometry and material
-        # state shares one instanced draw instead of one GL draw per Thing.
-        batches = {}
-        for thing in models:
-            props = getattr(thing, 'properties', {})
-            model_file = props.get('model_path')
-            if not model_file:
-                continue
-            obj = self.load_model(model_file)
-            if not obj or not obj.is_loaded:
-                continue
-
-            self.render_stats.visible_tris += obj.vertex_count // 3
-            manual_texture = props.get('texture')
-
-            if obj.groups and not manual_texture:
-                for group in obj.groups:
-                    material = obj.materials.get(
-                        group['material'],
-                        {'color': [0.8, 0.8, 0.8], 'texture': None})
-                    use_texture = material.get('texture')
-                    shader_kind = (
-                        'textured' if use_texture and textured_shader
-                        else 'lit' if lit_shader else None)
-                    if not shader_kind:
-                        continue
-                    color = tuple(material.get('color', [0.8, 0.8, 0.8]))
-                    key = (
-                        id(obj), group.get('start', 0), group.get('count', 0),
-                        bool(group.get('indexed', False)), shader_kind,
-                        str(use_texture) if shader_kind == 'textured' else color,
-                    )
-                    batch = batches.get(key)
-                    if batch is None:
-                        batch = {
-                            'obj': obj, 'group': group, 'things': [],
-                            'shader': shader_kind, 'material': material,
-                            'texture_name': use_texture, 'color': color,
-                        }
-                        batches[key] = batch
-                    batch['things'].append(thing)
-            else:
-                tex_name = manual_texture
-                shader_kind = (
-                    'textured' if tex_name and textured_shader
-                    else 'lit' if lit_shader else None)
-                if not shader_kind:
-                    continue
-                color = tuple(props.get('color', [0.8, 0.8, 0.8]))
-                key = (
-                    id(obj), 0, obj.vertex_count, False, shader_kind,
-                    str(tex_name) if shader_kind == 'textured' else color,
-                )
-                batch = batches.get(key)
-                if batch is None:
-                    batch = {
-                        'obj': obj, 'group': None, 'things': [],
-                        'shader': shader_kind, 'material': None,
-                        'texture_name': tex_name, 'color': color,
-                    }
-                    batches[key] = batch
-                batch['things'].append(thing)
-
-        current_shader = None
-        for batch in batches.values():
-            tex_name = batch.get('texture_name')
-            if tex_name:
-                batch['texture_id'] = self._model_texture_id(
-                    tex_name, batch.get('material'),
-                    manual=bool(batch.get('material') is None))
-
-            things = batch['things']
-            instanced_shader = self.shaders.get(batch['shader'] + '_instanced')
-            if len(things) >= 2 and instanced_shader:
-                current_shader = self._draw_model_batch_instanced(
-                    batch, projection, view, lights, current_shader)
-            else:
-                current_shader = self._draw_model_batch_single(
-                    batch, projection, view, lights, current_shader)
-
-        gl.glBindVertexArray(0)
-        if cull_was_enabled:
-            gl.glEnable(gl.GL_CULL_FACE)
-        else:
-            gl.glDisable(gl.GL_CULL_FACE)
-
     def set_instance_textures(self, textures):
         self.instance_textures = textures
 
@@ -2593,117 +2425,6 @@ layout (location = 9) in vec4 iNormal2;
     # --------------------------------------------------------------------------
     # Helpers for sorting and matrix utilities
     # --------------------------------------------------------------------------
-    @staticmethod
-    def _thing_render_kind(thing):
-        """Cache the type-derived render category of a Thing."""
-        props = getattr(thing, 'properties', {})
-        render_mode = str(props.get('render_mode', 'model')).lower()
-        key = (type(thing), render_mode, bool(props.get('sprite_path')))
-        cached = getattr(thing, '_render_kind_cache', None)
-        if cached is not None and cached[0] == key:
-            return cached[1]
-
-        if isinstance(thing, Pickup):
-            kind = 'pickup'
-        elif isinstance(thing, (Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger)):
-            kind = 'entity_sprite'
-        elif key[1] == 'billboard' and key[2]:
-            kind = 'sprite'
-        else:
-            kind = 'ordinary'
-
-        thing._render_kind_cache = (key, kind)
-        return kind
-
-    def _sort_objects(self, brushes, things, config, model_out=None,
-                      brush_positions=None, thing_positions=None,
-                      collect_sort_positions=False):
-        opaque, transparent, sprites, fog, water, glass, glow = [], [], [], [], [], [], []
-        is_play = config.get('play_mode', False)
-        show_sprites = config.get('show_sprites_in_play_mode', False)
-
-        if collect_sort_positions:
-            transparent_pos, water_pos = [], []
-            glass_pos, sprite_pos = [], []
-        else:
-            transparent_pos = water_pos = glass_pos = sprite_pos = None
-
-        for i, brush in enumerate(brushes):
-            if brush.get('hidden'):
-                continue
-            shader = brush.get('shader')
-            pos = brush_positions[i] if brush_positions is not None else None
-            if is_water_brush(brush):
-                water.append(brush)
-                if water_pos is not None:
-                    water_pos.append(pos)
-            elif brush.get('is_fog') or shader == 'Fog':
-                fog.append(brush)
-            elif shader == 'Glass':
-                glass.append(brush)
-                if glass_pos is not None:
-                    glass_pos.append(pos)
-            elif shader == 'Glow':
-                glow.append(brush)
-            elif brush.get('is_trigger'):
-                if not is_play:
-                    transparent.append(brush)
-                    if transparent_pos is not None:
-                        transparent_pos.append(pos)
-            else:
-                opaque.append(brush)
-
-        for i, t in enumerate(things):
-            pos = thing_positions[i] if thing_positions is not None else None
-            if PathNode is not None and isinstance(t, PathNode):
-                continue
-            if isinstance(t, dict) and 'monster_type' in t:
-                sprites.append(t)
-                if sprite_pos is not None:
-                    sprite_pos.append(pos)
-                continue
-            if not isinstance(t, Thing):
-                continue
-
-            props = getattr(t, 'properties', {})
-            model_path = props.get('model_path')
-            render_mode = str(props.get('render_mode', 'model')).lower()
-            model_visible = bool(
-                model_path and
-                render_mode == 'model' and
-                not props.get('hidden', False)
-            )
-            if model_out is not None and model_visible:
-                model_out.append(t)
-                continue
-
-            kind = self._thing_render_kind(t)
-            if isinstance(t, Prop):
-                if render_mode == 'billboard' and kind == 'sprite':
-                    sprites.append(t)
-            elif kind == 'pickup' or kind == 'entity_sprite':
-                sprites.append(t)
-            elif model_path and render_mode == 'model':
-                # Models have already been collected into model_out above.
-                pass
-            elif kind == 'sprite':
-                sprites.append(t)
-            elif not is_play or show_sprites:
-                sprites.append(t)
-
-            if sprite_pos is not None and sprites and sprites[-1] is t:
-                sprite_pos.append(pos)
-
-        result = (opaque, transparent, sprites, fog, water, glass, glow)
-        if collect_sort_positions:
-            return result + ({
-                'transparent': transparent_pos,
-                'water': water_pos,
-                'glass': glass_pos,
-                'sprites': sprite_pos,
-            },)
-        return result
-
     def _classify_brush_slots(self, table, slots, config):
         """Split visible brush slots into the render passes, numerically.
 
@@ -2796,15 +2517,6 @@ layout (location = 9) in vec4 iNormal2;
         distances = dx * dx + dz * dz
         order = np.argsort(-distances if reverse else distances, kind="stable")
         return slots[order]
-
-    def _split_opaque(self, brushes):
-        textured, solid = [], []
-        for b in brushes:
-            if any(t and t not in ('default.png', 'caulk.jpg') for t in b.get('textures', {}).values()):
-                textured.append(b)
-            else:
-                solid.append(b)
-        return textured, solid
 
     def _brush_model_matrix(self, brush):
         pos = brush.get('pos', [0, 0, 0])
