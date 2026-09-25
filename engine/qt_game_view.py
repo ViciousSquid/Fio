@@ -1089,18 +1089,13 @@ class QtGameView(QOpenGLWidget):
             and render_state is not None
             and getattr(render_state, 'splitscreen_active', False)
         )
-        # The per-entity sprite-texture overrides exist for the object
-        # billboard path. The instanced pass resolves its own textures from the
-        # entity projection and never reads them, so on a frame that is wholly
-        # instanced this is a walk over every entity producing a dict nothing
-        # consumes -- 0.18 ms at 961 entities, measured. Three things still
-        # take the object path and are asked about rather than assumed: the
-        # main pass itself (the renderer's own predicate), the split-screen
-        # second view, and the portal virtual views.
+        # The instanced pass resolves sprite textures from the EntityTable and
+        # never reads the Thing objects.  Portal and split-screen views consume
+        # the same dense table, so the presence of portals is no longer a reason
+        # to rebuild the old object-path texture map.
         _instanced_sprites = (
             render_state is not None
             and self.renderer is not None
-            and not getattr(render_state, 'has_portals', False)
             and self.renderer.will_instance_sprites(
                 self._render_config, _main_brush_slots)
         )
