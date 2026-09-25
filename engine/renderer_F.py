@@ -82,33 +82,7 @@ class Renderer_F(BaseRenderer):
     # Matrix helpers – cached on the brush dict itself
     # ------------------------------------------------------------------
 
-    def _brush_model_matrix(self, brush):
-        """Return the model matrix for *brush*, recomputing only when the
-        brush transform actually changes.  Result is stored directly on the
-        brush dict so it survives across frames with zero extra bookkeeping.
-        """
-        pos   = brush.get('pos',  [0, 0, 0])
-        size  = brush.get('size', [64, 64, 64])
-        angle = brush.get('_rot_angle')
-        axis  = tuple(brush.get('rot_axis', [0, 1, 0])) if angle else None
-        key   = (pos[0], pos[1], pos[2],
-                 size[0], size[1], size[2],
-                 angle, axis)
-
-        if brush.get('_mat_cache_key') == key:
-            return brush['_mat_cache']
-
-        mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
-        if angle:
-            av = glm.vec3(*axis)
-            if glm.length(av) > 0.001:
-                mat = glm.rotate(mat, glm.radians(float(angle)), glm.normalize(av))
-        mat = glm.scale(mat, glm.vec3(*size))
-        brush['_mat_cache_key'] = key
-        brush['_mat_cache']     = mat
-        return mat
-
-    def _tex_cache_path(self, tex_name):
+        def _tex_cache_path(self, tex_name):
         """Return the ``textures/<name>`` cache key for *tex_name*, memoizing the
         os.path.join. Called for every drawn face every frame in play mode, so
         the join is done once per unique texture name and reused thereafter."""
@@ -124,35 +98,7 @@ class Renderer_F(BaseRenderer):
     def set_instance_textures(self, textures):
         self.instance_textures = textures
 
-    def _compute_normal_matrix(self, model_matrix, brush=None):
-        """Compute the normal matrix.
-
-        If *brush* is provided the result is cached under the same cache
-        key as the model matrix, so it is only recomputed when the brush
-        transform changes.  Falls back to uncached behaviour when brush is
-        None (e.g. calls from base-class code that don't have a brush ref).
-        """
-        if brush is not None:
-            mk = brush.get('_mat_cache_key')
-            if mk is not None and brush.get('_nmat_cache_key') == mk:
-                return brush['_nmat_cache']
-            try:
-                nmat = glm.transpose(glm.inverse(glm.mat3(model_matrix)))
-            except Exception:
-                nmat = self._identity_mat3
-            brush['_nmat_cache_key'] = mk
-            brush['_nmat_cache']     = nmat
-            return nmat
-        # No brush supplied – uncached path (should be rare)
-        try:
-            return glm.transpose(glm.inverse(glm.mat3(model_matrix)))
-        except Exception:
-            return self._identity_mat3
-
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _selected_slot(table, config):
+        def _selected_slot(table, config):
         """The slot of the selected brush, or -1.
 
         One dictionary lookup per pass, so the per-brush ``brush is selected``
