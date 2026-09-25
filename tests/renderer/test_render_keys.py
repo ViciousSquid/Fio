@@ -67,6 +67,22 @@ def test_the_sort_is_stable_so_depth_order_survives_within_a_run():
     assert starts.tolist() == [0, 4]
 
 
+def test_runs_can_use_a_secondary_depth_key_without_reordering_runs():
+    textures = np.array([2, 1, 2, 1], dtype=np.int32)
+    depth_sq = np.array([5.0, 4.0, 3.0, 2.0])
+    order, starts = sort_into_runs(textures, secondary=-depth_sq)
+
+    # Texture is the primary key, depth is only the stable order inside it.
+    assert textures[order].tolist() == [1, 1, 2, 2]
+    assert depth_sq[order].tolist() == [4.0, 2.0, 5.0, 3.0]
+    assert starts.tolist() == [0, 2, 4]
+
+
+def test_secondary_key_must_match_primary_length():
+    with pytest.raises(ValueError, match='same length'):
+        sort_into_runs(np.array([1, 2]), secondary=np.array([1.0]))
+
+
 def test_an_empty_input_yields_no_runs():
     order, starts = sort_into_runs(np.empty(0, dtype=np.int64))
     assert len(order) == 0
