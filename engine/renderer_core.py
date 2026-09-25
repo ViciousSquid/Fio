@@ -1723,13 +1723,16 @@ layout (location = 9) in vec4 iNormal2;
             self._sprite_recipes_seen = recipes
             self._sprite_gl_by_id = np.zeros(0, dtype=np.int32)
         cached = self._sprite_gl_by_id
-        if len(cached) >= len(recipes):
-            return cached
-        grown = np.zeros(len(recipes), dtype=np.int32)
-        grown[:len(cached)] = cached
-        for sprite_id in range(len(cached), len(recipes)):
-            grown[sprite_id] = self._resolve_sprite_recipe(recipes[sprite_id])
-        self._sprite_gl_by_id = grown
+        if len(cached) < len(recipes):
+            old_len = len(cached)
+            capacity = max(16, old_len, old_len * 2, len(recipes))
+            grown = np.zeros(capacity, dtype=np.int32)
+            grown[:old_len] = cached
+            for sprite_id in range(old_len, len(recipes)):
+                grown[sprite_id] = self._resolve_sprite_recipe(
+                    recipes[sprite_id])
+            self._sprite_gl_by_id = grown
+            cached = grown
         return grown
 
     def _resolve_sprite_recipe(self, candidates):
