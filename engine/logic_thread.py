@@ -27,6 +27,7 @@ from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIM
 from .prop_runtime import PropSession
 from .render_table import RenderTable
 from .entity_table import EntityTable
+from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
 
 # Import Thing subclasses for type checking
 try:
@@ -2060,10 +2061,13 @@ class LogicThread(threading.Thread):
         all carried through, including pitch for tilted/floor portals."""
         p = self.player.pos
         # Position and velocity through the shared transform.
-        tx, ty, tz = portal_a.map_point(portal_b, float(p.x), float(p.y), float(p.z))
-        vx, vy, vz = portal_a.map_direction(
-            portal_b, float(self.player.velocity.x),
-            float(self.player.velocity.y), float(self.player.velocity.z))
+        tx, ty, tz = portal_map_point(
+            portal_a.pos, portal_a.get_basis(),
+            portal_b.pos, portal_b.get_basis(),
+            (float(p.x), float(p.y), float(p.z)))
+        vx, vy, vz = portal_map_direction(
+            portal_a.get_basis(), portal_b.get_basis(),
+            (float(self.player.velocity.x), float(self.player.velocity.y), float(self.player.velocity.z)))
 
         # Push out along the destination normal by the body's extent along that
         # normal plus a small clearance, so we never spawn inside the far wall.
@@ -2081,7 +2085,8 @@ class LogicThread(threading.Thread):
         fx = math.sin(angle) * math.cos(pitch)
         fy = math.sin(pitch)
         fz = math.cos(angle) * math.cos(pitch)
-        mfx, mfy, mfz = portal_a.map_direction(portal_b, fx, fy, fz)
+        mfx, mfy, mfz = portal_map_direction(
+            portal_a.get_basis(), portal_b.get_basis(), (fx, fy, fz))
         self.player.angle = math.atan2(mfx, mfz)
         if hasattr(self.player, 'pitch'):
             self.player.pitch = math.asin(max(-1.0, min(1.0, mfy)))
@@ -2111,9 +2116,13 @@ class LogicThread(threading.Thread):
                 continue
             if self._segment_crosses_aperture(portal_a, prev_pos, cur) is None:
                 continue
-            npx, npy, npz = portal_a.map_point(portal_b, cur[0], cur[1], cur[2])
-            nvx, nvy, nvz = portal_a.map_direction(
-                portal_b, proj['vel'][0], proj['vel'][1], proj['vel'][2])
+            npx, npy, npz = portal_map_point(
+                portal_a.pos, portal_a.get_basis(),
+                portal_b.pos, portal_b.get_basis(),
+                (cur[0], cur[1], cur[2]))
+            nvx, nvy, nvz = portal_map_direction(
+                portal_a.get_basis(), portal_b.get_basis(),
+                (proj['vel'][0], proj['vel'][1], proj['vel'][2]))
             bnx, bny, bnz = portal_b.get_normal()
             proj['pos'][0] = npx + bnx * Portal.EXIT_CLEARANCE
             proj['pos'][1] = npy + bny * Portal.EXIT_CLEARANCE
