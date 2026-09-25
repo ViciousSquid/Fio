@@ -3988,7 +3988,9 @@ class LogicThread(threading.Thread):
         # rows are the entity table's dynamic rows, and refreshing them is the
         # only per-entity work left that is not a column operation.
         for i in etable.monster_slots:
-            erefs[i] = things[i].get_render_snapshot()
+            snapshot = things[i].get_render_snapshot()
+            erefs[i] = snapshot
+            etable.update_monster_snapshot(int(i), snapshot)
 
         # A collected pickup is not published.  Only pickup rows can be
         # collected, so the filter costs pickups rather than entities -- on a
