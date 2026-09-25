@@ -3952,8 +3952,8 @@ class LogicThread(threading.Thread):
         # sort and batch without reconstructing anything.
         write_state.render_table = table
         write_state.render_refs = refs
-        write_state.visible_brush_slots = visible_slots.astype(np.int32)
-        write_state.all_brush_slots = all_slots.astype(np.int32)
+        write_state.visible_brush_slots = visible_slots
+        write_state.all_brush_slots = all_slots
 
         write_state.visible_brushes = visible_brushes
         write_state.visible_brush_position_count = len(visible_brushes)
@@ -4000,7 +4000,7 @@ class LogicThread(threading.Thread):
             if dropped:
                 keep_things = np.ones(thing_count, dtype=bool)
                 keep_things[dropped] = False
-                visible_thing_slots = np.flatnonzero(keep_things).astype(np.int32)
+                visible_thing_slots = np.flatnonzero(keep_things)
 
         visible_count = len(visible_thing_slots)
         visible_thing_positions = write_state.ensure_visible_thing_positions(
