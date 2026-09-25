@@ -1432,46 +1432,118 @@ class PropertyEditor(QWidget):
     def _create_water_properties(self, brush):
         group = QGroupBox("Water Properties")
         group.setStyleSheet(_Style.group_box("#00CED1"))
-        layout = QFormLayout(group)
+        layout = QVBoxLayout(group)
         layout.setSpacing(8)
 
-        color_btn = self._color_button(brush.get('water_tint', [0.0, 0.4, 0.6]),
-                                       lambda: self._pick_color('water_tint', color_btn, [0.0, 0.4, 0.6]))
-        layout.addRow("Water Tint:", color_btn)
+        form = QFormLayout()
+        form.setSpacing(6)
+
+        color_btn = self._color_button(
+            brush.get('water_tint', [0.0, 0.4, 0.6]),
+            lambda: self._pick_color('water_tint', color_btn, [0.0, 0.4, 0.6]))
+        form.addRow("Water Tint:", color_btn)
         self._widgets['water_color_btn'] = color_btn
 
-        for key, label_txt, default in (('water_opacity', "Opacity:", 0.5),
-                                        ('water_reflectivity', "Reflectivity:", 0.5)):
-            slider, label = _make_slider(self, brush.get(key, default), 0, 100,
-                                         callback=lambda v, k=key: self.update_object_prop(k, v))
-            layout.addRow(label_txt, _hbox(slider, label, stretch=False))
+        for key, label_txt, default, tip in (
+            ('water_opacity', "Opacity:", 0.5, "Surface opacity"),
+        ):
+            slider, label = _make_slider(
+                self, brush.get(key, default), 0, 100,
+                callback=lambda v, k=key: self.update_object_prop(k, v),
+                tooltip=tip)
+            form.addRow(label_txt, _hbox(slider, label, stretch=False))
             self._widgets[f'{key}_slider'] = slider
 
-        wave_cb = _make_checkbox("Enable Waves", brush.get('water_wave_enabled', True),
-                                 lambda c: self.update_object_prop('water_wave_enabled', c), _Style.CHECKBOX)
-        layout.addRow("", wave_cb)
+        layout.addLayout(form)
+
+        dist_group = QGroupBox("Distortion Effects")
+        dist_group.setStyleSheet(_Style.group_box("#87CEEB", "#2b3d3b"))
+        dist_form = QFormLayout(dist_group)
+        dist_form.setSpacing(6)
+        for key, label_txt, default, tip in (
+            ('water_distortion', "Warp Strength:", 0.5,
+             "How much the view through water is warped"),
+            ('water_refraction', "Refraction:", 1.333,
+             "Index of refraction (1.00=air, 1.333=water, 1.50=glass)"),
+            ('water_roughness', "Roughness:", 0.0,
+             "Surface roughness (0=clear, 1=rough)"),
+        ):
+            if key == 'water_refraction':
+                ior = float(brush.get(key, default))
+                slider = QSlider(Qt.Horizontal)
+                slider.setRange(100, 250)
+                slider.setValue(max(100, min(250, int(round(ior * 100)))))
+
+                label = QLabel(f"{ior:.2f}")
+
+                def _on_ior_change(v, _label=label):
+                    real = v / 100.0
+                    _label.setText(f"{real:.2f}")
+                    self.update_object_prop('water_refraction', real)
+
+                slider.valueChanged.connect(_on_ior_change)
+                slider.setToolTip(tip)
+            else:
+                slider, label = _make_slider(
+                    self, brush.get(key, default), 0, 100,
+                    fmt="{:.2f}",
+                    callback=lambda v, k=key: self.update_object_prop(k, v),
+                    tooltip=tip)
+            dist_form.addRow(label_txt, _hbox(slider, label, stretch=False))
+            self._widgets[f'{key}_slider'] = slider
+        layout.addWidget(dist_group)
+
+        fres_group = QGroupBox("Fresnel Effect")
+        fres_group.setStyleSheet(_Style.group_box("#98FB98", "#2b3d3b"))
+        fres_form = QFormLayout(fres_group)
+        slider, label = _make_slider(
+            self, brush.get('water_fresnel',
+                            brush.get('water_reflectivity', 0.5)),
+            0, 100,
+            callback=lambda v: self.update_object_prop('water_fresnel', v),
+            tooltip="Controls edge reflection intensity")
+        fres_form.addRow("Intensity:", _hbox(slider, label, stretch=False))
+        self._widgets['water_fresnel_slider'] = slider
+        layout.addWidget(fres_group)
+
+        wave_group = QGroupBox("Surface")
+        wave_group.setStyleSheet(_Style.group_box("#48D1CC", "#2b3d3b"))
+        wave_layout = QFormLayout(wave_group)
+        wave_layout.setSpacing(6)
+
+        wave_cb = _make_checkbox(
+            "Enable Waves",
+            brush.get('water_wave_enabled', True),
+            lambda c: self.update_object_prop('water_wave_enabled', c),
+            _Style.CHECKBOX)
+        wave_layout.addRow("", wave_cb)
         self._widgets['water_wave_cb'] = wave_cb
 
-        # 0..1 fraction; the renderer maps this to world-space wave amplitude
         wave_h = min(float(brush.get('water_wave_height', 0.5)), 1.0)
-        slider, label = _make_slider(self, wave_h, 0, 100,
-                                     callback=lambda v: self.update_object_prop('water_wave_height', v),
-                                     tooltip="Amplitude of the waves")
-        layout.addRow("Wave Height:", _hbox(slider, label, stretch=False))
+        slider, label = _make_slider(
+            self, wave_h, 0, 100,
+            callback=lambda v: self.update_object_prop('water_wave_height', v),
+            tooltip="Amplitude of the waves")
+        wave_layout.addRow("Wave Height:", _hbox(slider, label, stretch=False))
         self._widgets['water_wave_h_slider'] = slider
 
-        plane_cb = _make_checkbox("Draw top surface only", brush.get('water_plane', False),
-                                  lambda c: self.update_object_prop('water_plane', c), _Style.CHECKBOX)
+        layout.addWidget(wave_group)
+
+        plane_cb = _make_checkbox(
+            "Draw top surface only",
+            brush.get('water_plane', False),
+            lambda c: self.update_object_prop('water_plane', c),
+            _Style.CHECKBOX)
         reflection_cb = _make_checkbox(
             "Reflections",
             brush.get('water_reflections', False),
             lambda c: self.update_object_prop('water_reflections', c),
-            _Style.CHECKBOX,
-        )
+            _Style.CHECKBOX)
         reflection_cb.setToolTip(
-            "Render a 256×256 environment reflection cubemap. More expensive."
-        )
-        layout.addRow("", _hbox(plane_cb, reflection_cb, stretch=False))
+            "Render a 256×256 environment reflection cubemap 256 world units above the water. "
+            "More expensive.")
+        layout.addWidget(plane_cb)
+        layout.addWidget(reflection_cb)
         self._widgets['water_plane_cb'] = plane_cb
         self._widgets['water_reflections_cb'] = reflection_cb
 
@@ -3651,6 +3723,7 @@ class PropertyEditor(QWidget):
                            'glass_roughness', 'glass_fresnel', 'glow_color', 'glow_intensity',
                            'water_tint', 'water_opacity', 'water_reflectivity', 'water_wave_enabled',
                            'water_wave_height', 'water_plane', 'water_reflections',
+                           'water_distortion', 'water_refraction', 'water_roughness', 'water_fresnel',
                            'fog_color', 'fog_density')
             for key in shader_keys:
                 self.current_object.pop(key, None)
@@ -3686,6 +3759,14 @@ class PropertyEditor(QWidget):
                 self.current_object['water_wave_height'] = 0.5
             if 'water_reflections' not in self.current_object:
                 self.current_object['water_reflections'] = False
+            if 'water_distortion' not in self.current_object:
+                self.current_object['water_distortion'] = 0.5
+            if 'water_refraction' not in self.current_object:
+                self.current_object['water_refraction'] = 1.333
+            if 'water_roughness' not in self.current_object:
+                self.current_object['water_roughness'] = 0.0
+            if 'water_fresnel' not in self.current_object:
+                self.current_object['water_fresnel'] = self.current_object.get('water_reflectivity', 0.5)
         elif shader_type == 'Fog':
             self.current_object['is_fog'] = True
             if 'fog_density' not in self.current_object:
