@@ -158,6 +158,8 @@ def test_structural_change_keeps_survivors_cold_columns():
 
     slot_a = t.slot_of_id['a']
     assert t.class_bits[slot_a] & rt.CLASS_GLASS      # survivor: not re-resolved
+    slot_b = t.slot_of_id['b']
+    assert not (t.class_bits[slot_b] & rt.CLASS_GLOW)  # mutated survivor kept its cache
     assert t.class_bits[t.slot_of_id['c']] & rt.CLASS_TRIGGER   # new row: resolved
     assert t.slot_of_id['b'] == 2
 
