@@ -328,11 +328,11 @@ def _assert_same_entities(want, got, table, things, what):
 # ---------------------------------------------------------------------------
 
 def _keys(table, slot):
-    """The cache keys of a row's sprite candidates, in order."""
+    """The unique cache keys of a row's sprite recipe, in order."""
     sid = int(table.sprite_key_id[slot])
     if sid < 0:
         return None
-    return [c[0] for c in table.sprite_recipes()[sid]]
+    return list(dict.fromkeys(c[0] for c in table.sprite_recipes()[sid]))
 
 
 def test_a_portal_draws_no_sprite():
@@ -357,6 +357,18 @@ def test_a_monsters_sprite_key_names_its_current_frame():
         "dead wins over shooting, as the object path's chain decides it")
 
 
+
+def test_a_dead_monster_keeps_an_idle_fallback_if_dead_frame_is_missing():
+    """The numeric recipe must not drop the monster when dead.png is absent."""
+    grunt = make_thing(Monster, 'grunt', monster_type='human')
+    grunt.properties['dead'] = True
+    table = _synced([grunt])
+    recipe = table.sprite_recipes()[int(table.sprite_key_id[0])]
+
+    assert [c[1:] for c in recipe] == [
+        ('dead.png', 'sprites/monsters/human', True),
+        ('idle.png', 'sprites/monsters/human', True),
+    ]
 def test_a_variant_monster_falls_back_to_the_base_folder():
     """Two load attempts, in the order draw_sprites makes them."""
     grunt = make_thing(Monster, 'grunt', monster_type='human', variant='red')
