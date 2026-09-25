@@ -76,6 +76,8 @@ Dense numerical render projection. Converts render-relevant world state into par
 
 This is a derived execution representation, not a second source of truth. It exists so visibility, classification, batching and instance construction do not repeatedly traverse Python objects.
 
+Water is projected alongside the other special brush materials: the dense table carries opacity, Fresnel/reflectivity, wave state, refraction IOR, distortion, roughness and the optional reflection flag. The normal water pass uses the same screen-space transmission/refraction model as Glass; when `Reflections` is enabled, the forward renderer fills a 256×256 environment cubemap from a probe 256 world units above the water's top surface and the water shader samples it by Fresnel/roughness. Reflection capture uses the dense RenderTable/EntityTable scene path and excludes water, glass, fog and portals to avoid recursive optical rendering.
+
 ### `renderer_core.py`
 `BaseRenderer`, the shared OpenGL rendering infrastructure used by renderer backends. Provides shader and texture management, VAOs/VBOs, terrain, models, sprites, water, glass, fog, portals, lighting, shadows, editor helpers, LOD support, statistics and cleanup. `render_scene()` is the concrete-renderer entry point rather than an artificial abstract interface.
 
