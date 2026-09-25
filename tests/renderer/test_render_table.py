@@ -395,7 +395,7 @@ def test_special_volume_state_moves_with_a_surviving_row():
     assert old != new
     np.testing.assert_allclose(t.water_tint[new], [1.0, 0.2, 0.3])
     assert t.water_params[new, 0] == pytest.approx(0.7)
-    assert t.water_reflections[new] is False
+    assert not bool(t.water_reflections[new])
 
 
 def test_special_volume_state_refreshes_on_epoch_change():
@@ -404,3 +404,16 @@ def test_special_volume_state_refreshes_on_epoch_change():
     water['water_opacity'] = 0.9
     t.sync([water], epoch=2)
     assert t.water_params[0, 0] == pytest.approx(0.9)
+
+def test_water_optics_fall_back_to_existing_reflectivity():
+    water = _brush(
+        id='water',
+        shader='Water',
+        water_reflectivity=0.7,
+    )
+    t = _synced([water])
+    assert t.water_params[0, 1] == pytest.approx(0.7)
+    assert t.water_params[0, 4] == pytest.approx(0.5)
+    assert t.water_params[0, 5] == pytest.approx(1.333)
+    assert t.water_params[0, 6] == pytest.approx(0.0)
+    assert not bool(t.water_reflections[0])
