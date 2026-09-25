@@ -548,7 +548,7 @@ class EntityTable:
         """
         return epoch is None or epoch != self._epoch or len(things) != self.count
 
-    def begin_frame(self, things, epoch=None):
+    def begin_frame(self, things, epoch=None, dirty_objects=None):
         """Bring the table into line with *things*; return the live hidden mask.
 
         The whole of the projection's per-frame Python cost: one comprehension
@@ -562,7 +562,7 @@ class EntityTable:
         """
         n = len(things)
         if self.needs_reconcile(things, epoch):
-            self._reconcile(things)
+            self._reconcile(things, dirty_objects=dirty_objects)
             self._epoch = epoch
 
         if n:
@@ -619,7 +619,7 @@ class EntityTable:
                 hidden[:] = [_props_of(t).get('hidden', False) for t in things]
         return hidden
 
-    def sync(self, things, epoch=None) -> bool:
+    def sync(self, things, epoch=None, dirty_objects=None) -> bool:
         """Reconcile without reading ``hidden``.  Returns whether it did.
 
         :meth:`begin_frame` is what the render path calls; this is for callers
@@ -638,26 +638,59 @@ class EntityTable:
                     structural = True
                     break
         if structural:
-            self._reconcile(things)
+            self._reconcile(things, dirty_objects=dirty_objects)
             self._epoch = epoch
         return self.generation != before
 
-    def _reconcile(self, things):
-        """Rebuild the row mapping and re-resolve the cold column."""
+    def _reconcile(self, things, dirty_objects=None):
+        """Rebuild slot mapping while preserving untouched cold entity rows."""
         n = len(things)
         self._resize(max(n, 16))
 
+        old_slot_of_id = self.slot_of_id
+        old_things = self.things
+        old_count = len(old_things)
+        old_states = self._sprite_state
         ids = [None] * n
         states = [None] * n
+        survivors = set()
+        move_src, move_dst = [], []
+
         for slot, thing in enumerate(things):
             props = getattr(thing, 'properties', None)
-            ids[slot] = props.get('id') if isinstance(props, dict) else None
-            self.class_bits[slot] = _entity_class_bits(thing)
+            eid = props.get('id') if isinstance(props, dict) else None
+            ids[slot] = eid
+            if eid is None:
+                continue
+            if dirty_objects is None or id(thing) in dirty_objects:
+                continue
+            old = old_slot_of_id.get(eid)
+            if old is None or old >= old_count or old_things[old] is not thing:
+                continue
+            survivors.add(slot)
+            if old != slot:
+                move_src.append(old)
+                move_dst.append(slot)
+
+        if move_src:
+            src = np.asarray(move_src, dtype=np.intp)
+            dst = np.asarray(move_dst, dtype=np.intp)
+            for arr in (self.class_bits, self.sprite_size, self.sprite_key_id):
+                arr[dst] = arr[src]
+
+        for slot, thing in enumerate(things):
+            # Position is warm and authoritative every frame; reconcile still
+            # refreshes it so a structural reorder cannot expose stale rows.
             self.pos[slot] = _pos_of(thing)
-            self.sprite_size[slot] = sprite_size(thing)
-            self.sprite_key_id[slot] = self.intern_sprite(
-                sprite_candidates(thing))
-            states[slot] = sprite_state(thing)
+            if slot not in survivors:
+                self.class_bits[slot] = _entity_class_bits(thing)
+                self.sprite_size[slot] = sprite_size(thing)
+                self.sprite_key_id[slot] = self.intern_sprite(
+                    sprite_candidates(thing))
+                states[slot] = sprite_state(thing)
+            else:
+                old = old_slot_of_id.get(ids[slot])
+                states[slot] = old_states[old] if old < len(old_states) else None
 
         self._sprite_state = states
         self.ids = ids
