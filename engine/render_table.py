@@ -550,7 +550,7 @@ class RenderTable:
             for arr in (self.class_bits, self.tex_name_id, self.uv_scale,
                         self.uv_angle, self.uv_shift, self.uv_natural,
                         self.uv_has_scale, self.colour, self.glow_colour,
-                        self.geo_epoch, self.water_tint, self.water_params,
+                        self.geo_epoch, self.geometry_id, self.water_tint, self.water_params,
                         self.water_plane, self.glass_color, self.glass_params,
                         self.fog_color, self.fog_params):
                 arr[dst] = arr[src]
@@ -559,6 +559,14 @@ class RenderTable:
             self._resolve_warm(slot, brush)
             if slot not in survivors:
                 self._resolve_cold(slot, brush)
+
+        # Geometry handles are dense row identities. Recompute them after
+        # structural compaction so a surviving convex brush never retains the
+        # slot it occupied in the previous generation.
+        self.geometry_id[:n] = -1
+        geo_slots = np.flatnonzero(
+            self.class_bits[:n] & CLASS_HAS_GEOMETRY).astype(np.int32)
+        self.geometry_id[geo_slots] = geo_slots
 
         self.ids = new_ids
         self.slot_of_id = {bid: slot for slot, bid in enumerate(new_ids)
