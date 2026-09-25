@@ -158,6 +158,14 @@ def test_the_slot_cull_exempts_the_same_lights_and_portals():
         "Monster (3) are not" % ([int(i) for i in kept],))
 
 
+def test_shadow_lights_use_entity_slots_on_numeric_path():
+    """Shadow-map light state must not materialise Light objects."""
+    body = _render_scene_source()
+    assert "shadow_lights = (light_table, shadow_slots)" in body
+    assert "light_refs = config.get('entity_refs')" not in body
+    assert "shadow_lights = [light_refs[int(s)]" not in body
+
+
 def test_legacy_per_object_sprite_renderer_is_gone():
     """Sprite rendering has one execution boundary: EntityTable -> instancing."""
     core = _read("engine/renderer_core.py")
