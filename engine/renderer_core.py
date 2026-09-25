@@ -2474,8 +2474,8 @@ layout (location = 9) in vec4 iNormal2;
         """:meth:`_distance_cull_slots` with the Thing pass's exemption.
 
         Lights and Portals survive the dense entity cull at any distance.
-        The legacy object predicate is no longer part of Portal rendering;
-        the entity-table ENT_CULL_EXEMPT mask is authoritative.
+        The object-path predicate is no longer part of Portal rendering;
+        the dense EntityTable ENT_CULL_EXEMPT mask is authoritative.
         """
         if not len(slots):
             return slots
