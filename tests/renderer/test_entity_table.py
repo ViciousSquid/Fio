@@ -190,6 +190,44 @@ def test_the_columns_are_a_pure_projection():
     assert np.array_equal(first.pos[:first.count], second.pos[:second.count])
 
 
+def test_monster_snapshot_updates_sprite_key_without_reconciling():
+    monster = make_thing(Monster, 'grunt')
+    table = _synced([monster])
+    generation = table.generation
+    before = int(table.sprite_key_id[0])
+
+    snapshot = monster.get_render_snapshot()
+    snapshot['dead'] = True
+    snapshot['is_shooting'] = False
+    table.update_monster_snapshot(0, snapshot)
+
+    assert table.generation == generation
+    assert int(table.sprite_key_id[0]) != before
+
+
+def test_model_state_is_cold_and_position_is_separate():
+    thing = make_thing(
+        Prop, 'model',
+        model_path='crate.glb',
+        rotation=[15.0, 30.0, 45.0],
+        scale=2.0,
+        pos=[10.0, 20.0, 30.0],
+    )
+    table = _synced([thing])
+    assert table.model_recipe_id[0] >= 0
+    assert np.isclose(table.model_base_matrix[0, 3], 0.0)
+    assert np.isclose(table.model_base_matrix[0, 7], 0.0)
+    assert np.isclose(table.model_base_matrix[0, 11], 0.0)
+    assert np.isclose(table.model_base_matrix[0, 15], 1.0)
+
+    base = table.model_base_matrix[0].copy()
+    thing.pos = [100.0, 200.0, 300.0]
+    table.begin_frame([thing], epoch=1)
+
+    np.testing.assert_array_equal(table.model_base_matrix[0], base)
+    np.testing.assert_allclose(table.pos[0], [100.0, 200.0, 300.0])
+
+
 # ---------------------------------------------------------------------------
 # Equivalence with the loop it replaces
 # ---------------------------------------------------------------------------
