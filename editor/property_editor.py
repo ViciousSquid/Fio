@@ -1462,8 +1462,18 @@ class PropertyEditor(QWidget):
 
         plane_cb = _make_checkbox("Draw top surface only", brush.get('water_plane', False),
                                   lambda c: self.update_object_prop('water_plane', c), _Style.CHECKBOX)
-        layout.addRow("", plane_cb)
+        reflection_cb = _make_checkbox(
+            "Reflections",
+            brush.get('water_reflections', False),
+            lambda c: self.update_object_prop('water_reflections', c),
+            _Style.CHECKBOX,
+        )
+        reflection_cb.setToolTip(
+            "Render a 256×256 environment reflection cubemap. More expensive."
+        )
+        layout.addRow("", _hbox(plane_cb, reflection_cb, stretch=False))
         self._widgets['water_plane_cb'] = plane_cb
+        self._widgets['water_reflections_cb'] = reflection_cb
 
         return group
 
@@ -3640,7 +3650,8 @@ class PropertyEditor(QWidget):
             shader_keys = ('glass_color', 'glass_opacity', 'glass_distortion', 'glass_refraction',
                            'glass_roughness', 'glass_fresnel', 'glow_color', 'glow_intensity',
                            'water_tint', 'water_opacity', 'water_reflectivity', 'water_wave_enabled',
-                           'water_wave_height', 'water_plane', 'fog_color', 'fog_density')
+                           'water_wave_height', 'water_plane', 'water_reflections',
+                           'fog_color', 'fog_density')
             for key in shader_keys:
                 self.current_object.pop(key, None)
         elif shader_type != 'Fog':
@@ -3673,6 +3684,8 @@ class PropertyEditor(QWidget):
                 self.current_object['water_wave_enabled'] = True
             if 'water_wave_height' not in self.current_object:
                 self.current_object['water_wave_height'] = 0.5
+            if 'water_reflections' not in self.current_object:
+                self.current_object['water_reflections'] = False
         elif shader_type == 'Fog':
             self.current_object['is_fog'] = True
             if 'fog_density' not in self.current_object:
