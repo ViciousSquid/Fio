@@ -199,7 +199,7 @@ _LOOKUP_ONLY = ('', '', False)
 
 
 def _monster_sprite_candidates(props):
-    """The monster branch of ``draw_sprites``, as candidates.
+    """The monster sprite branch, expressed as numeric texture candidates.
 
     Monsters reach the renderer as render-snapshot dicts, so this reads the
     same four state fields that branch reads and builds the same ``msprite_``
@@ -256,9 +256,8 @@ def sprite_candidates(thing):
     """How this entity's sprite texture is found, as an ordered candidate list.
 
     Reproduces two chains that between them decide every sprite Fio draws:
-    ``QtGameView.update_instance_textures``, which resolves the per-entity
-    override, and ``BaseRenderer.draw_sprites``, which falls back to the
-    texture shared by everything of that class.  Returns ``None`` for a row the
+    the dense sprite projection, which resolves the per-entity override
+    and class texture recipe before the renderer reaches OpenGL.  Returns ``None`` for a row the
     sprite pass draws nothing for.
     """
     if isinstance(thing, dict):
