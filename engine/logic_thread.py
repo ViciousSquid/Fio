@@ -1998,11 +1998,6 @@ class LogicThread(threading.Thread):
         if prev is None:
             prev = cur
 
-        half = getattr(self.player, '_half', None)
-        try:
-            hx, hy, hz = float(half.x), float(half.y), float(half.z)
-        except AttributeError:
-            hx, hy, hz = 25.0, 50.0, 25.0
 
         for portal_index, portal_slot in enumerate(self._portal_slots):
             portal_a = self.things[int(portal_slot)]
@@ -2021,8 +2016,7 @@ class LogicThread(threading.Thread):
 
             hit = self._segment_crosses_aperture(portal_a, prev, cur)
             if hit is not None:
-                self._execute_portal_transit(
-                    portal_a, portal_b, hx, hy, hz)
+                self._execute_portal_transit(portal_a, portal_b)
                 cd = getattr(
                     Portal, 'TRANSIT_COOLDOWN', _PORTAL_TRANSIT_COOLDOWN)
                 self._portal_cooldowns[id(portal_a)] = cd
@@ -2067,7 +2061,7 @@ class LogicThread(threading.Thread):
             return hit
         return None
 
-    def _execute_portal_transit(self, portal_a, portal_b, hx=25.0, hy=50.0, hz=25.0):
+    def _execute_portal_transit(self, portal_a, portal_b):
         """Teleport the player through portal_a to portal_b using the portal's
         shared link transform, so this exactly matches the view the renderer
         draws through the aperture.  Position, velocity and look direction are
@@ -2082,13 +2076,15 @@ class LogicThread(threading.Thread):
             portal_a.get_basis(), portal_b.get_basis(),
             (float(self.player.velocity.x), float(self.player.velocity.y), float(self.player.velocity.z)))
 
-        # Push out along the destination normal by the body's extent along that
-        # normal plus a small clearance, so we never spawn inside the far wall.
+        # Preserve the mapped position.  A body-sized exit offset makes the
+        # camera visibly jump when walking through an otherwise door-like portal.
+        # The portal plane itself is the transition surface; the collision system
+        # owns any subsequent world penetration correction.
         bnx, bny, bnz = portal_b.get_normal()
-        clearance = abs(bnx) * hx + abs(bny) * hy + abs(bnz) * hz + Portal.EXIT_CLEARANCE
-        self.player.pos = glm.vec3(tx + bnx * clearance,
-                                   ty + bny * clearance,
-                                   tz + bnz * clearance)
+        epsilon = 0.05
+        self.player.pos = glm.vec3(tx + bnx * epsilon,
+                                   ty + bny * epsilon,
+                                   tz + bnz * epsilon)
         self.player.velocity = glm.vec3(vx, vy, vz)
 
         # Re-derive yaw (and pitch) from the transformed look direction so the
