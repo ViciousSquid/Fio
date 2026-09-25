@@ -1009,10 +1009,10 @@ class Renderer_F(BaseRenderer):
     def _portal_numeric_scene_inputs(self, projection, view, config):
         """Resolve a portal virtual scene entirely from the dense projections.
 
-        The portal camera itself still uses Portal objects for its link
-        transform and aperture geometry, but the world seen through that
-        camera never falls back to _sort_objects or reconstructs a brush or
-        entity list.  all_brush_slots is already the live-hidden-filtered
+        Portal topology, transforms and aperture geometry all come from
+        EntityTable columns. The world seen through that camera never falls back
+        to _sort_objects or reconstructs a brush or entity list.
+        all_brush_slots is already the live-hidden-filtered
         world projection published by the logic thread; the virtual frustum
         is applied as a vector mask over RenderTable.center/half.
         EntityTable supplies the entity classification and live hidden
