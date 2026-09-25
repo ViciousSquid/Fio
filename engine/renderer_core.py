@@ -3273,10 +3273,9 @@ layout (location = 9) in vec4 iNormal2;
             (glm.vec3( 0, 0,-1), glm.vec3(0, -1,  0)),
         )
 
-        for light, slot, in_brushes, in_models, sig in to_render:
-            lx, ly, lz = float(light.pos[0]), float(light.pos[1]), float(light.pos[2])
+        for light_identity, slot, in_brushes, in_models, sig, lx, ly, lz, far_plane in to_render:
             center = glm.vec3(lx, ly, lz)
-            far_plane = max(float(light.get_radius()), 1.0)
+            far_plane = max(float(far_plane), 1.0)
             near_plane = max(far_plane * 0.002, 1.0)
             proj = glm.perspective(glm.radians(90.0), 1.0, near_plane, far_plane)
             cubemap = self._shadow_cubemaps[slot]
