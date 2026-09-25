@@ -793,7 +793,7 @@ class Renderer_F(BaseRenderer):
         gl.glBindVertexArray(0)
 
     def draw_glow_brushes(self, projection, view, camera_pos, brushes, lights,
-                          config, table=None, refs=None):
+                          config, table):
         """Overbright brushes.
 
         With *table* and *refs*, ``brushes`` is an array of slots: the
@@ -803,7 +803,6 @@ class Renderer_F(BaseRenderer):
         """
         if len(brushes) == 0 or 'lit' not in self.shaders:
             return
-        numeric = table is not None and refs is not None
         shader, uniforms = self.shaders['lit'], self.uniforms['lit']
         gl.glUseProgram(shader)
         self._current_shader = shader
@@ -832,29 +831,11 @@ class Renderer_F(BaseRenderer):
 
         for index in range(len(brushes)):
             self.render_stats.visible_tris += 12
-            if numeric:
-                brush = None
-                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[index])
-                if normal_mat_loc > 0:
-                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
-                                          normals[index])
-                gl.glUniform3fv(color_loc, 1, colours[index])
-                has_geometry = bool(geometry[index])
-            else:
-                brush = brushes[index]
-                model_matrix = self._brush_model_matrix(brush)
-                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE,
-                                      glm.value_ptr(model_matrix))
-                if normal_mat_loc > 0:
-                    nmat = self._compute_normal_matrix(model_matrix, brush)
-                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
-                                          glm.value_ptr(nmat))
-                tint = brush.get('tint') or brush.get('colour')
-                base_color = normalize_color(tint, default=[1.0, 1.0, 1.0])
-                intensity  = float(brush.get('glow_intensity', 10.0))
-                overbright = [min(c * intensity, 10.0) for c in base_color]
-                gl.glUniform3fv(color_loc, 1, overbright)
-                has_geometry = brush_has_geometry(brush)
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[index])
+            if normal_mat_loc > 0:
+                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normals[index])
+            gl.glUniform3fv(color_loc, 1, colours[index])
+            has_geometry = bool(geometry[index])
             gl.glUniform1f(alpha_loc, 1.0)
             mesh = None
             if has_geometry:
@@ -873,26 +854,14 @@ class Renderer_F(BaseRenderer):
         gl.glBindVertexArray(0)
 
     def _get_active_lights(self, things, config):
-        """Return active lights as dense EntityTable slots when available."""
+        """Return active lights directly from the dense EntityTable."""
         table = config.get('entity_table')
-        if table is not None and hasattr(table, 'light_color'):
-            slots = table.light_slots
-            if len(slots):
-                slots = slots[table.light_enabled[slots]]
-            return (table, slots)
-
-        lights = config.get('all_lights')
-        if lights is None:
-            # Non-threaded editor fallback. The Thing collection normally stays
-            # stable while editing, so rebuild only when its identity/size changes.
-            key = (id(things), len(things))
-            if key != self._light_collection_key:
-                self._light_collection = [t for t in things if isinstance(t, Light)]
-                self._light_collection_key = key
-            lights = self._light_collection
-
-        return [light for light in lights
-                if light.properties.get('state', 'on') == 'on']
+        if table is None or not hasattr(table, 'light_color'):
+            raise RuntimeError("dense EntityTable is required for light rendering")
+        slots = table.light_slots
+        if len(slots):
+            slots = slots[table.light_enabled[slots]]
+        return (table, slots)
 
     def entities_are_numeric(self, config, brush_slots=None):
         """Whether dense EntityTable state is available for this renderer."""
@@ -1231,7 +1200,7 @@ class Renderer_F(BaseRenderer):
         brush_display_mode = config.get('brush_display_mode', 'Textured')
         if current_mode == RENDER_MODE_UNLIT:
             self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl)
-            self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl, refs=_refs)
+            self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl)
         elif current_mode == RENDER_MODE_LIT:
             if brush_display_mode == 'Textured' or brush_display_mode == 'Solid Lit':
                 self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl)
