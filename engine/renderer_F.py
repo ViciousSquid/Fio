@@ -1070,11 +1070,10 @@ class Renderer_F(BaseRenderer):
     def entities_are_numeric(self, config, brush_slots):
         """Whether this frame can classify entities from the projection.
 
-        Everything the numeric entity path needs has to arrive together -- the
-        table, the per-slot references, the published slots and the live hidden
-        mask -- and the brush half has to be numeric too, because the two are
-        published by the same pass and a frame with one and not the other is a
-        frame something went wrong in.
+        The entity path is independently consumable: its dense table, slot
+        publication and live hidden mask are sufficient. Brush-slot publication
+        is deliberately not part of this predicate, so secondary views can keep
+        sprites on the same numeric path.
         """
         etable = config.get('entity_table')
         erefs = config.get('entity_refs')
@@ -1246,7 +1245,7 @@ class Renderer_F(BaseRenderer):
                         thing_positions=cull_thing_positions)
                     cull_thing_positions = self._last_cull_thing_positions
 
-                (_, _, sprite_things, _, _, _, _, sort_positions) =                     self._sort_objects(
+                (_, _, sprite_things, _, _, _, _, sort_positions) = self._sort_objects(
                         (), cull_things, config,
                         model_out=models_to_render,
                         thing_positions=cull_thing_positions,
@@ -1304,7 +1303,7 @@ class Renderer_F(BaseRenderer):
                     brush_positions=cull_brush_positions,
                     collect_sort_positions=True,
                 )
-                sort_positions = sort_positions or brush_sort_positions
+                sort_positions = brush_sort_positions
                 textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
             else:
                 (opaque_brushes, transparent_brushes, sprite_things,
@@ -1320,9 +1319,8 @@ class Renderer_F(BaseRenderer):
                 )
                 textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
 
-        # _sort_objects classified the same visible Thing set and kept model
-        # Things out of sprite_things, so the billboard pass needs no second
-        # Python scan or object-id set.
+        # The entity projection has already split model/sprite rows, so the
+        # billboard pass needs no second Python scan or object-id set.
         final_sprites = sprite_things
         # Only the numeric path may hand slots to a brush pass; everything else
         # passes None and the passes take their object path.
