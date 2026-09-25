@@ -321,7 +321,7 @@ def register_renderer(self, name: str, cls) -> bool
 Register a swappable renderer class under *name*. Fio's viewport selects its
 renderer from a class registry; this drops *cls* in so it appears as a render
 mode. *cls* must implement the renderer interface (`render_scene`,
-`draw_models`, `cleanup`, a `lod_manager`, …). Returns `True` if registered,
+`draw_models_instanced`, `cleanup`, a `lod_manager`, …). Returns `True` if registered,
 `False` in a headless/player context with no viewport. This is how a whole new
 renderer ships as a plugin.
 
