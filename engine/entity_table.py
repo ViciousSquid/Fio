@@ -466,6 +466,14 @@ class EntityTable:
 
         #: The billboard's world size. Cold: it comes from authored properties.
         self.sprite_size = np.zeros((0, 2), dtype=np.float32)
+        #: Dense sprite recipe id per entity slot.  -1 means no sprite.
+        self.sprite_key_id = np.full((0,), SPRITE_NONE, dtype=np.int32)
+        #: Dense model recipe id per entity slot.  -1 means no model.
+        self.model_recipe_id = np.full((0,), -1, dtype=np.int32)
+        #: Cold model transform, flattened as a mat4 per entity slot.
+        self.model_base_matrix = np.zeros((0, 16), dtype=np.float32)
+        #: Cold normal transform, flattened as a 3x3 matrix padded to 12 floats.
+        self.model_normal_matrix = np.zeros((0, 12), dtype=np.float32)
         #: Interned sprite identity, :data:`SPRITE_NONE` for a row that draws
         #: none. Authored sprite identity is cold; Monster snapshots update it
         #: directly when the logic thread publishes them.
