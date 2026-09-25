@@ -1084,6 +1084,18 @@ class Renderer_F(BaseRenderer):
                 and len(erefs) >= etable.count
                 and len(thing_hidden) >= etable.count)
 
+    def will_instance_sprites(self, config, brush_slots):
+        """Whether the billboard pass will read columns rather than objects.
+
+        Keep this predicate identical to the renderer's actual sprite-path
+        requirements. The Qt view uses it to avoid rebuilding per-entity
+        texture overrides when the dense EntityTable path will resolve its own
+        textures. A missing predicate here must never force the legacy sprite
+        renderer back into the frame.
+        """
+        return (self.entities_are_numeric(config, brush_slots)
+                and 'sprite_instanced' in self.shaders)
+
     def render_scene(self, projection, view, camera_pos, brushes, things,
                      selected_object, config, clear=True, brush_slots=None):
         """Draw one view.
