@@ -2752,10 +2752,9 @@ layout (location = 9) in vec4 iNormal2;
     def _distance_cull_thing_slots(table, slots, cx, cz, limit_sq):
         """:meth:`_distance_cull_slots` with the Thing pass's exemption.
 
-        Lights and Portals survive the cull at any distance, because lighting
-        and portal rendering are deliberately unaffected by it -- the predicate
-        ``_cull_keep_thing`` states that for the object path, and this is the
-        same statement as a mask over :data:`engine.entity_table.ENT_CULL_EXEMPT`.
+        Lights and Portals survive the dense entity cull at any distance.
+        The legacy object predicate is no longer part of Portal rendering;
+        the entity-table ENT_CULL_EXEMPT mask is authoritative.
         """
         if not len(slots):
             return slots
