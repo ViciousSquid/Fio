@@ -908,8 +908,9 @@ class Renderer_F(BaseRenderer):
         Keep this predicate identical to the renderer's actual sprite-path
         requirements. The Qt view uses it to avoid rebuilding per-entity
         texture overrides when the dense EntityTable path will resolve its own
-        textures. A missing predicate here must never force the legacy sprite
-        renderer back into the frame.
+        textures. A missing predicate here must never force an object-based sprite
+        path back into the frame; dense EntityTable instancing is the only
+        supported renderer path.
         """
         return (self.entities_are_numeric(config, brush_slots)
                 and 'sprite_instanced' in self.shaders)
