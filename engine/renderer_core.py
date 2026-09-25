@@ -2100,6 +2100,7 @@ layout (location = 9) in vec4 iNormal2;
             planes = table.water_plane[brushes]
             bits = table.class_bits[brushes]
             geo = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
+            geo_meshes = self._prepare_geo_meshes(table, brushes)
             for i, slot_value in enumerate(brushes):
                 slot = int(slot_value)
                 gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
@@ -2116,8 +2117,7 @@ layout (location = 9) in vec4 iNormal2;
                 amp = min(amp, float(sizes[i, 1]) * 0.45, 30.0)
                 gl.glUniform1f(wave_amp_loc, amp)
 
-                brush = refs[slot] if geo[i] else None
-                mesh = self._get_geo_mesh(brush) if brush is not None else None
+                mesh = geo_meshes.get(int(table.geometry_id[slot])) if geo[i] else None
                 if mesh is not None:
                     top_count = mesh.count - mesh.side_count
                     gl.glBindVertexArray(mesh.vao)
@@ -2222,6 +2222,7 @@ layout (location = 9) in vec4 iNormal2;
             colors = table.glass_color[brushes]
             params = table.glass_params[brushes]
             geo = ((table.class_bits[brushes] & render_table.CLASS_HAS_GEOMETRY) != 0)
+            geo_meshes = self._prepare_geo_meshes(table, brushes)
             for i, slot_value in enumerate(brushes):
                 slot = int(slot_value)
                 gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
@@ -2233,8 +2234,7 @@ layout (location = 9) in vec4 iNormal2;
                 gl.glUniform1f(opacity_loc, float(params[i, 0]))
                 gl.glUniform1f(refraction_loc, float(params[i, 2]))
                 gl.glUniform1f(roughness_loc, float(params[i, 3]))
-                brush = refs[slot] if geo[i] else None
-                mesh = self._get_geo_mesh(brush) if brush is not None else None
+                mesh = geo_meshes.get(int(table.geometry_id[slot])) if geo[i] else None
                 if mesh is not None:
                     gl.glBindVertexArray(mesh.vao)
                     gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
@@ -2312,6 +2312,7 @@ layout (location = 9) in vec4 iNormal2;
             colors = table.fog_color[brushes]
             params = table.fog_params[brushes]
             geo = ((table.class_bits[brushes] & render_table.CLASS_HAS_GEOMETRY) != 0)
+            geo_meshes = self._prepare_geo_meshes(table, brushes)
             for i, slot_value in enumerate(brushes):
                 slot = int(slot_value)
                 gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
@@ -2321,8 +2322,7 @@ layout (location = 9) in vec4 iNormal2;
                 gl.glUniform1f(noise_scale_loc, float(params[i, 1]))
                 gl.glUniform3fv(object_color_loc, 1, colors[i])
                 gl.glUniform1f(alpha_loc, 0.4)
-                brush = refs[slot] if geo[i] else None
-                mesh = self._get_geo_mesh(brush) if brush is not None else None
+                mesh = geo_meshes.get(int(table.geometry_id[slot])) if geo[i] else None
                 if mesh is not None:
                     gl.glBindVertexArray(mesh.vao)
                     gl.glCullFace(gl.GL_FRONT)
