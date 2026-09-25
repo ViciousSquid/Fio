@@ -189,7 +189,7 @@ class RenderTable:
     __slots__ = ('generation', 'count', 'ids', 'slot_of_id', 'brushes',
                  'center', 'half', 'rot', 'class_bits', 'tex_name_id',
                  'uv_scale', 'uv_angle', 'uv_shift', 'uv_natural',
-                 'uv_has_scale', 'colour', 'glow_colour', 'geo_epoch',
+                 'uv_has_scale', 'colour', 'glow_colour', 'geo_epoch', 'geometry_id',
                  'water_tint', 'water_params', 'water_plane',
                  'glass_color', 'glass_params',
                  'fog_color', 'fog_params',
@@ -247,6 +247,11 @@ class RenderTable:
         #: consumer caching GPU data per row can tell a stale mesh from a live
         #: one without re-deriving ``geometry_signature``.  0 for box brushes.
         self.geo_epoch = np.zeros((0,), dtype=np.int64)
+        #: Dense row handle for convex/custom geometry.  ``-1`` means the
+        #: shared box VAO; for a geometry row this is the row's slot, so the
+        #: renderer can prepare the mesh once at the cache boundary and then
+        #: draw from a pure integer column in the hot loop.
+        self.geometry_id = np.full((0,), -1, dtype=np.int32)
 
         # Special-brush render state. These are narrow numerical projections of
         # the authored dictionaries consumed by the water/glass/fog shaders.
@@ -326,6 +331,7 @@ class RenderTable:
         self.colour = grow(self.colour)
         self.glow_colour = grow(self.glow_colour)
         self.geo_epoch = grow(self.geo_epoch)
+        self.geometry_id = grow(self.geometry_id, -1)
         self.water_tint = grow(self.water_tint)
         self.water_params = grow(self.water_params)
         self.water_plane = grow(self.water_plane)
@@ -392,8 +398,10 @@ class RenderTable:
 
         if self.class_bits[slot] & CLASS_HAS_GEOMETRY:
             self.geo_epoch[slot] = brush_geometry._brush_epoch(brush)
+            self.geometry_id[slot] = slot
         else:
             self.geo_epoch[slot] = 0
+            self.geometry_id[slot] = -1
 
         # Water / glass / fog shader state. Defaults deliberately match the
         # renderer's former brush.get(...) fallbacks.
