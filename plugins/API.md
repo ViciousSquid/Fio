@@ -321,9 +321,21 @@ def register_renderer(self, name: str, cls) -> bool
 Register a swappable renderer class under *name*. Fio's viewport selects its
 renderer from a class registry; this drops *cls* in so it appears as a render
 mode. *cls* must implement the renderer interface (`render_scene`,
-`draw_models_instanced`, `cleanup`, a `lod_manager`, …). Returns `True` if registered,
-`False` in a headless/player context with no viewport. This is how a whole new
-renderer ships as a plugin.
+`draw_models_instanced`, `render_shadow_maps`, `cleanup`, a `lod_manager`, …).
+
+The production forward renderer's `render_shadow_maps` signature is:
+
+```python
+def render_shadow_maps(self, shadow_lights, config, camera_pos=None)
+```
+
+`shadow_lights` is the dense `(EntityTable, light_slots)` tuple published by
+the render state. Shadow casters are selected from `RenderTable` and
+`EntityTable` slots; the shadow pass does not accept or traverse authored
+`Brush`/`Thing`/`Light` collections. A custom renderer should preserve that
+dense execution boundary. Returns `True` if registered, `False` in a
+headless/player context with no viewport. This is how a whole new renderer
+ships as a plugin.
 
 ### Developer/editor tools (API 1.4.0)
 
