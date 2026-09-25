@@ -261,6 +261,29 @@ def test_lights_and_entities_reach_the_render_state(logic):
     assert len(published.visible_things) == 2
 
 
+def test_visible_things_stays_lazy_until_an_object_consumer_reads_it(logic):
+    lamp = make_thing(Light, "lamp", (100, 200, -300))
+    monster = make_thing(Monster, "grunt", (-50, 96, -700))
+    thread = logic(things=[lamp, monster])
+
+    thread._prepare_render_state()
+
+    published = thread.game_state.get_write_state()
+    visible = published.visible_things
+    assert visible._list is None, (
+        "visible entity slots were materialised into a Python list during "
+        "render-state publication"
+    )
+    assert len(visible) == 2
+    assert visible._list is None, (
+        "len() must inspect the dense slot selection without materialising objects"
+    )
+
+    # An object consumer may still request the compatibility view.
+    assert visible[0] is lamp
+    assert visible._list is not None
+
+
 def test_visible_thing_positions_are_contiguous_and_aligned_with_snapshots(logic):
     lamp = make_thing(Light, "lamp", (100, 200, -300))
     monster = make_thing(Monster, "grunt", (-50, 96, 700))
