@@ -918,7 +918,7 @@ class EntityTable:
         return 0
 
     def _refresh_portal_live(self, things):
-        """Refresh the small genuinely live portal state set."""
+        """Refresh only runtime-mutated portal state."""
         if not len(self.portal_slots):
             return
         for slot_value in self.portal_slots:
@@ -927,11 +927,27 @@ class EntityTable:
             props = _props_of(thing)
             self.portal_active[slot] = _bool_property(
                 props.get('active', True), True)
-            self.portal_direction[slot] = self._portal_direction_code(
-                props.get('portal_direction', 'both'))
             self.portal_fade[slot] = float(
                 max(0.0, min(1.0, _float_property(
                     getattr(thing, '_fade_alpha', 1.0), 1.0))))
+            # Parent movers can change a portal's world orientation at runtime.
+            # Authored dimensions, direction, rim and colour remain cold.
+            self.portal_basis[slot] = np.asarray(
+                basis_from_rotation(props.get(
+                    'rotation', [props.get('angle', 0.0), 0.0, 0.0])),
+                dtype=np.float64)
+
+    def _resolve_entity_cold(self, slot, thing):
+        """Resolve authored render state for one entity row."""
+        self.class_bits[slot] = _entity_class_bits(thing)
+        if self.class_bits[slot] & ENT_PORTAL:
+            props = _props_of(thing)
+            self.portal_direction[slot] = self._portal_direction_code(
+                props.get('portal_direction', 'both'))
+            self.portal_width_height[slot] = (
+                max(16.0, _float_property(props.get('width', 128.0), 128.0)),
+                max(16.0, _float_property(props.get('height', 256.0), 256.0)),
+            )
             colour = props.get('color', [255, 255, 255])
             try:
                 rgb = np.asarray(colour[:3], dtype=np.float32) / 255.0
@@ -942,42 +958,10 @@ class EntityTable:
                 self.portal_color[slot] = 1.0
             self.portal_show_rim[slot] = _bool_property(
                 props.get('show_rim', True), True)
-            self.portal_width_height[slot] = (
-                max(16.0, _float_property(
-                    props.get('width', 128.0), 128.0)),
-                max(16.0, _float_property(
-                    props.get('height', 256.0), 256.0)),
-            )
             self.portal_basis[slot] = np.asarray(
                 basis_from_rotation(props.get(
-                    'rotation',
-                    [props.get('angle', 0.0), 0.0, 0.0])),
+                    'rotation', [props.get('angle', 0.0), 0.0, 0.0])),
                 dtype=np.float64)
-
-    def _resolve_entity_cold(self, slot, thing):
-        """Resolve authored render state for one entity row."""
-        self.class_bits[slot] = _entity_class_bits(thing)
-        if self.class_bits[slot] & ENT_LIGHT:
-            self.light_color[slot] = _light_color_of(thing)
-            self.light_params[slot] = (
-                _light_float(thing, 'intensity', 1.0),
-                _light_float(thing, 'radius', 512.0),
-            )
-            self.light_enabled[slot] = _light_bool(thing, 'state', True)
-            self.light_casts_shadows[slot] = _light_bool(
-                thing, 'casts_shadows', False)
-        self.sprite_size[slot] = sprite_size(thing)
-        self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(thing))
-
-        recipe = _model_recipe(thing)
-        self.model_recipe_id[slot] = self.intern_model_recipe(recipe)
-        if recipe is None:
-            self.model_base_matrix[slot] = 0.0
-            self.model_normal_matrix[slot] = 0.0
-        else:
-            model, normal = _model_transform_columns(thing)
-            self.model_base_matrix[slot] = model
-            self.model_normal_matrix[slot] = normal
 
     def refresh_rows(self, things, slots):
         """Re-resolve cold render columns for *slots* after an editor change."""
