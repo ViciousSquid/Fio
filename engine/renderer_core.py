@@ -532,7 +532,7 @@ class BaseRenderer:
             self.shaders['glass'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['glass'] = UniformCache(self.shaders['glass'])
             self.uniforms['glass'].preload(['projection', 'view', 'model', 'viewPos', 'waterColor',
-                                            'distortionStrength', 'causticStrength', 'glassOpacity',
+                                            'distortionStrength', 'fresnelIntensity', 'glassOpacity',
                                             'refractionIndex', 'roughness', 'normalMatrix',
                                             'sceneColor', 'screenSize'])
             self.uniforms['glass'].preload(self.ENV_UNIFORMS)
@@ -2261,7 +2261,7 @@ layout (location = 9) in vec4 iNormal2;
         model_loc = uniforms['model']
         water_color_loc = uniforms['waterColor']
         distortion_loc = uniforms['distortionStrength']
-        caustic_loc = uniforms['causticStrength']
+        fresnel_loc = uniforms['fresnelIntensity']
         opacity_loc = uniforms['glassOpacity']
         refraction_loc = uniforms['refractionIndex']
         roughness_loc = uniforms['roughness']
@@ -2287,7 +2287,7 @@ layout (location = 9) in vec4 iNormal2;
                     gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normals[i])
                 gl.glUniform3fv(water_color_loc, 1, colors[i])
                 gl.glUniform1f(distortion_loc, float(params[i, 1]))
-                gl.glUniform1f(caustic_loc, float(params[i, 4]))
+                gl.glUniform1f(fresnel_loc, float(params[i, 4]))
                 gl.glUniform1f(opacity_loc, float(params[i, 0]))
                 gl.glUniform1f(refraction_loc, float(params[i, 2]))
                 gl.glUniform1f(roughness_loc, float(params[i, 3]))
@@ -2317,7 +2317,7 @@ layout (location = 9) in vec4 iNormal2;
             fresnel = brush.get('glass_fresnel', 0.5)
             gl.glUniform3fv(water_color_loc, 1, glass_color)
             gl.glUniform1f(distortion_loc, distortion)
-            gl.glUniform1f(caustic_loc, fresnel)
+            gl.glUniform1f(fresnel_loc, fresnel)
             gl.glUniform1f(opacity_loc, opacity)
             gl.glUniform1f(refraction_loc, refraction)
             gl.glUniform1f(roughness_loc, roughness)
