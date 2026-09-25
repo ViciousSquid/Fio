@@ -246,6 +246,12 @@ def _monster_sprite_candidates(props):
     return tuple(candidates)
 
 
+
+def _split_asset_path(path):
+    """Return ``(filename, subfolder)`` for an authored ``assets/`` path."""
+    rel = str(path).replace('assets/', '', 1)
+    return os.path.basename(rel), os.path.dirname(rel)
+
 def sprite_candidates(thing):
     """How this entity's sprite texture is found, as an ordered candidate list.
 
