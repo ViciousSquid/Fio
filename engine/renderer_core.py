@@ -1745,26 +1745,22 @@ layout (location = 9) in vec4 iNormal2;
                 return int(tex_id)
         return 0
 
-    #: The sprite pass's render key. Texture is the whole of it: it is the only
-    #: GPU state a billboard establishes, and everything else about a sprite --
-    #: where it is, how big -- is per-instance by construction.
-    SPRITE_KEY_LAYOUT = KeyLayout([('texture', 32)])
-
     def draw_sprites_instanced(self, projection, view, table, slots,
                                gl_ids=None, camera_pos=None):
         """The sprite pass over dense columns: one draw per texture run.
 
         *slots* are rows of an :class:`engine.entity_table.EntityTable`, already
-        classified into the sprite pass and depth-ordered.  Everything this
-        needs is a column read: the centre from ``pos``, the size from
-        ``sprite_size``, the texture from ``sprite_key_id`` through
-        :meth:`_sprite_gl_ids`.  No entity is touched.
+        classified into the sprite pass.  Everything this needs is a column
+        read: the centre from ``pos``, the size from ``sprite_size``, the
+        texture from ``sprite_key_id`` through :meth:`_sprite_gl_ids`.  No
+        entity is touched.
 
         Rows whose texture resolves to 0 are dropped, which is what the object
-        path's ``if tex_id:`` did.  The rest are sorted by texture into runs --
-        :func:`engine.render_keys.sort_into_runs`, stable, so the depth order
-        the caller established survives inside each run -- and each run is one
-        ``glDrawArraysInstanced`` over a slice of the packed buffer.
+        path's ``if tex_id:`` did.  The rest are sorted numerically by texture,
+        with camera depth as a secondary key when a camera is supplied.  The
+        stable lexicographic sort keeps each texture run back-to-front without
+        a separate depth sort, and each run is one ``glDrawArraysInstanced``
+        over a slice of the packed buffer.
 
         Returns the number of sprites submitted, so a caller can tell an empty
         pass from a skipped one.
