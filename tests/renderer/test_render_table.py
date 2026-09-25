@@ -342,6 +342,7 @@ def test_special_volume_state_is_projected_as_dense_numeric_columns():
             water_fresnel=0.9,
             water_plane=True,
             water_reflections=True,
+            water_reflection_height=512,
         ),
         _brush(
             id='glass',
@@ -370,6 +371,7 @@ def test_special_volume_state_is_projected_as_dense_numeric_columns():
     )
     assert bool(t.water_plane[0])
     assert bool(t.water_reflections[0])
+    assert t.water_reflection_height[0] == pytest.approx(512.0)
 
     np.testing.assert_allclose(t.glass_color[1], [0.4, 0.5, 0.6])
     np.testing.assert_allclose(t.glass_params[1], [0.25, 0.2, 1.33, 0.1, 0.9])
@@ -404,6 +406,12 @@ def test_special_volume_state_refreshes_on_epoch_change():
     water['water_opacity'] = 0.9
     t.sync([water], epoch=2)
     assert t.water_params[0, 0] == pytest.approx(0.9)
+
+def test_water_reflection_height_defaults_to_256():
+    water = _brush(id='water', shader='Water', water_reflections=True)
+    t = _synced([water])
+    assert t.water_reflection_height[0] == pytest.approx(256.0)
+
 
 def test_water_optics_fall_back_to_existing_reflectivity():
     water = _brush(
