@@ -860,6 +860,323 @@ class Renderer_F(BaseRenderer):
         lights = self._get_active_lights((), config)
         return table, groups, model_slots, sprite_slots, lights
 
+    def _render_water_reflection_probes(self, table, water_slots, lights, config):
+        """Render optional environment cubemaps for visible reflected water rows.
+
+        Each enabled water row owns a 256x256 RGBA cubemap. The capture point is
+        256 world units above the authored top surface. The capture scene uses
+        the same dense RenderTable/EntityTable draw passes as the main renderer,
+        but deliberately omits water, glass, fog volumes and portals so the
+        probe never reflects its own optical pass or recurses through secondary
+        views.
+        """
+        if table is None or not len(water_slots):
+            return
+
+        reflection_slots = water_slots[
+            table.water_reflections[water_slots]]
+        if not len(reflection_slots):
+            return
+        if not self._ensure_water_reflection_resources():
+            return
+
+        entity_table = config.get('entity_table')
+        if entity_table is None:
+            return
+
+        all_brush_slots = config.get('all_brush_slots')
+        if all_brush_slots is None:
+            all_brush_slots = np.arange(table.count, dtype=np.int32)
+        else:
+            all_brush_slots = np.asarray(all_brush_slots, dtype=np.int32)
+
+        thing_hidden = config.get('thing_hidden')
+        if thing_hidden is None:
+            thing_hidden = np.zeros(entity_table.count, dtype=bool)
+
+        capture_config = dict(config)
+        capture_config['selected_object'] = None
+        capture_config['camera_distance_cull'] = False
+
+        prev_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
+        prev_viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+        prev_draw = int(gl.glGetIntegerv(gl.GL_DRAW_BUFFER))
+        prev_read = int(gl.glGetIntegerv(gl.GL_READ_BUFFER))
+        prev_program = int(gl.glGetIntegerv(gl.GL_CURRENT_PROGRAM))
+        prev_vao = int(gl.glGetIntegerv(gl.GL_VERTEX_ARRAY_BINDING))
+        depth_was = bool(gl.glIsEnabled(gl.GL_DEPTH_TEST))
+        blend_was = bool(gl.glIsEnabled(gl.GL_BLEND))
+        cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
+        scissor_was = bool(gl.glIsEnabled(gl.GL_SCISSOR_TEST))
+        depth_mask = bool(gl.glGetBooleanv(gl.GL_DEPTH_WRITEMASK))
+        prev_clear = gl.glGetFloatv(gl.GL_COLOR_CLEAR_VALUE)
+
+        size = self.WATER_REFLECTION_SIZE
+        far_plane = max(float(self.view_distance.distance), 1024.0)
+        near_plane = max(0.5, min(4.0, far_plane * 0.002))
+        face_dirs = (
+            (glm.vec3( 1, 0, 0), glm.vec3(0, -1,  0)),
+            (glm.vec3(-1, 0, 0), glm.vec3(0, -1,  0)),
+            (glm.vec3( 0, 1, 0), glm.vec3(0,  0,  1)),
+            (glm.vec3( 0,-1, 0), glm.vec3(0,  0, -1)),
+            (glm.vec3( 0, 0, 1), glm.vec3(0, -1,  0)),
+            (glm.vec3( 0, 0,-1), glm.vec3(0, -1,  0)),
+        )
+
+        try:
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._water_reflection_fbo)
+            gl.glDrawBuffer(gl.GL_COLOR_ATTACHMENT0)
+            gl.glReadBuffer(gl.GL_COLOR_ATTACHMENT0)
+            gl.glViewport(0, 0, size, size)
+            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
+            gl.glDisable(gl.GL_SCISSOR_TEST)
+            gl.glEnable(gl.GL_DEPTH_TEST)
+            gl.glDepthFunc(gl.GL_LESS)
+            gl.glDepthMask(gl.GL_TRUE)
+            gl.glDisable(gl.GL_BLEND)
+            gl.glDisable(gl.GL_CULL_FACE)
+
+            for slot_value in reflection_slots:
+                slot = int(slot_value)
+                cubemap = self._ensure_water_reflection_cubemap(slot)
+                probe = glm.vec3(
+                    float(table.center[slot, 0]),
+                    float(table.center[slot, 1] +
+                          table.half[slot, 1] +
+                          self.WATER_REFLECTION_PROBE_HEIGHT),
+                    float(table.center[slot, 2]),
+                )
+                projection = glm.perspective(
+                    glm.radians(90.0),
+                    1.0,
+                    near_plane,
+                    far_plane,
+                )
+
+                for face in range(6):
+                    gl.glFramebufferTexture2D(
+                        gl.GL_FRAMEBUFFER,
+                        gl.GL_COLOR_ATTACHMENT0,
+                        gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
+                        cubemap,
+                        0,
+                    )
+                    status = gl.glCheckFramebufferStatus(gl.GL_FRAMEBUFFER)
+                    if status != gl.GL_FRAMEBUFFER_COMPLETE:
+                        print(
+                            f"[Water] reflection face FBO incomplete "
+                            f"(0x{status:x})"
+                        )
+                        break
+
+                    gl.glClear(
+                        gl.GL_COLOR_BUFFER_BIT |
+                        gl.GL_DEPTH_BUFFER_BIT
+                    )
+
+                    view = glm.lookAt(
+                        probe,
+                        probe + face_dirs[face][0],
+                        face_dirs[face][1],
+                    )
+                    planes = np.asarray(
+                        self._frustum_planes(projection * view),
+                        dtype=np.float64,
+                    )
+
+                    slots = all_brush_slots
+                    if len(slots):
+                        centres = table.center[slots]
+                        radii = np.linalg.norm(table.half[slots], axis=1)
+                        distances = (
+                            centres @ planes[:, :3].T +
+                            planes[:, 3]
+                        )
+                        slots = slots[
+                            np.all(
+                                distances >= -radii[:, None],
+                                axis=1,
+                            )
+                        ]
+
+                    groups = self._classify_brush_slots(
+                        table, slots, capture_config)
+                    mode = capture_config.get(
+                        'brush_display_mode', 'Textured')
+                    if mode in ('Textured', 'Solid Lit'):
+                        self.draw_textured_brushes_optimized(
+                            projection,
+                            view,
+                            probe,
+                            groups['textured'],
+                            lights,
+                            capture_config,
+                            table,
+                        )
+                        self.draw_lit_brushes_optimized(
+                            projection,
+                            view,
+                            probe,
+                            groups['solid'],
+                            lights,
+                            capture_config,
+                            table=table,
+                        )
+                    else:
+                        self.draw_lit_brushes_optimized(
+                            projection,
+                            view,
+                            probe,
+                            groups['opaque'],
+                            lights,
+                            capture_config,
+                            table=table,
+                        )
+
+                    glow = groups['glow']
+                    if len(glow):
+                        self.draw_glow_brushes(
+                            projection,
+                            view,
+                            probe,
+                            glow,
+                            lights,
+                            capture_config,
+                            table=table,
+                        )
+
+                    # Dense entity scene. Hidden rows are filtered numerically
+                    # before the frustum test; no Thing objects are materialised.
+                    thing_slots = np.arange(
+                        entity_table.count,
+                        dtype=np.int32,
+                    )
+                    if len(thing_slots):
+                        visible_entities = ~np.asarray(
+                            thing_hidden[:entity_table.count],
+                            dtype=bool,
+                        )
+                        thing_slots = thing_slots[visible_entities]
+                    if len(thing_slots):
+                        centres = entity_table.pos[thing_slots]
+                        distances = (
+                            centres @ planes[:, :3].T +
+                            planes[:, 3]
+                        )
+                        radii = np.maximum(
+                            entity_table.sprite_size[
+                                thing_slots
+                            ].max(axis=1) * 0.5,
+                            1.0,
+                        )
+                        model_rows = (
+                            entity_table.model_recipe_id[
+                                thing_slots
+                            ] >= 0
+                        )
+                        radii[model_rows] = np.maximum(
+                            radii[model_rows],
+                            128.0,
+                        )
+                        thing_slots = thing_slots[
+                            np.all(
+                                distances >= -radii[:, None],
+                                axis=1,
+                            )
+                        ]
+
+                    model_slots, sprite_slots = entity_projection.classify_slots(
+                        entity_table,
+                        thing_slots,
+                        thing_hidden,
+                        capture_config.get('play_mode', False),
+                        capture_config.get(
+                            'show_sprites_in_play_mode', False),
+                    )
+                    if len(model_slots):
+                        self.draw_models_instanced(
+                            projection,
+                            view,
+                            probe,
+                            entity_table,
+                            model_slots,
+                            lights,
+                            capture_config,
+                        )
+
+                    if len(sprite_slots):
+                        gl.glEnable(gl.GL_BLEND)
+                        gl.glDepthMask(gl.GL_FALSE)
+                        self.draw_sprites_instanced(
+                            projection,
+                            view,
+                            entity_table,
+                            sprite_slots,
+                            camera_pos=probe,
+                        )
+                        gl.glDepthMask(gl.GL_TRUE)
+                        gl.glDisable(gl.GL_BLEND)
+
+                    terrain = capture_config.get('terrain')
+                    if terrain and terrain.enabled:
+                        self.render_terrain(
+                            projection,
+                            view,
+                            probe,
+                            terrain,
+                            lights,
+                            frustum_planes=planes,
+                        )
+
+                gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cubemap)
+                gl.glGenerateMipmap(gl.GL_TEXTURE_CUBE_MAP)
+                gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+
+        finally:
+            self._frame_camera_pos = self._camera_xyz(
+                config.get('camera_pos', self._frame_camera_pos))
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, prev_fbo)
+            try:
+                gl.glDrawBuffer(prev_draw)
+                gl.glReadBuffer(prev_read)
+            except Exception:
+                pass
+            gl.glViewport(
+                int(prev_viewport[0]),
+                int(prev_viewport[1]),
+                int(prev_viewport[2]),
+                int(prev_viewport[3]),
+            )
+            gl.glPolygonMode(
+                gl.GL_FRONT,
+                int(prev_clear[0]) if False else gl.GL_FILL,
+            )
+            gl.glUseProgram(prev_program)
+            gl.glBindVertexArray(prev_vao)
+            if scissor_was:
+                gl.glEnable(gl.GL_SCISSOR_TEST)
+            else:
+                gl.glDisable(gl.GL_SCISSOR_TEST)
+            if cull_was:
+                gl.glEnable(gl.GL_CULL_FACE)
+            else:
+                gl.glDisable(gl.GL_CULL_FACE)
+            if blend_was:
+                gl.glEnable(gl.GL_BLEND)
+            else:
+                gl.glDisable(gl.GL_BLEND)
+            if depth_was:
+                gl.glEnable(gl.GL_DEPTH_TEST)
+            else:
+                gl.glDisable(gl.GL_DEPTH_TEST)
+            gl.glDepthMask(gl.GL_TRUE if depth_mask else gl.GL_FALSE)
+            gl.glClearColor(
+                float(prev_clear[0]),
+                float(prev_clear[1]),
+                float(prev_clear[2]),
+                float(prev_clear[3]),
+            )
+
     def render_scene(self, projection, view, camera_pos, brushes, things,
                      selected_object, config, clear=True, brush_slots=None):
         """Draw one view.
@@ -1113,7 +1430,7 @@ class Renderer_F(BaseRenderer):
             else:
                 self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl)
         else:
-            self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl, refs=_refs)
+            self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl)
         if len(glow_brushes):
             self.draw_glow_brushes(projection, view, camera_pos, glow_brushes, lights, config, table=_tbl)
         if len(numeric_model_slots):
@@ -1141,7 +1458,7 @@ class Renderer_F(BaseRenderer):
         if current_mode == RENDER_MODE_UNLIT:
             self.draw_textured_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, _tbl)
         elif current_mode == RENDER_MODE_LIT:
-            self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl, refs=_refs)
+            self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl)
         else:
             self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl, refs=_refs)
         if current_mode == RENDER_MODE_LIT:
