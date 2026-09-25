@@ -132,6 +132,15 @@ def test_epoch_bump_re_resolves_cold_columns():
     assert t.class_bits[0] & rt.CLASS_GLASS
 
 
+def test_dirty_journal_only_re_resolves_marked_row():
+    a, b = _brush(id='a'), _brush(id='b', shader='Glass')
+    t = _synced([a, b], epoch=1)
+    a['shader'] = 'Glow'
+    assert t.sync([a, b], 2, dirty_objects={id(a)}) is True
+    assert t.class_bits[0] & rt.CLASS_GLOW
+    assert t.class_bits[1] & rt.CLASS_GLASS
+
+
 def test_structural_change_keeps_survivors_cold_columns():
     """A row that survives is not re-resolved -- that is what keeps a
     structural change from costing a full level re-classification."""
