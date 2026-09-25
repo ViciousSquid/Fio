@@ -107,20 +107,13 @@ class Renderer_F(BaseRenderer):
 
     def draw_lit_brushes_optimized(self, projection, view, camera_pos, brushes,
                                    lights, config, is_transparent_pass=False,
-                                   table=None, refs=None):
-        """Flat-shaded brushes.
+                                   table):
+        """Draw lit brush slots from dense RenderTable columns.
 
-        With *table* and *refs*, ``brushes`` is an array of slots into the
-        dense render projection and nothing here reads a brush dict except to
-        fetch an angled brush's mesh.  Colour, trigger/subtract state and the
-        transform all come from columns; selection is an integer compare.
-        Without them it walks brush dicts, which is now limited to the
-        non-threaded editor and other callers that explicitly lack a projection.
-        """
-        if len(brushes) == 0 or 'lit' not in self.shaders:
+        Transforms, material state, selection and geometry IDs all come from
+        dense render data; authored Brush objects are never touched here.
+        """     if len(brushes) == 0 or 'lit' not in self.shaders:
             return
-        if table is None:
-            raise RuntimeError("draw_textured_brushes_optimized requires RenderTable")
         visible = brushes
         self.render_stats.visible_brushes += len(visible)
         shader, uniforms = self.shaders['lit'], self.uniforms['lit']
