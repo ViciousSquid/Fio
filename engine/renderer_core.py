@@ -1348,9 +1348,7 @@ layout (location = 9) in vec4 iNormal2;
 
         self._current_shader = terrain.shader_program
         self._upload_lights_once('terrain', terrain_lights)
-        active_lights_count = (
-            len(terrain_lights[1]) if dense_lights else len(terrain_lights)
-        )
+        active_lights_count = len(terrain_lights[1])
         gl.glDisable(gl.GL_CULL_FACE)
         if hasattr(terrain, 'get_tri_count'):
             self.render_stats.visible_tris += terrain.get_tri_count()
