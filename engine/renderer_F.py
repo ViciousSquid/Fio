@@ -658,37 +658,39 @@ class Renderer_F(BaseRenderer):
     def draw_textured_brushes_optimized(self, projection, view, camera_pos,
                                         brushes, lights, config,
                                         table):
-        """Textured brushes.
+        """Textured brushes from the dense RenderTable projection.
 
-        ``brushes`` is a dense RenderTable slot array. Face batches are built
-        entirely from dense columns; there is no object/Brush rendering path.
+        The 2.5 render path has no Brush-object fallback here.  Face batches,
+        transforms, material ids and convex geometry handles all come from
+        dense numerical columns.
         """
         if len(brushes) == 0 or 'textured' not in self.shaders:
             return
         if table is None:
-            raise RuntimeError("draw_textured_brushes_optimized requires RenderTable")
-        visible = brushes
-        self.render_stats.visible_brushes += len(visible)
+            raise RuntimeError(
+                "draw_textured_brushes_optimized requires RenderTable")
+
+        slots = brushes
+        self.render_stats.visible_brushes += len(slots)
         shader, uniforms = self.shaders['textured'], self.uniforms['textured']
         gl.glUseProgram(shader)
         self._current_shader = shader
         self._upload_lights_once('textured', lights)
+
         proj_ptr = glm.value_ptr(projection)
         view_ptr = glm.value_ptr(view)
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'],       1, gl.GL_FALSE, view_ptr)
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniforms['texture_diffuse'], 0)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         gl.glBindVertexArray(self.vaos['cube'])
         model_loc = uniforms['model']
 
-        # Ensure tex_scale_loc is permanently stored in the UniformCache so
-        # we never call glGetUniformLocation on the hot path again.
         tex_scale_loc = uniforms.get('tex_scale', -1)
         if tex_scale_loc == -1:
             loc = gl.glGetUniformLocation(shader, "tex_scale")
-            uniforms._cache['tex_scale'] = loc   # write straight into the cache
+            uniforms._cache['tex_scale'] = loc
             tex_scale_loc = loc
 
         tex_angle_loc = uniforms.get('tex_angle', -1)
@@ -708,75 +710,65 @@ class Renderer_F(BaseRenderer):
             normal_mat_loc = -1
 
         is_play = config.get('play_mode', False)
-
-        slots = visible
         rows, faces, gl_tex, scales, run_starts = self._build_face_batches(
-                table, slots, config)
-            models, normals = self._frame_transforms(table, slots)
-            sel_slots = slots[rows]
-            angles = np.radians(table.uv_angle[sel_slots, faces])
-            shifts = table.uv_shift[sel_slots, faces]
-            geo_slots = slots[(table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0]
-            geo_meshes = self._prepare_geo_meshes(table, geo_slots)
+            table, slots, config)
+        models, normals = self._frame_transforms(table, slots)
+        sel_slots = slots[rows]
+        angles = np.radians(table.uv_angle[sel_slots, faces])
+        shifts = table.uv_shift[sel_slots, faces]
 
-            instanced = (len(rows) > 0 and 'brush_instanced' in self.shaders
-                         and self._cube_vbo is not None)
-            if instanced:
-                self._draw_face_runs_instanced(
-                    projection, view, lights, models, normals, rows, faces,
-                    gl_tex, scales, shifts, angles, run_starts)
-                # The instanced program is a different one; the angled-brush
-                # loop below runs under the ordinary textured shader, so put it
-                # back and restore its per-draw uniform state.
-                gl.glUseProgram(shader)
-                self._current_shader = shader
-                gl.glActiveTexture(gl.GL_TEXTURE0)
-                gl.glBindVertexArray(self.vaos['cube'])
-                current_tex = None
-                self._portal_begin_cull(is_geo=False)
-            else:
-                self._portal_begin_cull(is_geo=False)
-                if self.debug_gl_state:
-                    self._debug_textured_brush_gl_state()
+        self._portal_begin_cull(is_geo=False)
+        if self.debug_gl_state:
+            self._debug_textured_brush_gl_state()
 
-                current_tex = None
-                last_row = -1
-                for i in range(len(rows)):
-                    tex_id = int(gl_tex[i])
-                    if tex_id != current_tex:
-                        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                        current_tex = tex_id
-                        self.render_stats.batched_draws += 1
-                    row = int(rows[i])
-                    if row != last_row:
-                        gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[row])
-                        if normal_mat_loc > 0:
-                            gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
-                                                  normals[row])
-                        last_row = row
-                    if tex_angle_loc != -1:
-                        gl.glUniform1f(tex_angle_loc, float(angles[i]))
-                    if tex_shift_loc != -1:
-                        gl.glUniform2f(tex_shift_loc, float(shifts[i, 0]),
-                                       float(shifts[i, 1]))
-                    if tex_scale_loc != -1:
-                        gl.glUniform2f(tex_scale_loc, float(scales[i, 0]),
-                                       float(scales[i, 1]))
-                    gl.glDrawArrays(gl.GL_TRIANGLES, int(faces[i]) * 6, 6)
-                    self.render_stats.visible_tris += 2
-                    self.render_stats.draw_calls += 1
-        # ---- Angled brushes: one draw per convex face --------------------
+        current_tex = None
+        instanced = (len(rows) > 0 and 'brush_instanced' in self.shaders
+                     and self._cube_vbo is not None)
+        if instanced:
+            self._draw_face_runs_instanced(
+                projection, view, lights, models, normals, rows, faces,
+                gl_tex, scales, shifts, angles, run_starts)
+            gl.glUseProgram(shader)
+            self._current_shader = shader
+            gl.glActiveTexture(gl.GL_TEXTURE0)
+            gl.glBindVertexArray(self.vaos['cube'])
+        else:
+            last_row = -1
+            for i in range(len(rows)):
+                tex_id = int(gl_tex[i])
+                if tex_id != current_tex:
+                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                    current_tex = tex_id
+                    self.render_stats.batched_draws += 1
+                row = int(rows[i])
+                if row != last_row:
+                    gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[row])
+                    if normal_mat_loc > 0:
+                        gl.glUniformMatrix3fv(
+                            normal_mat_loc, 1, gl.GL_FALSE, normals[row])
+                    last_row = row
+                if tex_angle_loc != -1:
+                    gl.glUniform1f(tex_angle_loc, float(angles[i]))
+                if tex_shift_loc != -1:
+                    gl.glUniform2f(
+                        tex_shift_loc, float(shifts[i, 0]), float(shifts[i, 1]))
+                if tex_scale_loc != -1:
+                    gl.glUniform2f(
+                        tex_scale_loc, float(scales[i, 0]), float(scales[i, 1]))
+                gl.glDrawArrays(gl.GL_TRIANGLES, int(faces[i]) * 6, 6)
+                self.render_stats.visible_tris += 2
+                self.render_stats.draw_calls += 1
+
         # Convex/custom geometry is addressed only by the dense geometry handle.
-        # There is no Brush-object fallback on the 2.5 render path.
         self._portal_set_cull(is_geo=True)
         geo_slots = slots[
             (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0
         ]
         geo_meshes = self._prepare_geo_meshes(table, geo_slots)
-
         geo_rows = np.flatnonzero(
             (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0
         )
+
         for geo_i, slot_value in enumerate(geo_slots):
             gid = int(table.geometry_id[int(slot_value)])
             mesh = geo_meshes.get(gid)
@@ -785,20 +777,24 @@ class Renderer_F(BaseRenderer):
             row = int(geo_rows[geo_i])
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[row])
             if normal_mat_loc > 0:
-                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
-                                      normals[row])
+                gl.glUniformMatrix3fv(
+                    normal_mat_loc, 1, gl.GL_FALSE, normals[row])
             gl.glBindVertexArray(mesh.vao)
+
             for run in mesh.runs:
                 tex_name = self._geo_run_texture(run)
                 if tex_name == 'caulk.jpg':
                     continue
                 if is_play and tex_name == 'nodraw.jpg':
                     continue
-                tex_id = self.texture_manager.get(self._tex_cache_path(tex_name)) or \
-                         self.load_texture_callback(tex_name, 'textures')
+
+                tex_id = self.texture_manager.get(
+                    self._tex_cache_path(tex_name)
+                ) or self.load_texture_callback(tex_name, 'textures')
                 if tex_id != current_tex:
                     gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
                     current_tex = tex_id
+
                 if tex_scale_loc != -1:
                     su, sv = self._geo_run_tex_scale(run, tex_name)
                     gl.glUniform2f(tex_scale_loc, su, sv)
@@ -808,9 +804,12 @@ class Renderer_F(BaseRenderer):
                         gl.glUniform1f(tex_angle_loc, angle)
                     if tex_shift_loc != -1:
                         gl.glUniform2f(tex_shift_loc, shift_u, shift_v)
-                gl.glDrawArrays(gl.GL_TRIANGLES, run['first'], run['count'])
+
+                gl.glDrawArrays(
+                    gl.GL_TRIANGLES, run['first'], run['count'])
                 self.render_stats.visible_tris += run['count'] // 3
                 self.render_stats.draw_calls += 1
+
         self._portal_end_cull()
         gl.glBindVertexArray(0)
 
