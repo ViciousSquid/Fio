@@ -1488,7 +1488,7 @@ layout (location = 9) in vec4 iNormal2;
         gl.glBindVertexArray(0)
         self._model_instanced_vaos.add(key)
 
-        def _fill_model_instance_buffer_numeric(self, table, slots):
+    def _fill_model_instance_buffer_numeric(self, table, slots):
         """Gather model transforms directly from dense entity columns."""
         count = len(slots)
         self._ensure_model_instance_buffer(count)
@@ -4363,7 +4363,7 @@ layout (location = 9) in vec4 iNormal2;
             self._geo_mesh_cache[cache_key] = new
         return new
 
-        @staticmethod
+    @staticmethod
     def _geo_uv_axes(n):
         """World axes a face's planar UVs project onto, by dominant normal
         axis.  Matches the cube VAO's orientation (v runs up walls).
