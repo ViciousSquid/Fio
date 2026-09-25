@@ -1,9 +1,9 @@
 """The numeric path must draw exactly what the object path drew.
 
-``Renderer_F.render_scene`` has two ways through the brush half of a frame:
-the main camera pass consumes integer slots into the dense render projection,
-and everything else (the portal virtual views, the split-screen second view,
-the non-threaded editor) still walks brush dicts.
+``Renderer_F.render_scene`` feeds all brush passes from the dense render
+projection. The portal virtual views also consume those slots, applying their
+own virtual frustum as a numeric mask; entity sprites come from EntityTable
+slots in the same pass.
 
 They are the same picture or the refactor changed what Fio renders.  So these
 draw one scene both ways on a real GL context and compare the pixels -- which
