@@ -670,21 +670,8 @@ class EntityTable:
                     if type(p) is not list:
                         things[i].pos = [float(p[0]), float(p[1]), float(p[2])]
 
-        # The warm half of sprite identity: a monster's frame, a gate's type,
-        # a pickup's item, a prop's representation.  Bounded by the rows that
-        # can actually change -- and within those, by the rows that actually
-        # did, because re-deriving the recipe is ten times the cost of asking
-        # whether its inputs moved.
-        state_cache = self._sprite_state
-        for slot in self.warm_sprite_slots:
-            slot = int(slot)
-            thing = things[slot]
-            state = sprite_state(thing)
-            if state == state_cache[slot]:
-                continue
-            state_cache[slot] = state
-            self.sprite_key_id[slot] = self.intern_sprite(
-                sprite_candidates(thing))
+        # Authored sprite identity is cold. Dynamic Monster sprite identity is
+        # published from the existing snapshot path, avoiding a second object walk.
 
         if len(self._hidden_buf) < n:
             self._hidden_buf = np.empty(max(n, 16), dtype=bool)
@@ -730,27 +717,9 @@ class EntityTable:
         old_slot_of_id = self.slot_of_id
         old_things = self.things
         old_count = len(old_things)
-        old_states = self._sprite_state
         ids = [None] * n
-        states = [None] * n
         survivors = set()
         move_src, move_dst = [], []
-
-        for slot, thing in enumerate(things):
-            props = getattr(thing, 'properties', None)
-            eid = props.get('id') if isinstance(props, dict) else None
-            ids[slot] = eid
-            if eid is None:
-                continue
-            if dirty_objects is None or id(thing) in dirty_objects:
-                continue
-            old = old_slot_of_id.get(eid)
-            if old is None or old >= old_count or old_things[old] is not thing:
-                continue
-            survivors.add(slot)
-            if old != slot:
-                move_src.append(old)
-                move_dst.append(slot)
 
         if move_src:
             src = np.asarray(move_src, dtype=np.intp)
@@ -773,6 +742,19 @@ class EntityTable:
                 states[slot] = old_states[old] if old < len(old_states) else None
 
         self._sprite_state = states
+        if move_src:
+            src = np.asarray(move_src, dtype=np.intp)
+            dst = np.asarray(move_dst, dtype=np.intp)
+            for arr in (self.class_bits, self.sprite_size, self.sprite_key_id,
+                        self.model_recipe_id, self.model_base_matrix,
+                        self.model_normal_matrix):
+                arr[dst] = arr[src]
+
+        for slot, thing in enumerate(things):
+            self.pos[slot] = _pos_of(thing)
+            if slot not in survivors:
+                self._resolve_entity_cold(slot, thing)
+
         self.ids = ids
         self.slot_of_id = {eid: slot for slot, eid in enumerate(ids)
                            if eid is not None}
@@ -782,20 +764,29 @@ class EntityTable:
         self.light_slots = np.flatnonzero(bits & ENT_LIGHT).astype(np.int32)
         self.monster_slots = np.flatnonzero(bits & ENT_MONSTER).astype(np.int32)
         self.pickup_slots = np.flatnonzero(bits & ENT_PICKUP).astype(np.int32)
-        self.warm_sprite_slots = np.flatnonzero(
-            bits & ENT_SPRITE_WARM).astype(np.int32)
         self.generation += 1
 
+    def _resolve_entity_cold(self, slot, thing):
+        """Resolve authored render state for one entity row."""
+        self.class_bits[slot] = _entity_class_bits(thing)
+        self.sprite_size[slot] = sprite_size(thing)
+        self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(thing))
+
+        recipe = _model_recipe(thing)
+        self.model_recipe_id[slot] = self.intern_model_recipe(recipe)
+        if recipe is None:
+            self.model_base_matrix[slot] = 0.0
+            self.model_normal_matrix[slot] = 0.0
+        else:
+            model, normal = _model_transform_columns(thing)
+            self.model_base_matrix[slot] = model
+            self.model_normal_matrix[slot] = normal
+
     def refresh_rows(self, things, slots):
-        """Re-resolve the cold columns for *slots* after a semantic change."""
+        """Re-resolve cold render columns for *slots* after an editor change."""
         for slot in slots:
             slot = int(slot)
-            thing = things[slot]
-            self.class_bits[slot] = _entity_class_bits(thing)
-            self.sprite_size[slot] = sprite_size(thing)
-            self.sprite_key_id[slot] = self.intern_sprite(
-                sprite_candidates(thing))
-            self._sprite_state[slot] = sprite_state(thing)
+            self._resolve_entity_cold(slot, things[slot])
 
 
 _EMPTY: dict = {}
