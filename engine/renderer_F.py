@@ -904,6 +904,9 @@ class Renderer_F(BaseRenderer):
         prev_read = int(gl.glGetIntegerv(gl.GL_READ_BUFFER))
         prev_program = int(gl.glGetIntegerv(gl.GL_CURRENT_PROGRAM))
         prev_vao = int(gl.glGetIntegerv(gl.GL_VERTEX_ARRAY_BINDING))
+        prev_active_texture = int(gl.glGetIntegerv(gl.GL_ACTIVE_TEXTURE))
+        prev_polygon = gl.glGetIntegerv(gl.GL_POLYGON_MODE)
+        prev_frame_camera_pos = self._frame_camera_pos
         depth_was = bool(gl.glIsEnabled(gl.GL_DEPTH_TEST))
         blend_was = bool(gl.glIsEnabled(gl.GL_BLEND))
         cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
@@ -954,6 +957,8 @@ class Renderer_F(BaseRenderer):
                 )
 
                 for face in range(6):
+                    self._frame_camera_pos = (
+                        float(probe.x), float(probe.y), float(probe.z))
                     gl.glFramebufferTexture2D(
                         gl.GL_FRAMEBUFFER,
                         gl.GL_COLOR_ATTACHMENT0,
@@ -1133,8 +1138,7 @@ class Renderer_F(BaseRenderer):
                 gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
 
         finally:
-            self._frame_camera_pos = self._camera_xyz(
-                config.get('camera_pos', self._frame_camera_pos))
+            self._frame_camera_pos = prev_frame_camera_pos
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, prev_fbo)
             try:
                 gl.glDrawBuffer(prev_draw)
@@ -1147,12 +1151,11 @@ class Renderer_F(BaseRenderer):
                 int(prev_viewport[2]),
                 int(prev_viewport[3]),
             )
-            gl.glPolygonMode(
-                gl.GL_FRONT,
-                int(prev_clear[0]) if False else gl.GL_FILL,
-            )
+            gl.glPolygonMode(gl.GL_FRONT, int(prev_polygon[0]))
+            gl.glPolygonMode(gl.GL_BACK, int(prev_polygon[1]))
             gl.glUseProgram(prev_program)
             gl.glBindVertexArray(prev_vao)
+            gl.glActiveTexture(prev_active_texture)
             if scissor_was:
                 gl.glEnable(gl.GL_SCISSOR_TEST)
             else:
