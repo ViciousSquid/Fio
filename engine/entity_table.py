@@ -677,27 +677,21 @@ class EntityTable:
         survivors = set()
         move_src, move_dst = [], []
 
-        if move_src:
-            src = np.asarray(move_src, dtype=np.intp)
-            dst = np.asarray(move_dst, dtype=np.intp)
-            for arr in (self.class_bits, self.sprite_size, self.sprite_key_id):
-                arr[dst] = arr[src]
-
         for slot, thing in enumerate(things):
-            # Position is warm and authoritative every frame; reconcile still
-            # refreshes it so a structural reorder cannot expose stale rows.
-            self.pos[slot] = _pos_of(thing)
-            if slot not in survivors:
-                self.class_bits[slot] = _entity_class_bits(thing)
-                self.sprite_size[slot] = sprite_size(thing)
-                self.sprite_key_id[slot] = self.intern_sprite(
-                    sprite_candidates(thing))
-                states[slot] = sprite_state(thing)
-            else:
-                old = old_slot_of_id.get(ids[slot])
-                states[slot] = old_states[old] if old < len(old_states) else None
+            eid = _props_of(thing).get('id')
+            ids[slot] = eid
+            if eid is None:
+                continue
+            if dirty_objects is None or id(thing) in dirty_objects:
+                continue
+            old = old_slot_of_id.get(eid)
+            if old is None or old >= old_count or old_things[old] is not thing:
+                continue
+            survivors.add(slot)
+            if old != slot:
+                move_src.append(old)
+                move_dst.append(slot)
 
-        self._sprite_state = states
         if move_src:
             src = np.asarray(move_src, dtype=np.intp)
             dst = np.asarray(move_dst, dtype=np.intp)
@@ -721,6 +715,7 @@ class EntityTable:
         self.monster_slots = np.flatnonzero(bits & ENT_MONSTER).astype(np.int32)
         self.pickup_slots = np.flatnonzero(bits & ENT_PICKUP).astype(np.int32)
         self.generation += 1
+
 
     def _resolve_entity_cold(self, slot, thing):
         """Resolve authored render state for one entity row."""
