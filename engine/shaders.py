@@ -810,9 +810,10 @@ layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec2 aTexCoords;
 
-out vec3 FragPos;
+out highp vec3 FragPos;
 out mediump vec3 Normal;
-out vec2 TexCoords;
+out highp vec2 TexCoords;
+out highp vec3 ViewFragPos;
 
 uniform mat4 model;
 uniform mat4 view;
@@ -823,7 +824,8 @@ void main() {
     FragPos     = vec3(model * vec4(aPos, 1.0));
     Normal      = normalize(normalMatrix * aNormal);
     TexCoords   = aTexCoords;
-    gl_Position = projection * view * vec4(FragPos, 1.0);
+    ViewFragPos = vec3(view * vec4(FragPos, 1.0));
+    gl_Position = projection * vec4(ViewFragPos, 1.0);
 }""",
 
     'glass.frag': """#version 330 core
@@ -833,107 +835,117 @@ out vec4 FragColor;
 in highp vec3 FragPos;
 in vec3 Normal;
 in highp vec2 TexCoords;
+in highp vec3 ViewFragPos;
 
 uniform highp vec3 viewPos;
+uniform mat4 view;
+uniform mat4 projection;
 uniform vec3 waterColor;
 uniform float distortionStrength;
-uniform float causticStrength;
+uniform float fresnelIntensity;
 uniform float glassOpacity;
 uniform float refractionIndex;
-uniform float roughness;""" + FOG_GLSL + """
+uniform float roughness;
+uniform sampler2D sceneColor;
+uniform vec2 screenSize;""" + FOG_GLSL + """
 
-highp float random(in highp vec2 st) {
-    return fract(sin(dot(st, vec2(12.9898, 78.233))) * 43758.5453123);
+highp float hash21(highp vec2 p) {
+    p = fract(p * vec2(123.34, 345.45));
+    p += dot(p, p + 34.345);
+    return fract(p.x * p.y);
 }
 
-highp float noise(in highp vec2 st) {
-    highp vec2 i = floor(st);
-    highp vec2 f = fract(st);
-    float a = random(i);
-    float b = random(i + vec2(1.0, 0.0));
-    float c = random(i + vec2(0.0, 1.0));
-    float d = random(i + vec2(1.0, 1.0));
-    highp vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
-}
-
-#define NUM_OCTAVES 3
-highp float fbm(in highp vec2 st) {
-    float v = 0.0;
-    float a = 0.5;
-    highp vec2 shift = vec2(100.0);
-    mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
-    for (int i = 0; i < NUM_OCTAVES; ++i) {
-        v  += a * noise(st);
-        st  = rot * st * 2.0 + shift;
-        a  *= 0.5;
-    }
-    return v;
-}
-
-highp float pattern(in highp vec2 p) {
-    return fbm(p + vec2(fbm(p)));
+highp float noise2(highp vec2 p) {
+    highp vec2 i = floor(p);
+    highp vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
 void main() {
-    vec3 viewDir    = normalize(viewPos - FragPos);
-    vec3 baseNormal = normalize(Normal);
-    vec3 lightDir   = normalize(vec3(0.5, 1.0, 0.3));
+    highp vec3 viewDir = normalize(viewPos - FragPos);
+    highp vec3 baseNormal = normalize(Normal);
 
-    highp vec2 surfaceUV = FragPos.xz * 0.5 + FragPos.xy * 0.3;
-    
-    float iorRatio  = 1.0 / max(refractionIndex, 1.0);
-    vec3 refractDir = refract(-viewDir, baseNormal, iorRatio);
-    highp vec2 refractUV  = surfaceUV + refractDir.xy * distortionStrength * 0.2;
+    // Actual screen-space transmission. IOR changes the Snell refraction
+    // direction; distortion scales the resulting screen offset. At IOR=1.0
+    // the delta is zero, so "air" really does not bend the scene.
+    float ior = max(refractionIndex, 1.0);
+    float eta = 1.0 / ior;
+    highp vec3 straightDir = -viewDir;
+    highp vec3 refractDir = refract(straightDir, baseNormal, eta);
+    highp vec3 refractDeltaView = mat3(view) * (refractDir - straightDir);
 
-    float bumpScale     = 1.5 + roughness * 8.0;
-    float surfaceHeight = pattern(refractUV * bumpScale);
-    float epsilon       = 0.015;
-    float hA = pattern((refractUV + vec2(epsilon, 0.0)) * bumpScale);
-    float hB = pattern((refractUV + vec2(0.0, epsilon)) * bumpScale);
+    float viewDepth = max(-ViewFragPos.z, 1.0);
+    highp vec2 projectionScale = vec2(projection[0][0], projection[1][1]);
+    highp vec2 uvOffset =
+        refractDeltaView.xy * projectionScale * 0.5 / viewDepth
+        * distortionStrength * 1.5;
 
-    float distortMul = (distortionStrength * 4.0) + roughness * 2.0;
-    vec3 perturbedNormal = normalize(vec3(
-        (surfaceHeight - hA) * distortMul,
-        1.0 / max(distortMul * 3.0, 0.1),
-        (surfaceHeight - hB) * distortMul
-    ));
-    
-    float normalMix  = 0.5 + roughness * 0.4 + distortionStrength * 0.3;
-    vec3 finalNormal = normalize(baseNormal + perturbedNormal * normalMix);
+    highp vec2 screenUV = gl_FragCoord.xy / screenSize;
 
-    float combinedPattern = pattern(surfaceUV * 2.0) * 0.7 + pattern(surfaceUV * 8.0) * 0.3;
-    
-    float fresnelPower       = mix(1.5, 10.0, causticStrength);
-    float fresnel            = pow(1.0 - max(dot(viewDir, finalNormal), 0.0), fresnelPower);
-    float fresnelWithPattern = fresnel * (0.8 + combinedPattern * 0.4);
+    // A small surface perturbation gives distortion something to work with
+    // without turning the glass pass back into the old multi-octave procedural
+    // shader. It is deliberately bounded so the authored distortion slider
+    // remains the primary control.
+    highp float n1 = noise2(FragPos.xz * 0.08 + TexCoords * 3.0);
+    highp float n2 = noise2(FragPos.xy * 0.11 + TexCoords * 5.0);
+    highp vec2 microWarp = (vec2(n1, n2) - 0.5) * 0.015 * distortionStrength;
 
-    vec3  reflectDir  = reflect(-lightDir, finalNormal);
-    float shininess   = mix(256.0, 16.0, roughness);
-    float spec        = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
-    vec3  reflectDir2 = reflect(-viewDir, finalNormal);
-    float envSpec     = pow(max(dot(reflectDir2, vec3(0.0, 1.0, 0.0)), 0.0), 32.0);
-    vec3  specular    = vec3(1.0) * (spec * causticStrength * 4.0 + envSpec * 0.5);
-
-    vec3 surfaceColor    = waterColor * (0.85 + combinedPattern * 0.3);
-    vec3 reflectionColor = vec3(0.95, 0.98, 1.0) + vec3(combinedPattern * 0.1);
-    vec3 baseMix         = mix(surfaceColor, reflectionColor, fresnelWithPattern * min(causticStrength * 2.5, 1.0));
-    vec3 angleColor      = vec3(0.9, 0.95, 1.0) * fresnel * 0.2;
-    vec3 finalRGB        = baseMix + angleColor;
-    finalRGB += specular * (2.5 - roughness * 1.2);
-    finalRGB += vec3(combinedPattern * 0.15 * (1.0 - glassOpacity)) * waterColor;
-
-    float alpha = clamp(
-        glassOpacity
-        + fresnelWithPattern * (0.2 + roughness * 0.1) * (1.0 - glassOpacity)
-        + roughness * 0.25
-        + combinedPattern * 0.08,
-        0.05, 1.0
+    highp vec2 refractUV = clamp(
+        screenUV + uvOffset + microWarp,
+        vec2(0.001),
+        vec2(0.999)
     );
-    
+
+    // Roughness is a real filter over the transmitted scene rather than merely
+    // changing a highlight exponent. Four taps are cheap, deterministic, and
+    // make the control visibly useful on GL 3.3 hardware.
+    highp vec2 blurStep = roughness * 4.0 / screenSize;
+    vec3 transmitted = texture(sceneColor, refractUV).rgb;
+    if (roughness > 0.001) {
+        transmitted += texture(sceneColor, clamp(refractUV + vec2(blurStep.x, 0.0),
+                                                 vec2(0.001), vec2(0.999))).rgb;
+        transmitted += texture(sceneColor, clamp(refractUV - vec2(blurStep.x, 0.0),
+                                                 vec2(0.001), vec2(0.999))).rgb;
+        transmitted += texture(sceneColor, clamp(refractUV + vec2(0.0, blurStep.y),
+                                                 vec2(0.001), vec2(0.999))).rgb;
+        transmitted /= 4.0;
+    }
+
+    // Tint the transmitted scene without replacing it with a flat glass colour.
+    vec3 filteredScene = transmitted * mix(vec3(1.0), waterColor, 0.35);
+
+    // Schlick Fresnel: refractionIndex supplies the physically derived F0, while
+    // the authored Fresnel slider controls its strength.
+    float cosTheta = clamp(dot(viewDir, baseNormal), 0.0, 1.0);
+    float f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+    float fresnel = f0 + (1.0 - f0) * pow(1.0 - cosTheta, 5.0);
+    fresnel = clamp(fresnel * fresnelIntensity, 0.0, 1.0);
+
+    vec3 reflectionColor = vec3(0.96, 0.99, 1.0);
+    vec3 finalRGB = mix(filteredScene, reflectionColor, fresnel);
+
+    // A compact view-dependent glint keeps Fresnel readable without requiring
+    // the glass pass to upload the whole light table a second time.
+    highp vec3 halfDir = normalize(viewDir + vec3(0.35, 0.9, 0.2));
+    float shininess = mix(128.0, 12.0, roughness);
+    float specular = pow(max(dot(baseNormal, halfDir), 0.0), shininess);
+    finalRGB += vec3(specular * (0.15 + 0.55 * fresnel));
+
+    float edgeAlpha = fresnel * 0.65 + roughness * 0.20;
+    float alpha = clamp(
+        glassOpacity + edgeAlpha * (1.0 - glassOpacity),
+        0.05,
+        1.0
+    );
+
     FragColor = vec4(applyFog(finalRGB, FragPos), alpha);
 }""",
-    
+
     # Depth cube-map pass: renders scene geometry from a point light's position
     # into one cube face, storing linear distance (0..1 = 0..far_plane) so the
     # lighting shaders can do an omnidirectional shadow test.  One draw per face
