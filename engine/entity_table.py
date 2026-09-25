@@ -202,9 +202,12 @@ def _monster_sprite_candidates(props):
     """The monster branch of ``draw_sprites``, as candidates.
 
     Monsters reach the renderer as render-snapshot dicts, so this reads the
-    same four fields that branch reads and builds the same ``msprite_`` cache
-    key -- which is what makes the two paths resolve to one texture rather than
-    to two that happen to look alike.
+    same four state fields that branch reads and builds the same ``msprite_``
+    cache key.  The recipe also carries the fallback behaviour of
+    ``Monster.get_sprite_path()``: a missing dead/shoot frame falls back to
+    idle rather than making the monster disappear.  The renderer tries the
+    candidates in order and caches the first one that actually loads, so this
+    stays GL-free and does not add per-frame filesystem checks.
     """
     if props.get('dead'):
         custom, sprite_type = props.get('custom_dead', ''), 'dead'
@@ -217,23 +220,30 @@ def _monster_sprite_candidates(props):
     variant = props.get('variant', '<None>')
     key = 'msprite_%s_%s_%s_%s' % (mtype, variant, sprite_type, custom)
 
+    candidates = []
     if custom:
         clean = custom.replace('assets/', '', 1)
-        return ((key, os.path.basename(clean), os.path.dirname(clean), True),)
+        candidates.append(
+            (key, os.path.basename(clean), os.path.dirname(clean), True))
 
     filename = '%s.png' % sprite_type
+    base_folder = 'sprites/monsters/%s' % mtype
     if variant and variant != '<None>':
-        # The variant folder first, the base folder as the fallback -- the two
-        # load attempts the object path makes, in the order it makes them.
-        return ((key, filename, 'sprites/monsters/%s/%s' % (mtype, variant), True),
-                (key, filename, 'sprites/monsters/%s' % mtype, True))
-    return ((key, filename, 'sprites/monsters/%s' % mtype, True),)
+        variant_folder = '%s/%s' % (base_folder, variant)
+        # Match Monster.get_sprite_path(): variant first, then base.
+        candidates.append((key, filename, variant_folder, True))
+        candidates.append((key, filename, base_folder, True))
+        # get_sprite_path() falls back to the chosen idle frame when the
+        # requested dead/shoot frame does not exist.
+        if sprite_type != 'idle':
+            candidates.append((key, 'idle.png', variant_folder, True))
+            candidates.append((key, 'idle.png', base_folder, True))
+    else:
+        candidates.append((key, filename, base_folder, True))
+        if sprite_type != 'idle':
+            candidates.append((key, 'idle.png', base_folder, True))
 
-
-def _split_asset_path(path):
-    """``(filename, subfolder)`` for an authored ``assets/``-relative path."""
-    rel = str(path).replace('assets/', '', 1)
-    return os.path.basename(rel), os.path.dirname(rel)
+    return tuple(candidates)
 
 
 def sprite_candidates(thing):
