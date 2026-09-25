@@ -516,19 +516,24 @@ class EntityTable:
     def _resize(self, n):
         if n <= len(self.pos):
             return
-        grown = np.zeros((n, 3), dtype=np.float64)
+        grown = max(16, len(self.pos) * 2, n)
+
+        pos = np.zeros((grown, 3), dtype=np.float64)
         if len(self.pos):
-            grown[:len(self.pos)] = self.pos
-        self.pos = grown
-        bits = np.zeros((n,), dtype=np.uint16)
+            pos[:len(self.pos)] = self.pos
+        self.pos = pos
+
+        bits = np.zeros((grown,), dtype=np.uint16)
         if len(self.class_bits):
             bits[:len(self.class_bits)] = self.class_bits
         self.class_bits = bits
-        size = np.zeros((n, 2), dtype=np.float32)
+
+        size = np.zeros((grown, 2), dtype=np.float32)
         if len(self.sprite_size):
             size[:len(self.sprite_size)] = self.sprite_size
         self.sprite_size = size
-        keys = np.full((n,), SPRITE_NONE, dtype=np.int32)
+
+        keys = np.full((grown,), SPRITE_NONE, dtype=np.int32)
         if len(self.sprite_key_id):
             keys[:len(self.sprite_key_id)] = self.sprite_key_id
         self.sprite_key_id = keys
