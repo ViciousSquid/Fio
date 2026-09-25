@@ -140,7 +140,7 @@ class EditorState:
         that wants to be finer-grained tracks its own per-row dirty set on top.
         """
         self.world_epoch += 1
-        if objects is None:
+        if objects is None or not objects:
             self._render_dirty_objects.clear()
             self._render_dirty_all = True
         else:
