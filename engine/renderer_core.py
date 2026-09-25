@@ -2056,11 +2056,18 @@ layout (location = 9) in vec4 iNormal2;
             amp = 1.2
         return min(amp, size[1] * 0.45, 30.0)
 
-    def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config):
-        if not brushes or 'water' not in self.shaders:
+    def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config,
+                           table=None, refs=None):
+        """Draw water from dense RenderTable state when available.
+
+        *brushes* is a slot array on the numeric path. Only convex geometry
+        needs a Brush reference; box water stays entirely in dense columns.
+        """
+        if len(brushes) == 0 or 'water' not in self.shaders:
             return
         if not getattr(self, 'water_enabled', True):
             return
+        numeric = table is not None and refs is not None
         shader, uniforms = self.shaders['water'], self.uniforms['water']
         gl.glUseProgram(shader)
         self._upload_lights_once('water', lights)
@@ -2084,6 +2091,63 @@ layout (location = 9) in vec4 iNormal2;
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
+        if numeric:
+            models, normals = render_table.model_matrices(
+                table, brushes)
+            sizes = table.half[brushes] * 2.0
+            params = table.water_params[brushes]
+            tints = table.water_tint[brushes]
+            planes = table.water_plane[brushes]
+            bits = table.class_bits[brushes]
+            geo = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
+            for i, slot_value in enumerate(brushes):
+                slot = int(slot_value)
+                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
+                if normal_mat_loc >= 0:
+                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normals[i])
+                gl.glUniform1f(opacity_loc, float(params[i, 0]))
+                gl.glUniform1f(reflectivity_loc, float(params[i, 1]))
+                gl.glUniform3fv(tint_loc, 1, tints[i])
+                gl.glUniform3f(brush_size_loc, float(sizes[i, 0]), float(sizes[i, 1]), float(sizes[i, 2]))
+                h = float(params[i, 2])
+                if h > 2.0:
+                    h /= 100.0
+                amp = h * 30.0 if params[i, 3] != 0.0 else 1.2
+                amp = min(amp, float(sizes[i, 1]) * 0.45, 30.0)
+                gl.glUniform1f(wave_amp_loc, amp)
+
+                brush = refs[slot] if geo[i] else None
+                mesh = self._get_geo_mesh(brush) if brush is not None else None
+                if mesh is not None:
+                    top_count = mesh.count - mesh.side_count
+                    gl.glBindVertexArray(mesh.vao)
+                    if not bool(planes[i]):
+                        gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.side_count)
+                    if mesh.has_flat_top and surface_vao:
+                        gl.glBindVertexArray(surface_vao)
+                        gl.glDrawElements(gl.GL_TRIANGLES, self._water_surface_index_count,
+                                          gl.GL_UNSIGNED_INT, None)
+                    elif top_count:
+                        gl.glDrawArrays(gl.GL_TRIANGLES, mesh.side_count, top_count)
+                    elif bool(planes[i]):
+                        gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
+                    self.render_stats.draw_calls += 1
+                    continue
+
+                if not bool(planes[i]):
+                    gl.glBindVertexArray(cube_vao)
+                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
+                if surface_vao:
+                    gl.glBindVertexArray(surface_vao)
+                    gl.glDrawElements(gl.GL_TRIANGLES, self._water_surface_index_count,
+                                      gl.GL_UNSIGNED_INT, None)
+                else:
+                    gl.glBindVertexArray(cube_vao)
+                    gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
+                self.render_stats.draw_calls += 1
+            gl.glBindVertexArray(0)
+            return
+
         for brush in brushes:
             model_matrix = self._brush_model_matrix(brush)
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
@@ -2096,13 +2160,8 @@ layout (location = 9) in vec4 iNormal2;
             size = brush.get('size', [64, 64, 64])
             gl.glUniform3f(brush_size_loc, float(size[0]), float(size[1]), float(size[2]))
             gl.glUniform1f(wave_amp_loc, self._water_wave_amplitude(brush))
-
             mesh = self._get_geo_mesh(brush)
             if mesh is not None:
-                # Angled water: draw the real convex faces.  When the top face
-                # is flat and spans the full AABB footprint the tessellated
-                # wave grid still caps it exactly; otherwise the mesh's own
-                # top faces are used (flat surface, shader-animated normals).
                 top_count = mesh.count - mesh.side_count
                 gl.glBindVertexArray(mesh.vao)
                 if not brush.get('water_plane', False):
@@ -2117,15 +2176,9 @@ layout (location = 9) in vec4 iNormal2;
                     gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
                 self.render_stats.draw_calls += 1
                 continue
-
-            # Side walls first for full water volumes (edge-pinned waves keep
-            # the displaced surface meeting these exactly), then the surface
-            # composites over them for the common above-water view.
             if not brush.get('water_plane', False):
                 gl.glBindVertexArray(cube_vao)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
-
-            # Tessellated top surface (the part the waves displace)
             if surface_vao:
                 gl.glBindVertexArray(surface_vao)
                 gl.glDrawElements(gl.GL_TRIANGLES, self._water_surface_index_count,
@@ -2136,14 +2189,13 @@ layout (location = 9) in vec4 iNormal2;
             self.render_stats.draw_calls += 1
         gl.glBindVertexArray(0)
 
-    def draw_glass_brushes(self, projection, view, camera_pos, brushes, lights, config):
-        if not brushes or 'glass' not in self.shaders:
+    def draw_glass_brushes(self, projection, view, camera_pos, brushes, lights, config,
+                           table=None, refs=None):
+        if len(brushes) == 0 or 'glass' not in self.shaders:
             return
+        numeric = table is not None and refs is not None
         shader, uniforms = self.shaders['glass'], self.uniforms['glass']
         gl.glUseProgram(shader)
-        # Glass lights itself from the view angle rather than from the light
-        # list, so it never reaches _upload_lights_once — but a distant pane
-        # still has to fog with everything around it.
         self._upload_env_uniforms('glass')
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
@@ -2157,12 +2209,42 @@ layout (location = 9) in vec4 iNormal2;
         refraction_loc = uniforms['refractionIndex']
         roughness_loc = uniforms['roughness']
         normal_mat_loc = uniforms.get('normalMatrix', -1)
-        if normal_mat_loc is None: normal_mat_loc = -1
+        if normal_mat_loc is None:
+            normal_mat_loc = -1
         gl.glBindVertexArray(self.vaos['cube'])
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         gl.glEnable(gl.GL_CULL_FACE)
         gl.glCullFace(gl.GL_BACK)
+
+        if numeric:
+            models, normals = render_table.model_matrices(table, brushes)
+            colors = table.glass_color[brushes]
+            params = table.glass_params[brushes]
+            geo = ((table.class_bits[brushes] & render_table.CLASS_HAS_GEOMETRY) != 0)
+            for i, slot_value in enumerate(brushes):
+                slot = int(slot_value)
+                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
+                if normal_mat_loc > 0:
+                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normals[i])
+                gl.glUniform3fv(water_color_loc, 1, colors[i])
+                gl.glUniform1f(distortion_loc, float(params[i, 1]))
+                gl.glUniform1f(caustic_loc, float(params[i, 4]))
+                gl.glUniform1f(opacity_loc, float(params[i, 0]))
+                gl.glUniform1f(refraction_loc, float(params[i, 2]))
+                gl.glUniform1f(roughness_loc, float(params[i, 3]))
+                brush = refs[slot] if geo[i] else None
+                mesh = self._get_geo_mesh(brush) if brush is not None else None
+                if mesh is not None:
+                    gl.glBindVertexArray(mesh.vao)
+                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
+                    gl.glBindVertexArray(self.vaos['cube'])
+                else:
+                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+                self.render_stats.draw_calls += 1
+            gl.glDisable(gl.GL_CULL_FACE)
+            gl.glBindVertexArray(0)
+            return
 
         for brush in brushes:
             model_matrix = self._brush_model_matrix(brush)
@@ -2176,14 +2258,12 @@ layout (location = 9) in vec4 iNormal2;
             refraction = brush.get('glass_refraction', 1.5)
             roughness = brush.get('glass_roughness', 0.0)
             fresnel = brush.get('glass_fresnel', 0.5)
-
             gl.glUniform3fv(water_color_loc, 1, glass_color)
             gl.glUniform1f(distortion_loc, distortion)
             gl.glUniform1f(caustic_loc, fresnel)
             gl.glUniform1f(opacity_loc, opacity)
             gl.glUniform1f(refraction_loc, refraction)
             gl.glUniform1f(roughness_loc, roughness)
-
             mesh = self._get_geo_mesh(brush)
             if mesh is not None:
                 gl.glBindVertexArray(mesh.vao)
@@ -2192,13 +2272,14 @@ layout (location = 9) in vec4 iNormal2;
             else:
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             self.render_stats.draw_calls += 1
-
         gl.glDisable(gl.GL_CULL_FACE)
         gl.glBindVertexArray(0)
 
-    def draw_fog_volumes(self, projection, view, camera_pos, brushes, lights, config):
-        if not brushes or 'fog' not in self.shaders:
+    def draw_fog_volumes(self, projection, view, camera_pos, brushes, lights, config,
+                         table=None, refs=None):
+        if len(brushes) == 0 or 'fog' not in self.shaders:
             return
+        numeric = table is not None and refs is not None
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         shader, uniforms = self.shaders['fog'], self.uniforms['fog']
@@ -2222,6 +2303,45 @@ layout (location = 9) in vec4 iNormal2;
         object_color_loc = uniforms['object_color']
         alpha_loc = uniforms['alpha']
 
+        if numeric:
+            models, _ = render_table.model_matrices(table, brushes)
+            # model_matrices is column-major for GL; transpose into conventional
+            # matrices, invert the batch, then transpose back for glUniform.
+            mats = models.reshape(-1, 4, 4).transpose(0, 2, 1)
+            inv = np.linalg.inv(mats).transpose(0, 2, 1).reshape(-1, 16).astype(np.float32)
+            colors = table.fog_color[brushes]
+            params = table.fog_params[brushes]
+            geo = ((table.class_bits[brushes] & render_table.CLASS_HAS_GEOMETRY) != 0)
+            for i, slot_value in enumerate(brushes):
+                slot = int(slot_value)
+                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
+                gl.glUniformMatrix4fv(inv_model_loc, 1, gl.GL_FALSE, inv[i])
+                gl.glUniform3fv(fog_color_loc, 1, colors[i])
+                gl.glUniform1f(density_loc, float(params[i, 0]))
+                gl.glUniform1f(noise_scale_loc, float(params[i, 1]))
+                gl.glUniform3fv(object_color_loc, 1, colors[i])
+                gl.glUniform1f(alpha_loc, 0.4)
+                brush = refs[slot] if geo[i] else None
+                mesh = self._get_geo_mesh(brush) if brush is not None else None
+                if mesh is not None:
+                    gl.glBindVertexArray(mesh.vao)
+                    gl.glCullFace(gl.GL_FRONT)
+                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
+                    gl.glCullFace(gl.GL_BACK)
+                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
+                    gl.glBindVertexArray(self.vaos['cube'])
+                else:
+                    gl.glCullFace(gl.GL_FRONT)
+                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
+                    gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
+                    gl.glCullFace(gl.GL_BACK)
+                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
+                    gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
+            gl.glDisable(gl.GL_CULL_FACE)
+            gl.glBindVertexArray(0)
+            gl.glActiveTexture(gl.GL_TEXTURE0)
+            return
+
         for brush in brushes:
             model_matrix = self._brush_model_matrix(brush)
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
@@ -2233,7 +2353,6 @@ layout (location = 9) in vec4 iNormal2;
             gl.glUniform1f(noise_scale_loc, brush.get('fog_noise_scale', 0.01))
             gl.glUniform3fv(object_color_loc, 1, f_color)
             gl.glUniform1f(alpha_loc, 0.4)
-
             mesh = self._get_geo_mesh(brush)
             if mesh is not None:
                 gl.glBindVertexArray(mesh.vao)
@@ -2249,7 +2368,6 @@ layout (location = 9) in vec4 iNormal2;
                 gl.glCullFace(gl.GL_BACK)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
-
         gl.glDisable(gl.GL_CULL_FACE)
         gl.glBindVertexArray(0)
         gl.glActiveTexture(gl.GL_TEXTURE0)
