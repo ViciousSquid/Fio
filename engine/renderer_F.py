@@ -822,36 +822,35 @@ class Renderer_F(BaseRenderer):
         cube_vao = self.vaos['cube']
         bound_vao = cube_vao
 
-        if numeric:
-            models, normals = self._frame_transforms(table, brushes)
-            colours = table.glow_colour[brushes]
-            geometry = (table.class_bits[brushes]
-                        & render_table.CLASS_HAS_GEOMETRY) != 0
-            geo_meshes = self._prepare_geo_meshes(table, brushes)
+        models, normals = self._frame_transforms(table, brushes)
+        colours = table.glow_colour[brushes]
+        geometry = (table.class_bits[brushes]
+                    & render_table.CLASS_HAS_GEOMETRY) != 0
+        geo_meshes = self._prepare_geo_meshes(table, brushes)
 
-        for index in range(len(brushes)):
-            self.render_stats.visible_tris += 12
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[index])
-            if normal_mat_loc > 0:
-                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normals[index])
-            gl.glUniform3fv(color_loc, 1, colours[index])
-            has_geometry = bool(geometry[index])
-            gl.glUniform1f(alpha_loc, 1.0)
-            mesh = None
-            if has_geometry:
-                mesh = geo_meshes.get(int(table.geometry_id[int(brushes[index])]))
-            if mesh is not None:
-                if bound_vao != mesh.vao:
-                    gl.glBindVertexArray(mesh.vao)
-                    bound_vao = mesh.vao
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
-            else:
-                if bound_vao != cube_vao:
-                    gl.glBindVertexArray(cube_vao)
-                    bound_vao = cube_vao
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
-            self.render_stats.draw_calls += 1
-        gl.glBindVertexArray(0)
+    for index in range(len(brushes)):
+        self.render_stats.visible_tris += 12
+        gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[index])
+        if normal_mat_loc > 0:
+            gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normals[index])
+        gl.glUniform3fv(color_loc, 1, colours[index])
+        has_geometry = bool(geometry[index])
+        gl.glUniform1f(alpha_loc, 1.0)
+        mesh = None
+        if has_geometry:
+            mesh = geo_meshes.get(int(table.geometry_id[int(brushes[index])]))
+        if mesh is not None:
+            if bound_vao != mesh.vao:
+                gl.glBindVertexArray(mesh.vao)
+                bound_vao = mesh.vao
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
+        else:
+            if bound_vao != cube_vao:
+                gl.glBindVertexArray(cube_vao)
+                bound_vao = cube_vao
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+        self.render_stats.draw_calls += 1
+    gl.glBindVertexArray(0)
 
     def _get_active_lights(self, things, config):
         """Return active lights directly from the dense EntityTable."""
@@ -1170,7 +1169,7 @@ class Renderer_F(BaseRenderer):
                                     table=portal_table)
                             self.draw_water_brushes(
                                 proj, vw, cam, portal_groups['water'], portal_lights, cfg,
-                                table=portal_table, refs=p_refs)
+                                table=portal_table)
                             self.draw_glass_brushes(
                                 proj, vw, cam, portal_groups['glass'], portal_lights, cfg,
                                 table=portal_table, refs=p_refs)
