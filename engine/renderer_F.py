@@ -1019,7 +1019,6 @@ class Renderer_F(BaseRenderer):
                              portal_lights) = self._portal_numeric_scene_inputs(
                                  proj, vw, cfg)
                             mode = cfg.get('brush_display_mode', 'Textured')
-                            p_refs = cfg.get('render_refs')
 
                             # Match the main numeric scene pipeline: every brush
                             # material class consumes the same projected slots,
@@ -1112,7 +1111,7 @@ class Renderer_F(BaseRenderer):
                 self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl)
                 self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl)
             else:
-                self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl, refs=_refs)
+                self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl)
         else:
             self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl, refs=_refs)
         if len(glow_brushes):
