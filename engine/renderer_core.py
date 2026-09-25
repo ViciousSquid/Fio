@@ -1874,7 +1874,7 @@ layout (location = 9) in vec4 iNormal2;
                     recipes[sprite_id])
             self._sprite_gl_by_id = grown
             cached = grown
-        return grown
+        return cached
 
     def _resolve_sprite_recipe(self, candidates):
         """The GL texture id for one interned candidate list, or 0."""
