@@ -4748,6 +4748,7 @@ layout (location = 9) in vec4 iNormal2;
             # along world axes when it does not — exactly as before.
             us, vs, (u0, eu), (v0, ev) = brush_geometry.face_uv_projection(
                 ring_w, face)
+            plane_meta = convex.planes[face['plane']]
             first = vert_count
             for k in range(1, len(idx) - 1):
                 for j in (0, k, k + 1):
@@ -4756,9 +4757,9 @@ layout (location = 9) in vec4 iNormal2;
                                  (us[j] - u0) / eu, (vs[j] - v0) / ev))
             vert_count += (len(idx) - 2) * 3
             runs.append({'face': face.get('face'), 'texture': face.get('texture'),
-                         'uv_scale': face.get('uv_scale'), 'plane': face.get('plane'),
-                         'uv_angle': face.get('uv_angle', 0.0),
-                         'uv_shift': face.get('uv_shift', (0.0, 0.0)),
+                         'uv_scale': face.get('uv_scale') or plane_meta.get('uv_scale'), 'plane': face.get('plane'),
+                         'uv_angle': plane_meta.get('uv_angle', 0.0),
+                         'uv_shift': plane_meta.get('uv_shift', (0.0, 0.0)),
                          'natural_scale': bool(brush_geometry.face_uses_natural_scale(
                              brush, face.get('face'), face)),
                          'first': first, 'count': vert_count - first,
