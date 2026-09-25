@@ -1101,7 +1101,6 @@ class QtGameView(QOpenGLWidget):
             render_state is not None
             and self.renderer is not None
             and not getattr(render_state, 'has_portals', False)
-            and not _splitscreen
             and self.renderer.will_instance_sprites(
                 self._render_config, _main_brush_slots)
         )
