@@ -1085,7 +1085,7 @@ class Renderer_F(BaseRenderer):
                                 table=portal_table)
                             self.draw_fog_volumes(
                                 proj, vw, cam, portal_groups['fog'], portal_lights, cfg,
-                                table=portal_table, refs=p_refs)
+                                table=portal_table)
                             gl.glDepthMask(gl.GL_TRUE)
                         finally:
                             self._frame_camera_pos = saved_cam
@@ -1113,7 +1113,7 @@ class Renderer_F(BaseRenderer):
         elif current_mode == RENDER_MODE_LIT:
             if brush_display_mode == 'Textured' or brush_display_mode == 'Solid Lit':
                 self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl)
-                self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl, refs=_refs)
+                self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl)
             else:
                 self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl, refs=_refs)
         else:
