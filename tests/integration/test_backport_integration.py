@@ -465,6 +465,9 @@ def test_water_shader_controls_match_dense_projection():
     assert 'water_refraction' in src
     assert 'water_roughness' in src
     assert 'water_fresnel' in src
+    assert 'water_reflection_height' in src
+    assert 'setVisible(bool(brush.get(\'water_reflections\', False)))' in src
+    assert 'reflection_height.setVisible(bool(enabled))' in src
 
 
 def test_special_brush_passes_do_not_materialise_dense_slots():
