@@ -4348,11 +4348,8 @@ layout (location = 9) in vec4 iNormal2;
         return _portal_contains_point(table.pos[int(slot)], BaseRenderer._portal_slot_basis(table, slot),
                                      table.portal_width_height[int(slot), 0], table.portal_width_height[int(slot), 1], point)
 
-    def _portal_forward_allowed(self, table, slot):
-        return int(table.portal_direction[int(slot)]) in (entity_table.PORTAL_DIRECTION_FORWARD, entity_table.PORTAL_DIRECTION_BOTH)
-
-    def _portal_reverse_allowed(self, table, target_slot):
-        return int(table.portal_direction[int(target_slot)]) in (entity_table.PORTAL_DIRECTION_REVERSE, entity_table.PORTAL_DIRECTION_BOTH)
+    def _portal_direction(self, table, slot):
+        return int(table.portal_direction[int(slot)])
 
     def draw_portals(self, portal_table, portal_slots, projection, main_view, camera_pos, config, draw_scene_fn):
         """Render portal views from dense EntityTable topology."""
@@ -4368,10 +4365,11 @@ layout (location = 9) in vec4 iNormal2;
             portal_b = int(portal_table.portal_target_slot[portal_a])
             if portal_b < 0:
                 continue
-            if self._portal_forward_allowed(portal_table, portal_a) and rendered < self.MAX_PORTALS:
+            direction = self._portal_direction(portal_table, portal_a)
+            if direction in (entity_table.PORTAL_DIRECTION_FORWARD, entity_table.PORTAL_DIRECTION_BOTH) and rendered < self.MAX_PORTALS:
                 self._draw_one_portal(portal_table, portal_a, portal_b, projection, main_view, camera_pos, config, draw_scene_fn, pv, portal_slots, depth=1)
                 rendered += 1
-            if self._portal_reverse_allowed(portal_table, portal_b) and rendered < self.MAX_PORTALS:
+            if direction in (entity_table.PORTAL_DIRECTION_REVERSE, entity_table.PORTAL_DIRECTION_BOTH) and rendered < self.MAX_PORTALS:
                 self._draw_one_portal(portal_table, portal_b, portal_a, projection, main_view, camera_pos, config, draw_scene_fn, pv, portal_slots, depth=1)
                 rendered += 1
         gl.glDisable(gl.GL_SCISSOR_TEST)
@@ -4454,7 +4452,7 @@ layout (location = 9) in vec4 iNormal2;
             portal_a=int(portal_a)
             if portal_a==int(from_b): continue
             portal_b=int(portal_table.portal_target_slot[portal_a])
-            if portal_b<0 or not self._portal_forward_allowed(portal_table,portal_a): continue
+            if portal_b<0: continue
             self._draw_one_portal(portal_table,portal_a,portal_b,projection,view,cam,config,draw_scene_fn,pv,portal_slots,depth=depth)
     def _portal_screen_rect(self, corners, pv):
         """Screen-space integer AABB (x, y, w, h) of the aperture, clamped to the
