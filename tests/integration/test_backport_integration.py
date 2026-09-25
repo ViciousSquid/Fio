@@ -459,3 +459,22 @@ def test_mover_position_types_survive_a_json_round_trip():
     pos = [original[i] + (direction[i] * distance) * factor for i in range(3)]
     text = json.dumps({"pos": pos})          # would raise on np.float64
     assert json.loads(text)["pos"] == pos
+
+
+def test_special_brush_passes_do_not_materialise_dense_slots():
+    """Water, glass and fog must stay in RenderTable through render submission."""
+    src = _read("engine/renderer_F.py")
+    assert "water_brushes = groups['water']" in src
+    assert "glass_brushes = groups['glass']" in src
+    assert "fog_volumes = groups['fog']" in src
+    assert "water_brushes = _objs('water')" not in src
+    assert "glass_brushes = _objs('glass')" not in src
+    assert "fog_volumes = _objs('fog')" not in src
+
+    core = _read("engine/renderer_core.py")
+    assert "table.water_params[brushes]" in core
+    assert "table.glass_params[brushes]" in core
+    assert "table.fog_params[brushes]" in core
+    assert "brush.get('water_opacity'" in core
+    assert "brush.get('glass_opacity'" in core
+    assert "brush.get('fog_density'" in core
