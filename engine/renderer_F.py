@@ -942,11 +942,15 @@ class Renderer_F(BaseRenderer):
             for slot_value in reflection_slots:
                 slot = int(slot_value)
                 cubemap = self._ensure_water_reflection_cubemap(slot)
+                probe_height = max(
+                    float(table.water_reflection_height[slot]),
+                    1.0,
+                )
                 probe = glm.vec3(
                     float(table.center[slot, 0]),
                     float(table.center[slot, 1] +
                           table.half[slot, 1] +
-                          self.WATER_REFLECTION_PROBE_HEIGHT),
+                          probe_height),
                     float(table.center[slot, 2]),
                 )
                 projection = glm.perspective(
