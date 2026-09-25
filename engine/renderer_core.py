@@ -4520,13 +4520,7 @@ layout (location = 9) in vec4 iNormal2;
             pass  # GL context may already be gone during shutdown
 
     def _prepare_geo_meshes(self, table, slots):
-        """Prepare convex meshes at the dense-table/cache boundary.
-
-        ``geometry_id`` is a dense integer handle (the row slot for geometry
-        rows).  The only Brush access here is cold cache preparation; draw loops
-        consume the returned integer-keyed mesh map and never dereference a
-        RenderTable slot back into ``refs``.
-        """
+        """Prepare convex meshes from dense geometry records."""
         if table is None or slots is None or not len(slots):
             return {}
         slots = np.asarray(slots, dtype=np.int32)
@@ -4535,36 +4529,36 @@ layout (location = 9) in vec4 iNormal2;
         if not len(gids):
             return {}
         meshes = {}
+        records = table.geometry_records
         for gid in np.unique(gids):
             gid = int(gid)
-            brush = table.brushes[gid]
-            mesh = self._get_geo_mesh(brush, geometry_id=gid,
-                                      geometry_generation=table.generation)
+            if gid >= len(records):
+                continue
+            record = records[gid]
+            if record is None:
+                continue
+            mesh = self._get_geo_mesh_record(record, geometry_id=gid,
+                                             geometry_generation=table.generation)
             if mesh is not None:
                 meshes[gid] = mesh
         return meshes
 
-    def _get_geo_mesh(self, brush, geometry_id=None, geometry_generation=None):
-        """Cached :class:`BrushGeoMesh` for an angled brush, or ``None``.
-
-        Returns ``None`` for plain box brushes (callers fall back to the
-        shared cube VAO) and for degenerate plane sets.
-        """
-        if not brush_geometry.brush_has_geometry(brush):
+    def _get_geo_mesh_record(self, record, geometry_id=None, geometry_generation=None):
+        """Get or build a GPU mesh from a dense GeometryRecord."""
+        if record is None or record.convex is None or not record.convex.is_valid:
             return None
-        key = brush_geometry.geometry_signature(brush)
-        cache_key = (geometry_generation, int(geometry_id)) if geometry_id is not None else id(brush)
+        key = record.signature
+        cache_key = ((geometry_generation, int(geometry_id))
+                     if geometry_id is not None else id(record))
         mesh = self._geo_mesh_cache.get(cache_key)
         if mesh is not None and mesh.key == key:
             mesh.frame = self._geo_mesh_frame
             return mesh
-        new = None
-        convex = brush_geometry.get_convex(brush)
-        if convex is not None and convex.is_valid:
-            try:
-                new = self._build_geo_mesh(brush, convex, key)
-            except Exception as e:
-                print(f"[GeoMesh] build failed: {e}")
+        try:
+            new = self._build_geo_mesh(record, record.convex, key)
+        except Exception as e:
+            print(f"[GeoMesh] build failed: {e}")
+            new = None
         if mesh is not None:
             self._delete_geo_mesh(mesh)
             self._geo_mesh_cache.pop(cache_key, None)
@@ -4573,7 +4567,27 @@ layout (location = 9) in vec4 iNormal2;
             self._geo_mesh_cache[cache_key] = new
         return new
 
-    @staticmethod
+    def _get_geo_mesh(self, brush, geometry_id=None, geometry_generation=None):
+        """Legacy/editor bridge for callers that still own a Brush."""
+        if not brush_geometry.brush_has_geometry(brush):
+            return None
+        convex = brush_geometry.get_convex(brush)
+        if convex is None or not convex.is_valid:
+            return None
+        from engine.render_table import GeometryRecord
+        pos = brush.get('pos') or (0.0, 0.0, 0.0)
+        size = brush.get('size') or (64.0, 64.0, 64.0)
+        record = GeometryRecord(
+            brush_geometry.geometry_signature(brush), convex,
+            np.asarray(pos, dtype=np.float64).copy(),
+            np.asarray([max(abs(float(s)), 1e-6) for s in size], dtype=np.float64),
+            tuple(bool(brush_geometry.face_uses_natural_scale(
+                brush, face.get('face'), face)) for face in convex.faces),
+        )
+        return self._get_geo_mesh_record(record, geometry_id=geometry_id,
+                                         geometry_generation=geometry_generation)
+
+        @staticmethod
     def _geo_uv_axes(n):
         """World axes a face's planar UVs project onto, by dominant normal
         axis.  Matches the cube VAO's orientation (v runs up walls).
@@ -4584,11 +4598,9 @@ layout (location = 9) in vec4 iNormal2;
         """
         return brush_geometry.render_uv_axes(n)
 
-    def _build_geo_mesh(self, brush, convex, key):
-        pos = brush.get('pos', [0, 0, 0])
-        size = brush.get('size', [64, 64, 64])
-        origin = np.array([float(pos[0]), float(pos[1]), float(pos[2])])
-        scale = np.array([max(abs(float(s)), 1e-6) for s in size])
+    def _build_geo_mesh(self, record, convex, key):
+        origin = record.origin
+        scale = record.scale
 
         # A "top" face (flat, at the AABB top) is emitted last so water can
         # draw walls and surface separately, like its box path does.
@@ -4634,8 +4646,7 @@ layout (location = 9) in vec4 iNormal2;
                          'uv_scale': face.get('uv_scale') or plane_meta.get('uv_scale'), 'plane': face.get('plane'),
                          'uv_angle': plane_meta.get('uv_angle', 0.0),
                          'uv_shift': plane_meta.get('uv_shift', (0.0, 0.0)),
-                         'natural_scale': bool(brush_geometry.face_uses_natural_scale(
-                             brush, face.get('face'), face)),
+                         'natural_scale': bool(record.natural_scale[len(runs)]),
                          'first': first, 'count': vert_count - first,
                          'extent': (eu, ev)})
             if top:
