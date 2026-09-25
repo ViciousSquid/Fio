@@ -64,6 +64,11 @@ class EditorState:
         #: :meth:`mark_world_changed`.  Set before anything that bumps it can
         #: run, because save_state() is reachable during construction.
         self.world_epoch = 0
+        # Object ids whose render-facing cold columns changed in the current
+        # editor transaction. _render_dirty_all is used for reload/undo,
+        # where the object identities themselves are replaced.
+        self._render_dirty_objects = set()
+        self._render_dirty_all = False
         self.brushes = []
         self.things = []
         self.selected_object = None
@@ -91,6 +96,25 @@ class EditorState:
     # =========================================================================
 
 
+    def mark_render_dirty(self, *objects) -> None:
+        """Mark specific objects whose render-facing cold state changed."""
+        if self._render_dirty_all:
+            return
+        for obj in objects:
+            if obj is not None:
+                self._render_dirty_objects.add(id(obj))
+
+    def render_dirty_snapshot(self):
+        """Return the current render dirtiness without consuming it."""
+        if self._render_dirty_all:
+            return None
+        return set(self._render_dirty_objects)
+
+    def clear_render_dirty(self) -> None:
+        """Consume render dirtiness after both dense projections have synced."""
+        self._render_dirty_objects.clear()
+        self._render_dirty_all = False
+
     def mark_world_changed(self) -> None:
         """Bump the coarse "something about the world changed" counter.
 
@@ -113,6 +137,7 @@ class EditorState:
         that wants to be finer-grained tracks its own per-row dirty set on top.
         """
         self.world_epoch += 1
+        self.mark_render_dirty(*getattr(self, "selected_objects", ()))
 
     def mark_lighting_dirty(self) -> None:
         """
@@ -125,6 +150,7 @@ class EditorState:
         # (the Surface Inspector) calls this per edit, so it is the signal that
         # catches what save_state alone would miss.
         self.world_epoch += 1
+        self.mark_render_dirty(*getattr(self, "selected_objects", ()))
         if self.bake_state is not None:
             self.bake_state.mark_dirty()
 
@@ -214,6 +240,8 @@ class EditorState:
         identity or contents cannot see it happen and would go on showing the
         entities that used to be there.
         """
+        self._render_dirty_objects.clear()
+        self._render_dirty_all = True
         self.mark_world_changed()
         if IO_AVAILABLE:
             try:
