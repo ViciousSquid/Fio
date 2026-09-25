@@ -3167,7 +3167,7 @@ layout (location = 9) in vec4 iNormal2;
         geometry = (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0
         cube_slots = slots[~geometry]
         geo_slots = slots[geometry]
-        geo_casters = [(int(s), refs[int(s)]) for s in geo_slots]
+        geo_casters = [int(s) for s in geo_slots]
         if not len(cube_slots):
             return 0, geo_casters
 
@@ -4782,6 +4782,9 @@ layout (location = 9) in vec4 iNormal2;
             vert_count += (len(idx) - 2) * 3
             runs.append({'face': face.get('face'), 'texture': face.get('texture'),
                          'uv_scale': face.get('uv_scale'), 'plane': face.get('plane'),
+                         'uv_angle': face.get('uv_angle', 0.0),
+                         'uv_shift': face.get('uv_shift', (0.0, 0.0)),
+                         'natural_scale': bool(face.get('uv_natural', False)),
                          'first': first, 'count': vert_count - first,
                          'extent': (eu, ev)})
             if top:
@@ -4840,94 +4843,26 @@ layout (location = 9) in vec4 iNormal2;
         return mesh
 
     @staticmethod
-    def _geo_run_plane(brush, run):
-        """Live plane dict backing this run, or ``None``.
-
-        Reading the plane live (rather than the value baked into the mesh at
-        build time) lets the Face tool's texture / scale edits on a cut face
-        show immediately — the mesh signature ignores texture, so it isn't
-        rebuilt on a texture change.
-        """
-        pidx = run.get('plane')
-        if pidx is None:
-            return None
-        planes = brush.get('geometry', {}).get('planes')
-        if planes and 0 <= pidx < len(planes):
-            return planes[pidx]
-        return None
+    def _geo_run_texture(run):
+        """Texture name baked into this cold geometry run."""
+        return run.get('texture') or 'default.png'
 
     @staticmethod
-    def _geo_run_texture(brush, run):
-        """Texture name for one face of an angled brush.
+    def _geo_run_tex_transform(run):
+        """``(angle_radians, shift_u, shift_v)`` from cold run data."""
+        shift = run.get('uv_shift') or (0.0, 0.0)
+        return (math.radians(float(run.get('uv_angle', 0.0))),
+                float(shift[0]), float(shift[1]))
 
-        The brush's live ``textures`` dict wins for faces that kept their box
-        face tag (so editor texture changes apply immediately); cut faces read
-        the texture stored live on their plane, then any brush texture.
-        """
-        tag = run['face']
-        if tag:
-            return brush.get('textures', {}).get(tag) or run['texture'] or 'default.png'
-        plane = BaseRenderer._geo_run_plane(brush, run)
-        tex = (plane.get('texture') if plane else None) or run['texture']
-        if not tex:
-            # Untagged cut face with no stored texture: borrow any brush
-            # texture rather than showing the default checkerboard.
-            for t in brush.get('textures', {}).values():
-                if t:
-                    tex = t
-                    break
-        return tex or 'default.png'
-
-    def _geo_run_tex_transform(self, brush, run):
-        """``(angle_radians, shift_u, shift_v)`` for one angled-brush face.
-
-        Same precedence as :meth:`_geo_run_tex_scale`: a tagged side reads the
-        brush's per-tag dicts, a cut face reads its own plane live so Surface
-        Inspector edits show up without rebuilding the mesh.  Angled faces used
-        to have both of these forced to zero, which is why rotating or shifting
-        a texture did nothing once a brush stopped being a box.
-        """
-        tag = run['face']
-        if tag:
-            angle = brush.get('uv_angle', {}).get(tag, 0.0)
-            shift = brush.get('uv_shift', {}).get(tag, (0.0, 0.0))
-        else:
-            plane = BaseRenderer._geo_run_plane(brush, run)
-            if plane is None:
-                return 0.0, 0.0, 0.0
-            angle = plane.get('uv_angle', 0.0)
-            shift = plane.get('uv_shift', (0.0, 0.0))
-        return math.radians(float(angle)), float(shift[0]), float(shift[1])
-
-    def _geo_run_tex_scale(self, brush, run, tex_name):
-        """UV repeat factors for one face, mirroring the box-face priorities:
-        live per-face uv_scale, then the plane's stored uv_scale, then
-        texture_tiling (1px = 1 world unit over the face's extent), then FIT."""
-        tag = run['face']
-        plane = None if tag else BaseRenderer._geo_run_plane(brush, run)
-
-        # Natural is a live mode: the repeats come from the face's *current*
-        # extent every frame, so resizing the brush shows more of the texture
-        # at the same texel size rather than stretching it.  It therefore wins
-        # over any stored uv_scale (which is only kept as a fallback).
-        if brush_geometry.face_uses_natural_scale(brush, tag, plane):
+    def _geo_run_tex_scale(self, run, tex_name):
+        """UV repeat factors from cold convex-face data."""
+        if run.get('natural_scale'):
             return brush_geometry.natural_repeats(
                 run['extent'][0], run['extent'][1],
                 self._texture_pixel_size(tex_name))
-
-        uv = brush.get('uv_scale', {}).get(tag) if tag else None
-        if uv is None and plane is not None:
-            # Cut face: read its plane's uv_scale live so Surface Inspector
-            # edits apply without a mesh rebuild.
-            uv = plane.get('uv_scale')
-        if uv is None:
-            uv = run['uv_scale']
+        uv = run.get('uv_scale')
         if uv is not None:
             return float(uv[0]), float(uv[1])
-        if brush.get('texture_tiling', False):
-            eu, ev = run['extent']
-            return brush_geometry.natural_repeats(
-                eu, ev, self._texture_pixel_size(tex_name))
         return 1.0, 1.0
 
     def _texture_pixel_size(self, tex_name):
