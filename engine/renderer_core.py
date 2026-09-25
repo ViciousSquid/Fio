@@ -322,7 +322,7 @@ class BaseRenderer:
         # texture arrays per frame.
         self._sprite_key_scratch = np.empty(0, dtype=np.int32)
         self._sprite_index_scratch = np.empty(0, dtype=np.int32)
-        self._sprite_texture_scratch = np.empty(0, dtype=np.int64)
+        self._sprite_texture_scratch = np.empty(0, dtype=np.int32)
         self._sprite_draw_mask = np.empty(0, dtype=bool)
         self._brush_instance_capacity = 0
         self._brush_instance_data = np.empty((0, 32), dtype=np.float32)
@@ -1780,7 +1780,7 @@ layout (location = 9) in vec4 iNormal2;
             grown = max(64, len(self._sprite_key_scratch) * 2, slot_count)
             self._sprite_key_scratch = np.empty(grown, dtype=np.int32)
             self._sprite_index_scratch = np.empty(grown, dtype=np.int32)
-            self._sprite_texture_scratch = np.empty(grown, dtype=np.int64)
+            self._sprite_texture_scratch = np.empty(grown, dtype=np.int32)
             self._sprite_draw_mask = np.empty(grown, dtype=bool)
 
         key_ids = self._sprite_key_scratch[:slot_count]
