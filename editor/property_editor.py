@@ -3766,8 +3766,6 @@ class PropertyEditor(QWidget):
                 self.current_object['water_roughness'] = 0.0
             if 'water_fresnel' not in self.current_object:
                 self.current_object['water_fresnel'] = self.current_object.get('water_reflectivity', 0.5)
-            if 'water_reflection_height' not in self.current_object:
-                self.current_object['water_reflection_height'] = 256
         elif shader_type == 'Fog':
             self.current_object['is_fog'] = True
             if 'fog_density' not in self.current_object:
