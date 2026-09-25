@@ -1892,10 +1892,6 @@ class QtGameView(QOpenGLWidget):
                     fallback_key = 'logic_relay'
                     if fallback_key in self.sprite_textures:
                         instance_textures[id(thing)] = self.sprite_textures[fallback_key]
-            elif isinstance(thing, Portal):
-                tex_key = 'Portal'
-                if tex_key in self.sprite_textures:
-                    instance_textures[id(thing)] = self.sprite_textures[tex_key]
         self.renderer.set_instance_textures(instance_textures)
 
     def toggle_play_mode(self, player_start_pos, player_start_angle, physics_enabled=True):
