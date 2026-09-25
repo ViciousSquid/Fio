@@ -30,7 +30,7 @@ def register_renderer(name, cls):
     deferred one) without editing the engine: a plugin calls
     ``api.register_renderer("Deferred", DeferredRenderer)`` and it becomes an
     available render mode. *cls* must implement the renderer interface the
-    viewport drives (``render_scene``, ``draw_models``, ``render_shadow_maps``,
+    viewport drives (``render_scene``, ``draw_models_instanced``, ``render_shadow_maps``,
     ``set_sprite_textures``, ``cleanup``, a ``lod_manager``, …). Returns True.
     """
     _RENDERER_CLASSES[str(name)] = cls
