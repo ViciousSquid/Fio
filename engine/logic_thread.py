@@ -114,6 +114,8 @@ Key_Control = 0x01000021
 # Portal transit cooldown — prevents the player from oscillating back and
 # forth between two portals if they are very close together (seconds).
 _PORTAL_TRANSIT_COOLDOWN = 0.5
+# Keep the camera continuous across a portal plane; collision handles any later correction.
+_PORTAL_PLAYER_EXIT_EPSILON = 0.05
 
 # Noise "loudness" multipliers scale a monster's hearing range per event.
 # 1.0 = heard out to the full sensory radius (gunshots); water splashes are
@@ -2081,7 +2083,7 @@ class LogicThread(threading.Thread):
         # The portal plane itself is the transition surface; the collision system
         # owns any subsequent world penetration correction.
         bnx, bny, bnz = portal_b.get_normal()
-        epsilon = 0.05
+        epsilon = _PORTAL_PLAYER_EXIT_EPSILON
         self.player.pos = glm.vec3(tx + bnx * epsilon,
                                    ty + bny * epsilon,
                                    tz + bnz * epsilon)
