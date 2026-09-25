@@ -861,15 +861,19 @@ class Renderer_F(BaseRenderer):
         lights = self._get_active_lights((), config)
         return table, groups, model_slots, sprite_slots, lights
 
-    def _render_water_reflection_probes(self, table, water_slots, lights, config):
-        """Render optional environment cubemaps for visible reflected water rows.
+    def _render_water_reflections(
+            self, table, water_slots, lights, config, view, camera_pos):
+        """Render planar reflections for the visible water surfaces.
 
-        Each enabled water row owns a 256x256 RGBA cubemap. The capture point is
-        just above the authored top surface. The capture scene uses
-        the same dense RenderTable/EntityTable draw passes as the main renderer,
-        but deliberately omits water, glass, fog volumes and portals so the
-        probe never reflects its own optical pass or recurses through secondary
-        views.
+        Each reflected water slot gets one ordinary 2D texture. The scene is
+        rendered once from the main camera mirrored across that water's top
+        plane, then the water fragment shader projectively samples that image
+        using the same reflected view-projection matrix.
+
+        This is deliberately a planar reflection, not an environment probe:
+        the reflected image is tied to the actual camera and the actual water
+        surface, so objects above the surface appear where a real mirror would
+        put them.
         """
         if table is None or not len(water_slots):
             return
@@ -916,16 +920,13 @@ class Renderer_F(BaseRenderer):
         prev_clear = gl.glGetFloatv(gl.GL_COLOR_CLEAR_VALUE)
 
         size = self.WATER_REFLECTION_SIZE
-        far_plane = max(float(self.view_distance.distance), 1024.0)
-        near_plane = max(0.5, min(4.0, far_plane * 0.002))
-        face_dirs = (
-            (glm.vec3( 1, 0, 0), glm.vec3(0, -1,  0)),
-            (glm.vec3(-1, 0, 0), glm.vec3(0, -1,  0)),
-            (glm.vec3( 0, 1, 0), glm.vec3(0,  0,  1)),
-            (glm.vec3( 0,-1, 0), glm.vec3(0,  0, -1)),
-            (glm.vec3( 0, 0, 1), glm.vec3(0, -1,  0)),
-            (glm.vec3( 0, 0,-1), glm.vec3(0, -1,  0)),
-        )
+        inv_view = glm.inverse(view)
+        main_pos = glm.vec3(
+            float(camera_pos.x), float(camera_pos.y), float(camera_pos.z))
+        main_forward = glm.normalize(glm.vec3(
+            -inv_view[2][0], -inv_view[2][1], -inv_view[2][2]))
+        main_up = glm.normalize(glm.vec3(
+            inv_view[1][0], inv_view[1][1], inv_view[1][2]))
 
         try:
             gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._water_reflection_fbo)
@@ -938,209 +939,211 @@ class Renderer_F(BaseRenderer):
             gl.glDepthFunc(gl.GL_LESS)
             gl.glDepthMask(gl.GL_TRUE)
             gl.glDisable(gl.GL_BLEND)
+            # Reflection reverses winding. Do not cull the reflected scene.
             gl.glDisable(gl.GL_CULL_FACE)
 
             for slot_value in reflection_slots:
                 slot = int(slot_value)
-                cubemap = self._ensure_water_reflection_cubemap(slot)
-                probe_height = min(
-                    max(float(table.water_reflection_height[slot]), 0.05),
-                    4.0,
+                water_y = float(
+                    table.center[slot, 1] + table.half[slot, 1])
+
+                reflection_pos = glm.vec3(
+                    main_pos.x,
+                    2.0 * water_y - main_pos.y,
+                    main_pos.z,
                 )
-                probe = glm.vec3(
-                    float(table.center[slot, 0]),
-                    float(table.center[slot, 1] +
-                          table.half[slot, 1] +
-                          probe_height),
-                    float(table.center[slot, 2]),
+                reflection_forward = glm.vec3(
+                    main_forward.x,
+                    -main_forward.y,
+                    main_forward.z,
                 )
-                projection = glm.perspective(
-                    glm.radians(90.0),
-                    1.0,
-                    near_plane,
-                    far_plane,
+                reflection_up = glm.vec3(
+                    main_up.x,
+                    -main_up.y,
+                    main_up.z,
+                )
+                reflection_view = glm.lookAt(
+                    reflection_pos,
+                    reflection_pos + reflection_forward,
+                    reflection_up,
+                )
+                reflection_matrix = projection * reflection_view
+
+                texture = self._ensure_water_reflection_texture(slot)
+                gl.glFramebufferTexture2D(
+                    gl.GL_FRAMEBUFFER,
+                    gl.GL_COLOR_ATTACHMENT0,
+                    gl.GL_TEXTURE_2D,
+                    texture,
+                    0,
+                )
+                status = gl.glCheckFramebufferStatus(gl.GL_FRAMEBUFFER)
+                if status != gl.GL_FRAMEBUFFER_COMPLETE:
+                    print(
+                        f"[Water] planar reflection FBO incomplete "
+                        f"(0x{status:x})")
+                    continue
+
+                gl.glClear(
+                    gl.GL_COLOR_BUFFER_BIT |
+                    gl.GL_DEPTH_BUFFER_BIT
+                )
+                self._frame_camera_pos = (
+                    float(reflection_pos.x),
+                    float(reflection_pos.y),
+                    float(reflection_pos.z),
                 )
 
-                for face in range(6):
-                    self._frame_camera_pos = (
-                        float(probe.x), float(probe.y), float(probe.z))
-                    gl.glFramebufferTexture2D(
-                        gl.GL_FRAMEBUFFER,
-                        gl.GL_COLOR_ATTACHMENT0,
-                        gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
-                        cubemap,
-                        0,
-                    )
-                    status = gl.glCheckFramebufferStatus(gl.GL_FRAMEBUFFER)
-                    if status != gl.GL_FRAMEBUFFER_COMPLETE:
-                        print(
-                            f"[Water] reflection face FBO incomplete "
-                            f"(0x{status:x})"
-                        )
-                        break
+                planes = np.asarray(
+                    self._frustum_planes(reflection_matrix),
+                    dtype=np.float64,
+                )
 
-                    gl.glClear(
-                        gl.GL_COLOR_BUFFER_BIT |
-                        gl.GL_DEPTH_BUFFER_BIT
+                terrain = capture_config.get('terrain')
+                if terrain and terrain.enabled:
+                    self.render_terrain(
+                        projection,
+                        reflection_view,
+                        reflection_pos,
+                        terrain,
+                        lights,
+                        frustum_planes=planes,
                     )
 
-                    view = glm.lookAt(
-                        probe,
-                        probe + face_dirs[face][0],
-                        face_dirs[face][1],
+                slots = all_brush_slots
+                if len(slots):
+                    centres = table.center[slots]
+                    radii = np.linalg.norm(table.half[slots], axis=1)
+                    distances = (
+                        centres @ planes[:, :3].T +
+                        planes[:, 3]
                     )
-                    planes = np.asarray(
-                        self._frustum_planes(projection * view),
-                        dtype=np.float64,
+                    slots = slots[
+                        np.all(
+                            distances >= -radii[:, None],
+                            axis=1,
+                        )
+                    ]
+
+                # The water itself is intentionally absent from this capture.
+                # The normal pass draws it after this texture has been filled.
+                groups = self._classify_brush_slots(
+                    table, slots, capture_config)
+                mode = capture_config.get(
+                    'brush_display_mode', 'Textured')
+                if mode in ('Textured', 'Solid Lit'):
+                    self.draw_textured_brushes_optimized(
+                        projection,
+                        reflection_view,
+                        reflection_pos,
+                        groups['textured'],
+                        lights,
+                        capture_config,
+                        table,
+                    )
+                    self.draw_lit_brushes_optimized(
+                        projection,
+                        reflection_view,
+                        reflection_pos,
+                        groups['solid'],
+                        lights,
+                        capture_config,
+                        table=table,
+                    )
+                else:
+                    self.draw_lit_brushes_optimized(
+                        projection,
+                        reflection_view,
+                        reflection_pos,
+                        groups['opaque'],
+                        lights,
+                        capture_config,
+                        table=table,
                     )
 
-                    terrain = capture_config.get('terrain')
-                    if terrain and terrain.enabled:
-                        self.render_terrain(
-                            projection,
-                            view,
-                            probe,
-                            terrain,
-                            lights,
-                            frustum_planes=planes,
-                        )
-
-                    slots = all_brush_slots
-                    if len(slots):
-                        centres = table.center[slots]
-                        radii = np.linalg.norm(table.half[slots], axis=1)
-                        distances = (
-                            centres @ planes[:, :3].T +
-                            planes[:, 3]
-                        )
-                        slots = slots[
-                            np.all(
-                                distances >= -radii[:, None],
-                                axis=1,
-                            )
-                        ]
-
-                    groups = self._classify_brush_slots(
-                        table, slots, capture_config)
-                    mode = capture_config.get(
-                        'brush_display_mode', 'Textured')
-                    if mode in ('Textured', 'Solid Lit'):
-                        self.draw_textured_brushes_optimized(
-                            projection,
-                            view,
-                            probe,
-                            groups['textured'],
-                            lights,
-                            capture_config,
-                            table,
-                        )
-                        self.draw_lit_brushes_optimized(
-                            projection,
-                            view,
-                            probe,
-                            groups['solid'],
-                            lights,
-                            capture_config,
-                            table=table,
-                        )
-                    else:
-                        self.draw_lit_brushes_optimized(
-                            projection,
-                            view,
-                            probe,
-                            groups['opaque'],
-                            lights,
-                            capture_config,
-                            table=table,
-                        )
-
-                    glow = groups['glow']
-                    if len(glow):
-                        self.draw_glow_brushes(
-                            projection,
-                            view,
-                            probe,
-                            glow,
-                            lights,
-                            capture_config,
-                            table=table,
-                        )
-
-                    # Dense entity scene. Hidden rows are filtered numerically
-                    # before the frustum test; no Thing objects are materialised.
-                    thing_slots = np.arange(
-                        entity_table.count,
-                        dtype=np.int32,
+                glow = groups['glow']
+                if len(glow):
+                    self.draw_glow_brushes(
+                        projection,
+                        reflection_view,
+                        reflection_pos,
+                        glow,
+                        lights,
+                        capture_config,
+                        table=table,
                     )
-                    if len(thing_slots):
-                        visible_entities = ~np.asarray(
-                            thing_hidden[:entity_table.count],
-                            dtype=bool,
-                        )
-                        thing_slots = thing_slots[visible_entities]
-                    if len(thing_slots):
-                        centres = entity_table.pos[thing_slots]
-                        distances = (
-                            centres @ planes[:, :3].T +
-                            planes[:, 3]
-                        )
-                        radii = np.maximum(
-                            entity_table.sprite_size[
-                                thing_slots
-                            ].max(axis=1) * 0.5,
-                            1.0,
-                        )
-                        model_rows = (
-                            entity_table.model_recipe_id[
-                                thing_slots
-                            ] >= 0
-                        )
-                        radii[model_rows] = np.maximum(
-                            radii[model_rows],
-                            128.0,
-                        )
-                        thing_slots = thing_slots[
-                            np.all(
-                                distances >= -radii[:, None],
-                                axis=1,
-                            )
-                        ]
 
-                    model_slots, sprite_slots = entity_projection.classify_slots(
+                thing_slots = np.arange(
+                    entity_table.count,
+                    dtype=np.int32,
+                )
+                if len(thing_slots):
+                    visible_entities = ~np.asarray(
+                        thing_hidden[:entity_table.count],
+                        dtype=bool,
+                    )
+                    thing_slots = thing_slots[visible_entities]
+                if len(thing_slots):
+                    centres = entity_table.pos[thing_slots]
+                    distances = (
+                        centres @ planes[:, :3].T +
+                        planes[:, 3]
+                    )
+                    radii = np.maximum(
+                        entity_table.sprite_size[
+                            thing_slots
+                        ].max(axis=1) * 0.5,
+                        1.0,
+                    )
+                    model_rows = (
+                        entity_table.model_recipe_id[
+                            thing_slots
+                        ] >= 0
+                    )
+                    radii[model_rows] = np.maximum(
+                        radii[model_rows],
+                        128.0,
+                    )
+                    thing_slots = thing_slots[
+                        np.all(
+                            distances >= -radii[:, None],
+                            axis=1,
+                        )
+                    ]
+
+                model_slots, sprite_slots = entity_projection.classify_slots(
+                    entity_table,
+                    thing_slots,
+                    thing_hidden,
+                    capture_config.get('play_mode', False),
+                    capture_config.get(
+                        'show_sprites_in_play_mode', False),
+                )
+                if len(model_slots):
+                    self.draw_models_instanced(
+                        projection,
+                        reflection_view,
+                        reflection_pos,
                         entity_table,
-                        thing_slots,
-                        thing_hidden,
-                        capture_config.get('play_mode', False),
-                        capture_config.get(
-                            'show_sprites_in_play_mode', False),
+                        model_slots,
+                        lights,
+                        capture_config,
                     )
-                    if len(model_slots):
-                        self.draw_models_instanced(
-                            projection,
-                            view,
-                            probe,
-                            entity_table,
-                            model_slots,
-                            lights,
-                            capture_config,
-                        )
 
-                    if len(sprite_slots):
-                        gl.glEnable(gl.GL_BLEND)
-                        gl.glDepthMask(gl.GL_FALSE)
-                        self.draw_sprites_instanced(
-                            projection,
-                            view,
-                            entity_table,
-                            sprite_slots,
-                            camera_pos=probe,
-                        )
-                        gl.glDepthMask(gl.GL_TRUE)
-                        gl.glDisable(gl.GL_BLEND)
+                if len(sprite_slots):
+                    gl.glEnable(gl.GL_BLEND)
+                    gl.glDepthMask(gl.GL_FALSE)
+                    self.draw_sprites_instanced(
+                        projection,
+                        reflection_view,
+                        entity_table,
+                        sprite_slots,
+                        camera_pos=reflection_pos,
+                    )
+                    gl.glDepthMask(gl.GL_TRUE)
+                    gl.glDisable(gl.GL_BLEND)
 
-                gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cubemap)
-                gl.glGenerateMipmap(gl.GL_TEXTURE_CUBE_MAP)
-                gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+                self._water_reflection_matrices[slot] = reflection_matrix
 
         finally:
             self._frame_camera_pos = prev_frame_camera_pos
@@ -1470,8 +1473,8 @@ class Renderer_F(BaseRenderer):
         else:
             self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl)
         if current_mode == RENDER_MODE_LIT:
-            self._render_water_reflection_probes(
-                _tbl, water_brushes, lights, config)
+            self._render_water_reflections(
+                _tbl, water_brushes, lights, config, view, camera_pos)
             self.draw_water_brushes(
                 projection, view, camera_pos, water_brushes, lights, config,
                 table=_tbl)
