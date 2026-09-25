@@ -2443,11 +2443,6 @@ layout (location = 9) in vec4 iNormal2;
         order = np.argsort(-distances if reverse else distances, kind="stable")
         return slots[order]
 
-            def _distance_sq(self, pos1, pos2):
-        if isinstance(pos1, (list, tuple)):
-            return (pos1[0]-pos2.x)**2 + (pos1[1]-pos2.y)**2 + (pos1[2]-pos2.z)**2
-        return (pos1.x-pos2.x)**2 + (pos1.y-pos2.y)**2 + (pos1.z-pos2.z)**2
-
     def _shader_light_cap(self, shader_name):
         """How many lights ``shader_name``'s ``lights[]`` array actually holds.
 
