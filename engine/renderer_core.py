@@ -335,6 +335,8 @@ class BaseRenderer:
         self._model_instance_capacity = 0
         self._model_instance_data = np.empty((0, 28), dtype=np.float32)
         self._model_instanced_vaos = set()
+        self._model_recipe_scratch = np.empty(0, dtype=np.int32)
+        self._model_sorted_slots_scratch = np.empty(0, dtype=np.int32)
 
         # Shared std140 light UBO. One upload feeds every lighting shader.
         self._light_ubo = None
@@ -1470,6 +1472,145 @@ layout (location = 9) in vec4 iNormal2;
             out[i, 16:28] = normal_np
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._model_instance_vbo)
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, out)
+
+    def _fill_model_instance_buffer_numeric(self, table, slots):
+        """Gather model transforms directly from dense entity columns."""
+        count = len(slots)
+        self._ensure_model_instance_buffer(count)
+        out = self._model_instance_data[:count]
+        np.take(table.model_base_matrix, slots, axis=0, out=out[:, :16])
+        np.take(table.model_normal_matrix, slots, axis=0, out=out[:, 16:28])
+        np.take(table.pos[:, 0], slots, out=out[:, 3])
+        np.take(table.pos[:, 1], slots, out=out[:, 7])
+        np.take(table.pos[:, 2], slots, out=out[:, 11])
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._model_instance_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, out)
+
+
+    def draw_models_instanced(self, projection, view, camera_pos, table, slots,
+                              lights, config=None):
+        """Render model instances from dense EntityTable columns.
+
+        Entity objects are not touched here. Model resources are resolved once
+        per distinct cold recipe; instance transforms and visibility remain
+        numeric all the way to the reusable GPU staging buffer.
+        """
+        if not len(slots):
+            return 0
+        if not (self.shaders.get('lit_instanced') or self.shaders.get('textured_instanced')):
+            return 0
+
+        count = len(slots)
+        if len(self._model_recipe_scratch) < count:
+            grown = max(64, len(self._model_recipe_scratch) * 2, count)
+            self._model_recipe_scratch = np.empty(grown, dtype=np.int32)
+            self._model_sorted_slots_scratch = np.empty(grown, dtype=np.int32)
+
+        recipe_ids = self._model_recipe_scratch[:count]
+        np.take(table.model_recipe_id, slots, out=recipe_ids)
+        order, starts = sort_into_runs(recipe_ids)
+        sorted_slots = self._model_sorted_slots_scratch[:count]
+        np.take(slots, order, out=sorted_slots)
+
+        recipes = table.model_recipes()
+        current_shader = None
+        for start, end in zip(starts[:-1], starts[1:]):
+            if start == end:
+                continue
+            recipe_id = int(recipe_ids[order[start]])
+            if recipe_id < 0 or recipe_id >= len(recipes):
+                continue
+            model_path, manual_texture, override_color = recipes[recipe_id]
+            obj = self.load_model(model_path)
+            if not obj or not obj.is_loaded:
+                continue
+
+            run_slots = sorted_slots[start:end]
+            self.render_stats.visible_tris += (obj.vertex_count // 3) * len(run_slots)
+            self._fill_model_instance_buffer_numeric(table, run_slots)
+            self._ensure_model_instance_vao(obj.vao)
+            gl.glBindVertexArray(obj.vao)
+
+            groups = obj.groups or []
+            if manual_texture:
+                shader_kind = (
+                    'textured' if self.shaders.get('textured_instanced')
+                    else 'lit' if self.shaders.get('lit_instanced') else None)
+                if not shader_kind:
+                    continue
+                shader_name = shader_kind + '_instanced'
+                current_shader = self._prepare_model_shader(
+                    shader_name, projection, view, lights, current_shader)
+                if current_shader != shader_name:
+                    continue
+                u = self.uniforms[shader_name]
+                gl.glBindTexture(
+                    gl.GL_TEXTURE_2D,
+                    self._model_texture_id(manual_texture, manual=True))
+                if shader_kind != 'textured':
+                    colour = override_color or (0.8, 0.8, 0.8)
+                    gl.glUniform3fv(u['object_color'], 1, colour)
+                    gl.glUniform1f(u['alpha'], 1.0)
+                gl.glDrawArraysInstanced(
+                    gl.GL_TRIANGLES, 0, obj.vertex_count, len(run_slots))
+                self.render_stats.draw_calls += 1
+                self.render_stats.batched_draws += 1
+                continue
+
+            if not groups:
+                shader_kind = 'lit' if self.shaders.get('lit_instanced') else 'textured'
+                shader_name = shader_kind + '_instanced'
+                current_shader = self._prepare_model_shader(
+                    shader_name, projection, view, lights, current_shader)
+                if current_shader != shader_name:
+                    continue
+                u = self.uniforms[shader_name]
+                if shader_kind == 'lit':
+                    gl.glUniform3fv(u['object_color'], 1, (0.8, 0.8, 0.8))
+                    gl.glUniform1f(u['alpha'], 1.0)
+                gl.glDrawArraysInstanced(
+                    gl.GL_TRIANGLES, 0, obj.vertex_count, len(run_slots))
+                self.render_stats.draw_calls += 1
+                self.render_stats.batched_draws += 1
+                continue
+
+            for group in groups:
+                material = obj.materials.get(
+                    group['material'],
+                    {'color': [0.8, 0.8, 0.8], 'texture': None})
+                use_texture = material.get('texture')
+                shader_kind = (
+                    'textured' if use_texture and self.shaders.get('textured_instanced')
+                    else 'lit' if self.shaders.get('lit_instanced') else None)
+                if not shader_kind:
+                    continue
+                shader_name = shader_kind + '_instanced'
+                current_shader = self._prepare_model_shader(
+                    shader_name, projection, view, lights, current_shader)
+                if current_shader != shader_name:
+                    continue
+                u = self.uniforms[shader_name]
+                if shader_kind == 'textured':
+                    gl.glBindTexture(
+                        gl.GL_TEXTURE_2D,
+                        self._model_texture_id(use_texture, material, manual=False))
+                else:
+                    colour = tuple(material.get('color', [0.8, 0.8, 0.8]))
+                    gl.glUniform3fv(u['object_color'], 1, colour)
+                    gl.glUniform1f(u['alpha'], 1.0)
+                if group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
+                    gl.glDrawElementsInstanced(
+                        gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
+                        ctypes.c_void_p(group['start'] * 4), len(run_slots))
+                else:
+                    gl.glDrawArraysInstanced(
+                        gl.GL_TRIANGLES, group['start'], group['count'], len(run_slots))
+                self.render_stats.draw_calls += 1
+                self.render_stats.batched_draws += 1
+
+        gl.glBindVertexArray(0)
+        return count
+
 
     def _model_texture_id(self, tex_name, material=None, manual=False):
         if not tex_name:
