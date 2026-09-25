@@ -307,6 +307,7 @@ def _entity_scene():
 def test_portal_virtual_scene_consumes_dense_tables(renderer):
     """Portal scene classification never reconstructs brush/entity objects."""
     from engine.entity_table import EntityTable
+    from editor.things import Thing
 
     brushes = [
         box_brush('inside', (0.0, 0.0, 0.0), (64.0, 64.0, 64.0)),
@@ -315,20 +316,24 @@ def test_portal_virtual_scene_consumes_dense_tables(renderer):
     for brush in brushes:
         brush['textures'] = {'south': 'inside.png'}
 
+    model = make_thing(
+        Thing, 'portal_model', (0.0, 32.0, 0.0),
+        model_path='assets/models/oil_drum.obj',
+    )
     table, refs, slots = _projection_for(brushes)
     etable = EntityTable()
-    hidden = etable.begin_frame([], 1)
+    hidden = etable.begin_frame([model], 1)
 
     projection, view, _eye = glh.camera_matrices(aspect=1.0)
     config = glh.render_config(
         all_brushes=brushes,
-        all_things=[],
+        all_things=[model],
         render_table=table,
         render_refs=refs,
         all_brush_slots=slots,
         entity_table=etable,
-        entity_refs=np.empty(0, dtype=object),
-        visible_thing_slots=np.empty(0, dtype=np.int32),
+        entity_refs=np.asarray([model], dtype=object),
+        visible_thing_slots=np.asarray([0], dtype=np.int32),
         thing_hidden=hidden,
         play_mode=True,
     )
@@ -338,7 +343,8 @@ def test_portal_virtual_scene_consumes_dense_tables(renderer):
         raise AssertionError("portal virtual view fell back to _sort_objects")
     renderer._sort_objects = fail_sort
     try:
-        table_out, groups, sprite_slots, lights = renderer._portal_numeric_scene_inputs(
+        (table_out, groups, model_slots,
+         sprite_slots, lights) = renderer._portal_numeric_scene_inputs(
             projection, view, config
         )
     finally:
@@ -348,6 +354,7 @@ def test_portal_virtual_scene_consumes_dense_tables(renderer):
     assert set(groups['opaque'].tolist()) == {0}
     assert set(groups['textured'].tolist()) == {0}
     assert len(groups['solid']) == 0
+    assert model_slots.tolist() == [0]
     assert len(sprite_slots) == 0
     assert isinstance(lights, tuple)
     assert lights[0] is etable
