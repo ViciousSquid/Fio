@@ -618,9 +618,12 @@ class RenderTable:
         geo_slots = np.flatnonzero(
             self.class_bits[:n] & CLASS_HAS_GEOMETRY).astype(np.int32)
         dense_records = []
-        for gid, slot in enumerate(geo_slots):
-            dense_records.append(self.geometry_records[int(slot)])
-            self.geometry_id[int(slot)] = gid
+        for slot in geo_slots:
+            record = self.geometry_records[int(slot)]
+            if record is None:
+                continue
+            self.geometry_id[int(slot)] = len(dense_records)
+            dense_records.append(record)
         self.geometry_records = dense_records
 
         self.ids = new_ids
