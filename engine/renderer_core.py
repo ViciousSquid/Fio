@@ -3264,7 +3264,7 @@ layout (location = 9) in vec4 iNormal2;
         table = config.get('render_table')
         refs = config.get('render_refs')
         caster_slots = config.get('all_brush_slots')
-        numeric = (table is not None and caster_slots is not None)
+        numeric = (table is not None and refs is not None
                    and caster_slots is not None and len(refs) >= table.count)
 
         if numeric:
