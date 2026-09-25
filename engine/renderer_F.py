@@ -17,7 +17,7 @@ from engine.render_keys import KeyLayout, sort_into_runs
 from engine.brush_geometry import (brush_has_geometry, face_uses_natural_scale,
                                    geometry_signature, natural_repeats)
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
-from editor.things import Thing, Light
+from editor.things import Thing
 
 # Camera render-distance cull. The pure per-object geometry lives in
 # engine.render_cull (GL-free, so it is unit-testable without a GL context) and
@@ -1126,12 +1126,12 @@ class Renderer_F(BaseRenderer):
                                 self.draw_lit_brushes_optimized(
                                     proj, vw, cam,
                                     portal_groups['solid'], portal_lights, cfg,
-                                    table=portal_table, refs=p_refs)
+                                    table=portal_table)
                             else:
                                 self.draw_lit_brushes_optimized(
                                     proj, vw, cam,
                                     portal_groups['opaque'], portal_lights, cfg,
-                                    table=portal_table, refs=p_refs)
+                                    table=portal_table)
 
                             # Entity models use the same dense recipe/transform
                             # projection as the main camera.  No erefs[...] and no
@@ -1148,7 +1148,7 @@ class Renderer_F(BaseRenderer):
                                 self.draw_glow_brushes(
                                     proj, vw, cam,
                                     portal_groups['glow'], portal_lights, cfg,
-                                    table=portal_table, refs=p_refs)
+                                    table=portal_table)
 
                             if len(portal_sprite_slots):
                                 self.draw_sprites_instanced(
@@ -1167,7 +1167,7 @@ class Renderer_F(BaseRenderer):
                                     proj, vw, cam,
                                     portal_groups['transparent'], portal_lights, cfg,
                                     is_transparent_pass=True,
-                                    table=portal_table, refs=p_refs)
+                                    table=portal_table)
                             self.draw_water_brushes(
                                 proj, vw, cam, portal_groups['water'], portal_lights, cfg,
                                 table=portal_table, refs=p_refs)
@@ -1210,7 +1210,7 @@ class Renderer_F(BaseRenderer):
         else:
             self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl, refs=_refs)
         if len(glow_brushes):
-            self.draw_glow_brushes(projection, view, camera_pos, glow_brushes, lights, config, table=_tbl, refs=_refs)
+            self.draw_glow_brushes(projection, view, camera_pos, glow_brushes, lights, config, table=_tbl)
         if len(numeric_model_slots):
             if not (self.shaders.get('lit_instanced')
                     or self.shaders.get('textured_instanced')):
