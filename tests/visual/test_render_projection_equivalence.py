@@ -572,6 +572,39 @@ def test_depth_order_survives_being_grouped_into_a_run(renderer, context):
         "far to near is ascending z and the run reordered them" % (zs,))
 
 
+def test_depth_order_survives_multiple_texture_runs(renderer, context):
+    """Each texture run stays back-to-front after the fused numeric sort."""
+    from editor.things import Light, Pickup
+
+    brushes = [box_brush("floor", (0, -16, 0), (1024, 32, 1024))]
+    things = [
+        make_thing(Pickup, "near_health", (0, 48, 300), item_type="health"),
+        make_thing(Pickup, "far_health", (0, 48, -300), item_type="health"),
+        make_thing(Pickup, "near_key", (160, 48, 300), item_type="key",
+                   key_name="blue_key"),
+        make_thing(Pickup, "far_key", (160, 48, -300), item_type="key",
+                   key_name="blue_key"),
+        make_thing(Light, "l", (0, 300, 300), color=[255, 255, 255],
+                   intensity=2.0, radius=1400.0, state="on",
+                   casts_shadows=False),
+    ]
+    objects = _submitted(renderer, context, brushes, things, things,
+                          numeric=False)
+    slots = _submitted(renderer, context, brushes, things, things,
+                       numeric=True)
+    _assert_same_submissions(objects, slots, "multi-texture sprite depth")
+
+    texture_runs = {}
+    for row in slots[0]:
+        texture_runs.setdefault(row[5], []).append(row[2])
+    assert len(texture_runs) >= 2, (
+        "the test scene did not produce multiple sprite texture runs")
+    for tex_id, zs in texture_runs.items():
+        assert zs == sorted(zs), (
+            "texture run %s lost back-to-front depth order: %s"
+            % (tex_id, zs))
+
+
 def test_instanced_billboards_are_fogged_like_the_per_sprite_ones(renderer,
                                                                   context):
     """The one thing a submission capture cannot see.
