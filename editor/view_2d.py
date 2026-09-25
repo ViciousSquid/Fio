@@ -2471,6 +2471,24 @@ class View2D(QWidget):
         # Draw portal pair link lines on top of all things (F1 toggle respects this too)
         self._draw_portal_links(painter, axis1_idx, axis2_idx, visible_bounds)
 
+    def _draw_portal_center_handle(self, painter, center, color):
+        """Draw the center handle used to acquire a portal gizmo."""
+        size = 6.0
+        diamond = QPolygonF([
+            center + QPointF(0.0, -size),
+            center + QPointF(size, 0.0),
+            center + QPointF(0.0, size),
+            center + QPointF(-size, 0.0),
+        ])
+        painter.save()
+        painter.setPen(QPen(QColor(255, 255, 255, 230), 1.5))
+        painter.setBrush(QBrush(color))
+        painter.drawPolygon(diamond)
+        painter.setPen(QPen(QColor(255, 255, 255, 210), 1))
+        painter.drawLine(center + QPointF(-3, 0), center + QPointF(3, 0))
+        painter.drawLine(center + QPointF(0, -3), center + QPointF(0, 3))
+        painter.restore()
+
     def _draw_portal_gizmo(self, painter, thing, s_pos, axis1_idx, axis2_idx, ax_map, ax1, ax2, visible_bounds):
         """
         Draw the Portal aperture as a thick line segment in the 2D view,
@@ -2565,6 +2583,7 @@ class View2D(QWidget):
             ah2 = tip_s - QPointF(math.cos(angle + math.pi/6)*hs, math.sin(angle + math.pi/6)*hs)
             painter.setBrush(QBrush(portal_color))
             painter.drawPolygon(QPolygonF([tip_s, ah1, ah2]))
+            self._draw_portal_center_handle(painter, mid_s, portal_color)
 
             # Name label
             painter.setPen(QPen(portal_color.lighter(150)))
@@ -2610,6 +2629,8 @@ class View2D(QWidget):
             painter.setPen(QPen(portal_color, 2, pen_style))
             painter.setBrush(QBrush(dim_color))
             painter.drawRect(rect_s)
+            self._draw_portal_center_handle(
+                painter, self.world_to_screen(QPointF(px, py)), portal_color)
 
             # Name label
             painter.setPen(QPen(portal_color.lighter(150)))
@@ -4305,8 +4326,13 @@ class View2D(QWidget):
             
             is_hit = False
             
+            # Portal gizmos are their own pick target; do not reduce them to
+            # the tiny generic Thing-icon hitbox.
+            if isinstance(thing, Portal):
+                is_hit = self._portal_gizmo_hit_test(thing, screen_pos, ax1, ax2)
+
             # Standard Thing Hit Test
-            if thing.properties.get('model_path'):
+            elif thing.properties.get('model_path'):
                 # Advanced Model Hit Test: Check Bounding Box of projected vertices
                 coords = self._compute_model_screen_coords(thing, ax_map, ax1, ax2)
                 if coords:
