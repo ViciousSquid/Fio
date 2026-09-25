@@ -22,6 +22,7 @@ import ctypes
 import re
 import math
 import os
+from dataclasses import dataclass
 
 import glm
 import numpy as np
@@ -62,6 +63,21 @@ try:
 except ImportError:
     GLB = None
 
+
+@dataclass(frozen=True)
+class RenderView:
+    """Camera state for a secondary render view.
+
+    The main camera can use the same shape later; portals already use it so
+    aperture/clip/recursion state is carried alongside the camera instead of
+    being implicit renderer globals.
+    """
+    projection: object
+    view: object
+    camera_pos: object
+    aperture_slot: int = -1
+    clip_slot: int = -1
+    recursion_depth: int = 0
 
 # ---------- Utility classes ----------
 class UniformCache:
@@ -4407,7 +4423,15 @@ layout (location = 9) in vec4 iNormal2;
         gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glStencilMask(0x00)
         old_proj_ptr,old_view_ptr=self._proj_ptr,self._view_ptr; self._proj_ptr=glm.value_ptr(clip_proj); self._view_ptr=glm.value_ptr(virtual_view); self._current_shader=None; self._portal_scene_pass=True
         try:
-            draw_scene_fn(clip_proj,virtual_view,virtual_cam,None,None,None,config)
+            draw_scene_fn(
+                RenderView(
+                    clip_proj, virtual_view, virtual_cam,
+                    aperture_slot=portal_a,
+                    clip_slot=portal_b,
+                    recursion_depth=depth,
+                ),
+                config,
+            )
         finally:
             self._portal_scene_pass=False
         self._proj_ptr=old_proj_ptr; self._view_ptr=old_view_ptr; self._current_shader=None; gl.glStencilMask(0xFF)
