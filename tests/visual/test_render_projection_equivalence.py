@@ -333,9 +333,16 @@ def test_portal_virtual_scene_consumes_dense_tables(renderer):
         play_mode=True,
     )
 
-    table_out, groups, sprite_slots, lights = renderer._portal_numeric_scene_inputs(
-        projection, view, config
-    )
+    original_sort = renderer._sort_objects
+    def fail_sort(*args, **kwargs):
+        raise AssertionError("portal virtual view fell back to _sort_objects")
+    renderer._sort_objects = fail_sort
+    try:
+        table_out, groups, sprite_slots, lights = renderer._portal_numeric_scene_inputs(
+            projection, view, config
+        )
+    finally:
+        renderer._sort_objects = original_sort
 
     assert table_out is table
     assert set(groups['opaque'].tolist()) == {0}
