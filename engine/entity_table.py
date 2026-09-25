@@ -303,44 +303,6 @@ def sprite_candidates(thing):
     return tuple(out)
 
 
-def sprite_state(thing):
-    """The mutable inputs a warm row's sprite identity is derived from.
-
-    :func:`sprite_candidates` is not cheap -- it formats cache keys and splits
-    asset paths -- and running it every frame for every warm row costs ten
-    times what checking whether its inputs moved costs (2.39 ms against
-    0.195 ms at 961 warm rows).  Almost every frame the answer is that nothing
-    moved.
-
-    So this is the question asked first, and it is deliberately the same set of
-    fields ``update_instance_textures`` hashes to decide whether *its* overrides
-    are stale: the two were always answering the same question, and the answer
-    belongs next to the column it guards.  ``None`` for a row that is not warm.
-    """
-    if isinstance(thing, dict):
-        if 'monster_type' not in thing:
-            return None
-        return (thing.get('dead'), thing.get('is_shooting'),
-                thing.get('monster_type'), thing.get('variant'),
-                thing.get('custom_idle'), thing.get('custom_shoot'),
-                thing.get('custom_dead'))
-    props = _props_of(thing)
-    if Monster is not None and isinstance(thing, Monster):
-        return (props.get('dead'), props.get('is_shooting'),
-                props.get('monster_type'), props.get('variant'),
-                props.get('custom_idle'), props.get('custom_shoot'),
-                props.get('custom_dead'))
-    if Pickup is not None and isinstance(thing, Pickup):
-        # get_sprite_path() reads all three, through is_key()/is_gun().
-        return (props.get('item_type'), props.get('key_name'),
-                props.get('custom_sprite'))
-    if LogicGate is not None and isinstance(thing, LogicGate):
-        return (props.get('logic_type'),)
-    if Prop is not None and isinstance(thing, Prop):
-        return (props.get('render_mode'), props.get('sprite_path'))
-    return None
-
-
 def sprite_size(thing):
     """The billboard's world size, in the order ``draw_sprites`` decides it."""
     if isinstance(thing, dict):
@@ -502,17 +464,11 @@ class EntityTable:
         #: to consider, so that filter costs pickups rather than entities.
         self.pickup_slots = np.empty(0, dtype=np.int32)
 
-        #: The billboard's world size.  Cold: it comes from authored properties.
+        #: The billboard's world size. Cold: it comes from authored properties.
         self.sprite_size = np.zeros((0, 2), dtype=np.float32)
         #: Interned sprite identity, :data:`SPRITE_NONE` for a row that draws
-        #: none.  Cold for most rows and re-resolved every frame for
-        #: :attr:`warm_sprite_slots`; see the module's sprite-identity section.
-        self.sprite_key_id = np.full((0,), SPRITE_NONE, dtype=np.int32)
-        #: Rows whose sprite identity is re-resolved per frame.
-        self.model_recipe_id = np.full((0,), -1, dtype=np.int32)
-        self.model_base_matrix = np.zeros((0, 16), dtype=np.float32)
-        self.model_normal_matrix = np.zeros((0, 12), dtype=np.float32)
-
+        #: none. Authored sprite identity is cold; Monster snapshots update it
+        #: directly when the logic thread publishes them.
         # Candidate-list intern table.  GL-free, like the brush table's texture
         # names: these are ids for *recipes*, and the renderer maps them to GL
         # texture ids once per unique recipe on the thread that has a context.
