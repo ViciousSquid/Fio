@@ -881,7 +881,13 @@ void main() {
     float eta = 1.0 / ior;
     highp vec3 straightDir = -viewDir;
     highp vec3 refractDir = refract(straightDir, baseNormal, eta);
-    highp vec3 refractDeltaView = normalize(mat3(view) * (refractDir - straightDir));
+    highp vec3 refractDeltaView = mat3(view) * (refractDir - straightDir);
+    highp float refractDeltaLen = length(refractDeltaView);
+    if (refractDeltaLen > 1.0e-5) {
+        refractDeltaView /= refractDeltaLen;
+    } else {
+        refractDeltaView = vec3(0.0);
+    }
 
     highp vec2 projectionScale = vec2(projection[0][0], projection[1][1]);
     highp vec2 normalView = normalize(mat3(view) * baseNormal).xy;
