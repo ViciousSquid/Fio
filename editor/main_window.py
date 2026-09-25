@@ -2894,6 +2894,7 @@ class MainWindow(QMainWindow):
         ]
 
         caulked_faces = 0
+        changed_brushes = []
         for brush in brushes:
             # Ensure textures dict exists
             if 'textures' not in brush:
@@ -2906,9 +2907,11 @@ class MainWindow(QMainWindow):
 
                 if self._is_face_occluded(brush, face, brushes):
                     brush['textures'][face] = 'nodraw.jpg'
+                    changed_brushes.append(brush)
                     caulked_faces += 1
 
-        if caulked_faces > 0:
+        if changed_brushes:
+            self.state.mark_lighting_dirty(changed_brushes)
             self.update_views()
             self.show_toast(f"Autocaulk applied: caulked {caulked_faces} face(s)", duration=5000)
         else:
