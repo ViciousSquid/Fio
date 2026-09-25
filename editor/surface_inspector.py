@@ -571,7 +571,17 @@ class SurfaceInspector(QDialog):
     def _commit(self):
         """Push the change to the views and mark the map dirty."""
         self.editor.unsaved_changes = True
-        self.editor.state.mark_lighting_dirty()
+
+        # The Surface Inspector can edit a picked face whose brush is not in
+        # the editor's object selection. Pass the actual affected brushes so
+        # RenderTable invalidates the correct cold rows.
+        targets = self.target_faces()
+        dirty_brushes = list({id(brush): brush for brush, _ in targets}.values())
+        if dirty_brushes:
+            self.editor.state.mark_lighting_dirty(dirty_brushes)
+        else:
+            self.editor.state.mark_lighting_dirty()
+
         self.editor.update_views()
 
     # ------------------------------------------------------------------ #
