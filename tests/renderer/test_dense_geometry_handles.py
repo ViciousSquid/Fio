@@ -71,7 +71,8 @@ def test_dense_geometry_mesh_preparation_uses_handles_not_refs():
 
     assert meshes == {0: "mesh"}
     assert probe.calls == [(table.geometry_records[0], 0, table.generation)]
-    assert probe.calls[0][0] is not convex
+    assert probe.calls[0][0].convex is not convex
+    assert probe.calls[0][0] is table.geometry_records[0]
 
 
 def test_dense_render_paths_have_no_convex_refs_slot_lookup():
