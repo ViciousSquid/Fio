@@ -190,6 +190,9 @@ class RenderTable:
                  'center', 'half', 'rot', 'class_bits', 'tex_name_id',
                  'uv_scale', 'uv_angle', 'uv_shift', 'uv_natural',
                  'uv_has_scale', 'colour', 'glow_colour', 'geo_epoch',
+                 'water_tint', 'water_params', 'water_plane',
+                 'glass_color', 'glass_params',
+                 'fog_color', 'fog_params',
                  'dynamic_slots', '_tex_ids', '_tex_names', '_epoch',
                  '_hidden_buf')
 
@@ -244,6 +247,21 @@ class RenderTable:
         #: consumer caching GPU data per row can tell a stale mesh from a live
         #: one without re-deriving ``geometry_signature``.  0 for box brushes.
         self.geo_epoch = np.zeros((0,), dtype=np.int64)
+
+        # Special-brush render state. These are narrow numerical projections of
+        # the authored dictionaries consumed by the water/glass/fog shaders.
+        # Params are deliberately packed so the renderer can gather a whole
+        # pass without materialising Brush objects.
+        self.water_tint = np.zeros((0, 3), dtype=np.float32)
+        # opacity, reflectivity, wave_height, wave_enabled
+        self.water_params = np.zeros((0, 4), dtype=np.float32)
+        self.water_plane = np.zeros((0,), dtype=bool)
+        self.glass_color = np.zeros((0, 3), dtype=np.float32)
+        # opacity, distortion, refraction, roughness, fresnel
+        self.glass_params = np.zeros((0, 5), dtype=np.float32)
+        self.fog_color = np.zeros((0, 3), dtype=np.float32)
+        # density, noise_scale
+        self.fog_params = np.zeros((0, 2), dtype=np.float32)
 
         # Texture-name intern table.  GL-free: these are ids for *names*, and
         # the renderer maps them to GL texture ids once per unique name.
@@ -308,6 +326,13 @@ class RenderTable:
         self.colour = grow(self.colour)
         self.glow_colour = grow(self.glow_colour)
         self.geo_epoch = grow(self.geo_epoch)
+        self.water_tint = grow(self.water_tint)
+        self.water_params = grow(self.water_params)
+        self.water_plane = grow(self.water_plane)
+        self.glass_color = grow(self.glass_color)
+        self.glass_params = grow(self.glass_params)
+        self.fog_color = grow(self.fog_color)
+        self.fog_params = grow(self.fog_params)
 
     # -- row resolution ----------------------------------------------------
 
@@ -369,6 +394,35 @@ class RenderTable:
             self.geo_epoch[slot] = brush_geometry._brush_epoch(brush)
         else:
             self.geo_epoch[slot] = 0
+
+        # Water / glass / fog shader state. Defaults deliberately match the
+        # renderer's former brush.get(...) fallbacks.
+        water_tint = brush.get('water_tint', [0.0, 0.4, 0.6])
+        self.water_tint[slot] = normalize_color(water_tint)
+        self.water_params[slot] = (
+            float(brush.get('water_opacity', 0.5)),
+            float(brush.get('water_reflectivity', 0.5)),
+            float(brush.get('water_wave_height', 0.5)),
+            1.0 if brush.get('water_wave_enabled', True) else 0.0,
+        )
+        self.water_plane[slot] = bool(brush.get('water_plane', False))
+
+        self.glass_color[slot] = normalize_color(
+            brush.get('glass_color', [0.7, 0.85, 0.95]))
+        self.glass_params[slot] = (
+            float(brush.get('glass_opacity', 0.3)),
+            float(brush.get('glass_distortion', 0.5)),
+            float(brush.get('glass_refraction', 1.5)),
+            float(brush.get('glass_roughness', 0.0)),
+            float(brush.get('glass_fresnel', 0.5)),
+        )
+
+        self.fog_color[slot] = normalize_color(
+            brush.get('fog_color', [0.5, 0.6, 0.7]))
+        self.fog_params[slot] = (
+            float(brush.get('fog_density', 0.01)),
+            float(brush.get('fog_noise_scale', 0.01)),
+        )
 
     # -- synchronisation ---------------------------------------------------
 
@@ -488,7 +542,9 @@ class RenderTable:
             for arr in (self.class_bits, self.tex_name_id, self.uv_scale,
                         self.uv_angle, self.uv_shift, self.uv_natural,
                         self.uv_has_scale, self.colour, self.glow_colour,
-                        self.geo_epoch):
+                        self.geo_epoch, self.water_tint, self.water_params,
+                        self.water_plane, self.glass_color, self.glass_params,
+                        self.fog_color, self.fog_params):
                 arr[dst] = arr[src]
 
         for slot, brush in enumerate(brushes):
