@@ -1369,9 +1369,29 @@ class PropertyEditor(QWidget):
             ('glass_refraction', "Refraction:", 1.5, "Index of refraction (1.0=air, 1.5=glass, 2.4=diamond)"),
             ('glass_roughness', "Roughness:", 0.0, "Surface roughness (0=clear, 1=frosted)"),
         ):
-            slider, label = _make_slider(self, brush.get(key, default), 0, 100 if 'refraction' not in key else 250,
-                                         fmt="{:.2f}", callback=lambda v, k=key: self.update_object_prop(k, v),
-                                         tooltip=tip)
+            if key == 'glass_refraction':
+                # IOR is 1.00..2.50, in hundredths. The generic slider helper
+                # treats ranges above 100 as raw integers, which would quantise
+                # the material's advertised 1.50-style values to whole numbers.
+                ior = float(brush.get(key, default))
+                slider = QSlider(Qt.Horizontal)
+                slider.setRange(100, 250)
+                slider.setValue(max(100, min(250, int(round(ior * 100)))))
+                label = QLabel(f"{ior:.2f}")
+
+                def _on_ior_change(v, _slider=slider, _label=label):
+                    real = v / 100.0
+                    _label.setText(f"{real:.2f}")
+                    self.update_object_prop('glass_refraction', real)
+
+                slider.valueChanged.connect(_on_ior_change)
+                slider.setToolTip(tip)
+            else:
+                slider, label = _make_slider(
+                    self, brush.get(key, default), 0, 100,
+                    fmt="{:.2f}",
+                    callback=lambda v, k=key: self.update_object_prop(k, v),
+                    tooltip=tip)
             dist_form.addRow(label_txt, _hbox(slider, label, stretch=False))
             self._widgets[f'{key}_slider'] = slider
         layout.addWidget(dist_group)
