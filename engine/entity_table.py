@@ -940,6 +940,27 @@ class EntityTable:
     def _resolve_entity_cold(self, slot, thing):
         """Resolve authored render state for one entity row."""
         self.class_bits[slot] = _entity_class_bits(thing)
+
+        # Model rendering is part of the dense entity projection too. The
+        # classifier already sends Model-mode entities here, so their cold
+        # recipe and transform columns must be populated at the same cache
+        # boundary. Leaving model_recipe_id at its sentinel value (-1) makes
+        # draw_models_instanced silently skip an otherwise valid model slot.
+        recipe_id = self.intern_model_recipe(_model_recipe(thing))
+        self.model_recipe_id[slot] = recipe_id
+        if recipe_id >= 0:
+            model, normal = _model_transform_columns(thing)
+            self.model_base_matrix[slot] = model
+            self.model_normal_matrix[slot] = normal
+        else:
+            # Clear stale state when an edited entity loses its model_path.
+            self.model_base_matrix[slot].fill(0.0)
+            self.model_base_matrix[slot, 15] = 1.0
+            self.model_normal_matrix[slot].fill(0.0)
+            self.model_normal_matrix[slot, 0] = 1.0
+            self.model_normal_matrix[slot, 5] = 1.0
+            self.model_normal_matrix[slot, 10] = 1.0
+
         if self.class_bits[slot] & ENT_PORTAL:
             props = _props_of(thing)
             self.portal_direction[slot] = self._portal_direction_code(
