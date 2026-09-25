@@ -14,8 +14,6 @@ from .renderer_core import BaseRenderer, normalize_color
 from engine import render_table
 from engine import entity_table as entity_projection
 from engine.render_keys import KeyLayout, sort_into_runs
-from engine.brush_geometry import (brush_has_geometry, face_uses_natural_scale,
-                                   geometry_signature, natural_repeats)
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.things import Thing
 
