@@ -2025,57 +2025,116 @@ layout (location = 9) in vec4 iNormal2;
             amp = 1.2
         return min(amp, size[1] * 0.45, 30.0)
 
-    def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config):
-        """Draw water from dense RenderTable state when available.
+    def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config,
+                           table):
+        """Draw water from dense RenderTable state.
 
-        *brushes* is a slot array on the numeric path. Only convex geometry
-        needs a Brush reference; box water stays entirely in dense columns.
+        The pass captures the opaque scene once for screen-space transmission.
+        Optional environment cubemaps are already rendered by Renderer_F before
+        this method is called; the hot loop consumes only dense columns and GL
+        texture handles.
         """
         if len(brushes) == 0 or 'water' not in self.shaders:
             return
+        if table is None:
+            raise RuntimeError("draw_water_brushes requires RenderTable")
         if not getattr(self, 'water_enabled', True):
             return
+
         shader, uniforms = self.shaders['water'], self.uniforms['water']
         gl.glUseProgram(shader)
+        self._current_shader = shader
         self._upload_lights_once('water', lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-        gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
+        gl.glUniformMatrix4fv(
+            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(
+            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glUniform3fv(
+            uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
         gl.glUniform1f(uniforms['time'], config.get('time', 0.0))
+
+        # Water uses the same scene capture as Glass, but captures before any
+        # water surface is submitted so transmission never contains the water
+        # itself.
+        scene_size = self._capture_glass_scene()
+        if scene_size is None:
+            viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+            scene_size = (
+                max(int(viewport[2]), 1),
+                max(int(viewport[3]), 1),
+            )
+        scene_width, scene_height = scene_size
+
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self.water_normal_id)
         gl.glUniform1i(uniforms['normalMap'], 0)
 
+        scene_unit = self._glass_scene_texture_unit
+        gl.glActiveTexture(gl.GL_TEXTURE0 + scene_unit)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
+        gl.glUniform1i(uniforms['sceneColor'], scene_unit)
+        gl.glUniform2f(
+            uniforms['screenSize'],
+            float(scene_width),
+            float(scene_height),
+        )
+
+        reflection_unit = self.WATER_REFLECTION_TEXTURE_UNIT
+        gl.glActiveTexture(gl.GL_TEXTURE0 + reflection_unit)
+        gl.glUniform1i(uniforms['reflectionCube'], reflection_unit)
+
         opacity_loc = uniforms['waterOpacity']
         reflectivity_loc = uniforms['waterReflectivity']
-        tint_loc, model_loc = uniforms['waterTint'], uniforms['model']
-        normal_mat_loc = uniforms['normalMatrix']
+        fresnel_loc = uniforms['fresnelIntensity']
+        distortion_loc = uniforms['distortionStrength']
+        refraction_loc = uniforms['refractionIndex']
+        roughness_loc = uniforms['roughness']
+        reflection_enabled_loc = uniforms['reflectionEnabled']
+        tint_loc = uniforms['waterTint']
+        model_loc = uniforms['model']
+        normal_mat_loc = uniforms.get('normalMatrix', -1)
         wave_amp_loc = uniforms['waveAmp']
         brush_size_loc = uniforms['brushSize']
 
-        surface_vao = self.vaos.get('water_surface')
-        cube_vao = self.vaos['cube']
-        gl.glEnable(gl.GL_BLEND)
-        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-
-        models, normals = render_table.model_matrices(
-            table, brushes)
+        models, normals = self._frame_transforms(table, brushes)
         sizes = table.half[brushes] * 2.0
         params = table.water_params[brushes]
         tints = table.water_tint[brushes]
         planes = table.water_plane[brushes]
+        reflection_flags = table.water_reflections[brushes]
         bits = table.class_bits[brushes]
         geo = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
         geo_meshes = self._prepare_geo_meshes(table, brushes)
+
+        surface_vao = self.vaos.get('water_surface')
+        cube_vao = self.vaos['cube']
+
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+
         for i, slot_value in enumerate(brushes):
             slot = int(slot_value)
             gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
             if normal_mat_loc >= 0:
-                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normals[i])
-            gl.glUniform1f(opacity_loc, float(params[i, 0]))
-            gl.glUniform1f(reflectivity_loc, float(params[i, 1]))
+                gl.glUniformMatrix3fv(
+                    normal_mat_loc, 1, gl.GL_FALSE, normals[i])
+
+            opacity = float(params[i, 0])
+            fresnel = float(params[i, 1])
+            gl.glUniform1f(opacity_loc, opacity)
+            gl.glUniform1f(reflectivity_loc, fresnel)
+            gl.glUniform1f(fresnel_loc, fresnel)
+            gl.glUniform1f(distortion_loc, float(params[i, 4]))
+            gl.glUniform1f(refraction_loc, max(float(params[i, 5]), 1.0))
+            gl.glUniform1f(roughness_loc, min(max(float(params[i, 6]), 0.0), 1.0))
             gl.glUniform3fv(tint_loc, 1, tints[i])
-            gl.glUniform3f(brush_size_loc, float(sizes[i, 0]), float(sizes[i, 1]), float(sizes[i, 2]))
+            gl.glUniform3f(
+                brush_size_loc,
+                float(sizes[i, 0]),
+                float(sizes[i, 1]),
+                float(sizes[i, 2]),
+            )
+
             h = float(params[i, 2])
             if h > 2.0:
                 h /= 100.0
@@ -2083,7 +2142,24 @@ layout (location = 9) in vec4 iNormal2;
             amp = min(amp, float(sizes[i, 1]) * 0.45, 30.0)
             gl.glUniform1f(wave_amp_loc, amp)
 
-            mesh = geo_meshes.get(int(table.geometry_id[slot])) if geo[i] else None
+            reflection_tex = (
+                self._water_reflection_texture(slot)
+                if bool(reflection_flags[i]) else 0
+            )
+            if reflection_tex:
+                gl.glBindTexture(
+                    gl.GL_TEXTURE_CUBE_MAP,
+                    reflection_tex,
+                )
+                gl.glUniform1i(reflection_enabled_loc, 1)
+            else:
+                gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+                gl.glUniform1i(reflection_enabled_loc, 0)
+
+            mesh = (
+                geo_meshes.get(int(table.geometry_id[slot]))
+                if geo[i] else None
+            )
             if mesh is not None:
                 top_count = mesh.count - mesh.side_count
                 gl.glBindVertexArray(mesh.vao)
@@ -2091,10 +2167,18 @@ layout (location = 9) in vec4 iNormal2;
                     gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.side_count)
                 if mesh.has_flat_top and surface_vao:
                     gl.glBindVertexArray(surface_vao)
-                    gl.glDrawElements(gl.GL_TRIANGLES, self._water_surface_index_count,
-                                      gl.GL_UNSIGNED_INT, None)
+                    gl.glDrawElements(
+                        gl.GL_TRIANGLES,
+                        self._water_surface_index_count,
+                        gl.GL_UNSIGNED_INT,
+                        None,
+                    )
                 elif top_count:
-                    gl.glDrawArrays(gl.GL_TRIANGLES, mesh.side_count, top_count)
+                    gl.glDrawArrays(
+                        gl.GL_TRIANGLES,
+                        mesh.side_count,
+                        top_count,
+                    )
                 elif bool(planes[i]):
                     gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
                 self.render_stats.draw_calls += 1
@@ -2105,14 +2189,21 @@ layout (location = 9) in vec4 iNormal2;
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
             if surface_vao:
                 gl.glBindVertexArray(surface_vao)
-                gl.glDrawElements(gl.GL_TRIANGLES, self._water_surface_index_count,
-                                  gl.GL_UNSIGNED_INT, None)
+                gl.glDrawElements(
+                    gl.GL_TRIANGLES,
+                    self._water_surface_index_count,
+                    gl.GL_UNSIGNED_INT,
+                    None,
+                )
             else:
                 gl.glBindVertexArray(cube_vao)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
             self.render_stats.draw_calls += 1
+
         gl.glBindVertexArray(0)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
         return
+
     def _capture_glass_scene(self):
         """Copy the current framebuffer into the glass transmission texture.
 
@@ -2149,9 +2240,12 @@ layout (location = 9) in vec4 iNormal2;
             gl.GL_TEXTURE_2D, 0, 0, 0, x, y, width, height)
         return width, height
 
-    def draw_glass_brushes(self, projection, view, camera_pos, brushes, lights, config):
+    def draw_glass_brushes(self, projection, view, camera_pos, brushes, lights, config,
+                           table):
         if len(brushes) == 0 or 'glass' not in self.shaders:
             return
+        if table is None:
+            raise RuntimeError("draw_glass_brushes requires RenderTable")
         shader, uniforms = self.shaders['glass'], self.uniforms['glass']
         gl.glUseProgram(shader)
         self._upload_env_uniforms('glass')
