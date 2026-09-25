@@ -440,6 +440,37 @@ def _model_transform_columns(thing):
     ], dtype=np.float32)
     return model, normal_np
 
+
+def _light_props(thing):
+    props = getattr(thing, 'properties', thing if isinstance(thing, dict) else {})
+    return props if isinstance(props, dict) else {}
+
+
+def _light_float(thing, key, default):
+    try:
+        return float(_light_props(thing).get(key, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _light_bool(thing, key, default=False):
+    value = _light_props(thing).get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    return bool(value)
+
+
+def _light_color_of(thing):
+    value = _light_props(thing).get('colour', [255, 255, 255])
+    try:
+        rgb = np.asarray(value[:3], dtype=np.float32)
+        if rgb.size != 3:
+            raise ValueError
+        return np.clip(rgb / 255.0, 0.0, 1.0)
+    except (TypeError, ValueError, IndexError):
+        return np.asarray((1.0, 1.0, 1.0), dtype=np.float32)
+
+
 class EntityTable:
     """A dense, disposable projection of a Thing list.
 
@@ -448,8 +479,9 @@ class EntityTable:
     """
 
     __slots__ = ('generation', 'count', 'ids', 'slot_of_id', 'things',
-                 'pos', 'class_bits', 'light_slots', 'monster_slots',
-                 'pickup_slots', 'sprite_size', 'sprite_key_id',
+                 'pos', 'class_bits', 'light_slots', 'light_color',
+                 'light_params', 'light_enabled', 'light_casts_shadows',
+                 'monster_slots', 'pickup_slots', 'sprite_size', 'sprite_key_id',
                  'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
                  '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
                  '_epoch', '_hidden_buf')
@@ -472,6 +504,14 @@ class EntityTable:
 
         #: Slots of the Lights -- the frame's light list, without a scan.
         self.light_slots = np.empty(0, dtype=np.int32)
+        #: Per-light GL colour, normalized to 0..1. Warm: I/O may change it.
+        self.light_color = np.zeros((0, 3), dtype=np.float32)
+        #: Per-light (intensity, radius). Warm because gameplay can mutate both.
+        self.light_params = np.zeros((0, 2), dtype=np.float32)
+        #: Live on/off state, kept numeric so GL never needs the Light object.
+        self.light_enabled = np.zeros((0,), dtype=bool)
+        #: Shadow participation, normalized from bool/string authored state.
+        self.light_casts_shadows = np.zeros((0,), dtype=bool)
         #: Slots of the Monsters, whose published reference is a fresh snapshot
         #: each frame.  The entity half of ``RenderTable.dynamic_slots``.
         self.monster_slots = np.empty(0, dtype=np.int32)
@@ -572,6 +612,22 @@ class EntityTable:
             bits[:len(self.class_bits)] = self.class_bits
         self.class_bits = bits
 
+        light_color = np.zeros((grown, 3), dtype=np.float32)
+        if len(self.light_color):
+            light_color[:len(self.light_color)] = self.light_color
+        self.light_color = light_color
+        light_params = np.zeros((grown, 2), dtype=np.float32)
+        if len(self.light_params):
+            light_params[:len(self.light_params)] = self.light_params
+        self.light_params = light_params
+        light_enabled = np.zeros((grown,), dtype=bool)
+        if len(self.light_enabled):
+            light_enabled[:len(self.light_enabled)] = self.light_enabled
+        self.light_enabled = light_enabled
+        light_casts = np.zeros((grown,), dtype=bool)
+        if len(self.light_casts_shadows):
+            light_casts[:len(self.light_casts_shadows)] = self.light_casts_shadows
+        self.light_casts_shadows = light_casts
         size = np.zeros((grown, 2), dtype=np.float32)
         if len(self.sprite_size):
             size[:len(self.sprite_size)] = self.sprite_size
@@ -651,6 +707,24 @@ class EntityTable:
 
         # Authored sprite identity is cold. Dynamic Monster sprite identity is
         # published from the existing snapshot path, avoiding a second object walk.
+        # Light state is render state, not renderer metadata. Refresh only the
+        # light rows each frame because I/O may toggle or retune a light without
+        # changing the world epoch, while position is already refreshed above.
+        if len(self.light_slots):
+            ls = self.light_slots
+            light_rows = [things[int(i)] for i in ls]
+            self.light_color[ls] = np.asarray(
+                [_light_color_of(t) for t in light_rows], dtype=np.float32)
+            self.light_params[ls] = np.asarray(
+                [[_light_float(t, 'intensity', 1.0),
+                  _light_float(t, 'radius', 512.0)] for t in light_rows],
+                dtype=np.float32)
+            self.light_enabled[ls] = np.asarray(
+                [_light_bool(t, 'state', True) for t in light_rows], dtype=bool)
+            self.light_casts_shadows[ls] = np.asarray(
+                [_light_bool(t, 'casts_shadows', False) for t in light_rows],
+                dtype=bool)
+
 
         if len(self._hidden_buf) < n:
             self._hidden_buf = np.empty(max(n, 16), dtype=bool)
@@ -718,7 +792,9 @@ class EntityTable:
         if move_src:
             src = np.asarray(move_src, dtype=np.intp)
             dst = np.asarray(move_dst, dtype=np.intp)
-            for arr in (self.class_bits, self.sprite_size, self.sprite_key_id,
+            for arr in (self.class_bits, self.light_color, self.light_params,
+                        self.light_enabled, self.light_casts_shadows,
+                        self.sprite_size, self.sprite_key_id,
                         self.model_recipe_id, self.model_base_matrix,
                         self.model_normal_matrix):
                 arr[dst] = arr[src]
@@ -743,6 +819,15 @@ class EntityTable:
     def _resolve_entity_cold(self, slot, thing):
         """Resolve authored render state for one entity row."""
         self.class_bits[slot] = _entity_class_bits(thing)
+        if self.class_bits[slot] & ENT_LIGHT:
+            self.light_color[slot] = _light_color_of(thing)
+            self.light_params[slot] = (
+                _light_float(thing, 'intensity', 1.0),
+                _light_float(thing, 'radius', 512.0),
+            )
+            self.light_enabled[slot] = _light_bool(thing, 'state', True)
+            self.light_casts_shadows[slot] = _light_bool(
+                thing, 'casts_shadows', False)
         self.sprite_size[slot] = sprite_size(thing)
         self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(thing))
 
