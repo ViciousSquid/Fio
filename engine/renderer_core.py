@@ -1778,15 +1778,18 @@ layout (location = 9) in vec4 iNormal2;
         slots = slots[drawn]
         textures = textures[drawn].astype(np.int64)
 
-        keys = self.SPRITE_KEY_LAYOUT.pack(texture=textures)
-        order, run_starts = sort_into_runs(keys)
+        # Texture id is already the complete sprite render key.  Keep it dense
+        # through the sort instead of repacking an identical int64 key array.
+        order, run_starts = sort_into_runs(textures)
 
         count = len(order)
         self._ensure_sprite_instance_buffer(count)
         data = self._sprite_instance_data[:count]
         sorted_slots = slots[order]
-        data[:, 0:3] = table.pos[sorted_slots]
-        data[:, 3:5] = table.sprite_size[sorted_slots]
+        # Gather directly into the reusable GPU staging buffer.  The explicit
+        # out= avoids a temporary (N,3)/(N,2) array on every sprite frame.
+        np.take(table.pos, sorted_slots, axis=0, out=data[:, 0:3])
+        np.take(table.sprite_size, sorted_slots, axis=0, out=data[:, 3:5])
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
 
