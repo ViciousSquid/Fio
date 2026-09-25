@@ -458,9 +458,7 @@ class RenderTable:
         )
         self.water_plane[slot] = bool(brush.get('water_plane', False))
         self.water_reflections[slot] = bool(brush.get('water_reflections', False))
-        self.water_reflection_height[slot] = max(
-            1.0, float(brush.get('water_reflection_height', 256.0))
-        )
+        self.water_reflection_height[slot] = 0.5
 
         self.glass_color[slot] = normalize_color(
             brush.get('glass_color', [0.7, 0.85, 0.95]))
