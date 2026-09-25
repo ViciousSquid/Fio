@@ -17,7 +17,7 @@ from engine.render_keys import KeyLayout, sort_into_runs
 from engine.brush_geometry import (brush_has_geometry, face_uses_natural_scale,
                                    geometry_signature, natural_repeats)
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
-from editor.things import Thing, Light, Portal
+from editor.things import Thing, Light
 
 # Camera render-distance cull. The pure per-object geometry lives in
 # engine.render_cull (GL-free, so it is unit-testable without a GL context) and
@@ -890,9 +890,8 @@ class Renderer_F(BaseRenderer):
 
     @staticmethod
     def _cull_keep_thing(t):
-        """Things exempt from the distance cull: lights and portals are always
-        kept so lighting, shadow and portal rendering are wholly unaffected."""
-        return isinstance(t, Light) or (Portal is not None and isinstance(t, Portal))
+        """Legacy object-path distance-cull exemption for lights."""
+        return isinstance(t, Light)
 
     def _camera_distance_cull(self, brushes, things, camera_pos,
                               brush_positions=None, thing_positions=None):
