@@ -941,6 +941,13 @@ class EntityTable:
         """Resolve authored render state for one entity row."""
         self.class_bits[slot] = _entity_class_bits(thing)
 
+        # Sprite identity/size is cold for authored entities.  This must be
+        # resolved at the same edit boundary as class_bits/model_recipe_id:
+        # switching a Prop model -> billboard changes the render class and the
+        # sprite recipe without changing the entity row itself.
+        self.sprite_size[slot] = sprite_size(thing)
+        self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(thing))
+
         # Model rendering is part of the dense entity projection too. The
         # classifier already sends Model-mode entities here, so their cold
         # recipe and transform columns must be populated at the same cache
