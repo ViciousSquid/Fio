@@ -105,8 +105,8 @@ class RenderState:
         # The entity half of the dense projection (engine.entity_table), with
         # the slots the frame published and the live hidden mask it read.  The
         # renderer classifies entities into passes from these rather than
-        # re-deriving each one's kind; None outside a projected frame, where it
-        # takes the object path.
+        # re-deriving each one's kind. Portal virtual views consume the same
+        # columns; there is no portal-specific entity object walk.
         self.entity_table = None
         self.entity_refs = None
         self.visible_thing_slots = None
