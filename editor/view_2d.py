@@ -17,6 +17,9 @@ from editor import component_edit as ce  # shared object/face/edge/vertex model
 # zoom so the feel is the same at every zoom level.
 COMPONENT_GRAB_PIXELS = 9.0
 SIDE_GRAB_PIXELS = 7.0
+# Portal gizmos are deliberately easier to acquire than generic Thing icons.
+PORTAL_GIZMO_HANDLE_PIXELS = 12.0
+PORTAL_GIZMO_PICK_PIXELS = 10.0
 # I/O System imports for drawing connections
 try:
     from editor.io_system import get_connections
@@ -2216,6 +2219,64 @@ class View2D(QWidget):
                 painter.drawLine(p1, p2)
                 painter.drawLine(p2, p0)
 
+    @staticmethod
+    def _point_segment_distance_sq(point, a, b):
+        """Squared 2D distance from a point to a line segment."""
+        abx = b.x() - a.x()
+        aby = b.y() - a.y()
+        denom = abx * abx + aby * aby
+        if denom <= 1e-9:
+            dx = point.x() - a.x()
+            dy = point.y() - a.y()
+            return dx * dx + dy * dy
+        t = ((point.x() - a.x()) * abx + (point.y() - a.y()) * aby) / denom
+        t = max(0.0, min(1.0, t))
+        px = a.x() + abx * t
+        py = a.y() + aby * t
+        dx = point.x() - px
+        dy = point.y() - py
+        return dx * dx + dy * dy
+
+    def _portal_gizmo_hit_test(self, thing, screen_pos, ax1, ax2):
+        """Hit the visible portal gizmo in screen space, independent of zoom."""
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
+        center = self.world_to_screen(QPointF(
+            float(thing.pos[ax_map[ax1]]), float(thing.pos[ax_map[ax2]])))
+        dx = screen_pos.x() - center.x()
+        dy = screen_pos.y() - center.y()
+        if dx * dx + dy * dy <= PORTAL_GIZMO_HANDLE_PIXELS ** 2:
+            return True
+
+        yaw = thing.get_yaw_radians()
+        w2 = thing.get_width() * 0.5
+        if ax1 == 'x' and ax2 == 'z':
+            rx = math.cos(yaw)
+            rz = -math.sin(yaw)
+            left = self.world_to_screen(QPointF(
+                float(thing.pos[0]) - rx * w2,
+                float(thing.pos[2]) - rz * w2))
+            right = self.world_to_screen(QPointF(
+                float(thing.pos[0]) + rx * w2,
+                float(thing.pos[2]) + rz * w2))
+            return self._point_segment_distance_sq(
+                screen_pos, left, right) <= PORTAL_GIZMO_PICK_PIXELS ** 2
+
+        i1, i2 = ax_map[ax1], ax_map[ax2]
+        h2 = thing.get_height() * 0.5
+        proj_half_w = (w2 * abs(math.cos(yaw)) if ax1 == 'x'
+                       else w2 * abs(math.sin(yaw)))
+        proj_half_w = max(4.0, proj_half_w)
+        rect = QRectF(
+            self.world_to_screen(QPointF(
+                float(thing.pos[i1]) - proj_half_w,
+                float(thing.pos[i2]) + h2)),
+            self.world_to_screen(QPointF(
+                float(thing.pos[i1]) + proj_half_w,
+                float(thing.pos[i2]) - h2)),
+        ).normalized()
+        pad = PORTAL_GIZMO_PICK_PIXELS
+        return rect.adjusted(-pad, -pad, pad, pad).contains(screen_pos)
+
     def draw_things(self, painter, visible_bounds):
         ax1, ax2 = self.get_axes()
         if not ax1 or not ax2:
@@ -2247,7 +2308,9 @@ class View2D(QWidget):
 
             # --- PORTAL RENDERING ---
             elif isinstance(thing, Portal):
-                draw_rect = self._draw_portal_gizmo(painter, thing, s_pos, axis1_idx, axis2_idx, ax_map, ax1, ax2, visible_bounds)
+                draw_rect = self._draw_portal_gizmo(
+                    painter, thing, s_pos, axis1_idx, axis2_idx,
+                    ax_map, ax1, ax2, visible_bounds)
 
             # --- SPRITE RENDERING ---
             else:
