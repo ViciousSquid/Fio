@@ -250,6 +250,7 @@ class BaseRenderer:
         ('indices', '<i4', (4,)),
     ])
     MAX_PORTALS = 4      # maximum portal apertures rendered per frame
+    PORTAL_RENDER_DISTANCE = 2048.0
 
     # How many times a portal may be seen recursively through another portal.
     # 1 = classic single virtual view (default; identical to the original
@@ -4417,7 +4418,6 @@ layout (location = 9) in vec4 iNormal2;
         gl.glDepthRange(0.0,1.0); gl.glDepthFunc(gl.GL_LESS); gl.glColorMask(gl.GL_TRUE,gl.GL_TRUE,gl.GL_TRUE,gl.GL_TRUE)
         virtual_view,virtual_cam=self._portal_build_virtual_view(portal_table,portal_a,portal_b,main_view,camera_pos)
         clip_proj=self._calculate_oblique_projection(projection,virtual_view,portal_table.pos[portal_b],portal_table.portal_basis[portal_b,2])
-        self._portal_virtual_view=virtual_view; self._portal_virtual_proj=clip_proj
         gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glStencilMask(0x00)
         old_proj_ptr,old_view_ptr=self._proj_ptr,self._view_ptr; self._proj_ptr=glm.value_ptr(clip_proj); self._view_ptr=glm.value_ptr(virtual_view); self._current_shader=None; self._portal_scene_pass=True
         try:
@@ -4499,20 +4499,6 @@ layout (location = 9) in vec4 iNormal2;
             norm(m[0][3] + m[0][2], m[1][3] + m[1][2], m[2][3] + m[2][2], m[3][3] + m[3][2]),
             norm(m[0][3] - m[0][2], m[1][3] - m[1][2], m[2][3] - m[2][2], m[3][3] - m[3][2]),
         )
-
-    @staticmethod
-    def _brush_visible_in_frustum(planes, brush):
-        """Conservative bounding-sphere frustum test for a brush dict.  Sphere
-        (not AABB) so it stays correct for rotated brushes without inflating the
-        box."""
-        pos = brush.get('pos', (0.0, 0.0, 0.0))
-        size = brush.get('size', (64.0, 64.0, 64.0))
-        cx, cy, cz = float(pos[0]), float(pos[1]), float(pos[2])
-        radius = 0.5 * math.sqrt(float(size[0]) ** 2 + float(size[1]) ** 2 + float(size[2]) ** 2)
-        for a, b, c, d in planes:
-            if a * cx + b * cy + c * cz + d < -radius:
-                return False
-        return True
 
     def _portal_upload_quad(self, corners):
         # corners should be a list of 4 [x,y,z] points
