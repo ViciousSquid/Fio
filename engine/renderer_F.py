@@ -77,10 +77,7 @@ class Renderer_F(BaseRenderer):
 
 
     # ------------------------------------------------------------------
-    # Matrix helpers – cached on the brush dict itself
-    # ------------------------------------------------------------------
-
-        def _tex_cache_path(self, tex_name):
+    def _tex_cache_path(self, tex_name):
         """Return the ``textures/<name>`` cache key for *tex_name*, memoizing the
         os.path.join. Called for every drawn face every frame in play mode, so
         the join is done once per unique texture name and reused thereafter."""
@@ -96,7 +93,7 @@ class Renderer_F(BaseRenderer):
     def set_instance_textures(self, textures):
         self.instance_textures = textures
 
-        def _selected_slot(table, config):
+    def _selected_slot(table, config):
         """The slot of the selected brush, or -1.
 
         One dictionary lookup per pass, so the per-brush ``brush is selected``
@@ -124,7 +121,6 @@ class Renderer_F(BaseRenderer):
             return
         if table is None:
             raise RuntimeError("draw_textured_brushes_optimized requires RenderTable")
-        numeric = True
         visible = brushes
         self.render_stats.visible_brushes += len(visible)
         shader, uniforms = self.shaders['lit'], self.uniforms['lit']
@@ -154,34 +150,33 @@ class Renderer_F(BaseRenderer):
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
 
         indices = range(len(visible))
-        if numeric:
-            models, normals = self._frame_transforms(table, visible)
-            bits = table.class_bits[visible]
-            colours = table.colour[visible]
-            selected_slot = self._selected_slot(table, config)
-            geometry = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
-            # Resolve convex meshes at the dense-table/cache boundary once for
-            # the geometry rows in this pass. The draw loop stays integer-only:
-            # geometry_id -> prepared mesh, with no slot -> Brush lookup.
-            geo_meshes = (
-                self._prepare_geo_meshes(table, visible[geometry])
-                if geometry.any() else {}
-            )
-            if ('lit_brush_instanced' in self.shaders
-                    and self._cube_vbo is not None and (~geometry).any()):
-                # Every plain box brush in one submission; the angled minority
-                # still needs its own mesh, so it falls through to the loop.
-                self._draw_lit_brushes_instanced(
-                    projection, view, lights, table, visible,
-                    np.flatnonzero(~geometry).astype(np.int32), models, normals,
-                    config, selected_slot)
-                gl.glUseProgram(shader)
-                self._current_shader = shader
-                gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
-                gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
-                gl.glBindVertexArray(self.vaos['cube'])
-                gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
-                indices = [int(i) for i in np.flatnonzero(geometry)]
+        models, normals = self._frame_transforms(table, visible)
+        bits = table.class_bits[visible]
+        colours = table.colour[visible]
+        selected_slot = self._selected_slot(table, config)
+        geometry = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
+        # Resolve convex meshes at the dense-table/cache boundary once for
+        # the geometry rows in this pass. The draw loop stays integer-only:
+        # geometry_id -> prepared mesh, with no slot -> Brush lookup.
+        geo_meshes = (
+            self._prepare_geo_meshes(table, visible[geometry])
+            if geometry.any() else {}
+        )
+        if ('lit_brush_instanced' in self.shaders
+                and self._cube_vbo is not None and (~geometry).any()):
+            # Every plain box brush in one submission; the angled minority
+            # still needs its own mesh, so it falls through to the loop.
+            self._draw_lit_brushes_instanced(
+                projection, view, lights, table, visible,
+                np.flatnonzero(~geometry).astype(np.int32), models, normals,
+                config, selected_slot)
+            gl.glUseProgram(shader)
+            self._current_shader = shader
+            gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
+            gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
+            gl.glBindVertexArray(self.vaos['cube'])
+            gl.glPolygonMode(gl.GL_FRONT_AND_BACK, fill_mode)
+            indices = [int(i) for i in np.flatnonzero(geometry)]
 
         cube_vao = self.vaos['cube']
         bound_vao = cube_vao
@@ -191,45 +186,22 @@ class Renderer_F(BaseRenderer):
         # VAO below. No-op in the main pass.
         self._portal_begin_cull(is_geo=False)
         for index in indices:
-            if numeric:
-                slot = int(visible[index])
-                brush = None
-                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[index])
-                if normal_mat_loc > 0:
-                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
-                                          normals[index])
-                row = int(bits[index])
-                if row & render_table.CLASS_TRIGGER:
-                    color, alpha = _TRIGGER_COLOR, 0.3
-                elif slot == selected_slot:
-                    color, alpha = _SELECTED_COLOR, 1.0
-                elif row & render_table.CLASS_SUBTRACT:
-                    color, alpha = _SUBTRACT_COLOR, 1.0
-                else:
-                    color, alpha = colours[index], 1.0
-                has_geometry = bool(row & render_table.CLASS_HAS_GEOMETRY)
+            slot = int(visible[index])
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[index])
+            if normal_mat_loc > 0:
+                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
+                                      normals[index])
+            row = int(bits[index])
+            if row & render_table.CLASS_TRIGGER:
+                color, alpha = _TRIGGER_COLOR, 0.3
+            elif slot == selected_slot:
+                color, alpha = _SELECTED_COLOR, 1.0
+            elif row & render_table.CLASS_SUBTRACT:
+                color, alpha = _SUBTRACT_COLOR, 1.0
             else:
-                brush = visible[index]
-                model_matrix = self._brush_model_matrix(brush)
-                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE,
-                                      glm.value_ptr(model_matrix))
-                if normal_mat_loc > 0:
-                    nmat = self._compute_normal_matrix(model_matrix, brush)
-                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
-                                          glm.value_ptr(nmat))
-                if brush.get('is_trigger'):
-                    color, alpha = _TRIGGER_COLOR, 0.3
-                elif brush is selected:
-                    color, alpha = _SELECTED_COLOR, 1.0
-                elif brush.get('operation') == 'subtract':
-                    color, alpha = _SUBTRACT_COLOR, 1.0
-                else:
-                    brush_tint   = brush.get('tint')
-                    brush_colour = brush.get('colour')
-                    color = normalize_color(brush_tint) if brush_tint \
-                        else normalize_color(brush_colour)
-                    alpha = 1.0
-                has_geometry = brush_has_geometry(brush)
+                color, alpha = colours[index], 1.0
+            has_geometry = bool(row & render_table.CLASS_HAS_GEOMETRY)
+
             gl.glUniform3fv(color_loc, 1, color)
             gl.glUniform1f(alpha_loc, alpha)
             # An angled brush draws from its own convex mesh, which is built
