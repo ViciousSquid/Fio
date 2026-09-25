@@ -282,12 +282,14 @@ class RenderTable:
     # -- capacity ----------------------------------------------------------
 
     def _resize(self, n):
-        """Grow every column to hold *n* rows, preserving existing contents."""
-        if n <= len(self.center):
+        """Grow capacity geometrically; never resize for an ordinary append."""
+        capacity = len(self.center)
+        if n <= capacity:
             return
+        grown = max(16, capacity * 2, n)
 
         def grow(arr, fill=0):
-            shape = (n,) + arr.shape[1:]
+            shape = (grown,) + arr.shape[1:]
             new = np.full(shape, fill, dtype=arr.dtype)
             if len(arr):
                 new[:len(arr)] = arr
