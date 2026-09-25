@@ -72,6 +72,18 @@ from engine import brush_geometry
 # --------------------------------------------------------------------------
 # Classification bits
 # --------------------------------------------------------------------------
+
+class GeometryRecord:
+    """Dense cold render record for one convex brush geometry slot."""
+    __slots__ = ('signature', 'convex', 'origin', 'scale', 'natural_scale')
+
+    def __init__(self, signature, convex, origin, scale, natural_scale):
+        self.signature = signature
+        self.convex = convex
+        self.origin = origin
+        self.scale = scale
+        self.natural_scale = natural_scale
+
 #
 # One uint16 per brush replacing the chain of dict lookups, string comparisons
 # and substring searches ``_sort_objects`` and ``_split_opaque`` run per visible
@@ -193,7 +205,7 @@ class RenderTable:
                  'water_tint', 'water_params', 'water_plane',
                  'glass_color', 'glass_params',
                  'fog_color', 'fog_params',
-                 'dynamic_slots', '_tex_ids', '_tex_names', '_epoch',
+                 'dynamic_slots', 'geometry_records', '_tex_ids', '_tex_names', '_epoch',
                  '_hidden_buf')
 
     def __init__(self):
@@ -212,6 +224,7 @@ class RenderTable:
         #: re-read per frame.  Recomputed whenever the table reconciles, from
         #: :data:`CLASS_DYNAMIC`, so it cannot drift from the classification.
         self.dynamic_slots = np.empty(0, dtype=np.int32)
+        self.geometry_records: list = []
 
         # float64 deliberately: this is exactly what _build_cull_cache held,
         # and the frustum batch casts to float64 internally -- matching the
@@ -340,6 +353,24 @@ class RenderTable:
         self.fog_color = grow(self.fog_color)
         self.fog_params = grow(self.fog_params)
 
+    def _resolve_geometry(self, slot, brush):
+        """Materialise one dense cold geometry record from an authored brush."""
+        if not (self.class_bits[slot] & CLASS_HAS_GEOMETRY):
+            self.geometry_records[slot] = None
+            return
+        convex = brush_geometry.get_convex(brush)
+        if convex is None or not convex.is_valid:
+            self.geometry_records[slot] = None
+            return
+        pos = brush.get('pos') or (0.0, 0.0, 0.0)
+        size = brush.get('size') or (64.0, 64.0, 64.0)
+        origin = np.asarray(pos, dtype=np.float64).copy()
+        scale = np.asarray([max(abs(float(s)), 1e-6) for s in size], dtype=np.float64)
+        natural = tuple(bool(brush_geometry.face_uses_natural_scale(
+            brush, face.get('face'), face)) for face in convex.faces)
+        self.geometry_records[slot] = GeometryRecord(
+            brush_geometry.geometry_signature(brush), convex, origin, scale, natural)
+
     # -- row resolution ----------------------------------------------------
 
     def _resolve_warm(self, slot, brush):
@@ -402,6 +433,7 @@ class RenderTable:
         else:
             self.geo_epoch[slot] = 0
             self.geometry_id[slot] = -1
+        self._resolve_geometry(slot, brush)
 
         # Water / glass / fog shader state. Defaults deliberately match the
         # renderer's former brush.get(...) fallbacks.
@@ -519,6 +551,7 @@ class RenderTable:
         old_slot_of_id = self.slot_of_id
         old_brushes = self.brushes
         old_count = len(old_brushes)
+        old_geometry_records = self.geometry_records
 
         new_ids = [None] * n
         survivors = set()          # slots whose cold columns are already right
@@ -554,6 +587,12 @@ class RenderTable:
                         self.water_plane, self.glass_color, self.glass_params,
                         self.fog_color, self.fog_params):
                 arr[dst] = arr[src]
+
+        new_geometry_records = [None] * n
+        for old, new in zip(move_src, move_dst):
+            if old < len(old_geometry_records):
+                new_geometry_records[new] = old_geometry_records[old]
+        self.geometry_records = new_geometry_records
 
         for slot, brush in enumerate(brushes):
             self._resolve_warm(slot, brush)
