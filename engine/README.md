@@ -81,6 +81,8 @@ This is a derived execution representation, not a second source of truth. It exi
 
 Dynamic-light capacity comes from `engine.shaders`; shader light limits are clamped to the capacity actually declared by each shader.
 
+Shadow rendering is part of the dense execution boundary. `render_shadow_maps(shadow_lights, config, camera_pos=None)` receives a dense `(EntityTable, light_slots)` light set and selects brush casters from `RenderTable` slots and model casters from `EntityTable` slots. The shadow pass does not traverse authored `Brush`, `Thing` or `Light` collections.
+
 ### `renderer_F.py`
 Fio's production forward renderer. Implements the frame passes and brush batching, including lit/textured/glow brush paths, forward lighting, point-light shadow cube maps, portal virtual views and render-mode switching.
 
