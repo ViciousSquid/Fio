@@ -4759,7 +4759,8 @@ layout (location = 9) in vec4 iNormal2;
                          'uv_scale': face.get('uv_scale'), 'plane': face.get('plane'),
                          'uv_angle': face.get('uv_angle', 0.0),
                          'uv_shift': face.get('uv_shift', (0.0, 0.0)),
-                         'natural_scale': bool(face.get('uv_natural', False)),
+                         'natural_scale': bool(brush_geometry.face_uses_natural_scale(
+                             brush, face.get('face'), face)),
                          'first': first, 'count': vert_count - first,
                          'extent': (eu, ev)})
             if top:
