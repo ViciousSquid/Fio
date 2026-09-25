@@ -37,3 +37,52 @@ def test_sprite_candidates_resolves_nested_sprite_path_without_name_error():
     candidates = entity_table.sprite_candidates(thing)
 
     assert candidates[-1] == ("dict", "frame_01.png", "sprites/animated/door", True)
+
+
+def test_monster_dead_snapshot_interns_distinct_dead_sprite_recipe():
+    table = entity_table.EntityTable()
+    idle = {
+        "pos": [0.0, 0.0, 0.0],
+        "dead": False,
+        "is_shooting": False,
+        "monster_type": "human",
+        "variant": "<None>",
+        "sprite_width": 128,
+        "sprite_height": 128,
+        "custom_idle": "",
+        "custom_shoot": "",
+        "custom_dead": "",
+    }
+    dead = dict(idle, dead=True)
+
+    table.update_monster_snapshot(0, idle)
+    idle_id = int(table.sprite_key_id[0])
+    table.update_monster_snapshot(0, dead)
+    dead_id = int(table.sprite_key_id[0])
+
+    assert dead_id != idle_id
+    assert any(candidate[1] == "dead.png" for candidate in table.sprite_recipes()[dead_id])
+
+
+def test_sprite_gl_cache_resolves_recipes_added_after_capacity_growth():
+    from engine.renderer_core import BaseRenderer
+    import numpy as np
+
+    renderer = BaseRenderer.__new__(BaseRenderer)
+    renderer._sprite_recipes_seen = None
+    renderer._sprite_gl_by_id = np.zeros(0, dtype=np.int32)
+    renderer._sprite_gl_resolved = 0
+    resolved = []
+
+    renderer._resolve_sprite_recipe = lambda recipe: resolved.append(recipe) or (len(resolved) + 100)
+
+    recipes = [(("idle", "idle.png", "sprites/monsters/human", True),)]
+    table = type("Table", (), {"sprite_recipes": lambda self: recipes})()
+    first = renderer._sprite_gl_ids(table)
+    assert first[0] == 101
+    assert len(resolved) == 1
+
+    recipes.append((("dead", "dead.png", "sprites/monsters/human", True),))
+    second = renderer._sprite_gl_ids(table)
+    assert second[1] == 102
+    assert len(resolved) == 2
