@@ -862,7 +862,7 @@ class Renderer_F(BaseRenderer):
         return table, groups, model_slots, sprite_slots, lights
 
     def _render_water_reflections(
-            self, table, water_slots, lights, config, view, camera_pos):
+            self, table, water_slots, lights, config, projection, view, camera_pos):
         """Render planar reflections for the visible water surfaces.
 
         Each reflected water slot gets one ordinary 2D texture. The scene is
@@ -1474,7 +1474,7 @@ class Renderer_F(BaseRenderer):
             self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl)
         if current_mode == RENDER_MODE_LIT:
             self._render_water_reflections(
-                _tbl, water_brushes, lights, config, view, camera_pos)
+                _tbl, water_brushes, lights, config, projection, view, camera_pos)
             self.draw_water_brushes(
                 projection, view, camera_pos, water_brushes, lights, config,
                 table=_tbl)
