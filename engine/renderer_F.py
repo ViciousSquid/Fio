@@ -206,7 +206,9 @@ class Renderer_F(BaseRenderer):
         """
         if len(brushes) == 0 or 'lit' not in self.shaders:
             return
-        numeric = table is not None and refs is not None
+        if table is None:
+            raise RuntimeError("draw_textured_brushes_optimized requires RenderTable")
+        numeric = True
         visible = brushes
         self.render_stats.visible_brushes += len(visible)
         shader, uniforms = self.shaders['lit'], self.uniforms['lit']
@@ -655,14 +657,11 @@ class Renderer_F(BaseRenderer):
 
     def draw_textured_brushes_optimized(self, projection, view, camera_pos,
                                         brushes, lights, config,
-                                        table=None, refs=None):
+                                        table):
         """Textured brushes.
 
-        With *table* and *refs*, ``brushes`` is an array of slots and the face
-        batches are built by gathering and sorting columns rather than by
-        walking brush dicts and building a tuple per face.  Without them it
-        takes the object path, which still serves the portal virtual views and
-        the non-threaded editor.
+        ``brushes`` is a dense RenderTable slot array. Face batches are built
+        entirely from dense columns; there is no object/Brush rendering path.
         """
         if len(brushes) == 0 or 'textured' not in self.shaders:
             return
@@ -766,99 +765,6 @@ class Renderer_F(BaseRenderer):
                     gl.glDrawArrays(gl.GL_TRIANGLES, int(faces[i]) * 6, 6)
                     self.render_stats.visible_tris += 2
                     self.render_stats.draw_calls += 1
-        else:
-            # ---- Texture batch cache -------------------------------------
-            # Angled (convex-geometry) brushes carry per-plane faces instead of
-            # the six cube faces, so they are pulled out of the cube batches and
-            # drawn per-face below.  Their geometry signature is part of the key
-            # so clipping a brush invalidates the cached batches.
-            cache_key = None if is_play else tuple(
-                (id(b), tuple(sorted(b.get('textures', {}).items())), geometry_signature(b))
-                for b in visible
-            )
-
-            if not is_play and cache_key == self._tex_batch_cache_key and self._tex_batch_cache is not None:
-                batches, geo_brushes = self._tex_batch_cache
-            else:
-                batches = defaultdict(list)
-                geo_brushes = []
-                for brush in visible:
-                    if brush_has_geometry(brush):
-                        geo_brushes.append(brush)
-                        continue
-                    brush_textures = brush.get('textures', {})
-                    for i, face_key in enumerate(_CUBE_FACE_KEYS):
-                        tex_name = brush_textures.get(face_key, 'default.png')
-                        if tex_name == 'caulk.jpg':
-                            continue
-                        if is_play and tex_name == 'nodraw.jpg':
-                            continue
-                        tex_id = self.texture_manager.get(self._tex_cache_path(tex_name)) or \
-                                 self.load_texture_callback(tex_name, 'textures')
-                        batches[tex_id].append((brush, i, face_key))
-                if not is_play:
-                    self._tex_batch_cache     = (batches, geo_brushes)
-                    self._tex_batch_cache_key = cache_key
-
-            self._portal_begin_cull(is_geo=False)
-            if self.debug_gl_state:
-                self._debug_textured_brush_gl_state()
-
-            current_tex = None
-            brush_uniform_ptrs = {}
-            for tex_id, items in batches.items():
-                if tex_id != current_tex:
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                    current_tex = tex_id
-                    self.render_stats.batched_draws += 1
-                for brush, face_idx, face_key in items:
-                    self.render_stats.visible_tris += 2
-                    brush_id = id(brush)
-                    uniform_ptrs = brush_uniform_ptrs.get(brush_id)
-                    if uniform_ptrs is None:
-                        model_matrix = self._brush_model_matrix(brush)
-                        model_ptr = glm.value_ptr(model_matrix)
-                        normal_ptr = None
-                        if normal_mat_loc > 0:
-                            normal_ptr = glm.value_ptr(
-                                self._compute_normal_matrix(model_matrix, brush))
-                        uniform_ptrs = (model_ptr, normal_ptr)
-                        brush_uniform_ptrs[brush_id] = uniform_ptrs
-                    gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, uniform_ptrs[0])
-                    if normal_mat_loc > 0:
-                        gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, uniform_ptrs[1])
-                    if tex_angle_loc != -1:
-                        angle = brush.get('uv_angle', {}).get(face_key, 0.0)
-                        gl.glUniform1f(tex_angle_loc, math.radians(angle))
-                    if tex_shift_loc != -1:
-                        shift = brush.get('uv_shift', {}).get(face_key, (0.0, 0.0))
-                        gl.glUniform2f(tex_shift_loc, shift[0], shift[1])
-                    if tex_scale_loc != -1:
-                        size = brush.get('size', [64, 64, 64])
-                        uv_scale = brush.get('uv_scale', {}).get(face_key)
-                        natural = face_uses_natural_scale(brush, face_key) \
-                            or (uv_scale is None and brush.get('texture_tiling', False))
-                        if natural:
-                            tex_name = brush.get('textures', {}).get(face_key, 'default.png')
-                            tex_w, tex_h = getattr(self, '_texture_dimensions', {}).get(
-                                self._tex_cache_path(tex_name), (128, 128))
-                            fi = face_idx
-                            if fi == 0 or fi == 1:   # south, north
-                                extent = (size[0], size[1])
-                            elif fi == 2 or fi == 3:  # west, east
-                                extent = (size[2], size[1])
-                            else:                      # down, top
-                                extent = (size[0], size[2])
-                            scale_x, scale_y = natural_repeats(
-                                extent[0], extent[1], (tex_w, tex_h))
-                        elif uv_scale is not None:
-                            scale_x, scale_y = uv_scale[0], uv_scale[1]
-                        else:
-                            scale_x, scale_y = 1.0, 1.0
-                        gl.glUniform2f(tex_scale_loc, scale_x, scale_y)
-                    gl.glDrawArrays(gl.GL_TRIANGLES, face_idx * 6, 6)
-                    self.render_stats.draw_calls += 1
-
         # ---- Angled brushes: one draw per convex face --------------------
         # Numeric execution resolves meshes once from dense geometry handles.
         # No RenderTable slot is dereferenced through ``refs`` in this loop.
@@ -1420,7 +1326,7 @@ class Renderer_F(BaseRenderer):
                         _t_brush_mode = cfg.get('brush_display_mode', 'Textured')
                         _lights = self._get_active_lights(all_th, cfg)
                         if _t_brush_mode in ('Textured', 'Solid Lit'):
-                            self.draw_textured_brushes_optimized(proj, vw, cam, _t_opaque, _lights, cfg)
+                            self.draw_textured_brushes_optimized(proj, vw, cam, _t_opaque, _lights, cfg, cfg.get('render_table'))
                             self.draw_lit_brushes_optimized(proj, vw, cam, _solid, _lights, cfg)
                         else:
                             self.draw_lit_brushes_optimized(proj, vw, cam, _opaque, _lights, cfg)
@@ -1451,7 +1357,7 @@ class Renderer_F(BaseRenderer):
         gl.glDisable(gl.GL_BLEND)
         brush_display_mode = config.get('brush_display_mode', 'Textured')
         if current_mode == RENDER_MODE_UNLIT:
-            self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl, _refs)
+            self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl)
             self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl, refs=_refs)
         elif current_mode == RENDER_MODE_LIT:
             if brush_display_mode == 'Textured' or brush_display_mode == 'Solid Lit':
