@@ -2599,7 +2599,17 @@ layout (location = 9) in vec4 iNormal2;
             self._light_ubo_key = ()
             return
 
-        key = tuple(id(light) for light in lights[:count])
+        dense = (isinstance(lights, tuple) and len(lights) == 2
+                 and hasattr(lights[0], 'light_color'))
+        if dense:
+            table, slots = lights
+            # Position/parameters are warm columns and may change while the
+            # slot set stays identical. render_scene clears this key once per
+            # frame, so the same dense packet is uploaded once then shared by
+            # all lighting passes.
+            key = ('dense', id(table), table.generation, count)
+        else:
+            key = tuple(id(light) for light in lights[:count])
         if self._light_ubo_key == key:
             return
 
