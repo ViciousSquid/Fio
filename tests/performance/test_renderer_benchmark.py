@@ -267,7 +267,10 @@ def _benchmark_sprite_sort(count=169):
     from engine.render_keys import sort_into_runs
 
     slots = np.arange(count, dtype=np.int32)
-    textures = (np.arange(count, dtype=np.int32) % 31) + 1
+    # The measured renderer workload is ~150 texture runs out of ~169 sprites;
+    # use one unique texture per slot here so the benchmark exercises the
+    # high-run-count case rather than hiding the second sort behind grouping.
+    textures = np.arange(count, dtype=np.int32) + 1
     depth_sq = np.linspace(float(count), 1.0, count, dtype=np.float64)[::-1]
     old_drawn = np.empty(count, dtype=np.int32)
     new_drawn = np.empty(count, dtype=np.int32)
