@@ -2042,62 +2042,61 @@ layout (location = 9) in vec4 iNormal2;
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
-        if numeric:
-            models, normals = render_table.model_matrices(
-                table, brushes)
-            sizes = table.half[brushes] * 2.0
-            params = table.water_params[brushes]
-            tints = table.water_tint[brushes]
-            planes = table.water_plane[brushes]
-            bits = table.class_bits[brushes]
-            geo = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
-            geo_meshes = self._prepare_geo_meshes(table, brushes)
-            for i, slot_value in enumerate(brushes):
-                slot = int(slot_value)
-                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
-                if normal_mat_loc >= 0:
-                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normals[i])
-                gl.glUniform1f(opacity_loc, float(params[i, 0]))
-                gl.glUniform1f(reflectivity_loc, float(params[i, 1]))
-                gl.glUniform3fv(tint_loc, 1, tints[i])
-                gl.glUniform3f(brush_size_loc, float(sizes[i, 0]), float(sizes[i, 1]), float(sizes[i, 2]))
-                h = float(params[i, 2])
-                if h > 2.0:
-                    h /= 100.0
-                amp = h * 30.0 if params[i, 3] != 0.0 else 1.2
-                amp = min(amp, float(sizes[i, 1]) * 0.45, 30.0)
-                gl.glUniform1f(wave_amp_loc, amp)
+        models, normals = render_table.model_matrices(
+            table, brushes)
+        sizes = table.half[brushes] * 2.0
+        params = table.water_params[brushes]
+        tints = table.water_tint[brushes]
+        planes = table.water_plane[brushes]
+        bits = table.class_bits[brushes]
+        geo = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
+        geo_meshes = self._prepare_geo_meshes(table, brushes)
+        for i, slot_value in enumerate(brushes):
+            slot = int(slot_value)
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
+            if normal_mat_loc >= 0:
+                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normals[i])
+            gl.glUniform1f(opacity_loc, float(params[i, 0]))
+            gl.glUniform1f(reflectivity_loc, float(params[i, 1]))
+            gl.glUniform3fv(tint_loc, 1, tints[i])
+            gl.glUniform3f(brush_size_loc, float(sizes[i, 0]), float(sizes[i, 1]), float(sizes[i, 2]))
+            h = float(params[i, 2])
+            if h > 2.0:
+                h /= 100.0
+            amp = h * 30.0 if params[i, 3] != 0.0 else 1.2
+            amp = min(amp, float(sizes[i, 1]) * 0.45, 30.0)
+            gl.glUniform1f(wave_amp_loc, amp)
 
-                mesh = geo_meshes.get(int(table.geometry_id[slot])) if geo[i] else None
-                if mesh is not None:
-                    top_count = mesh.count - mesh.side_count
-                    gl.glBindVertexArray(mesh.vao)
-                    if not bool(planes[i]):
-                        gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.side_count)
-                    if mesh.has_flat_top and surface_vao:
-                        gl.glBindVertexArray(surface_vao)
-                        gl.glDrawElements(gl.GL_TRIANGLES, self._water_surface_index_count,
-                                          gl.GL_UNSIGNED_INT, None)
-                    elif top_count:
-                        gl.glDrawArrays(gl.GL_TRIANGLES, mesh.side_count, top_count)
-                    elif bool(planes[i]):
-                        gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
-                    self.render_stats.draw_calls += 1
-                    continue
-
+            mesh = geo_meshes.get(int(table.geometry_id[slot])) if geo[i] else None
+            if mesh is not None:
+                top_count = mesh.count - mesh.side_count
+                gl.glBindVertexArray(mesh.vao)
                 if not bool(planes[i]):
-                    gl.glBindVertexArray(cube_vao)
-                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
-                if surface_vao:
+                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.side_count)
+                if mesh.has_flat_top and surface_vao:
                     gl.glBindVertexArray(surface_vao)
                     gl.glDrawElements(gl.GL_TRIANGLES, self._water_surface_index_count,
                                       gl.GL_UNSIGNED_INT, None)
-                else:
-                    gl.glBindVertexArray(cube_vao)
-                    gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
+                elif top_count:
+                    gl.glDrawArrays(gl.GL_TRIANGLES, mesh.side_count, top_count)
+                elif bool(planes[i]):
+                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
                 self.render_stats.draw_calls += 1
-            gl.glBindVertexArray(0)
-            return
+                continue
+
+            if not bool(planes[i]):
+                gl.glBindVertexArray(cube_vao)
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
+            if surface_vao:
+                gl.glBindVertexArray(surface_vao)
+                gl.glDrawElements(gl.GL_TRIANGLES, self._water_surface_index_count,
+                                  gl.GL_UNSIGNED_INT, None)
+            else:
+                gl.glBindVertexArray(cube_vao)
+                gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
+            self.render_stats.draw_calls += 1
+        gl.glBindVertexArray(0)
+        return
     def _capture_glass_scene(self):
         """Copy the current framebuffer into the glass transmission texture.
 
@@ -2173,34 +2172,33 @@ layout (location = 9) in vec4 iNormal2;
         gl.glEnable(gl.GL_CULL_FACE)
         gl.glCullFace(gl.GL_BACK)
 
-        if numeric:
-            models, normals = render_table.model_matrices(table, brushes)
-            colors = table.glass_color[brushes]
-            params = table.glass_params[brushes]
-            geo = ((table.class_bits[brushes] & render_table.CLASS_HAS_GEOMETRY) != 0)
-            geo_meshes = self._prepare_geo_meshes(table, brushes)
-            for i, slot_value in enumerate(brushes):
-                slot = int(slot_value)
-                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
-                if normal_mat_loc > 0:
-                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normals[i])
-                gl.glUniform3fv(water_color_loc, 1, colors[i])
-                gl.glUniform1f(distortion_loc, float(params[i, 1]))
-                gl.glUniform1f(fresnel_loc, float(params[i, 4]))
-                gl.glUniform1f(opacity_loc, float(params[i, 0]))
-                gl.glUniform1f(refraction_loc, float(params[i, 2]))
-                gl.glUniform1f(roughness_loc, float(params[i, 3]))
-                mesh = geo_meshes.get(int(table.geometry_id[slot])) if geo[i] else None
-                if mesh is not None:
-                    gl.glBindVertexArray(mesh.vao)
-                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
-                    gl.glBindVertexArray(self.vaos['cube'])
-                else:
-                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
-                self.render_stats.draw_calls += 1
-            gl.glDisable(gl.GL_CULL_FACE)
-            gl.glBindVertexArray(0)
-            return
+        models, normals = render_table.model_matrices(table, brushes)
+        colors = table.glass_color[brushes]
+        params = table.glass_params[brushes]
+        geo = ((table.class_bits[brushes] & render_table.CLASS_HAS_GEOMETRY) != 0)
+        geo_meshes = self._prepare_geo_meshes(table, brushes)
+        for i, slot_value in enumerate(brushes):
+            slot = int(slot_value)
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
+            if normal_mat_loc > 0:
+                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normals[i])
+            gl.glUniform3fv(water_color_loc, 1, colors[i])
+            gl.glUniform1f(distortion_loc, float(params[i, 1]))
+            gl.glUniform1f(fresnel_loc, float(params[i, 4]))
+            gl.glUniform1f(opacity_loc, float(params[i, 0]))
+            gl.glUniform1f(refraction_loc, float(params[i, 2]))
+            gl.glUniform1f(roughness_loc, float(params[i, 3]))
+            mesh = geo_meshes.get(int(table.geometry_id[slot])) if geo[i] else None
+            if mesh is not None:
+                gl.glBindVertexArray(mesh.vao)
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
+                gl.glBindVertexArray(self.vaos['cube'])
+            else:
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+            self.render_stats.draw_calls += 1
+        gl.glDisable(gl.GL_CULL_FACE)
+        gl.glBindVertexArray(0)
+        return
     def draw_fog_volumes(self, projection, view, camera_pos, brushes, lights, config):
         if len(brushes) == 0 or 'fog' not in self.shaders:
             return
@@ -2227,44 +2225,43 @@ layout (location = 9) in vec4 iNormal2;
         object_color_loc = uniforms['object_color']
         alpha_loc = uniforms['alpha']
 
-        if numeric:
-            models, _ = render_table.model_matrices(table, brushes)
-            # model_matrices is column-major for GL; transpose into conventional
-            # matrices, invert the batch, then transpose back for glUniform.
-            mats = models.reshape(-1, 4, 4).transpose(0, 2, 1)
-            inv = np.linalg.inv(mats).transpose(0, 2, 1).reshape(-1, 16).astype(np.float32)
-            colors = table.fog_color[brushes]
-            params = table.fog_params[brushes]
-            geo = ((table.class_bits[brushes] & render_table.CLASS_HAS_GEOMETRY) != 0)
-            geo_meshes = self._prepare_geo_meshes(table, brushes)
-            for i, slot_value in enumerate(brushes):
-                slot = int(slot_value)
-                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
-                gl.glUniformMatrix4fv(inv_model_loc, 1, gl.GL_FALSE, inv[i])
-                gl.glUniform3fv(fog_color_loc, 1, colors[i])
-                gl.glUniform1f(density_loc, float(params[i, 0]))
-                gl.glUniform1f(noise_scale_loc, float(params[i, 1]))
-                gl.glUniform3fv(object_color_loc, 1, colors[i])
-                gl.glUniform1f(alpha_loc, 0.4)
-                mesh = geo_meshes.get(int(table.geometry_id[slot])) if geo[i] else None
-                if mesh is not None:
-                    gl.glBindVertexArray(mesh.vao)
-                    gl.glCullFace(gl.GL_FRONT)
-                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
-                    gl.glCullFace(gl.GL_BACK)
-                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
-                    gl.glBindVertexArray(self.vaos['cube'])
-                else:
-                    gl.glCullFace(gl.GL_FRONT)
-                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
-                    gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
-                    gl.glCullFace(gl.GL_BACK)
-                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
-                    gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
-            gl.glDisable(gl.GL_CULL_FACE)
-            gl.glBindVertexArray(0)
-            gl.glActiveTexture(gl.GL_TEXTURE0)
-            return
+        models, _ = render_table.model_matrices(table, brushes)
+        # model_matrices is column-major for GL; transpose into conventional
+        # matrices, invert the batch, then transpose back for glUniform.
+        mats = models.reshape(-1, 4, 4).transpose(0, 2, 1)
+        inv = np.linalg.inv(mats).transpose(0, 2, 1).reshape(-1, 16).astype(np.float32)
+        colors = table.fog_color[brushes]
+        params = table.fog_params[brushes]
+        geo = ((table.class_bits[brushes] & render_table.CLASS_HAS_GEOMETRY) != 0)
+        geo_meshes = self._prepare_geo_meshes(table, brushes)
+        for i, slot_value in enumerate(brushes):
+            slot = int(slot_value)
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
+            gl.glUniformMatrix4fv(inv_model_loc, 1, gl.GL_FALSE, inv[i])
+            gl.glUniform3fv(fog_color_loc, 1, colors[i])
+            gl.glUniform1f(density_loc, float(params[i, 0]))
+            gl.glUniform1f(noise_scale_loc, float(params[i, 1]))
+            gl.glUniform3fv(object_color_loc, 1, colors[i])
+            gl.glUniform1f(alpha_loc, 0.4)
+            mesh = geo_meshes.get(int(table.geometry_id[slot])) if geo[i] else None
+            if mesh is not None:
+                gl.glBindVertexArray(mesh.vao)
+                gl.glCullFace(gl.GL_FRONT)
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
+                gl.glCullFace(gl.GL_BACK)
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
+                gl.glBindVertexArray(self.vaos['cube'])
+            else:
+                gl.glCullFace(gl.GL_FRONT)
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
+                gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
+                gl.glCullFace(gl.GL_BACK)
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
+                gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
+        gl.glDisable(gl.GL_CULL_FACE)
+        gl.glBindVertexArray(0)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        return
     def _classify_brush_slots(self, table, slots, config):
         """Split visible brush slots into the render passes, numerically.
 
