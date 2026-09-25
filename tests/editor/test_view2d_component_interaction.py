@@ -30,6 +30,7 @@ from editor import component_edit as ce  # noqa: E402
 from editor.editor_state import EditorState  # noqa: E402
 from editor.main_window import MainWindow  # noqa: E402
 from editor.view_2d import View2D  # noqa: E402
+from editor.things import Portal  # noqa: E402
 from engine import brush_geometry as bg  # noqa: E402
 
 # Qt tier: PyQt5 must be importable.  No display and no GPU - the suite runs
@@ -222,6 +223,27 @@ def release(view, world_point, button=Qt.LeftButton, modifiers=Qt.NoModifier):
 
 def undo_depth(host):
     return len(host.state.undo_stack)
+
+
+def test_portal_gizmo_is_the_selection_target(editor):
+    """A portal is selectable on its visible aperture, not just its centre icon."""
+    host, view = editor
+    portal = Portal(pos=[0.0, 0.0, 0.0], properties={
+        'name': 'Portal_Test',
+        'width': 128.0,
+        'height': 256.0,
+        'rotation': [0.0, 0.0, 0.0],
+    })
+    host.state.things = [portal]
+
+    # Deliberately miss the old generic 12 px entity hitbox while landing
+    # close to the visible top-view aperture line.
+    screen = view.world_to_screen(QPointF(48.0, 8.0)).toPoint()
+    assert view.get_object_at(screen) is portal
+
+    # The dedicated centre gizmo handle is an independent pick target too.
+    centre = view.world_to_screen(QPointF(0.0, 0.0)).toPoint()
+    assert view.get_object_at(centre) is portal
 
 
 # ---------------------------------------------------------------------------
