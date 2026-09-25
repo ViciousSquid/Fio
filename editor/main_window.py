@@ -2518,7 +2518,7 @@ class MainWindow(QMainWindow):
         splash_label.setPixmap(pixmap.scaled(512, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         layout.addWidget(splash_label)
 
-        subtitle_label = QLabel("Liminal World Editor & Procedural Engine")
+        subtitle_label = QLabel("Real-time world machine")
         subtitle_label.setAlignment(Qt.AlignCenter)
         subtitle_label.setStyleSheet("""
             QLabel {
