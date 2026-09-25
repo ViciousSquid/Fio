@@ -1213,7 +1213,8 @@ class Renderer_F(BaseRenderer):
                 numeric_model_slots = model_slots
                 sort_positions = None
             else:
-                # No entity projection was published; keep the old object path.
+                # No entity projection: model rendering may still use the object API,
+                # but sprites have no object-renderer fallback.
                 if (config.get('camera_distance_cull',
                                config.get('play_mode', False))
                         and camera_pos is not None):
@@ -1222,7 +1223,7 @@ class Renderer_F(BaseRenderer):
                         thing_positions=cull_thing_positions)
                     cull_thing_positions = self._last_cull_thing_positions
 
-                (_, _, sprite_things, _, _, _, _, sort_positions) = self._sort_objects(
+                (_, _, _ignored_sprites, _, _, _, _, sort_positions) = self._sort_objects(
                         (), cull_things, config,
                         model_out=models_to_render,
                         thing_positions=cull_thing_positions,
@@ -1247,9 +1248,8 @@ class Renderer_F(BaseRenderer):
 
             if entities_numeric:
                 # The entity projection is independent of the brush projection.
-                # Use it even for secondary/editor views that do not have brush
-                # slot publication. This is the final escape hatch for the old
-                # per-Thing sprite classification.
+                # Use it for secondary/editor views that do not have brush-slot
+                # publication: sprites remain on the same dense execution path.
                 tslots = thing_slots
                 if (config.get('camera_distance_cull',
                                config.get('play_mode', False))
@@ -1274,7 +1274,7 @@ class Renderer_F(BaseRenderer):
                 sort_positions = brush_sort_positions
                 textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
             else:
-                (opaque_brushes, transparent_brushes, sprite_things,
+                (opaque_brushes, transparent_brushes, _ignored_sprites,
                  fog_volumes, water_brushes, glass_brushes, glow_brushes,
                  sort_positions) = self._sort_objects(
                     cull_brushes,
