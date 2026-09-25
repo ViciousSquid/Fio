@@ -3723,7 +3723,6 @@ class PropertyEditor(QWidget):
                            'water_tint', 'water_opacity', 'water_reflectivity', 'water_wave_enabled',
                            'water_wave_height', 'water_plane', 'water_reflections',
                            'water_distortion', 'water_refraction', 'water_roughness', 'water_fresnel',
-                           'water_reflection_height',
                            'fog_color', 'fog_density')
             for key in shader_keys:
                 self.current_object.pop(key, None)
