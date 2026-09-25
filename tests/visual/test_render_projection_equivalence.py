@@ -266,8 +266,8 @@ def test_the_two_paths_agree_in_solid_lit_mode(renderer, context):
     _assert_same_picture(objects_img, slots_img, "solid display mode")
 
 
-def test_the_two_paths_agree_with_a_shadow_casting_light(renderer, context):
-    """Covers the caster selection and the per-light reach test as well."""
+def test_dense_shadow_path_renders_shadowing_light(renderer, context):
+    """Shadow casting is exercised through EntityTable/RenderTable only."""
     from editor.things import Light
 
     brushes, _ = _scene()
@@ -275,9 +275,9 @@ def test_the_two_paths_agree_with_a_shadow_casting_light(renderer, context):
                        color=[255, 255, 255], intensity=2.0, radius=1400.0,
                        state="on", casts_shadows=True)
     things = [light]
-    objects_img = _render(renderer, context, brushes, things, numeric=False)
-    slots_img = _render(renderer, context, brushes, things, numeric=True)
-    _assert_same_picture(objects_img, slots_img, "shadowed scene")
+    image = _render(renderer, context, brushes, things, numeric=True,
+                    shadows_enabled=True)
+    assert not glh.is_blank(image), "dense shadow path rendered a blank scene"
 
 
 def _entity_scene():
@@ -768,7 +768,14 @@ def test_a_dirty_light_costs_six_submissions_not_six_per_caster(renderer, contex
     config = glh.render_config(all_brushes=brushes, all_things=things,
                                render_table=table, render_refs=refs,
                                all_brush_slots=slots, shadows_enabled=True)
-    lights = [t for t in things]
+    from engine.entity_table import EntityTable
+    etable = EntityTable()
+    hidden = etable.begin_frame(things, 1)
+    config["entity_table"] = etable
+    config["thing_hidden"] = hidden
+    shadow_slots = etable.light_slots[
+        etable.light_casts_shadows[etable.light_slots]
+    ]
 
     calls = []
     real = gl.glDrawArraysInstanced
@@ -778,7 +785,7 @@ def test_a_dirty_light_costs_six_submissions_not_six_per_caster(renderer, contex
     gl.glDrawArrays = lambda *a, **k: (plain.append(1), real_plain(*a, **k))[1]
     try:
         context.bind()
-        renderer.render_shadow_maps(lights, brushes, things, config, None)
+        renderer.render_shadow_maps((etable, shadow_slots), config, None)
         gl.glFinish()
     finally:
         gl.glDrawArraysInstanced = real
@@ -806,11 +813,19 @@ def test_more_casters_than_the_buffers_initial_capacity(renderer, context):
     config = glh.render_config(all_brushes=brushes, all_things=things,
                                render_table=table, render_refs=refs,
                                all_brush_slots=slots, shadows_enabled=True)
+    from engine.entity_table import EntityTable
+    etable = EntityTable()
+    hidden = etable.begin_frame(things, 1)
+    config["entity_table"] = etable
+    config["thing_hidden"] = hidden
+    shadow_slots = etable.light_slots[
+        etable.light_casts_shadows[etable.light_slots]
+    ]
     assert len(brushes) > 256, "the point is to exceed the initial capacity"
 
     with glh.no_gl_errors("rendering shadows for more casters than fit"):
         context.bind()
-        renderer.render_shadow_maps(list(things), brushes, things, config, None)
+        renderer.render_shadow_maps((etable, shadow_slots), config, None)
         gl.glFinish()
 
 
