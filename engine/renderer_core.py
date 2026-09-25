@@ -1558,8 +1558,10 @@ layout (location = 9) in vec4 iNormal2;
                 continue
 
             if not groups:
-                shader_kind = 'lit' if self.shaders.get('lit_instanced') else 'textured'
-                shader_name = shader_kind + '_instanced'
+                if not self.shaders.get('lit_instanced'):
+                    continue
+                shader_kind = 'lit'
+                shader_name = 'lit_instanced'
                 current_shader = self._prepare_model_shader(
                     shader_name, projection, view, lights, current_shader)
                 if current_shader != shader_name:
