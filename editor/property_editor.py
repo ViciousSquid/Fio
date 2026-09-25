@@ -1540,35 +1540,11 @@ class PropertyEditor(QWidget):
             lambda c: self.update_object_prop('water_reflections', c),
             _Style.CHECKBOX)
         reflection_cb.setToolTip(
-            "Render a 256×256 environment reflection cubemap at the configured height above the water. "
+            "Render a 256×256 environment reflection cubemap around the water surface. "
             "More expensive.")
         layout.addLayout(_hbox(plane_cb, reflection_cb, stretch=False))
         self._widgets['water_plane_cb'] = plane_cb
         self._widgets['water_reflections_cb'] = reflection_cb
-
-        reflection_height = _make_spin(
-            brush.get('water_reflection_height', 256),
-            1, 4096,
-            suffix=" units",
-            decimals=0,
-            step=1,
-            callback=lambda v: self.update_object_prop('water_reflection_height', v),
-            tooltip="Height of the environment reflection cubemap above the water surface.",
-        )
-        reflection_height.setVisible(bool(brush.get('water_reflections', False)))
-        layout.addRow("Cubemap height:", reflection_height)
-        self._widgets['water_reflection_height'] = reflection_height
-
-        def _toggle_water_reflections(enabled):
-            self.update_object_prop('water_reflections', enabled)
-            reflection_height.setVisible(bool(enabled))
-
-        # Replace the direct checkbox callback so the height control follows it.
-        try:
-            reflection_cb.toggled.disconnect()
-        except TypeError:
-            pass
-        reflection_cb.toggled.connect(_toggle_water_reflections)
 
         return group
 
