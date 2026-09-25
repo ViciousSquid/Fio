@@ -78,6 +78,7 @@ from __future__ import annotations
 import os
 from itertools import chain
 
+import glm
 import numpy as np
 
 # Defensive, as everywhere else in engine/: editor.things pulls in PyQt5, and
@@ -416,6 +417,52 @@ def _entity_class_bits(thing) -> int:
     return bits
 
 
+def _model_recipe(thing):
+    """Return the cold model draw recipe for one entity, or ``None``."""
+    props = _props_of(thing)
+    model_path = props.get('model_path')
+    if not model_path:
+        return None
+    model_path = str(model_path)
+    manual_texture = props.get('texture')
+    if not manual_texture:
+        return (model_path, None, None)
+    colour = props.get('color', [0.8, 0.8, 0.8])
+    try:
+        colour = (float(colour[0]), float(colour[1]), float(colour[2]))
+    except (TypeError, ValueError, IndexError):
+        colour = (0.8, 0.8, 0.8)
+    return (model_path, str(manual_texture), colour)
+
+
+def _model_transform_columns(thing):
+    """Resolve a model's cold rotation/scale matrices with zero translation."""
+    props = _props_of(thing)
+    rot = props.get('rotation', [0.0, 0.0, 0.0])
+    scale = props.get('scale', 1.0)
+    scale_vec = (scale, scale, scale) if isinstance(scale, (int, float)) else scale
+    try:
+        mat = glm.rotate(glm.mat4(1.0), glm.radians(float(rot[1])), glm.vec3(0, 1, 0))
+        mat = glm.rotate(mat, glm.radians(float(rot[0])), glm.vec3(1, 0, 0))
+        mat = glm.rotate(mat, glm.radians(float(rot[2])), glm.vec3(0, 0, 1))
+        mat = glm.scale(mat, glm.vec3(*scale_vec))
+        normal = glm.transpose(glm.inverse(glm.mat3(mat)))
+    except Exception:
+        mat = glm.mat4(1.0)
+        normal = glm.mat3(1.0)
+    model = np.array([
+        mat[0][0], mat[0][1], mat[0][2], 0.0,
+        mat[1][0], mat[1][1], mat[1][2], 0.0,
+        mat[2][0], mat[2][1], mat[2][2], 0.0,
+        mat[3][0], mat[3][1], mat[3][2], 1.0,
+    ], dtype=np.float32)
+    normal_np = np.array([
+        normal[0][0], normal[0][1], normal[0][2], 0.0,
+        normal[1][0], normal[1][1], normal[1][2], 0.0,
+        normal[2][0], normal[2][1], normal[2][2], 0.0,
+    ], dtype=np.float32)
+    return model, normal_np
+
 class EntityTable:
     """A dense, disposable projection of a Thing list.
 
@@ -426,8 +473,9 @@ class EntityTable:
     __slots__ = ('generation', 'count', 'ids', 'slot_of_id', 'things',
                  'pos', 'class_bits', 'light_slots', 'monster_slots',
                  'pickup_slots', 'sprite_size', 'sprite_key_id',
-                 'warm_sprite_slots', '_sprite_ids', '_sprite_recipes',
-                 '_sprite_state', '_epoch', '_hidden_buf')
+                 'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
+                 '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
+                 '_epoch', '_hidden_buf')
 
     def __init__(self):
         self.generation = 0
@@ -461,7 +509,9 @@ class EntityTable:
         #: :attr:`warm_sprite_slots`; see the module's sprite-identity section.
         self.sprite_key_id = np.full((0,), SPRITE_NONE, dtype=np.int32)
         #: Rows whose sprite identity is re-resolved per frame.
-        self.warm_sprite_slots = np.empty(0, dtype=np.int32)
+        self.model_recipe_id = np.full((0,), -1, dtype=np.int32)
+        self.model_base_matrix = np.zeros((0, 16), dtype=np.float32)
+        self.model_normal_matrix = np.zeros((0, 12), dtype=np.float32)
 
         # Candidate-list intern table.  GL-free, like the brush table's texture
         # names: these are ids for *recipes*, and the renderer maps them to GL
@@ -471,7 +521,8 @@ class EntityTable:
         #: slot -> the state tuple its sprite identity was last resolved from.
         #: A plain list: it is compared per warm row per frame and never
         #: indexed numerically.
-        self._sprite_state: list = []
+        self._model_ids = {}
+        self._model_recipes = []
 
         self._epoch = None
         self._hidden_buf = np.empty(0, dtype=bool)
