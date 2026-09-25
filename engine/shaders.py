@@ -870,33 +870,43 @@ void main() {
     highp vec3 viewDir = normalize(viewPos - FragPos);
     highp vec3 baseNormal = normalize(Normal);
 
-    // Actual screen-space transmission. IOR changes the Snell refraction
-    // direction; distortion scales the resulting screen offset. At IOR=1.0
-    // the delta is zero, so "air" really does not bend the scene.
+    // Screen-space transmission needs an authored, visible warp. The old
+    // implementation projected a unit ray delta and then divided it by
+    // scene depth, which leaves the resulting UV displacement well below a
+    // pixel on normal editor/game distances. Keep the Snell direction so the
+    // IOR slider still has a physical relationship to the result, but map the
+    // angular change into a bounded screen-space offset controlled directly by
+    // the distortion slider.
     float ior = max(refractionIndex, 1.0);
     float eta = 1.0 / ior;
     highp vec3 straightDir = -viewDir;
     highp vec3 refractDir = refract(straightDir, baseNormal, eta);
-    highp vec3 refractDeltaView = mat3(view) * (refractDir - straightDir);
+    highp vec3 refractDeltaView = normalize(mat3(view) * (refractDir - straightDir));
 
-    float viewDepth = max(-ViewFragPos.z, 1.0);
     highp vec2 projectionScale = vec2(projection[0][0], projection[1][1]);
-    highp vec2 uvOffset =
-        refractDeltaView.xy * projectionScale * 0.5 / viewDepth
-        * distortionStrength * 1.5;
+    highp vec2 normalView = normalize(mat3(view) * baseNormal).xy;
+    highp float grazing = 1.0 - clamp(abs(dot(viewDir, baseNormal)), 0.0, 1.0);
+
+    // The refracted direction supplies the broad warp; the view-space normal
+    // keeps a flat sheet of glass visibly responsive even when the ray delta is
+    // tiny; grazing angles get a little more displacement, like real glass.
+    highp vec2 refractionWarp =
+        refractDeltaView.xy * projectionScale * (0.055 + 0.035 * grazing);
+    highp vec2 normalWarp = normalView * (0.012 + 0.010 * grazing);
 
     highp vec2 screenUV = gl_FragCoord.xy / screenSize;
 
-    // A small surface perturbation gives distortion something to work with
-    // without turning the glass pass back into the old multi-octave procedural
-    // shader. It is deliberately bounded so the authored distortion slider
-    // remains the primary control.
+    // A compact procedural perturbation breaks up the perfectly planar warp.
+    // It is intentionally cheap and deterministic on GL 3.3 hardware.
     highp float n1 = noise2(FragPos.xz * 0.08 + TexCoords * 3.0);
     highp float n2 = noise2(FragPos.xy * 0.11 + TexCoords * 5.0);
-    highp vec2 microWarp = (vec2(n1, n2) - 0.5) * 0.015 * distortionStrength;
+    highp vec2 microWarp = (vec2(n1, n2) - 0.5) * 0.020;
+
+    highp vec2 uvOffset =
+        (refractionWarp + normalWarp + microWarp) * distortionStrength;
 
     highp vec2 refractUV = clamp(
-        screenUV + uvOffset + microWarp,
+        screenUV + uvOffset,
         vec2(0.001),
         vec2(0.999)
     );
