@@ -1029,11 +1029,11 @@ class Renderer_F(BaseRenderer):
         else:
             slots = np.asarray(slots, dtype=np.int32)
 
+        planes = np.asarray(
+            self._frustum_planes(projection * view),
+            dtype=np.float64,
+        )
         if len(slots):
-            planes = np.asarray(
-                self._frustum_planes(projection * view),
-                dtype=np.float64,
-            )
             centres = table.center[slots]
             radii = np.linalg.norm(table.half[slots], axis=1)
             distances = centres @ planes[:, :3].T + planes[:, 3]
@@ -1050,8 +1050,7 @@ class Renderer_F(BaseRenderer):
         if etable is not None and thing_hidden is not None:
             thing_slots = np.arange(etable.count, dtype=np.int32)
             if len(thing_slots):
-                entity_planes = planes if len(slots) or len(planes) else np.asarray(
-                    self._frustum_planes(projection * view), dtype=np.float64)
+                entity_planes = planes
                 centres = etable.pos[thing_slots]
                 distances = centres @ entity_planes[:, :3].T + entity_planes[:, 3]
                 radii = np.maximum(
