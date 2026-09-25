@@ -1283,25 +1283,44 @@ layout (location = 9) in vec4 iNormal2;
         self._ensure_terrain_textures(terrain)
         if not terrain.shader_program:
             self.setup_terrain_shader(terrain)
-        terrain_lights = list(lights) if lights else []
-        max_terrain_lights = shaders.MAX_LIGHTS_TERRAIN
-        if len(terrain_lights) > max_terrain_lights:
-            cx, cy, cz = self._camera_xyz(camera_pos)
-            terrain_lights.sort(
-                key=lambda light: (
-                    (float(light.pos[0]) - cx) ** 2 +
-                    (float(light.pos[1]) - cy) ** 2 +
-                    (float(light.pos[2]) - cz) ** 2
+        dense_lights = (isinstance(lights, tuple) and len(lights) == 2
+                        and hasattr(lights[0], 'light_color'))
+        if dense_lights:
+            light_table, light_slots = lights
+            terrain_lights = (light_table, light_slots)
+            max_terrain_lights = shaders.MAX_LIGHTS_TERRAIN
+            if len(light_slots) > max_terrain_lights:
+                cx, cy, cz = self._camera_xyz(camera_pos)
+                dx = light_table.pos[light_slots, 0] - cx
+                dy = light_table.pos[light_slots, 1] - cy
+                dz = light_table.pos[light_slots, 2] - cz
+                order = np.argsort(dx * dx + dy * dy + dz * dz, kind='stable')
+                terrain_lights = (
+                    light_table,
+                    light_slots[order[:max_terrain_lights]],
                 )
-            )
-            terrain_lights = terrain_lights[:max_terrain_lights]
+        else:
+            terrain_lights = list(lights) if lights else []
+            max_terrain_lights = shaders.MAX_LIGHTS_TERRAIN
+            if len(terrain_lights) > max_terrain_lights:
+                cx, cy, cz = self._camera_xyz(camera_pos)
+                terrain_lights.sort(
+                    key=lambda light: (
+                        (float(light.pos[0]) - cx) ** 2 +
+                        (float(light.pos[1]) - cy) ** 2 +
+                        (float(light.pos[2]) - cz) ** 2
+                    )
+                )
+                terrain_lights = terrain_lights[:max_terrain_lights]
         # _upload_lights_once() updates regular uniforms, so the terrain program
         # must be current before that upload. update_and_render() binds it again
         # for the actual draw, but it is too late for the uniform writes above.
         gl.glUseProgram(terrain.shader_program)
         self._current_shader = terrain.shader_program
         self._upload_lights_once('terrain', terrain_lights)
-        active_lights_count = len(terrain_lights)
+        active_lights_count = (
+            len(terrain_lights[1]) if dense_lights else len(terrain_lights)
+        )
         gl.glDisable(gl.GL_CULL_FACE)
         if hasattr(terrain, 'get_tri_count'):
             self.render_stats.visible_tris += terrain.get_tri_count()
