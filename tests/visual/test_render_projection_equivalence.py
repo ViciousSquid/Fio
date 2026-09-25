@@ -304,6 +304,47 @@ def _entity_scene():
 
 
 
+def test_portal_virtual_scene_consumes_dense_tables(renderer):
+    """Portal scene classification never reconstructs brush/entity objects."""
+    from engine.entity_table import EntityTable
+
+    brushes = [
+        box_brush('inside', (0.0, 0.0, 0.0), (64.0, 64.0, 64.0)),
+        box_brush('outside', (100000.0, 0.0, 0.0), (64.0, 64.0, 64.0)),
+    ]
+    for brush in brushes:
+        brush['textures'] = {'south': 'inside.png'}
+
+    table, refs, slots = _projection_for(brushes)
+    etable = EntityTable()
+    hidden = etable.begin_frame([], 1)
+
+    projection, view, _eye = glh.camera_matrices(aspect=1.0)
+    config = glh.render_config(
+        all_brushes=brushes,
+        all_things=[],
+        render_table=table,
+        render_refs=refs,
+        all_brush_slots=slots,
+        entity_table=etable,
+        entity_refs=np.empty(0, dtype=object),
+        visible_thing_slots=np.empty(0, dtype=np.int32),
+        thing_hidden=hidden,
+        play_mode=True,
+    )
+
+    table_out, groups, sprite_slots, lights = renderer._portal_numeric_scene_inputs(
+        projection, view, config
+    )
+
+    assert table_out is table
+    assert set(groups['opaque'].tolist()) == {0}
+    assert set(groups['textured'].tolist()) == {0}
+    assert len(groups['solid']) == 0
+    assert len(sprite_slots) == 0
+    assert isinstance(lights, tuple)
+    assert lights[0] is etable
+
 def test_sprite_renderer_has_no_legacy_object_path(renderer):
     """There is exactly one sprite renderer: dense EntityTable instancing."""
     import engine.renderer_core as rc
