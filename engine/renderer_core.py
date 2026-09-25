@@ -256,6 +256,13 @@ class BaseRenderer:
     def __init__(self, texture_loader, initial_grid_size, initial_world_size, config=None):
         self.texture_manager = {}
         self.loaded_models = {}
+
+        # Glass samples the already-rendered scene for screen-space transmission.
+        # Kept lazy because most frames contain no glass at all.
+        self._glass_scene_texture = 0
+        self._glass_scene_size = (0, 0)
+        self._glass_scene_texture_unit = 2
+
         self.load_texture_callback = texture_loader
         self._identity_mat4 = glm.mat4(1.0)
         self._identity_mat3 = glm.mat3(1.0)
@@ -526,7 +533,8 @@ class BaseRenderer:
             self.uniforms['glass'] = UniformCache(self.shaders['glass'])
             self.uniforms['glass'].preload(['projection', 'view', 'model', 'viewPos', 'waterColor',
                                             'distortionStrength', 'causticStrength', 'glassOpacity',
-                                            'refractionIndex', 'roughness', 'normalMatrix'])
+                                            'refractionIndex', 'roughness', 'normalMatrix',
+                                            'sceneColor', 'screenSize'])
             self.uniforms['glass'].preload(self.ENV_UNIFORMS)
             # fog – use ARM‑optimised fragment shader (works everywhere)
             fog_vert = DEFAULT_SHADERS.get('fog.vert', '')
@@ -2189,6 +2197,42 @@ layout (location = 9) in vec4 iNormal2;
             self.render_stats.draw_calls += 1
         gl.glBindVertexArray(0)
 
+    def _capture_glass_scene(self):
+        """Copy the current framebuffer into the glass transmission texture.
+
+        The copy happens once before the glass pass, so every glass surface
+        samples the same scene behind it. GL 3.3 supports this without adding
+        another permanent render target to the forward pipeline.
+        """
+        viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+        if viewport is None or len(viewport) < 4:
+            return None
+        x, y, width, height = (int(viewport[0]), int(viewport[1]),
+                               int(viewport[2]), int(viewport[3]))
+        if width <= 0 or height <= 0:
+            return None
+
+        if not self._glass_scene_texture:
+            self._glass_scene_texture = int(gl.glGenTextures(1))
+
+        unit = gl.GL_TEXTURE0 + self._glass_scene_texture_unit
+        gl.glActiveTexture(unit)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+
+        if self._glass_scene_size != (width, height):
+            gl.glTexImage2D(
+                gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, width, height, 0,
+                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
+            self._glass_scene_size = (width, height)
+
+        gl.glCopyTexSubImage2D(
+            gl.GL_TEXTURE_2D, 0, 0, 0, x, y, width, height)
+        return width, height
+
     def draw_glass_brushes(self, projection, view, camera_pos, brushes, lights, config,
                            table=None, refs=None):
         if len(brushes) == 0 or 'glass' not in self.shaders:
@@ -2200,6 +2244,19 @@ layout (location = 9) in vec4 iNormal2;
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
         gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
+
+        # Capture once, before any glass surface is drawn.
+        scene_size = self._capture_glass_scene()
+        if scene_size is None:
+            return
+        scene_width, scene_height = scene_size
+        scene_tex_unit = self._glass_scene_texture_unit
+        gl.glActiveTexture(gl.GL_TEXTURE0 + scene_tex_unit)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
+        gl.glUniform1i(uniforms['sceneColor'], scene_tex_unit)
+        gl.glUniform2f(uniforms['screenSize'],
+                       float(scene_width), float(scene_height))
+        gl.glActiveTexture(gl.GL_TEXTURE0)
 
         model_loc = uniforms['model']
         water_color_loc = uniforms['waterColor']
