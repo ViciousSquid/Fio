@@ -1465,8 +1465,11 @@ class Renderer_F(BaseRenderer):
         else:
             self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl, refs=_refs)
         if current_mode == RENDER_MODE_LIT:
-            self.draw_water_brushes(projection, view, camera_pos, water_brushes, lights, config,
-                                     table=_tbl)
+            self._render_water_reflection_probes(
+                _tbl, water_brushes, lights, config)
+            self.draw_water_brushes(
+                projection, view, camera_pos, water_brushes, lights, config,
+                table=_tbl)
             self.draw_glass_brushes(projection, view, camera_pos, glass_brushes, lights, config,
                                      table=_tbl)
             self.draw_fog_volumes(projection, view, camera_pos, fog_volumes, lights, config,
