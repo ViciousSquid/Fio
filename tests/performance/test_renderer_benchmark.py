@@ -319,6 +319,13 @@ def test_renderer_benchmark(record_property, capsys):
     """Measure renderer paths plus the scalar/batched distance-cull work."""
     cull_result = _benchmark_distance_cull()
     sprite_sort_result = _benchmark_sprite_sort()
+    print(
+        "sprite_sort   sprites=%d  legacy=%7.3f ms  fused=%7.3f ms  "
+        "speedup=%6.2fx"
+        % (sprite_sort_result["sprites"], sprite_sort_result["legacy_ms"],
+           sprite_sort_result["fused_ms"], sprite_sort_result["speedup"]),
+        flush=True,
+    )
     record_property("fio_distance_cull_benchmark", json.dumps(cull_result))
     record_property("fio_sprite_sort_benchmark", json.dumps(sprite_sort_result))
     results = []
