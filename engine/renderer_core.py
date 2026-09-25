@@ -293,8 +293,8 @@ class BaseRenderer:
         self._glass_scene_texture_unit = 2
 
         # Water reflections are fully lazy. The checkbox creates one
-        # 256x256 RGBA cubemap per reflected water slot, plus one shared
-        # 256x256 depth target used while filling all six faces.
+        # 256x256 RGBA 2D render texture per reflected water slot, plus one
+        # shared depth target used while rendering the mirrored scene.
         self._water_reflection_fbo = None
         self._water_reflection_depth = None
         self._water_reflection_textures = {}
