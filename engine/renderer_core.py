@@ -2003,26 +2003,6 @@ layout (location = 9) in vec4 iNormal2;
     # --------------------------------------------------------------------------
     # Water / Glass / Fog
     # --------------------------------------------------------------------------
-    @staticmethod
-    def _water_wave_amplitude(brush):
-        """World-space wave amplitude for a brush, from its editor settings.
-
-        water_wave_height is stored as a 0..1 fraction (legacy maps stored raw
-        slider ints up to 200 — treat anything > 2 as a percentage). Even with
-        waves disabled a whisper of swell remains so the surface never reads
-        as a frozen slab. Amplitude is capped so the surface stays inside the
-        brush volume.
-        """
-        size = brush.get('size', [64, 64, 64])
-        h = float(brush.get('water_wave_height', 0.5))
-        if h > 2.0:
-            h = h / 100.0
-        if brush.get('water_wave_enabled', True):
-            amp = h * 30.0
-        else:
-            amp = 1.2
-        return min(amp, size[1] * 0.45, 30.0)
-
     def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config,
                            table):
         """Draw water from dense RenderTable state.
