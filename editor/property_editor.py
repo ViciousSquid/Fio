@@ -1542,8 +1542,7 @@ class PropertyEditor(QWidget):
         reflection_cb.setToolTip(
             "Render a 256×256 environment reflection cubemap 256 world units above the water. "
             "More expensive.")
-        layout.addWidget(plane_cb)
-        layout.addWidget(reflection_cb)
+        layout.addLayout(_hbox(plane_cb, reflection_cb, stretch=False))
         self._widgets['water_plane_cb'] = plane_cb
         self._widgets['water_reflections_cb'] = reflection_cb
 
