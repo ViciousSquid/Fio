@@ -1540,11 +1540,35 @@ class PropertyEditor(QWidget):
             lambda c: self.update_object_prop('water_reflections', c),
             _Style.CHECKBOX)
         reflection_cb.setToolTip(
-            "Render a 256×256 environment reflection cubemap 256 world units above the water. "
+            "Render a 256×256 environment reflection cubemap at the configured height above the water. "
             "More expensive.")
         layout.addLayout(_hbox(plane_cb, reflection_cb, stretch=False))
         self._widgets['water_plane_cb'] = plane_cb
         self._widgets['water_reflections_cb'] = reflection_cb
+
+        reflection_height = _make_spin(
+            brush.get('water_reflection_height', 256),
+            1, 4096,
+            suffix=" units",
+            decimals=0,
+            step=1,
+            callback=lambda v: self.update_object_prop('water_reflection_height', v),
+            tooltip="Height of the environment reflection cubemap above the water surface.",
+        )
+        reflection_height.setVisible(bool(brush.get('water_reflections', False)))
+        layout.addRow("Cubemap height:", reflection_height)
+        self._widgets['water_reflection_height'] = reflection_height
+
+        def _toggle_water_reflections(enabled):
+            self.update_object_prop('water_reflections', enabled)
+            reflection_height.setVisible(bool(enabled))
+
+        # Replace the direct checkbox callback so the height control follows it.
+        try:
+            reflection_cb.toggled.disconnect()
+        except TypeError:
+            pass
+        reflection_cb.toggled.connect(_toggle_water_reflections)
 
         return group
 
@@ -3723,6 +3747,7 @@ class PropertyEditor(QWidget):
                            'water_tint', 'water_opacity', 'water_reflectivity', 'water_wave_enabled',
                            'water_wave_height', 'water_plane', 'water_reflections',
                            'water_distortion', 'water_refraction', 'water_roughness', 'water_fresnel',
+                           'water_reflection_height',
                            'fog_color', 'fog_density')
             for key in shader_keys:
                 self.current_object.pop(key, None)
@@ -3766,6 +3791,8 @@ class PropertyEditor(QWidget):
                 self.current_object['water_roughness'] = 0.0
             if 'water_fresnel' not in self.current_object:
                 self.current_object['water_fresnel'] = self.current_object.get('water_reflectivity', 0.5)
+            if 'water_reflection_height' not in self.current_object:
+                self.current_object['water_reflection_height'] = 256
         elif shader_type == 'Fog':
             self.current_object['is_fog'] = True
             if 'fog_density' not in self.current_object:
