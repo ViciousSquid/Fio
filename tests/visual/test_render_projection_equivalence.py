@@ -359,6 +359,29 @@ def test_portal_virtual_scene_consumes_dense_tables(renderer):
     assert isinstance(lights, tuple)
     assert lights[0] is etable
 
+def test_portal_renderer_has_no_legacy_object_path():
+    """Portal rendering must have no Thing/Portal object traversal fallback."""
+    from pathlib import Path
+
+    root = Path(__file__).parents[2]
+    forward = (root / 'engine' / 'renderer_F.py').read_text(encoding='utf-8')
+    core = (root / 'engine' / 'renderer_core.py').read_text(encoding='utf-8')
+
+    portal_scene = forward[
+        forward.index("def _portal_numeric_scene_inputs"):
+        forward.index("def render_scene", forward.index("def _portal_numeric_scene_inputs"))
+    ]
+    portal_wire = core[
+        core.index("def draw_portal_wireframes"):
+        core.index("def draw_connection_lines", core.index("def draw_portal_wireframes"))
+    ]
+
+    assert "Portal)" not in portal_scene
+    assert "isinstance" not in portal_scene
+    assert "portal_things" not in portal_wire
+    assert "isinstance" not in portal_wire
+    assert "for t in things" not in portal_wire
+
 def test_sprite_renderer_has_no_legacy_object_path(renderer):
     """There is exactly one sprite renderer: dense EntityTable instancing."""
     import engine.renderer_core as rc
