@@ -4033,13 +4033,9 @@ class LogicThread(threading.Thread):
         write_state.visible_thing_position_count = visible_count
         write_state.all_things = list(things)
         write_state.all_lights = all_lights
-        # The numerical result itself, for the renderer's entity classification.
-        # Whether any portal exists at all. The portal virtual views draw
-        # their sprites through the object path, so a view deciding whether to
-        # skip the per-entity texture overrides has to know. Read off the
-        # entity cache rather than by scanning, like every other per-tick
-        # portal question.
-        write_state.has_portals = bool(self._portal_things)
+        # Portal existence is a numeric projection fact; the renderer reads
+        # the published portal slot vector directly.
+        write_state.has_portals = bool(len(etable.portal_slots))
         write_state.entity_table = etable
         write_state.entity_refs = erefs
         write_state.visible_thing_slots = visible_thing_slots
