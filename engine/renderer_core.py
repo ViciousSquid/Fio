@@ -2609,24 +2609,41 @@ layout (location = 9) in vec4 iNormal2;
         active['params'].fill(0.0)
         active['indices'].fill(0)
 
-        active_lights = lights[:count]
-        positions = np.asarray([light.pos for light in active_lights], dtype=np.float32)
-        colors = np.asarray([light.get_color() for light in active_lights], dtype=np.float32)
-        params = np.asarray(
-            [[light.get_intensity(), light.get_radius()] for light in active_lights],
-            dtype=np.float32,
-        )
-        shadow_indices = np.fromiter(
-            (self._light_shadow_index.get(id(light), -1) for light in active_lights),
-            dtype=np.int32,
-            count=count,
-        )
+        if (isinstance(lights, tuple) and len(lights) == 2
+                and hasattr(lights[0], 'light_color')):
+            table, slots = lights
+            active_lights = slots[:count]
+            active['position'][:, :3] = table.pos[active_lights].astype(
+                np.float32, copy=False)
+            active['position'][:, 3] = 1.0
+            active['color'][:, :3] = table.light_color[active_lights]
+            active['color'][:, 3] = 1.0
+            active['params'][:, :2] = table.light_params[active_lights]
+            shadow_indices = np.fromiter(
+                (self._light_shadow_index.get(int(slot), -1)
+                 for slot in active_lights),
+                dtype=np.int32,
+                count=count,
+            )
+        else:
+            active_lights = lights[:count]
+            positions = np.asarray([light.pos for light in active_lights], dtype=np.float32)
+            colors = np.asarray([light.get_color() for light in active_lights], dtype=np.float32)
+            params = np.asarray(
+                [[light.get_intensity(), light.get_radius()] for light in active_lights],
+                dtype=np.float32,
+            )
+            shadow_indices = np.fromiter(
+                (self._light_shadow_index.get(id(light), -1) for light in active_lights),
+                dtype=np.int32,
+                count=count,
+            )
+            active['position'][:, :3] = positions
+            active['position'][:, 3] = 1.0
+            active['color'][:, :3] = colors
+            active['color'][:, 3] = 1.0
+            active['params'][:, :2] = params
 
-        active['position'][:, :3] = positions
-        active['position'][:, 3] = 1.0
-        active['color'][:, :3] = colors
-        active['color'][:, 3] = 1.0
-        active['params'][:, :2] = params
         active['indices'][:, 0] = shadow_indices
 
         gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
@@ -2648,7 +2665,12 @@ layout (location = 9) in vec4 iNormal2;
         # state.
         self._upload_env_uniforms(shader_name)
         cap = self._shader_light_cap(shader_name)
-        num_lights = min(len(lights), cap)
+        num_lights = min(
+            len(lights[1]) if (isinstance(lights, tuple) and len(lights) == 2
+                               and hasattr(lights[0], 'light_color'))
+            else len(lights),
+            cap,
+        )
 
         # Bind the shared block for this program even when the light list itself
         # is unchanged. The UBO contents are uploaded only when the light IDs
@@ -2659,7 +2681,13 @@ layout (location = 9) in vec4 iNormal2;
             shaders.LIGHT_UBO_BINDING,
             self._light_ubo,
         )
-        self._frame_lights_uploaded[shader_name] = tuple(map(id, lights[:cap]))
+        if (isinstance(lights, tuple) and len(lights) == 2
+                and hasattr(lights[0], 'light_color')):
+            self._frame_lights_uploaded[shader_name] = (
+                id(lights[0]), lights[0].generation,
+                tuple(int(x) for x in lights[1][:cap]))
+        else:
+            self._frame_lights_uploaded[shader_name] = tuple(map(id, lights[:cap]))
         gl.glUniform1i(self.uniforms[shader_name]['active_lights'], num_lights)
         self._upload_light_ubo(lights, num_lights)
 
