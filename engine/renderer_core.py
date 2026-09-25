@@ -3251,7 +3251,13 @@ layout (location = 9) in vec4 iNormal2;
         if numeric:
             caster_slots = self._shadow_caster_slots(table, caster_slots)
             caster_brushes = None
-            caster_batch = self._prepare_shadow_caster_batch((), ())
+            if dense_entities:
+                caster_batch = self._prepare_shadow_caster_batch((), ())
+            else:
+                caster_models = [t for t in things
+                                 if isinstance(t, Thing) and t.properties.get('model_path')]
+                caster_batch = self._prepare_shadow_caster_batch(
+                    (), caster_models)
         else:
             caster_brushes = []
             for b in brushes:
