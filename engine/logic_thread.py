@@ -380,7 +380,10 @@ class LogicThread(threading.Thread):
         # Portal name → Portal lookup cache; rebuilt on play start and when
         # the things list changes.  Avoids an O(n) rebuild every physics tick.
         self._portal_things: List = []
-        self._portals_by_name: Dict[str, object] = {}
+        # Portal slots use the same enumerate(self.things) address space as
+        # EntityTable.  Links are resolved once when the topology cache changes.
+        self._portal_slots = np.empty(0, dtype=np.int32)
+        self._portal_target_slots = np.empty(0, dtype=np.int32)
 
         self.level_complete_ui = None
 
@@ -487,16 +490,32 @@ class LogicThread(threading.Thread):
         self._timer_things = [t for t in self.things if LogicTimer and isinstance(t, LogicTimer)]
 
         # PERF: portals, for the same reason again.  _update_portals ticks every
-        # portal's fade every frame, which used to mean an isinstance scan of
-        # the entire thing list per frame on a map with no portals at all.  The
-        # name index is derived here too, in the same pass, so the two can never
-        # disagree about which portals exist.
-        self._portal_things = [t for t in self.things if Portal and isinstance(t, Portal)]
-        self._portals_by_name = {}
-        for t in self._portal_things:
-            n = t.properties.get('name', '')
-            if n:
-                self._portals_by_name[n] = t
+        # portal's fade every frame, but the traversal relation itself is also
+        # cached numerically.  The slot space is exactly enumerate(self.things),
+        # which is the EntityTable slot space published to the renderer.
+        self._portal_things = []
+        portal_slots = []
+        portal_target_slots = []
+        name_to_slot = {
+            t.properties.get('name'): slot
+            for slot, t in enumerate(self.things)
+            if t.properties.get('name')
+        }
+        for slot, t in enumerate(self.things):
+            if not (Portal and isinstance(t, Portal)):
+                continue
+            self._portal_things.append(t)
+            portal_slots.append(slot)
+            target_name = t.properties.get('portal_target', '')
+            target_slot = name_to_slot.get(target_name, -1)
+            if (target_slot >= 0 and Portal
+                    and isinstance(self.things[target_slot], Portal)):
+                portal_target_slots.append(target_slot)
+            else:
+                portal_target_slots.append(-1)
+        self._portal_slots = np.asarray(portal_slots, dtype=np.int32)
+        self._portal_target_slots = np.asarray(
+            portal_target_slots, dtype=np.int32)
 
     def _find_entity_by_name(self, name: str):
         if not name:
@@ -1957,61 +1976,57 @@ class LogicThread(threading.Thread):
     def _update_portals(self, delta: float):
         """
         Detect and execute player transit through active portal pairs.
+
+        Portal links are integer slot relations resolved at topology-cache
+        rebuild time; the per-tick traversal no longer resolves portal names.
         """
         if Portal is None or not self.player:
             return
-        if not self._portal_things:
-            # No portals in this map: nothing to fade, nothing to cross, and no
-            # cooldowns to decay (they are only ever written below).
+        if not len(self._portal_things):
             return
 
-        # Tick fade transitions for every portal each frame, off the list built
-        # by _build_entity_caches — walking the portals, not the level.
-        for t in self._portal_things:
-            t.tick_fade(delta)
+        for portal in self._portal_things:
+            portal.tick_fade(delta)
 
-        # Decay all active cooldowns
         for pid in list(self._portal_cooldowns):
             self._portal_cooldowns[pid] -= delta
             if self._portal_cooldowns[pid] <= 0.0:
                 del self._portal_cooldowns[pid]
 
-        portals_by_name = self._portals_by_name
-
         cur = (float(self.player.pos.x), float(self.player.pos.y), float(self.player.pos.z))
         prev = self._portal_prev_player_pos
         if prev is None:
             prev = cur
-        # Player half-extents — used for radius-aware exit clearance so the body
-        # never emerges embedded in the wall behind the destination.
+
         half = getattr(self.player, '_half', None)
         try:
             hx, hy, hz = float(half.x), float(half.y), float(half.z)
         except AttributeError:
             hx, hy, hz = 25.0, 50.0, 25.0
 
-        for portal_a in list(portals_by_name.values()):
+        for portal_index, portal_a in enumerate(self._portal_things):
             if not portal_a.is_active():
                 continue
-            target_name = portal_a.properties.get('portal_target', '')
-            if not target_name:
+            if portal_index >= len(self._portal_target_slots):
                 continue
-            portal_b = portals_by_name.get(target_name)
-            if portal_b is None or not portal_b.is_active():
+            target_slot = int(self._portal_target_slots[portal_index])
+            if target_slot < 0:
+                continue
+            portal_b = self.things[target_slot]
+            if not portal_b.is_active():
                 continue
             if id(portal_a) in self._portal_cooldowns:
                 continue
 
             hit = self._segment_crosses_aperture(portal_a, prev, cur)
             if hit is not None:
-                self._execute_portal_transit(portal_a, portal_b, hx, hy, hz)
-                cd = getattr(Portal, 'TRANSIT_COOLDOWN', _PORTAL_TRANSIT_COOLDOWN)
+                self._execute_portal_transit(
+                    portal_a, portal_b, hx, hy, hz)
+                cd = getattr(
+                    Portal, 'TRANSIT_COOLDOWN', _PORTAL_TRANSIT_COOLDOWN)
                 self._portal_cooldowns[id(portal_a)] = cd
                 self._portal_cooldowns[id(portal_b)] = cd
                 if self.io_manager:
-                    # Fire both output names so connections made against either
-                    # the canonical 'OnTeleport' pin (logic graph editor / IO
-                    # registry) or the legacy 'OnPlayerEnter' pin both trigger.
                     self.io_manager.fire_output(portal_a, 'OnTeleport')
                     self.io_manager.fire_output(portal_a, 'OnPlayerEnter')
                 debug_log(
@@ -2019,11 +2034,8 @@ class LogicThread(threading.Thread):
                     f"Player transited '{portal_a.properties.get('name')}' "
                     f"→ '{portal_b.properties.get('name')}'"
                 )
-                break  # one transit per frame; player pos has now jumped
+                break
 
-        # Store the post-update position so next frame's segment starts here.
-        # After a transit that is the emerged position, so the paired portal
-        # won't see a bogus crossing.
         self._portal_prev_player_pos = (
             float(self.player.pos.x), float(self.player.pos.y), float(self.player.pos.z)
         )
@@ -2094,27 +2106,23 @@ class LogicThread(threading.Thread):
         self._plugin_emit("portal_transit", portal_from=portal_a, portal_to=portal_b)
 
     def _transit_projectile_through_portals(self, proj, prev_pos):
-        """Teleport a monster projectile through any active portal pair whose
-        aperture its movement segment crossed this frame.  Position and
-        velocity are carried through the shared link transform, so a fireball
-        that flies into portal A comes out of portal B on course.
-
-        No cooldown is needed: the projectile emerges in front of B travelling
-        *away* from it, so the front-to-back crossing test cannot re-fire on the
-        following frame (its stored prev position becomes the emerged point)."""
-        if Portal is None or not self._portals_by_name:
+        """Teleport a monster projectile through the cached portal relations."""
+        if Portal is None or not len(self._portal_things):
             return
         cur = (proj['pos'][0], proj['pos'][1], proj['pos'][2])
-        for portal_a in self._portals_by_name.values():
+        for portal_index, portal_a in enumerate(self._portal_things):
             if not portal_a.is_active():
                 continue
-            target_name = portal_a.properties.get('portal_target', '')
-            if not target_name:
+            if portal_index >= len(self._portal_target_slots):
                 continue
-            portal_b = self._portals_by_name.get(target_name)
-            if portal_b is None or not portal_b.is_active():
+            target_slot = int(self._portal_target_slots[portal_index])
+            if target_slot < 0:
                 continue
-            if self._segment_crosses_aperture(portal_a, prev_pos, cur) is None:
+            portal_b = self.things[target_slot]
+            if not portal_b.is_active():
+                continue
+            if self._segment_crosses_aperture(
+                    portal_a, prev_pos, cur) is None:
                 continue
             npx, npy, npz = portal_map_point(
                 portal_a.pos, portal_a.get_basis(),
