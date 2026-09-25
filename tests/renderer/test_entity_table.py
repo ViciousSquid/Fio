@@ -312,6 +312,29 @@ def test_model_prop_enters_the_dense_model_pass_with_its_recipe():
     assert not np.allclose(table.model_base_matrix[0], 0.0)
 
 
+def test_prop_switching_model_to_billboard_refreshes_dense_sprite_columns():
+    prop = make_thing(
+        Prop, 'oil-drum',
+        model_path='assets/models/oil_drum.obj',
+        render_mode='model',
+        sprite_path='assets/sprites/pickup.png',
+    )
+    table = _synced([prop])
+    model_recipe = int(table.model_recipe_id[0])
+    assert model_recipe >= 0
+    assert int(table.sprite_key_id[0]) >= 0
+
+    prop.properties['render_mode'] = 'billboard'
+    table.refresh_rows([prop], [0])
+
+    assert int(table.class_bits[0]) & et.ENT_MODE_BILLBOARD
+    assert not int(table.class_bits[0]) & et.ENT_MODE_MODEL
+    assert int(table.sprite_key_id[0]) >= 0
+    sid = int(table.sprite_key_id[0])
+    assert table.sprite_recipes()[sid][0][1] == 'pickup.png'
+    assert np.allclose(table.sprite_size[0], [32.0, 32.0])
+
+
 def test_model_state_is_cold_and_position_is_separate():
     thing = make_thing(
         Prop, 'model',
