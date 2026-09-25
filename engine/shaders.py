@@ -647,10 +647,18 @@ uniform Light lights[MAX_LIGHTS];
 uniform int active_lights;
 uniform highp vec3 viewPos;
 uniform sampler2D normalMap;
+uniform sampler2D sceneColor;
+uniform samplerCube reflectionCube;
 uniform highp float time;
 
 uniform float waterOpacity;
 uniform float waterReflectivity;
+uniform float distortionStrength;
+uniform float refractionIndex;
+uniform float roughness;
+uniform float fresnelIntensity;
+uniform int reflectionEnabled;
+uniform vec2 screenSize;
 uniform vec3 waterTint;""" + FOG_GLSL + """
 
 const vec3 SUN_DIR   = vec3(0.4767, 0.6555, 0.5859);  // pre-normalized
@@ -670,12 +678,17 @@ highp float vnoise(highp vec2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// Procedural sky used for reflections: horizon haze -> blue zenith + sun.
+// Procedural sky remains the zero-cost fallback when reflections are disabled.
 vec3 skyColor(vec3 dir) {
     float h = clamp(dir.y, 0.0, 1.0);
-    vec3 sky = mix(vec3(0.66, 0.76, 0.83), vec3(0.19, 0.38, 0.66), pow(h, 0.55));
+    vec3 sky = mix(vec3(0.66, 0.76, 0.83),
+                   vec3(0.19, 0.38, 0.66),
+                   pow(h, 0.55));
     float sunAmount = max(dot(dir, SUN_DIR), 0.0);
-    sky += SUN_COLOR * (pow(sunAmount, 350.0) * 3.0 + pow(sunAmount, 24.0) * 0.18);
+    sky += SUN_COLOR * (
+        pow(sunAmount, 350.0) * 3.0 +
+        pow(sunAmount, 24.0) * 0.18
+    );
     return sky;
 }
 
@@ -686,21 +699,18 @@ void main()
     vec3 viewDir = toView / max(viewDist, 0.0001);
 
     vec3 geoN = normalize(Normal);
-    bool backside = dot(geoN, viewDir) < 0.0;   // camera inside the volume
+    bool backside = dot(geoN, viewDir) < 0.0;
     if (backside) geoN = -geoN;
 
-    // Horizontal surface vs. vertical side wall (side normals have y ~= 0)
     float topFace = step(0.35, abs(geoN.y));
 
-    // ---- Detail ripples: three scrolling normal-map layers projected in
-    //      world space, so ripple scale is constant regardless of brush size.
-    //      Side walls project onto their own plane or the pattern collapses
-    //      into 1D streaks. ----
+    // World-space animated normal-map detail.  This is also the normal used
+    // by Snell/Fresnel, so the optical effects follow the visible ripples.
     highp vec2 wuv;
     if (topFace > 0.5) {
         wuv = FragPos.xz;
     } else if (abs(geoN.x) > abs(geoN.z)) {
-        wuv = vec2(FragPos.z, FragPos.y - time * 6.0);   // slow downward drift
+        wuv = vec2(FragPos.z, FragPos.y - time * 6.0);
     } else {
         wuv = vec2(FragPos.x, FragPos.y - time * 6.0);
     }
@@ -709,46 +719,159 @@ void main()
     vec2 r3 = texture(normalMap, wuv * 0.0310 + time * vec2( 0.016, -0.029)).xy - 0.5;
     vec2 ripple = r1 + r2 * 0.65 + r3 * 0.35;
 
-    // Fade fine detail with distance to stop specular aliasing shimmer
     float detailFade = 1.0 / (1.0 + viewDist * 0.0009);
     float rippleStrength = (0.34 + WaveCrest * 0.18) * detailFade;
 
-    // Perturb tangentially to the face so ripples work on walls too
     vec3 N;
     if (topFace > 0.5) {
-        N = normalize(vec3(geoN.x + ripple.x * rippleStrength,
-                           geoN.y,
-                           geoN.z + ripple.y * rippleStrength));
+        N = normalize(vec3(
+            geoN.x + ripple.x * rippleStrength,
+            geoN.y,
+            geoN.z + ripple.y * rippleStrength
+        ));
     } else {
         vec3 up = vec3(0.0, 1.0, 0.0);
         vec3 tangent = normalize(cross(up, geoN));
-        N = normalize(geoN + (tangent * ripple.x + up * ripple.y) * rippleStrength * 0.6);
+        N = normalize(
+            geoN +
+            (tangent * ripple.x + up * ripple.y) *
+            rippleStrength * 0.6
+        );
     }
 
-    // ---- Fresnel (Schlick, R0 of water = 0.02) with the real normal ----
-    float NdV = max(dot(N, viewDir), 0.0);
-    float fresnel = 0.02 + 0.98 * pow(1.0 - NdV, 5.0);
-    fresnel = clamp(fresnel * clamp(waterReflectivity * 2.0, 0.0, 1.6), 0.0, 1.0);
+    // ------------------------------------------------------------------
+    // Refraction / transmission: the same screen-space optical treatment
+    // used by Glass, but driven by the water's perturbed surface normal.
+    // ------------------------------------------------------------------
+    float ior = max(refractionIndex, 1.0);
+    float eta = 1.0 / ior;
+    highp vec3 straightDir = -viewDir;
+    highp vec3 refractDir = refract(straightDir, N, eta);
+    highp vec3 refractDeltaView = mat3(view) * (refractDir - straightDir);
+    highp float refractDeltaLen = length(refractDeltaView);
+    if (refractDeltaLen > 1.0e-5) {
+        refractDeltaView /= refractDeltaLen;
+    } else {
+        refractDeltaView = vec3(0.0);
+    }
 
-    // ---- Sky reflection ----
+    highp vec2 projectionScale =
+        vec2(projection[0][0], projection[1][1]);
+    highp vec2 normalView =
+        normalize(mat3(view) * N).xy;
+    highp float grazing =
+        1.0 - clamp(abs(dot(viewDir, N)), 0.0, 1.0);
+
+    highp vec2 refractionWarp =
+        refractDeltaView.xy *
+        projectionScale *
+        (0.055 + 0.035 * grazing);
+    highp vec2 normalWarp =
+        normalView *
+        (0.012 + 0.010 * grazing);
+
+    highp float nWarp1 =
+        vnoise(FragPos.xz * 0.08 + TexCoords * 3.0);
+    highp float nWarp2 =
+        vnoise(FragPos.xy * 0.11 + TexCoords * 5.0);
+    highp vec2 microWarp =
+        (vec2(nWarp1, nWarp2) - 0.5) * 0.020;
+
+    highp vec2 screenUV =
+        gl_FragCoord.xy / max(screenSize, vec2(1.0));
+    highp vec2 uvOffset =
+        (refractionWarp + normalWarp + microWarp) *
+        distortionStrength;
+    highp vec2 refractUV = clamp(
+        screenUV + uvOffset,
+        vec2(0.001),
+        vec2(0.999)
+    );
+
+    vec3 transmitted = texture(sceneColor, refractUV).rgb;
+    if (roughness > 0.001) {
+        highp vec2 blurStep = roughness * 4.0 / max(screenSize, vec2(1.0));
+        transmitted += texture(
+            sceneColor,
+            clamp(refractUV + vec2(blurStep.x, 0.0),
+                  vec2(0.001), vec2(0.999))).rgb;
+        transmitted += texture(
+            sceneColor,
+            clamp(refractUV - vec2(blurStep.x, 0.0),
+                  vec2(0.001), vec2(0.999))).rgb;
+        transmitted += texture(
+            sceneColor,
+            clamp(refractUV + vec2(0.0, blurStep.y),
+                  vec2(0.001), vec2(0.999))).rgb;
+        transmitted /= 4.0;
+    }
+
+    // ------------------------------------------------------------------
+    // Water body / shallow colour and subsurface-looking crest scatter.
+    // ------------------------------------------------------------------
+    float NdV = max(dot(N, viewDir), 0.0);
+    vec3 deepCol = waterTint * 0.55;
+    vec3 shallowCol =
+        waterTint * 1.25 +
+        vec3(0.02, 0.10, 0.09);
+    vec3 bodyCol =
+        mix(deepCol, shallowCol,
+            pow(1.0 - NdV, 1.5) * 0.7 + 0.15);
+
+    float sss =
+        pow(WaveCrest, 2.0) *
+        pow(
+            max(
+                dot(
+                    viewDir,
+                    -normalize(vec3(SUN_DIR.x, 0.0, SUN_DIR.z))
+                ),
+                0.0
+            ),
+            2.0
+        );
+    bodyCol +=
+        (waterTint * 0.8 + vec3(0.05, 0.22, 0.18)) * sss;
+
+    bodyCol *=
+        0.45 + 0.55 * max(dot(N, SUN_DIR), 0.0);
+
+    // Mix the refracted scene with the water's own body colour so shallow
+    // geometry remains visible instead of replacing the water with a flat
+    // post-process image.
+    vec3 transmittedTinted =
+        transmitted * mix(vec3(1.0), waterTint, 0.35);
+    vec3 transmission =
+        mix(transmittedTinted, bodyCol, 0.45);
+
+    // ------------------------------------------------------------------
+    // Fresnel: physical R0 for water (~0.0204), multiplied by the authored
+    // Fresnel/reflectivity intensity so existing maps retain their control.
+    // ------------------------------------------------------------------
+    float f0 = 0.020373;
+    float fresnel =
+        f0 + (1.0 - f0) * pow(1.0 - NdV, 5.0);
+    fresnel = clamp(
+        fresnel * clamp(fresnelIntensity, 0.0, 4.0),
+        0.0, 1.0
+    );
+
     vec3 R = reflect(-viewDir, N);
-    R.y = abs(R.y);   // reflections that would sample "below horizon" mirror upward
     vec3 reflection = skyColor(R);
 
-    // ---- Water body: deep tint straight down, brighter scatter at angles,
-    //      subsurface glow through wave crests ----
-    vec3 deepCol    = waterTint * 0.55;
-    vec3 shallowCol = waterTint * 1.25 + vec3(0.02, 0.10, 0.09);
-    vec3 bodyCol = mix(deepCol, shallowCol, pow(1.0 - NdV, 1.5) * 0.7 + 0.15);
+    // High quality reflection uses the world captured from a probe 256 units
+    // above the authored water surface. Only horizontal water surfaces sample
+    // it; vertical pool walls retain the cheap procedural environment.
+    if (reflectionEnabled == 1 && topFace > 0.5) {
+        float lod = clamp(roughness * 5.0, 0.0, 5.0);
+        reflection = textureLod(reflectionCube, R, lod).rgb;
+    }
 
-    float sss = pow(WaveCrest, 2.0)
-              * pow(max(dot(viewDir, -normalize(vec3(SUN_DIR.x, 0.0, SUN_DIR.z))), 0.0), 2.0);
-    bodyCol += (waterTint * 0.8 + vec3(0.05, 0.22, 0.18)) * sss;
+    vec3 color = mix(transmission, reflection, fresnel);
 
-    // Constant sun term so water reads correctly even with no point lights
-    bodyCol *= (0.45 + 0.55 * max(dot(N, SUN_DIR), 0.0));
-
-    // ---- Dynamic point lights: wide diffuse + tight Blinn specular ----
+    // ------------------------------------------------------------------
+    // Dynamic lights / specular / foam.
+    // ------------------------------------------------------------------
     vec3 diffuseAcc = vec3(0.0);
     vec3 specAcc = vec3(0.0);
     for (int i = 0; i < active_lights && i < MAX_LIGHTS; i++) {
@@ -756,48 +879,77 @@ void main()
         highp float dist = length(toL);
         if (dist < lights[i].radius) {
             vec3 Ldir = toL / dist;
-            float att = 1.0 - smoothstep(0.0, lights[i].radius, dist);
-            vec3 lc = lights[i].color * lights[i].intensity * att;
+            float att =
+                1.0 - smoothstep(0.0, lights[i].radius, dist);
+            vec3 lc =
+                lights[i].color * lights[i].intensity * att;
             diffuseAcc += max(dot(N, Ldir), 0.0) * lc;
             vec3 Hl = normalize(Ldir + viewDir);
             float ndh = max(dot(N, Hl), 0.0);
-            specAcc += (pow(ndh, 240.0) * 1.6 + pow(ndh, 28.0) * 0.15) * lc;
+            specAcc +=
+                (pow(ndh, 240.0) * 1.6 +
+                 pow(ndh, 28.0) * 0.15) * lc;
         }
     }
-    bodyCol += bodyCol * diffuseAcc * 0.9;
+    color += color * diffuseAcc * 0.45;
 
-    // ---- Sun glint with sparkle (twinkling micro-facets) ----
     vec3 Hs = normalize(SUN_DIR + viewDir);
-    float sunSpec = pow(max(dot(N, Hs), 0.0), 320.0);
-    float sparkle = vnoise(wuv * 0.9 + vec2(time * 1.7, -time * 1.3))
-                  * vnoise(wuv * 1.7 - vec2(time * 0.9, -time * 1.1));
-    sunSpec *= (1.0 + sparkle * 6.0) * detailFade;
-    vec3 specular = SUN_COLOR * sunSpec * 2.2 + specAcc;
+    float sunSpec =
+        pow(max(dot(N, Hs), 0.0), 320.0);
+    float sparkle =
+        vnoise(wuv * 0.9 +
+               vec2(time * 1.7, -time * 1.3)) *
+        vnoise(wuv * 1.7 -
+               vec2(time * 0.9, -time * 1.1));
+    sunSpec *=
+        (1.0 + sparkle * 6.0) *
+        detailFade;
+    vec3 specular =
+        SUN_COLOR * sunSpec * 2.2 + specAcc;
 
-    // ---- Foam: breaking wave crests + lapping at the shore/walls
-    //      (horizontal surface only — walls get none) ----
-    float foamNoise = vnoise(wuv * 0.16 + vec2(time * 0.05, -time * 0.04)) * 0.6
-                    + vnoise(wuv * 0.45 - vec2(time * 0.07, time * 0.06)) * 0.4;
-    float crestFoam = smoothstep(0.68, 0.92, WaveCrest) * smoothstep(0.35, 0.75, foamNoise);
-    float shoreWave = 0.5 + 0.5 * sin(ShoreDist * 0.30 - time * 1.8);
-    float shoreFoam = (1.0 - smoothstep(2.0, 26.0, ShoreDist))
-                    * (0.30 + 0.70 * shoreWave)
-                    * smoothstep(0.25, 0.60, foamNoise + 0.15);
-    float foam = clamp(crestFoam + shoreFoam, 0.0, 1.0) * topFace;
+    float foamNoise =
+        vnoise(wuv * 0.16 +
+               vec2(time * 0.05, -time * 0.04)) * 0.6 +
+        vnoise(wuv * 0.45 -
+               vec2(time * 0.07, time * 0.06)) * 0.4;
+    float crestFoam =
+        smoothstep(0.68, 0.92, WaveCrest) *
+        smoothstep(0.35, 0.75, foamNoise);
+    float shoreWave =
+        0.5 + 0.5 * sin(ShoreDist * 0.30 - time * 1.8);
+    float shoreFoam =
+        (1.0 - smoothstep(2.0, 26.0, ShoreDist)) *
+        (0.30 + 0.70 * shoreWave) *
+        smoothstep(0.25, 0.60, foamNoise + 0.15);
+    float foam =
+        clamp(crestFoam + shoreFoam, 0.0, 1.0) *
+        topFace;
 
-    // ---- Combine ----
-    vec3 color = mix(bodyCol, reflection, fresnel);
     color += specular * (0.35 + 0.65 * waterReflectivity);
-    color = mix(color, vec3(0.90, 0.95, 0.96), foam * 0.85);
+    color = mix(
+        color,
+        vec3(0.90, 0.95, 0.96),
+        foam * 0.85
+    );
 
-    // ---- Alpha: more transparent looking straight down, opaque at glancing
-    //      angles; foam and glints always read solid ----
-    float alpha = clamp(waterOpacity, 0.05, 1.0) * (0.60 + 0.40 * (1.0 - NdV));
-    alpha = clamp(alpha + fresnel * 0.35 + foam * 0.45 + sunSpec * 0.4, 0.05, 1.0);
+    float alpha =
+        clamp(waterOpacity, 0.05, 1.0) *
+        (0.60 + 0.40 * (1.0 - NdV));
+    alpha = clamp(
+        alpha +
+        fresnel * 0.35 +
+        foam * 0.45 +
+        sunSpec * 0.4,
+        0.05,
+        1.0
+    );
 
     if (backside) {
-        // Seen from underwater: milkier, brighter surface (approx. Snell window)
-        color = mix(color, waterTint * 1.4 + vec3(0.10, 0.18, 0.20), 0.35);
+        color = mix(
+            color,
+            waterTint * 1.4 + vec3(0.10, 0.18, 0.20),
+            0.35
+        );
         alpha = min(alpha + 0.15, 1.0);
     }
 
