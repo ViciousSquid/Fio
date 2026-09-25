@@ -645,6 +645,8 @@ struct Light {
 #define MAX_LIGHTS """ + str(MAX_LIGHTS_WATER) + """
 uniform Light lights[MAX_LIGHTS];
 uniform int active_lights;
+uniform mat4 view;
+uniform mat4 projection;
 uniform highp vec3 viewPos;
 uniform sampler2D normalMap;
 uniform sampler2D sceneColor;
