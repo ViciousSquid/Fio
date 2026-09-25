@@ -2975,9 +2975,9 @@ layout (location = 9) in vec4 iNormal2;
 
         Returns ``(instance_count, geo_casters)``. The cube casters go into the
         shared instance buffer as model matrices -- the depth pass writes only
-        depth, so the normal and payload slots stay zero -- and the angled ones
-        come back as objects, because each convex mesh is unique and a run of
-        one instance buys nothing.
+        depth, so the normal and payload slots stay zero. Angled casters come
+        back as ``(slot, brush)`` pairs: the brush is needed only for its unique
+        convex mesh, while its transform still comes from the dense table.
 
         Falls back to treating every caster as an individual object when there
         is no projection to read, or no instanced depth shader: the per-caster
@@ -2985,13 +2985,14 @@ layout (location = 9) in vec4 iNormal2;
         interface gets.
         """
         if not instanced or table is None or refs is None or not len(in_brushes):
-            return 0, [refs[int(b)] if (refs is not None and not isinstance(b, dict))
-                       else b for b in in_brushes]
+            return 0, [(None, refs[int(b)] if (refs is not None and not isinstance(b, dict))
+                       else b) for b in in_brushes]
 
         slots = np.asarray(in_brushes, dtype=np.int32)
         geometry = (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0
         cube_slots = slots[~geometry]
-        geo_casters = [refs[int(s)] for s in slots[geometry]]
+        geo_slots = slots[geometry]
+        geo_casters = [(int(s), refs[int(s)]) for s in geo_slots]
         if not len(cube_slots):
             return 0, geo_casters
 
@@ -3212,19 +3213,41 @@ layout (location = 9) in vec4 iNormal2;
                     gl.glUniformMatrix4fv(lsm_loc, 1, gl.GL_FALSE,
                                           glm.value_ptr(lsm))
 
-                # Angled casters keep their own mesh, and their own draw: each
-                # convex mesh is unique, so a run would have one member in it.
+                # Angled casters keep their own mesh, and their own draw:
+                # each convex mesh is unique, so a run would have one member
+                # in it. The mesh remains object-backed, but its transform is
+                # projected: this is what lets dynamic brushes stop requiring
+                # per-frame dictionary snapshots.
                 gl.glBindVertexArray(cube_vao)
-                for b in geo_casters:
-                    gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE,
-                                          glm.value_ptr(self._brush_model_matrix(b)))
-                    mesh = self._get_geo_mesh(b)
-                    if mesh is not None:
-                        gl.glBindVertexArray(mesh.vao)
-                        gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
-                        gl.glBindVertexArray(cube_vao)
+                if geo_casters:
+                    geo_slots = np.asarray(
+                        [slot for slot, _brush in geo_casters if slot is not None],
+                        dtype=np.int32)
+                    if len(geo_slots):
+                        geo_models, _geo_normals = self._frame_transforms(
+                            table, geo_slots)
+                        geo_model_by_slot = {
+                            int(slot): geo_models[i]
+                            for i, slot in enumerate(geo_slots)
+                        }
                     else:
-                        gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+                        geo_model_by_slot = {}
+                    for slot_value, b in geo_casters:
+                        if slot_value is not None:
+                            model_matrix = geo_model_by_slot[int(slot_value)]
+                            gl.glUniformMatrix4fv(
+                                model_loc, 1, gl.GL_FALSE, model_matrix)
+                        else:
+                            gl.glUniformMatrix4fv(
+                                model_loc, 1, gl.GL_FALSE,
+                                glm.value_ptr(self._brush_model_matrix(b)))
+                        mesh = self._get_geo_mesh(b)
+                        if mesh is not None:
+                            gl.glBindVertexArray(mesh.vao)
+                            gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
+                            gl.glBindVertexArray(cube_vao)
+                        else:
+                            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
 
                 # Model casters.
                 for t, obj in resolved_models:
