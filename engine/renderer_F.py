@@ -1317,22 +1317,34 @@ class Renderer_F(BaseRenderer):
         # scene geometry so every lit/textured/terrain draw can sample them.
         self._light_shadow_index = {}
         if current_mode == RENDER_MODE_LIT and self.shadows_enabled:
+            shadow_slots = None
             if isinstance(lights, tuple) and len(lights) == 2:
                 light_table, light_slots = lights
-                shadow_lights = (
-                    light_table,
-                    light_slots[light_table.light_casts_shadows[light_slots]],
-                )
+                shadow_slots = light_slots[
+                    light_table.light_casts_shadows[light_slots]]
+                # Shadow-map rendering still has a narrow object seam for its
+                # caster/model API. Keep it limited to the shadow-casting lights;
+                # ordinary GL light state remains entirely dense.
+                light_refs = config.get('entity_refs')
+                shadow_lights = ([light_refs[int(s)] for s in shadow_slots]
+                                 if light_refs is not None else [])
             else:
                 shadow_lights = [l for l in lights if _light_casts_shadows(l)]
-            shadow_count = (len(shadow_lights[1])
-                            if isinstance(shadow_lights, tuple) else len(shadow_lights))
+            shadow_count = len(shadow_lights)
             if shadow_count:
                 shadow_brushes = config.get('all_brushes', brushes)
                 shadow_things = config.get('all_things', things)
                 self.render_shadow_maps(
                     shadow_lights, shadow_brushes, shadow_things,
                     config, camera_pos)
+                if shadow_slots is not None:
+                    # render_shadow_maps keyed its shadow slots by object id;
+                    # translate those temporary keys back to EntityTable slots
+                    # for the dense UBO upload.
+                    self._light_shadow_index = {
+                        int(slot): self._light_shadow_index.get(id(ref), -1)
+                        for slot, ref in zip(shadow_slots, shadow_lights)
+                    }
 
         terrain = config.get('terrain', None)
         if terrain and terrain.enabled:
