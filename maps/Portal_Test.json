@@ -153,7 +153,8 @@
                 "down": "default.png"
             },
             "lock": false,
-            "id": "cfa15b28-cc11-452d-ab53-1fb76ba4c0f5"
+            "id": "cfa15b28-cc11-452d-ab53-1fb76ba4c0f5",
+            "hidden": true
         },
         {
             "pos": [
@@ -373,7 +374,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -403,7 +405,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -418,7 +421,8 @@
                 "type": "playerstart",
                 "name": "PlayerStart_1",
                 "angle": 0.0,
-                "id": "5f4a744c-0acf-4862-98ec-e02efbcb407e"
+                "id": "5f4a744c-0acf-4862-98ec-e02efbcb407e",
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -438,7 +442,8 @@
                 "show_radius": false,
                 "radius": 128.0,
                 "id": "8e3f4a55-6824-4063-b67a-541b820551b4",
-                "usable": false
+                "usable": false,
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -446,7 +451,7 @@
             "type": "portal",
             "pos": [
                 1072,
-                192,
+                224,
                 -800
             ],
             "properties": {
@@ -454,7 +459,7 @@
                 "name": "Portal_2",
                 "id": "54bfcf4f-c761-4ce9-892b-485895533177",
                 "portal_target": "Portal_1",
-                "width": 128.0,
+                "width": 200.0,
                 "height": 256.0,
                 "rotation": [
                     180.0,
@@ -477,7 +482,8 @@
                 ],
                 "parent_local_pos": null,
                 "parent_local_yaw": 0.0,
-                "portal_direction": "both"
+                "portal_direction": "both",
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -485,7 +491,7 @@
             "type": "portal",
             "pos": [
                 480,
-                192,
+                224,
                 -448
             ],
             "properties": {
@@ -493,7 +499,7 @@
                 "name": "Portal_1",
                 "id": "778eaaae-0c3b-49d3-9635-7428cd0d2ec1",
                 "portal_target": "Portal_2",
-                "width": 128.0,
+                "width": 200.0,
                 "height": 256.0,
                 "rotation": [
                     270.0,
@@ -516,7 +522,8 @@
                 ],
                 "parent_local_pos": null,
                 "parent_local_yaw": 0.0,
-                "portal_direction": "both"
+                "portal_direction": "both",
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -538,7 +545,8 @@
                 "respawns": false,
                 "respawn_time": 20.0,
                 "key_name": "blue_key",
-                "custom_sprite": "assets/sprites/health.png"
+                "custom_sprite": "assets/sprites/health.png",
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -568,9 +576,11 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         }
-    ]
+    ],
+    "created": "2026-09-25T21:17:50"
 }
