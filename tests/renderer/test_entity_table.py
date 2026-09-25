@@ -369,6 +369,8 @@ def test_a_dead_monster_keeps_an_idle_fallback_if_dead_frame_is_missing():
         ('dead.png', 'sprites/monsters/human', True),
         ('idle.png', 'sprites/monsters/human', True),
     ]
+
+
 def test_a_variant_monster_falls_back_to_the_base_folder():
     """Two load attempts, in the order draw_sprites makes them."""
     grunt = make_thing(Monster, 'grunt', monster_type='human', variant='red')
