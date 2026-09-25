@@ -1447,7 +1447,7 @@ class PropertyEditor(QWidget):
             layout.addRow(label_txt, _hbox(slider, label, stretch=False))
             self._widgets[f'{key}_slider'] = slider
 
-        wave_cb = _make_checkbox("Enable Rolling Waves", brush.get('water_wave_enabled', True),
+        wave_cb = _make_checkbox("Enable Waves", brush.get('water_wave_enabled', True),
                                  lambda c: self.update_object_prop('water_wave_enabled', c), _Style.CHECKBOX)
         layout.addRow("", wave_cb)
         self._widgets['water_wave_cb'] = wave_cb
