@@ -12,6 +12,11 @@ jobs:
   headless:
     name: Core (headless, no Qt, no GL)
     runs-on: ubuntu-latest
+    env:
+      # PyOpenGL is imported by some renderer modules during collection even
+      # though the GL-marked tests themselves are excluded here. EGL lets those
+      # imports resolve function symbols without requiring a display.
+      PYOPENGL_PLATFORM: egl
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,6 +33,9 @@ jobs:
   editor:
     name: Editor + engine (Qt, offscreen)
     runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYOPENGL_PLATFORM: egl
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -46,13 +54,14 @@ jobs:
           pip install pytest
           pip install -r requirements.txt
       - name: Run everything that does not need a GPU
-        env:
-          QT_QPA_PLATFORM: offscreen
         run: python -m pytest -m "not gl and not benchmark" -q
 
   opengl:
     name: Renderer (OpenGL, software rasteriser)
     runs-on: ubuntu-latest
+    env:
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      PYOPENGL_PLATFORM: glx
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -72,8 +81,6 @@ jobs:
           pip install pytest
           pip install -r requirements.txt
       - name: Run the visual tier against llvmpipe
-        env:
-          LIBGL_ALWAYS_SOFTWARE: '1'
         run: xvfb-run -a python -m pytest -m gl -q
 
   benchmark:
@@ -81,6 +88,10 @@ jobs:
     runs-on: ubuntu-latest
     # Informational: a shared runner's speed is not a property of Fio.
     continue-on-error: true
+    env:
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      PYOPENGL_PLATFORM: glx
+      FIO_BENCH_OUT: benchmark.json
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -100,9 +111,6 @@ jobs:
           pip install pytest
           pip install -r requirements.txt
       - name: Measure and report
-        env:
-          LIBGL_ALWAYS_SOFTWARE: '1'
-          FIO_BENCH_OUT: benchmark.json
         run: xvfb-run -a python -m pytest tests/performance/test_renderer_benchmark.py -m benchmark --run-benchmarks -q -s
       - uses: actions/upload-artifact@v4
         if: always()
