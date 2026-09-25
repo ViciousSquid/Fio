@@ -1035,18 +1035,14 @@ class Renderer_F(BaseRenderer):
             slots = np.asarray(slots, dtype=np.int32)
 
         if len(slots):
-            planes = self._frustum_planes(projection * view)
+            planes = np.asarray(
+                self._frustum_planes(projection * view),
+                dtype=np.float64,
+            )
             centres = table.center[slots]
             radii = np.linalg.norm(table.half[slots], axis=1)
-            keep = np.ones(len(slots), dtype=bool)
-            for a, b, c, d in planes:
-                keep &= (
-                    a * centres[:, 0]
-                    + b * centres[:, 1]
-                    + c * centres[:, 2]
-                    + d
-                ) >= -radii
-            slots = slots[keep]
+            distances = centres @ planes[:, :3].T + planes[:, 3]
+            slots = slots[np.all(distances >= -radii[:, None], axis=1)]
 
         groups = self._classify_brush_slots(table, slots, config)
 
