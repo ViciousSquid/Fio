@@ -4,10 +4,12 @@ The dense renderer consumes a snapshot of the editor's invalidation journal.
 Edits made after that snapshot must remain pending for the next frame.
 """
 
-from editor.editor_state import EditorState
+import pytest
 
 
 def _state():
+    pytest.importorskip("PyQt5")
+    from editor.editor_state import EditorState
     state = EditorState.__new__(EditorState)
     state.world_epoch = 0
     state._render_dirty_objects = set()
