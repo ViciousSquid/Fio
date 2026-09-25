@@ -307,7 +307,7 @@ class ConsoleCommandHandler:
         except Exception as e:
             debug_log("Warning", f"Could not fire OnDeath: {e}")
 
-        debug_log("Info", f"Monster '{name}' killed (health set to 0, hidden=True)")
+        debug_log("Info", f"Monster '{name}' killed (health set to 0, dead=True)")
         self.main_window.update_all_ui()
 
     def cmd_monster_revive(self, args):
