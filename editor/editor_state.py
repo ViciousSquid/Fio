@@ -101,6 +101,10 @@ class EditorState:
     def mark_render_dirty(self, *objects) -> None:
         """Mark specific objects whose render-facing cold state changed."""
         if self._render_dirty_all:
+            # The global invalidation already covers every row, but remember
+            # the later epoch so a frame snapshot cannot consume an edit that
+            # happened after it was captured.
+            self._render_dirty_all_epoch = self.world_epoch
             return
         epoch = self.world_epoch
         for obj in objects:
