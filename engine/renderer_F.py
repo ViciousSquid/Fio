@@ -112,7 +112,8 @@ class Renderer_F(BaseRenderer):
 
         Transforms, material state, selection and geometry IDs all come from
         dense render data; authored Brush objects are never touched here.
-        """     if len(brushes) == 0 or 'lit' not in self.shaders:
+        """
+        if len(brushes) == 0 or 'lit' not in self.shaders:
             return
         visible = brushes
         self.render_stats.visible_brushes += len(visible)
