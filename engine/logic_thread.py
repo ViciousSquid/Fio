@@ -3873,7 +3873,9 @@ class LogicThread(threading.Thread):
         render_dirty = self.editor_state.render_dirty_snapshot()
         # Rows are named by the brush's UUID, so ids have to exist before the
         # table reconciles -- but only then, not on every frame.
-        if table.needs_reconcile(brushes, world_epoch):
+        # Stable ids are needed when rows are first created/replaced, not
+        # for ordinary epoch bumps. Avoid walking the whole scene on every edit.
+        if len(brushes) != table.count:
             self.editor_state.ensure_entity_ids()
         generation = table.generation
         # One Python pass over the brush list, for the only two things that
