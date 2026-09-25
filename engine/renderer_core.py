@@ -273,6 +273,9 @@ class BaseRenderer:
     MAX_SHADOW_LIGHTS = 8          # number of point lights that can cast shadows at once
     SHADOW_MAP_SIZE = 384         # per-face resolution of each depth cube-map
     SHADOW_TEXTURE_UNIT_BASE = 4   # shadow cube-maps bind to units 4..(4+MAX_SHADOW_LIGHTS-1)
+    WATER_REFLECTION_SIZE = 256
+    WATER_REFLECTION_PROBE_HEIGHT = 256.0
+    WATER_REFLECTION_TEXTURE_UNIT = 3
 
     #: Uniform names of the shared distance-fog / global-ambient block
     #: (engine.shaders.FOG_GLSL). Preloaded for every shader that splices it in,
@@ -289,6 +292,13 @@ class BaseRenderer:
         self._glass_scene_texture = 0
         self._glass_scene_size = (0, 0)
         self._glass_scene_texture_unit = 2
+
+        # Water reflections are fully lazy. The checkbox creates one
+        # 256x256 RGBA cubemap per reflected water slot, plus one shared
+        # 256x256 depth target used while filling all six faces.
+        self._water_reflection_fbo = None
+        self._water_reflection_depth = None
+        self._water_reflection_cubemaps = {}
 
         self.load_texture_callback = texture_loader
         self._identity_mat4 = glm.mat4(1.0)
@@ -1125,8 +1135,14 @@ layout (location = 9) in vec4 iNormal2;
 
     def _preload_water_uniforms(self):
         uniforms = self.uniforms['water']
-        uniforms.preload(['projection', 'view', 'model', 'time', 'viewPos', 'normalMap', 'waterOpacity',
-                          'waterReflectivity', 'waterTint', 'normalMatrix', 'waveAmp', 'brushSize'])
+        uniforms.preload([
+            'projection', 'view', 'model', 'time', 'viewPos',
+            'normalMap', 'sceneColor', 'reflectionCube', 'reflectionEnabled',
+            'screenSize', 'waterOpacity', 'waterReflectivity',
+            'waterTint', 'distortionStrength', 'refractionIndex',
+            'roughness', 'fresnelIntensity', 'normalMatrix',
+            'waveAmp', 'brushSize'
+        ])
         uniforms.preload(self.ENV_UNIFORMS)
 
     def _preload_fog_uniforms(self):
@@ -2595,6 +2611,96 @@ layout (location = 9) in vec4 iNormal2;
             print(f"[Shadow] initialisation failed: {e}")
             self._shadow_fbo = None
             self._shadow_cubemaps = []
+
+    def _ensure_water_reflection_resources(self):
+        """Create the shared render target used by high-quality water reflections."""
+        if self._water_reflection_fbo and self._water_reflection_depth:
+            return True
+        try:
+            size = self.WATER_REFLECTION_SIZE
+            self._water_reflection_fbo = int(gl.glGenFramebuffers(1))
+            self._water_reflection_depth = int(gl.glGenRenderbuffers(1))
+
+            gl.glBindRenderbuffer(gl.GL_RENDERBUFFER, self._water_reflection_depth)
+            gl.glRenderbufferStorage(
+                gl.GL_RENDERBUFFER, gl.GL_DEPTH_COMPONENT24, size, size)
+
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._water_reflection_fbo)
+            gl.glFramebufferRenderbuffer(
+                gl.GL_FRAMEBUFFER,
+                gl.GL_DEPTH_ATTACHMENT,
+                gl.GL_RENDERBUFFER,
+                self._water_reflection_depth,
+            )
+            gl.glDrawBuffer(gl.GL_COLOR_ATTACHMENT0)
+            gl.glReadBuffer(gl.GL_COLOR_ATTACHMENT0)
+            status = gl.glCheckFramebufferStatus(gl.GL_FRAMEBUFFER)
+            if status != gl.GL_FRAMEBUFFER_COMPLETE:
+                print(
+                    f"[Water] reflection FBO incomplete "
+                    f"(0x{status:x}); reflections disabled"
+                )
+                gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, 0)
+                gl.glDeleteRenderbuffers(1, [self._water_reflection_depth])
+                gl.glDeleteFramebuffers(1, [self._water_reflection_fbo])
+                self._water_reflection_depth = None
+                self._water_reflection_fbo = None
+                return False
+
+            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, 0)
+            gl.glBindRenderbuffer(gl.GL_RENDERBUFFER, 0)
+            return True
+        except Exception as exc:
+            print(f"[Water] reflection target initialisation failed: {exc}")
+            self._water_reflection_depth = None
+            if self._water_reflection_fbo:
+                try:
+                    gl.glDeleteFramebuffers(1, [self._water_reflection_fbo])
+                except Exception:
+                    pass
+            self._water_reflection_fbo = None
+            return False
+
+    def _ensure_water_reflection_cubemap(self, slot):
+        """Return the 256x256 RGBA cubemap owned by dense water slot."""
+        slot = int(slot)
+        existing = self._water_reflection_cubemaps.get(slot)
+        if existing:
+            return existing
+        tex = int(gl.glGenTextures(1))
+        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, tex)
+        size = self.WATER_REFLECTION_SIZE
+        for face in range(6):
+            gl.glTexImage2D(
+                gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
+                0,
+                gl.GL_RGBA8,
+                size,
+                size,
+                0,
+                gl.GL_RGBA,
+                gl.GL_UNSIGNED_BYTE,
+                None,
+            )
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_CUBE_MAP,
+            gl.GL_TEXTURE_MIN_FILTER,
+            gl.GL_LINEAR_MIPMAP_LINEAR,
+        )
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_R, gl.GL_CLAMP_TO_EDGE)
+        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+        self._water_reflection_cubemaps[slot] = tex
+        return tex
+
+    def _water_reflection_texture(self, slot):
+        return self._water_reflection_cubemaps.get(int(slot), 0)
 
     def _bind_shadow_maps(self, uniforms):
         """Bind shadow samplers to dedicated texture units.
@@ -4519,6 +4625,26 @@ layout (location = 9) in vec4 iNormal2;
         self._shadow_slot_owner = [None] * self.MAX_SHADOW_LIGHTS
         self._shadow_slot_sig = [None] * self.MAX_SHADOW_LIGHTS
         self._light_shadow_index = {}
+
+        if self._water_reflection_cubemaps:
+            try:
+                gl.glDeleteTextures(list(self._water_reflection_cubemaps.values()))
+            except Exception:
+                pass
+            self._water_reflection_cubemaps.clear()
+        if self._water_reflection_depth:
+            try:
+                gl.glDeleteRenderbuffers(1, [self._water_reflection_depth])
+            except Exception:
+                pass
+            self._water_reflection_depth = None
+        if self._water_reflection_fbo:
+            try:
+                gl.glDeleteFramebuffers(1, [self._water_reflection_fbo])
+            except Exception:
+                pass
+            self._water_reflection_fbo = None
+
         if self._cube_vbo:
             gl.glDeleteBuffers(1, [self._cube_vbo])
         if self._sprite_vbo:
