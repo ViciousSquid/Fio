@@ -1493,19 +1493,6 @@ class PropertyEditor(QWidget):
             self._widgets[f'{key}_slider'] = slider
         layout.addWidget(dist_group)
 
-        fres_group = QGroupBox("Fresnel Effect")
-        fres_group.setStyleSheet(_Style.group_box("#98FB98", "#2b3d3b"))
-        fres_form = QFormLayout(fres_group)
-        slider, label = _make_slider(
-            self, brush.get('water_fresnel',
-                            brush.get('water_reflectivity', 0.5)),
-            0, 100,
-            callback=lambda v: self.update_object_prop('water_fresnel', v),
-            tooltip="Controls edge reflection intensity")
-        fres_form.addRow("Intensity:", _hbox(slider, label, stretch=False))
-        self._widgets['water_fresnel_slider'] = slider
-        layout.addWidget(fres_group)
-
         wave_group = QGroupBox("Surface")
         wave_group.setStyleSheet(_Style.group_box("#48D1CC", "#2b3d3b"))
         wave_layout = QFormLayout(wave_group)
