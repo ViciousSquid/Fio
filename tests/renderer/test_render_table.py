@@ -148,9 +148,11 @@ def test_structural_change_keeps_survivors_cold_columns():
     t = _synced([a, b], epoch=1)
     assert t.class_bits[t.slot_of_id['a']] & rt.CLASS_GLASS
 
-    # Mutate 'a' behind the table's back, then force a structural change at the
-    # same epoch by inserting a new brush ahead of it.
-    a['shader'] = 'Glow'
+    # Mutate the survivor behind the table's back, then force a structural
+    # change at the same epoch by inserting a new brush ahead of it. The
+    # survivor's source data now disagrees with its cache, so the assertion
+    # below only passes if the row really was preserved rather than re-resolved.
+    b['shader'] = 'Glow'
     c = _brush(id='c', is_trigger=True)
     assert t.sync([c, a, b], 1) is True
 
