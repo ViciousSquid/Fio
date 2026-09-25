@@ -985,7 +985,7 @@ def _bool_property(value, default=False):
     if value is None:
         return bool(default)
     if isinstance(value, str):
-        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+        return value.strip().lower() not in ('false', '0', 'no')
     return bool(value)
 
 
