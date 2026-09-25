@@ -81,6 +81,8 @@ from itertools import chain
 import glm
 import numpy as np
 
+from .portal_transform import basis_from_rotation
+
 # Defensive, as everywhere else in engine/: editor.things pulls in PyQt5, and
 # the standalone player tier does not have it.  A tier without the classes
 # classifies every entity as a plain Thing, which is what it is there.
@@ -149,6 +151,11 @@ ENT_SPRITE_WARM     = 1 << 12
 #: rendering are unaffected by the cull, which is deliberate and predates this
 #: projection.
 ENT_CULL_EXEMPT = ENT_LIGHT | ENT_PORTAL
+
+# Numeric portal direction codes.  3 means both directions.
+PORTAL_DIRECTION_FORWARD = 1
+PORTAL_DIRECTION_REVERSE = 2
+PORTAL_DIRECTION_BOTH = 3
 
 #: Indexable for debug text and test failure messages.
 BIT_NAMES = (
@@ -481,6 +488,9 @@ class EntityTable:
     __slots__ = ('generation', 'count', 'ids', 'slot_of_id', 'things',
                  'pos', 'class_bits', 'light_slots', 'light_color',
                  'light_params', 'light_enabled', 'light_casts_shadows',
+                 'portal_slots', 'portal_target_slot', 'portal_active',
+                 'portal_direction', 'portal_width_height', 'portal_basis',
+                 'portal_fade', 'portal_color', 'portal_show_rim',
                  'monster_slots', 'pickup_slots', 'sprite_size', 'sprite_key_id',
                  'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
                  '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
@@ -501,6 +511,18 @@ class EntityTable:
         # compared and combined without a cast.
         self.pos = np.zeros((0, 3), dtype=np.float64)
         self.class_bits = np.zeros((0,), dtype=np.uint16)
+        #: Dense portal topology/render columns. Target links are resolved to
+        #: integer entity slots at reconcile; transforms are refreshed only for
+        #: portal rows so moving/parented portals stay numeric in the renderer.
+        self.portal_slots = np.empty(0, dtype=np.int32)
+        self.portal_target_slot = np.full((0,), -1, dtype=np.int32)
+        self.portal_active = np.zeros((0,), dtype=bool)
+        self.portal_direction = np.zeros((0,), dtype=np.uint8)
+        self.portal_width_height = np.zeros((0, 2), dtype=np.float32)
+        self.portal_basis = np.zeros((0, 3, 3), dtype=np.float64)
+        self.portal_fade = np.zeros((0,), dtype=np.float32)
+        self.portal_color = np.ones((0, 3), dtype=np.float32)
+        self.portal_show_rim = np.zeros((0,), dtype=bool)
 
         #: Slots of the Lights -- the frame's light list, without a scan.
         self.light_slots = np.empty(0, dtype=np.int32)
@@ -653,6 +675,46 @@ class EntityTable:
             normal[:len(self.model_normal_matrix)] = self.model_normal_matrix
         self.model_normal_matrix = normal
 
+        ptarget = np.full((grown,), -1, dtype=np.int32)
+        if len(self.portal_target_slot):
+            ptarget[:len(self.portal_target_slot)] = self.portal_target_slot
+        self.portal_target_slot = ptarget
+
+        pactive = np.zeros((grown,), dtype=bool)
+        if len(self.portal_active):
+            pactive[:len(self.portal_active)] = self.portal_active
+        self.portal_active = pactive
+
+        pdirection = np.zeros((grown,), dtype=np.uint8)
+        if len(self.portal_direction):
+            pdirection[:len(self.portal_direction)] = self.portal_direction
+        self.portal_direction = pdirection
+
+        psize = np.zeros((grown, 2), dtype=np.float32)
+        if len(self.portal_width_height):
+            psize[:len(self.portal_width_height)] = self.portal_width_height
+        self.portal_width_height = psize
+
+        pbasis = np.zeros((grown, 3, 3), dtype=np.float64)
+        if len(self.portal_basis):
+            pbasis[:len(self.portal_basis)] = self.portal_basis
+        self.portal_basis = pbasis
+
+        pfade = np.zeros((grown,), dtype=np.float32)
+        if len(self.portal_fade):
+            pfade[:len(self.portal_fade)] = self.portal_fade
+        self.portal_fade = pfade
+
+        pcolor = np.ones((grown, 3), dtype=np.float32)
+        if len(self.portal_color):
+            pcolor[:len(self.portal_color)] = self.portal_color
+        self.portal_color = pcolor
+
+        prim = np.zeros((grown,), dtype=bool)
+        if len(self.portal_show_rim):
+            prim[:len(self.portal_show_rim)] = self.portal_show_rim
+        self.portal_show_rim = prim
+
     # -- synchronisation ---------------------------------------------------
 
     def needs_reconcile(self, things, epoch=None) -> bool:
@@ -707,6 +769,10 @@ class EntityTable:
 
         # Authored sprite identity is cold. Dynamic Monster sprite identity is
         # published from the existing snapshot path, avoiding a second object walk.
+        # Portal state is the other small live entity family; keep it numeric so
+        # secondary render views never need Portal objects.
+        self._refresh_portal_live(things)
+
         # Light state is render state, not renderer metadata. Refresh only the
         # light rows each frame because I/O may toggle or retune a light without
         # changing the world epoch, while position is already refreshed above.
@@ -796,7 +862,11 @@ class EntityTable:
                         self.light_enabled, self.light_casts_shadows,
                         self.sprite_size, self.sprite_key_id,
                         self.model_recipe_id, self.model_base_matrix,
-                        self.model_normal_matrix):
+                        self.model_normal_matrix, self.portal_target_slot,
+                        self.portal_active, self.portal_direction,
+                        self.portal_width_height, self.portal_basis,
+                        self.portal_fade, self.portal_color,
+                        self.portal_show_rim):
                 arr[dst] = arr[src]
 
         for slot, thing in enumerate(things):
@@ -811,10 +881,78 @@ class EntityTable:
         self.count = n
         bits = self.class_bits[:n]
         self.light_slots = np.flatnonzero(bits & ENT_LIGHT).astype(np.int32)
+        self.portal_slots = np.flatnonzero(bits & ENT_PORTAL).astype(np.int32)
         self.monster_slots = np.flatnonzero(bits & ENT_MONSTER).astype(np.int32)
         self.pickup_slots = np.flatnonzero(bits & ENT_PICKUP).astype(np.int32)
+        self._resolve_portal_links(things)
         self.generation += 1
 
+
+    def _resolve_portal_links(self, things):
+        """Resolve authored portal names to integer entity slots."""
+        self.portal_target_slot[:self.count] = -1
+        if not len(self.portal_slots):
+            return
+        name_to_slot = {
+            _props_of(thing).get('name'): slot
+            for slot, thing in enumerate(things)
+            if _props_of(thing).get('name')
+        }
+        for slot_value in self.portal_slots:
+            slot = int(slot_value)
+            target = _props_of(things[slot]).get('portal_target', '')
+            target_slot = name_to_slot.get(target, -1)
+            if (target_slot >= 0
+                    and (self.class_bits[target_slot] & ENT_PORTAL)):
+                self.portal_target_slot[slot] = int(target_slot)
+
+    @staticmethod
+    def _portal_direction_code(value):
+        value = str(value or 'both').strip().lower()
+        if value == 'forward':
+            return PORTAL_DIRECTION_FORWARD
+        if value == 'reverse':
+            return PORTAL_DIRECTION_REVERSE
+        if value == 'both':
+            return PORTAL_DIRECTION_BOTH
+        return 0
+
+    def _refresh_portal_live(self, things):
+        """Refresh the small genuinely live portal state set."""
+        if not len(self.portal_slots):
+            return
+        for slot_value in self.portal_slots:
+            slot = int(slot_value)
+            thing = things[slot]
+            props = _props_of(thing)
+            self.portal_active[slot] = _bool_property(
+                props.get('active', True), True)
+            self.portal_direction[slot] = self._portal_direction_code(
+                props.get('portal_direction', 'both'))
+            self.portal_fade[slot] = float(
+                max(0.0, min(1.0, _float_property(
+                    getattr(thing, '_fade_alpha', 1.0), 1.0))))
+            colour = props.get('color', [255, 255, 255])
+            try:
+                rgb = np.asarray(colour[:3], dtype=np.float32) / 255.0
+                if rgb.size != 3:
+                    raise ValueError
+                self.portal_color[slot] = np.clip(rgb, 0.0, 1.0)
+            except (TypeError, ValueError, IndexError):
+                self.portal_color[slot] = 1.0
+            self.portal_show_rim[slot] = _bool_property(
+                props.get('show_rim', True), True)
+            self.portal_width_height[slot] = (
+                max(16.0, _float_property(
+                    props.get('width', 128.0), 128.0)),
+                max(16.0, _float_property(
+                    props.get('height', 256.0), 256.0)),
+            )
+            self.portal_basis[slot] = np.asarray(
+                basis_from_rotation(props.get(
+                    'rotation',
+                    [props.get('angle', 0.0), 0.0, 0.0])),
+                dtype=np.float64)
 
     def _resolve_entity_cold(self, slot, thing):
         """Resolve authored render state for one entity row."""
@@ -857,6 +995,21 @@ def _props_of(thing) -> dict:
     if isinstance(props, dict):
         return props
     return thing if isinstance(thing, dict) else _EMPTY
+
+
+def _bool_property(value, default=False):
+    if value is None:
+        return bool(default)
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    return bool(value)
+
+
+def _float_property(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def _pos_of(thing):
