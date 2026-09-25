@@ -2301,7 +2301,11 @@ class View2D(QWidget):
             draw_rect = None
 
             # --- MODEL RENDERING ---
-            if thing.properties.get('model_path'):
+            # A Prop may retain its model_path while being represented as a
+            # billboard.  Representation, not asset history, decides what the
+            # 2D view draws.
+            render_mode = str(thing.properties.get('render_mode', 'model')).lower()
+            if thing.properties.get('model_path') and render_mode == 'model':
                 self._draw_model_wireframe(painter, thing, ax_map, ax1, ax2)
                 # Selection box for models
                 draw_rect = QRectF(s_pos.x() - 16, s_pos.y() - 16, 32, 32)
