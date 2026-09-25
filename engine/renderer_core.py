@@ -4581,8 +4581,8 @@ layout (location = 9) in vec4 iNormal2;
             brush_geometry.geometry_signature(brush), convex,
             np.asarray(pos, dtype=np.float64).copy(),
             np.asarray([max(abs(float(s)), 1e-6) for s in size], dtype=np.float64),
-            tuple(bool(brush_geometry.face_uses_natural_scale(
-                brush, face.get('face'), face)) for face in convex.faces),
+            {id(face): bool(brush_geometry.face_uses_natural_scale(
+                brush, face.get('face'), face)) for face in convex.faces},
         )
         return self._get_geo_mesh_record(record, geometry_id=geometry_id,
                                          geometry_generation=geometry_generation)
@@ -4646,7 +4646,7 @@ layout (location = 9) in vec4 iNormal2;
                          'uv_scale': face.get('uv_scale') or plane_meta.get('uv_scale'), 'plane': face.get('plane'),
                          'uv_angle': plane_meta.get('uv_angle', 0.0),
                          'uv_shift': plane_meta.get('uv_shift', (0.0, 0.0)),
-                         'natural_scale': bool(record.natural_scale[len(runs)]),
+                         'natural_scale': bool(record.natural_scale.get(id(face), False)),
                          'first': first, 'count': vert_count - first,
                          'extent': (eu, ev)})
             if top:
