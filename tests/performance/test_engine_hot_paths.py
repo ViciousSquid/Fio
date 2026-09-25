@@ -412,7 +412,8 @@ def test_portal_fades_tick_off_the_cache_not_the_thing_list(logic):
     thread.set_play_mode(True)
     try:
         assert thread._portal_things == portals
-        assert set(thread._portals_by_name) == {'P0', 'P1', 'P2'}
+        assert thread._portal_slots.tolist() == [50, 51, 52]
+        assert thread._portal_target_slots.tolist() == [-1, -1, -1]
 
         # Fades still advance, and they advance for portals the name index
         # cannot hold (an unnamed portal is still a portal).
@@ -420,7 +421,7 @@ def test_portal_fades_tick_off_the_cache_not_the_thing_list(logic):
         thread.editor_state.things.append(unnamed)
         thread._build_entity_caches()
         assert unnamed in thread._portal_things
-        assert '' not in thread._portals_by_name
+        assert '' not in [p.properties.get('name', '') for p in thread._portal_things]
 
         for p in thread._portal_things:
             p._fade_alpha, p._fade_target = 0.0, 1.0
@@ -442,6 +443,46 @@ def test_portal_fades_tick_off_the_cache_not_the_thing_list(logic):
     finally:
         thread.set_play_mode(False)
 
+
+def test_portal_transit_keeps_player_at_mapped_plane_not_body_clearance(logic):
+    """Walking through a portal must not add a player-sized camera jump."""
+    from editor.things import Portal
+    from engine.player import Player
+    from engine.portal_transform import map_direction, map_point
+
+    portal_a = Portal(pos=[0.0, 0.0, 0.0], properties={
+        'name': 'A', 'portal_target': 'B',
+        'rotation': [0.0, 0.0, 0.0],
+    })
+    portal_b = Portal(pos=[100.0, 0.0, 0.0], properties={
+        'name': 'B', 'portal_target': 'A',
+        'rotation': [180.0, 0.0, 0.0],
+    })
+    thread = logic(brushes=[], things=[portal_a, portal_b])
+    player = Player(0.0, -10.0, 0.0)
+    player.pos = __import__('glm').vec3(0.0, 20.0, -4.0)
+    player.velocity = __import__('glm').vec3(0.0, 0.0, -120.0)
+    thread.set_player(player)
+    thread.set_play_mode(True)
+    try:
+        expected = map_point(
+            portal_a.pos, portal_a.get_basis(),
+            portal_b.pos, portal_b.get_basis(),
+            tuple(player.pos),
+        )
+        expected_velocity = map_direction(
+            portal_a.get_basis(), portal_b.get_basis(), tuple(player.velocity))
+
+        thread._execute_portal_transit(portal_a, portal_b)
+
+        actual = tuple(thread.player.pos)
+        displacement = ((actual[0] - expected[0]) * portal_b.get_normal()[0]
+                        + (actual[1] - expected[1]) * portal_b.get_normal()[1]
+                        + (actual[2] - expected[2]) * portal_b.get_normal()[2])
+        assert np.isclose(displacement, 0.05, atol=1e-6)
+        assert np.allclose(tuple(thread.player.velocity), expected_velocity)
+    finally:
+        thread.set_play_mode(False)
 
 def test_a_map_with_no_portals_pays_nothing_for_the_portal_system(logic):
     from engine.player import Player
