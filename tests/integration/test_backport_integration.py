@@ -50,17 +50,13 @@ def test_cull_output_feeds_only_sort_objects():
     assert len(main) == 1, "main camera pass must sort the culled collections"
 
 
-def test_shadow_and_portal_passes_use_the_unculled_collections():
-    """The shadow/portal passes must still see the full scene."""
+def test_shadow_and_portal_passes_use_dense_unculled_collections():
+    """Shadow maps use the full dense caster projections, not camera-cull output."""
     body = _render_scene_source()
-    # Locate the shadow-map render call and confirm it uses the originals.
-    assert "render_shadow_maps(shadow_lights, shadow_brushes, shadow_things" in body
-    # shadow_brushes/shadow_things must not be derived from the culled lists.
-    for line in body.splitlines():
-        s = line.strip()
-        if s.startswith("shadow_brushes") or s.startswith("shadow_things"):
-            assert "cull_brushes" not in s and "cull_things" not in s, \
-                f"shadow collection built from culled data: {s}"
+    assert "self.render_shadow_maps(" in body
+    assert "(light_table, shadow_slots), config, camera_pos" in body
+    assert "shadow_brushes" not in body
+    assert "shadow_things" not in body
 
 
 def test_cull_is_opt_in_and_defaults_to_play_mode():
