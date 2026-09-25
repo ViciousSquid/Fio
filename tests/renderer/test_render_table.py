@@ -336,7 +336,12 @@ def test_special_volume_state_is_projected_as_dense_numeric_columns():
             water_reflectivity=0.8,
             water_wave_height=0.6,
             water_wave_enabled=False,
+            water_distortion=0.35,
+            water_refraction=1.333,
+            water_roughness=0.2,
+            water_fresnel=0.9,
             water_plane=True,
+            water_reflections=True,
         ),
         _brush(
             id='glass',
@@ -359,8 +364,12 @@ def test_special_volume_state_is_projected_as_dense_numeric_columns():
     t = _synced(brushes)
 
     np.testing.assert_allclose(t.water_tint[0], [0.1, 0.2, 0.3])
-    np.testing.assert_allclose(t.water_params[0], [0.7, 0.8, 0.6, 0.0])
+    np.testing.assert_allclose(
+        t.water_params[0],
+        [0.7, 0.9, 0.6, 0.0, 0.35, 1.333, 0.2],
+    )
     assert bool(t.water_plane[0])
+    assert bool(t.water_reflections[0])
 
     np.testing.assert_allclose(t.glass_color[1], [0.4, 0.5, 0.6])
     np.testing.assert_allclose(t.glass_params[1], [0.25, 0.2, 1.33, 0.1, 0.9])
@@ -386,6 +395,7 @@ def test_special_volume_state_moves_with_a_surviving_row():
     assert old != new
     np.testing.assert_allclose(t.water_tint[new], [1.0, 0.2, 0.3])
     assert t.water_params[new, 0] == pytest.approx(0.7)
+    assert t.water_reflections[new] is False
 
 
 def test_special_volume_state_refreshes_on_epoch_change():
