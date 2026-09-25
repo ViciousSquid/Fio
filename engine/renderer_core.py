@@ -313,6 +313,7 @@ class BaseRenderer:
         self._sprite_instance_vao = None
         self._sprite_instance_capacity = 0
         self._sprite_gl_by_id = np.zeros(0, dtype=np.int32)
+        self._sprite_gl_resolved = 0
         self._sprite_instance_base = 0
         self._sprite_recipes_seen = None
         self._sprite_instance_data = np.empty(
@@ -1865,17 +1866,21 @@ layout (location = 9) in vec4 iNormal2;
             # the list outlives nothing: holding it does not keep the table.
             self._sprite_recipes_seen = recipes
             self._sprite_gl_by_id = np.zeros(0, dtype=np.int32)
+            self._sprite_gl_resolved = 0
         cached = self._sprite_gl_by_id
-        if len(cached) < len(recipes):
-            old_len = len(cached)
-            capacity = max(16, old_len, old_len * 2, len(recipes))
-            grown = np.zeros(capacity, dtype=np.int32)
-            grown[:old_len] = cached
-            for sprite_id in range(old_len, len(recipes)):
-                grown[sprite_id] = self._resolve_sprite_recipe(
-                    recipes[sprite_id])
-            self._sprite_gl_by_id = grown
-            cached = grown
+        resolved = self._sprite_gl_resolved
+        recipe_count = len(recipes)
+        if resolved < recipe_count:
+            if len(cached) < recipe_count:
+                capacity = max(16, len(cached) * 2, recipe_count)
+                grown = np.zeros(capacity, dtype=np.int32)
+                if resolved:
+                    grown[:resolved] = cached[:resolved]
+                self._sprite_gl_by_id = grown
+                cached = grown
+            for sprite_id in range(resolved, recipe_count):
+                cached[sprite_id] = self._resolve_sprite_recipe(recipes[sprite_id])
+            self._sprite_gl_resolved = recipe_count
         return cached
 
     def _resolve_sprite_recipe(self, candidates):
