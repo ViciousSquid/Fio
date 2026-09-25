@@ -4670,7 +4670,32 @@ layout (location = 9) in vec4 iNormal2;
         except Exception:
             pass  # GL context may already be gone during shutdown
 
-    def _get_geo_mesh(self, brush):
+    def _prepare_geo_meshes(self, table, slots):
+        """Prepare convex meshes at the dense-table/cache boundary.
+
+        ``geometry_id`` is a dense integer handle (the row slot for geometry
+        rows).  The only Brush access here is cold cache preparation; draw loops
+        consume the returned integer-keyed mesh map and never dereference a
+        RenderTable slot back into ``refs``.
+        """
+        if table is None or slots is None or not len(slots):
+            return {}
+        slots = np.asarray(slots, dtype=np.int32)
+        gids = table.geometry_id[slots]
+        gids = gids[gids >= 0]
+        if not len(gids):
+            return {}
+        meshes = {}
+        for gid in np.unique(gids):
+            gid = int(gid)
+            brush = table.brushes[gid]
+            mesh = self._get_geo_mesh(brush, geometry_id=gid,
+                                      geometry_generation=table.generation)
+            if mesh is not None:
+                meshes[gid] = mesh
+        return meshes
+
+    def _get_geo_mesh(self, brush, geometry_id=None, geometry_generation=None):
         """Cached :class:`BrushGeoMesh` for an angled brush, or ``None``.
 
         Returns ``None`` for plain box brushes (callers fall back to the
@@ -4679,7 +4704,8 @@ layout (location = 9) in vec4 iNormal2;
         if not brush_geometry.brush_has_geometry(brush):
             return None
         key = brush_geometry.geometry_signature(brush)
-        mesh = self._geo_mesh_cache.get(id(brush))
+        cache_key = (geometry_generation, int(geometry_id)) if geometry_id is not None else id(brush)
+        mesh = self._geo_mesh_cache.get(cache_key)
         if mesh is not None and mesh.key == key:
             mesh.frame = self._geo_mesh_frame
             return mesh
@@ -4692,10 +4718,10 @@ layout (location = 9) in vec4 iNormal2;
                 print(f"[GeoMesh] build failed: {e}")
         if mesh is not None:
             self._delete_geo_mesh(mesh)
-            self._geo_mesh_cache.pop(id(brush), None)
+            self._geo_mesh_cache.pop(cache_key, None)
         if new is not None:
             new.frame = self._geo_mesh_frame
-            self._geo_mesh_cache[id(brush)] = new
+            self._geo_mesh_cache[cache_key] = new
         return new
 
     @staticmethod
