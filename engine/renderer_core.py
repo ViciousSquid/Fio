@@ -315,6 +315,13 @@ class BaseRenderer:
         self._sprite_recipes_seen = None
         self._sprite_instance_data = np.empty(
             (0, 5), dtype=np.float32)
+        # Capacity-stable scratch for the numeric sprite filter. The renderer
+        # owns these arrays so steady-state drawing does not allocate key/mask/
+        # texture arrays per frame.
+        self._sprite_key_scratch = np.empty(0, dtype=np.int32)
+        self._sprite_index_scratch = np.empty(0, dtype=np.int32)
+        self._sprite_texture_scratch = np.empty(0, dtype=np.int64)
+        self._sprite_draw_mask = np.empty(0, dtype=bool)
         self._brush_instance_capacity = 0
         self._brush_instance_data = np.empty((0, 32), dtype=np.float32)
         # Reusable model/normal matrix buffers for the batched transform build.
@@ -1766,17 +1773,34 @@ layout (location = 9) in vec4 iNormal2;
         if gl_ids is None:
             gl_ids = self._sprite_gl_ids(table)
 
-        key_ids = table.sprite_key_id[slots]
-        drawn = key_ids >= 0
+        slot_count = len(slots)
+        if len(self._sprite_key_scratch) < slot_count:
+            grown = max(64, len(self._sprite_key_scratch) * 2, slot_count)
+            self._sprite_key_scratch = np.empty(grown, dtype=np.int32)
+            self._sprite_index_scratch = np.empty(grown, dtype=np.int32)
+            self._sprite_texture_scratch = np.empty(grown, dtype=np.int64)
+            self._sprite_draw_mask = np.empty(grown, dtype=bool)
+
+        key_ids = self._sprite_key_scratch[:slot_count]
+        indices = self._sprite_index_scratch[:slot_count]
+        textures = self._sprite_texture_scratch[:slot_count]
+        drawn = self._sprite_draw_mask[:slot_count]
+
+        np.take(table.sprite_key_id, slots, out=key_ids)
+        drawn[:] = key_ids >= 0
         if len(gl_ids):
-            textures = np.where(drawn, gl_ids[np.where(drawn, key_ids, 0)], 0)
+            np.maximum(key_ids, 0, out=indices)
+            np.take(gl_ids, indices, out=textures)
+            drawn &= textures > 0
         else:
-            textures = np.zeros(len(slots), dtype=np.int32)
-        drawn &= textures > 0
-        if not drawn.any():
+            drawn.fill(False)
+
+        valid_count = int(np.count_nonzero(drawn))
+        if valid_count == 0:
             return 0
-        slots = slots[drawn]
-        textures = textures[drawn].astype(np.int64)
+        if valid_count != slot_count:
+            slots = slots[drawn]
+            textures = textures[drawn]
 
         # Texture id is already the complete sprite render key.  Keep it dense
         # through the sort instead of repacking an identical int64 key array.
