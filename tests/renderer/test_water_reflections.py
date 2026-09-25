@@ -35,7 +35,7 @@ def test_water_shader_supports_planar_reflections():
     assert 'reflectionMatrix * vec4(FragPos, 1.0)' in src
 
 
-def test_water_reflection_geometry_is_optional_and_fixed():
+def test_water_reflection_target_is_a_2d_texture():
     from engine.renderer_core import BaseRenderer
 
     assert BaseRenderer.WATER_REFLECTION_SIZE == 256
