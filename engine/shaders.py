@@ -746,7 +746,8 @@ void main()
     // used by Glass, but driven by the water's perturbed surface normal.
     // ------------------------------------------------------------------
     float ior = max(refractionIndex, 1.0);
-    float eta = 1.0 / ior;
+    // Air -> water above the surface; water -> air when viewed from below.
+    float eta = backside ? ior : (1.0 / ior);
     highp vec3 straightDir = -viewDir;
     highp vec3 refractDir = refract(straightDir, N, eta);
     highp vec3 refractDeltaView = mat3(view) * (refractDir - straightDir);
