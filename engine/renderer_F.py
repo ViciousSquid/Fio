@@ -989,6 +989,17 @@ class Renderer_F(BaseRenderer):
                         dtype=np.float64,
                     )
 
+                    terrain = capture_config.get('terrain')
+                    if terrain and terrain.enabled:
+                        self.render_terrain(
+                            projection,
+                            view,
+                            probe,
+                            terrain,
+                            lights,
+                            frustum_planes=planes,
+                        )
+
                     slots = all_brush_slots
                     if len(slots):
                         centres = table.center[slots]
@@ -1121,17 +1132,6 @@ class Renderer_F(BaseRenderer):
                         )
                         gl.glDepthMask(gl.GL_TRUE)
                         gl.glDisable(gl.GL_BLEND)
-
-                    terrain = capture_config.get('terrain')
-                    if terrain and terrain.enabled:
-                        self.render_terrain(
-                            projection,
-                            view,
-                            probe,
-                            terrain,
-                            lights,
-                            frustum_planes=planes,
-                        )
 
                 gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cubemap)
                 gl.glGenerateMipmap(gl.GL_TEXTURE_CUBE_MAP)
