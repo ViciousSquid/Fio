@@ -323,6 +323,8 @@ class BaseRenderer:
         self._sprite_key_scratch = np.empty(0, dtype=np.int32)
         self._sprite_texture_scratch = np.empty(0, dtype=np.int32)
         self._sprite_draw_mask = np.empty(0, dtype=bool)
+        self._sprite_depth_scratch = np.empty(0, dtype=np.float64)
+        self._sprite_depth_aux_scratch = np.empty(0, dtype=np.float64)
         self._brush_instance_capacity = 0
         self._brush_instance_data = np.empty((0, 32), dtype=np.float32)
         # Reusable model/normal matrix buffers for the batched transform build.
@@ -1776,6 +1778,8 @@ layout (location = 9) in vec4 iNormal2;
             self._sprite_key_scratch = np.empty(grown, dtype=np.int32)
             self._sprite_texture_scratch = np.empty(grown, dtype=np.int32)
             self._sprite_draw_mask = np.empty(grown, dtype=bool)
+            self._sprite_depth_scratch = np.empty(grown, dtype=np.float64)
+            self._sprite_depth_aux_scratch = np.empty(grown, dtype=np.float64)
 
         key_ids = self._sprite_key_scratch[:slot_count]
         textures = self._sprite_texture_scratch[:slot_count]
@@ -1805,10 +1809,19 @@ layout (location = 9) in vec4 iNormal2;
             order, run_starts = sort_into_runs(textures)
         else:
             cx, _, cz = self._camera_xyz(camera_pos)
-            dx = table.pos[slots, 0] - cx
-            dz = table.pos[slots, 2] - cz
-            depth_sq = dx * dx + dz * dz
-            order, run_starts = sort_into_runs(textures, secondary=-depth_sq)
+            sprite_count = len(slots)
+            depth_sq = self._sprite_depth_scratch[:sprite_count]
+            depth_aux = self._sprite_depth_aux_scratch[:sprite_count]
+            np.take(table.pos[:, 0], slots, out=depth_sq)
+            np.subtract(depth_sq, cx, out=depth_sq)
+            np.square(depth_sq, out=depth_sq)
+            np.take(table.pos[:, 2], slots, out=depth_aux)
+            np.subtract(depth_aux, cz, out=depth_aux)
+            np.square(depth_aux, out=depth_aux)
+            np.add(depth_sq, depth_aux, out=depth_sq)
+            np.negative(depth_sq, out=depth_aux)
+            order, run_starts = sort_into_runs(
+                textures, secondary=depth_aux)
 
         count = len(order)
         self._ensure_sprite_instance_buffer(count)
