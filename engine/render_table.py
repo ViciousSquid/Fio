@@ -366,8 +366,8 @@ class RenderTable:
         size = brush.get('size') or (64.0, 64.0, 64.0)
         origin = np.asarray(pos, dtype=np.float64).copy()
         scale = np.asarray([max(abs(float(s)), 1e-6) for s in size], dtype=np.float64)
-        natural = tuple(bool(brush_geometry.face_uses_natural_scale(
-            brush, face.get('face'), face)) for face in convex.faces)
+        natural = {id(face): bool(brush_geometry.face_uses_natural_scale(
+            brush, face.get('face'), face)) for face in convex.faces}
         self.geometry_records[slot] = GeometryRecord(
             brush_geometry.geometry_signature(brush), convex, origin, scale, natural)
 
