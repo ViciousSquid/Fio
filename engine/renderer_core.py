@@ -3070,46 +3070,82 @@ layout (location = 9) in vec4 iNormal2;
         self._light_shadow_index = {}
         if not self._shadow_cubemaps or 'depth_cube' not in self.shaders:
             return
-        lights = list(shadow_lights)
-        if not lights:
+        dense_lights = (
+            isinstance(shadow_lights, tuple)
+            and len(shadow_lights) == 2
+            and hasattr(shadow_lights[0], 'light_color')
+        )
+        if dense_lights:
+            light_table, light_slots = shadow_lights
+            lights = np.asarray(light_slots, dtype=np.int32)
+        else:
+            light_table = None
+            lights = list(shadow_lights)
+
+        if not len(lights):
             # Release every slot so a light enabled later re-renders cleanly.
             for s in range(self.MAX_SHADOW_LIGHTS):
                 self._shadow_slot_owner[s] = None
                 self._shadow_slot_sig[s] = None
             return
 
-        # Over budget? Keep the shadow lights nearest the camera.
+        # Over budget? Keep the shadow lights nearest the camera.  Dense lights
+        # are sorted with NumPy; no Light objects are needed to make this choice.
         if len(lights) > self.MAX_SHADOW_LIGHTS:
             if camera_pos is not None:
-                cx, cy, cz = float(camera_pos.x), float(camera_pos.y), float(camera_pos.z)
-                lights.sort(key=lambda l: (l.pos[0] - cx) ** 2 + (l.pos[1] - cy) ** 2 + (l.pos[2] - cz) ** 2)
-            lights = lights[:self.MAX_SHADOW_LIGHTS]
+                cx, cy, cz = self._camera_xyz(camera_pos)
+                if dense_lights:
+                    dx = light_table.pos[lights, 0] - cx
+                    dy = light_table.pos[lights, 1] - cy
+                    dz = light_table.pos[lights, 2] - cz
+                    order = np.argsort(dx * dx + dy * dy + dz * dz, kind='stable')
+                    lights = lights[order[:self.MAX_SHADOW_LIGHTS]]
+                else:
+                    lights.sort(
+                        key=lambda l: (
+                            (l.pos[0] - cx) ** 2 +
+                            (l.pos[1] - cy) ** 2 +
+                            (l.pos[2] - cz) ** 2
+                        )
+                    )
+                    lights = lights[:self.MAX_SHADOW_LIGHTS]
+            else:
+                lights = lights[:self.MAX_SHADOW_LIGHTS]
 
         # ---- Stable slot assignment (a light keeps its slot across frames) ---
-        current_ids = {id(l) for l in lights}
+        # Dense EntityTable slots are the identity here.  The legacy path keeps
+        # using object ids for direct render_shadow_maps() callers.
+        light_keys = (
+            [int(s) for s in lights]
+            if dense_lights else [id(l) for l in lights]
+        )
+        current_ids = set(light_keys)
         for s in range(self.MAX_SHADOW_LIGHTS):
             if self._shadow_slot_owner[s] not in current_ids:
                 self._shadow_slot_owner[s] = None
                 self._shadow_slot_sig[s] = None
+
         light_slot = {}
-        for l in lights:                       # lights that already own a slot keep it
+        for key in light_keys:
             for s in range(self.MAX_SHADOW_LIGHTS):
-                if self._shadow_slot_owner[s] == id(l):
-                    light_slot[id(l)] = s
+                if self._shadow_slot_owner[s] == key:
+                    light_slot[key] = s
                     break
-        for l in lights:                       # remaining lights grab free slots
-            if id(l) in light_slot:
+
+        for key in light_keys:
+            if key in light_slot:
                 continue
             for s in range(self.MAX_SHADOW_LIGHTS):
                 if self._shadow_slot_owner[s] is None:
-                    self._shadow_slot_owner[s] = id(l)
+                    self._shadow_slot_owner[s] = key
                     self._shadow_slot_sig[s] = None
-                    light_slot[id(l)] = s
+                    light_slot[key] = s
                     break
 
         # ---- Filter casters once & decide which lights are dirty ------------
-        # Models keep the object path: they are not projected, and the set is
-        # small enough that it has never been the cost here.
+        # Models keep the object path: they are not projected yet, and shadow
+        # meshes need their authored model path/rotation/scale.  Brush casters
+        # are already dense.
         caster_models = [t for t in things
                          if isinstance(t, Thing) and t.properties.get('model_path')]
 
@@ -3122,49 +3158,65 @@ layout (location = 9) in vec4 iNormal2;
         if numeric:
             caster_slots = self._shadow_caster_slots(table, caster_slots)
             caster_brushes = None
-            # Brush positions come from the projection, so the only snapshot
-            # still worth building is the models', and it is built once for
-            # every light rather than once per light.
             caster_batch = self._prepare_shadow_caster_batch((), caster_models)
         else:
             caster_brushes = []
             for b in brushes:
-                if b.get('hidden') or b.get('is_trigger') or b.get('is_fog') or b.get('operation') == 'subtract':
+                if (b.get('hidden') or b.get('is_trigger')
+                        or b.get('is_fog') or b.get('operation') == 'subtract'):
                     continue
                 if is_water_brush(b) or b.get('shader') in ('Fog', 'Glass', 'Glow'):
                     continue
                 caster_brushes.append(b)
-            # Build numeric caster positions once; every dirty light reuses them.
             caster_batch = self._prepare_shadow_caster_batch(
                 caster_brushes, caster_models)
 
-        to_render = []   # (light, slot, in_brushes, in_models)
-        for l in lights:
-            slot = light_slot.get(id(l))
-            if slot is None:
+        # Dense entries are (EntityTable slot, shadow slot, brush slots,
+        # model objects, signature). Legacy entries retain the Light object.
+        to_render = []
+        for light_key in light_keys:
+            shadow_slot = light_slot.get(light_key)
+            if shadow_slot is None:
                 continue
-            lx, ly, lz = float(l.pos[0]), float(l.pos[1]), float(l.pos[2])
-            radius = max(float(l.get_radius()), 1.0)
+
+            if dense_lights:
+                light_slot_value = int(light_key)
+                lx = float(light_table.pos[light_slot_value, 0])
+                ly = float(light_table.pos[light_slot_value, 1])
+                lz = float(light_table.pos[light_slot_value, 2])
+                radius = max(float(light_table.light_params[light_slot_value, 1]), 1.0)
+                light_identity = light_slot_value
+            else:
+                light = next(l for l in lights if id(l) == light_key)
+                lx, ly, lz = (float(light.pos[0]), float(light.pos[1]),
+                              float(light.pos[2]))
+                radius = max(float(light.get_radius()), 1.0)
+                light_identity = light_key
+
             if numeric:
                 in_slots, brush_keys = self._casters_in_reach(
                     table, caster_slots, lx, ly, lz, radius)
-                # Models still go through the object path for their own keys.
                 _, in_models, (_, mkeys) = self._collect_shadow_casters(
                     (), caster_models, lx, ly, lz, radius, batch=caster_batch)
                 in_brushes = in_slots
                 caster_keys = (brush_keys, mkeys)
             else:
+                light = next(l for l in lights if id(l) == light_key)
                 in_brushes, in_models, caster_keys = self._collect_shadow_casters(
                     caster_brushes, caster_models, lx, ly, lz, radius,
                     batch=caster_batch)
-            sig = (round(lx, 3), round(ly, 3), round(lz, 3), round(radius, 3), caster_keys)
-            self._light_shadow_index[id(l)] = slot
-            if self._shadow_slot_sig[slot] == sig:
-                continue                       # cube-map still valid -> skip GPU work
-            to_render.append((l, slot, in_brushes, in_models, sig))
 
-        if not to_render:
-            return                             # everything cached: no GL work this frame
+            sig = (
+                round(lx, 3), round(ly, 3), round(lz, 3),
+                round(radius, 3), caster_keys,
+            )
+            self._light_shadow_index[light_identity] = shadow_slot
+            if self._shadow_slot_sig[shadow_slot] == sig:
+                continue
+            to_render.append((
+                light_identity, shadow_slot, in_brushes, in_models, sig,
+                lx, ly, lz, radius,
+            ))
 
         # ---- Save GL state we are about to clobber -------------------------
         prev_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
