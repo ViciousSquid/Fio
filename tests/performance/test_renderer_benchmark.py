@@ -262,6 +262,52 @@ PATHS = [
 ]
 
 
+def _benchmark_sprite_sort(count=169):
+    """Measure the old two-sort sprite ordering against the fused numeric path."""
+    from engine.render_keys import sort_into_runs
+
+    slots = np.arange(count, dtype=np.int32)
+    textures = (np.arange(count, dtype=np.int32) % 31) + 1
+    depth_sq = np.linspace(float(count), 1.0, count, dtype=np.float64)[::-1]
+    old_drawn = np.empty(count, dtype=np.int32)
+    new_drawn = np.empty(count, dtype=np.int32)
+
+    def legacy():
+        depth_order = np.argsort(-depth_sq, kind="stable")
+        sorted_slots = slots[depth_order]
+        sorted_textures = textures[depth_order]
+        texture_order = np.argsort(sorted_textures, kind="stable")
+        old_drawn[:] = sorted_slots[texture_order]
+        return old_drawn
+
+    def fused():
+        order, _ = sort_into_runs(textures, secondary=-depth_sq)
+        new_drawn[:] = slots[order]
+        return new_drawn
+
+    for _ in range(100):
+        legacy()
+        fused()
+
+    def median_ms(fn):
+        samples = []
+        for _ in range(5):
+            start = time.perf_counter()
+            for _ in range(2000):
+                fn()
+            samples.append(1000.0 * (time.perf_counter() - start) / 2000.0)
+        return statistics.median(samples)
+
+    old_ms = median_ms(legacy)
+    new_ms = median_ms(fused)
+    return {
+        "sprites": count,
+        "legacy_ms": old_ms,
+        "fused_ms": new_ms,
+        "speedup": old_ms / new_ms if new_ms else float("inf"),
+    }
+
+
 def test_distance_cull_benchmark(record_property, capsys):
     """Run only the CPU distance-cull measurement, without requiring a GL context."""
     result = _benchmark_distance_cull()
@@ -272,7 +318,9 @@ def test_distance_cull_benchmark(record_property, capsys):
 def test_renderer_benchmark(record_property, capsys):
     """Measure renderer paths plus the scalar/batched distance-cull work."""
     cull_result = _benchmark_distance_cull()
+    sprite_sort_result = _benchmark_sprite_sort()
     record_property("fio_distance_cull_benchmark", json.dumps(cull_result))
+    record_property("fio_sprite_sort_benchmark", json.dumps(sprite_sort_result))
     results = []
     for name, scene_factory, overrides in PATHS:
         brushes, things = scene_factory()
@@ -288,6 +336,11 @@ def test_renderer_benchmark(record_property, capsys):
         "speedup=%6.2fx"
         % (cull_result["objects"], cull_result["scalar_ms"],
            cull_result["batch_ms"], cull_result["speedup"]))
+    lines.append(
+        "sprite_sort   sprites=%d  legacy=%7.3f ms  fused=%7.3f ms  "
+        "speedup=%6.2fx"
+        % (sprite_sort_result["sprites"], sprite_sort_result["legacy_ms"],
+           sprite_sort_result["fused_ms"], sprite_sort_result["speedup"]))
     lines += [result.report() for result in results]
 
     measurements = {result.name: result.as_dict() for result in results}
