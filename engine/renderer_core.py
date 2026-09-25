@@ -4528,6 +4528,38 @@ layout (location = 9) in vec4 iNormal2;
         gl.glDepthMask(gl.GL_TRUE)
         gl.glClear(gl.GL_STENCIL_BUFFER_BIT)
 
+    def _portal_flatten_depth(self, corners, projection, view, stencil_level):
+        """Make the completed portal image occupy the source aperture's depth plane.
+
+        The virtual scene needs its own depth buffer while it is rendered, but that
+        depth is in the *destination* camera space.  Leaving it in the main depth
+        buffer makes arbitrary destination geometry occlude main-world objects
+        such as a carried prop.  Once the portal colour is complete, replace those
+        virtual depths with the real source-aperture depth so the later main-scene
+        passes compare against the portal plane, not the destination scene.
+        """
+        gl.glEnable(gl.GL_STENCIL_TEST)
+        gl.glStencilFunc(gl.GL_EQUAL, stencil_level, 0xFF)
+        gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
+        gl.glStencilMask(0x00)
+        gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glDepthFunc(gl.GL_ALWAYS)
+        gl.glDepthRange(0.0, 1.0)
+
+        self._portal_upload_quad(corners)
+        gl.glUseProgram(self._portal_mask_shader)
+        gl.glUniformMatrix4fv(
+            self._portal_mask_proj_loc, 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(
+            self._portal_mask_view_loc, 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glBindVertexArray(self._portal_quad_vao)
+        gl.glDrawArrays(gl.GL_TRIANGLE_FAN, 0, 4)
+
+        gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
+        gl.glDepthFunc(gl.GL_LESS)
+
+
     def _draw_one_portal(self, portal_table, portal_a, portal_b, projection, main_view, camera_pos, config, draw_scene_fn, pv, portal_slots, depth=1):
         corners_a = self._portal_slot_corners(
             portal_table, portal_a, self.PORTAL_APERTURE_INSET)
@@ -4584,6 +4616,14 @@ layout (location = 9) in vec4 iNormal2;
         self._proj_ptr=old_proj_ptr; self._view_ptr=old_view_ptr; self._current_shader=None; gl.glStencilMask(0xFF)
         if depth < self.MAX_PORTAL_RECURSION:
             self._draw_nested_portals(portal_table,portal_a,portal_b,clip_proj,virtual_view,virtual_cam,config,draw_scene_fn,portal_slots,depth+1)
+
+        # The virtual scene used the shared depth buffer in destination-camera
+        # space.  Flatten that depth back to the source portal plane before the
+        # main scene resumes, so foreground main-world geometry can occlude the
+        # portal correctly without being compared against unrelated destination
+        # geometry depths.
+        self._portal_flatten_depth(corners_a, projection, main_view, depth)
+
         if bool(portal_table.portal_show_rim[portal_a]):
             gl.glEnable(gl.GL_STENCIL_TEST); gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glStencilMask(0x00); gl.glEnable(gl.GL_BLEND); gl.glBlendFunc(gl.GL_SRC_ALPHA,gl.GL_ONE)
             r,g,b=portal_table.portal_color[portal_a]; self._portal_upload_quad(corners_a); gl.glUseProgram(self._portal_rim_shader)
