@@ -1186,10 +1186,11 @@ class MainWindow(QMainWindow):
         """Drop the copies where they are.  Returns ``True`` if one was pending."""
         if not self.clone_placement:
             return False
-        count = len(self.clone_placement['objects'])
+        objects = list(self.clone_placement['objects'])
+        count = len(objects)
         self.clone_placement = None
         self.unsaved_changes = True
-        self.state.mark_lighting_dirty()
+        self.state.mark_lighting_dirty(objects)
         self.show_toast("Placed %d copy(s)" % count)
         self.update_all_ui()
         return True
