@@ -1536,6 +1536,119 @@ layout (location = 9) in vec4 iNormal2;
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, out)
 
 
+    def _draw_dense_model_single(self, projection, view, table, slot, lights):
+        """Draw one dense model row through the proven uniform model path.
+
+        A single model does not benefit from instancing. More importantly, this
+        keeps the one-model case independent of instanced-attribute driver
+        quirks while preserving the dense EntityTable boundary: no Thing is
+        materialised just to submit the draw.
+        """
+        slot = int(slot)
+        recipe_id = int(table.model_recipe_id[slot])
+        recipes = table.model_recipes()
+        if recipe_id < 0 or recipe_id >= len(recipes):
+            return 0
+
+        model_path, manual_texture, override_color = recipes[recipe_id]
+        obj = self.load_model(model_path)
+        if not obj or not obj.is_loaded:
+            return 0
+
+        groups = obj.groups or []
+        if manual_texture:
+            shader_kind = (
+                'textured' if self.shaders.get('textured') else
+                'lit' if self.shaders.get('lit') else None)
+            if shader_kind is None:
+                return 0
+            shader_name = shader_kind
+            current_shader = self._prepare_model_shader(
+                shader_name, projection, view, lights, None)
+            if current_shader != shader_name:
+                return 0
+            u = self.uniforms[shader_name]
+            if shader_kind == 'textured':
+                gl.glBindTexture(
+                    gl.GL_TEXTURE_2D,
+                    self._model_texture_id(manual_texture, manual=True))
+            else:
+                gl.glUniform3fv(
+                    u['object_color'], 1, override_color or (0.8, 0.8, 0.8))
+                gl.glUniform1f(u['alpha'], 1.0)
+            groups_to_draw = (None,)
+        elif groups:
+            groups_to_draw = groups
+        else:
+            groups_to_draw = (None,)
+
+        base = np.asarray(table.model_base_matrix[slot], dtype=np.float32).copy()
+        base[12:15] = np.asarray(table.pos[slot], dtype=np.float32)
+        normal = np.asarray(
+            table.model_normal_matrix[slot].reshape(3, 4)[:, :3],
+            dtype=np.float32,
+        ).reshape(-1).copy()
+
+        current_shader = None
+        draws = 0
+        for group in groups_to_draw:
+            material = (
+                obj.materials.get(
+                    group['material'],
+                    {'color': [0.8, 0.8, 0.8], 'texture': None})
+                if group is not None else
+                {'color': override_color or [0.8, 0.8, 0.8],
+                 'texture': manual_texture}
+            )
+            use_texture = material.get('texture')
+            shader_kind = (
+                'textured' if use_texture and self.shaders.get('textured') else
+                'lit' if self.shaders.get('lit') else None)
+            if shader_kind is None:
+                continue
+
+            shader_name = shader_kind
+            current_shader = self._prepare_model_shader(
+                shader_name, projection, view, lights, current_shader)
+            if current_shader != shader_name:
+                continue
+
+            u = self.uniforms[shader_name]
+            if shader_kind == 'textured':
+                gl.glBindTexture(
+                    gl.GL_TEXTURE_2D,
+                    self._model_texture_id(
+                        use_texture, material, manual=manual_texture is not None))
+            else:
+                color = tuple(material.get('color', [0.8, 0.8, 0.8]))
+                gl.glUniform3fv(u['object_color'], 1, color)
+                gl.glUniform1f(u['alpha'], 1.0)
+
+            gl.glUniformMatrix4fv(
+                u['model'], 1, gl.GL_FALSE, base)
+            normal_loc = u.get('normalMatrix', -1)
+            if normal_loc >= 0:
+                gl.glUniformMatrix3fv(
+                    normal_loc, 1, gl.GL_FALSE, normal)
+
+            gl.glBindVertexArray(obj.vao)
+            if group is None:
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
+            elif group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
+                gl.glDrawElements(
+                    gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
+                    ctypes.c_void_p(group['start'] * 4))
+            else:
+                gl.glDrawArrays(
+                    gl.GL_TRIANGLES, group['start'], group['count'])
+            self.render_stats.draw_calls += 1
+            draws += 1
+
+        gl.glBindVertexArray(0)
+        self.render_stats.visible_tris += (obj.vertex_count // 3)
+        return draws
+
+
     def draw_models_instanced(self, projection, view, camera_pos, table, slots,
                               lights, config=None):
         """Render model instances from dense EntityTable columns.
@@ -1550,6 +1663,12 @@ layout (location = 9) in vec4 iNormal2;
             return 0
 
         count = len(slots)
+        if count == 1:
+            # Keep the singleton path numeric but use the already-proven uniform
+            # model submission instead of depending on instanced vertex
+            # attributes for a draw that gains nothing from instancing.
+            return 1 if self._draw_dense_model_single(
+                projection, view, table, slots[0], lights) else 0
         if len(self._model_recipe_scratch) < count:
             grown = max(64, len(self._model_recipe_scratch) * 2, count)
             self._model_recipe_scratch = np.empty(grown, dtype=np.int32)
