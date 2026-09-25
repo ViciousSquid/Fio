@@ -1024,6 +1024,11 @@ class Renderer_F(BaseRenderer):
                             axis=1,
                         )
                     ]
+                    if len(slots):
+                        centres = table.center[slots]
+                        slots = slots[
+                            centres[:, 1] + table.half[slots, 1] >= water_y
+                        ]
 
                 # The water itself is intentionally absent from this capture.
                 # The normal pass draws it after this texture has been filled.
@@ -1110,6 +1115,11 @@ class Renderer_F(BaseRenderer):
                             axis=1,
                         )
                     ]
+                    if len(thing_slots):
+                        centres = entity_table.pos[thing_slots]
+                        thing_slots = thing_slots[
+                            centres[:, 1] + radii >= water_y
+                        ]
 
                 model_slots, sprite_slots = entity_projection.classify_slots(
                     entity_table,
