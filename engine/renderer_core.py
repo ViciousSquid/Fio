@@ -1480,9 +1480,9 @@ layout (location = 9) in vec4 iNormal2;
         out = self._model_instance_data[:count]
         np.take(table.model_base_matrix, slots, axis=0, out=out[:, :16])
         np.take(table.model_normal_matrix, slots, axis=0, out=out[:, 16:28])
-        np.take(table.pos[:, 0], slots, out=out[:, 3])
-        np.take(table.pos[:, 1], slots, out=out[:, 7])
-        np.take(table.pos[:, 2], slots, out=out[:, 11])
+        np.take(table.pos[:, 0], slots, out=out[:, 12])
+        np.take(table.pos[:, 1], slots, out=out[:, 13])
+        np.take(table.pos[:, 2], slots, out=out[:, 14])
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._model_instance_vbo)
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, out)
 
