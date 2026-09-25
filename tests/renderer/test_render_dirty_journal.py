@@ -8,6 +8,7 @@ import pytest
 
 
 def _state():
+    """Build the minimum EditorState instance needed for journal tests."""
     pytest.importorskip("PyQt5")
     from editor.editor_state import EditorState
     state = EditorState.__new__(EditorState)
@@ -20,6 +21,7 @@ def _state():
 
 
 def test_snapshot_preserves_later_object_edit():
+    """An edit after capture remains pending for the next frame."""
     state = _state()
     first = object()
     second = object()
@@ -35,6 +37,7 @@ def test_snapshot_preserves_later_object_edit():
 
 
 def test_snapshot_preserves_same_object_edited_again():
+    """Re-dirtying the same row after capture is not consumed early."""
     state = _state()
     brush = object()
 
@@ -47,6 +50,7 @@ def test_snapshot_preserves_same_object_edited_again():
 
 
 def test_snapshot_preserves_global_invalidation_after_capture():
+    """A later global invalidation survives the earlier frame boundary."""
     state = _state()
     first = object()
 
