@@ -381,7 +381,7 @@ class RenderTable:
         """
         return epoch is None or epoch != self._epoch or len(brushes) != self.count
 
-    def begin_frame(self, brushes, epoch=None):
+    def begin_frame(self, brushes, epoch=None, dirty_objects=None):
         """Bring the table into line with *brushes* and return the live hidden mask.
 
         This is the whole of the projection's per-frame Python cost: one pass
@@ -398,10 +398,9 @@ class RenderTable:
         per frame.
 
         The row set is re-derived when the epoch moves or the brush count
-        changes.  Between those, a brush dict *replaced in place* at the same
-        index, by something that bumped no counter, is not noticed -- the same
-        gap ``hidden`` has, and for the same reason: every path that Fio itself
-        has goes through one of EditorState's three hooks or changes the count.
+        changes. When an editor transaction supplies its dirty-object journal,
+        only those rows lose their cold columns; unrelated survivors keep their
+        cached classification/material state.
 
         Rows are matched by ``brush['id']``, so a structural change costs a set
         diff rather than a full re-resolution: surviving rows keep the columns
@@ -415,7 +414,7 @@ class RenderTable:
 
         cold_dirty = epoch is None or epoch != self._epoch
         if cold_dirty or n != self.count:
-            self._reconcile(brushes, cold_dirty)
+            self._reconcile(brushes, cold_dirty, dirty_objects)
             self._epoch = epoch
 
         # One list comprehension and one bulk store. Assigning a NumPy array
@@ -424,7 +423,7 @@ class RenderTable:
         hidden[:] = [b.get('hidden', False) for b in brushes]
         return hidden
 
-    def sync(self, brushes, epoch=None):
+    def sync(self, brushes, epoch=None, dirty_objects=None):
         """Reconcile without reading ``hidden``.  Returns whether it did.
 
         :meth:`begin_frame` is what the render path calls; this is for callers
@@ -440,19 +439,17 @@ class RenderTable:
                     structural = True
                     break
         if structural:
-            self._reconcile(brushes, cold_dirty)
+            self._reconcile(brushes, cold_dirty, dirty_objects)
             self._epoch = epoch
         return self.generation != before
 
-    def _reconcile(self, brushes, cold_dirty):
+    def _reconcile(self, brushes, cold_dirty, dirty_objects=None):
         """Rebuild the slot mapping, preserving the cold columns that survive.
 
         A row *survives* when the brush now at some slot is the same object,
-        under the same id, as one the table already held.  Its classification
-        cannot have changed without the epoch moving, so its cold columns are
-        carried across rather than re-resolved -- which is what keeps a
-        structural change (a brush appended by a plugin, a streaming layer
-        reordering the list) from costing a full re-resolution of the level.
+        under the same id, and is not in the transaction dirty-object journal.
+        Structural changes therefore move untouched rows without re-resolving
+        their materials or classification.
         """
         n = len(brushes)
         self._resize(max(n, 16))
@@ -468,7 +465,12 @@ class RenderTable:
         for slot, brush in enumerate(brushes):
             bid = brush.get('id')
             new_ids[slot] = bid
-            if cold_dirty or bid is None:
+            if bid is None:
+                continue
+            if dirty_objects is None:
+                if cold_dirty:
+                    continue
+            elif id(brush) in dirty_objects:
                 continue
             old = old_slot_of_id.get(bid)
             if old is None or old >= old_count or old_brushes[old] is not brush:
