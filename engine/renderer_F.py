@@ -239,6 +239,13 @@ class Renderer_F(BaseRenderer):
             colours = table.colour[visible]
             selected_slot = self._selected_slot(table, config)
             geometry = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
+            # Resolve convex meshes at the dense-table/cache boundary once for
+            # the geometry rows in this pass. The draw loop stays integer-only:
+            # geometry_id -> prepared mesh, with no slot -> Brush lookup.
+            geo_meshes = (
+                self._prepare_geo_meshes(table, visible[geometry])
+                if geometry.any() else {}
+            )
             if ('lit_brush_instanced' in self.shaders
                     and self._cube_vbo is not None and (~geometry).any()):
                 # Every plain box brush in one submission; the angled minority
