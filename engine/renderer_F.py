@@ -860,47 +860,80 @@ class Renderer_F(BaseRenderer):
                     self.render_stats.draw_calls += 1
 
         # ---- Angled brushes: one draw per convex face --------------------
-        # Angled faces carry the same per-face rotation and shift box faces do;
-        # they are set per run below rather than forced to zero here.
-        # Convex-geometry meshes wind the opposite way to the cube (GL_BACK).
+        # Numeric execution resolves meshes once from dense geometry handles.
+        # No RenderTable slot is dereferenced through ``refs`` in this loop.
         self._portal_set_cull(is_geo=True)
-        for slot_value in geo_slots if numeric else []:
-            gid = int(table.geometry_id[int(slot_value)])
-            mesh = geo_meshes.get(gid)
-            if mesh is None:
-                continue
-            row_model = models[int(np.flatnonzero(slots == slot_value)[0])] if False else None
-            model_matrix = rt_model = None
-            if numeric:
-                row_model = models[int(np.flatnonzero(slots == slot_value)[0])]
-                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, row_model)
+        if numeric:
+            geo_rows = np.flatnonzero(
+                (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0)
+            for geo_i, slot_value in enumerate(geo_slots):
+                gid = int(table.geometry_id[int(slot_value)])
+                mesh = geo_meshes.get(gid)
+                if mesh is None:
+                    continue
+                row = int(geo_rows[geo_i])
+                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[row])
                 if normal_mat_loc > 0:
-                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE,
-                                          normals[int(np.flatnonzero(slots == slot_value)[0])])
-            gl.glBindVertexArray(mesh.vao)
-            for run in mesh.runs:
-                tex_name = self._geo_run_texture(run)
-                if tex_name == 'caulk.jpg':
+                    gl.glUniformMatrix3fv(gl.gl_FALSE, 1, gl.GL_FALSE,
+                                          normals[row])
+                gl.glBindVertexArray(mesh.vao)
+                for run in mesh.runs:
+                    tex_name = self._geo_run_texture(run)
+                    if tex_name == 'caulk.jpg':
+                        continue
+                    if is_play and tex_name == 'nodraw.jpg':
+                        continue
+                    tex_id = self.texture_manager.get(self._tex_cache_path(tex_name)) or \
+                             self.load_texture_callback(tex_name, 'textures')
+                    if tex_id != current_tex:
+                        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                        current_tex = tex_id
+                    if tex_scale_loc != -1:
+                        su, sv = self._geo_run_tex_scale(run, tex_name)
+                        gl.glUniform2f(tex_scale_loc, su, sv)
+                    if tex_angle_loc != -1 or tex_shift_loc != -1:
+                        angle, shift_u, shift_v = self._geo_run_tex_transform(run)
+                        if tex_angle_loc != -1:
+                            gl.glUniform1f(tex_angle_loc, angle)
+                        if tex_shift_loc != -1:
+                            gl.glUniform2f(tex_shift_loc, shift_u, shift_v)
+                    gl.glDrawArrays(gl.GL_TRIANGLES, run['first'], run['count'])
+                    self.render_stats.visible_tris += run['count'] // 3
+                    self.render_stats.draw_calls += 1
+        else:
+            for brush in geo_brushes:
+                mesh = self._get_geo_mesh(brush)
+                if mesh is None:
                     continue
-                if is_play and tex_name == 'nodraw.jpg':
-                    continue
-                tex_id = self.texture_manager.get(self._tex_cache_path(tex_name)) or \
-                         self.load_texture_callback(tex_name, 'textures')
-                if tex_id != current_tex:
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                    current_tex = tex_id
-                if tex_scale_loc != -1:
-                    su, sv = self._geo_run_tex_scale(run, tex_name)
-                    gl.glUniform2f(tex_scale_loc, su, sv)
-                if tex_angle_loc != -1 or tex_shift_loc != -1:
-                    angle, shift_u, shift_v = self._geo_run_tex_transform(run)
-                    if tex_angle_loc != -1:
-                        gl.glUniform1f(tex_angle_loc, angle)
-                    if tex_shift_loc != -1:
-                        gl.glUniform2f(tex_shift_loc, shift_u, shift_v)
-                gl.glDrawArrays(gl.GL_TRIANGLES, run['first'], run['count'])
-                self.render_stats.visible_tris += run['count'] // 3
-                self.render_stats.draw_calls += 1
+                model_matrix = self._brush_model_matrix(brush)
+                gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+                if normal_mat_loc > 0:
+                    nmat = self._compute_normal_matrix(model_matrix, brush)
+                    gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(nmat))
+                gl.glBindVertexArray(mesh.vao)
+                for run in mesh.runs:
+                    tex_name = self._geo_run_texture(run)
+                    if tex_name == 'caulk.jpg':
+                        continue
+                    if is_play and tex_name == 'nodraw.jpg':
+                        continue
+                    tex_id = self.texture_manager.get(self._tex_cache_path(tex_name)) or \
+                             self.load_texture_callback(tex_name, 'textures')
+                    if tex_id != current_tex:
+                        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                        current_tex = tex_id
+                    if tex_scale_loc != -1:
+                        su, sv = self._geo_run_tex_scale(run, tex_name)
+                        gl.glUniform2f(tex_scale_loc, su, sv)
+                    if tex_angle_loc != -1 or tex_shift_loc != -1:
+                        angle, shift_u, shift_v = self._geo_run_tex_transform(run)
+                        if tex_angle_loc != -1:
+                            gl.glUniform1f(tex_angle_loc, angle)
+                        if tex_shift_loc != -1:
+                            gl.glUniform2f(tex_shift_loc, shift_u, shift_v)
+                    gl.glDrawArrays(gl.GL_TRIANGLES, run['first'], run['count'])
+                    self.render_stats.visible_tris += run['count'] // 3
+                    self.render_stats.draw_calls += 1
         self._portal_end_cull()
         gl.glBindVertexArray(0)
 
