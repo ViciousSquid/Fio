@@ -895,73 +895,6 @@ class Renderer_F(BaseRenderer):
             self.render_stats.draw_calls += 1
         gl.glBindVertexArray(0)
 
-    @staticmethod
-    def _cull_keep_thing(t):
-        """Legacy object-path distance-cull exemption for lights."""
-        return isinstance(t, Light)
-
-    def _camera_distance_cull(self, brushes, things, camera_pos,
-                              brush_positions=None, thing_positions=None):
-        """Broad-phase distance cull for the MAIN camera pass.
-
-        Numeric [x, z] snapshots are propagated alongside the object lists. The
-        distance arithmetic therefore runs in NumPy for both brushes and Things,
-        while the Python list remains only the reference container.
-        """
-        self._last_cull_brush_positions = brush_positions
-        self._last_cull_thing_positions = thing_positions
-        if camera_pos is None:
-            return brushes, things
-
-        cx, cz = _cull_camera_xz(camera_pos)
-        limit_sq = self.view_distance.distance_sq
-
-        if brush_positions is not None:
-            brush_positions = brush_positions[:len(brushes)]
-        if thing_positions is not None:
-            thing_positions = thing_positions[:len(things)]
-
-        brush_out_pos = None
-        if brush_positions is not None:
-            count = len(brushes)
-            capacity = int(self._cull_brush_pos_buf.shape[0])
-            if count > capacity:
-                new_capacity = max(count, 16 if capacity == 0 else capacity * 2)
-                self._cull_brush_pos_buf = np.empty(
-                    (new_capacity, 2), dtype=np.float64)
-            brush_out_pos = self._cull_brush_pos_buf[:count]
-
-        thing_out_pos = None
-        if thing_positions is not None:
-            count = len(things)
-            capacity = int(self._cull_thing_pos_buf.shape[0])
-            if count > capacity:
-                new_capacity = max(count, 16 if capacity == 0 else capacity * 2)
-                self._cull_thing_pos_buf = np.empty(
-                    (new_capacity, 2), dtype=np.float64)
-            thing_out_pos = self._cull_thing_pos_buf[:count]
-
-        brushes = _cull_by_distance(
-            brushes, cx, cz, limit_sq,
-            out=self._cull_brush_buf,
-            positions=brush_positions,
-            positions_out=brush_out_pos,
-        )
-        things = _cull_by_distance(
-            things, cx, cz, limit_sq,
-            out=self._cull_thing_buf,
-            keep=self._cull_keep_thing,
-            positions=thing_positions,
-            positions_out=thing_out_pos,
-        )
-
-        self._last_cull_brush_positions = (
-            brush_out_pos[:len(brushes)] if brush_out_pos is not None else None)
-        self._last_cull_thing_positions = (
-            thing_out_pos[:len(things)] if thing_out_pos is not None else None)
-        return brushes, things
-
-
     def _get_active_lights(self, things, config):
         """Return active lights as dense EntityTable slots when available."""
         table = config.get('entity_table')
@@ -984,22 +917,13 @@ class Renderer_F(BaseRenderer):
         return [light for light in lights
                 if light.properties.get('state', 'on') == 'on']
 
-    def entities_are_numeric(self, config, brush_slots):
-        """Whether this frame can classify entities from the projection.
-
-        The entity path is independently consumable: its dense table, slot
-        publication and live hidden mask are sufficient. Brush-slot publication
-        is deliberately not part of this predicate, so secondary views can keep
-        sprites on the same numeric path.
-        """
+    def entities_are_numeric(self, config, brush_slots=None):
+        """Whether dense EntityTable state is available for this renderer."""
         etable = config.get('entity_table')
-        erefs = config.get('entity_refs')
         thing_slots = config.get('visible_thing_slots')
         thing_hidden = config.get('thing_hidden')
-        return (etable is not None and erefs is not None
-                and thing_slots is not None and thing_hidden is not None
-                and len(erefs) >= etable.count
-                and len(thing_hidden) >= etable.count)
+        return (etable is not None and thing_slots is not None
+                and thing_hidden is not None and len(thing_hidden) >= etable.count)
 
     def will_instance_sprites(self, config, brush_slots):
         """Whether the billboard pass will read columns rather than objects.
@@ -1141,150 +1065,62 @@ class Renderer_F(BaseRenderer):
         # blinking out while it is being built.
         table = config.get('render_table')
         refs = config.get('render_refs')
-        numeric = (brush_slots is not None and table is not None
-                   and refs is not None and len(refs) >= table.count)
+        if (brush_slots is None or table is None or refs is None
+                or len(refs) < table.count):
+            raise RuntimeError(
+                "Fio 2.5 renderer requires dense RenderTable brush slots")
 
         etable = config.get('entity_table')
-        erefs = config.get('entity_refs')
         thing_slots = config.get('visible_thing_slots')
         thing_hidden = config.get('thing_hidden')
-        entities_numeric = self.entities_are_numeric(config, brush_slots)
-        # Sprites are a dense execution path now. There is deliberately no
-        # per-Thing fallback: EntityTable is the renderer boundary.
+        if etable is None or thing_slots is None or thing_hidden is None:
+            raise RuntimeError(
+                "Fio 2.5 renderer requires dense EntityTable state")
+
+        numeric = True
         sprite_slots = None
         numeric_model_slots = None
-
-        cull_things = things
-        cull_thing_positions = config.get('thing_positions')
-        if cull_thing_positions is not None:
-            cull_thing_positions = cull_thing_positions[:len(cull_things)]
 
         cx = cz = None
         if camera_pos is not None:
             cx, cz = _cull_camera_xz(camera_pos)
 
-        if numeric:
-            # ---- brushes: masks over the projection, no objects yet --------
-            slots = brush_slots
-            if (config.get('camera_distance_cull', config.get('play_mode', False))
-                    and cx is not None):
-                slots = self._distance_cull_slots(
-                    table, slots, cx, cz, self.view_distance.distance_sq)
-            groups = self._classify_brush_slots(table, slots, config)
-            if cx is not None:
-                for key in ('transparent', 'water', 'glass'):
-                    groups[key] = self._sort_slots_by_distance(
-                        table, groups[key], cx, cz)
+        # Brushes: masks over the dense RenderTable. No Brush objects are
+        # materialised for classification, culling, sorting, or submission.
+        slots = brush_slots
+        if (config.get('camera_distance_cull', config.get('play_mode', False))
+                and cx is not None):
+            slots = self._distance_cull_slots(
+                table, slots, cx, cz, self.view_distance.distance_sq)
+        groups = self._classify_brush_slots(table, slots, config)
+        if cx is not None:
+            for key in ('transparent', 'water', 'glass'):
+                groups[key] = self._sort_slots_by_distance(
+                    table, groups[key], cx, cz)
 
-            # Special volumes are dense slots too. Their shader material state
-            # is projected by RenderTable; only convex geometry crosses back to
-            # a Brush reference inside the pass.
-            opaque_brushes = groups['opaque']
-            textured_opaque = groups['textured']
-            solid_opaque = groups['solid']
-            transparent_brushes = groups['transparent']
-            glow_brushes = groups['glow']
-            water_brushes = groups['water']
-            glass_brushes = groups['glass']
-            fog_volumes = groups['fog']
+        opaque_brushes = groups['opaque']
+        textured_opaque = groups['textured']
+        solid_opaque = groups['solid']
+        transparent_brushes = groups['transparent']
+        glow_brushes = groups['glow']
+        water_brushes = groups['water']
+        glass_brushes = groups['glass']
+        fog_volumes = groups['fog']
 
-            cull_brushes = None
-            models_to_render = self._model_render_buf
-            models_to_render.clear()
+        # Entities: classification, distance cull and submission all consume
+        # EntityTable columns. No entity_refs -> Thing materialisation exists.
+        tslots = thing_slots
+        if (config.get('camera_distance_cull', config.get('play_mode', False))
+                and cx is not None):
+            tslots = self._distance_cull_thing_slots(
+                etable, tslots, cx, cz, self.view_distance.distance_sq)
+        numeric_model_slots, sprite_slots = entity_projection.classify_slots(
+            etable, tslots, thing_hidden,
+            config.get('play_mode', False),
+            config.get('show_sprites_in_play_mode', False))
 
-            if entities_numeric:
-                # ---- entities: masks over the dense projection -------------
-                tslots = thing_slots
-                if (config.get('camera_distance_cull',
-                               config.get('play_mode', False))
-                        and cx is not None):
-                    tslots = self._distance_cull_thing_slots(
-                        etable, tslots, cx, cz, self.view_distance.distance_sq)
-                model_slots, sprite_slots = entity_projection.classify_slots(
-                    etable, tslots, thing_hidden,
-                    config.get('play_mode', False),
-                    config.get('show_sprites_in_play_mode', False))
-                numeric_model_slots = model_slots
-                sort_positions = None
-            else:
-                # No entity projection: model rendering may still use the object API,
-                # but sprites have no object-renderer fallback.
-                if (config.get('camera_distance_cull',
-                               config.get('play_mode', False))
-                        and camera_pos is not None):
-                    _, cull_things = self._camera_distance_cull(
-                        (), things, camera_pos,
-                        thing_positions=cull_thing_positions)
-                    cull_thing_positions = self._last_cull_thing_positions
-
-                (_, _, _ignored_sprites, _, _, _, _, sort_positions) = self._sort_objects(
-                        (), cull_things, config,
-                        model_out=models_to_render,
-                        thing_positions=cull_thing_positions,
-                        collect_sort_positions=True,
-                    )
-        else:
-            cull_brushes = brushes
-            cull_brush_positions = config.get('brush_positions')
-            if cull_brush_positions is not None:
-                cull_brush_positions = cull_brush_positions[:len(cull_brushes)]
-            if config.get('camera_distance_cull', config.get('play_mode', False)):
-                cull_brushes, cull_things = self._camera_distance_cull(
-                    brushes, things, camera_pos,
-                    brush_positions=cull_brush_positions,
-                    thing_positions=cull_thing_positions,
-                )
-                cull_brush_positions = self._last_cull_brush_positions
-                cull_thing_positions = self._last_cull_thing_positions
-
-            models_to_render = self._model_render_buf
-            models_to_render.clear()
-
-            if entities_numeric:
-                # The entity projection is independent of the brush projection.
-                # Use it for secondary/editor views that do not have brush-slot
-                # publication: sprites remain on the same dense execution path.
-                tslots = thing_slots
-                if (config.get('camera_distance_cull',
-                               config.get('play_mode', False))
-                        and camera_pos is not None):
-                    tslots = self._distance_cull_thing_slots(
-                        etable, tslots, cx, cz, self.view_distance.distance_sq)
-                model_slots, sprite_slots = entity_projection.classify_slots(
-                    etable, tslots, thing_hidden,
-                    config.get('play_mode', False),
-                    config.get('show_sprites_in_play_mode', False))
-                numeric_model_slots = model_slots
-                sort_positions = None
-                # Run the brush-only object sorter. It now cannot touch Things.
-                (opaque_brushes, transparent_brushes, _ignored,
-                 fog_volumes, water_brushes, glass_brushes, glow_brushes,
-                 brush_sort_positions) = self._sort_objects(
-                    cull_brushes, (), config,
-                    model_out=None,
-                    brush_positions=cull_brush_positions,
-                    collect_sort_positions=True,
-                )
-                sort_positions = brush_sort_positions
-                textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
-            else:
-                (opaque_brushes, transparent_brushes, _ignored_sprites,
-                 fog_volumes, water_brushes, glass_brushes, glow_brushes,
-                 sort_positions) = self._sort_objects(
-                    cull_brushes,
-                    cull_things,
-                    config,
-                    model_out=models_to_render,
-                    brush_positions=cull_brush_positions,
-                    thing_positions=cull_thing_positions,
-                    collect_sort_positions=True,
-                )
-                textured_opaque, solid_opaque = self._split_opaque(opaque_brushes)
-
-        # Only the numeric brush projection may hand slots to a brush pass;
-        # entity sprites are always submitted from EntityTable columns.
-        _tbl = table if numeric else None
-        _refs = refs if numeric else None
+        _tbl = table
+        _refs = refs
         lights = self._get_active_lights(things, config)
         self._frame_lights = lights
 
@@ -1439,30 +1275,14 @@ class Renderer_F(BaseRenderer):
             self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl, refs=_refs)
         if len(glow_brushes):
             self.draw_glow_brushes(projection, view, camera_pos, glow_brushes, lights, config, table=_tbl, refs=_refs)
-        if numeric_model_slots is not None and len(numeric_model_slots):
-            if (self.shaders.get('lit_instanced')
+        if len(numeric_model_slots):
+            if not (self.shaders.get('lit_instanced')
                     or self.shaders.get('textured_instanced')):
-                self.draw_models_instanced(
-                    projection, view, camera_pos, etable, numeric_model_slots,
-                    lights, config)
-            else:
-                models_to_render.extend(erefs[numeric_model_slots].tolist())
-                self.draw_models(projection, view, camera_pos, models_to_render, lights, config)
-        elif models_to_render:
-            self.draw_models(projection, view, camera_pos, models_to_render, lights, config)
-        if camera_pos is not None:
-            if not numeric:
-                # The numeric path ordered these from the projection's centres
-                # before it materialised them; this is the object path's sort.
-                if transparent_brushes:
-                    transparent_brushes = _sort_by_distance(
-                        transparent_brushes, sort_positions['transparent'], cx, cz)
-                if water_brushes:
-                    water_brushes = _sort_by_distance(
-                        water_brushes, sort_positions['water'], cx, cz)
-                if glass_brushes:
-                    glass_brushes = _sort_by_distance(
-                        glass_brushes, sort_positions['glass'], cx, cz)
+                raise RuntimeError(
+                    "Fio 2.5 requires instanced model shaders for dense entity rendering")
+            self.draw_models_instanced(
+                projection, view, camera_pos, etable, numeric_model_slots,
+                lights, config)
         if not config.get('play_mode', False):
             self.draw_path_node_cubes(projection, view, things)
         if etable is not None:
