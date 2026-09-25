@@ -2355,29 +2355,7 @@ layout (location = 9) in vec4 iNormal2;
         order = np.argsort(-distances if reverse else distances, kind="stable")
         return slots[order]
 
-    def _brush_model_matrix(self, brush):
-        pos = brush.get('pos', [0, 0, 0])
-        size = brush.get('size', [64, 64, 64])
-        mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
-        angle = brush.get('_rot_angle')
-        if angle:
-            axis_raw = brush.get('rot_axis', [0, 1, 0])
-            axis = glm.vec3(*axis_raw)
-            if glm.length(axis) > 0.001:
-                mat = glm.rotate(mat, glm.radians(float(angle)), glm.normalize(axis))
-        mat = glm.scale(mat, glm.vec3(*size))
-        return mat
-
-    def _compute_normal_matrix(self, model_matrix, brush=None):
-        # brush parameter is accepted for API compatibility with Renderer_F's
-        # caching override, but not used at the base-class level.
-        mat3 = glm.mat3(model_matrix)
-        try:
-            return glm.transpose(glm.inverse(mat3))
-        except Exception:
-            return self._identity_mat3
-
-    def _distance_sq(self, pos1, pos2):
+            def _distance_sq(self, pos1, pos2):
         if isinstance(pos1, (list, tuple)):
             return (pos1[0]-pos2.x)**2 + (pos1[1]-pos2.y)**2 + (pos1[2]-pos2.z)**2
         return (pos1.x-pos2.x)**2 + (pos1.y-pos2.y)**2 + (pos1.z-pos2.z)**2
