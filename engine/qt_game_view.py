@@ -671,9 +671,23 @@ class QtGameView(QOpenGLWidget):
         else:
             self.repaint()
 
-    def _spatial_sound_mix(self, position):
+    @staticmethod
+    def _sound_radius_gain(distance, radius):
+        """Linear falloff: full volume at the source, zero at the radius."""
+        try:
+            distance = max(0.0, float(distance))
+            radius = max(0.0, float(radius))
+        except (TypeError, ValueError):
+            return 0.0
+        if radius <= 0.0:
+            return 0.0
+        if distance >= radius:
+            return 0.0
+        return 1.0 - (distance / radius)
+
+    def _spatial_sound_mix(self, position, radius=512.0, global_sound=False):
         """Return (gain, left, right) for a world-space sound source."""
-        if position is None:
+        if global_sound or position is None:
             return 1.0, 1.0, 1.0
         try:
             source = np.asarray(position, dtype=np.float32)
@@ -686,15 +700,9 @@ class QtGameView(QOpenGLWidget):
         except (TypeError, ValueError, AttributeError):
             return 1.0, 1.0, 1.0
 
-        reference_distance = 64.0
-        max_distance = 1024.0
-        if distance <= reference_distance:
-            gain = 1.0
-        elif distance >= max_distance:
-            gain = 0.0
-        else:
-            gain = 1.0 - ((distance - reference_distance) /
-                          (max_distance - reference_distance))
+        gain = self._sound_radius_gain(distance, radius)
+        if gain <= 0.0:
+            return 0.0, 1.0, 1.0
 
         try:
             front = self.camera.get_front_vector()
@@ -713,25 +721,44 @@ class QtGameView(QOpenGLWidget):
         pan = max(-1.0, min(1.0, pan))
         angle = (pan + 1.0) * (math.pi / 4.0)
         return gain, math.cos(angle), math.sin(angle)
-    def _process_sound_queue(self):
-        """Drain the logic thread's sound queue and play via pygame mixer.
 
-        Speaker requests carry an ``action`` ('play'/'stop'), a ``looping`` flag
-        and an ``entity_id``. Looping speakers play with ``loops=-1`` and their
-        channel is remembered under the entity id so a later StopSound can
-        actually silence them; plain one-shot sounds (no entity id) just play.
-        Requests without an 'action' default to 'play', so any existing caller
-        that queues a bare {'file', 'volume'} dict is unaffected.
+    def _process_sound_queue(self):
+        """Drain queued sound requests and keep active speaker channels mixed.
+
+        Speaker requests carry an action ('play'/'stop'), looping,
+        position/radius for spatial speakers, and entity_id.
+        Looping speakers remain tracked so their attenuation follows the
+        listener as the player moves.
         """
         speaker_channels = getattr(self, "_speaker_channels", None)
         if speaker_channels is None:
             speaker_channels = self._speaker_channels = {}
+        speaker_mix = getattr(self, "_speaker_mix", None)
+        if speaker_mix is None:
+            speaker_mix = self._speaker_mix = {}
+
+        def apply_mix(channel, meta):
+            gain, left, right = self._spatial_sound_mix(
+                meta.get('position'),
+                meta.get('radius', 512.0),
+                bool(meta.get('global', False)),
+            )
+            volume = max(0.0, min(1.0, float(meta.get('volume', 1.0))))
+            if meta.get('position') is not None and not meta.get('global', False):
+                channel.set_volume(
+                    volume * gain * left,
+                    volume * gain * right,
+                )
+            else:
+                channel.set_volume(volume)
+
         for request in self.game_state.consume_sounds():
             action = request.get('action', 'play')
             entity_id = request.get('entity_id')
 
             if action == 'stop':
                 channel = speaker_channels.pop(entity_id, None)
+                speaker_mix.pop(entity_id, None)
                 if channel is not None:
                     try:
                         channel.stop()
@@ -747,31 +774,43 @@ class QtGameView(QOpenGLWidget):
             sound = self._get_sound_instance(sound_file)
             if not sound:
                 continue
-            # -1 loops = repeat until stopped; 0 = play once.
+
             loops = -1 if request.get('looping') else 0
-            gain, left, right = self._spatial_sound_mix(request.get('position'))
-            if gain <= 0.0:
-                continue
+
             # If this speaker is already looping, stop the old channel first so
-            # a re-trigger doesn't stack a second copy on top of itself.
+            # a re-trigger does not stack a second copy on top of itself.
             if entity_id is not None:
                 prev = speaker_channels.pop(entity_id, None)
+                speaker_mix.pop(entity_id, None)
                 if prev is not None:
                     try:
                         prev.stop()
                     except Exception as exc:
                         print(f"[QtGameView] speaker restart stop failed: {exc}")
+
             channel = sound.play(loops=loops)
             if channel:
-                if request.get('position') is not None:
-                    channel.set_volume(
-                        max(0.0, min(1.0, float(volume) * gain * left)),
-                        max(0.0, min(1.0, float(volume) * gain * right)),
-                    )
-                else:
-                    channel.set_volume(volume)
+                meta = {
+                    'position': request.get('position'),
+                    'radius': request.get('radius', 512.0),
+                    'global': bool(request.get('global', False)),
+                    'volume': volume,
+                }
+                apply_mix(channel, meta)
+
+                # Track only entity-owned looping channels. One-shots get the
+                # correct spatial mix at their start position.
                 if entity_id is not None and loops != 0:
                     speaker_channels[entity_id] = channel
+                    speaker_mix[entity_id] = meta
+
+        # Re-mix active looping speakers every render frame so walking toward
+        # or away from a speaker changes volume without re-triggering playback.
+        for entity_id, channel in list(speaker_channels.items()):
+            meta = speaker_mix.get(entity_id)
+            if meta is not None:
+                apply_mix(channel, meta)
+
 
     def _process_console_command_queue(self):
         """Run any console commands queued by the I/O system on the UI thread.
