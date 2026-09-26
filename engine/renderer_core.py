@@ -857,7 +857,7 @@ layout (location = 10) in vec4 iPayload;
             'effect_instanced',
             vert,
             frag,
-            extra_uniforms=['projection', 'view', 'fire_texture'],
+            extra_uniforms=['projection', 'view', 'explosion_texture'],
         ):
             print(f'{_BASE_RENDERER_PREFIX} Effect instancing shader compiled successfully.')
 
@@ -1009,7 +1009,7 @@ layout (location = 10) in vec4 iPayload;
         prev_active_texture = gl.glGetIntegerv(gl.GL_ACTIVE_TEXTURE)
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_explosion_texture)
-        gl.glUniform1i(uniforms['fire_texture'], 0)
+        gl.glUniform1i(uniforms['explosion_texture'], 0)
 
         gl.glBindVertexArray(self._ensure_effect_instance_vao())
         gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, count)
