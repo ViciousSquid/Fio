@@ -200,6 +200,23 @@ class TerrainEditorPanel(QWidget):
         scroll_area.setFrameShape(QFrame.NoFrame)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.verticalScrollBar().setStyleSheet("""
+            QScrollBar:vertical {
+                width: 26px;
+                background: #222;
+                border: none;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #555;
+                min-height: 28px;
+                border-radius: 5px;
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
         content_widget = QWidget()
         content_layout = QVBoxLayout(content_widget)
         content_layout.setSpacing(10)
@@ -1140,8 +1157,8 @@ class TerrainEditorPanel(QWidget):
     def _update_grass_color_preview(self):
         r, g, b = self.terrain.grass_color
         self.grass_color_preview.setStyleSheet(
-            f"QFrame {{ background-color: rgb({int(r*255)}, {int(g*255)}, {int(b*255)}); "
-            "border: 1px solid #777; border-radius: 3px; }}"
+            f"QFrame {{ background-color: rgb({int(r * 255)}, {int(g * 255)}, {int(b * 255)}); "
+            f"border: 1px solid #777; border-radius: 3px; }}"
         )
 
     def on_wireframe_changed(self, enabled):
