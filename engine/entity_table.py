@@ -1017,7 +1017,7 @@ class EntityTable:
                              & flash_active
                          )
                          self.light_params[explosion_slots, 0] = (
-                             base * (0.15 + 0.85 * decay)
+                             base * (1.0 + 2.0 * decay)
                          )
                      else:
                          self.light_enabled[explosion_slots] = False
