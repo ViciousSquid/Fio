@@ -4266,7 +4266,9 @@ class PropertyEditor(QWidget):
         h.addWidget(button)
         form_layout.addRow(key.replace('_', ' ').title() + ":", widget)
 
-    def add_color_picker_widget(self, form_layout, thing, key):
+    def add_color_picker_widget(
+            self, form_layout, thing, key,
+            label="Colour:", dialog_title="Choose Light Colour"):
         widget = QWidget()
         h = QHBoxLayout(widget)
         h.setContentsMargins(0, 0, 0, 0)
@@ -4280,7 +4282,7 @@ class PropertyEditor(QWidget):
 
         def open_dialog():
             rgb = thing.properties.get(key, [255, 255, 255])
-            color = QColorDialog.getColor(QColor(*rgb), self, "Choose Light Colour")
+            color = QColorDialog.getColor(QColor(*rgb), self, dialog_title)
             if color.isValid():
                 self.update_object_prop(key, [color.red(), color.green(), color.blue()])
                 update_swatch()
@@ -4288,7 +4290,7 @@ class PropertyEditor(QWidget):
         swatch.clicked.connect(open_dialog)
         update_swatch()
         h.addWidget(swatch)
-        form_layout.addRow("Colour:", widget)
+        form_layout.addRow(label, widget)
 
     def _on_prop_sprite_size_changed(self, thing, index, value):
         size = thing.properties.get('sprite_size', [32.0, 32.0])
