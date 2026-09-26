@@ -1831,7 +1831,9 @@ class Terrain:
         self.max_chunk_x = data.get('max_chunk_x', 2)
         self.min_chunk_z = data.get('min_chunk_z', -2)
         self.max_chunk_z = data.get('max_chunk_z', 2)
-        self.use_textures = data.get('use_textures', True)
+        # Texture blending is opt-in for terrain, including older maps that
+        # do not contain an explicit use_textures field.
+        self.use_textures = data.get('use_textures', False)
         self.flat_mode = data.get('flat_mode', False)
         self.grass_enabled = data.get('grass_enabled', False)
         self.grass_density = float(np.clip(data.get('grass_density', 0.02), 0.0, 0.06))
