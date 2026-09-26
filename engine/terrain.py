@@ -1169,7 +1169,6 @@ class Terrain:
                     chunk.target_lod = target_resolution
                     chunk.lod_stable_frames = 0
                 elif chunk.target_lod != target_resolution:
-                if chunk.target_lod != target_resolution:
                     chunk.target_lod = target_resolution
                     chunk.lod_stable_frames = 0
                 else:
