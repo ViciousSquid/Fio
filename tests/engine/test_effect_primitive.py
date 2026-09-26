@@ -1,5 +1,5 @@
 from editor.things import Effect, Thing
-from engine.effect_entity import EFFECT_EXPLOSION, EFFECT_FIRE
+from engine.effect_entity import EFFECT_EXPLOSION, EFFECT_FIRE, EFFECT_FIRE_TEXTURES
 from engine.entity_table import ENT_EFFECT, EntityTable
 from editor.io_system import IOManager, get_input_names
 from editor.io_handlers import register_all_input_handlers
@@ -10,6 +10,8 @@ def test_effect_defaults_to_fire_with_intrinsic_light():
     effect = Effect()
     assert effect.properties["type"] == "effect"
     assert effect.properties["effect_type"] == EFFECT_FIRE
+    assert effect.properties["fire_texture"] == EFFECT_FIRE_TEXTURES[0]
+    assert len(EFFECT_FIRE_TEXTURES) == 5
     assert effect.properties["size"] == 32.0
     assert effect.properties["light_enabled"] is True
     assert effect.properties["light_radius"] == 128.0
@@ -26,6 +28,25 @@ def test_effect_seed_is_stable_and_copy_gets_a_new_seed():
     clone = effect.duplicate()
     assert clone.properties["id"] != effect.properties["id"]
     assert clone.properties["effect_seed"] != first
+
+
+def test_fire_texture_choice_is_projected_to_dense_variant():
+    effect = Effect(
+        properties={
+            "effect_type": EFFECT_FIRE,
+            "fire_texture": EFFECT_FIRE_TEXTURES[2],
+        }
+    )
+    table = EntityTable()
+    hidden = table.begin_frame(
+        [effect],
+        epoch=1,
+        effect_runtime=False,
+    )
+
+    assert not hidden[0]
+    assert table.effect_type[0] == 0
+    assert table.effect_fire_variant.tolist() == [2]
 
 
 def test_effect_is_projected_as_one_dense_visual_and_light_primitive():
