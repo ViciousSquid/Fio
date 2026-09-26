@@ -1134,8 +1134,7 @@ class Terrain:
                 else:
                     gl.glUniform3f(loc, *value)
 
-        # Alpha-test rather than blended transparency: one cheap pass, stable
-        # depth, and no sorting. The fragment shader provides the blade silhouette.
+        # Opaque tapered blades: one cheap pass with stable depth and no sorting.
         gl.glDisable(gl.GL_CULL_FACE)
         gl.glEnable(gl.GL_DEPTH_TEST)
         for chunk in visible_chunks:
@@ -1147,7 +1146,7 @@ class Terrain:
             gl.glBindVertexArray(chunk.grass_vao)
             gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 12, chunk.grass_instance_count)
         gl.glBindVertexArray(0)
-        # Crossed grass billboards are double-sided. Restore normal culling
+        # Grass blades are double-sided. Restore normal culling
         # state before the renderer continues with subsequent passes.
         gl.glEnable(gl.GL_CULL_FACE)
 
