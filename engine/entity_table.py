@@ -820,7 +820,8 @@ class EntityTable:
         """
         return epoch is None or epoch != self._epoch or len(things) != self.count
 
-    def begin_frame(self, things, epoch=None, dirty_objects=None):
+    def begin_frame(self, things, epoch=None, dirty_objects=None,
+                    effect_runtime=False):
         """Bring the table into line with *things*; return the live hidden mask.
 
         The whole of the projection's per-frame Python cost: one comprehension
