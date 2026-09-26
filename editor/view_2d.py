@@ -3735,12 +3735,6 @@ class View2D(QWidget):
         self.is_panning = False
 
         if event.button() == Qt.LeftButton:
-            if self.is_dragging_object:
-                self.is_dragging_object = False
-                self.drag_group = []
-                self.drag_primary = None
-                self._object_drag_undo_saved = False
-
             # Free-rotate tool: releasing the button commits the spin.
             if self.rotate_dragging:
                 self.commit_rotate()
@@ -3787,6 +3781,7 @@ class View2D(QWidget):
                 self.is_dragging_object = False
                 self.drag_group = []
                 self.drag_primary = None
+                self._object_drag_undo_saved = False
                 # A click (no drag) inside an existing group flips scale/rotate.
                 if getattr(self, '_maybe_toggle_manip', False):
                     self._maybe_toggle_manip = False
