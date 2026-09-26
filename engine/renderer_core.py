@@ -510,13 +510,13 @@ class BaseRenderer:
         # Fire animation atlas. The sheet is a 4x2 grid of RGBA frames.
         # Keep it un-mipmapped and clamp to the sheet edge so linear filtering
         # cannot bleed neighbouring frames through transparent borders.
-        self.effect_fire_texture = 0
-        fire_path = os.path.join('assets', 'textures', 'effects', 'firesheet.png')
-        if os.path.exists(fire_path):
-            self.effect_fire_texture = self.load_texture(
-                'firesheet.png', 'textures/effects')
-            if self.effect_fire_texture:
-                gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_fire_texture)
+        self.effect_explosion_texture = 0
+        explosion_path = os.path.join('assets', 'textures', 'effects', 'explosion.png')
+        if os.path.exists(explosion_path):
+            self.effect_explosion_texture = self.load_texture(
+                'explosion.png', 'textures/effects')
+            if self.effect_explosion_texture:
+                gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_explosion_texture)
                 gl.glTexParameteri(
                     gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
                 gl.glTexParameteri(
@@ -998,7 +998,7 @@ layout (location = 10) in vec4 iPayload;
         gl.glUniformMatrix4fv(
             uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view)
         )
-        if not self.effect_fire_texture:
+        if not self.effect_explosion_texture:
             gl.glBindVertexArray(0)
             if cull_was:
                 gl.glEnable(gl.GL_CULL_FACE)
@@ -1008,7 +1008,7 @@ layout (location = 10) in vec4 iPayload;
 
         prev_active_texture = gl.glGetIntegerv(gl.GL_ACTIVE_TEXTURE)
         gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_fire_texture)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_explosion_texture)
         gl.glUniform1i(uniforms['fire_texture'], 0)
 
         gl.glBindVertexArray(self._ensure_effect_instance_vao())
