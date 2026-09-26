@@ -381,6 +381,11 @@ class BaseRenderer:
         self._effect_depth_aux_scratch = np.empty(0, dtype=np.float64)
         self._effect_expand_slots_scratch = np.empty(0, dtype=np.int32)
         self._effect_expand_particle_scratch = np.empty(0, dtype=np.float32)
+        # Decoded FIRE GIF frames, indexed by the dense fire variant.
+        # Each entry is a tuple of persistent GL texture ids plus cumulative
+        # frame durations in seconds.
+        self.effect_fire_frames = {}
+        self.effect_fire_cumulative = {}
         # Capacity-stable scratch for the numeric sprite filter. The renderer
         # owns these arrays so steady-state drawing does not allocate key/mask/
         # texture arrays per frame.
@@ -1830,6 +1835,29 @@ layout (location = 9) in vec4 iNormal2;
             )
 
         return [], np.empty(0, dtype=np.float32)
+
+    def _load_fire_effect_textures(self):
+        """Load the five authored FIRE variants once after the GL context exists."""
+        self.effect_fire_frames.clear()
+        self.effect_fire_cumulative.clear()
+
+        for variant in range(5):
+            asset_path = (
+                f"assets/textures/effects/fire{variant + 1:02d}.gif"
+            )
+            frames, cumulative = self._load_fire_gif(asset_path)
+
+            # Optional variants may not exist yet.  Keep the selector usable
+            # without inventing an asset: an absent variant falls back to FIRE 01.
+            if not frames and variant != 0:
+                frames = self.effect_fire_frames.get(0, ())
+                cumulative = self.effect_fire_cumulative.get(
+                    0, np.empty(0, dtype=np.float32)
+                )
+
+            self.effect_fire_frames[variant] = tuple(frames)
+            self.effect_fire_cumulative[variant] = cumulative
+
 
     # --------------------------------------------------------------------------
     # Texture management
