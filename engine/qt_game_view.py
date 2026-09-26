@@ -1149,11 +1149,11 @@ class QtGameView(QOpenGLWidget):
         if render_state is not None and self.play_mode and self._render_config["show_glasses"]:
             if not getattr(render_state, 'player_dead', False):
                 _p = render_state.player_pos
-                _glass_positions.append((float(_p.x), float(_p.y), float(_p.z)))
+                _glass_positions.append((float(_p.x), float(_p.y) + 40.0, float(_p.z)))
             if (getattr(render_state, 'splitscreen_active', False)
                     and not getattr(render_state, 'player2_dead', False)):
                 _p2 = render_state.player2_pos
-                _glass_positions.append((float(_p2.x), float(_p2.y), float(_p2.z)))
+                _glass_positions.append((float(_p2.x), float(_p2.y) + 40.0, float(_p2.z)))
         self._render_config["player_glasses_positions"] = tuple(_glass_positions)
         self._render_config["grid_visible"] = getattr(self, 'grid_visible', True) and not self.play_mode
         self._render_config["terrain"] = getattr(self.editor, 'terrain', None)
