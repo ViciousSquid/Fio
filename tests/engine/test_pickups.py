@@ -57,6 +57,7 @@ def test_collect_pickup_equips_explicit_weapon():
     logic.current_hud_message = ""
     logic.io_manager = None
     logic.respawn_timers = {}
+    logic.plugins = None
     logic._plugin_emit = lambda *args, **kwargs: None
 
     logic._collect_pickup(pickup)
@@ -77,6 +78,8 @@ def test_collect_legacy_cig_pickup_remains_non_firing_weapon():
     logic.current_hud_message = ""
     logic.io_manager = None
     logic.respawn_timers = {}
+    logic.plugins = None
+    logic._plugin_emit = lambda *args, **kwargs: None
 
     logic._collect_pickup(pickup)
 
