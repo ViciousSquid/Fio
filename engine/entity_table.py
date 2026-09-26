@@ -983,9 +983,14 @@ class EntityTable:
                 lifetime = np.maximum(self.effect_lifetime[effect_ls], 0.01)
                 # Editor preview makes an otherwise dormant EXPLOSION visible
                 # at frame zero without arming its runtime state.
-                preview_explosion = (
-                    explosion & self.effect_preview[effect_ls] & ~bool(effect_runtime)
+                preview_explosion = np.asarray(
+                    explosion & self.effect_preview[effect_ls],
+                    dtype=bool,
                 )
+                if not effect_runtime:
+                    preview_explosion = preview_explosion.copy()
+                else:
+                    preview_explosion.fill(False)
                 expired = explosion_active & (elapsed >= lifetime)
                 if np.any(expired):
                     expired_slots = effect_ls[expired]
