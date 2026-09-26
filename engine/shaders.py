@@ -1328,7 +1328,6 @@ void main() {
 }""",
 
     'grass.vert': """#version 330 core
-precision highp float;
 
 layout (location = 2) in vec3 iPosition;
 layout (location = 3) in float iSize;
@@ -1399,7 +1398,6 @@ void main() {
 """,
 
     'grass.frag': """#version 330 core
-precision mediump float;
 out vec4 FragColor;
 
 in highp vec3 FragPos;
