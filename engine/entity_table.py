@@ -1116,7 +1116,7 @@ class EntityTable:
             light_radius = max(0.01, _effect_float(props, 'light_radius', 5.0))
             lifetime = max(0.01, _effect_float(props, 'lifetime', 0.5))
             try:
-                seed = float(int(props.get('effect_seed', 1)) & 0xFFFFFFFF)
+                seed = float((int(props.get('effect_seed', 1)) % 1000003) + 1)
             except (TypeError, ValueError):
                 seed = 1.0
 
