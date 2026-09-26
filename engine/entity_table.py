@@ -868,24 +868,74 @@ class EntityTable:
         # secondary render views never need Portal objects.
         self._refresh_portal_live(things)
 
-        # Light state is render state, not renderer metadata. Refresh only the
-        # light rows each frame because I/O may toggle or retune a light without
-        # changing the world epoch, while position is already refreshed above.
+        # Light state is render state, not renderer metadata. Ordinary Lights
+        # retain their existing warm object-backed state; Effect rows stay fully
+        # numeric and derive animated light from the dense effect columns.
         if len(self.light_slots):
             ls = self.light_slots
-            light_rows = [things[int(i)] for i in ls]
-            self.light_color[ls] = np.asarray(
-                [_light_color_of(t) for t in light_rows], dtype=np.float32)
-            self.light_params[ls] = np.asarray(
-                [[_light_float(t, 'intensity', 1.0),
-                  _light_float(t, 'radius', 512.0)] for t in light_rows],
-                dtype=np.float32)
-            self.light_enabled[ls] = np.asarray(
-                [_light_bool(t, 'state', True) for t in light_rows], dtype=bool)
-            self.light_casts_shadows[ls] = np.asarray(
-                [_light_bool(t, 'casts_shadows', False) for t in light_rows],
-                dtype=bool)
+            effect_mask = (self.class_bits[ls] & ENT_EFFECT) != 0
+            normal_ls = ls[~effect_mask]
+            effect_ls = ls[effect_mask]
 
+            if len(normal_ls):
+                light_rows = [things[int(i)] for i in normal_ls]
+                self.light_color[normal_ls] = np.asarray(
+                    [_light_color_of(t) for t in light_rows], dtype=np.float32)
+                self.light_params[normal_ls] = np.asarray(
+                    [[_light_float(t, 'intensity', 1.0),
+                      _light_float(t, 'radius', 512.0)] for t in light_rows],
+                    dtype=np.float32)
+                self.light_enabled[normal_ls] = np.asarray(
+                    [_light_bool(t, 'state', True) for t in light_rows], dtype=bool)
+                self.light_casts_shadows[normal_ls] = np.asarray(
+                    [_light_bool(t, 'casts_shadows', False) for t in light_rows],
+                    dtype=bool)
+
+            if len(effect_ls):
+                now = float(time.perf_counter())
+                unset = self.effect_spawn_time[effect_ls] <= 0.0
+                if effect_runtime and np.any(unset):
+                    self.effect_spawn_time[effect_ls[unset]] = now
+
+                explosion = self.effect_type[effect_ls] == 1
+                if effect_runtime:
+                    elapsed = np.maximum(
+                        now - self.effect_spawn_time[effect_ls], 0.0
+                    ).astype(np.float32, copy=False)
+                else:
+                    # FIRE animates in the editor; EXPLOSION previews at t=0
+                    # instead of consuming its lifetime before Play.
+                    elapsed = np.where(
+                        explosion, 0.0, max(now, 0.0)
+                    ).astype(np.float32, copy=False)
+
+                self.effect_elapsed[effect_ls] = elapsed
+                lifetime = np.maximum(self.effect_lifetime[effect_ls], 0.01)
+                t = np.clip(elapsed / lifetime, 0.0, 1.0)
+                alive = (~explosion) | (elapsed < lifetime)
+                if not effect_runtime:
+                    alive[:] = True
+                self.effect_alive[effect_ls] = alive
+
+                flicker = _effect_flicker(
+                    self.effect_seed[effect_ls], elapsed
+                ).astype(np.float32, copy=False)
+                base_intensity = self.effect_params[effect_ls, 2]
+                base_radius = self.effect_params[effect_ls, 3]
+                self.light_color[effect_ls] = self.effect_light_color[effect_ls]
+                self.light_enabled[effect_ls] = alive & (base_intensity > 0.0)
+
+                intensity = base_intensity * (0.80 + 0.20 * flicker)
+                radius = base_radius.copy()
+                if np.any(explosion):
+                    burst = np.exp(-t * t * 48.0)
+                    envelope = 1.0 - np.clip(
+                        (t - 0.40) / 0.60, 0.0, 1.0
+                    )
+                    intensity *= (1.0 + burst * 2.2) * envelope
+                    radius *= 1.0 + burst * 1.4 + t * 0.5
+                self.light_params[effect_ls, 0] = intensity
+                self.light_params[effect_ls, 1] = np.maximum(radius, 0.01)
 
         if len(self._hidden_buf) < n:
             self._hidden_buf = np.empty(max(n, 16), dtype=bool)
