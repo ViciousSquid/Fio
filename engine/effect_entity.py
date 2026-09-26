@@ -35,6 +35,7 @@ EFFECT_ORB_TEXTURES = tuple(
 EFFECT_DEFAULTS = {
     "effect_type": EFFECT_FIRE,
     "preview": False,
+    "silent": False,
     "fire_texture": EFFECT_FIRE_TEXTURES[0],
     "orb_texture": EFFECT_ORB_TEXTURES[0],
     "custom_gif": "",
@@ -115,6 +116,7 @@ class Effect(_ThingBase):
 
         custom_gif = str(self.properties.get("custom_gif", "")).strip().replace("\\", "/")
         self.properties["custom_gif"] = custom_gif
+        self.properties["silent"] = str(self.properties.get("silent", False)).strip().lower() in ("1", "true", "yes", "on") if isinstance(self.properties.get("silent"), str) else bool(self.properties.get("silent", False))
 
         try:
             seed = int(self.properties.get("effect_seed"))
