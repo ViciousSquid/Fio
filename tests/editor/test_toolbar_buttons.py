@@ -51,7 +51,7 @@ class FakeEditorWindow(QMainWindow):
     to look at, not to drive.
     """
 
-    tool_mode = 'select'
+    tool_mode = 'brush'
 
     def __init__(self):
         super().__init__()
@@ -169,7 +169,7 @@ def test_only_one_tool_button_is_checked_at_a_time(qt_app):
         def __init__(self):
             super().__init__()
             self.components = ce.ComponentController()
-            self.tool_mode = 'select'
+            self.tool_mode = 'brush'
 
     window = SyncingWindow()
     Ui_MainWindow().create_tool_toolbar(window)
