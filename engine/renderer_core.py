@@ -940,12 +940,10 @@ layout (location = 10) in vec4 iPayload;
         np.take(table.pos, sorted_slots, axis=0, out=data[:, 0:3])
         np.take(table.effect_params[:, :2], sorted_slots, axis=0,
                out=data[:, 3:5])
-        if play_mode:
-            np.take(table.effect_elapsed, sorted_slots, out=data[:, 5])
-        else:
-            types = table.effect_type[sorted_slots]
-            data[:, 5] = float(editor_time)
-            data[:, 5][types == 1] = 0.0
+        # EntityTable owns the effect clock. In the editor FIRE advances with
+        # the same clock that drives the intrinsic light, while EXPLOSION stays
+        # at t=0 until Play; runtime rows use elapsed-since-spawn.
+        np.take(table.effect_elapsed, sorted_slots, out=data[:, 5])
         np.take(table.effect_lifetime, sorted_slots, out=data[:, 6])
         np.take(table.effect_seed, sorted_slots, out=data[:, 7])
         data[:, 8] = table.effect_type[sorted_slots]
