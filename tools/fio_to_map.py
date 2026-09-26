@@ -414,7 +414,11 @@ def convert_fio_entity(fio_thing: Dict[str, Any]) -> Optional[MapEntity]:
     
     elif entity_type == 'Pickup':
         item_type = props.get('item_type', 'health')
-        classname = PICKUP_CLASSNAMES.get(item_type, PICKUP_CLASSNAMES['default'])
+        weapon = props.get('weapon', item_type)
+        # Preserve compatibility with older maps that encoded the weapon in
+        # item_type, while new maps use item_type="weapon" + weapon="gun1|gun2|cig".
+        pickup_class = weapon if item_type == 'weapon' else item_type
+        classname = PICKUP_CLASSNAMES.get(pickup_class, PICKUP_CLASSNAMES['default'])
     
     elif entity_type == 'Light':
         classname = 'light'
