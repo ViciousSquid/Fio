@@ -1,8 +1,7 @@
 """The one and only Effect entity class.
 
 Effect is a core world primitive: one authored object that describes both a
-procedural visual effect and its emitted dynamic light. FIRE, ORB and
-EXPLOSION are behaviours of this same primitive; there is no second explosion
+procedural visual effect and its emitted dynamic light. FIRE, ORB, EXPLOSION and CUSTOM are behaviours of this same primitive; there is no second explosion
 system.
 
 The class contains authored data only. Rendering/runtime state is projected
@@ -22,8 +21,9 @@ except ImportError:  # standalone player / Android: no PyQt5
 EFFECT_FIRE = "FIRE"
 EFFECT_ORB = "ORB"
 EFFECT_EXPLOSION = "EXPLOSION"
-EFFECT_TYPES = (EFFECT_FIRE, EFFECT_ORB, EFFECT_EXPLOSION)
-EFFECT_ANIMATED_TYPES = (EFFECT_FIRE, EFFECT_ORB)
+EFFECT_CUSTOM = "CUSTOM"
+EFFECT_TYPES = (EFFECT_FIRE, EFFECT_ORB, EFFECT_EXPLOSION, EFFECT_CUSTOM)
+EFFECT_ANIMATED_TYPES = (EFFECT_FIRE, EFFECT_ORB, EFFECT_CUSTOM)
 EFFECT_ORB_LIGHT_COLOUR = [74, 155, 255]
 EFFECT_FIRE_TEXTURES = tuple(
     f"assets/textures/effects/fire{i:02d}.gif" for i in range(1, 6)
@@ -37,6 +37,7 @@ EFFECT_DEFAULTS = {
     "preview": False,
     "fire_texture": EFFECT_FIRE_TEXTURES[0],
     "orb_texture": EFFECT_ORB_TEXTURES[0],
+    "custom_gif": "",
     "width": 32.0,
     "height": 46.0,
     "intensity": 1.0,
@@ -111,6 +112,9 @@ class Effect(_ThingBase):
         if orb_texture not in EFFECT_ORB_TEXTURES:
             orb_texture = EFFECT_ORB_TEXTURES[0]
         self.properties["orb_texture"] = orb_texture
+
+        custom_gif = str(self.properties.get("custom_gif", "")).strip().replace("\\", "/")
+        self.properties["custom_gif"] = custom_gif
 
         try:
             seed = int(self.properties.get("effect_seed"))
