@@ -5,6 +5,7 @@ Edits made after that snapshot must remain pending for the next frame.
 """
 
 import pytest
+import threading
 
 
 def _state():
@@ -17,6 +18,7 @@ def _state():
     state._render_dirty_epoch_by_id = {}
     state._render_dirty_all = False
     state._render_dirty_all_epoch = -1
+    state._render_dirty_lock = threading.RLock()
     return state
 
 
