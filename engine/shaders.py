@@ -480,690 +480,325 @@ void main() {
     FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a);
 }""",
 
-    'effect.vert': "#version 330 core\nprecision highp float;\n\nlayout (location = 0) in vec2 aPos;\nlayout (location = 1) in vec3 iEffectPos;\nlayout (location = 2) in vec4 iEffectParams;  // size, intensity, elapsed, lifetime\nlayout (location = 3) in vec4 iEffectMeta;    // seed, type, spare, spare\nlayout (location = 4) in vec4 iEffectColor;\n\nuniform mat4 projection;\nuniform mat4 view;\n\nout vec2 TexCoords;\nout vec3 FragPos;\nout vec4 EffectParams;\nout vec4 EffectMeta;\nout vec3 EffectColor;\n\nvoid main() {\n    float size = max(iEffectParams.x, 0.01);\n    float elapsed = max(iEffectParams.z, 0.0);\n    float lifetime = max(iEffectParams.w, 0.001);\n    float effectType = iEffectMeta.y;\n\n    float t = clamp(elapsed / lifetime, 0.0, 1.0);\n\n    // FIRE stays at authored size. EXPLOSION rapidly expands from the same\n    // primitive. The quad's bottom edge is anchored at the authored origin.\n    float growth = 1.0;\n    if (effectType > 0.5) {\n        growth = mix(1.0, 3.0, smoothstep(0.0, 0.28, t));\n    }\n\n    // Upright cylindrical billboard: world Y keeps the flame vertical\n    // while cameraRight makes the sheet face the camera in the horizontal plane.\n    vec3 cameraRight = normalize(vec3(view[0][0], view[1][0], view[2][0]));\n    const vec3 worldUp = vec3(0.0, 1.0, 0.0);\n\n    float vertical = aPos.y + 0.5;\n    vec3 worldPos = iEffectPos\n                  + cameraRight * aPos.x * size * growth\n                  + worldUp * vertical * size * 1.25 * growth;\n\n    TexCoords = aPos + 0.5;\n    FragPos = worldPos;\n    EffectParams = iEffectParams;\n    EffectMeta = iEffectMeta;\n    EffectColor = iEffectColor.rgb;\n\n    gl_Position = projection * view * vec4(worldPos, 1.0);\n}\n",
-    'effect.frag': "#version 330 core\nprecision mediump float;\n\nout vec4 FragColor;\n\nin highp vec2 TexCoords;\nin highp vec3 FragPos;\nin highp vec4 EffectParams;\nin highp vec4 EffectMeta;\nin highp vec3 EffectColor;\n\nuniform sampler2D explosion_texture;\n\nuniform int uFogEnabled;\nuniform vec3 uFogColor;\nuniform float uFogStart;\nuniform float uFogEnd;\nuniform float uFogDensity;\nuniform highp vec3 uFogCamPos;\nuniform vec3 uAmbient;\n\n// explosion.png: 5 columns x 4 rows, with one used cell on the final row.\n// This yields 16 actual frames; the empty atlas cells are never sampled.\nconst float EXPLOSION_SHEET_COLUMNS = 5.0;\nconst float EXPLOSION_SHEET_ROWS = 4.0;\nconst float EXPLOSION_FRAME_COUNT = 16.0;\nconst float EXPLOSION_FRAME_RATE = 16.0;\n\nhighp float hash21(highp vec2 p, highp float seed) {\n    return fract(\n        sin(dot(p + vec2(seed, seed * 0.731), vec2(127.1, 311.7)))\n        * 43758.5453123\n    );\n}\n\nhighp float valueNoise(highp vec2 p, highp float seed) {\n    highp vec2 i = floor(p);\n    highp vec2 f = fract(p);\n    highp vec2 u = f * f * (3.0 - 2.0 * f);\n    float a = hash21(i, seed);\n    float b = hash21(i + vec2(1.0, 0.0), seed);\n    float c = hash21(i + vec2(0.0, 1.0), seed);\n    float d = hash21(i + vec2(1.0, 1.0), seed);\n    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);\n}\n\nfloat fogFactor(highp vec3 fragPos) {\n    if (uFogEnabled == 0) return 0.0;\n    highp float d = length(fragPos - uFogCamPos);\n    float band = max(uFogEnd - uFogStart, 1e-4);\n    float f = clamp((d - uFogStart) / band, 0.0, 1.0);\n    if (uFogDensity > 0.0) {\n        float e = uFogDensity * max(d - uFogStart, 0.0);\n        f = max(f, clamp(1.0 - exp(-e * e), 0.0, 1.0));\n    }\n    return f;\n}\n\nvec3 applyFog(vec3 color, highp vec3 fragPos) {\n    return mix(color, uFogColor, fogFactor(fragPos));\n}\n\nvec2 explosionAtlasUV(vec2 localUV, float frameIndex) {\n    float column = mod(frameIndex, EXPLOSION_SHEET_COLUMNS);\n    float rowTop = floor(frameIndex / EXPLOSION_SHEET_COLUMNS);\n    float rowBottom = EXPLOSION_SHEET_ROWS - 1.0 - rowTop;\n    vec2 cellSize = vec2(\n        1.0 / EXPLOSION_SHEET_COLUMNS,\n        1.0 / EXPLOSION_SHEET_ROWS\n    );\n    return (vec2(column, rowBottom) + localUV) * cellSize;\n}\n\nvoid main() {\n    float visualIntensity = max(EffectParams.y, 0.0);\n    float elapsed = max(EffectParams.z, 0.0);\n    float lifetime = max(EffectParams.w, 0.001);\n    float seed = EffectMeta.x;\n    float effectType = EffectMeta.y;\n\n    highp vec2 uv = TexCoords;\n    highp float y = uv.y;\n    highp float x = uv.x - 0.5;\n\n    if (effectType > 0.5) {\n        float t = clamp(elapsed / lifetime, 0.0, 1.0);\n\n        // EXPLOSION uses the authored 16-frame atlas once over its lifetime.\n        float frame = min(\n            floor(t * EXPLOSION_FRAME_COUNT),\n            EXPLOSION_FRAME_COUNT - 1.0\n        );\n        vec4 sheet = texture(explosion_texture, explosionAtlasUV(TexCoords, frame));\n\n        if (sheet.a < 0.02 || visualIntensity <= 0.0) {\n            discard;\n        }\n\n        float envelope = 1.0 - smoothstep(0.70, 1.0, t);\n        float flash = exp(-t * t * 48.0);\n        float burst = 1.0 + flash * 2.2;\n        vec3 tint = mix(vec3(1.0), max(EffectColor, vec3(0.001)), 0.35);\n        vec3 rgb = sheet.rgb * tint * visualIntensity * burst;\n        float alpha = sheet.a * envelope;\n\n        if (alpha < 0.01) discard;\n        FragColor = vec4(applyFog(rgb, FragPos), alpha);\n        return;\n    }\n\n    // FIRE remains procedural. The explosion atlas is not used for FIRE.\n    highp float drift = elapsed * 1.7 + seed * 0.013;\n    highp float n0 = valueNoise(\n        vec2(uv.x * 3.0, uv.y * 2.7 - drift), seed\n    );\n    highp float n1 = valueNoise(\n        vec2(uv.x * 7.0 + drift * 0.65,\n             uv.y * 6.0 - drift * 1.9),\n        seed + 9.17\n    );\n\n    float width = mix(0.44, 0.10, smoothstep(0.05, 1.0, y));\n    float warp = (n0 - 0.5) * 0.20 * (0.2 + 0.8 * y)\n               + (n1 - 0.5) * 0.065;\n    float lateral = abs(x + warp) / max(width, 0.015);\n\n    float body = 1.0 - smoothstep(0.55, 1.0, lateral);\n    float baseFade = smoothstep(0.0, 0.10, y);\n    float topFade = 1.0 - smoothstep(0.70, 1.0, y);\n\n    float emberNoise = valueNoise(\n        vec2(uv.x * 13.0 + seed * 0.07,\n             uv.y * 11.0 - elapsed * 2.6),\n        seed + 21.3\n    );\n    float embers = smoothstep(0.91, 0.985, emberNoise)\n                 * smoothstep(0.35, 0.9, y)\n                 * (1.0 - smoothstep(0.78, 1.0, y));\n\n    float alpha = clamp(\n        body * baseFade * topFade + embers * 0.85, 0.0, 1.0\n    );\n\n    float core = exp(-lateral * lateral * 4.8)\n               * smoothstep(0.0, 0.28, y);\n\n    vec3 base = max(EffectColor, vec3(0.001));\n    vec3 outer = base * 0.42;\n    vec3 hot = mix(base, vec3(1.0, 0.90, 0.55), core);\n    vec3 rgb = mix(\n        outer,\n        hot,\n        clamp(core + embers * 0.7, 0.0, 1.0)\n    );\n\n    highp float phase = elapsed * 10.0 + seed * 0.013;\n    highp float cell = floor(phase);\n    highp float fracPart = phase - cell;\n    highp float smoothPart = fracPart * fracPart * (3.0 - 2.0 * fracPart);\n    highp float flickerA =\n        fract(sin((cell + seed) * 12.9898) * 43758.5453123);\n    highp float flickerB =\n        fract(sin((cell + 1.0 + seed) * 12.9898) * 43758.5453123);\n    float flicker = mix(flickerA, flickerB, smoothPart);\n\n    rgb *= visualIntensity * (0.80 + 0.20 * flicker);\n    if (alpha < 0.01 || visualIntensity <= 0.0) discard;\n\n    FragColor = vec4(applyFog(rgb, FragPos), alpha);\n}\n",
-    'fog.vert': """#version 330 core
+    'effect.vert': """#version 330 core
 precision highp float;
-layout (location = 0) in vec3 a_pos;
 
-uniform mat4 model;
-uniform mat4 view;
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec3 iEffectPos;
+layout (location = 2) in vec4 iEffectParams;  // size, intensity, elapsed, lifetime
+layout (location = 3) in vec4 iEffectMeta;    // seed, type, particle index, spare
+layout (location = 4) in vec4 iEffectColor;
+layout (location = 5) in float iParticleIndex;
+
 uniform mat4 projection;
+uniform mat4 view;
 
-out vec3 localPos;
-
-void main() {
-    localPos = a_pos;
-    gl_Position = projection * view * model * vec4(a_pos, 1.0);
-}""",
-
-    'fog.frag': """#version 330 core
-precision mediump float;
-out vec4 FragColor;
-in highp vec3 localPos;
-
-uniform highp mat4 model;
-uniform highp mat4 inverseModel;
-uniform highp vec3 viewPos;
-
-uniform float density;
-uniform vec3 fogColor;
-uniform sampler3D noiseTexture;
-uniform float noiseScale;
-uniform highp float time;
-
-highp vec2 intersectBox(highp vec3 rayOrigin, highp vec3 rayDir) {
-    highp vec3 tMin = (-0.5 - rayOrigin) / rayDir;
-    highp vec3 tMax = ( 0.5 - rayOrigin) / rayDir;
-    highp vec3 t1 = min(tMin, tMax);
-    highp vec3 t2 = max(tMin, tMax);
-    return vec2(max(max(t1.x, t1.y), t1.z),
-                min(min(t2.x, t2.y), t2.z));
-}
-
-void main() {
-    highp vec3 fragWorldPos = vec3(model * vec4(localPos, 1.0));
-    highp vec3 rayDirWorld  = normalize(fragWorldPos - viewPos);
-
-    highp vec3 rayOriginLocal = (inverseModel * vec4(viewPos,       1.0)).xyz;
-    highp vec3 rayDirLocal    = normalize((inverseModel * vec4(rayDirWorld, 0.0)).xyz);
-
-    highp vec2 t = intersectBox(rayOriginLocal, rayDirLocal);
-    if (t.x >= t.y) discard;
-
-    highp float tNear    = max(0.0, t.x);
-    highp float stepSize = (t.y - tNear) / 16.0;
-
-    vec4  acc        = vec4(0.0);
-    highp float timeOffset = time * 0.1;
-
-    for (int i = 0; i < 16; ++i) {
-        highp vec3 sp = rayOriginLocal + rayDirLocal * (tNear + float(i) * stepSize);
-        float n       = texture(noiseTexture, sp * noiseScale + vec3(0.0, 0.0, timeOffset)).r;
-        float tr      = exp(-density * n * stepSize);
-        acc.rgb      += fogColor * (1.0 - tr) * (1.0 - acc.a);
-        acc.a        += (1.0 - tr);
-        if (acc.a > 0.99) break;
-    }
-
-    FragColor = vec4(acc.rgb, clamp(acc.a, 0.0, 1.0));
-}""",
-
-    'water.vert': """#version 330 core
-precision highp float;
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-layout (location = 2) in vec2 aTexCoords;
-
-out vec3 FragPos;
 out vec2 TexCoords;
-out mediump vec3 Normal;
-out mediump float WaveCrest;
-out mediump float ShoreDist;
+out vec3 FragPos;
+out vec4 EffectParams;
+out vec4 EffectMeta;
+out vec3 EffectColor;
 
-uniform mat4 model;
-uniform mat4 view;
-uniform mat4 projection;
-uniform highp float time;
-uniform mat3 normalMatrix;
-
-uniform float waveAmp;    // total wave amplitude in world units
-uniform vec3 brushSize;   // world-space brush dimensions
-
-// One Gerstner wave: displaces the vertex and accumulates normal derivatives.
-void addWave(vec2 dir, float wavelength, float amp, float speed, vec2 p,
-             inout float dy, inout vec2 dxz, inout vec3 n)
-{
-    float k = 6.2831853 / wavelength;
-    float f = k * dot(dir, p) + speed * time;
-    float s = sin(f);
-    float c = cos(f);
-    float steep = min(0.8 / (k * max(amp, 0.0001) * 4.0), 1.2);
-    dy  += amp * s;
-    dxz += steep * amp * c * dir;
-    n.x -= dir.x * k * amp * c;
-    n.z -= dir.y * k * amp * c;
-    n.y -= steep * k * amp * s * 0.25;
+float hash11(float x) {
+    return fract(sin(x * 12.9898) * 43758.5453123);
 }
 
-void main()
-{
-    vec3 worldPos = vec3(model * vec4(aPos, 1.0));
+void main() {
+    float size = max(iEffectParams.x, 0.01);
+    float effectType = iEffectMeta.y;
 
-    // World-space distance from this vertex to the nearest lateral brush edge.
-    // Waves are pinned to zero at the edges so the surface always meets the
-    // side faces / pool walls exactly (keeps the volume watertight).
-    vec2 edgeLocal = vec2(0.5) - abs(aPos.xz);
-    float edgeWorld = min(edgeLocal.x * brushSize.x, edgeLocal.y * brushSize.z);
-    float fadeW = clamp(min(brushSize.x, brushSize.z) * 0.25, 4.0, 48.0);
-    float edgeFade = smoothstep(0.0, fadeW, edgeWorld);
+    // EXPLOSION remains the authored one-shot billboard.
+    if (effectType > 0.5) {
+        float growth = 1.0;
+        float elapsed = max(iEffectParams.z, 0.0);
+        float lifetime = max(iEffectParams.w, 0.001);
+        float t = clamp(elapsed / lifetime, 0.0, 1.0);
+        growth = mix(1.0, 3.0, smoothstep(0.0, 0.28, t));
 
-    float topVert = step(0.49, aPos.y);   // only the top surface deforms
-    float amp = waveAmp * edgeFade * topVert;
+        vec3 cameraRight = normalize(vec3(view[0][0], view[1][0], view[2][0]));
+        const vec3 worldUp = vec3(0.0, 1.0, 0.0);
+        float vertical = aPos.y + 0.5;
 
-    float dy = 0.0;
-    vec2 dxz = vec2(0.0);
-    vec3 n = vec3(0.0, 1.0, 0.0);
-    if (amp > 0.001) {
-        addWave(vec2( 0.788,  0.616), 190.0, amp * 0.42, 1.05, worldPos.xz, dy, dxz, n);
-        addWave(vec2(-0.552,  0.834), 118.0, amp * 0.28, 1.45, worldPos.xz, dy, dxz, n);
-        addWave(vec2( 0.943, -0.333),  74.0, amp * 0.19, 1.95, worldPos.xz, dy, dxz, n);
-        addWave(vec2(-0.673, -0.740),  38.0, amp * 0.11, 2.70, worldPos.xz, dy, dxz, n);
-        worldPos.y  += dy;
-        worldPos.xz += dxz * 0.75 * edgeFade;
+        vec3 worldPos = iEffectPos
+                      + cameraRight * aPos.x * size * growth
+                      + worldUp * vertical * size * 1.25 * growth;
+
+        TexCoords = aPos + 0.5;
+        FragPos = worldPos;
+        EffectParams = iEffectParams;
+        EffectMeta = iEffectMeta;
+        EffectColor = iEffectColor.rgb;
+        gl_Position = projection * view * vec4(worldPos, 1.0);
+        return;
     }
 
-    vec3 baseNormal = normalize(normalMatrix * aNormal);
-    // Only the upward-facing surface takes the wave normal; side walls keep
-    // their flat normals even at their top verts (which do get displaced)
-    float topFaceVert = topVert * step(0.5, aNormal.y);
-    Normal    = normalize(mix(baseNormal, normalize(n), topFaceVert));
-    FragPos   = worldPos;
-    TexCoords = aTexCoords;
-    WaveCrest = clamp(dy / max(waveAmp * 0.85, 0.001) * 0.5 + 0.5, 0.0, 1.0);
-    ShoreDist = edgeWorld;
+    // FIRE is a deterministic collection of virtual flame cards. They are
+    // ordinary instanced quads, but each card gets its own height, width,
+    // starting height, lean and orientation. No CPU particle simulation exists.
+    float card = iParticleIndex;
+    float r0 = hash11(iEffectMeta.x + card * 17.173);
+    float r1 = hash11(iEffectMeta.x + card * 31.791);
+    float r2 = hash11(iEffectMeta.x + card * 53.417);
+    float r3 = hash11(iEffectMeta.x + card * 79.133);
 
+    bool baseCard = card < 8.0;
+    float base = baseCard ? 1.0 : 0.0;
+
+    float cardHeight = mix(0.58, 1.32, r1) * size;
+    float cardWidth = mix(0.13, 0.30, r2) * size;
+
+    // Broad crossed sheets build the burning mass; the remaining cards are
+    // narrower tongues which start at different heights and peel away.
+    cardWidth *= mix(0.78, 1.55, base);
+    cardHeight *= mix(0.82, 0.92, base);
+
+    float lift = base * (r3 - 0.5) * 0.12 * size
+               + (1.0 - base) * r3 * 0.38 * size;
+
+    float angle = (r0 * 6.2831853) + floor(card * 0.25) * 0.17;
+    vec3 cameraRight = normalize(vec3(view[0][0], view[1][0], view[2][0]));
+    vec3 cameraForward = normalize(vec3(-view[0][2], -view[1][2], -view[2][2]));
+    cameraForward.y = 0.0;
+    cameraForward = normalize(cameraForward);
+    vec3 cardRight = normalize(
+        cameraRight * cos(angle) + cameraForward * sin(angle)
+    );
+
+    float vertical = aPos.y + 0.5;
+    float y = vertical;
+    float lean = (r1 - 0.5) * size * mix(0.16, 0.52, y * y);
+    float sideways = sin(r0 * 17.0 + vertical * 2.3) * size * 0.05 * y;
+
+    vec3 worldPos = iEffectPos
+                  + cardRight * aPos.x * cardWidth
+                  + worldUp * (lift + vertical * cardHeight)
+                  + normalize(vec3(cardRight.z, 0.0, -cardRight.x)) * (lean + sideways);
+
+    TexCoords = aPos + 0.5;
+    FragPos = worldPos;
+    EffectParams = iEffectParams;
+    EffectMeta = iEffectMeta;
+    EffectColor = iEffectColor.rgb;
     gl_Position = projection * view * vec4(worldPos, 1.0);
-}""",
+}
+""",
 
-    'water.frag': """#version 330 core
+    'effect.frag': """#version 330 core
 precision mediump float;
+
 out vec4 FragColor;
 
-in highp vec3 FragPos;
 in highp vec2 TexCoords;
-in vec3 Normal;
-in float WaveCrest;
-in float ShoreDist;
+in highp vec3 FragPos;
+in highp vec4 EffectParams;
+in highp vec4 EffectMeta;
+in highp vec3 EffectColor;
 
-struct Light {
-    highp vec3 position;
-    vec3 color;
-    float intensity;
-    highp float radius;
-};
+uniform sampler2D explosion_texture;
 
-#define MAX_LIGHTS """ + str(MAX_LIGHTS_WATER) + """
-uniform Light lights[MAX_LIGHTS];
-uniform int active_lights;
-uniform mat4 view;
-uniform mat4 projection;
-uniform highp vec3 viewPos;
-uniform sampler2D normalMap;
-uniform sampler2D sceneColor;
-uniform sampler2D reflectionTexture;
-uniform mat4 reflectionMatrix;
-uniform highp float time;
+uniform int uFogEnabled;
+uniform vec3 uFogColor;
+uniform float uFogStart;
+uniform float uFogEnd;
+uniform float uFogDensity;
+uniform highp vec3 uFogCamPos;
+uniform vec3 uAmbient;
 
-uniform float waterOpacity;
-uniform float waterReflectivity;
-uniform float distortionStrength;
-uniform float refractionIndex;
-uniform float roughness;
-uniform float fresnelIntensity;
-uniform int reflectionEnabled;
-uniform vec2 screenSize;
-uniform vec3 waterTint;""" + FOG_GLSL + """
+// explosion.png: 5 columns x 4 rows, with one used cell on the final row.
+const float EXPLOSION_SHEET_COLUMNS = 5.0;
+const float EXPLOSION_SHEET_ROWS = 4.0;
+const float EXPLOSION_FRAME_COUNT = 16.0;
+const float EXPLOSION_FRAME_RATE = 16.0;
 
-const vec3 SUN_DIR   = vec3(0.4767, 0.6555, 0.5859);  // pre-normalized
-const vec3 SUN_COLOR = vec3(1.00, 0.95, 0.82);
-
-highp float hash21(highp vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+highp float hash21(highp vec2 p, highp float seed) {
+    return fract(
+        sin(dot(p + vec2(seed, seed * 0.731), vec2(127.1, 311.7)))
+        * 43758.5453123
+    );
 }
-highp float vnoise(highp vec2 p) {
+
+highp float valueNoise(highp vec2 p, highp float seed) {
     highp vec2 i = floor(p);
     highp vec2 f = fract(p);
     highp vec2 u = f * f * (3.0 - 2.0 * f);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
+    float a = hash21(i, seed);
+    float b = hash21(i + vec2(1.0, 0.0), seed);
+    float c = hash21(i + vec2(0.0, 1.0), seed);
+    float d = hash21(i + vec2(1.0, 1.0), seed);
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// Procedural sky remains the zero-cost fallback when reflections are disabled.
-vec3 skyColor(vec3 dir) {
-    float h = clamp(dir.y, 0.0, 1.0);
-    vec3 sky = mix(vec3(0.66, 0.76, 0.83),
-                   vec3(0.19, 0.38, 0.66),
-                   pow(h, 0.55));
-    float sunAmount = max(dot(dir, SUN_DIR), 0.0);
-    sky += SUN_COLOR * (
-        pow(sunAmount, 350.0) * 3.0 +
-        pow(sunAmount, 24.0) * 0.18
-    );
-    return sky;
+highp float fbm3(highp vec2 p, highp float seed) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    for (int i = 0; i < 3; ++i) {
+        value += valueNoise(p, seed + float(i) * 13.71) * amplitude;
+        p = p * 2.03 + vec2(7.1, 3.7);
+        amplitude *= 0.5;
+    }
+    return value;
 }
 
-void main()
-{
-    highp vec3 toView = viewPos - FragPos;
-    highp float viewDist = length(toView);
-    vec3 viewDir = toView / max(viewDist, 0.0001);
-
-    vec3 geoN = normalize(Normal);
-    bool backside = dot(geoN, viewDir) < 0.0;
-    if (backside) geoN = -geoN;
-
-    float topFace = step(0.35, abs(geoN.y));
-
-    // World-space animated normal-map detail.  This is also the normal used
-    // by Snell/Fresnel, so the optical effects follow the visible ripples.
-    highp vec2 wuv;
-    if (topFace > 0.5) {
-        wuv = FragPos.xz;
-    } else if (abs(geoN.x) > abs(geoN.z)) {
-        wuv = vec2(FragPos.z, FragPos.y - time * 6.0);
-    } else {
-        wuv = vec2(FragPos.x, FragPos.y - time * 6.0);
+float fogFactor(highp vec3 fragPos) {
+    if (uFogEnabled == 0) return 0.0;
+    highp float d = length(fragPos - uFogCamPos);
+    float band = max(uFogEnd - uFogStart, 1e-4);
+    float f = clamp((d - uFogStart) / band, 0.0, 1.0);
+    if (uFogDensity > 0.0) {
+        float e = uFogDensity * max(d - uFogStart, 0.0);
+        f = max(f, clamp(1.0 - exp(-e * e), 0.0, 1.0));
     }
-    vec2 r1 = texture(normalMap, wuv * 0.0110 + time * vec2( 0.021,  0.014)).xy - 0.5;
-    vec2 r2 = texture(normalMap, wuv * 0.0047 + time * vec2(-0.011,  0.008)).xy - 0.5;
-    vec2 r3 = texture(normalMap, wuv * 0.0310 + time * vec2( 0.016, -0.029)).xy - 0.5;
-    vec2 ripple = r1 + r2 * 0.65 + r3 * 0.35;
+    return f;
+}
 
-    float detailFade = 1.0 / (1.0 + viewDist * 0.0009);
-    float rippleStrength = (0.34 + WaveCrest * 0.18) * detailFade;
+vec3 applyFog(vec3 color, highp vec3 fragPos) {
+    return mix(color, uFogColor, fogFactor(fragPos));
+}
 
-    vec3 N;
-    if (topFace > 0.5) {
-        N = normalize(vec3(
-            geoN.x + ripple.x * rippleStrength,
-            geoN.y,
-            geoN.z + ripple.y * rippleStrength
-        ));
-    } else {
-        vec3 up = vec3(0.0, 1.0, 0.0);
-        vec3 tangent = normalize(cross(up, geoN));
-        N = normalize(
-            geoN +
-            (tangent * ripple.x + up * ripple.y) *
-            rippleStrength * 0.6
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // Refraction / transmission: the same screen-space optical treatment
-    // used by Glass, but driven by the water's perturbed surface normal.
-    // ------------------------------------------------------------------
-    float ior = max(refractionIndex, 1.0);
-    // Air -> water above the surface; water -> air when viewed from below.
-    float eta = backside ? ior : (1.0 / ior);
-    highp vec3 straightDir = -viewDir;
-    highp vec3 refractDir = refract(straightDir, N, eta);
-    highp vec3 refractDeltaView = mat3(view) * (refractDir - straightDir);
-    highp float refractDeltaLen = length(refractDeltaView);
-    if (refractDeltaLen > 1.0e-5) {
-        refractDeltaView /= refractDeltaLen;
-    } else {
-        refractDeltaView = vec3(0.0);
-    }
-
-    highp vec2 projectionScale =
-        vec2(projection[0][0], projection[1][1]);
-    highp vec2 normalView =
-        normalize(mat3(view) * N).xy;
-    highp float grazing =
-        1.0 - clamp(abs(dot(viewDir, N)), 0.0, 1.0);
-
-    highp vec2 refractionWarp =
-        refractDeltaView.xy *
-        projectionScale *
-        (0.055 + 0.035 * grazing);
-    highp vec2 normalWarp =
-        normalView *
-        (0.012 + 0.010 * grazing);
-
-    highp float nWarp1 =
-        vnoise(FragPos.xz * 0.08 + TexCoords * 3.0);
-    highp float nWarp2 =
-        vnoise(FragPos.xy * 0.11 + TexCoords * 5.0);
-    highp vec2 microWarp =
-        (vec2(nWarp1, nWarp2) - 0.5) * 0.020;
-
-    highp vec2 screenUV =
-        gl_FragCoord.xy / max(screenSize, vec2(1.0));
-    highp vec2 uvOffset =
-        (refractionWarp + normalWarp + microWarp) *
-        distortionStrength;
-    highp vec2 refractUV = clamp(
-        screenUV + uvOffset,
-        vec2(0.001),
-        vec2(0.999)
+vec2 explosionAtlasUV(vec2 localUV, float frameIndex) {
+    float column = mod(frameIndex, EXPLOSION_SHEET_COLUMNS);
+    float rowTop = floor(frameIndex / EXPLOSION_SHEET_COLUMNS);
+    float rowBottom = EXPLOSION_SHEET_ROWS - 1.0 - rowTop;
+    vec2 cellSize = vec2(
+        1.0 / EXPLOSION_SHEET_COLUMNS,
+        1.0 / EXPLOSION_SHEET_ROWS
     );
+    return (vec2(column, rowBottom) + localUV) * cellSize;
+}
 
-    vec3 transmitted = texture(sceneColor, refractUV).rgb;
-    if (roughness > 0.001) {
-        highp vec2 blurStep = roughness * 4.0 / max(screenSize, vec2(1.0));
-        transmitted += texture(
-            sceneColor,
-            clamp(refractUV + vec2(blurStep.x, 0.0),
-                  vec2(0.001), vec2(0.999))).rgb;
-        transmitted += texture(
-            sceneColor,
-            clamp(refractUV - vec2(blurStep.x, 0.0),
-                  vec2(0.001), vec2(0.999))).rgb;
-        transmitted += texture(
-            sceneColor,
-            clamp(refractUV + vec2(0.0, blurStep.y),
-                  vec2(0.001), vec2(0.999))).rgb;
-        transmitted /= 4.0;
+void main() {
+    float visualIntensity = max(EffectParams.y, 0.0);
+    float elapsed = max(EffectParams.z, 0.0);
+    float lifetime = max(EffectParams.w, 0.001);
+    float seed = EffectMeta.x;
+    float effectType = EffectMeta.y;
+
+    if (effectType > 0.5) {
+        float t = clamp(elapsed / lifetime, 0.0, 1.0);
+        float frame = min(
+            floor(t * EXPLOSION_FRAME_COUNT),
+            EXPLOSION_FRAME_COUNT - 1.0
+        );
+        vec4 sheet = texture(explosion_texture, explosionAtlasUV(TexCoords, frame));
+
+        if (sheet.a < 0.02 || visualIntensity <= 0.0) discard;
+
+        float envelope = 1.0 - smoothstep(0.70, 1.0, t);
+        float flash = exp(-t * t * 48.0);
+        float burst = 1.0 + flash * 2.2;
+        vec3 tint = mix(vec3(1.0), max(EffectColor, vec3(0.001)), 0.35);
+        vec3 rgb = sheet.rgb * tint * visualIntensity * burst;
+        float alpha = sheet.a * envelope;
+
+        if (alpha < 0.01) discard;
+        FragColor = vec4(applyFog(rgb, FragPos), alpha);
+        return;
     }
 
     // ------------------------------------------------------------------
-    // Water body / shallow colour and subsurface-looking crest scatter.
+    // FIRE
     // ------------------------------------------------------------------
-    float NdV = max(dot(N, viewDir), 0.0);
-    vec3 deepCol = waterTint * 0.55;
-    vec3 shallowCol =
-        waterTint * 1.25 +
-        vec3(0.02, 0.10, 0.09);
-    vec3 bodyCol =
-        mix(deepCol, shallowCol,
-            pow(1.0 - NdV, 1.5) * 0.7 + 0.15);
+    // The flame is a turbulent density field rather than a scrolling picture.
+    // Three noise scales establish the classic fire hierarchy:
+    //   large  = broad tongues and global body motion
+    //   detail = breakup into secondary tongues
+    //   fine   = ragged edge / small hot holes
+    float card = EffectMeta.z;
+    float cardSeed = seed + card * 19.37;
+    float cardRand = hash21(vec2(card, seed), cardSeed);
 
-    float sss =
-        pow(WaveCrest, 2.0) *
-        pow(
-            max(
-                dot(
-                    viewDir,
-                    -normalize(vec3(SUN_DIR.x, 0.0, SUN_DIR.z))
-                ),
-                0.0
-            ),
-            2.0
-        );
-    bodyCol +=
-        (waterTint * 0.8 + vec3(0.05, 0.22, 0.18)) * sss;
+    float y = clamp(TexCoords.y, 0.0, 1.0);
+    float x = TexCoords.x - 0.5;
 
-    bodyCol *=
-        0.45 + 0.55 * max(dot(N, SUN_DIR), 0.0);
+    float speed = mix(0.72, 1.55, fract(cardRand * 17.0));
+    float phase = hash21(vec2(card * 3.17, seed + 8.1), cardSeed + 4.7) * 6.2831853;
 
-    // Mix the refracted scene with the water's own body colour so shallow
-    // geometry remains visible instead of replacing the water with a flat
-    // post-process image.
-    vec3 transmittedTinted =
-        transmitted * mix(vec3(1.0), waterTint, 0.35);
-    vec3 transmission =
-        mix(transmittedTinted, bodyCol, 0.45);
+    highp vec2 p = vec2(x * 2.35, y * 3.15);
+    p.y -= elapsed * speed + phase;
+    p.x += sin(elapsed * 0.9 + phase + y * 2.7) * 0.10 * y;
 
-    // ------------------------------------------------------------------
-    // Fresnel: physical R0 for water (~0.0204), multiplied by the authored
-    // Fresnel/reflectivity intensity so existing maps retain their control.
-    // ------------------------------------------------------------------
-    float f0 = 0.020373;
-    float fresnel =
-        f0 + (1.0 - f0) * pow(1.0 - NdV, 5.0);
-    fresnel = clamp(
-        fresnel * clamp(fresnelIntensity, 0.0, 4.0),
+    highp vec2 warp = vec2(
+        fbm3(p * 0.82 + vec2(0.0, -elapsed * 0.25), cardSeed + 11.0),
+        fbm3(p * 0.67 + vec2(3.7, elapsed * 0.18), cardSeed + 27.0)
+    ) - 0.5;
+    p += warp * vec2(0.95, 0.62);
+
+    float large = fbm3(p * 1.05, cardSeed + 41.0);
+    float detail = fbm3(p * 3.15 + vec2(4.2, -1.6), cardSeed + 57.0);
+    float fine = valueNoise(p * 9.0 + vec2(11.0, -7.0), cardSeed + 73.0);
+
+    // A flame is broad at the base and contracts aggressively toward the tips.
+    float baseWidth = mix(0.53, 0.075, pow(y, 0.68));
+    float silhouetteShift =
+        (large - 0.5) * 0.23 * (0.22 + 0.78 * y)
+        + (detail - 0.5) * 0.095;
+
+    float lateral = abs(x + silhouetteShift) / max(baseWidth, 0.012);
+    float body = 1.0 - smoothstep(0.54, 1.0, lateral);
+
+    // Domain-warped holes break the single sausage shape into separate tongues.
+    float voids = smoothstep(0.68, 0.94, fine);
+    float tongue = smoothstep(0.36, 0.88, detail)
+                 * smoothstep(0.12, 0.82, y);
+    body *= mix(1.0, 0.32, voids * (0.35 + 0.65 * tongue));
+
+    float bottomFade = smoothstep(0.0, 0.075, y);
+    float tipFade = 1.0 - smoothstep(0.68, 1.0, y);
+    float density = body * bottomFade * tipFade;
+
+    // A few tiny detached hot fragments make the upper edge lively without
+    // requiring another particle system.
+    float embers = smoothstep(0.965, 0.998, fine)
+                 * smoothstep(0.46, 0.88, y)
+                 * (1.0 - smoothstep(0.82, 1.0, y));
+    density = clamp(density + embers * 0.34, 0.0, 1.0);
+
+    // Temperature is concentrated in the inner combustion channel and falls
+    // toward the turbulent edge. The result is dark red -> orange -> yellow ->
+    // almost white, rather than a flat orange sprite.
+    float coreDistance = exp(-lateral * lateral * 4.6);
+    float coreMask = coreDistance
+                   * smoothstep(0.035, 0.52, y)
+                   * (0.70 + 0.30 * large);
+    float temperature = clamp(
+        0.20
+        + coreMask * 0.90
+        + detail * 0.20
+        - y * 0.10,
         0.0, 1.0
     );
 
-    vec3 R = reflect(-viewDir, N);
-    vec3 reflection = skyColor(R);
+    vec3 outer = max(EffectColor, vec3(0.001)) * 0.55;
+    vec3 orange = vec3(1.0, 0.10, 0.008);
+    vec3 yellow = vec3(1.0, 0.60, 0.055);
+    vec3 hot = vec3(1.0, 0.93, 0.62);
 
-    // Planar reflection: project the actual top-face world position into
-    // the scene rendered from the camera mirrored across this water plane.
-    // This is a 2D render-to-texture, not an environment/cubemap lookup, so
-    // nearby geometry stays spatially tied to the water surface.
-    if (reflectionEnabled == 1 && topFace > 0.5) {
-        highp vec4 reflectionClip =
-            reflectionMatrix * vec4(FragPos, 1.0);
-        if (reflectionClip.w > 0.0001) {
-            highp vec2 reflectionUV =
-                reflectionClip.xy / reflectionClip.w * 0.5 + 0.5;
-            if (reflectionUV.x > 0.0 && reflectionUV.x < 1.0 &&
-                reflectionUV.y > 0.0 && reflectionUV.y < 1.0) {
-                highp vec2 reflectionWarp =
-                    normalize(mat3(view) * N).xy *
-                    distortionStrength * 0.018;
-                reflectionUV = clamp(
-                    reflectionUV + reflectionWarp,
-                    vec2(0.001),
-                    vec2(0.999)
-                );
-                reflection = texture(
-                    reflectionTexture, reflectionUV).rgb;
-                if (roughness > 0.001) {
-                    highp vec2 blurStep =
-                        roughness * 2.0 / max(screenSize, vec2(1.0));
-                    reflection += texture(
-                        reflectionTexture,
-                        clamp(
-                            reflectionUV + vec2(blurStep.x, 0.0),
-                            vec2(0.001), vec2(0.999))).rgb;
-                    reflection += texture(
-                        reflectionTexture,
-                        clamp(
-                            reflectionUV - vec2(blurStep.x, 0.0),
-                            vec2(0.001), vec2(0.999))).rgb;
-                    reflection += texture(
-                        reflectionTexture,
-                        clamp(
-                            reflectionUV + vec2(0.0, blurStep.y),
-                            vec2(0.001), vec2(0.999))).rgb;
-                    reflection /= 4.0;
-                }
-            }
-        }
-    }
+    vec3 rgb = mix(outer, orange, smoothstep(0.08, 0.34, temperature));
+    rgb = mix(rgb, yellow, smoothstep(0.30, 0.67, temperature));
+    rgb = mix(rgb, hot, smoothstep(0.58, 0.88, temperature));
 
-    // Keep authored reflectivity visible at normal viewing angles. Physical
-    // water Fresnel starts around 2%, which is too weak to make the optional
-    // reflection perceptible from above on its own; grazing angles still get
-    // the full Fresnel response.
-    float reflectionWeight = max(
-        fresnel,
-        clamp(waterReflectivity, 0.0, 1.0) * 0.5
+    // Low-frequency temporal modulation gives the light-looking flame a
+    // coherent pulse; a faster term supplies the small chaotic flicker.
+    float slowFlicker = fbm3(
+        vec2(elapsed * 0.42 + seed * 0.013, seed * 0.0011),
+        seed + 91.0
     );
-    vec3 color = mix(transmission, reflection, reflectionWeight);
-
-    // ------------------------------------------------------------------
-    // Dynamic lights / specular / foam.
-    // ------------------------------------------------------------------
-    vec3 diffuseAcc = vec3(0.0);
-    vec3 specAcc = vec3(0.0);
-    for (int i = 0; i < active_lights && i < MAX_LIGHTS; i++) {
-        highp vec3 toL = lights[i].position - FragPos;
-        highp float dist = length(toL);
-        if (dist < lights[i].radius) {
-            vec3 Ldir = toL / dist;
-            float att =
-                1.0 - smoothstep(0.0, lights[i].radius, dist);
-            vec3 lc =
-                lights[i].color * lights[i].intensity * att;
-            diffuseAcc += max(dot(N, Ldir), 0.0) * lc;
-            vec3 Hl = normalize(Ldir + viewDir);
-            float ndh = max(dot(N, Hl), 0.0);
-            specAcc +=
-                (pow(ndh, 240.0) * 1.6 +
-                 pow(ndh, 28.0) * 0.15) * lc;
-        }
-    }
-    color += color * diffuseAcc * 0.45;
-
-    vec3 Hs = normalize(SUN_DIR + viewDir);
-    float sunSpec =
-        pow(max(dot(N, Hs), 0.0), 320.0);
-    float sparkle =
-        vnoise(wuv * 0.9 +
-               vec2(time * 1.7, -time * 1.3)) *
-        vnoise(wuv * 1.7 -
-               vec2(time * 0.9, -time * 1.1));
-    sunSpec *=
-        (1.0 + sparkle * 6.0) *
-        detailFade;
-    vec3 specular =
-        SUN_COLOR * sunSpec * 2.2 + specAcc;
-
-    float foamNoise =
-        vnoise(wuv * 0.16 +
-               vec2(time * 0.05, -time * 0.04)) * 0.6 +
-        vnoise(wuv * 0.45 -
-               vec2(time * 0.07, time * 0.06)) * 0.4;
-    float crestFoam =
-        smoothstep(0.68, 0.92, WaveCrest) *
-        smoothstep(0.35, 0.75, foamNoise);
-    float shoreWave =
-        0.5 + 0.5 * sin(ShoreDist * 0.30 - time * 1.8);
-    float shoreFoam =
-        (1.0 - smoothstep(2.0, 26.0, ShoreDist)) *
-        (0.30 + 0.70 * shoreWave) *
-        smoothstep(0.25, 0.60, foamNoise + 0.15);
-    float foam =
-        clamp(crestFoam + shoreFoam, 0.0, 1.0) *
-        topFace;
-
-    color += specular * (0.35 + 0.65 * waterReflectivity);
-    color = mix(
-        color,
-        vec3(0.90, 0.95, 0.96),
-        foam * 0.85
+    float fastFlicker = valueNoise(
+        vec2(elapsed * 3.6 + seed * 0.07, card * 0.31),
+        seed + 103.0
     );
+    float flicker = mix(0.78, 1.16, clamp(
+        slowFlicker * 0.72 + fastFlicker * 0.28, 0.0, 1.0
+    ));
 
-    float alpha =
-        clamp(waterOpacity, 0.05, 1.0) *
-        (0.60 + 0.40 * (1.0 - NdV));
-    alpha = clamp(
-        alpha +
-        fresnel * 0.35 +
-        foam * 0.45 +
-        sunSpec * 0.4,
-        0.05,
-        1.0
-    );
+    rgb *= visualIntensity * flicker;
+    float alpha = density * clamp(0.84 + temperature * 0.18, 0.0, 1.0);
 
-    if (backside) {
-        color = mix(
-            color,
-            waterTint * 1.4 + vec3(0.10, 0.18, 0.20),            0.35
-        );
-        alpha = min(alpha + 0.15, 1.0);
-    }
+    if (alpha < 0.012 || visualIntensity <= 0.0) discard;
 
-    FragColor = vec4(applyFog(color, FragPos), alpha);
-}""",
-
-    'glass.vert': """#version 330 core
-precision highp float;
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-layout (location = 2) in vec2 aTexCoords;
-
-out highp vec3 FragPos;
-out mediump vec3 Normal;
-out highp vec2 TexCoords;
-out highp vec3 ViewFragPos;
-
-uniform mat4 model;
-uniform mat4 view;
-uniform mat4 projection;
-uniform mat3 normalMatrix;
-
-void main() {
-    FragPos     = vec3(model * vec4(aPos, 1.0));
-    Normal      = normalize(normalMatrix * aNormal);
-    TexCoords   = aTexCoords;
-    ViewFragPos = vec3(view * vec4(FragPos, 1.0));
-    gl_Position = projection * vec4(ViewFragPos, 1.0);
-}""",
-
-    'glass.frag': """#version 330 core
-precision mediump float;
-out vec4 FragColor;
-
-in highp vec3 FragPos;
-in vec3 Normal;
-in highp vec2 TexCoords;
-in highp vec3 ViewFragPos;
-
-uniform highp vec3 viewPos;
-uniform mat4 view;
-uniform mat4 projection;
-uniform vec3 waterColor;
-uniform float distortionStrength;
-uniform float fresnelIntensity;
-uniform float glassOpacity;
-uniform float refractionIndex;
-uniform float roughness;
-uniform sampler2D sceneColor;
-uniform vec2 screenSize;""" + FOG_GLSL + """
-
-highp float hash21(highp vec2 p) {
-    p = fract(p * vec2(123.34, 345.45));
-    p += dot(p, p + 34.345);
-    return fract(p.x * p.y);
+    FragColor = vec4(applyFog(rgb, FragPos), alpha);
 }
-
-highp float noise2(highp vec2 p) {
-    highp vec2 i = floor(p);
-    highp vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-void main() {
-    highp vec3 viewDir = normalize(viewPos - FragPos);
-    highp vec3 baseNormal = normalize(Normal);
-
-    // Screen-space transmission needs an authored, visible warp. The old
-    // implementation projected a unit ray delta and then divided it by
-    // scene depth, which leaves the resulting UV displacement well below a
-    // pixel on normal editor/game distances. Keep the Snell direction so the
-    // IOR slider still has a physical relationship to the result, but map the
-    // angular change into a bounded screen-space offset controlled directly by
-    // the distortion slider.
-    float ior = max(refractionIndex, 1.0);
-    float eta = 1.0 / ior;
-    highp vec3 straightDir = -viewDir;
-    highp vec3 refractDir = refract(straightDir, baseNormal, eta);
-    highp vec3 refractDeltaView = mat3(view) * (refractDir - straightDir);
-    highp float refractDeltaLen = length(refractDeltaView);
-    if (refractDeltaLen > 1.0e-5) {
-        refractDeltaView /= refractDeltaLen;
-    } else {
-        refractDeltaView = vec3(0.0);
-    }
-
-    highp vec2 projectionScale = vec2(projection[0][0], projection[1][1]);
-    highp vec2 normalView = normalize(mat3(view) * baseNormal).xy;
-    highp float grazing = 1.0 - clamp(abs(dot(viewDir, baseNormal)), 0.0, 1.0);
-
-    // The refracted direction supplies the broad warp; the view-space normal
-    // keeps a flat sheet of glass visibly responsive even when the ray delta is
-    // tiny; grazing angles get a little more displacement, like real glass.
-    highp vec2 refractionWarp =
-        refractDeltaView.xy * projectionScale * (0.055 + 0.035 * grazing);
-    highp vec2 normalWarp = normalView * (0.012 + 0.010 * grazing);
-
-    highp vec2 screenUV = gl_FragCoord.xy / screenSize;
-
-    // A compact procedural perturbation breaks up the perfectly planar warp.
-    // It is intentionally cheap and deterministic on GL 3.3 hardware.
-    highp float n1 = noise2(FragPos.xz * 0.08 + TexCoords * 3.0);
-    highp float n2 = noise2(FragPos.xy * 0.11 + TexCoords * 5.0);
-    highp vec2 microWarp = (vec2(n1, n2) - 0.5) * 0.020;
-
-    highp vec2 uvOffset =
-        (refractionWarp + normalWarp + microWarp) * distortionStrength;
-
-    highp vec2 refractUV = clamp(
-        screenUV + uvOffset,
-        vec2(0.001),
-        vec2(0.999)
-    );
-
-    // Roughness is a real filter over the transmitted scene rather than merely
-    // changing a highlight exponent. Four taps are cheap, deterministic, and
-    // make the control visibly useful on GL 3.3 hardware.
-    highp vec2 blurStep = roughness * 4.0 / screenSize;
-    vec3 transmitted = texture(sceneColor, refractUV).rgb;
-    if (roughness > 0.001) {
-        transmitted += texture(sceneColor, clamp(refractUV + vec2(blurStep.x, 0.0),
-                                                 vec2(0.001), vec2(0.999))).rgb;
-        transmitted += texture(sceneColor, clamp(refractUV - vec2(blurStep.x, 0.0),
-                                                 vec2(0.001), vec2(0.999))).rgb;
-        transmitted += texture(sceneColor, clamp(refractUV + vec2(0.0, blurStep.y),
-                                                 vec2(0.001), vec2(0.999))).rgb;
-        transmitted /= 4.0;
-    }
-
-    // Tint the transmitted scene without replacing it with a flat glass colour.
-    vec3 filteredScene = transmitted * mix(vec3(1.0), waterColor, 0.35);
-
-    // Schlick Fresnel: refractionIndex supplies the physically derived F0, while
-    // the authored Fresnel slider controls its strength.
-    float cosTheta = clamp(dot(viewDir, baseNormal), 0.0, 1.0);
-    float f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
-    float fresnel = f0 + (1.0 - f0) * pow(1.0 - cosTheta, 5.0);
-    fresnel = clamp(fresnel * fresnelIntensity, 0.0, 1.0);
-
-    vec3 reflectionColor = vec3(0.96, 0.99, 1.0);
-    vec3 finalRGB = mix(filteredScene, reflectionColor, fresnel);
-
-    // A compact view-dependent glint keeps Fresnel readable without requiring
-    // the glass pass to upload the whole light table a second time.
-    highp vec3 halfDir = normalize(viewDir + vec3(0.35, 0.9, 0.2));
-    float shininess = mix(128.0, 12.0, roughness);
-    float specular = pow(max(dot(baseNormal, halfDir), 0.0), shininess);
-    finalRGB += vec3(specular * (0.15 + 0.55 * fresnel));
-
-    float edgeAlpha = fresnel * 0.65 + roughness * 0.20;
-    float alpha = clamp(
-        glassOpacity + edgeAlpha * (1.0 - glassOpacity),
-        0.05,
-        1.0
-    );
-
-    FragColor = vec4(applyFog(finalRGB, FragPos), alpha);
-}""",
-
+""",
     # Depth cube-map pass: renders scene geometry from a point light's position
     # into one cube face, storing linear distance (0..1 = 0..far_plane) so the
     # lighting shaders can do an omnidirectional shadow test.  One draw per face
