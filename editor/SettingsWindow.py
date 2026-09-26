@@ -304,6 +304,13 @@ class SettingsWindow(QDialog):
         self.show_hud_checkbox = QCheckBox("Show HUD (health, etc.)")
         gameplay_layout.addWidget(self.show_hud_checkbox)
 
+        self.show_glasses_checkbox = QCheckBox("Show glasses")
+        self.show_glasses_checkbox.setToolTip(
+            "Show the player's glasses representation in play mode, "
+            "including split-screen and portal views."
+        )
+        gameplay_layout.addWidget(self.show_glasses_checkbox)
+
         gameplay_group.setLayout(gameplay_layout)
         layout.addWidget(gameplay_group)
 
@@ -505,6 +512,9 @@ class SettingsWindow(QDialog):
 
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
         self.show_hud_checkbox.setChecked(self.config.getboolean('Display', 'show_hud', fallback=True))
+        self.show_glasses_checkbox.setChecked(
+            self.config.getboolean('Display', 'show_glasses', fallback=True)
+        )
 
         save_mode = str(self.config.get('Settings', 'save_mode', fallback='full')).strip().lower()
         idx = self.save_mode_combo.findData(save_mode)
@@ -614,6 +624,7 @@ class SettingsWindow(QDialog):
         self.config.set('Renderer', 'shadows_enabled', str(self.shadows_enabled_checkbox.isChecked()))
         
         self.config.set('Display', 'show_hud', str(self.show_hud_checkbox.isChecked()))
+        self.config.set('Display', 'show_glasses', str(self.show_glasses_checkbox.isChecked()))
         
         if not self.config.has_section('Settings'):
             self.config.add_section('Settings')

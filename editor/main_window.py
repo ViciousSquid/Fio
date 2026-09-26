@@ -1875,6 +1875,12 @@ class MainWindow(QMainWindow):
             new_show_caulk = self.config.getboolean('Display', 'show_caulk', fallback=True)
             if old_show_caulk != new_show_caulk:
                 self.update_views()
+
+            # Player glasses visibility is live; no restart is required.
+            self.view_3d.show_glasses = self.config.getboolean(
+                'Display', 'show_glasses', fallback=True
+            )
+            self.view_3d.update()
                 
             new_dpi_setting = self.config.getboolean('Display', 'high_dpi_scaling', fallback=False)
             if old_dpi_setting != new_dpi_setting:

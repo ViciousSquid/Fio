@@ -206,7 +206,9 @@ class QtGameView(QOpenGLWidget):
         self.player2 = None
         self.splitscreen_mode = False
         # Player representation used by split-screen and portal views.
-        self.show_glasses = True
+        self.show_glasses = self.editor.config.getboolean(
+            'Display', 'show_glasses', fallback=True
+        )
 
         # PYGAME INIT (MUST happen before _init_sound_system)
         pygame.init()
@@ -1322,10 +1324,9 @@ class QtGameView(QOpenGLWidget):
                                                 _split_proj, self.view_matrix)
             if self.play_mode and getattr(self, 'show_spatial_grid', False):
                 self._render_spatial_grid(_split_proj, self.view_matrix)
-            if (self.show_glasses and render_state is not None
-                    and not getattr(render_state, 'player2_dead', False)):
+            if self.show_glasses and render_state is not None:
                 self._render_player_glasses(
-                    [render_state.player2_pos],
+                    self._render_config.get("player_glasses_positions", ()),
                     _split_proj,
                     self.view_matrix,
                 )
@@ -1363,10 +1364,9 @@ class QtGameView(QOpenGLWidget):
                                                 _split_proj, _p2_view)
             if self.play_mode and getattr(self, 'show_spatial_grid', False):
                 self._render_spatial_grid(_split_proj, _p2_view)
-            if (self.show_glasses and render_state is not None
-                    and not getattr(render_state, 'player_dead', False)):
+            if self.show_glasses and render_state is not None:
                 self._render_player_glasses(
-                    [render_state.player_pos],
+                    self._render_config.get("player_glasses_positions", ()),
                     _split_proj,
                     _p2_view,
                 )
