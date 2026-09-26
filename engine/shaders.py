@@ -1403,25 +1403,24 @@ precision mediump float;
 out vec4 FragColor;
 
 in highp vec3 FragPos;
-in float BladeAlpha;
+in float BladeHeight;
 in float ColorVariation;
 
 uniform vec3 grassColor;
 uniform vec3 cameraPos;
 """ + FOG_GLSL + """
 void main() {
-    float distanceFade = 1.0 - smoothstep(1800.0, 3072.0,
-                                           length(FragPos.xz - cameraPos.xz));
-    float alpha = BladeAlpha * distanceFade;
-    if (alpha < 0.34) discard;
-
+    // Geometry supplies the silhouette; unlike the old billboard pass there
+    // is no alpha-card coverage to discard. Fade is handled by fog.
+    float heightShade = mix(0.82, 1.08, clamp(BladeHeight, 0.0, 1.0));
+    
     // Grass uses a constant upward normal by design: terrain slope does not
     // make blades lie down and no per-blade normal data is uploaded.
     vec3 upwardNormal = vec3(0.0, 1.0, 0.0);
     vec3 sunDir = normalize(vec3(0.4, 0.7, 0.3));
     float sun = 0.45 + 0.55 * max(dot(upwardNormal, sunDir), 0.0);
-    float shade = mix(0.82, 1.08, clamp(ColorVariation - 0.82, 0.0, 1.0) / 0.30);
-    vec3 color = grassColor * sun * shade + uAmbient * grassColor;
+    float variation = mix(0.88, 1.08, clamp((ColorVariation - 0.82) / 0.30, 0.0, 1.0));
+    vec3 color = grassColor * sun * heightShade * variation + uAmbient * grassColor;
     FragColor = vec4(applyFog(color, FragPos), 1.0);
 }
 """,
