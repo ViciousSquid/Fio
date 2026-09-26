@@ -1440,6 +1440,14 @@ class Renderer_F(BaseRenderer):
                                     proj, vw, cfg.get('entity_table'),
                                     portal_sprite_slots, camera_pos=cam)
 
+                            if cfg.get('show_glasses', True):
+                                player_positions = cfg.get(
+                                    'player_glasses_positions', ())
+                                if player_positions:
+                                    self.draw_player_glasses(
+                                        proj, vw, player_positions,
+                                        width=50.0, height=100.0)
+
                             gl.glEnable(gl.GL_BLEND)
                             gl.glDepthMask(gl.GL_FALSE)
                             if mode == RENDER_MODE_UNLIT:
