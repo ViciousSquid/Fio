@@ -496,6 +496,7 @@ class LogicThread(threading.Thread):
         # cached numerically.  The slot space is exactly enumerate(self.things),
         # which is the EntityTable slot space published to the renderer.
         self._portal_things = []
+        self._portal_target_things = []
         portal_slots = []
         portal_target_slots = []
         name_to_slot = {
@@ -513,8 +514,10 @@ class LogicThread(threading.Thread):
             if (target_slot >= 0 and Portal
                     and isinstance(self.things[target_slot], Portal)):
                 portal_target_slots.append(target_slot)
+                self._portal_target_things.append(self.things[target_slot])
             else:
                 portal_target_slots.append(-1)
+                self._portal_target_things.append(None)
         self._portal_slots = np.asarray(portal_slots, dtype=np.int32)
         self._portal_target_slots = np.asarray(
             portal_target_slots, dtype=np.int32)
@@ -2031,7 +2034,7 @@ class LogicThread(threading.Thread):
 
 
         for portal_index, portal_slot in enumerate(self._portal_slots):
-            portal_a = self.things[int(portal_slot)]
+            portal_a = self._portal_things[portal_index]
             if not portal_a.is_active():
                 continue
             if portal_index >= len(self._portal_target_slots):
@@ -2039,8 +2042,8 @@ class LogicThread(threading.Thread):
             target_slot = int(self._portal_target_slots[portal_index])
             if target_slot < 0:
                 continue
-            portal_b = self.things[target_slot]
-            if not portal_b.is_active():
+            portal_b = self._portal_target_things[portal_index]
+            if portal_b is None or not portal_b.is_active():
                 continue
             if id(portal_a) in self._portal_cooldowns:
                 continue
@@ -2139,7 +2142,7 @@ class LogicThread(threading.Thread):
             return
         cur = (proj['pos'][0], proj['pos'][1], proj['pos'][2])
         for portal_index, portal_slot in enumerate(self._portal_slots):
-            portal_a = self.things[int(portal_slot)]
+            portal_a = self._portal_things[portal_index]
             if not portal_a.is_active():
                 continue
             if portal_index >= len(self._portal_target_slots):
@@ -2147,8 +2150,8 @@ class LogicThread(threading.Thread):
             target_slot = int(self._portal_target_slots[portal_index])
             if target_slot < 0:
                 continue
-            portal_b = self.things[target_slot]
-            if not portal_b.is_active():
+            portal_b = self._portal_target_things[portal_index]
+            if portal_b is None or not portal_b.is_active():
                 continue
             if self._segment_crosses_aperture(
                     portal_a, prev_pos, cur) is None:
