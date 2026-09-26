@@ -1312,6 +1312,9 @@ class Renderer_F(BaseRenderer):
             etable, tslots, thing_hidden,
             config.get('play_mode', False),
             config.get('show_sprites_in_play_mode', False))
+        effect_slots = tslots[
+            (etable.class_bits[tslots] & entity_projection.ENT_EFFECT) != 0
+        ]
 
         _tbl = table
         lights = self._get_active_lights(things, config)
