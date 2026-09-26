@@ -27,7 +27,7 @@ pytestmark = pytest.mark.qt
 
 def _synced(things, epoch=1):
     table = EntityTable()
-    table.sync(things, epoch)
+    table.begin_frame(things, epoch)
     return table
 
 
@@ -472,7 +472,7 @@ def test_portal_target_is_resolved_to_an_integer_entity_slot():
     table = _synced([a, b])
 
     assert table.portal_slots.tolist() == [0, 1]
-    assert table.portal_target_slot.tolist() == [1, -1]
+    assert table.portal_target_slot[:table.count].tolist() == [1, -1]
 
 
 def test_portal_authored_state_is_dense_and_geometry_is_shared():
