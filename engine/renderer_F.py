@@ -1273,6 +1273,7 @@ class Renderer_F(BaseRenderer):
         numeric = True
         sprite_slots = None
         numeric_model_slots = None
+        effect_slots = None
 
         cx = cz = None
         if camera_pos is not None:
