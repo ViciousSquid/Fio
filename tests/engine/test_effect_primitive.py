@@ -9,7 +9,7 @@ def test_effect_defaults_to_fire_with_intrinsic_light():
     assert effect.properties["effect_type"] == EFFECT_FIRE
     assert effect.properties["size"] == 32.0
     assert effect.properties["light_enabled"] is True
-    assert effect.properties["light_radius"] == 5.0
+    assert effect.properties["light_radius"] == 128.0
     assert effect.properties["light_intensity"] == 2.5
     assert effect.properties["effect_seed"] != 0
 
