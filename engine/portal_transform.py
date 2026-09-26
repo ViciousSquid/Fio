@@ -77,9 +77,13 @@ def contains_point(pos, basis, width, height, point, margin=0.0):
     dx = float(point[0]) - float(pos[0])
     dy = float(point[1]) - float(pos[1])
     dz = float(point[2]) - float(pos[2])
-    r, u, _ = basis
+    r, u, n = basis
     lr = dx * r[0] + dy * r[1] + dz * r[2]
     lu = dx * u[0] + dy * u[1] + dz * u[2]
+    ln = dx * n[0] + dy * n[1] + dz * n[2]
     hw = max(16.0, float(width)) * 0.5 + float(margin)
     hh = max(16.0, float(height)) * 0.5 + float(margin)
-    return abs(lr) <= hw and abs(lu) <= hh
+    # The aperture is a plane, not an infinite rectangle extruded along its
+    # normal. Keep only a tiny numerical tolerance on that third coordinate.
+    plane_eps = max(1e-6, abs(float(margin)))
+    return (abs(lr) <= hw and abs(lu) <= hh and abs(ln) <= plane_eps)
