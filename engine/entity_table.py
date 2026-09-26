@@ -700,6 +700,51 @@ class EntityTable:
         if len(self.light_casts_shadows):
             light_casts[:len(self.light_casts_shadows)] = self.light_casts_shadows
         self.light_casts_shadows = light_casts
+        effect_type = np.zeros((grown,), dtype=np.uint8)
+        if len(self.effect_type):
+            effect_type[:len(self.effect_type)] = self.effect_type
+        self.effect_type = effect_type
+
+        effect_params = np.zeros((grown, 4), dtype=np.float32)
+        if len(self.effect_params):
+            effect_params[:len(self.effect_params)] = self.effect_params
+        self.effect_params = effect_params
+
+        effect_color = np.ones((grown, 3), dtype=np.float32)
+        if len(self.effect_color):
+            effect_color[:len(self.effect_color)] = self.effect_color
+        self.effect_color = effect_color
+
+        effect_light_color = np.ones((grown, 3), dtype=np.float32)
+        if len(self.effect_light_color):
+            effect_light_color[:len(self.effect_light_color)] = self.effect_light_color
+        self.effect_light_color = effect_light_color
+
+        effect_lifetime = np.full((grown,), 0.5, dtype=np.float32)
+        if len(self.effect_lifetime):
+            effect_lifetime[:len(self.effect_lifetime)] = self.effect_lifetime
+        self.effect_lifetime = effect_lifetime
+
+        effect_seed = np.ones((grown,), dtype=np.float32)
+        if len(self.effect_seed):
+            effect_seed[:len(self.effect_seed)] = self.effect_seed
+        self.effect_seed = effect_seed
+
+        effect_spawn = np.zeros((grown,), dtype=np.float64)
+        if len(self.effect_spawn_time):
+            effect_spawn[:len(self.effect_spawn_time)] = self.effect_spawn_time
+        self.effect_spawn_time = effect_spawn
+
+        effect_elapsed = np.zeros((grown,), dtype=np.float32)
+        if len(self.effect_elapsed):
+            effect_elapsed[:len(self.effect_elapsed)] = self.effect_elapsed
+        self.effect_elapsed = effect_elapsed
+
+        effect_alive = np.zeros((grown,), dtype=bool)
+        if len(self.effect_alive):
+            effect_alive[:len(self.effect_alive)] = self.effect_alive
+        self.effect_alive = effect_alive
+
         size = np.zeros((grown, 2), dtype=np.float32)
         if len(self.sprite_size):
             size[:len(self.sprite_size)] = self.sprite_size
