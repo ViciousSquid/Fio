@@ -2059,6 +2059,8 @@ ENTITY_TYPES = {
     'LogicSpawner': LogicSpawner,
     'Portal': Portal,
     'LogicState': LogicState,
+    # Core primitive is imported only after editor Thing/Model definitions exist.
+    'Effect': __import__('engine.effect_entity', fromlist=['Effect']).Effect,
 }
 
 # Categories for editor UI
