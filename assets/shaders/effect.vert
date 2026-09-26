@@ -25,8 +25,7 @@ void main() {
     float t = clamp(elapsed / lifetime, 0.0, 1.0);
 
     // FIRE stays at authored size. EXPLOSION rapidly expands from the same
-    // primitive, then leaves the fragment shader to handle the bright/fade
-    // envelope. The quad's bottom edge is anchored at the authored origin.
+    // primitive. The quad's bottom edge is anchored at the authored origin.
     float growth = 1.0;
     if (effectType > 0.5) {
         growth = mix(1.0, 3.0, smoothstep(0.0, 0.28, t));
@@ -34,7 +33,6 @@ void main() {
 
     // Upright cylindrical billboard: world Y keeps the flame vertical
     // while cameraRight makes the sheet face the camera in the horizontal plane.
-    // This is more appropriate for fire than pitching the flame with cameraUp.
     vec3 cameraRight = normalize(vec3(view[0][0], view[1][0], view[2][0]));
     const vec3 worldUp = vec3(0.0, 1.0, 0.0);
 
