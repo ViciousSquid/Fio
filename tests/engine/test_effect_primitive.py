@@ -3,6 +3,7 @@ from engine.effect_entity import (
     EFFECT_EXPLOSION,
     EFFECT_FIRE,
     EFFECT_ORB,
+    EFFECT_CUSTOM,
     EFFECT_FIRE_TEXTURES,
     EFFECT_ORB_TEXTURES,
 )
@@ -52,6 +53,23 @@ def test_orb_defaults_to_blue_square_animation():
         np.asarray((0x4A, 0x9B, 0xFF), dtype=np.float32) / 255.0,
     )
 
+
+def test_custom_effect_uses_selected_gif_path():
+    custom = Effect(properties={
+        "effect_type": EFFECT_CUSTOM,
+        "custom_gif": r"custom\\magic.gif",
+    })
+    assert custom.properties["effect_type"] == EFFECT_CUSTOM
+    assert custom.properties["custom_gif"] == "custom/magic.gif"
+
+    table = EntityTable()
+    table.begin_frame([custom], epoch=1, effect_runtime=False)
+
+    assert table.effect_type[0] == 3
+    assert table.effect_custom_id[0] > 0
+    assert table.effect_custom_path(table.effect_custom_id[0]) == "custom/magic.gif"
+    assert bool(table.effect_active[0])
+    assert bool(table.effect_alive[0])
 
 def test_effect_seed_is_stable_and_copy_gets_a_new_seed():
     effect = Effect()
@@ -295,6 +313,13 @@ def test_effect_set_type_input_changes_type_and_fires_onchanged():
     assert bool(table.effect_alive[0])
     np.testing.assert_allclose(table.sprite_size[0], (32.0, 32.0))
     assert events[-1] == ("OnChanged", "ORB")
+
+    set_type(effect, "custom", logic)
+    assert effect.properties["effect_type"] == EFFECT_CUSTOM
+    assert table.effect_type[0] == 3
+    assert bool(table.effect_active[0])
+    assert bool(table.effect_alive[0])
+    assert events[-1] == ("OnChanged", "CUSTOM")
 
 
 def test_explode_input_forces_fire_to_explosion_and_never_reverts():
