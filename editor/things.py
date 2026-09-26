@@ -8,6 +8,7 @@ import copy
 import os
 import math
 import uuid
+import importlib
 
 from engine.portal_transform import (
     basis_from_rotation as _portal_basis_from_rotation,
@@ -2078,7 +2079,7 @@ ENTITY_TYPES = {
     'Portal': Portal,
     'LogicState': LogicState,
     # Core primitive is imported only after editor Thing/Model definitions exist.
-    'Effect': __import__('engine.effect_entity', fromlist=['Effect']).Effect,
+    'Effect': importlib.import_module('engine.effect_entity').Effect,
 }
 
 # Categories for editor UI
