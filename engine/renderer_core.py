@@ -834,12 +834,13 @@ layout (location = 10) in vec4 iPayload;
         frag = DEFAULT_SHADERS.get('effect.frag', '')
         if not vert or not frag:
             return
-        self._register_instanced_shader(
+        if self._register_instanced_shader(
             'effect_instanced',
             vert,
             frag,
             extra_uniforms=['projection', 'view'],
-        )
+        ):
+            print(f'{_BASE_RENDERER_PREFIX} Effect instancing shader compiled successfully.')
 
     def _ensure_effect_instance_buffer(self, count):
         if self._effect_instance_vbo is None:
