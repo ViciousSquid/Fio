@@ -1134,9 +1134,15 @@ class Terrain:
                 else:
                     gl.glUniform3f(loc, *value)
 
-        # Opaque tapered blades: one cheap pass with stable depth and no sorting.
-        gl.glDisable(gl.GL_CULL_FACE)
+        # Opaque tapered blades. Explicitly restore the depth state here:
+        # grass must test against the already-rendered terrain, not inherit
+        # depth state from a preceding renderer pass.
+        gl.glDisable(gl.GL_BLEND)
         gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDepthFunc(gl.GL_LEQUAL)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glDisable(gl.GL_CULL_FACE)
+        gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         for chunk in visible_chunks:
             if chunk.grass_instance_count <= 0 or not chunk.grass_vao:
                 continue
