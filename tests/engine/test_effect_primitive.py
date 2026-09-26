@@ -1,7 +1,7 @@
 from editor.things import Effect, Thing
 from engine.effect_entity import EFFECT_EXPLOSION, EFFECT_FIRE, EFFECT_FIRE_TEXTURES
 from engine.entity_table import ENT_EFFECT, EntityTable
-from editor.io_system import IOManager, get_input_names
+from editor.io_system import IOManager, get_input_names, get_output_names
 from editor.io_handlers import register_all_input_handlers
 from types import SimpleNamespace
 
@@ -161,6 +161,49 @@ def test_explosion_expires_but_fire_does_not():
     table.begin_frame([fire], epoch=1, effect_runtime=True)
     assert bool(table.effect_alive[0])
     assert bool(table.light_enabled[0])
+
+
+def test_effect_set_type_input_changes_type_and_fires_onchanged():
+    effect = Effect(properties={
+        "id": "type-test",
+        "effect_type": EFFECT_FIRE,
+    })
+    table = EntityTable()
+    table.begin_frame([effect], epoch=1, effect_runtime=True)
+
+    events = []
+    io_manager = SimpleNamespace(
+        fire_output=lambda entity, name, value=None: events.append((name, value))
+    )
+    logic = SimpleNamespace(_entity_table=table, io_manager=io_manager)
+    real_io = IOManager()
+    register_all_input_handlers(real_io)
+
+    assert get_input_names("effect") == ["SetType", "Explode"]
+    assert get_output_names("effect") == ["OnChanged"]
+
+    set_type = real_io._input_handlers[("effect", "settype")]
+    set_type(effect, "explosion", logic)
+
+    assert effect.properties["effect_type"] == EFFECT_EXPLOSION
+    assert table.effect_type[0] == 1
+    assert not bool(table.effect_active[0])
+    assert not bool(table.effect_alive[0])
+    assert events == [("OnChanged", "EXPLOSION")]
+
+    set_type(effect, "explosion", logic)
+    assert events == [("OnChanged", "EXPLOSION")]
+
+    set_type(effect, "fire", logic)
+    assert effect.properties["effect_type"] == EFFECT_FIRE
+    assert table.effect_type[0] == 0
+    assert bool(table.effect_active[0])
+    assert bool(table.effect_alive[0])
+    assert events[-1] == ("OnChanged", "FIRE")
+
+    set_type(effect, "future_type", logic)
+    assert effect.properties["effect_type"] == EFFECT_FIRE
+    assert events[-1] == ("OnChanged", "FIRE")
 
 
 def test_explode_input_forces_fire_to_explosion_and_never_reverts():
