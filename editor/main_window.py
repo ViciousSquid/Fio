@@ -3332,16 +3332,108 @@ class MainWindow(QMainWindow):
                 return
 
             elif event.key() == Qt.Key_F3:
-                self.view_3d.show_sprites_in_p        # Ctrl+C / Ctrl+V: keep the keyboard path identical to the Edit menu.
+                self.view_3d.show_sprites_in_play_mode = not self.view_3d.show_sprites_in_play_mode
+                self.view_3d.update()
+                return
+
+            elif event.key() == Qt.Key_F1:
+                self.view_3d.show_connections_in_play_mode = not getattr(self.view_3d, 'show_connections_in_play_mode', False)
+                self.update_all_ui()
+                return
+
+            elif event.key() == Qt.Key_F12:
+                if getattr(self, 'is_kiosk_mode', False):
+                    self.exit_kiosk_mode(keep_play_mode=True)
+                else:
+                    self.enter_kiosk_mode()
+                return
+
+            elif event.key() == Qt.Key_E:
+                if hasattr(self.view_3d, 'game_state') and self.view_3d.game_state:
+                    self.view_3d.game_state.set_use_key_pressed()
+                self.keys_pressed.add(event.key())
+                return
+
+            elif event.key() == Qt.Key_QuoteLeft:  # Tilde/backtick
+                self.toggle_debug_console()
+                return
+
+            else:
+                # Check for user‑defined key bindings (only if console input does NOT have focus)
+                console_input = self.debug_console.command_input
+                if not console_input.hasFocus():
+                    key_seq = QKeySequence(event.key() | int(event.modifiers()))
+                    key_str = key_seq.toString()
+                    if key_str in self.key_bindings:
+                        command = self.key_bindings[key_str]
+                        self.console_handler.handle_command(command)
+                        return
+                # If no binding, just record the key for later use (e.g., movement)
+                self.keys_pressed.add(event.key())
+                return
+
+        # ------------------------------------------------------------------
+        # EDITOR MODE HANDLING (including bindings)
+        # ------------------------------------------------------------------
+
+        # Tilde always toggles console (works in both modes)
+        if event.key() == Qt.Key_QuoteLeft:
+            self.toggle_debug_console()
+            return
+
+        # ESC: back out of whatever is in progress, innermost first
+        if event.key() == Qt.Key_Escape:
+            if self.handle_escape():
+                return
+
+        # Component modes — Radiant's V / E / F reflexes, spelled with the Shift
+        # modifier Fio already uses for tool switches (Shift+S select, Shift+B
+        # brush) so none of the existing single-key bindings move.  A key the
+        # user has bound to a console command in Settings always wins.
+        user_bound = self._has_user_binding(event)
+
+        if not user_bound and event.modifiers() == Qt.ShiftModifier and \
+                event.key() in (Qt.Key_V, Qt.Key_E, Qt.Key_F):
+            self.set_component_mode({Qt.Key_V: MODE_VERTEX,
+                                     Qt.Key_E: MODE_EDGE,
+                                     Qt.Key_F: MODE_FACE}[event.key()])
+            return
+        if not user_bound and event.key() == Qt.Key_Q and not event.modifiers():
+            self.cycle_component_mode()
+            return
+
+        # Radiant's area selections (Select Touching / Inside / Tall).
+        if not user_bound:
+            ctrl = Qt.ControlModifier
+            ctrl_shift = Qt.ControlModifier | Qt.ShiftModifier
+            area_ops = {
+                (int(ctrl), Qt.Key_T): self.select_touching,
+                (int(ctrl), Qt.Key_I): self.select_inside,
+                (int(ctrl_shift), Qt.Key_T): self.select_partial_tall,
+                (int(ctrl_shift), Qt.Key_I): self.select_complete_tall,
+            }
+            handler = area_ops.get((int(event.modifiers()), event.key()))
+            if handler is not None:
+                handler()
+                return
+
+        # Ctrl+C: Copy the current selection.  The clipboard stores a
+        # detached list so a multi-selection can be pasted as one unit.
         if event.key() == Qt.Key_C and event.modifiers() == Qt.ControlModifier:
-            self.copy_selection()
-            return
+            sources = list(getattr(self.state, 'selected_objects', []) or [])
+            if self.state.selected_object is not None and self.state.selected_object not in sources:
+                sources.append(self.state.selected_object)
 
-        if event.key() == Qt.Key_V and event.modifiers() == Qt.ControlModifier:
-            self.paste_selection()
-            return
-
-d = clipboard
+            if sources:
+                clipboard = []
+                for source in sources:
+                    if isinstance(source, dict):
+                        source = {
+                            k: v for k, v in source.items()
+                            if k not in brush_geometry.GEO_RUNTIME_KEYS
+                        }
+                    clipboard.append(copy.deepcopy(source))
+                self._brush_clipboard = clipboard
 
                 names = []
                 for source in clipboard:
