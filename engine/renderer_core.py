@@ -1204,7 +1204,8 @@ layout (location = 10) in vec4 iPayload;
         np.take(table.effect_color, sorted_slots, axis=0,
                out=data[:, 11:14])
         data[:, 14] = 1.0
-        data[:, 15] = 0.0
+        np.take(table.effect_preview, sorted_slots, out=data[:, 15])
+        data[:, 15] = data[:, 15].astype(np.float32, copy=False)
 
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
