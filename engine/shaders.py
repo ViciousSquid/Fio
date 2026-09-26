@@ -1334,7 +1334,7 @@ layout (location = 3) in float iSize;
 layout (location = 4) in float iPhase;
 layout (location = 5) in float iVariation;
 
-out highp vec3 FragPos;
+out vec3 FragPos;
 out float BladeHeight;
 out float ColorVariation;
 
@@ -1400,7 +1400,7 @@ void main() {
     'grass.frag': """#version 330 core
 out vec4 FragColor;
 
-in highp vec3 FragPos;
+in vec3 FragPos;
 in float BladeHeight;
 in float ColorVariation;
 
