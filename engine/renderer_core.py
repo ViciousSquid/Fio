@@ -387,6 +387,8 @@ class BaseRenderer:
         self.effect_fire_cumulative = {}
         self.effect_orb_frames = {}
         self.effect_orb_cumulative = {}
+        self.effect_custom_frames = {}
+        self.effect_custom_cumulative = {}
         # Capacity-stable scratch for the numeric sprite filter. The renderer
         # owns these arrays so steady-state drawing does not allocate key/mask/
         # texture arrays per frame.
@@ -986,6 +988,7 @@ layout (location = 10) in vec4 iPayload;
         textures.fill(0)
 
         variants = table.effect_fire_variant[slots]
+        custom_ids = table.effect_custom_id[slots]
         elapsed = table.effect_elapsed[slots]
 
         # There are only five authored variants per animated Effect family.
@@ -1020,6 +1023,45 @@ layout (location = 10) in vec4 iPayload;
                     frame_indices, len(frames) - 1
                 ).astype(np.int32, copy=False)
                 positions = kind_positions[np.flatnonzero(mask)]
+                textures[positions] = np.asarray(
+                    frames, dtype=np.int32
+                )[frame_indices]
+
+        # CUSTOM can use any GIF path. Iterate only over unique authored GIFs,
+        # never over entities; each path is decoded and uploaded once per renderer.
+        custom_mask = effect_types == 3
+        if np.any(custom_mask):
+            custom_positions = np.flatnonzero(custom_mask)
+            custom_values = custom_ids[custom_mask]
+            custom_elapsed = elapsed[custom_mask]
+            for custom_id in np.unique(custom_values):
+                custom_id = int(custom_id)
+                if custom_id <= 0:
+                    continue
+                frames = self.effect_custom_frames.get(custom_id)
+                cumulative = self.effect_custom_cumulative.get(custom_id)
+                if frames is None:
+                    path = table.effect_custom_path(custom_id)
+                    if path:
+                        frames, cumulative = self._load_fire_gif(path)
+                    else:
+                        frames, cumulative = (), np.empty(0, dtype=np.float32)
+                    self.effect_custom_frames[custom_id] = tuple(frames)
+                    self.effect_custom_cumulative[custom_id] = cumulative
+                if not frames or cumulative is None or not len(cumulative):
+                    continue
+
+                mask = custom_values == custom_id
+                local_elapsed = np.mod(
+                    custom_elapsed[mask], cumulative[-1]
+                )
+                frame_indices = np.searchsorted(
+                    cumulative, local_elapsed, side='right'
+                )
+                frame_indices = np.minimum(
+                    frame_indices, len(frames) - 1
+                ).astype(np.int32, copy=False)
+                positions = custom_positions[np.flatnonzero(mask)]
                 textures[positions] = np.asarray(
                     frames, dtype=np.int32
                 )[frame_indices]
