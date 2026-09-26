@@ -208,6 +208,10 @@ class ShaderLoader:
             raise
 
     def compile_from_source(self, vertex_src, fragment_src):
+        if not vertex_src:
+            raise ValueError("empty vertex shader source")
+        if not fragment_src:
+            raise ValueError("empty fragment shader source")
         try:
             fragment_src = shaders.light_ubo_source(fragment_src)
             vs = compileShader(vertex_src, gl.GL_VERTEX_SHADER)
@@ -505,6 +509,10 @@ class BaseRenderer:
         self.shader_loader = ShaderLoader()
         self._compile_common_shaders()
 
+        # Procedural FIRE/EXPLOSION instance shader.
+        if not self._shader_init_failed:
+            self._compile_instanced_effect_shader()
+
         # Terrain normal map (water)
         self.water_normal_id = self.load_texture('water_normal.png', 'textures')
         self.noise_texture_id = 0
@@ -558,19 +566,34 @@ class BaseRenderer:
     # --------------------------------------------------------------------------
     # Shader compilation helpers
     # --------------------------------------------------------------------------
+    def _shader_source(self, name):
+        """Return an embedded shader or its loose asset-file fallback.
+
+        A few larger shaders intentionally live only in assets/shaders rather
+        than being duplicated in DEFAULT_SHADERS.  Never pass an empty string
+        to the GL compiler just because a default entry is absent.
+        """
+        source = DEFAULT_SHADERS.get(name)
+        if source:
+            return source
+        try:
+            return self.shader_loader._read_source(name)
+        except (FileNotFoundError, OSError):
+            return ''
+
     def _compile_common_shaders(self):
         """Compile shaders that are shared by both forward and deferred paths."""
         try:
             # simple (for grid, outlines, lines)
-            vs_src = DEFAULT_SHADERS.get('simple.vert', '')
-            fs_src = DEFAULT_SHADERS.get('simple.frag', '')
+            vs_src = self._shader_source('simple.vert')
+            fs_src = self._shader_source('simple.frag')
             self.shaders['simple'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['simple'] = UniformCache(self.shaders['simple'])
             self.uniforms['simple'].preload(['projection', 'view', 'model', 'color', 'alpha'])
 
             # sprite (billboards)
-            vs_src = DEFAULT_SHADERS.get('sprite.vert', '')
-            fs_src = DEFAULT_SHADERS.get('sprite.frag', '')
+            vs_src = self._shader_source('sprite.vert')
+            fs_src = self._shader_source('sprite.frag')
             self.shaders['sprite'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['sprite'] = UniformCache(self.shaders['sprite'])
             self.uniforms['sprite'].preload(['projection', 'view', 'sprite_texture', 'sprite_pos_world', 'sprite_size'])
@@ -578,22 +601,22 @@ class BaseRenderer:
 
             # depth_cube – renders scene depth into a point light's cube-map for
             # omnidirectional shadow mapping (replaces the old projected shadows).
-            vs_src = DEFAULT_SHADERS.get('depth_cube.vert', '')
-            fs_src = DEFAULT_SHADERS.get('depth_cube.frag', '')
+            vs_src = self._shader_source('depth_cube.vert')
+            fs_src = self._shader_source('depth_cube.frag')
             self.shaders['depth_cube'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['depth_cube'] = UniformCache(self.shaders['depth_cube'])
             self.uniforms['depth_cube'].preload(['model', 'lightSpaceMatrix', 'lightPos', 'far_plane'])
 
             # water
-            vs_src = DEFAULT_SHADERS.get('water.vert', '')
-            fs_src = DEFAULT_SHADERS.get('water.frag', '')
+            vs_src = self._shader_source('water.vert')
+            fs_src = self._shader_source('water.frag')
             self.shaders['water'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['water'] = UniformCache(self.shaders['water'])
             self._preload_water_uniforms()
 
             # glass
-            vs_src = DEFAULT_SHADERS.get('glass.vert', '')
-            fs_src = DEFAULT_SHADERS.get('glass.frag', '')
+            vs_src = self._shader_source('glass.vert')
+            fs_src = self._shader_source('glass.frag')
             self.shaders['glass'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['glass'] = UniformCache(self.shaders['glass'])
             self.uniforms['glass'].preload(['projection', 'view', 'model', 'viewPos', 'waterColor',
@@ -602,8 +625,8 @@ class BaseRenderer:
                                             'sceneColor', 'screenSize'])
             self.uniforms['glass'].preload(self.ENV_UNIFORMS)
             # fog – use ARM‑optimised fragment shader (works everywhere)
-            fog_vert = DEFAULT_SHADERS.get('fog.vert', '')
-            fog_frag = DEFAULT_SHADERS.get('fog_arm.frag', DEFAULT_SHADERS.get('fog.frag', ''))
+            fog_vert = self._shader_source('fog.vert')
+            fog_frag = self._shader_source('fog_arm.frag') or self._shader_source('fog.frag')
             self.shaders['fog'] = self.shader_loader.compile_from_source(fog_vert, fog_frag)
             self.uniforms['fog'] = UniformCache(self.shaders['fog'])
             self._preload_fog_uniforms()
@@ -789,8 +812,8 @@ layout (location = 10) in vec4 iPayload;
         payload slots go unused here, which costs a little upload bandwidth and
         buys one layout for the whole renderer.
         """
-        vert = DEFAULT_SHADERS.get('depth_cube.vert', '')
-        frag = DEFAULT_SHADERS.get('depth_cube.frag', '')
+        vert = self._shader_source('depth_cube.vert')
+        frag = self._shader_source('depth_cube.frag')
         if not vert or not frag:
             return
         vertex = self._instanced_vertex_source(vert, preamble='')
@@ -820,8 +843,8 @@ layout (location = 10) in vec4 iPayload;
         attributes rather than written out again, so the billboard's
         camera-facing maths cannot drift from the path it accelerates.
         """
-        vert = DEFAULT_SHADERS.get('sprite.vert', '')
-        frag = DEFAULT_SHADERS.get('sprite.frag', '')
+        vert = self._shader_source('sprite.vert')
+        frag = self._shader_source('sprite.frag')
         if not vert or not frag:
             return
         kept = [line for line in vert.splitlines()
