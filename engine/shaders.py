@@ -505,6 +505,10 @@ void main() {
     float elapsed = max(iEffectParams.z, 0.0);
     float lifetime = max(iEffectParams.w, 0.001);
     float t = clamp(elapsed / lifetime, 0.0, 1.0);
+    if (iEffectMeta.w > 0.5) {
+        // Keep editor Preview visually locked to animation frame 10.
+        t = (9.5 / 16.0);
+    }
     float growth = mix(1.0, 3.0, smoothstep(0.0, 0.28, t));
 
     vec3 cameraRight = normalize(vec3(view[0][0], view[1][0], view[2][0]));
@@ -582,6 +586,10 @@ void main() {
     float elapsed = max(EffectParams.z, 0.0);
     float lifetime = max(EffectParams.w, 0.001);
     float t = clamp(elapsed / lifetime, 0.0, 1.0);
+    if (EffectMeta.w > 0.5) {
+        // Keep the visual envelope aligned with the static frame-10 preview.
+        t = (9.5 / 16.0);
+    }
 
     float frame;
     if (EffectMeta.w > 0.5) {
