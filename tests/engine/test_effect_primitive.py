@@ -13,6 +13,11 @@ from editor.io_handlers import register_all_input_handlers
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
+
+pytest.importorskip("PyQt5", reason="Effect is an editor Thing")
+
+pytestmark = pytest.mark.qt
 
 
 def test_effect_defaults_to_fire_with_intrinsic_light():
