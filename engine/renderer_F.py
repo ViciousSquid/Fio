@@ -1484,8 +1484,6 @@ class Renderer_F(BaseRenderer):
         else:
             self.draw_lit_brushes_optimized(projection, view, camera_pos, transparent_brushes, lights, config, is_transparent_pass=True, table=_tbl)
         if current_mode == RENDER_MODE_LIT:
-            self._render_water_reflections(
-                _tbl, water_brushes, lights, config, projection, view, camera_pos)
             self.draw_water_brushes(
                 projection, view, camera_pos, water_brushes, lights, config,
                 table=_tbl)
