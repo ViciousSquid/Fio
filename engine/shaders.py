@@ -1291,7 +1291,7 @@ void main() {
         );
         texColor = splatColor * VertexColor * 1.1;
     } else {
-        texColor = VertexColor;
+        texColor = VertexColor * 1.1;
     }
     
     vec3 skyColor    = vec3(0.6, 0.75, 0.9);
