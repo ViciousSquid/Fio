@@ -3976,7 +3976,11 @@ class LogicThread(threading.Thread):
         etable = self._entity_table
         entity_generation = etable.generation
         thing_hidden = etable.begin_frame(
-            things, world_epoch, dirty_objects=render_dirty)
+            things,
+            world_epoch,
+            dirty_objects=render_dirty,
+            effect_runtime=self.play_mode,
+        )
         if etable.generation != entity_generation:
             erefs = np.empty(etable.count, dtype=object)
             for i, t in enumerate(things):
