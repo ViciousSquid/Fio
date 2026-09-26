@@ -1140,6 +1140,7 @@ layout (location = 10) in vec4 iPayload;
         np.take(table.effect_seed, sorted_slots, out=data[:, 7])
         data[:, 8] = 1.0
         data[:, 9:11] = 0.0
+        np.take(table.sprite_size[:, 1], sorted_slots, out=data[:, 10])
         np.take(table.effect_color, sorted_slots, axis=0,
                out=data[:, 11:14])
         data[:, 14] = 1.0
