@@ -533,9 +533,9 @@ void main() {
     }
 
     // FIRE is a deterministic collection of virtual flame cards. They are
-    const vec3 worldUp = vec3(0.0, 1.0, 0.0);
     // ordinary instanced quads, but each card gets its own height, width,
     // starting height, lean and orientation. No CPU particle simulation exists.
+    const vec3 worldUp = vec3(0.0, 1.0, 0.0);
     float card = iParticleIndex;
     float r0 = hash11(iEffectMeta.x + card * 17.173);
     float r1 = hash11(iEffectMeta.x + card * 31.791);
@@ -558,9 +558,13 @@ void main() {
 
     float angle = (r0 * 6.2831853) + floor(card * 0.25) * 0.17;
     vec3 cameraRight = normalize(vec3(view[0][0], view[1][0], view[2][0]));
-    vec3 cameraForward = normalize(vec3(-view[0][2], -view[1][2], -view[2][2]));
+    vec3 cameraForward = vec3(-view[0][2], -view[1][2], -view[2][2]);
     cameraForward.y = 0.0;
-    cameraForward = normalize(cameraForward);
+    if (dot(cameraForward, cameraForward) < 0.0001) {
+        cameraForward = vec3(-cameraRight.z, 0.0, cameraRight.x);
+    } else {
+        cameraForward = normalize(cameraForward);
+    }
     vec3 cardRight = normalize(
         cameraRight * cos(angle) + cameraForward * sin(angle)
     );
