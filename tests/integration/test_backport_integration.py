@@ -37,17 +37,14 @@ def _render_scene_source():
     raise AssertionError("render_scene not found")
 
 
-def test_cull_output_feeds_only_sort_objects():
-    """render_scene hands the culled lists (not the originals) to _sort_objects."""
+def test_cull_output_feeds_the_dense_brush_pipeline():
+    """The main camera consumes cull output as dense slots, then classifies/sorts them."""
     body = _render_scene_source()
-    tree = ast.parse("def _f():\n" + "\n".join("    " + l for l in body.splitlines()))
-    sort_calls = [
-        n for n in ast.walk(tree)
-        if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "_sort_objects"
-    ]
-    main = [c for c in sort_calls
-            if [getattr(a, "id", None) for a in c.args[:2]] == ["cull_brushes", "cull_things"]]
-    assert len(main) == 1, "main camera pass must sort the culled collections"
+    assert "slots = brush_slots" in body
+    assert "self._distance_cull_slots(" in body
+    assert "self._classify_brush_slots(table, slots, config)" in body
+    assert "self._sort_slots_by_distance(" in body
+    assert "_sort_objects" not in body
 
 
 def test_split_screen_second_view_passes_dense_brush_slots():
@@ -93,25 +90,14 @@ def test_shadow_and_portal_passes_use_dense_unculled_collections():
 
 
 def test_cull_is_opt_in_and_defaults_to_play_mode():
-    """Both the numeric and the object path gate the cull on the same flag.
-
-    render_scene has two of them now: the main camera pass narrows integer
-    slots into the render projection, and everything else (the split-screen
-    second view, the portal virtual views, the non-threaded editor) still
-    narrows object lists. Neither may cull unless the flag says so, and with
-    the flag absent outside play mode both must pass their input straight
-    through.
-    """
+    """Distance culling is applied only through the dense slot pipeline."""
     body = _render_scene_source()
     guard = "config.get('camera_distance_cull', config.get('play_mode', False))"
-    assert body.count(guard) >= 2, (
-        "every cull site must be gated on the opt-in flag; found %d"
-        % body.count(guard))
-    # Numeric path: the published slots are the starting point, unnarrowed.
+    assert body.count(guard) >= 2
     assert "slots = brush_slots" in body
-    # Object path: the originals pass through.
-    assert "cull_brushes = brushes" in body
-    assert "cull_things = things" in body
+    assert "tslots = thing_slots" in body
+    assert "cull_brushes = brushes" not in body
+    assert "cull_things = things" not in body
 
 
 def test_cull_does_not_mutate_its_input_lists():
@@ -125,36 +111,22 @@ def test_cull_does_not_mutate_its_input_lists():
 
 
 def test_camera_cull_exempts_lights_and_portals_and_tracks_positions():
-    """Behavioural: far Lights/Portals survive, far brushes/Things do not."""
+    """The dense entity cull keeps lights/portals while dropping distant actors."""
     import numpy as np
-    from editor.things import Light, Portal, Thing
-    from engine.renderer_F import Renderer_F
-    from engine.view_distance import ViewDistance
-
-    r = Renderer_F.__new__(Renderer_F)
-    r.view_distance = ViewDistance(1000.0)
-    r._cull_brush_buf, r._cull_thing_buf = [], []
-    r._cull_brush_pos_buf = np.empty((0, 2), dtype=np.float64)
-    r._cull_thing_pos_buf = np.empty((0, 2), dtype=np.float64)
+    from editor.things import Light, Monster, Portal, Thing
+    from engine.entity_table import EntityTable
+    from engine.renderer_core import BaseRenderer
 
     far = [50000.0, 0.0, 0.0]
-    near_brush = {"pos": [10.0, 0.0, 10.0]}
-    far_brush = {"pos": list(far)}
-    light, portal, thing = Light(pos=list(far)), Portal(pos=list(far)), Thing(pos=list(far))
-    near_thing = Thing(pos=[5.0, 0.0, 5.0])
-    brushes = [far_brush, near_brush]
-    things = [thing, light, near_thing, portal]
-    bpos = np.asarray([[b["pos"][0], b["pos"][2]] for b in brushes])
-    tpos = np.asarray([[t.pos[0], t.pos[2]] for t in things])
-
-    kb, kt = r._camera_distance_cull(brushes, things, glm_vec(0.0, 0.0, 0.0),
-                                     brush_positions=bpos, thing_positions=tpos)
-
-    assert kb == [near_brush]
-    assert kt == [light, near_thing, portal]
-    np.testing.assert_array_equal(r._last_cull_brush_positions, bpos[1:])
-    np.testing.assert_array_equal(r._last_cull_thing_positions, tpos[1:])
-    assert brushes == [far_brush, near_brush]  # inputs untouched
+    things = [Thing(pos=list(far)), Light(pos=list(far)), Portal(pos=list(far)),
+              Monster(pos=list(far)), Thing(pos=[5.0, 0.0, 5.0])]
+    table = EntityTable()
+    hidden = table.begin_frame(things, epoch=1)
+    slots = np.arange(table.count, dtype=np.int32)
+    kept = BaseRenderer._distance_cull_thing_slots(
+        table, slots, 0.0, 0.0, 1000.0 * 1000.0)
+    assert [int(i) for i in kept] == [1, 2, 4]
+    assert not hidden[0]
 
 
 def test_the_slot_cull_exempts_the_same_lights_and_portals():
@@ -188,9 +160,11 @@ def test_the_slot_cull_exempts_the_same_lights_and_portals():
 
 
 def test_shadow_lights_use_entity_slots_on_numeric_path():
-    """Shadow-map light state must not materialise Light objects."""
+    """Shadow-map selection remains an EntityTable slot operation."""
     body = _render_scene_source()
-    assert "shadow_lights = (light_table, shadow_slots)" in body
+    assert "light_table, light_slots = lights" in body
+    assert "shadow_slots = light_slots[" in body
+    assert "self.render_shadow_maps(" in body
     assert "light_refs = config.get('entity_refs')" not in body
     assert "shadow_lights = [light_refs[int(s)]" not in body
 
@@ -201,7 +175,8 @@ def test_legacy_per_object_sprite_renderer_is_gone():
     forward = _read("engine/renderer_F.py")
     assert "def draw_sprites(" not in core
     assert ".draw_sprites(" not in forward
-    assert "will_instance_sprites" not in forward
+    assert "self.draw_sprites_instanced(" in _render_scene_source()
+    assert "entity_projection.classify_slots(" in _render_scene_source()
 
 
 def test_entity_projection_is_the_sprite_renderer_input():
