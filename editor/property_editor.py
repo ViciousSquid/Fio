@@ -2172,6 +2172,13 @@ class PropertyEditor(QWidget):
         )
         form.addRow("Type:", type_combo)
 
+        preview_check = QCheckBox("Preview")
+        preview_check.setToolTip(
+            "Show a static EXPLOSION frame in the editor. Runtime behavior is unchanged."
+        )
+        preview_check.setChecked(bool(props.get('preview', False)))
+        form.addRow("Preview:", preview_check)
+
         fire_combo = QComboBox()
         fire_textures = [
             (f"Fire {index:02d}", f"assets/textures/effects/fire{index:02d}.gif")
@@ -2196,6 +2203,7 @@ class PropertyEditor(QWidget):
                 thing.properties.get("effect_type", "FIRE")
             ).upper() == "EXPLOSION"
             fire_combo.setEnabled(not explosion)
+            preview_check.setEnabled(explosion)
 
         def fire_texture_changed(index):
             path = fire_combo.itemData(index)
@@ -2203,6 +2211,10 @@ class PropertyEditor(QWidget):
                 self.update_object_prop("fire_texture", str(path))
 
         fire_combo.currentIndexChanged.connect(fire_texture_changed)
+
+        preview_check.toggled.connect(
+            lambda value: self.update_object_prop('preview', bool(value))
+        )
 
         def add_scaled_slider(label, key, minimum, maximum, default, fmt):
             scale = 100
@@ -2280,6 +2292,12 @@ class PropertyEditor(QWidget):
             value = str(value).upper()
             self.update_object_prop('effect_type', value)
             refresh_fire_texture()
+            if value != 'EXPLOSION':
+                preview_check.blockSignals(True)
+                preview_check.setChecked(False)
+                preview_check.blockSignals(False)
+                if thing.properties.get('preview', False):
+                    self.update_object_prop('preview', False)
             if value == 'EXPLOSION':
                 try:
                     lifetime = float(thing.properties.get('lifetime', 0.5))
