@@ -180,6 +180,11 @@ def register_all_input_handlers(io_manager: IOManager):
                 table.effect_alive[slot] = (
                     table.effect_type[slot] == 0
                 )
+                table.light_enabled[slot] = (
+                    bool(table.effect_light_enabled[slot])
+                    if table.effect_type[slot] == 0
+                    else False
+                )
 
         logic.io_manager.fire_output(
             entity, 'OnChanged', value=entity.properties['effect_type']
