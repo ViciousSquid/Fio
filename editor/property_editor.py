@@ -1870,6 +1870,9 @@ class PropertyEditor(QWidget):
                 )
                 form.addRow("", note)
 
+        if isinstance(thing, Effect):
+            self._build_effect_ui(form, thing)
+
         if isinstance(thing, Light):
             self.add_color_picker_widget(form, thing, 'colour')
             self._build_attach_to_mover(form, thing)
