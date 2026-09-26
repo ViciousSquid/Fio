@@ -62,6 +62,8 @@ class FakeHost(QWidget):
         super().__init__()
         self.state = EditorState()
         self.state.selected_objects = []
+        initial_dirty = self.state.render_dirty_snapshot()
+        self.state.clear_render_dirty(initial_dirty)
         self.config = configparser.ConfigParser()
         self.grid_size = 16
         self.saves = 0
