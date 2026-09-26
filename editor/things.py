@@ -2066,7 +2066,7 @@ ENTITY_TYPES = {
 # Categories for editor UI
 ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Pickup', 'LevelChanger'],
-    'Environment': ['Light', 'Speaker', 'Model', 'Portal'],
+    'Environment': ['Light', 'Effect', 'Speaker', 'Model', 'Portal'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicState'],
     'AI': ['PathNode'],
 }
