@@ -1935,6 +1935,10 @@ class MainWindow(QMainWindow):
         """
         if self.cancel_clone_placement():
             return True
+        if (hasattr(self, 'view_3d') and
+                getattr(self.view_3d, 'terrain_sculpt_active', False)):
+            self.view_3d.set_terrain_sculpt_active(False)
+            return True
         if self.components.cancel_drag():
             self.refresh_views()
             return True
