@@ -804,6 +804,688 @@ void main() {
     FragColor = vec4(applyFog(rgb, FragPos), alpha);
 }
 """,
+    'fog.vert': """#version 330 core
+precision highp float;
+layout (location = 0) in vec3 a_pos;
+
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+
+out vec3 localPos;
+
+void main() {
+    localPos = a_pos;
+    gl_Position = projection * view * model * vec4(a_pos, 1.0);
+}""",
+
+    'fog.frag': """#version 330 core
+precision mediump float;
+out vec4 FragColor;
+in highp vec3 localPos;
+
+uniform highp mat4 model;
+uniform highp mat4 inverseModel;
+uniform highp vec3 viewPos;
+
+uniform float density;
+uniform vec3 fogColor;
+uniform sampler3D noiseTexture;
+uniform float noiseScale;
+uniform highp float time;
+
+highp vec2 intersectBox(highp vec3 rayOrigin, highp vec3 rayDir) {
+    highp vec3 tMin = (-0.5 - rayOrigin) / rayDir;
+    highp vec3 tMax = ( 0.5 - rayOrigin) / rayDir;
+    highp vec3 t1 = min(tMin, tMax);
+    highp vec3 t2 = max(tMin, tMax);
+    return vec2(max(max(t1.x, t1.y), t1.z),
+                min(min(t2.x, t2.y), t2.z));
+}
+
+void main() {
+    highp vec3 fragWorldPos = vec3(model * vec4(localPos, 1.0));
+    highp vec3 rayDirWorld  = normalize(fragWorldPos - viewPos);
+
+    highp vec3 rayOriginLocal = (inverseModel * vec4(viewPos,       1.0)).xyz;
+    highp vec3 rayDirLocal    = normalize((inverseModel * vec4(rayDirWorld, 0.0)).xyz);
+
+    highp vec2 t = intersectBox(rayOriginLocal, rayDirLocal);
+    if (t.x >= t.y) discard;
+
+    highp float tNear    = max(0.0, t.x);
+    highp float stepSize = (t.y - tNear) / 16.0;
+
+    vec4  acc        = vec4(0.0);
+    highp float timeOffset = time * 0.1;
+
+    for (int i = 0; i < 16; ++i) {
+        highp vec3 sp = rayOriginLocal + rayDirLocal * (tNear + float(i) * stepSize);
+        float n       = texture(noiseTexture, sp * noiseScale + vec3(0.0, 0.0, timeOffset)).r;
+        float tr      = exp(-density * n * stepSize);
+        acc.rgb      += fogColor * (1.0 - tr) * (1.0 - acc.a);
+        acc.a        += (1.0 - tr);
+        if (acc.a > 0.99) break;
+    }
+
+    FragColor = vec4(acc.rgb, clamp(acc.a, 0.0, 1.0));
+}""",
+
+    'water.vert': """#version 330 core
+precision highp float;
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec2 aTexCoords;
+
+out vec3 FragPos;
+out vec2 TexCoords;
+out mediump vec3 Normal;
+out mediump float WaveCrest;
+out mediump float ShoreDist;
+
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+uniform highp float time;
+uniform mat3 normalMatrix;
+
+uniform float waveAmp;    // total wave amplitude in world units
+uniform vec3 brushSize;   // world-space brush dimensions
+
+// One Gerstner wave: displaces the vertex and accumulates normal derivatives.
+void addWave(vec2 dir, float wavelength, float amp, float speed, vec2 p,
+             inout float dy, inout vec2 dxz, inout vec3 n)
+{
+    float k = 6.2831853 / wavelength;
+    float f = k * dot(dir, p) + speed * time;
+    float s = sin(f);
+    float c = cos(f);
+    float steep = min(0.8 / (k * max(amp, 0.0001) * 4.0), 1.2);
+    dy  += amp * s;
+    dxz += steep * amp * c * dir;
+    n.x -= dir.x * k * amp * c;
+    n.z -= dir.y * k * amp * c;
+    n.y -= steep * k * amp * s * 0.25;
+}
+
+void main()
+{
+    vec3 worldPos = vec3(model * vec4(aPos, 1.0));
+
+    // World-space distance from this vertex to the nearest lateral brush edge.
+    // Waves are pinned to zero at the edges so the surface always meets the
+    // side faces / pool walls exactly (keeps the volume watertight).
+    vec2 edgeLocal = vec2(0.5) - abs(aPos.xz);
+    float edgeWorld = min(edgeLocal.x * brushSize.x, edgeLocal.y * brushSize.z);
+    float fadeW = clamp(min(brushSize.x, brushSize.z) * 0.25, 4.0, 48.0);
+    float edgeFade = smoothstep(0.0, fadeW, edgeWorld);
+
+    float topVert = step(0.49, aPos.y);   // only the top surface deforms
+    float amp = waveAmp * edgeFade * topVert;
+
+    float dy = 0.0;
+    vec2 dxz = vec2(0.0);
+    vec3 n = vec3(0.0, 1.0, 0.0);
+    if (amp > 0.001) {
+        addWave(vec2( 0.788,  0.616), 190.0, amp * 0.42, 1.05, worldPos.xz, dy, dxz, n);
+        addWave(vec2(-0.552,  0.834), 118.0, amp * 0.28, 1.45, worldPos.xz, dy, dxz, n);
+        addWave(vec2( 0.943, -0.333),  74.0, amp * 0.19, 1.95, worldPos.xz, dy, dxz, n);
+        addWave(vec2(-0.673, -0.740),  38.0, amp * 0.11, 2.70, worldPos.xz, dy, dxz, n);
+        worldPos.y  += dy;
+        worldPos.xz += dxz * 0.75 * edgeFade;
+    }
+
+    vec3 baseNormal = normalize(normalMatrix * aNormal);
+    // Only the upward-facing surface takes the wave normal; side walls keep
+    // their flat normals even at their top verts (which do get displaced)
+    float topFaceVert = topVert * step(0.5, aNormal.y);
+    Normal    = normalize(mix(baseNormal, normalize(n), topFaceVert));
+    FragPos   = worldPos;
+    TexCoords = aTexCoords;
+    WaveCrest = clamp(dy / max(waveAmp * 0.85, 0.001) * 0.5 + 0.5, 0.0, 1.0);
+    ShoreDist = edgeWorld;
+
+    gl_Position = projection * view * vec4(worldPos, 1.0);
+}""",
+
+    'water.frag': """#version 330 core
+precision mediump float;
+out vec4 FragColor;
+
+in highp vec3 FragPos;
+in highp vec2 TexCoords;
+in vec3 Normal;
+in float WaveCrest;
+in float ShoreDist;
+
+struct Light {
+    highp vec3 position;
+    vec3 color;
+    float intensity;
+    highp float radius;
+};
+
+#define MAX_LIGHTS """ + str(MAX_LIGHTS_WATER) + """
+uniform Light lights[MAX_LIGHTS];
+uniform int active_lights;
+uniform mat4 view;
+uniform mat4 projection;
+uniform highp vec3 viewPos;
+uniform sampler2D normalMap;
+uniform sampler2D sceneColor;
+uniform sampler2D reflectionTexture;
+uniform mat4 reflectionMatrix;
+uniform highp float time;
+
+uniform float waterOpacity;
+uniform float waterReflectivity;
+uniform float distortionStrength;
+uniform float refractionIndex;
+uniform float roughness;
+uniform float fresnelIntensity;
+uniform int reflectionEnabled;
+uniform vec2 screenSize;
+uniform vec3 waterTint;""" + FOG_GLSL + """
+
+const vec3 SUN_DIR   = vec3(0.4767, 0.6555, 0.5859);  // pre-normalized
+const vec3 SUN_COLOR = vec3(1.00, 0.95, 0.82);
+
+highp float hash21(highp vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+highp float vnoise(highp vec2 p) {
+    highp vec2 i = floor(p);
+    highp vec2 f = fract(p);
+    highp vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// Procedural sky remains the zero-cost fallback when reflections are disabled.
+vec3 skyColor(vec3 dir) {
+    float h = clamp(dir.y, 0.0, 1.0);
+    vec3 sky = mix(vec3(0.66, 0.76, 0.83),
+                   vec3(0.19, 0.38, 0.66),
+                   pow(h, 0.55));
+    float sunAmount = max(dot(dir, SUN_DIR), 0.0);
+    sky += SUN_COLOR * (
+        pow(sunAmount, 350.0) * 3.0 +
+        pow(sunAmount, 24.0) * 0.18
+    );
+    return sky;
+}
+
+void main()
+{
+    highp vec3 toView = viewPos - FragPos;
+    highp float viewDist = length(toView);
+    vec3 viewDir = toView / max(viewDist, 0.0001);
+
+    vec3 geoN = normalize(Normal);
+    bool backside = dot(geoN, viewDir) < 0.0;
+    if (backside) geoN = -geoN;
+
+    float topFace = step(0.35, abs(geoN.y));
+
+    // World-space animated normal-map detail.  This is also the normal used
+    // by Snell/Fresnel, so the optical effects follow the visible ripples.
+    highp vec2 wuv;
+    if (topFace > 0.5) {
+        wuv = FragPos.xz;
+    } else if (abs(geoN.x) > abs(geoN.z)) {
+        wuv = vec2(FragPos.z, FragPos.y - time * 6.0);
+    } else {
+        wuv = vec2(FragPos.x, FragPos.y - time * 6.0);
+    }
+    vec2 r1 = texture(normalMap, wuv * 0.0110 + time * vec2( 0.021,  0.014)).xy - 0.5;
+    vec2 r2 = texture(normalMap, wuv * 0.0047 + time * vec2(-0.011,  0.008)).xy - 0.5;
+    vec2 r3 = texture(normalMap, wuv * 0.0310 + time * vec2( 0.016, -0.029)).xy - 0.5;
+    vec2 ripple = r1 + r2 * 0.65 + r3 * 0.35;
+
+    float detailFade = 1.0 / (1.0 + viewDist * 0.0009);
+    float rippleStrength = (0.34 + WaveCrest * 0.18) * detailFade;
+
+    vec3 N;
+    if (topFace > 0.5) {
+        N = normalize(vec3(
+            geoN.x + ripple.x * rippleStrength,
+            geoN.y,
+            geoN.z + ripple.y * rippleStrength
+        ));
+    } else {
+        vec3 up = vec3(0.0, 1.0, 0.0);
+        vec3 tangent = normalize(cross(up, geoN));
+        N = normalize(
+            geoN +
+            (tangent * ripple.x + up * ripple.y) *
+            rippleStrength * 0.6
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Refraction / transmission: the same screen-space optical treatment
+    // used by Glass, but driven by the water's perturbed surface normal.
+    // ------------------------------------------------------------------
+    float ior = max(refractionIndex, 1.0);
+    // Air -> water above the surface; water -> air when viewed from below.
+    float eta = backside ? ior : (1.0 / ior);
+    highp vec3 straightDir = -viewDir;
+    highp vec3 refractDir = refract(straightDir, N, eta);
+    highp vec3 refractDeltaView = mat3(view) * (refractDir - straightDir);
+    highp float refractDeltaLen = length(refractDeltaView);
+    if (refractDeltaLen > 1.0e-5) {
+        refractDeltaView /= refractDeltaLen;
+    } else {
+        refractDeltaView = vec3(0.0);
+    }
+
+    highp vec2 projectionScale =
+        vec2(projection[0][0], projection[1][1]);
+    highp vec2 normalView =
+        normalize(mat3(view) * N).xy;
+    highp float grazing =
+        1.0 - clamp(abs(dot(viewDir, N)), 0.0, 1.0);
+
+    highp vec2 refractionWarp =
+        refractDeltaView.xy *
+        projectionScale *
+        (0.055 + 0.035 * grazing);
+    highp vec2 normalWarp =
+        normalView *
+        (0.012 + 0.010 * grazing);
+
+    highp float nWarp1 =
+        vnoise(FragPos.xz * 0.08 + TexCoords * 3.0);
+    highp float nWarp2 =
+        vnoise(FragPos.xy * 0.11 + TexCoords * 5.0);
+    highp vec2 microWarp =
+        (vec2(nWarp1, nWarp2) - 0.5) * 0.020;
+
+    highp vec2 screenUV =
+        gl_FragCoord.xy / max(screenSize, vec2(1.0));
+    highp vec2 uvOffset =
+        (refractionWarp + normalWarp + microWarp) *
+        distortionStrength;
+    highp vec2 refractUV = clamp(
+        screenUV + uvOffset,
+        vec2(0.001),
+        vec2(0.999)
+    );
+
+    vec3 transmitted = texture(sceneColor, refractUV).rgb;
+    if (roughness > 0.001) {
+        highp vec2 blurStep = roughness * 4.0 / max(screenSize, vec2(1.0));
+        transmitted += texture(
+            sceneColor,
+            clamp(refractUV + vec2(blurStep.x, 0.0),
+                  vec2(0.001), vec2(0.999))).rgb;
+        transmitted += texture(
+            sceneColor,
+            clamp(refractUV - vec2(blurStep.x, 0.0),
+                  vec2(0.001), vec2(0.999))).rgb;
+        transmitted += texture(
+            sceneColor,
+            clamp(refractUV + vec2(0.0, blurStep.y),
+                  vec2(0.001), vec2(0.999))).rgb;
+        transmitted /= 4.0;
+    }
+
+    // ------------------------------------------------------------------
+    // Water body / shallow colour and subsurface-looking crest scatter.
+    // ------------------------------------------------------------------
+    float NdV = max(dot(N, viewDir), 0.0);
+    vec3 deepCol = waterTint * 0.55;
+    vec3 shallowCol =
+        waterTint * 1.25 +
+        vec3(0.02, 0.10, 0.09);
+    vec3 bodyCol =
+        mix(deepCol, shallowCol,
+            pow(1.0 - NdV, 1.5) * 0.7 + 0.15);
+
+    float sss =
+        pow(WaveCrest, 2.0) *
+        pow(
+            max(
+                dot(
+                    viewDir,
+                    -normalize(vec3(SUN_DIR.x, 0.0, SUN_DIR.z))
+                ),
+                0.0
+            ),
+            2.0
+        );
+    bodyCol +=
+        (waterTint * 0.8 + vec3(0.05, 0.22, 0.18)) * sss;
+
+    bodyCol *=
+        0.45 + 0.55 * max(dot(N, SUN_DIR), 0.0);
+
+    // Mix the refracted scene with the water's own body colour so shallow
+    // geometry remains visible instead of replacing the water with a flat
+    // post-process image.
+    vec3 transmittedTinted =
+        transmitted * mix(vec3(1.0), waterTint, 0.35);
+    vec3 transmission =
+        mix(transmittedTinted, bodyCol, 0.45);
+
+    // ------------------------------------------------------------------
+    // Fresnel: physical R0 for water (~0.0204), multiplied by the authored
+    // Fresnel/reflectivity intensity so existing maps retain their control.
+    // ------------------------------------------------------------------
+    float f0 = 0.020373;
+    float fresnel =
+        f0 + (1.0 - f0) * pow(1.0 - NdV, 5.0);
+    fresnel = clamp(
+        fresnel * clamp(fresnelIntensity, 0.0, 4.0),
+        0.0, 1.0
+    );
+
+    vec3 R = reflect(-viewDir, N);
+    vec3 reflection = skyColor(R);
+
+    // Planar reflection: project the actual top-face world position into
+    // the scene rendered from the camera mirrored across this water plane.
+    // This is a 2D render-to-texture, not an environment/cubemap lookup, so
+    // nearby geometry stays spatially tied to the water surface.
+    if (reflectionEnabled == 1 && topFace > 0.5) {
+        highp vec4 reflectionClip =
+            reflectionMatrix * vec4(FragPos, 1.0);
+        if (reflectionClip.w > 0.0001) {
+            highp vec2 reflectionUV =
+                reflectionClip.xy / reflectionClip.w * 0.5 + 0.5;
+            if (reflectionUV.x > 0.0 && reflectionUV.x < 1.0 &&
+                reflectionUV.y > 0.0 && reflectionUV.y < 1.0) {
+                highp vec2 reflectionWarp =
+                    normalize(mat3(view) * N).xy *
+                    distortionStrength * 0.018;
+                reflectionUV = clamp(
+                    reflectionUV + reflectionWarp,
+                    vec2(0.001),
+                    vec2(0.999)
+                );
+                reflection = texture(
+                    reflectionTexture, reflectionUV).rgb;
+                if (roughness > 0.001) {
+                    highp vec2 blurStep =
+                        roughness * 2.0 / max(screenSize, vec2(1.0));
+                    reflection += texture(
+                        reflectionTexture,
+                        clamp(
+                            reflectionUV + vec2(blurStep.x, 0.0),
+                            vec2(0.001), vec2(0.999))).rgb;
+                    reflection += texture(
+                        reflectionTexture,
+                        clamp(
+                            reflectionUV - vec2(blurStep.x, 0.0),
+                            vec2(0.001), vec2(0.999))).rgb;
+                    reflection += texture(
+                        reflectionTexture,
+                        clamp(
+                            reflectionUV + vec2(0.0, blurStep.y),
+                            vec2(0.001), vec2(0.999))).rgb;
+                    reflection /= 4.0;
+                }
+            }
+        }
+    }
+
+    // Keep authored reflectivity visible at normal viewing angles. Physical
+    // water Fresnel starts around 2%, which is too weak to make the optional
+    // reflection perceptible from above on its own; grazing angles still get
+    // the full Fresnel response.
+    float reflectionWeight = max(
+        fresnel,
+        clamp(waterReflectivity, 0.0, 1.0) * 0.5
+    );
+    vec3 color = mix(transmission, reflection, reflectionWeight);
+
+    // ------------------------------------------------------------------
+    // Dynamic lights / specular / foam.
+    // ------------------------------------------------------------------
+    vec3 diffuseAcc = vec3(0.0);
+    vec3 specAcc = vec3(0.0);
+    for (int i = 0; i < active_lights && i < MAX_LIGHTS; i++) {
+        highp vec3 toL = lights[i].position - FragPos;
+        highp float dist = length(toL);
+        if (dist < lights[i].radius) {
+            vec3 Ldir = toL / dist;
+            float att =
+                1.0 - smoothstep(0.0, lights[i].radius, dist);
+            vec3 lc =
+                lights[i].color * lights[i].intensity * att;
+            diffuseAcc += max(dot(N, Ldir), 0.0) * lc;
+            vec3 Hl = normalize(Ldir + viewDir);
+            float ndh = max(dot(N, Hl), 0.0);
+            specAcc +=
+                (pow(ndh, 240.0) * 1.6 +
+                 pow(ndh, 28.0) * 0.15) * lc;
+        }
+    }
+    color += color * diffuseAcc * 0.45;
+
+    vec3 Hs = normalize(SUN_DIR + viewDir);
+    float sunSpec =
+        pow(max(dot(N, Hs), 0.0), 320.0);
+    float sparkle =
+        vnoise(wuv * 0.9 +
+               vec2(time * 1.7, -time * 1.3)) *
+        vnoise(wuv * 1.7 -
+               vec2(time * 0.9, -time * 1.1));
+    sunSpec *=
+        (1.0 + sparkle * 6.0) *
+        detailFade;
+    vec3 specular =
+        SUN_COLOR * sunSpec * 2.2 + specAcc;
+
+    float foamNoise =
+        vnoise(wuv * 0.16 +
+               vec2(time * 0.05, -time * 0.04)) * 0.6 +
+        vnoise(wuv * 0.45 -
+               vec2(time * 0.07, time * 0.06)) * 0.4;
+    float crestFoam =
+        smoothstep(0.68, 0.92, WaveCrest) *
+        smoothstep(0.35, 0.75, foamNoise);
+    float shoreWave =
+        0.5 + 0.5 * sin(ShoreDist * 0.30 - time * 1.8);
+    float shoreFoam =
+        (1.0 - smoothstep(2.0, 26.0, ShoreDist)) *
+        (0.30 + 0.70 * shoreWave) *
+        smoothstep(0.25, 0.60, foamNoise + 0.15);
+    float foam =
+        clamp(crestFoam + shoreFoam, 0.0, 1.0) *
+        topFace;
+
+    color += specular * (0.35 + 0.65 * waterReflectivity);
+    color = mix(
+        color,
+        vec3(0.90, 0.95, 0.96),
+        foam * 0.85
+    );
+
+    float alpha =
+        clamp(waterOpacity, 0.05, 1.0) *
+        (0.60 + 0.40 * (1.0 - NdV));
+    alpha = clamp(
+        alpha +
+        fresnel * 0.35 +
+        foam * 0.45 +
+        sunSpec * 0.4,
+        0.05,
+        1.0
+    );
+
+    if (backside) {
+        color = mix(
+            color,
+            waterTint * 1.4 + vec3(0.10, 0.18, 0.20),            0.35
+        );
+        alpha = min(alpha + 0.15, 1.0);
+    }
+
+    FragColor = vec4(applyFog(color, FragPos), alpha);
+}""",
+
+    'glass.vert': """#version 330 core
+precision highp float;
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec2 aTexCoords;
+
+out highp vec3 FragPos;
+out mediump vec3 Normal;
+out highp vec2 TexCoords;
+out highp vec3 ViewFragPos;
+
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+uniform mat3 normalMatrix;
+
+void main() {
+    FragPos     = vec3(model * vec4(aPos, 1.0));
+    Normal      = normalize(normalMatrix * aNormal);
+    TexCoords   = aTexCoords;
+    ViewFragPos = vec3(view * vec4(FragPos, 1.0));
+    gl_Position = projection * vec4(ViewFragPos, 1.0);
+}""",
+
+    'glass.frag': """#version 330 core
+precision mediump float;
+out vec4 FragColor;
+
+in highp vec3 FragPos;
+in vec3 Normal;
+in highp vec2 TexCoords;
+in highp vec3 ViewFragPos;
+
+uniform highp vec3 viewPos;
+uniform mat4 view;
+uniform mat4 projection;
+uniform vec3 waterColor;
+uniform float distortionStrength;
+uniform float fresnelIntensity;
+uniform float glassOpacity;
+uniform float refractionIndex;
+uniform float roughness;
+uniform sampler2D sceneColor;
+uniform vec2 screenSize;""" + FOG_GLSL + """
+
+highp float hash21(highp vec2 p) {
+    p = fract(p * vec2(123.34, 345.45));
+    p += dot(p, p + 34.345);
+    return fract(p.x * p.y);
+}
+
+highp float noise2(highp vec2 p) {
+    highp vec2 i = floor(p);
+    highp vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+void main() {
+    highp vec3 viewDir = normalize(viewPos - FragPos);
+    highp vec3 baseNormal = normalize(Normal);
+
+    // Screen-space transmission needs an authored, visible warp. The old
+    // implementation projected a unit ray delta and then divided it by
+    // scene depth, which leaves the resulting UV displacement well below a
+    // pixel on normal editor/game distances. Keep the Snell direction so the
+    // IOR slider still has a physical relationship to the result, but map the
+    // angular change into a bounded screen-space offset controlled directly by
+    // the distortion slider.
+    float ior = max(refractionIndex, 1.0);
+    float eta = 1.0 / ior;
+    highp vec3 straightDir = -viewDir;
+    highp vec3 refractDir = refract(straightDir, baseNormal, eta);
+    highp vec3 refractDeltaView = mat3(view) * (refractDir - straightDir);
+    highp float refractDeltaLen = length(refractDeltaView);
+    if (refractDeltaLen > 1.0e-5) {
+        refractDeltaView /= refractDeltaLen;
+    } else {
+        refractDeltaView = vec3(0.0);
+    }
+
+    highp vec2 projectionScale = vec2(projection[0][0], projection[1][1]);
+    highp vec2 normalView = normalize(mat3(view) * baseNormal).xy;
+    highp float grazing = 1.0 - clamp(abs(dot(viewDir, baseNormal)), 0.0, 1.0);
+
+    // The refracted direction supplies the broad warp; the view-space normal
+    // keeps a flat sheet of glass visibly responsive even when the ray delta is
+    // tiny; grazing angles get a little more displacement, like real glass.
+    highp vec2 refractionWarp =
+        refractDeltaView.xy * projectionScale * (0.055 + 0.035 * grazing);
+    highp vec2 normalWarp = normalView * (0.012 + 0.010 * grazing);
+
+    highp vec2 screenUV = gl_FragCoord.xy / screenSize;
+
+    // A compact procedural perturbation breaks up the perfectly planar warp.
+    // It is intentionally cheap and deterministic on GL 3.3 hardware.
+    highp float n1 = noise2(FragPos.xz * 0.08 + TexCoords * 3.0);
+    highp float n2 = noise2(FragPos.xy * 0.11 + TexCoords * 5.0);
+    highp vec2 microWarp = (vec2(n1, n2) - 0.5) * 0.020;
+
+    highp vec2 uvOffset =
+        (refractionWarp + normalWarp + microWarp) * distortionStrength;
+
+    highp vec2 refractUV = clamp(
+        screenUV + uvOffset,
+        vec2(0.001),
+        vec2(0.999)
+    );
+
+    // Roughness is a real filter over the transmitted scene rather than merely
+    // changing a highlight exponent. Four taps are cheap, deterministic, and
+    // make the control visibly useful on GL 3.3 hardware.
+    highp vec2 blurStep = roughness * 4.0 / screenSize;
+    vec3 transmitted = texture(sceneColor, refractUV).rgb;
+    if (roughness > 0.001) {
+        transmitted += texture(sceneColor, clamp(refractUV + vec2(blurStep.x, 0.0),
+                                                 vec2(0.001), vec2(0.999))).rgb;
+        transmitted += texture(sceneColor, clamp(refractUV - vec2(blurStep.x, 0.0),
+                                                 vec2(0.001), vec2(0.999))).rgb;
+        transmitted += texture(sceneColor, clamp(refractUV + vec2(0.0, blurStep.y),
+                                                 vec2(0.001), vec2(0.999))).rgb;
+        transmitted /= 4.0;
+    }
+
+    // Tint the transmitted scene without replacing it with a flat glass colour.
+    vec3 filteredScene = transmitted * mix(vec3(1.0), waterColor, 0.35);
+
+    // Schlick Fresnel: refractionIndex supplies the physically derived F0, while
+    // the authored Fresnel slider controls its strength.
+    float cosTheta = clamp(dot(viewDir, baseNormal), 0.0, 1.0);
+    float f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+    float fresnel = f0 + (1.0 - f0) * pow(1.0 - cosTheta, 5.0);
+    fresnel = clamp(fresnel * fresnelIntensity, 0.0, 1.0);
+
+    vec3 reflectionColor = vec3(0.96, 0.99, 1.0);
+    vec3 finalRGB = mix(filteredScene, reflectionColor, fresnel);
+
+    // A compact view-dependent glint keeps Fresnel readable without requiring
+    // the glass pass to upload the whole light table a second time.
+    highp vec3 halfDir = normalize(viewDir + vec3(0.35, 0.9, 0.2));
+    float shininess = mix(128.0, 12.0, roughness);
+    float specular = pow(max(dot(baseNormal, halfDir), 0.0), shininess);
+    finalRGB += vec3(specular * (0.15 + 0.55 * fresnel));
+
+    float edgeAlpha = fresnel * 0.65 + roughness * 0.20;
+    float alpha = clamp(
+        glassOpacity + edgeAlpha * (1.0 - glassOpacity),
+        0.05,
+        1.0
+    );
+
+    FragColor = vec4(applyFog(finalRGB, FragPos), alpha);
+}""",
+
     # Depth cube-map pass: renders scene geometry from a point light's position
     # into one cube face, storing linear distance (0..1 = 0..far_plane) so the
     # lighting shaders can do an omnidirectional shadow test.  One draw per face
