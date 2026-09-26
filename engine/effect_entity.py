@@ -152,6 +152,9 @@ class Effect(_ThingBase):
 
         self.properties["effect_type"] = effect_type
         self.properties["preview"] = False
+        if effect_type == EFFECT_ORB:
+            self.properties["width"] = 32.0
+            self.properties["height"] = 32.0
         self._effect_spawn_time = 0.0
         self._effect_active = effect_type in EFFECT_ANIMATED_TYPES
         return True
