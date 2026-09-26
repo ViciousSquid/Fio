@@ -1651,25 +1651,32 @@ layout (location = 9) in vec4 iNormal2;
             reader = QImageReader(buffer, b"gif")
             reader.setDecideFormatFromContent(True)
 
-            while reader.canRead():
+            # GIF animation is an indexed image sequence. Read each image
+            # explicitly rather than relying on canRead()/jumpToNextImage(),
+            # which can stop after the first decoded image on some Qt builds.
+            image_count = reader.imageCount()
+            if image_count < 0:
+                image_count = 0
+
+            for frame_index in range(image_count):
+                if not reader.jumpToImage(frame_index):
+                    if frame_index == 0:
+                        break
+                    continue
+
                 image = reader.read()
                 if image.isNull():
-                    break
+                    continue
 
-                cache_key = (
-                    f"{asset_path}#frame={len(frames)}"
-                )
+                cache_key = f"{asset_path}#frame={frame_index}"
                 frames.append(self._upload_fire_frame(cache_key, image))
 
                 delay = reader.nextImageDelay()
                 try:
-                    delay_seconds = max(float(delay) / 1000.0, 0.001)
+                    delay_seconds = max(float(delay) / 1000.0, 0.01)
                 except (TypeError, ValueError):
                     delay_seconds = 0.1
                 durations.append(delay_seconds)
-
-                if not reader.jumpToNextImage():
-                    break
 
             buffer.close()
 
@@ -1689,9 +1696,8 @@ layout (location = 9) in vec4 iNormal2;
                 f"'{asset_path}': {exc}"
             )
 
-        # Last-resort static frame.  This uses the same image loader as the
-        # rest of Fio and guarantees a FIRE image can still appear if an
-        # animated GIF decoder rejects the file.
+        # Last-resort static frame. This guarantees a FIRE image can still
+        # appear if Qt's animated GIF reader rejects the sequence.
         try:
             image = QImage.fromData(data)
             if not image.isNull():
