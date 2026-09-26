@@ -171,7 +171,7 @@ def test_cut_face_highlight_and_texturing_survive():
     core = _read("engine/renderer_core.py")
     assert "_geo_face_highlight_verts" in core
     assert "_draw_face_highlight_verts" in core
-    assert "_geo_run_plane" in core
+    assert "def draw_face_highlight(" in core
 
     # Addressing a cut face's texture moved out of the Surface Inspector into
     # a shared, Qt-free layer, so the inspector and anything else reach a cut
