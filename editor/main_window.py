@@ -2729,8 +2729,12 @@ class MainWindow(QMainWindow):
         self.update_all_ui()
         self._refresh_logic_graph()
 
-    def perform_subtraction(self, push_undo=True):
-        """CSG-subtract the selected brush from everything it intersects.
+    def perform_subtraction(self, push_undo=True, target_brush=None):
+        """CSG-subtract the selected brush, optionally from one target brush only.
+
+        ``target_brush`` is used by compound editor operations such as Hollow:
+        the temporary cutter must not modify unrelated geometry that happens to
+        sit inside the selected brush.
 
         ``push_undo`` lets a caller that has already opened an undo checkpoint
         (Hollow, which runs a subtract as one step of a larger operation) fold
@@ -2754,6 +2758,14 @@ class MainWindow(QMainWindow):
         new_brushes = []
         for brush in self.state.brushes:
             if brush is subtract_brush:
+                continue
+
+            # A targeted subtraction is deliberately isolated to the caller's
+            # brush.  This is essential for Hollow: an object already inside
+            # the outer box is not part of the hollowing operation and must be
+            # left completely untouched.
+            if target_brush is not None and brush is not target_brush:
+                new_brushes.append(brush)
                 continue
                 
             if brush.get('operation') == 'subtract':
@@ -2963,89 +2975,86 @@ class MainWindow(QMainWindow):
         return False
 
     def hollow_selected_brush(self):
-        """Hollow out the selected brush by creating an inner subtraction brush."""
+        """Hollow the selected outer box without modifying enclosed geometry.
+
+        The selected brush is converted into a shell with the requested wall
+        thickness.  Other brushes, including arbitrary/many-sided geometry
+        already enclosed by the box, are intentionally left untouched.
+        """
         if not isinstance(self.state.selected_object, dict):
             QMessageBox.warning(self, "Invalid Selection", "Select a brush to hollow.")
             return
 
         outer_brush = self.state.selected_object
-        
-        # Check if brush is locked
+
         if outer_brush.get('lock', False):
             QMessageBox.warning(self, "Brush Locked", "Cannot hollow a locked brush.")
             return
 
-        # Prompt for wall thickness, defaulting to whatever was used last so a
-        # run of hollows is a keypress each rather than a re-typed number.
         max_thickness = int(min(outer_brush['size']) // 2 - 1)
-        default_thickness = min(max(int(getattr(self, 'last_hollow_thickness', 16)), 8),
-                                max(8, max_thickness))
+        default_thickness = min(
+            max(int(getattr(self, 'last_hollow_thickness', 16)), 8),
+            max(8, max_thickness)
+        )
         thickness, ok = QInputDialog.getInt(
             self,
             "Hollow Brush",
             "Wall thickness (grid units):",
             value=default_thickness,
-            min=8,  # Changed from 1 to 8
-            max=max(8, max_thickness)  # Ensure at least 8
+            min=8,
+            max=max(8, max_thickness)
         )
 
         if not ok:
-            return          # cancelled: nothing has been touched yet
+            return
         self.last_hollow_thickness = thickness
-        
-        # Check if the brush is large enough to hollow
+
         min_size = min(outer_brush['size'])
         if min_size <= thickness * 2:
             QMessageBox.warning(
-                self, 
-                "Brush Too Small", 
-                f"The brush is too small to hollow with thickness {thickness}.\n"
+                self,
+                "Brush Too Small",
+                f"The brush is too small to hollow with thickness {thickness}.\\n"
                 f"Minimum dimension ({min_size}) must be greater than {thickness * 2}."
             )
             return
 
         self.save_state()
-        
-        # Get outer brush properties
+
+        # Keep the original scene intact except for the selected outer brush.
+        # The generic subtract operation normally cuts every intersecting
+        # additive brush; Hollow must not do that because enclosed geometry is
+        # part of the user's scene, not part of the box shell.
+        before = set(id(b) for b in self.state.brushes)
+
         outer_pos = outer_brush['pos']
         outer_size = outer_brush['size']
-        
-        # Calculate inner brush size (reduced by thickness on each side = thickness * 2 total)
-        inner_size = [
-            outer_size[0] - thickness * 2,
-            outer_size[1] - thickness * 2,
-            outer_size[2] - thickness * 2
-        ]
-        
-        # Inner brush has the same center position
-        inner_pos = list(outer_pos)
-        
-        # Create inner brush with subtract operation
         inner_brush = {
-            'pos': inner_pos,
-            'size': inner_size,
+            'pos': list(outer_pos),
+            'size': [
+                outer_size[0] - thickness * 2,
+                outer_size[1] - thickness * 2,
+                outer_size[2] - thickness * 2
+            ],
             'operation': 'subtract',
             'textures': outer_brush.get('textures', {}).copy(),
-            'name': f"{outer_brush.get('name', 'Brush')}_hollow_sub"  # Mark as temporary
+            'name': f"{outer_brush.get('name', 'Brush')}_hollow_sub"
         }
-        
-        # Add the inner brush to the scene
-        self.state.brushes.append(inner_brush)
-        
-        # Now perform the subtraction using the inner brush.  The checkpoint
-        # above already covers the whole operation, so the subtract must not
-        # push a second one — hollow is one undo step, not two.
-        before = set(id(b) for b in self.state.brushes)
-        self.state.selected_object = inner_brush
-        self.perform_subtraction(push_undo=False)
 
-        # Remove the inner brush after subtraction (it's no longer needed)
+        self.state.brushes.append(inner_brush)
+        self.state.selected_object = inner_brush
+
+        # Only subtract the temporary inner volume from the selected outer
+        # brush.  An enclosed many-sided brush therefore survives unchanged.
+        self.perform_subtraction(push_undo=False, target_brush=outer_brush)
+
         if inner_brush in self.state.brushes:
             self.state.brushes.remove(inner_brush)
 
-        # Select the walls the operation just produced, so the next tool acts on
-        # them straight away instead of on an empty selection.
-        walls = [b for b in self.state.brushes if id(b) not in before]
+        walls = [
+            b for b in self.state.brushes
+            if id(b) not in before
+        ]
         if walls:
             self.set_selected_objects(walls)
         else:
