@@ -13,6 +13,7 @@ import os
 from .renderer_core import BaseRenderer, normalize_color
 from engine import render_table
 from engine import entity_table as entity_projection
+from engine.portal_transform import map_point as _portal_map_point
 from engine.render_keys import KeyLayout, sort_into_runs
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.things import Thing, Effect
@@ -1444,8 +1445,36 @@ class Renderer_F(BaseRenderer):
                                 player_positions = cfg.get(
                                     'player_glasses_positions', ())
                                 if player_positions:
-                                    self.draw_player_glasses(
-                                        proj, vw, player_positions)
+                                    # Portal scenes are rendered from the
+                                    # destination side. Map the player
+                                    # representations through the same portal
+                                    # transform as the virtual camera so a
+                                    # player can see themselves/other players
+                                    # through the portal.
+                                    aperture = int(getattr(
+                                        view_state, 'aperture_slot', -1))
+                                    clip = int(getattr(
+                                        view_state, 'clip_slot', -1))
+                                    if (aperture >= 0 and clip >= 0
+                                            and cfg.get('entity_table') is not None):
+                                        table = cfg['entity_table']
+                                        player_positions = tuple(
+                                            _portal_map_point(
+                                                table.pos[aperture],
+                                                self._portal_slot_basis(table, aperture),
+                                                table.pos[clip],
+                                                self._portal_slot_basis(table, clip),
+                                                (
+                                                    float(pos[0]),
+                                                    float(pos[1]),
+                                                    float(pos[2]),
+                                                ),
+                                            )
+                                            for pos in player_positions
+                                        )
+                                    if player_positions:
+                                        self.draw_player_glasses(
+                                            proj, vw, player_positions)
 
                             gl.glEnable(gl.GL_BLEND)
                             gl.glDepthMask(gl.GL_FALSE)
