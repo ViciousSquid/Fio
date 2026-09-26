@@ -498,6 +498,21 @@ def _effect_bool(props, key, default=True):
     return bool(value)
 
 
+_EFFECT_FIRE_TEXTURES = tuple(
+    f"assets/textures/effects/fire{i:02d}.gif" for i in range(1, 6)
+)
+_EFFECT_FIRE_TEXTURE_TO_INDEX = {
+    path: index for index, path in enumerate(_EFFECT_FIRE_TEXTURES)
+}
+
+
+def _effect_fire_variant(props):
+    value = str(
+        props.get("fire_texture", _EFFECT_FIRE_TEXTURES[0])
+    ).replace("\\", "/")
+    return _EFFECT_FIRE_TEXTURE_TO_INDEX.get(value, 0)
+
+
 def _effect_colour(props, key, default):
     value = props.get(key, default)
     try:
@@ -534,7 +549,7 @@ class EntityTable:
                  'portal_direction', 'portal_width_height', 'portal_basis',
                  'portal_fade', 'portal_color', 'portal_show_rim',
                  'monster_slots', 'pickup_slots', 'effect_slots',
-                 'effect_type', 'effect_params', 'effect_color',
+                 'effect_type', 'effect_fire_variant', 'effect_params', 'effect_color',
                  'effect_light_color', 'effect_lifetime', 'effect_seed',
                  'effect_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
                  'sprite_size', 'sprite_key_id',
@@ -591,6 +606,7 @@ class EntityTable:
         #: are runtime columns and the renderer never touches Effect objects.
         self.effect_slots = np.empty(0, dtype=np.int32)
         self.effect_type = np.zeros((0,), dtype=np.uint8)
+        self.effect_fire_variant = np.zeros((0,), dtype=np.uint8)
         self.effect_params = np.zeros((0, 4), dtype=np.float32)
         self.effect_color = np.ones((0, 3), dtype=np.float32)
         self.effect_light_color = np.ones((0, 3), dtype=np.float32)
@@ -714,6 +730,11 @@ class EntityTable:
         if len(self.effect_type):
             effect_type[:len(self.effect_type)] = self.effect_type
         self.effect_type = effect_type
+
+        effect_fire_variant = np.zeros((grown,), dtype=np.uint8)
+        if len(self.effect_fire_variant):
+            effect_fire_variant[:len(self.effect_fire_variant)] = self.effect_fire_variant
+        self.effect_fire_variant = effect_fire_variant
 
         effect_params = np.zeros((grown, 4), dtype=np.float32)
         if len(self.effect_params):
@@ -1132,6 +1153,7 @@ class EntityTable:
             props = _props_of(thing)
             effect_type = str(props.get('effect_type', 'FIRE')).strip().upper()
             self.effect_type[slot] = 1 if effect_type == 'EXPLOSION' else 0
+            self.effect_fire_variant[slot] = _effect_fire_variant(props)
             size = max(0.01, _effect_float(props, 'size', 1.0))
             visual_intensity = max(0.0, _effect_float(props, 'intensity', 1.0))
             light_intensity = max(0.0, _effect_float(props, 'light_intensity', 2.5))
@@ -1167,6 +1189,7 @@ class EntityTable:
             self.light_casts_shadows[slot] = False
         else:
             self.effect_type[slot] = 0
+            self.effect_fire_variant[slot] = 0
             self.effect_params[slot].fill(0.0)
             self.effect_color[slot] = 1.0
             self.effect_light_color[slot] = 1.0
