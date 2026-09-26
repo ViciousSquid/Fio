@@ -185,22 +185,14 @@ def light_ubo_source(source):
 
     count = int(match.group(1))
     block = (
-        "struct Light {
-"
-        "    highp vec4 position;
-"
-        "    vec4 color;
-"
-        "    vec4 params;       // x=intensity, y=radius
-"
-        "    ivec4 indices;     // x=shadow index
-"
-        "};
-"
-        "layout(std140) uniform FioLightBlock {
-"
-        f"    Light lights[{count}];
-"
+        "struct Light {\n"
+        "    highp vec4 position;\n"
+        "    vec4 color;\n"
+        "    vec4 params;       // x=intensity, y=radius\n"
+        "    ivec4 indices;     // x=shadow index\n"
+        "};\n"
+        "layout(std140) uniform FioLightBlock {\n"
+        f"    Light lights[{count}];\n"
         "};"
     )
     result = _LIGHT_DECL_RE.sub(block, source, count=1)
