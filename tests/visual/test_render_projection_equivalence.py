@@ -414,7 +414,7 @@ def test_numeric_sprite_render_submits_instanced_quads(renderer, context):
 
 def test_numeric_sprite_submission_is_one_draw_per_texture(renderer, context):
     """Equal sprite texture ids collapse into one instanced draw run."""
-    from editor.things import Light, Pickup
+    from editor.things import Pickup
 
     brushes = [box_brush("floor", (0, -16, 0), (1024, 32, 1024))]
     things = [
@@ -422,10 +422,6 @@ def test_numeric_sprite_submission_is_one_draw_per_texture(renderer, context):
                    item_type="health")
         for i in range(20)
     ]
-    things.append(make_thing(Light, "l", (0, 300, 300),
-                             color=[255, 255, 255], intensity=2.0,
-                             radius=1400.0, state="on",
-                             casts_shadows=False))
 
     # Count only the sprite pass. A raw GL draw hook also sees brush/model
     # instancing, which is unrelated to this assertion.
