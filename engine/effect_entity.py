@@ -27,6 +27,7 @@ EFFECT_FIRE_TEXTURES = tuple(
 
 EFFECT_DEFAULTS = {
     "effect_type": EFFECT_FIRE,
+    "preview": False,
     "fire_texture": EFFECT_FIRE_TEXTURES[0],
     "size": 32.0,
     "intensity": 1.0,
