@@ -1589,7 +1589,7 @@
         },
         {
             "pos": [
-                -272.0,
+                -264.0,
                 252.0,
                 656.0
             ],
@@ -1601,7 +1601,7 @@
             "textures": {
                 "north": "default.png",
                 "south": "default.png",
-                "east": "default.png",
+                "east": "nodraw.jpg",
                 "west": "default.png",
                 "top": "default.png",
                 "down": "default.png"
@@ -1635,7 +1635,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "09a7d258-2856-4e9d-a2aa-3e89a9feacc1"
+            "id": "09a7d258-2856-4e9d-a2aa-3e89a9feacc1",
+            "hidden": false
         },
         {
             "pos": [
@@ -1703,10 +1704,15 @@
             "is_trigger": false,
             "water_reflectivity": 0.5,
             "water_plane": true,
-            "water_opacity": 0.71,
+            "water_opacity": 1.0,
             "water_wave_enabled": true,
             "water_wave_height": 0.07,
-            "id": "174e96c5-a1c6-4805-9a9a-d7a7e0042864"
+            "id": "174e96c5-a1c6-4805-9a9a-d7a7e0042864",
+            "colour": [
+                0.1607843137254902,
+                0.24705882352941178,
+                0.8
+            ]
         },
         {
             "pos": [
@@ -1964,7 +1970,7 @@
             "properties": {
                 "type": "playerstart",
                 "name": "PlayerStart_1",
-                "angle": 0.0,
+                "angle": 180.0,
                 "id": "86adcd90-887a-4dec-a869-0bcff0fd94cc",
                 "io_enabled": true
             },
