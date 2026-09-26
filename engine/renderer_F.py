@@ -1420,6 +1420,8 @@ class Renderer_F(BaseRenderer):
                                     table=portal_table)
 
                             if len(portal_effect_slots):
+                                gl.glEnable(gl.GL_BLEND)
+                                gl.glDepthMask(gl.GL_FALSE)
                                 self.draw_effects_instanced(
                                     proj, vw, cfg.get('entity_table'),
                                     portal_effect_slots,
