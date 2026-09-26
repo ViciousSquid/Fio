@@ -171,7 +171,6 @@ def _render(renderer, context, brushes, things, numeric, live_things=None,
     config = glh.render_config(all_brushes=brushes, all_things=things,
                                **overrides)
     brush_slots = config["all_brush_slots"]
-    brush_slots = None
     # The object path's first half. It runs every frame in production, before
     # the renderer sees anything, so it runs here for both paths -- what it
     # populates is a renderer-level cache, not a per-path one.
