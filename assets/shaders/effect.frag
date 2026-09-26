@@ -19,10 +19,10 @@ uniform float uFogDensity;
 uniform highp vec3 uFogCamPos;
 uniform vec3 uAmbient;
 
-// firesheet.png: 4 columns x 2 rows, eight animation frames.
-const float FIRE_SHEET_COLUMNS = 4.0;
-const float FIRE_SHEET_ROWS = 2.0;
-const float FIRE_FRAME_COUNT = 8.0;
+// firesheet.png: 5 columns x 4 rows, with one used cell on the final row.
+const float FIRE_SHEET_COLUMNS = 5.0;
+const float FIRE_SHEET_ROWS = 4.0;
+const float FIRE_FRAME_COUNT = 16.0;
 const float FIRE_FRAME_RATE = 12.0;
 
 float fogFactor(highp vec3 fragPos) {
