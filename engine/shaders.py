@@ -1379,7 +1379,10 @@ void main() {
     offset.xz += vec2(0.42, -0.25) * bend * height;
 
     FragPos = base + offset;
-    BladeAlpha = 1.0 - smoothstep(0.84, 1.0, abs(c.x));
+    // The generated quad has only edge vertices, so abs(c.x) is always 1.
+    // Fading from it therefore made every grass fragment alpha zero.
+    // The tapered geometry already supplies the blade silhouette.
+    BladeAlpha = 1.0;
     ColorVariation = iVariation;
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }
