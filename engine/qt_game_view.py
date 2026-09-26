@@ -1229,6 +1229,24 @@ class QtGameView(QOpenGLWidget):
                 getattr(render_state, _field, None)
                 if render_state is not None else None
             )
+
+        # The EntityTable is shared by the editor/logic paths, while RenderState
+        # is a shallow snapshot. A structural entity change can therefore become
+        # visible in the live table one frame before the snapshot's hidden mask
+        # is refreshed. Repair only this transient mismatch; the normal frame
+        # keeps consuming the published dense mask without another object walk.
+        _etable = self._render_config.get("entity_table")
+        _hidden = self._render_config.get("thing_hidden")
+        if (_etable is not None
+                and (_hidden is None or len(_hidden) < _etable.count)):
+            self._render_config["thing_hidden"] = _etable.begin_frame(
+                things_to_render,
+                getattr(self.editor.state, 'world_epoch', None),
+                effect_runtime=self.play_mode,
+            )
+            self._render_config["visible_thing_slots"] = np.arange(
+                _etable.count, dtype=np.int32)
+
         _splitscreen = (
             self.play_mode
             and getattr(self, 'splitscreen_mode', False)
