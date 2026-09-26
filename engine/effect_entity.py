@@ -113,6 +113,25 @@ class Effect(_ThingBase):
     def is_explosion(self) -> bool:
         return self.effect_type == EFFECT_EXPLOSION
 
+    def set_effect_type(self, value: object) -> bool:
+        """Set the authored Effect TYPE and reset its transient behaviour.
+        
+        Returns True only when the type actually changes. The accepted names
+        come from EFFECT_TYPES, so adding a new type extends SetType without
+        changing the input handler.
+        """
+        effect_type = str(value or "").strip().upper()
+        if effect_type not in EFFECT_TYPES:
+            return False
+        if effect_type == self.effect_type:
+            return False
+
+        self.properties["effect_type"] = effect_type
+        self.properties["preview"] = False
+        self._effect_spawn_time = 0.0
+        self._effect_active = effect_type == EFFECT_FIRE
+        return True
+
     def reset_runtime(self) -> None:
         """Reset transient runtime state without changing authored data."""
         self._effect_spawn_time = 0.0
