@@ -1105,7 +1105,12 @@ class Terrain:
     def _draw_grass(self, visible_chunks, projection, view, camera_pos, env_uniforms):
         if not self.grass_enabled or not self.grass_shader_program:
             return
-        self.grass_time = (self.grass_time + 1.0 / 60.0) % 100000.0
+        # A monotonic frame clock keeps wind speed independent of actual FPS.
+        import time
+        now = time.perf_counter()
+        last = getattr(self, '_grass_last_time', now)
+        self.grass_time = (self.grass_time + max(0.0, min(now - last, 0.1))) % 100000.0
+        self._grass_last_time = now
         gl.glUseProgram(self.grass_shader_program)
         u = self.grass_uniforms
         gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
