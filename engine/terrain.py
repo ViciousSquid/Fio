@@ -383,6 +383,10 @@ class TerrainChunk:
     is_uploaded: bool = False
     needs_lod_update: bool = False
     height_cache: Optional[HeightCache] = None
+    grass_vao: int = 0
+    grass_vbo: int = 0
+    grass_instance_count: int = 0
+    grass_dirty: bool = True
 
 # ============================================================================
 # MAIN TERRAIN CLASS
@@ -429,6 +433,18 @@ class Terrain:
         self.culled_chunks: int = 0
         self.shader_program: int = 0
         self.uniforms: Dict[str, int] = {}
+        # Grass is a separate, instanced GL 3.3 pass. CPU owns only one compact
+        # position/size/phase record per tuft; the GPU expands it into two
+        # crossed blades and animates the tops in the vertex shader.
+        self.grass_enabled: bool = False
+        self.grass_density: float = 0.02
+        self.grass_color: Tuple[float, float, float] = tuple(self.biome.color_gradient[0][1])
+        self.grass_color_custom: bool = False
+        self.grass_shader_program: int = 0
+        self.grass_uniforms: Dict[str, int] = {}
+        self.grass_time = 0.0
+        self.GRASS_MAX_PER_CHUNK = 4096
+        self.GRASS_MAX_DISTANCE = 3072.0
         self.enabled: bool = True
         self.wireframe: bool = False
         self.solid: bool = True
@@ -502,6 +518,8 @@ class Terrain:
             gl.glUniformBlockBinding(
                 self.shader_program, block_index, shaders.LIGHT_UBO_BINDING)
 
+        self._init_grass_shader()
+
         self.uniforms = {
             'projection':        gl.glGetUniformLocation(self.shader_program, 'projection'),
             'view':              gl.glGetUniformLocation(self.shader_program, 'view'),
@@ -519,6 +537,40 @@ class Terrain:
         for i in range(shaders.MAX_SHADOW_LIGHTS):
             self.uniforms[f'shadowMaps[{i}]'] = gl.glGetUniformLocation(self.shader_program, f'shadowMaps[{i}]')
     
+    def _init_grass_shader(self):
+        try:
+            vertex_code = shaders.DEFAULT_SHADERS['grass.vert']
+            fragment_code = shaders.DEFAULT_SHADERS['grass.frag']
+            vertex_shader = compileShader(vertex_code, gl.GL_VERTEX_SHADER)
+            fragment_shader = compileShader(fragment_code, gl.GL_FRAGMENT_SHADER)
+            self.grass_shader_program = compileProgram(
+                vertex_shader, fragment_shader, validate=False)
+        except Exception as e:
+            msg = str(e)
+            if ("glCreateShader" in msg or "undefined alternate function" in msg
+                    or "context" in msg.lower()):
+                self.grass_shader_program = 0
+                return
+            print(f"ERROR: Exception during grass shader compilation: {e}")
+            self.grass_shader_program = 0
+            return
+
+        self.grass_uniforms = {
+            'projection': gl.glGetUniformLocation(self.grass_shader_program, 'projection'),
+            'view': gl.glGetUniformLocation(self.grass_shader_program, 'view'),
+            'time': gl.glGetUniformLocation(self.grass_shader_program, 'time'),
+            'grassColor': gl.glGetUniformLocation(self.grass_shader_program, 'grassColor'),
+            'cameraPos': gl.glGetUniformLocation(self.grass_shader_program, 'cameraPos'),
+            'windStrength': gl.glGetUniformLocation(self.grass_shader_program, 'windStrength'),
+            'uFogEnabled': gl.glGetUniformLocation(self.grass_shader_program, 'uFogEnabled'),
+            'uFogColor': gl.glGetUniformLocation(self.grass_shader_program, 'uFogColor'),
+            'uFogStart': gl.glGetUniformLocation(self.grass_shader_program, 'uFogStart'),
+            'uFogEnd': gl.glGetUniformLocation(self.grass_shader_program, 'uFogEnd'),
+            'uFogDensity': gl.glGetUniformLocation(self.grass_shader_program, 'uFogDensity'),
+            'uFogCamPos': gl.glGetUniformLocation(self.grass_shader_program, 'uFogCamPos'),
+            'uAmbient': gl.glGetUniformLocation(self.grass_shader_program, 'uAmbient'),
+        }
+
     def load_terrain_textures(self, tex_manager):
         self.grass_tex = tex_manager.get('assets/textures/terrain/grass.jpg')
         self.rock_tex = tex_manager.get('assets/textures/terrain/rock.jpg')
@@ -600,7 +652,23 @@ class Terrain:
     def set_biome(self, biome_name: str):
         if biome_name in BIOMES:
             self.biome = BIOMES[biome_name]
-            self.mark_all_dirty()
+            if not self.grass_color_custom:
+                self.grass_color = tuple(self.biome.color_gradient[0][1])
+            for chunk in self.chunks.values():
+                chunk.is_dirty = True
+                chunk.grass_dirty = True
+
+    def set_grass(self, enabled: bool, density: Optional[float] = None,
+                  color: Optional[Tuple[float, float, float]] = None):
+        """Configure cheap terrain grass; geometry is rebuilt lazily on the GL thread."""
+        self.grass_enabled = bool(enabled)
+        if density is not None:
+            self.grass_density = float(np.clip(density, 0.0, 0.06))
+        if color is not None:
+            self.grass_color = tuple(float(np.clip(c, 0.0, 1.0)) for c in color)
+            self.grass_color_custom = True
+        for chunk in self.chunks.values():
+            chunk.grass_dirty = True
     
     def set_seed(self, seed: int):
         self.seed = seed
@@ -761,6 +829,10 @@ class Terrain:
                 gl.glDeleteVertexArrays(1, [chunk.vao])
             if chunk.vbo:
                 gl.glDeleteBuffers(1, [chunk.vbo])
+            if chunk.grass_vao:
+                gl.glDeleteVertexArrays(1, [chunk.grass_vao])
+            if chunk.grass_vbo:
+                gl.glDeleteBuffers(1, [chunk.grass_vbo])
             del self.chunks[key]
     
     def _ensure_chunk(self, cx: int, cz: int) -> TerrainChunk:
@@ -967,6 +1039,108 @@ class Terrain:
         chunk.is_uploaded = True
         chunk.lod_level = self.LOD_RESOLUTIONS.index(resolution) if resolution in self.LOD_RESOLUTIONS else 0
     
+    def _upload_grass_chunk(self, chunk: TerrainChunk):
+        """Generate deterministic grass instances for one chunk and upload them."""
+        if not self.grass_enabled:
+            chunk.grass_instance_count = 0
+            chunk.grass_dirty = False
+            return
+        if not self.grass_shader_program:
+            self._init_grass_shader()
+            if not self.grass_shader_program:
+                return
+
+        count = min(
+            self.GRASS_MAX_PER_CHUNK,
+            int(max(0.0, self.grass_density) * chunk.size * chunk.size)
+        )
+        if count <= 0:
+            chunk.grass_instance_count = 0
+            chunk.grass_dirty = False
+            return
+
+        seed = (
+            (int(self.seed) * 73856093)
+            ^ (int(chunk.chunk_x) * 19349663)
+            ^ (int(chunk.chunk_z) * 83492791)
+        ) & 0xFFFFFFFF
+        rng = np.random.default_rng(seed)
+        x = chunk.world_x + rng.random(count).astype(np.float32) * chunk.size
+        z = chunk.world_z + rng.random(count).astype(np.float32) * chunk.size
+        y = self._get_heights_batch(x, z).astype(np.float32)
+
+        # x,z position + height/width + a fixed phase. Keeping the phase in the
+        # instance buffer makes every tuft desynchronised without per-frame CPU work.
+        data = np.empty((count, 6), dtype=np.float32)
+        data[:, 0] = x
+        data[:, 1] = y
+        data[:, 2] = z
+        data[:, 3] = rng.uniform(0.65, 1.25, count).astype(np.float32)
+        data[:, 4] = rng.uniform(0.0, 6.2831853, count).astype(np.float32)
+        data[:, 5] = rng.uniform(0.82, 1.12, count).astype(np.float32)
+
+        if not chunk.grass_vao:
+            chunk.grass_vao = gl.glGenVertexArrays(1)
+            chunk.grass_vbo = gl.glGenBuffers(1)
+        gl.glBindVertexArray(chunk.grass_vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, chunk.grass_vbo)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, data.nbytes, data, gl.GL_STATIC_DRAW)
+        stride = 6 * 4
+        gl.glVertexAttribPointer(2, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(0))
+        gl.glEnableVertexAttribArray(2)
+        gl.glVertexAttribDivisor(2, 1)
+        gl.glVertexAttribPointer(3, 1, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(12))
+        gl.glEnableVertexAttribArray(3)
+        gl.glVertexAttribDivisor(3, 1)
+        gl.glVertexAttribPointer(4, 1, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(16))
+        gl.glEnableVertexAttribArray(4)
+        gl.glVertexAttribDivisor(4, 1)
+        gl.glVertexAttribPointer(5, 1, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(20))
+        gl.glEnableVertexAttribArray(5)
+        gl.glVertexAttribDivisor(5, 1)
+        gl.glBindVertexArray(0)
+        chunk.grass_instance_count = count
+        chunk.grass_dirty = False
+
+    def _draw_grass(self, visible_chunks, projection, view, camera_pos, env_uniforms):
+        if not self.grass_enabled or not self.grass_shader_program:
+            return
+        self.grass_time = (self.grass_time + 1.0 / 60.0) % 100000.0
+        gl.glUseProgram(self.grass_shader_program)
+        u = self.grass_uniforms
+        gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glUniform1f(u['time'], self.grass_time)
+        gl.glUniform3f(u['grassColor'], *self.grass_color)
+        gl.glUniform3f(u['cameraPos'], float(camera_pos.x), float(camera_pos.y), float(camera_pos.z))
+        gl.glUniform1f(u['windStrength'], 0.65)
+
+        if env_uniforms:
+            for name, value in env_uniforms.items():
+                loc = u.get(name, -1)
+                if loc == -1:
+                    continue
+                if isinstance(value, int):
+                    gl.glUniform1i(loc, value)
+                elif isinstance(value, float):
+                    gl.glUniform1f(loc, value)
+                else:
+                    gl.glUniform3f(loc, *value)
+
+        # Alpha-test rather than blended transparency: one cheap pass, stable
+        # depth, and no sorting. The fragment shader provides the blade silhouette.
+        gl.glDisable(gl.GL_CULL_FACE)
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        for chunk in visible_chunks:
+            if chunk.grass_instance_count <= 0 or not chunk.grass_vao:
+                continue
+            dist_sq = self._chunk_nearest_dist_sq(chunk, camera_pos)
+            if dist_sq > self.GRASS_MAX_DISTANCE * self.GRASS_MAX_DISTANCE:
+                continue
+            gl.glBindVertexArray(chunk.grass_vao)
+            gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 12, chunk.grass_instance_count)
+        gl.glBindVertexArray(0)
+
     def _get_lod_resolution(self, dist_sq: float) -> int:
         for i, threshold in enumerate(self.LOD_DISTANCES_SQ):
             if dist_sq < threshold:
@@ -1193,6 +1367,30 @@ class Terrain:
         for i, (key, resolution, _) in enumerate(chunks_to_update[:self.MAX_UPDATES_PER_FRAME]):
             chunk = self.chunks[key]
             self._upload_chunk(chunk, resolution)
+
+        # Grass has its own dirty queue. It is rebuilt in the same bounded
+        # fashion as terrain meshes, so moving the density slider cannot spike
+        # the frame by rebuilding every resident chunk at once.
+        if self.grass_enabled:
+            grass_updates = [
+                chunk for chunk in self.chunks.values()
+                if chunk.grass_dirty
+            ]
+            for chunk in grass_updates[:self.MAX_UPDATES_PER_FRAME]:
+                self._upload_grass_chunk(chunk)
+        else:
+            for chunk in self.chunks.values():
+                if chunk.grass_instance_count:
+                    chunk.grass_instance_count = 0
+
+        if self.grass_enabled:
+            visible_grass = [
+                chunk for chunk in self.chunks.values()
+                if chunk.is_uploaded and chunk.grass_instance_count > 0
+                and self._is_chunk_visible(chunk, frustum_planes)
+            ]
+            self._draw_grass(
+                visible_grass, projection, view, camera_pos, env_uniforms)
     
     def get_2d_contours(self, axis1: str, axis2: str, view_bounds: Tuple[float, float, float, float], resolution: int = 32) -> List[Tuple[List[float], List[float], float]]:
         if not self.enabled: return []
@@ -1583,6 +1781,10 @@ class Terrain:
             'max_chunk_z': max_cz,
             'use_textures': self.use_textures,
             'flat_mode': self.flat_mode,
+            'grass_enabled': self.grass_enabled,
+            'grass_density': self.grass_density,
+            'grass_color': list(self.grass_color),
+            'grass_color_custom': self.grass_color_custom,
             'custom_biome': self.biome.to_dict()
         }
         # Sculpt offsets — serialise sparse dict as list of [gx, gz, offset]
@@ -1620,6 +1822,14 @@ class Terrain:
         self.max_chunk_z = data.get('max_chunk_z', 2)
         self.use_textures = data.get('use_textures', True)
         self.flat_mode = data.get('flat_mode', False)
+        self.grass_enabled = data.get('grass_enabled', False)
+        self.grass_density = float(np.clip(data.get('grass_density', 0.02), 0.0, 0.06))
+        saved_grass_color = data.get('grass_color')
+        if saved_grass_color is not None and len(saved_grass_color) >= 3:
+            self.grass_color = tuple(float(np.clip(c, 0.0, 1.0)) for c in saved_grass_color[:3])
+        else:
+            self.grass_color = tuple(self.biome.color_gradient[0][1])
+        self.grass_color_custom = bool(data.get('grass_color_custom', saved_grass_color is not None))
         if 'custom_biome' in data: self.biome = BiomeConfig.from_dict(data['custom_biome'])
         # Sculpt offsets
         self.sculpt_offsets = {}
