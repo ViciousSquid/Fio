@@ -942,6 +942,7 @@ class TerrainEditorPanel(QWidget):
     def load_from_terrain(self):
         """Load current terrain values into UI."""
         self._building_ui = True
+        self.textures_checkbox.setChecked(getattr(self.terrain, 'use_textures', True))
         
         # Find biome index
         biome_index = 0
