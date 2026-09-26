@@ -1242,9 +1242,9 @@ class EntityTable:
                 seed = 1.0
 
             effect_size = size * scale if effect_type == 'EXPLOSION' else size
-self.effect_params[slot] = (
+            self.effect_params[slot] = (
                 effect_size, visual_intensity, light_intensity, light_radius
-             )
+            )
             self.effect_color[slot] = _effect_colour(
                 props, 'colour', [255, 110, 25]
             )
