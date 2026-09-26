@@ -533,6 +533,7 @@ void main() {
     }
 
     // FIRE is a deterministic collection of virtual flame cards. They are
+    const vec3 worldUp = vec3(0.0, 1.0, 0.0);
     // ordinary instanced quads, but each card gets its own height, width,
     // starting height, lean and orientation. No CPU particle simulation exists.
     float card = iParticleIndex;
