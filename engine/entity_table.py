@@ -90,9 +90,9 @@ from .portal_transform import basis_from_rotation
 try:
     from editor.things import (Thing, PathNode, Portal, Pickup, Prop, Monster,
                                LogicGate, LogicRelay, LogicTimer, LevelChanger,
-                               Light, LogicSpawner, LogicCamera)
+                               Light, LogicSpawner, LogicCamera, Effect)
 except ImportError:                                   # pragma: no cover
-    Thing = PathNode = Portal = Pickup = Prop = Monster = None
+    Thing = PathNode = Portal = Pickup = Prop = Monster = Effect = None
     LogicGate = LogicRelay = LogicTimer = LevelChanger = Light = None
     LogicSpawner = LogicCamera = None
 
