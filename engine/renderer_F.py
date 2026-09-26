@@ -855,6 +855,9 @@ class Renderer_F(BaseRenderer):
                 config.get('play_mode', False),
                 config.get('show_sprites_in_play_mode', False),
             )
+            effect_slots = thing_slots[
+                (etable.class_bits[thing_slots] & entity_projection.ENT_EFFECT) != 0
+            ]
         else:
             model_slots = np.empty(0, dtype=np.int32)
             sprite_slots = np.empty(0, dtype=np.int32)
