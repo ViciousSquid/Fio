@@ -5,6 +5,8 @@ from editor.io_system import IOManager, get_input_names
 from editor.io_handlers import register_all_input_handlers
 from types import SimpleNamespace
 
+import numpy as np
+
 
 def test_effect_defaults_to_fire_with_intrinsic_light():
     effect = Effect()
@@ -47,6 +49,26 @@ def test_fire_texture_choice_is_projected_to_dense_variant():
     assert not hidden[0]
     assert table.effect_type[0] == 0
     assert table.effect_fire_variant.tolist() == [2]
+
+
+def test_fire_texture_variants_set_dominant_emitted_light_colour():
+    expected = np.asarray((
+        (0xE4, 0x92, 0x34),
+        (0xFF, 0x9A, 0x00),
+        (0xFC, 0x24, 0x00),
+        (0xFE, 0xAC, 0x1D),
+    ), dtype=np.float32) / 255.0
+
+    for variant, colour in enumerate(expected):
+        effect = Effect(properties={
+            "effect_type": EFFECT_FIRE,
+            "fire_texture": EFFECT_FIRE_TEXTURES[variant],
+        })
+        table = EntityTable()
+        table.begin_frame([effect], epoch=1, effect_runtime=False)
+
+        np.testing.assert_allclose(table.effect_light_color[0], colour)
+        np.testing.assert_allclose(table.light_color[0], colour)
 
 
 def test_effect_is_projected_as_one_dense_visual_and_light_primitive():
