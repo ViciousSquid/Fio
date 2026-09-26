@@ -568,6 +568,44 @@ def _effect_flicker(seed, elapsed):
     return a * (1.0 - smooth) + b * smooth
 
 
+def sprite_state(thing):
+    """Return the authored state that can change an entity's sprite recipe."""
+    props = thing if isinstance(thing, dict) else _props_of(thing)
+    if Monster is not None and isinstance(thing, Monster):
+        return (
+            'Monster',
+            bool(props.get('dead', False)),
+            bool(props.get('is_shooting', False)),
+            str(props.get('monster_type', 'human')),
+            str(props.get('variant', '<None>')),
+            str(props.get('custom_idle', '')),
+            str(props.get('custom_shoot', '')),
+            str(props.get('custom_dead', '')),
+        )
+    if LogicGate is not None and isinstance(thing, LogicGate):
+        return ('LogicGate', str(props.get('logic_type', 'and')).lower())
+    if Pickup is not None and isinstance(thing, Pickup):
+        return (
+            'Pickup',
+            str(props.get('item_type', 'health')),
+            str(props.get('weapon', 'gun1')),
+            str(props.get('key_name', 'blue_key')),
+            str(props.get('custom_sprite', '')),
+        )
+    if Prop is not None and isinstance(thing, Prop):
+        return (
+            'Prop',
+            str(props.get('render_mode', 'model')).lower(),
+            str(props.get('sprite_path', '')),
+        )
+    return None
+
+
+def _sprite_state_fingerprint(state):
+    """Pack a sprite-state tuple into the numeric projection's uint64 column."""
+    return np.uint64(hash(state) & ((1 << 64) - 1))
+
+
 class EntityTable:
     """A dense, disposable projection of a Thing list.
 
