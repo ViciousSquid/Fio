@@ -209,7 +209,7 @@ def test_property_edit_marks_the_dense_render_row_dirty(panel):
 
     table = RenderTable()
     table.begin_frame(host.state.brushes, epoch, dirty_objects=dirty)
-    assert table.glass_params[0].tolist() == [0.3, 0.5, 2.4, 0.0, 0.5]
+    assert table.glass_params[0].tolist() == pytest.approx([0.3, 0.5, 2.4, 0.0, 0.5], rel=1e-6)
 
 
 def test_toggling_a_behaviour_rebuilds_for_the_new_tabs(panel):
