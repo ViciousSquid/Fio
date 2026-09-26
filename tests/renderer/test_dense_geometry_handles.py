@@ -101,9 +101,9 @@ def test_shadow_preparation_returns_dense_convex_slots():
             self.packed = len(rows)
 
     probe = Probe()
-    count, geo_slots = BaseRenderer._prepare_shadow_instances(
-        probe, table, None, np.array([0, 1], dtype=np.int32), True)
+    cube_slots, geo_slots = BaseRenderer._prepare_shadow_instances(
+        probe, table, np.array([0, 1], dtype=np.int32), True)
 
-    assert count == 1
-    assert geo_slots == [1]
+    assert cube_slots.tolist() == [0]
+    assert geo_slots.tolist() == [1]
     assert probe.packed == 1
