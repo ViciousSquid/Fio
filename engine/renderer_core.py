@@ -2120,19 +2120,11 @@ layout (location = 9) in vec4 iNormal2;
             amp = min(amp, float(sizes[i, 1]) * 0.45, 30.0)
             gl.glUniform1f(wave_amp_loc, amp)
 
-            reflection_tex = (
-                self._water_reflection_texture(slot)
-                if bool(reflection_flags[i]) else 0
-            )
-            if reflection_tex:
-                gl.glBindTexture(gl.GL_TEXTURE_2D, reflection_tex)
-                gl.glUniformMatrix4fv(
-                    uniforms['reflectionMatrix'], 1, gl.GL_FALSE,
-                    glm.value_ptr(self._water_reflection_matrices[slot]))
-                gl.glUniform1i(reflection_enabled_loc, 1)
-            else:
-                gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
-                gl.glUniform1i(reflection_enabled_loc, 0)
+            # Water reflections are no longer an authored property. Keep the
+            # shader path explicitly disabled so older maps carrying the removed
+            # flag cannot re-enable the deleted reflection capture pass.
+            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+            gl.glUniform1i(reflection_enabled_loc, 0)
 
             mesh = (
                 geo_meshes.get(int(table.geometry_id[slot]))
