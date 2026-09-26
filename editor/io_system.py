@@ -1044,6 +1044,15 @@ def register_default_io():
         ]
     )
 
+    # === EFFECT ===
+    # One-shot EXPLOSION primitive. FIRE has no triggerable state.
+    register_io('effect',
+        inputs=[
+            IODef('Explode', 'Play the EXPLOSION animation once and emit its intrinsic light'),
+        ],
+        outputs=[]
+    )
+
     # === PORTAL ===
     # Prey 2006-style portal that links two named portal entities.
     register_io('portal',
