@@ -274,7 +274,7 @@ class BaseRenderer:
     SHADOW_MAP_SIZE = 384         # per-face resolution of each depth cube-map
     SHADOW_TEXTURE_UNIT_BASE = 4   # shadow cube-maps bind to units 4..(4+MAX_SHADOW_LIGHTS-1)
     WATER_REFLECTION_SIZE = 256
-        WATER_REFLECTION_TEXTURE_UNIT = 3
+    WATER_REFLECTION_TEXTURE_UNIT = 3
 
     #: Uniform names of the shared distance-fog / global-ambient block
     #: (engine.shaders.FOG_GLSL). Preloaded for every shader that splices it in,
