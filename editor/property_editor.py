@@ -2954,10 +2954,31 @@ class PropertyEditor(QWidget):
         form.addRow("Variant:", variant_combo)
 
     def _build_pickup_item_type_row(self, form, thing):
-        combo = _make_combo(['health', 'key', 'gun1', 'gun2', 'cig'],
-                            thing.properties.get('item_type', 'health'),
+        item_type = thing.properties.get('item_type', 'health')
+        # Older maps stored gun1/gun2/cig directly in item_type. Present those
+        # maps through the new explicit Weapon field without breaking them.
+        legacy_weapon = item_type if item_type in ('gun1', 'gun2', 'cig') else None
+        if legacy_weapon:
+            item_type = 'weapon'
+            thing.properties['item_type'] = 'weapon'
+            thing.properties.setdefault('weapon', legacy_weapon)
+
+        combo = _make_combo(['health', 'key', 'weapon', 'custom'],
+                            item_type,
                             self.on_pickup_item_type_changed)
         form.addRow("Item Type:", combo)
+
+        weapon_lbl = QLabel("Weapon:")
+        weapon_combo = _make_combo(
+            ['gun1', 'gun2', 'cig'],
+            thing.properties.get('weapon', legacy_weapon or 'gun1'),
+            self.on_pickup_weapon_changed,
+        )
+        form.addRow(weapon_lbl, weapon_combo)
+        self._pickup_weapon_widgets = [(weapon_lbl, weapon_combo)]
+        weapon_visible = item_type == 'weapon'
+        weapon_lbl.setVisible(weapon_visible)
+        weapon_combo.setVisible(weapon_visible)
 
         lbl = QLabel("Key Name:")
         key_combo = _make_combo(['blue_key', 'red_key', 'yellow_key', 'green_key'],
@@ -4272,13 +4293,31 @@ class PropertyEditor(QWidget):
             Pickup.clear_sprite_cache()
         self.editor.update_all_ui()
 
+    def on_pickup_weapon_changed(self, weapon):
+        if self.current_object is None:
+            return
+        self.update_object_prop('weapon', weapon)
+        if self.current_object.properties.get('item_type') == 'weapon':
+            sprite = f'assets/sprites/{weapon}.png'
+            self.update_object_prop('custom_sprite', sprite)
+            if hasattr(self, 'pickup_sprite_path'):
+                self.pickup_sprite_path.setText(sprite)
+        if hasattr(Pickup, 'clear_sprite_cache'):
+            Pickup.clear_sprite_cache()
+        self.editor.update_all_ui()
+
     def on_pickup_item_type_changed(self, item_type):
         if self.current_object is None:
             return
         self.update_object_prop('item_type', item_type)
         is_key = item_type == 'key'
         is_health = item_type == 'health'
-        is_gun = item_type in ('gun1', 'gun2', 'cig')
+        is_weapon = item_type == 'weapon'
+
+        if hasattr(self, '_pickup_weapon_widgets'):
+            for lbl, widget in self._pickup_weapon_widgets:
+                lbl.setVisible(is_weapon)
+                widget.setVisible(is_weapon)
 
         current_key = self.current_object.properties.get('key_name', 'red_key')
 
@@ -4309,8 +4348,9 @@ class PropertyEditor(QWidget):
             if hasattr(self, '_pickup_activation_widget'):
                 self._pickup_activation_widget.setCurrentText('walk_over')
                 self._pickup_activation_widget.setEnabled(False)
-        elif is_gun:
-            sprite = f'assets/sprites/{item_type}.png'
+        elif is_weapon:
+            weapon = self.current_object.properties.get('weapon', 'gun1')
+            sprite = f'assets/sprites/{weapon}.png'
             self.update_object_prop('custom_sprite', sprite)
             if hasattr(self, 'pickup_sprite_path'):
                 self.pickup_sprite_path.setText(sprite)
