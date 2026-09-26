@@ -3,8 +3,14 @@
 A killed monster must remain renderable so its dead sprite can be shown.
 """
 
+import pytest
+
+pytest.importorskip("PyQt5", reason="console commands are editor-tier")
+
 from editor.console_commands import ConsoleCommandHandler
 from editor.things import Monster
+
+pytestmark = pytest.mark.qt
 
 
 class _State:
