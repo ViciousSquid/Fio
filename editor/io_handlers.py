@@ -11,6 +11,7 @@ from .io_system import IOManager, authored_flag, set_authored_flag
 from . import state_values as _sv
 import glm
 import os
+import time
 
 # Import debug logger - with fallback to print if not available
 try:
@@ -155,6 +156,35 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('light', 'fadein', light_fade_in)
     io_manager.register_input_handler('light', 'fadeout', light_fade_out)
     
+    # ==========================================================================
+    # EFFECT INPUTS
+    # ==========================================================================
+
+    def effect_explode(entity, param, logic):
+        """Start an EXPLOSION Effect from frame zero."""
+        if not getattr(entity, 'is_explosion', False):
+            return
+
+        now = time.perf_counter()
+        entity.trigger_explosion(now)
+
+        table = getattr(logic, '_entity_table', None)
+        if table is None:
+            return
+        slot = table.slot_of_id.get(entity.properties.get('id'))
+        if slot is None:
+            return
+        slot = int(slot)
+        table.effect_spawn_time[slot] = now
+        table.effect_elapsed[slot] = 0.0
+        table.effect_active[slot] = True
+        table.effect_alive[slot] = True
+        table.light_enabled[slot] = bool(
+            entity.properties.get('light_enabled', True)
+        )
+
+    io_manager.register_input_handler('effect', 'explode', effect_explode)
+
     # ==========================================================================
     # DOOR INPUTS
     # ==========================================================================
