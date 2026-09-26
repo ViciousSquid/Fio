@@ -648,7 +648,7 @@ void main() {
 
     FragColor = vec4(applyFog(rgb, FragPos), alpha);
 }
-"""",
+""",
 
     'fog.vert': """#version 330 core
 precision highp float;
