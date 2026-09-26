@@ -664,6 +664,7 @@ class BaseRenderer:
         self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
         self._compile_instanced_depth_shader()
         self._compile_instanced_sprite_shader()
+        self._compile_instanced_effect_shader()
 
     #: Floats per brush-face instance: a mat4 model matrix, a mat3 normal
     #: matrix padded to three vec4 (with the face's UV rotation tucked into the
