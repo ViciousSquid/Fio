@@ -119,7 +119,8 @@ def _benchmark_scene(brushes, things, name, **config_overrides):
                 context.bind()
                 gl.glClearColor(0.05, 0.05, 0.08, 1.0)
                 renderer.render_scene(projection, view, eye, brushes, things,
-                                      None, config)
+                                      None, config,
+                                      brush_slots=config["all_brush_slots"])
                 gl.glFinish()
 
             # Cold: the very first frame, on its own.

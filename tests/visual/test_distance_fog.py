@@ -109,7 +109,8 @@ def render(renderer, context, brushes, things, view_distance,
                                **config_overrides)
     context.bind()
     gl.glClearColor(clear[0], clear[1], clear[2], 1.0)
-    renderer.render_scene(projection, view, eye, brushes, things, None, config)
+    renderer.render_scene(projection, view, eye, brushes, things, None, config,
+                          brush_slots=config["all_brush_slots"])
     gl.glFinish()
     return context.read_pixels()
 
@@ -183,7 +184,8 @@ def test_play_mode_with_dynamic_light_draws_cleanly(renderer, context):
     context.bind()
     gl.glClearColor(*FOG_RGB, 1.0)
     with glh.no_gl_errors("play-mode dynamic-light render"):
-        renderer.render_scene(projection, view, eye, brushes, things, None, config)
+        renderer.render_scene(projection, view, eye, brushes, things, None, config,
+                          brush_slots=config["all_brush_slots"])
         gl.glFinish()
 
 # ---------------------------------------------------------------------------

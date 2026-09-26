@@ -66,6 +66,7 @@ def test_monster_dead_snapshot_interns_distinct_dead_sprite_recipe():
     assert any(candidate[1] == "dead.png" for candidate in table.sprite_recipes()[dead_id])
 
 
+@pytest.mark.gl
 def test_sprite_gl_cache_resolves_recipes_added_after_capacity_growth():
     from engine.renderer_core import BaseRenderer
     import numpy as np

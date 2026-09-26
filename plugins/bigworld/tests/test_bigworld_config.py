@@ -20,6 +20,10 @@ other — so the copies cannot come back.
 import os
 import sys
 
+import pytest
+
+pytestmark = pytest.mark.qt
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from plugins.bigworld import config, persistence          # noqa: E402

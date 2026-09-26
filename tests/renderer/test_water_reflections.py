@@ -1,5 +1,7 @@
 """Water shader and reflection contracts."""
 
+import pytest
+
 from engine import shaders
 
 
@@ -35,6 +37,7 @@ def test_water_shader_supports_planar_reflections():
     assert 'reflectionMatrix * vec4(FragPos, 1.0)' in src
 
 
+@pytest.mark.gl
 def test_water_reflection_target_is_a_2d_texture():
     from engine.renderer_core import BaseRenderer
 

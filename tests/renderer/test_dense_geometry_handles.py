@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from engine.render_table import RenderTable, CLASS_HAS_GEOMETRY
 from tests.helpers.worlds import angled_brush, box_brush
@@ -49,6 +50,7 @@ def test_geometry_handle_moves_with_a_surviving_row():
     assert table.geometry_id[table.slot_of_id[c["id"]]] == 0
 
 
+@pytest.mark.gl
 def test_dense_geometry_mesh_preparation_uses_handles_not_refs():
     from engine.renderer_core import BaseRenderer
 
@@ -85,6 +87,7 @@ def test_dense_render_paths_have_no_convex_refs_slot_lookup():
     assert "refs[int(s)]" not in renderer_core
 
 
+@pytest.mark.gl
 def test_shadow_preparation_returns_dense_convex_slots():
     from engine.renderer_core import BaseRenderer
 
