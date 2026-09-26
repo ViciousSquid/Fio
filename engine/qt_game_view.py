@@ -206,7 +206,9 @@ class QtGameView(QOpenGLWidget):
         self.player2 = None
         self.splitscreen_mode = False
         # Player representation used by split-screen and portal views.
-        self.show_glasses = True
+        self.show_glasses = self.editor.config.getboolean(
+            'Display', 'show_glasses', fallback=True
+        )
 
         # PYGAME INIT (MUST happen before _init_sound_system)
         pygame.init()
