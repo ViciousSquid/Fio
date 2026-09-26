@@ -177,7 +177,7 @@ class MainWindow(QMainWindow):
         # Base 2D interaction tool (Hammer-style): 'select' drags a rubber-band
         # marquee, 'brush' drags out new box geometry.  Clip/rotate are separate
         # drag tools layered on top and take precedence while active.
-        self.tool_mode = 'select'
+        self.tool_mode = 'brush'
         # Shared component-selection model (object / face / edge / vertex).
         # Both the 2D views and the 3D viewport drive this one controller, so
         # "click geometry, drag geometry" means the same thing in either view.
