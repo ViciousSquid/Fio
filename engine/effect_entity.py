@@ -81,6 +81,7 @@ class Effect(_ThingBase):
         self.properties["effect_seed"] = int(seed) & 0xFFFFFFFF or 1
 
         self._effect_spawn_time = 0.0
+        self._effect_active = effect_type == EFFECT_FIRE
 
     def duplicate(self, existing_names=()):
         """Duplicate with a fresh UUID, seed and runtime lifetime origin."""
@@ -89,6 +90,7 @@ class Effect(_ThingBase):
             clone.properties.get("id", "effect")
         )
         clone._effect_spawn_time = 0.0
+        clone._effect_active = clone.effect_type == EFFECT_FIRE
         return clone
 
     @property
@@ -100,5 +102,14 @@ class Effect(_ThingBase):
         return self.effect_type == EFFECT_EXPLOSION
 
     def reset_runtime(self) -> None:
-        """Reset transient runtime timing without changing authored data."""
+        """Reset transient runtime state without changing authored data."""
         self._effect_spawn_time = 0.0
+        self._effect_active = self.effect_type == EFFECT_FIRE
+
+    def trigger_explosion(self, now: float) -> bool:
+        """Start one EXPLOSION playback from frame zero."""
+        if not self.is_explosion:
+            return False
+        self._effect_spawn_time = float(now)
+        self._effect_active = True
+        return True
