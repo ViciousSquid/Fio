@@ -1060,9 +1060,13 @@ class Terrain:
             self._pending_prune = False
 
         if self.streaming:
-            # Never allow streaming to evict terrain from the protected zone.
-            if self.stream_radius < self.NEAR_DETAIL_RADIUS:
-                self.stream_radius = self.NEAR_DETAIL_RADIUS
+            # Keep at least one complete chunk ring beyond the protected zone
+            # resident. This prevents a chunk from being created/evicted as its
+            # edge crosses the 4096-unit gameplay radius.
+            self.stream_radius = max(
+                self.stream_radius,
+                self.NEAR_DETAIL_RADIUS + self.chunk_size,
+            )
             self._stream_chunks(camera_pos)
         else:
             for cz in range(self.min_chunk_z, self.max_chunk_z + 1):
@@ -1144,13 +1148,27 @@ class Terrain:
             # Use nearest chunk-point distance so an edge cannot drop LOD
             # while it is still inside the protected radius.
             dist_sq = self._chunk_nearest_dist_sq(chunk, camera_pos)
-            if dist_sq <= self.NEAR_DETAIL_RADIUS_SQ:
-                target_resolution = self.LOD_RESOLUTIONS[0]
-            else:
-                target_resolution = self._get_lod_resolution(dist_sq)
+            # Pre-promote an entire one-chunk ring around the protected zone.
+            # That means a chunk is already at full resolution before its edge
+            # can enter the 4096-unit radius; there is no visible LOD upgrade
+            # as the player crosses the boundary.
+            prewarm_radius = self.NEAR_DETAIL_RADIUS + chunk.size
+            protected = dist_sq <= prewarm_radius * prewarm_radius
+            target_resolution = (
+                self.LOD_RESOLUTIONS[0]
+                if protected
+                else self._get_lod_resolution(dist_sq)
+            )
             current_resolution = self.LOD_RESOLUTIONS[chunk.lod_level] if chunk.is_uploaded else 0
             needs_update = chunk.is_dirty or not chunk.is_uploaded
             if not needs_update and current_resolution != target_resolution:
+                if protected:
+                    # The protected/prewarm zone is never allowed to spend the
+                    # hysteresis period rendering the old mesh.
+                    needs_update = True
+                    chunk.target_lod = target_resolution
+                    chunk.lod_stable_frames = 0
+                elif chunk.target_lod != target_resolution:
                 if chunk.target_lod != target_resolution:
                     chunk.target_lod = target_resolution
                     chunk.lod_stable_frames = 0
