@@ -1332,10 +1332,6 @@ void main() {
     'grass.vert': """#version 330 core
 precision highp float;
 
-// Two crossed, upright blade quads are expanded from each instance. The
-// instance buffer contains only base position, size, phase and colour variation.
-layout (location = 0) in vec2 aCorner;
-layout (location = 1) in float aAxis;
 layout (location = 2) in vec3 iPosition;
 layout (location = 3) in float iSize;
 layout (location = 4) in float iPhase;
@@ -1352,21 +1348,32 @@ uniform float windStrength;
 uniform vec3 cameraPos;
 
 void main() {
-    float y = aCorner.y;
+    int vertex = gl_VertexID;
+    int plane = vertex / 6;
+    int corner = vertex - plane * 6;
+
+    // Two crossed upright quads: six vertices per plane.
+    vec2 corners[6] = vec2[](
+        vec2(-1.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0),
+        vec2(-1.0, 0.0), vec2(1.0, 1.0), vec2(-1.0, 1.0)
+    );
+    vec2 c = corners[corner];
+
+    float y = c.y;
     float taper = mix(1.0, 0.10, y);
-    float width = aCorner.x * iSize * taper;
+    float width = c.x * iSize * 0.55 * taper;
     float height = iSize * (1.8 + 0.35 * iVariation);
 
-    float angle = aAxis;
+    float angle = (plane == 0 ? 0.0 : 1.5707963);
     float ca = cos(angle);
     float sa = sin(angle);
     vec2 side = vec2(ca, sa);
 
-    // The roots remain fixed. The top bends gently in a coherent field, but
-    // each tuft has a permanent phase offset so the animation never syncs.
+    // Fixed roots + spatially varying phase = cheap, desynchronised wind.
     float spatial = dot(iPosition.xz, vec2(0.031, 0.027));
     float wave = sin(time * 0.85 + spatial + iPhase);
-    float gust = sin(time * 0.47 + iPosition.x * 0.011 - iPosition.z * 0.009 + iPhase * 1.7);
+    float gust = sin(time * 0.47 + iPosition.x * 0.011 - iPosition.z * 0.009
+                     + iPhase * 1.7);
     float bend = (wave * 0.65 + gust * 0.35) * windStrength * y * y;
 
     vec3 base = iPosition;
@@ -1374,7 +1381,7 @@ void main() {
     offset.xz += vec2(0.42, -0.25) * bend * height;
 
     FragPos = base + offset;
-    BladeAlpha = 1.0 - smoothstep(0.86, 1.0, abs(aCorner.x));
+    BladeAlpha = 1.0 - smoothstep(0.84, 1.0, abs(c.x));
     ColorVariation = iVariation;
     gl_Position = projection * view * vec4(FragPos, 1.0);
 }
