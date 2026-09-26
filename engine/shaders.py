@@ -526,7 +526,7 @@ void main() {
         TexCoords = aPos + 0.5;
         FragPos = worldPos;
         EffectParams = iEffectParams;
-        EffectMeta = iEffectMeta;
+        EffectMeta = vec4(iEffectMeta.x, iEffectMeta.y, iParticleIndex, iEffectMeta.w);
         EffectColor = iEffectColor.rgb;
         gl_Position = projection * view * vec4(worldPos, 1.0);
         return;
@@ -578,7 +578,7 @@ void main() {
     TexCoords = aPos + 0.5;
     FragPos = worldPos;
     EffectParams = iEffectParams;
-    EffectMeta = iEffectMeta;
+    EffectMeta = vec4(iEffectMeta.x, iEffectMeta.y, iParticleIndex, iEffectMeta.w);
     EffectColor = iEffectColor.rgb;
     gl_Position = projection * view * vec4(worldPos, 1.0);
 }
