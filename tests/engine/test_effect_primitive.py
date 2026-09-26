@@ -162,7 +162,7 @@ def test_fire_texture_choice_is_projected_to_dense_variant():
 
     assert not hidden[0]
     assert table.effect_type[0] == 0
-    assert table.effect_fire_variant.tolist() == [2]
+    assert table.effect_fire_variant[:table.count].tolist() == [2]
 
 
 def test_fire_texture_variants_set_dominant_emitted_light_colour():
@@ -435,7 +435,7 @@ def test_effect_explode_io_plays_once_and_can_be_retriggered():
     table = EntityTable()
     table.begin_frame([explosion], epoch=1, effect_runtime=True)
 
-    assert get_input_names("effect") == ["Explode"]
+    assert get_input_names("effect") == ["SetType", "Explode"]
 
     io_manager = IOManager()
     register_all_input_handlers(io_manager)
