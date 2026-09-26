@@ -236,7 +236,12 @@ class TerrainEditorPanel(QWidget):
         content_layout.addLayout(controls_layout)
 
         # Tab widget
-        tabs = QTabWidget()
+        # Keep the tab widget as an explicit Python-owned reference as well as
+        # a child of the content layout. This prevents PyQt from dropping the
+        # wrapper during panel construction, which can otherwise destroy the
+        # native QComboBox children before load_from_terrain() runs.
+        self._terrain_tabs = QTabWidget()
+        tabs = self._terrain_tabs
         
         # === BIOME TAB ===
         biome_tab = QWidget()
