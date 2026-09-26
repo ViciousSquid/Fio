@@ -200,6 +200,7 @@ def _render(renderer, context, brushes, things):
         things,
         None,
         config,
+        brush_slots=config["all_brush_slots"],
     )
     gl.glFinish()
 
