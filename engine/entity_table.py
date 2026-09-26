@@ -1106,6 +1106,53 @@ class EntityTable:
         self.sprite_size[slot] = sprite_size(thing)
         self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(thing))
 
+        if self.class_bits[slot] & ENT_EFFECT:
+            props = _props_of(thing)
+            effect_type = str(props.get('effect_type', 'FIRE')).strip().upper()
+            self.effect_type[slot] = 1 if effect_type == 'EXPLOSION' else 0
+            size = max(0.01, _effect_float(props, 'size', 1.0))
+            visual_intensity = max(0.0, _effect_float(props, 'intensity', 1.0))
+            light_intensity = max(0.0, _effect_float(props, 'light_intensity', 2.5))
+            light_radius = max(0.01, _effect_float(props, 'light_radius', 5.0))
+            lifetime = max(0.01, _effect_float(props, 'lifetime', 0.5))
+            try:
+                seed = float(int(props.get('effect_seed', 1)) & 0xFFFFFFFF)
+            except (TypeError, ValueError):
+                seed = 1.0
+
+            self.effect_params[slot] = (
+                size, visual_intensity, light_intensity, light_radius
+            )
+            self.effect_color[slot] = _effect_colour(
+                props, 'colour', [255, 110, 25]
+            )
+            self.effect_light_color[slot] = _effect_colour(
+                props, 'light_colour', [255, 165, 70]
+            )
+            self.effect_lifetime[slot] = lifetime
+            self.effect_seed[slot] = seed
+            self.effect_spawn_time[slot] = 0.0
+            self.effect_elapsed[slot] = 0.0
+            self.effect_alive[slot] = True
+
+            self.sprite_size[slot] = (size * 3.25, size * 3.25)
+            self.light_color[slot] = self.effect_light_color[slot]
+            self.light_params[slot] = (light_intensity, light_radius)
+            self.light_enabled[slot] = _light_bool(
+                props.get('light_enabled', True), True
+            )
+            self.light_casts_shadows[slot] = False
+        else:
+            self.effect_type[slot] = 0
+            self.effect_params[slot].fill(0.0)
+            self.effect_color[slot] = 1.0
+            self.effect_light_color[slot] = 1.0
+            self.effect_lifetime[slot] = 0.5
+            self.effect_seed[slot] = 1.0
+            self.effect_spawn_time[slot] = 0.0
+            self.effect_elapsed[slot] = 0.0
+            self.effect_alive[slot] = False
+
         # Model rendering is part of the dense entity projection too. The
         # classifier already sends Model-mode entities here, so their cold
         # recipe and transform columns must be populated at the same cache
