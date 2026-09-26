@@ -52,7 +52,8 @@ def _render(renderer, context, brushes, things, **config_overrides):
                                **config_overrides)
     context.bind()
     gl.glClearColor(0.0, 0.0, 0.0, 1.0)
-    renderer.render_scene(projection, view, eye, brushes, things, None, config)
+    renderer.render_scene(projection, view, eye, brushes, things, None, config),
+                          brush_slots=config["all_brush_slots"]
     gl.glFinish()
     return context.read_pixels()
 
@@ -362,8 +363,8 @@ def test_resizing_the_target_between_frames_is_harmless(renderer, context):
     _render(renderer, context, brushes, things)
     gl.glViewport(0, 0, SIZE // 2, SIZE // 2)
     with glh.no_gl_errors("rendering after a viewport change"):
+        config = glh.render_config(all_brushes=brushes, all_things=things)
         renderer.render_scene(*glh.camera_matrices(aspect=1.0),
-                              brushes, things, None,
-                              glh.render_config(all_brushes=brushes,
-                                                all_things=things))
+                              brushes, things, None, config,
+                              brush_slots=config["all_brush_slots"])
     gl.glViewport(0, 0, SIZE, SIZE)
