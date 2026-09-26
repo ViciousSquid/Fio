@@ -1232,20 +1232,19 @@ class EntityTable:
             self.effect_preview[slot] = _effect_bool(
                 props, 'preview', False
             )
-            size = max(0.01, _effect_float(props, 'size', 1.0))
+            width = max(0.01, _effect_float(props, 'width', 32.0))
+            height = max(0.01, _effect_float(props, 'height', 24.0))
             visual_intensity = max(0.0, _effect_float(props, 'intensity', 1.0))
             light_intensity = max(0.0, _effect_float(props, 'light_intensity', 2.5))
             light_radius = max(0.01, _effect_float(props, 'light_radius', 128.0))
             lifetime = max(0.01, _effect_float(props, 'lifetime', 0.5))
-            scale = max(0.01, _effect_float(props, 'scale', 1.0))
             try:
                 seed = float((int(props.get('effect_seed', 1)) % 1000003) + 1)
             except (TypeError, ValueError):
                 seed = 1.0
 
-            effect_size = size * scale if effect_type == 'EXPLOSION' else size
             self.effect_params[slot] = (
-                effect_size, visual_intensity, light_intensity, light_radius
+                width, visual_intensity, light_intensity, light_radius
             )
             self.effect_color[slot] = _effect_colour(
                 props, 'colour', [255, 110, 25]
@@ -1268,7 +1267,7 @@ class EntityTable:
             self.effect_active[slot] = effect_type != 'EXPLOSION'
             self.effect_alive[slot] = effect_type != 'EXPLOSION'
 
-            self.sprite_size[slot] = (size * 3.25, size * 3.25)
+            self.sprite_size[slot] = (width, height)
             self.light_color[slot] = self.effect_light_color[slot]
             self.light_params[slot] = (light_intensity, light_radius)
             self.light_enabled[slot] = _effect_bool(
