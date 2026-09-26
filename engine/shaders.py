@@ -485,8 +485,8 @@ precision highp float;
 
 layout (location = 0) in vec2 aPos;
 layout (location = 1) in vec3 iEffectPos;
-layout (location = 2) in vec4 iEffectParams;  // size, intensity, elapsed, lifetime
-layout (location = 3) in vec4 iEffectMeta;    // seed, type, particle index, spare
+layout (location = 2) in vec4 iEffectParams;  // width, intensity, elapsed, lifetime
+layout (location = 3) in vec4 iEffectMeta;    // seed, type, height, spare
 layout (location = 4) in vec4 iEffectColor;
 layout (location = 5) in float iParticleIndex;
 
@@ -500,7 +500,8 @@ out vec4 EffectMeta;
 out vec3 EffectColor;
 
 void main() {
-    float size = max(iEffectParams.x, 0.01);
+    float width = max(iEffectParams.x, 0.01);
+    float height = max(iEffectMeta.z, 0.01);
     float elapsed = max(iEffectParams.z, 0.0);
     float lifetime = max(iEffectParams.w, 0.001);
     float t = clamp(elapsed / lifetime, 0.0, 1.0);
@@ -511,13 +512,13 @@ void main() {
     float vertical = aPos.y + 0.5;
 
     vec3 worldPos = iEffectPos
-                  + cameraRight * aPos.x * size * growth
-                  + worldUp * vertical * size * 1.25 * growth;
+                  + cameraRight * aPos.x * width * growth
+                  + worldUp * vertical * height * growth;
 
     TexCoords = aPos + 0.5;
     FragPos = worldPos;
     EffectParams = iEffectParams;
-    EffectMeta = vec4(iEffectMeta.x, iEffectMeta.y, iParticleIndex, iEffectMeta.w);
+    EffectMeta = iEffectMeta;
     EffectColor = iEffectColor.rgb;
     gl_Position = projection * view * vec4(worldPos, 1.0);
 }
