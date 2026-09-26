@@ -2209,7 +2209,7 @@ class PropertyEditor(QWidget):
         )
         form.addRow("Light:", light_check)
 
-        add_scaled_slider("Radius", "light_radius", 0.5, 20.0, 5.0, "{:.1f}")
+        add_scaled_slider("Radius", "light_radius", 16.0, 512.0, 128.0, "{:.1f}")
         add_scaled_slider(
             "Brightness", "light_intensity", 0.0, 8.0, 2.5, "{:.2f}"
         )
