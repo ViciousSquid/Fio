@@ -524,7 +524,11 @@ class EntityTable:
                  'portal_slots', 'portal_target_slot', 'portal_active',
                  'portal_direction', 'portal_width_height', 'portal_basis',
                  'portal_fade', 'portal_color', 'portal_show_rim',
-                 'monster_slots', 'pickup_slots', 'sprite_size', 'sprite_key_id',
+                 'monster_slots', 'pickup_slots', 'effect_slots',
+                 'effect_type', 'effect_params', 'effect_color',
+                 'effect_light_color', 'effect_lifetime', 'effect_seed',
+                 'effect_spawn_time', 'effect_elapsed', 'effect_alive',
+                 'sprite_size', 'sprite_key_id',
                  'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
                  '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
                  '_epoch', '_hidden_buf')
