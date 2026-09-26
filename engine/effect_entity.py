@@ -30,6 +30,7 @@ EFFECT_DEFAULTS = {
     "preview": False,
     "fire_texture": EFFECT_FIRE_TEXTURES[0],
     "size": 32.0,
+    "scale": 1.0,
     "intensity": 1.0,
     "colour": [255, 110, 25],
     "lifetime": 0.5,
