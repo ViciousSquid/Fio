@@ -20,6 +20,7 @@ def test_effect_defaults_to_fire_with_intrinsic_light():
     assert effect.properties["type"] == "effect"
     assert effect.properties["effect_type"] == EFFECT_FIRE
     assert effect.properties["preview"] is False
+    assert effect.properties["silent"] is False
     assert effect.properties["fire_texture"] == EFFECT_FIRE_TEXTURES[0]
     assert len(EFFECT_FIRE_TEXTURES) == 5
     assert effect.properties["width"] == 32.0
@@ -52,6 +53,65 @@ def test_orb_defaults_to_blue_square_animation():
         table.effect_light_color[0],
         np.asarray((0x4A, 0x9B, 0xFF), dtype=np.float32) / 255.0,
     )
+
+
+def test_explosion_trigger_queues_centered_sound():
+    effect = Effect(
+        pos=(10.0, 20.0, 30.0),
+        properties={
+            "effect_type": EFFECT_FIRE,
+            "silent": False,
+        },
+    )
+    table = EntityTable()
+    table.begin_frame([effect], epoch=1, effect_runtime=True)
+
+    queued = []
+    game_state = SimpleNamespace(queue_sound=lambda request: queued.append(dict(request)))
+    logic = SimpleNamespace(
+        _entity_table=table,
+        game_state=game_state,
+        io_manager=SimpleNamespace(fire_output=lambda *args, **kwargs: None),
+    )
+    io_manager = IOManager()
+    register_all_input_handlers(io_manager)
+    explode = io_manager._input_handlers[("effect", "explode")]
+
+    explode(effect, "", logic)
+
+    assert queued == [{
+        "action": "play",
+        "file": "assets/sounds/explode.mp3",
+        "volume": 1.0,
+        "position": [10.0, 20.0, 30.0],
+    }]
+
+
+def test_silent_explosion_does_not_queue_sound():
+    effect = Effect(
+        pos=(1.0, 2.0, 3.0),
+        properties={
+            "effect_type": EFFECT_FIRE,
+            "silent": True,
+        },
+    )
+    table = EntityTable()
+    table.begin_frame([effect], epoch=1, effect_runtime=True)
+
+    queued = []
+    game_state = SimpleNamespace(queue_sound=lambda request: queued.append(dict(request)))
+    logic = SimpleNamespace(
+        _entity_table=table,
+        game_state=game_state,
+        io_manager=SimpleNamespace(fire_output=lambda *args, **kwargs: None),
+    )
+    io_manager = IOManager()
+    register_all_input_handlers(io_manager)
+    explode = io_manager._input_handlers[("effect", "explode")]
+
+    explode(effect, "", logic)
+
+    assert queued == []
 
 
 def test_custom_effect_uses_selected_gif_path():
