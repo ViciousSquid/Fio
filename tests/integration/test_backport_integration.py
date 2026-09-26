@@ -50,6 +50,39 @@ def test_cull_output_feeds_only_sort_objects():
     assert len(main) == 1, "main camera pass must sort the culled collections"
 
 
+def test_split_screen_second_view_passes_dense_brush_slots():
+    """The P2 split-screen camera must use the shared dense brush projection."""
+    src = _read("engine/qt_game_view.py")
+    tree = ast.parse(src)
+
+    render_calls = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "render_scene":
+            render_calls.append(node)
+
+    split_calls = [
+        node for node in render_calls
+        if any(isinstance(arg, ast.Name) and arg.id == "_p2_view" for arg in node.args)
+    ]
+    assert len(split_calls) == 1, "expected exactly one split-screen P2 render_scene call"
+
+    call = split_calls[0]
+    brush_slots = {
+        kw.arg: kw.value
+        for kw in call.keywords
+        if kw.arg == "brush_slots"
+    }
+    value = brush_slots.get("brush_slots")
+    assert isinstance(value, ast.Name)
+    assert value.id == "_p2_brush_slots"
+
+    # The P2 slot source must be the complete world projection, not P1's
+    # camera-visible subset.
+    src_body = ast.get_source_segment(src, call)
+    assert 'self._render_config.get("all_brush_slots")' in src
+    assert "_p2_brush_slots" in src_body
+
+
 def test_shadow_and_portal_passes_use_dense_unculled_collections():
     """Shadow maps use the full dense caster projections, not camera-cull output."""
     body = _render_scene_source()
