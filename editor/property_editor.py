@@ -2179,6 +2179,16 @@ class PropertyEditor(QWidget):
         preview_check.setChecked(bool(props.get('preview', False)))
         form.addRow("Preview:", preview_check)
 
+        silent_check = QCheckBox("Silent")
+        silent_check.setToolTip(
+            "Do not play the explosion sound when this Effect is triggered."
+        )
+        silent_check.setChecked(bool(props.get("silent", False)))
+        silent_check.toggled.connect(
+            lambda value: self.update_object_prop("silent", bool(value))
+        )
+        form.addRow("Audio:", silent_check)
+
         fire_combo = QComboBox()
         fire_textures = [
             (f"Fire {index:02d}", f"assets/textures/effects/fire{index:02d}.gif")
