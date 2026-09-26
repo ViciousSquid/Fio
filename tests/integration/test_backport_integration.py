@@ -12,6 +12,8 @@ import pathlib
 import re
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -110,6 +112,7 @@ def test_cull_does_not_mutate_its_input_lists():
     assert len(out) == 1
 
 
+@pytest.mark.gl
 def test_camera_cull_exempts_lights_and_portals_and_tracks_positions():
     """The dense entity cull keeps lights/portals while dropping distant actors."""
     import numpy as np
@@ -129,6 +132,7 @@ def test_camera_cull_exempts_lights_and_portals_and_tracks_positions():
     assert not hidden[0]
 
 
+@pytest.mark.gl
 def test_the_slot_cull_exempts_the_same_lights_and_portals():
     """The numeric path states the exemption as a mask; same answer required.
 
