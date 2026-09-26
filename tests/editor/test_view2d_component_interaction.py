@@ -661,6 +661,13 @@ def test_subtract_can_fold_into_a_caller_s_undo_step(editor):
     host.state.brushes.extend([target, cutter])
     host.set_selected_object(cutter)
 
+    host.save_state()                                # the caller's checkpoint
+    before = undo_depth(host)
+    host.perform_subtraction(push_undo=False)
+
+    assert undo_depth(host) == before                # no second checkpoint
+
+
 def test_hollow_preserves_geometry_inside_outer_box(editor, monkeypatch):
     """Hollow converts only the selected outer box into a shell."""
     host, _ = editor
@@ -681,7 +688,7 @@ def test_hollow_preserves_geometry_inside_outer_box(editor, monkeypatch):
     # Hollow is one undoable operation.
     assert undo_depth(host) == before + 1
 
-    # The enclosed authored brush survives byte-for-byte as a scene object.
+    # The enclosed authored brush survives unchanged as a scene object.
     assert enclosed in host.state.brushes
     assert enclosed["name"] == "ManySidedShape"
     assert enclosed["size"] == [64, 96, 80]
@@ -693,13 +700,6 @@ def test_hollow_preserves_geometry_inside_outer_box(editor, monkeypatch):
     assert all(b.get("operation") == "add" for b in walls)
     assert all(b.get("name", "").startswith("Outer_") for b in walls)
     assert len(host.state.selected_objects) == 6
-
-
-    host.save_state()                                # the caller's checkpoint
-    before = undo_depth(host)
-    host.perform_subtraction(push_undo=False)
-
-    assert undo_depth(host) == before                # no second checkpoint
 
 
 # ---------------------------------------------------------------------------
