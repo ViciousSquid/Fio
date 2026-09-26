@@ -942,6 +942,22 @@ class EntityTable:
                     active = self.effect_active[effect_ls]
 
                 self.effect_elapsed[effect_ls] = elapsed
+
+                # FIRE light flicker is derived from the same deterministic
+                # seed/clock family as the procedural flame.  The base authored
+                # intensity remains in effect_params[:, 2]; this only modulates
+                # the live light column so authored properties stay unchanged.
+                if np.any(fire):
+                    fire_slots = effect_ls[fire]
+                    flicker = _effect_flicker(
+                        self.effect_seed[fire_slots],
+                        elapsed[fire],
+                    )
+                    base_light = self.effect_params[fire_slots, 2]
+                    self.light_params[fire_slots, 0] = (
+                        base_light * (0.78 + 0.38 * flicker)
+                    )
+
                 alive = fire | (explosion & active)
                 self.effect_alive[effect_ls] = alive
 
