@@ -536,7 +536,7 @@ class EntityTable:
                  'monster_slots', 'pickup_slots', 'effect_slots',
                  'effect_type', 'effect_params', 'effect_color',
                  'effect_light_color', 'effect_lifetime', 'effect_seed',
-                 'effect_spawn_time', 'effect_elapsed', 'effect_alive',
+                 'effect_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
                  'sprite_size', 'sprite_key_id',
                  'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
                  '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
@@ -598,6 +598,7 @@ class EntityTable:
         self.effect_seed = np.ones((0,), dtype=np.float32)
         self.effect_spawn_time = np.zeros((0,), dtype=np.float64)
         self.effect_elapsed = np.zeros((0,), dtype=np.float32)
+        self.effect_active = np.zeros((0,), dtype=bool)
         self.effect_alive = np.zeros((0,), dtype=bool)
 
         #: The billboard's world size. Cold: it comes from authored properties.
@@ -748,6 +749,11 @@ class EntityTable:
         if len(self.effect_elapsed):
             effect_elapsed[:len(self.effect_elapsed)] = self.effect_elapsed
         self.effect_elapsed = effect_elapsed
+
+        effect_active = np.zeros((grown,), dtype=bool)
+        if len(self.effect_active):
+            effect_active[:len(self.effect_active)] = self.effect_active
+        self.effect_active = effect_active
 
         effect_alive = np.zeros((grown,), dtype=bool)
         if len(self.effect_alive):
@@ -903,49 +909,41 @@ class EntityTable:
 
             if len(effect_ls):
                 now = float(time.perf_counter())
-                unset = self.effect_spawn_time[effect_ls] <= 0.0
-                if effect_runtime and np.any(unset):
-                    self.effect_spawn_time[effect_ls[unset]] = now
-
                 explosion = self.effect_type[effect_ls] == 1
+                fire = ~explosion
+
+                # FIRE is continuously active. EXPLOSION is dormant until the
+                # I/O handler starts it, then consumes its lifetime exactly once.
+                if np.any(fire):
+                    fire_slots = effect_ls[fire]
+                    unset_fire = self.effect_spawn_time[fire_slots] <= 0.0
+                    if np.any(unset_fire):
+                        self.effect_spawn_time[fire_slots[unset_fire]] = now
+                    self.effect_active[fire_slots] = True
+
+                active = self.effect_active[effect_ls]
+                explosion_active = explosion & active
                 if effect_runtime:
                     elapsed = np.maximum(
                         now - self.effect_spawn_time[effect_ls], 0.0
                     ).astype(np.float32, copy=False)
                 else:
-                    # FIRE animates in the editor; EXPLOSION previews at t=0
-                    # instead of consuming its lifetime before Play.
+                    # FIRE animates in the editor; EXPLOSION remains dormant
+                    # until an Explode input is fired.
                     elapsed = np.where(
-                        explosion, 0.0, max(now, 0.0)
+                        fire, max(now, 0.0), 0.0
                     ).astype(np.float32, copy=False)
 
-                self.effect_elapsed[effect_ls] = elapsed
                 lifetime = np.maximum(self.effect_lifetime[effect_ls], 0.01)
-                t = np.clip(elapsed / lifetime, 0.0, 1.0)
-                alive = (~explosion) | (elapsed < lifetime)
-                if not effect_runtime:
-                    alive[:] = True
+                expired = explosion_active & (elapsed >= lifetime)
+                if np.any(expired):
+                    expired_slots = effect_ls[expired]
+                    self.effect_active[expired_slots] = False
+                    active = self.effect_active[effect_ls]
+
+                self.effect_elapsed[effect_ls] = elapsed
+                alive = fire | (explosion & active)
                 self.effect_alive[effect_ls] = alive
-
-                flicker = _effect_flicker(
-                    self.effect_seed[effect_ls], elapsed
-                ).astype(np.float32, copy=False)
-                base_intensity = self.effect_params[effect_ls, 2]
-                base_radius = self.effect_params[effect_ls, 3]
-                self.light_color[effect_ls] = self.effect_light_color[effect_ls]
-                self.light_enabled[effect_ls] = alive & (base_intensity > 0.0)
-
-                intensity = base_intensity * (0.80 + 0.20 * flicker)
-                radius = base_radius.copy()
-                if np.any(explosion):
-                    burst = np.exp(-t * t * 48.0)
-                    envelope = 1.0 - np.clip(
-                        (t - 0.40) / 0.60, 0.0, 1.0
-                    )
-                    intensity *= (1.0 + burst * 2.2) * envelope
-                    radius *= 1.0 + burst * 1.4 + t * 0.5
-                self.light_params[effect_ls, 0] = intensity
-                self.light_params[effect_ls, 1] = np.maximum(radius, 0.01)
 
         if len(self._hidden_buf) < n:
             self._hidden_buf = np.empty(max(n, 16), dtype=bool)
@@ -1021,7 +1019,8 @@ class EntityTable:
                         self.effect_params, self.effect_color,
                         self.effect_light_color, self.effect_lifetime,
                         self.effect_seed, self.effect_spawn_time,
-                        self.effect_elapsed, self.effect_alive,
+                        self.effect_elapsed, self.effect_active,
+                        self.effect_alive,
                         self.portal_target_slot,
                         self.portal_active, self.portal_direction,
                         self.portal_width_height, self.portal_basis,
@@ -1140,7 +1139,8 @@ class EntityTable:
             self.effect_seed[slot] = seed
             self.effect_spawn_time[slot] = 0.0
             self.effect_elapsed[slot] = 0.0
-            self.effect_alive[slot] = True
+            self.effect_active[slot] = effect_type != 'EXPLOSION'
+            self.effect_alive[slot] = effect_type != 'EXPLOSION'
 
             self.sprite_size[slot] = (size * 3.25, size * 3.25)
             self.light_color[slot] = self.effect_light_color[slot]
@@ -1158,6 +1158,7 @@ class EntityTable:
             self.effect_seed[slot] = 1.0
             self.effect_spawn_time[slot] = 0.0
             self.effect_elapsed[slot] = 0.0
+            self.effect_active[slot] = False
             self.effect_alive[slot] = False
 
         # Model rendering is part of the dense entity projection too. The
