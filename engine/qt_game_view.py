@@ -1278,11 +1278,16 @@ class QtGameView(QOpenGLWidget):
             _p2_view = render_state.player2_view_matrix
             _p2_cam_pos = render_state.player2_pos
 
+            # P2 has a different camera, so start from the complete live-hidden
+            # dense brush projection. render_scene performs the camera-specific
+            # narrowing from these slots; using P1's already-visible slots here
+            # would incorrectly hide geometry that only P2 can see.
+            _p2_brush_slots = self._render_config.get("all_brush_slots")
             self.renderer.render_scene(
                 _split_proj, _p2_view, _p2_cam_pos,
                 p2_brushes, things_to_render,
                 self.selected_object, self._render_config,
-                clear=False
+                clear=False, brush_slots=_p2_brush_slots
             )
 
             if render_state and hasattr(render_state, 'bullet_marks'):
