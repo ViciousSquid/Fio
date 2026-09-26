@@ -2166,7 +2166,7 @@ class PropertyEditor(QWidget):
         props = thing.properties
 
         type_combo = QComboBox()
-        type_combo.addItems(["FIRE", "ORB", "EXPLOSION"])
+        type_combo.addItems(["FIRE", "ORB", "EXPLOSION", "CUSTOM"])
         type_combo.setCurrentText(
             str(props.get('effect_type', 'FIRE')).upper()
         )
@@ -2219,16 +2219,56 @@ class PropertyEditor(QWidget):
         orb_label = QLabel("Orb:")
         form.addRow(orb_label, orb_combo)
 
+        custom_widget = QWidget()
+        custom_layout = QHBoxLayout(custom_widget)
+        custom_layout.setContentsMargins(0, 0, 0, 0)
+        custom_layout.setSpacing(4)
+        custom_edit = QLineEdit(str(props.get("custom_gif", "")))
+        custom_edit.setReadOnly(True)
+        custom_edit.setToolTip("Animated GIF used by the CUSTOM effect type.")
+        custom_button = QPushButton("Browse...")
+        custom_button.setToolTip("Choose a GIF for this CUSTOM effect.")
+
+        def pick_custom_gif():
+            start = os.path.join(
+                os.getcwd(), "assets", "textures", "effects"
+            )
+            os.makedirs(start, exist_ok=True)
+            fp, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Custom Effect GIF",
+                start,
+                "GIF Files (*.gif)",
+            )
+            if fp:
+                try:
+                    rel = os.path.relpath(fp, os.getcwd()).replace("\\", "/")
+                except Exception:
+                    rel = fp.replace("\\", "/")
+                if rel.startswith("./"):
+                    rel = rel[2:]
+                self.update_object_prop("custom_gif", rel)
+                custom_edit.setText(rel)
+
+        custom_button.clicked.connect(pick_custom_gif)
+        custom_layout.addWidget(custom_edit, 1)
+        custom_layout.addWidget(custom_button)
+        custom_label = QLabel("GIF:")
+        form.addRow(custom_label, custom_widget)
+
         def refresh_fire_texture():
             effect_type = str(
                 thing.properties.get("effect_type", "FIRE")
             ).upper()
             show_fire = effect_type == "FIRE"
             show_orb = effect_type == "ORB"
+            show_custom = effect_type == "CUSTOM"
             fire_label.setVisible(show_fire)
             fire_combo.setVisible(show_fire)
             orb_label.setVisible(show_orb)
             orb_combo.setVisible(show_orb)
+            custom_label.setVisible(show_custom)
+            custom_widget.setVisible(show_custom)
             preview_check.setEnabled(True)
 
         def fire_texture_changed(index):
