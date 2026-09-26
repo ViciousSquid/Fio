@@ -460,12 +460,12 @@ def test_mover_position_types_survive_a_json_round_trip():
 def test_water_shader_controls_match_dense_projection():
     src = _read("editor/property_editor.py")
     assert '"Enable Waves"' in src
-    assert '"Reflections"' in src
-    assert '_hbox(plane_cb, reflection_cb' in src
+    assert '"Reflections"' not in src
+    assert '_hbox(plane_cb, reflection_cb' not in src
     assert 'water_refraction' in src
     assert 'water_roughness' in src
     assert 'water_fresnel' in src
-    assert 'reflection_cb' in src
+    assert 'reflection_cb' not in src
     assert 'Cubemap height' not in src
     assert 'water_reflection_height' not in src
 
