@@ -578,6 +578,19 @@ class EntityTable:
         #: to consider, so that filter costs pickups rather than entities.
         self.pickup_slots = np.empty(0, dtype=np.int32)
 
+        #: Dense procedural Effect state. Authored data is cold; elapsed/alive
+        #: are runtime columns and the renderer never touches Effect objects.
+        self.effect_slots = np.empty(0, dtype=np.int32)
+        self.effect_type = np.zeros((0,), dtype=np.uint8)
+        self.effect_params = np.zeros((0, 4), dtype=np.float32)
+        self.effect_color = np.ones((0, 3), dtype=np.float32)
+        self.effect_light_color = np.ones((0, 3), dtype=np.float32)
+        self.effect_lifetime = np.full((0,), 0.5, dtype=np.float32)
+        self.effect_seed = np.ones((0,), dtype=np.float32)
+        self.effect_spawn_time = np.zeros((0,), dtype=np.float64)
+        self.effect_elapsed = np.zeros((0,), dtype=np.float32)
+        self.effect_alive = np.zeros((0,), dtype=bool)
+
         #: The billboard's world size. Cold: it comes from authored properties.
         self.sprite_size = np.zeros((0, 2), dtype=np.float32)
         #: Dense sprite recipe id per entity slot.  -1 means no sprite.
