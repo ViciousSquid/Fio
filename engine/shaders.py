@@ -480,7 +480,7 @@ void main() {
     FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a);
 }""",
 
-    'effect.vert': """"#version 330 core
+    'effect.vert': """#version 330 core
 precision highp float;
 
 layout (location = 0) in vec2 aPos;
@@ -530,8 +530,8 @@ void main() {
 
     gl_Position = projection * view * vec4(worldPos, 1.0);
 }
-"""",
-    'effect.frag': """"#version 330 core
+""",
+    'effect.frag': """#version 330 core
 precision mediump float;
 
 out vec4 FragColor;
