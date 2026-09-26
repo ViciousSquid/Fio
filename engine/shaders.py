@@ -1344,59 +1344,58 @@ uniform float time;
 uniform float windStrength;
 
 void main() {
-    // Three narrow blades make one tuft. Each blade is a tapered ribbon with
-    // a pointed, wind-bent tip rather than a large crossed billboard.
+    // One instance is a small crossed pair of ordinary grass blades.
+    // The CPU supplies only the tuft position and a few cheap random values;
+    // the GPU builds the 12 vertices for the two blades.
     int blade = gl_VertexID / 6;
     int vertex = gl_VertexID - blade * 6;
 
     float y;
     float sideAmount;
+
     if (vertex == 0) {
         y = 0.0; sideAmount = -1.0;
     } else if (vertex == 1) {
         y = 0.0; sideAmount = 1.0;
     } else if (vertex == 2) {
-        y = 0.58; sideAmount = 0.48;
+        y = 1.0; sideAmount = 1.0;
     } else if (vertex == 3) {
         y = 0.0; sideAmount = -1.0;
     } else if (vertex == 4) {
-        y = 0.58; sideAmount = 0.48;
+        y = 1.0; sideAmount = 1.0;
     } else {
-        y = 1.0; sideAmount = 0.0;
+        y = 1.0; sideAmount = -1.0;
     }
 
-    float bladePhase = iPhase + float(blade) * 2.0943951;
-    float angle = bladePhase + float(blade) * 0.55;
+    float angle = iPhase + float(blade) * 1.5707963;
     vec2 forward = vec2(cos(angle), sin(angle));
     vec2 side = vec2(-forward.y, forward.x);
 
-    // The previous crossed quads were deliberately broad; these dimensions
-    // keep the geometry in the proportions of a real grass blade.
-    float height = iSize * (1.35 + 0.45 * iVariation);
-    float width = iSize * (0.11 + 0.04 * iVariation);
+    // Tall, thin blades: this is intentionally simple geometry.
+    float height = iSize * (2.0 + 0.55 * iVariation);
+    float width = iSize * (0.16 + 0.04 * iVariation);
 
-    float rootSpread = (float(blade) - 1.0) * width * 0.9;
-    vec2 root = iPosition.xz + side * rootSpread;
+    // Slightly separate the crossed blades so their bases do not z-fight.
+    vec2 root = iPosition.xz + forward * (float(blade) - 0.5) * width * 0.25;
 
-    // Root stays planted while the upper blade bends in desynchronised waves.
+    // Cheap, spatially varying wind. The root stays planted.
     float spatial = dot(iPosition.xz, vec2(0.021, 0.017));
-    float wave = sin(time * 0.95 + spatial + bladePhase);
-    float gust = sin(time * 0.43 + iPosition.x * 0.009
-                     - iPosition.z * 0.011 + bladePhase * 1.37);
-    float bend = (wave * 0.68 + gust * 0.32) * windStrength;
+    float wave = sin(time * 1.1 + spatial + iPhase);
+    float gust = sin(time * 0.47 + iPosition.x * 0.009
+                     - iPosition.z * 0.011 + iPhase * 1.7);
+    float bend = (wave * 0.72 + gust * 0.28) * windStrength;
 
     float bendAmount = bend * height * y * y;
-    vec2 horizontal = side * (sideAmount * width * (1.0 - 0.30 * y));
+    vec2 horizontal = side * sideAmount * width;
     horizontal += forward * bendAmount;
 
-    // Lift the root slightly above the sampled terrain surface so the
-    // base cannot disappear into the depth buffer on a shared surface.
-    vec3 p = vec3(root + horizontal, iPosition.y + 0.025 + y * height);
+    vec3 p = vec3(root + horizontal, iPosition.y + 0.02 + y * height);
     FragPos = p;
     BladeHeight = y;
     ColorVariation = iVariation;
     gl_Position = projection * view * vec4(p, 1.0);
 }
+
 """,
 
     'grass.frag': """#version 330 core
