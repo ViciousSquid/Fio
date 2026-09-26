@@ -558,7 +558,7 @@ class EntityTable:
                  'portal_direction', 'portal_width_height', 'portal_basis',
                  'portal_fade', 'portal_color', 'portal_show_rim',
                  'monster_slots', 'pickup_slots', 'effect_slots',
-                 'effect_type', 'effect_fire_variant', 'effect_params', 'effect_color',
+                 'effect_type', 'effect_fire_variant', 'effect_preview', 'effect_params', 'effect_color',
                  'effect_light_color', 'effect_lifetime', 'effect_seed',
                  'effect_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
                  'sprite_size', 'sprite_key_id',
@@ -616,6 +616,7 @@ class EntityTable:
         self.effect_slots = np.empty(0, dtype=np.int32)
         self.effect_type = np.zeros((0,), dtype=np.uint8)
         self.effect_fire_variant = np.zeros((0,), dtype=np.uint8)
+        self.effect_preview = np.zeros((0,), dtype=bool)
         self.effect_params = np.zeros((0, 4), dtype=np.float32)
         self.effect_color = np.ones((0, 3), dtype=np.float32)
         self.effect_light_color = np.ones((0, 3), dtype=np.float32)
@@ -744,6 +745,11 @@ class EntityTable:
         if len(self.effect_fire_variant):
             effect_fire_variant[:len(self.effect_fire_variant)] = self.effect_fire_variant
         self.effect_fire_variant = effect_fire_variant
+
+        effect_preview = np.zeros((grown,), dtype=bool)
+        if len(self.effect_preview):
+            effect_preview[:len(self.effect_preview)] = self.effect_preview
+        self.effect_preview = effect_preview
 
         effect_params = np.zeros((grown, 4), dtype=np.float32)
         if len(self.effect_params):
@@ -965,6 +971,11 @@ class EntityTable:
                     ).astype(np.float32, copy=False)
 
                 lifetime = np.maximum(self.effect_lifetime[effect_ls], 0.01)
+                # Editor preview makes an otherwise dormant EXPLOSION visible
+                # at frame zero without arming its runtime state.
+                preview_explosion = (
+                    explosion & self.effect_preview[effect_ls] & ~bool(effect_runtime)
+                )
                 expired = explosion_active & (elapsed >= lifetime)
                 if np.any(expired):
                     expired_slots = effect_ls[expired]
@@ -988,7 +999,7 @@ class EntityTable:
                         base_light * (0.78 + 0.38 * flicker)
                     )
 
-                alive = fire | (explosion & active)
+                alive = fire | explosion_active | preview_explosion
                 self.effect_alive[effect_ls] = alive
 
         if len(self._hidden_buf) < n:
@@ -1163,6 +1174,9 @@ class EntityTable:
             effect_type = str(props.get('effect_type', 'FIRE')).strip().upper()
             self.effect_type[slot] = 1 if effect_type == 'EXPLOSION' else 0
             self.effect_fire_variant[slot] = _effect_fire_variant(props)
+            self.effect_preview[slot] = _effect_bool(
+                props, 'preview', False
+            )
             size = max(0.01, _effect_float(props, 'size', 1.0))
             visual_intensity = max(0.0, _effect_float(props, 'intensity', 1.0))
             light_intensity = max(0.0, _effect_float(props, 'light_intensity', 2.5))
@@ -1204,6 +1218,7 @@ class EntityTable:
         else:
             self.effect_type[slot] = 0
             self.effect_fire_variant[slot] = 0
+            self.effect_preview[slot] = False
             self.effect_params[slot].fill(0.0)
             self.effect_color[slot] = 1.0
             self.effect_light_color[slot] = 1.0
