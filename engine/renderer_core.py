@@ -507,6 +507,25 @@ class BaseRenderer:
         self.water_normal_id = self.load_texture('water_normal.png', 'textures')
         self.noise_texture_id = 0
 
+        # Fire animation atlas. The sheet is a 4x2 grid of RGBA frames.
+        # Keep it un-mipmapped and clamp to the sheet edge so linear filtering
+        # cannot bleed neighbouring frames through transparent borders.
+        self.effect_fire_texture = 0
+        fire_path = os.path.join('assets', 'textures', 'effects', 'firesheet.png')
+        if os.path.exists(fire_path):
+            self.effect_fire_texture = self.load_texture(
+                'firesheet.png', 'textures/effects')
+            if self.effect_fire_texture:
+                gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_fire_texture)
+                gl.glTexParameteri(
+                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+                gl.glTexParameteri(
+                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+                gl.glTexParameteri(
+                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+                gl.glTexParameteri(
+                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+
         # Create VAOs after shaders are ready
         if not self._shader_init_failed:
             self.vaos['cube'] = self._create_cube_vao()
@@ -838,7 +857,7 @@ layout (location = 10) in vec4 iPayload;
             'effect_instanced',
             vert,
             frag,
-            extra_uniforms=['projection', 'view'],
+            extra_uniforms=['projection', 'view', 'fire_texture'],
         ):
             print(f'{_BASE_RENDERER_PREFIX} Effect instancing shader compiled successfully.')
 
@@ -979,11 +998,25 @@ layout (location = 10) in vec4 iPayload;
         gl.glUniformMatrix4fv(
             uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view)
         )
+        if not self.effect_fire_texture:
+            gl.glBindVertexArray(0)
+            if cull_was:
+                gl.glEnable(gl.GL_CULL_FACE)
+            if not blend_was:
+                gl.glDisable(gl.GL_BLEND)
+            return 0
+
+        prev_active_texture = gl.glGetIntegerv(gl.GL_ACTIVE_TEXTURE)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_fire_texture)
+        gl.glUniform1i(uniforms['fire_texture'], 0)
+
         gl.glBindVertexArray(self._ensure_effect_instance_vao())
         gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, count)
         self.render_stats.draw_calls += 1
         self.render_stats.batched_draws += 1
         gl.glBindVertexArray(0)
+        gl.glActiveTexture(prev_active_texture)
         if cull_was:
             gl.glEnable(gl.GL_CULL_FACE)
         if not blend_was:
