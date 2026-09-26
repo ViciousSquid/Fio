@@ -435,8 +435,8 @@ class Terrain:
         self.shader_program: int = 0
         self.uniforms: Dict[str, int] = {}
         # Grass is a separate, instanced GL 3.3 pass. CPU owns only one compact
-        # position/size/phase record per tuft; the GPU expands it into two
-        # crossed blades and animates the tops in the vertex shader.
+        # position/size/phase record per tuft; the GPU expands it into three
+        # narrow tapered blades and animates their tops in the vertex shader.
         self.grass_enabled: bool = False
         self.grass_density: float = 0.02
         self.grass_color: Tuple[float, float, float] = tuple(self.biome.color_gradient[0][1])
@@ -1144,7 +1144,7 @@ class Terrain:
             if dist_sq > self.GRASS_MAX_DISTANCE * self.GRASS_MAX_DISTANCE:
                 continue
             gl.glBindVertexArray(chunk.grass_vao)
-            gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 12, chunk.grass_instance_count)
+            gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 18, chunk.grass_instance_count)
         gl.glBindVertexArray(0)
         # Grass blades are double-sided. Restore normal culling
         # state before the renderer continues with subsequent passes.
