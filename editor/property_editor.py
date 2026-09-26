@@ -2196,13 +2196,16 @@ class PropertyEditor(QWidget):
             0,
         )
         fire_combo.setCurrentIndex(fire_index)
-        form.addRow("Fire:", fire_combo)
+        fire_label = QLabel("Fire:")
+        form.addRow(fire_label, fire_combo)
 
         def refresh_fire_texture():
             explosion = str(
                 thing.properties.get("effect_type", "FIRE")
             ).upper() == "EXPLOSION"
-            fire_combo.setEnabled(not explosion)
+            show_fire = not explosion
+            fire_label.setVisible(show_fire)
+            fire_combo.setVisible(show_fire)
             preview_check.setEnabled(True)
 
         def fire_texture_changed(index):
