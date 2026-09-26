@@ -1383,6 +1383,30 @@ class LogicThread(threading.Thread):
             else:
                 thing.properties['awake'] = True
 
+    def _start_speakers_on_spawn(self):
+        """Turn on speakers authored with Start On when the player spawns.
+
+        This goes through the normal PlaySound input so speaker state,
+        active-speaker bookkeeping, and OnSoundStarted outputs stay consistent
+        with ordinary I/O-triggered playback.
+        """
+        if not self.io_manager or not Speaker:
+            return
+        for thing in self.things:
+            if not isinstance(thing, Speaker):
+                continue
+            if not bool(thing.properties.get('play_on_start', False)):
+                continue
+            target_name = thing.properties.get('name', '')
+            target_id = thing.properties.get('id', '')
+            self.io_manager._execute_input(
+                target_name,
+                'PlaySound',
+                '',
+                'PlayerSpawn',
+                target_id=target_id,
+            )
+
     def _fire_player_spawn_outputs(self):
         if not self.io_manager:
             return
@@ -1390,11 +1414,16 @@ class LogicThread(threading.Thread):
             return
         for thing in self.things:
             if isinstance(thing, PlayerStart):
+                # Start-on speakers initialise before the PlayerStart output
+                # chain, so an explicit OnPlayerSpawn connection can override
+                # the authored default state.
+                self._start_speakers_on_spawn()
                 self.io_manager.fire_output(thing, 'OnPlayerSpawn')
                 self._plugin_emit("player_spawn", start=thing)
                 break
-    
+
     @staticmethod
+    def _timer_key    @staticmethod
     def _timer_key(thing):
         """A timer's countdown is filed under its UUID, not its memory address.
 
