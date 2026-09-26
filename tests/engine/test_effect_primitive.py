@@ -1,6 +1,9 @@
 from editor.things import Effect, Thing
 from engine.effect_entity import EFFECT_EXPLOSION, EFFECT_FIRE
 from engine.entity_table import ENT_EFFECT, EntityTable
+from editor.io_system import IOManager, get_input_names
+from editor.io_handlers import register_all_input_handlers
+from types import SimpleNamespace
 
 
 def test_effect_defaults_to_fire_with_intrinsic_light():
@@ -45,6 +48,8 @@ def test_effect_is_projected_as_one_dense_visual_and_light_primitive():
     assert table.class_bits[0] & ENT_EFFECT
     assert table.effect_slots.tolist() == [0]
     assert table.light_slots.tolist() == [0]
+    assert not bool(table.effect_alive[0])
+    assert not bool(table.effect_active[0])
     assert table.effect_type[0] == 1
     assert float(table.effect_params[0, 3]) == 7.0
 
@@ -62,6 +67,8 @@ def test_explosion_expires_but_fire_does_not():
     explosion = Effect(properties={"effect_type": EFFECT_EXPLOSION, "lifetime": 0.5})
     table = EntityTable()
     table.begin_frame([explosion], epoch=1, effect_runtime=True)
+    assert not bool(table.effect_alive[0])
+    assert not bool(table.effect_active[0])
 
     table.effect_spawn_time[0] -= 1.0
     table.begin_frame([explosion], epoch=1, effect_runtime=True)
@@ -75,3 +82,41 @@ def test_explosion_expires_but_fire_does_not():
     table.begin_frame([fire], epoch=1, effect_runtime=True)
     assert bool(table.effect_alive[0])
     assert bool(table.light_enabled[0])
+
+
+def test_effect_explode_io_plays_once_and_can_be_retriggered():
+    explosion = Effect(
+        properties={
+            "id": "explosion-test",
+            "effect_type": EFFECT_EXPLOSION,
+            "lifetime": 0.5,
+        }
+    )
+    table = EntityTable()
+    table.begin_frame([explosion], epoch=1, effect_runtime=True)
+
+    assert get_input_names("effect") == ["Explode"]
+
+    io_manager = IOManager()
+    register_all_input_handlers(io_manager)
+    logic = SimpleNamespace(
+        _entity_table=table,
+        io_manager=io_manager,
+    )
+    explode = io_manager._input_handlers[("effect", "explode")]
+
+    explode(explosion, "", logic)
+    assert bool(table.effect_active[0])
+    assert bool(table.effect_alive[0])
+    assert float(table.effect_elapsed[0]) == 0.0
+
+    table.effect_spawn_time[0] -= 1.0
+    table.begin_frame([explosion], epoch=1, effect_runtime=True)
+    assert not bool(table.effect_active[0])
+    assert not bool(table.effect_alive[0])
+    assert not bool(table.light_enabled[0])
+
+    explode(explosion, "", logic)
+    assert bool(table.effect_active[0])
+    assert bool(table.effect_alive[0])
+    assert float(table.effect_elapsed[0]) == 0.0
