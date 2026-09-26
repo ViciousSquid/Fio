@@ -1147,6 +1147,9 @@ class Terrain:
             gl.glBindVertexArray(chunk.grass_vao)
             gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 12, chunk.grass_instance_count)
         gl.glBindVertexArray(0)
+        # Crossed grass billboards are double-sided. Restore normal culling
+        # state before the renderer continues with subsequent passes.
+        gl.glEnable(gl.GL_CULL_FACE)
 
     def _get_lod_resolution(self, dist_sq: float) -> int:
         for i, threshold in enumerate(self.LOD_DISTANCES_SQ):
