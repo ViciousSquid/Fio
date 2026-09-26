@@ -174,15 +174,12 @@ def register_all_input_handlers(io_manager: IOManager):
                 table.refresh_rows([entity], [slot])
                 # A SetType-to-EXPLOSION switch is not a trigger. It leaves
                 # EXPLOSION dormant until Explode is received.
-                table.effect_active[slot] = (
-                    table.effect_type[slot] == 0
-                )
-                table.effect_alive[slot] = (
-                    table.effect_type[slot] == 0
-                )
+                animated = table.effect_type[slot] != 1
+                table.effect_active[slot] = animated
+                table.effect_alive[slot] = animated
                 table.light_enabled[slot] = (
                     bool(table.effect_light_enabled[slot])
-                    if table.effect_type[slot] == 0
+                    if animated
                     else False
                 )
 
