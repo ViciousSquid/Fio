@@ -119,9 +119,9 @@ class Effect(_ThingBase):
         self._effect_active = self.effect_type == EFFECT_FIRE
 
     def trigger_explosion(self, now: float) -> bool:
-        """Start one EXPLOSION playback from frame zero."""
-        if not self.is_explosion:
-            return False
+        """Permanently switch to EXPLOSION and start/restart its playback."""
+        self.properties["effect_type"] = EFFECT_EXPLOSION
+        self.properties["preview"] = False
         self._effect_spawn_time = float(now)
         self._effect_active = True
         return True
