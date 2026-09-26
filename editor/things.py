@@ -8,6 +8,7 @@ import copy
 import os
 import math
 import uuid
+import importlib
 
 from engine.portal_transform import (
     basis_from_rotation as _portal_basis_from_rotation,
@@ -806,6 +807,15 @@ class Pickup(Thing):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'pickup')
+
+        # Migrate the old pickup representation before installing defaults.
+        # Pre-2.5.6 maps stored gun1/gun2/cig directly in item_type.  Applying
+        # the new weapon='gun1' default first would erase gun2/cig on load.
+        legacy_weapon = self.properties.get('item_type')
+        if legacy_weapon in self.GUN_SPRITES and 'weapon' not in self.properties:
+            self.properties['weapon'] = legacy_weapon
+            self.properties['item_type'] = 'weapon'
+
         self.properties.setdefault('item_type', 'health')
         self.properties.setdefault('weapon', 'gun1')
         self.properties.setdefault('value', 25)
@@ -2069,7 +2079,7 @@ ENTITY_TYPES = {
     'Portal': Portal,
     'LogicState': LogicState,
     # Core primitive is imported only after editor Thing/Model definitions exist.
-    'Effect': __import__('engine.effect_entity', fromlist=['Effect']).Effect,
+    'Effect': importlib.import_module('engine.effect_entity').Effect,
 }
 
 # Categories for editor UI

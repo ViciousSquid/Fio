@@ -46,14 +46,16 @@ def test_prop_can_be_a_billboard_without_a_model():
 # ---------------------------------------------------------------------------
 
 def _drawn_as(prop):
-    from engine.renderer_core import BaseRenderer
-    renderer = BaseRenderer.__new__(BaseRenderer)
-    models = []
-    _, _, sprites, *_ = BaseRenderer._sort_objects(
-        renderer, [], [prop], {'play_mode': True})
-    BaseRenderer._sort_objects(
-        renderer, [], [prop], {'play_mode': True}, model_out=models)
-    return {'model' if models else None, 'sprite' if sprites else None} - {None}
+    import numpy as np
+    from engine.entity_table import EntityTable, classify_slots
+
+    table = EntityTable()
+    hidden = table.begin_frame([prop], epoch=1)
+    models, sprites = classify_slots(
+        table, np.asarray([0], dtype=np.int32), hidden,
+        is_play=True, show_sprites=False,
+    )
+    return {'model' if len(models) else None, 'sprite' if len(sprites) else None} - {None}
 
 
 def test_a_bare_prop_is_drawable():

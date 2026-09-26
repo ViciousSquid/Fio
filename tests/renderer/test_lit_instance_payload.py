@@ -17,8 +17,12 @@ func later would silently change what triggers look like.
 import numpy as np
 import pytest
 
+pytest.importorskip("PyQt5", reason="renderer tests import editor Things")
+
 from engine import render_table as rt
 from engine.render_table import RenderTable
+pytestmark = pytest.mark.qt
+
 from engine.renderer_F import (Renderer_F, _TRIGGER_COLOR, _SELECTED_COLOR,
                                _SUBTRACT_COLOR)
 

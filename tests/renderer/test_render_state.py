@@ -649,7 +649,7 @@ def test_the_light_list_comes_off_the_projection_not_a_scan(logic):
     thread._prepare_render_state()
     state = thread.game_state.get_write_state()
 
-    assert state.all_lights == [lamp]
+    assert list(state.all_lights) == [lamp]
     assert list(thread._entity_table.light_slots) == [0]
 
 

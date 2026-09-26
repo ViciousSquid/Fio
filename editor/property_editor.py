@@ -4323,7 +4323,13 @@ class PropertyEditor(QWidget):
                 self.pickup_sprite_path.setText(sprite)
         if hasattr(Pickup, 'clear_sprite_cache'):
             Pickup.clear_sprite_cache()
-        self.editor.update_all_ui()
+        # update_object_prop() already invalidates the projections, repaints
+        # the viewports, and marks the map dirty. Rebuilding the entire
+        # inspector here would destroy the widgets that emitted the signal.
+        if hasattr(self.editor, 'view_3d'):
+            self.editor.view_3d.update()
+        if hasattr(self.editor, 'mark_dirty'):
+            self.editor.mark_dirty()
 
     def on_pickup_item_type_changed(self, item_type):
         if self.current_object is None:
@@ -4383,7 +4389,14 @@ class PropertyEditor(QWidget):
 
         if hasattr(Pickup, 'clear_sprite_cache'):
             Pickup.clear_sprite_cache()
-        self.editor.update_all_ui()
+        # update_object_prop() already invalidates the projections, repaints
+        # the viewports, and marks the map dirty. Do not rebuild the inspector
+        # from inside its own combo-box signal; that destroys the emitting
+        # widget and can re-enter Qt's deferred widget deletion path.
+        if hasattr(self.editor, 'view_3d'):
+            self.editor.view_3d.update()
+        if hasattr(self.editor, 'mark_dirty'):
+            self.editor.mark_dirty()
 
     def _on_collision_size_changed(self, value, thing):
         """Handle collision size vector update."""

@@ -161,8 +161,10 @@ def test_renaming_bumps_the_revision_so_dependent_panels_rebuild(scene):
     before = io.io_revision()
 
     pytest.importorskip("PyQt5", reason="the property editor is a Qt widget")
+    from PyQt5.QtWidgets import QApplication
     from editor.property_editor import PropertyEditor
-    editor = PropertyEditor.__new__(PropertyEditor)
+    app = QApplication.instance() or QApplication([])
+    editor = PropertyEditor(object())
     editor.current_object = brushes[0]
     editor._populating = True          # suppress the widget work
     PropertyEditor.update_object_prop(editor, 'name', 'renamed')
