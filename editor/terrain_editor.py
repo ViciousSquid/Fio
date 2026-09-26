@@ -311,12 +311,10 @@ class TerrainEditorPanel(QWidget):
         tabs.addTab(biome_tab, "Biome")
         
         # === FEATURES TAB ===
+        # The terrain editor already has one vertical scroll area around all
+        # tab content. Keep Features as a normal tab page so it does not create
+        # a nested vertical scrollbar inside the Properties dock.
         features_tab = QWidget()
-        features_scroll = QScrollArea()
-        features_scroll.setWidgetResizable(True)
-        features_scroll.setWidget(features_tab)
-        features_scroll.setFrameShape(QFrame.NoFrame)
-        
         features_layout = QVBoxLayout(features_tab)
         features_layout.setSpacing(12)
         features_layout.setContentsMargins(8, 8, 8, 8)
@@ -472,7 +470,7 @@ class TerrainEditorPanel(QWidget):
         features_layout.addWidget(grass_group)
 
         features_layout.addStretch()
-        tabs.addTab(features_scroll, "Features")
+        tabs.addTab(features_tab, "Features")
         
         # === SIZE TAB ===
         size_tab = QWidget()
@@ -980,7 +978,7 @@ class TerrainEditorPanel(QWidget):
     def load_from_terrain(self):
         """Load current terrain values into UI."""
         self._building_ui = True
-        self.textures_checkbox.setChecked(getattr(self.terrain, 'use_textures', True))
+        self.textures_checkbox.setChecked(getattr(self.terrain, 'use_textures', False))
         
         # Find biome index
         biome_index = 0
