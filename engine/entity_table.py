@@ -482,6 +482,35 @@ def _light_color_of(thing):
         return np.asarray((1.0, 1.0, 1.0), dtype=np.float32)
 
 
+def _effect_float(props, key, default):
+    try:
+        return float(props.get(key, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _effect_colour(props, key, default):
+    value = props.get(key, default)
+    try:
+        rgb = np.asarray(value[:3], dtype=np.float32)
+        if rgb.size != 3:
+            raise ValueError
+        return np.clip(rgb / 255.0, 0.0, 1.0)
+    except (TypeError, ValueError, IndexError):
+        return np.asarray(default, dtype=np.float32) / 255.0
+
+
+def _effect_flicker(seed, elapsed):
+    """Deterministic scalar noise shared conceptually with the Effect shader."""
+    phase = np.asarray(elapsed, dtype=np.float32) * 10.0 + np.asarray(seed, dtype=np.float32) * 0.013
+    cell = np.floor(phase)
+    frac = phase - cell
+    smooth = frac * frac * (3.0 - 2.0 * frac)
+    a = np.mod(np.sin((cell + seed) * 12.9898) * 43758.5453123, 1.0)
+    b = np.mod(np.sin((cell + 1.0 + seed) * 12.9898) * 43758.5453123, 1.0)
+    return a * (1.0 - smooth) + b * smooth
+
+
 class EntityTable:
     """A dense, disposable projection of a Thing list.
 
