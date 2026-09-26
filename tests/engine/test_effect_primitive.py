@@ -38,6 +38,7 @@ def test_orb_defaults_to_blue_square_animation():
     assert orb.properties["orb_texture"] == EFFECT_ORB_TEXTURES[0]
     assert orb.properties["width"] == 32.0
     assert orb.properties["height"] == 32.0
+    assert orb.properties["light_colour"] == [74, 155, 255]
 
     table = EntityTable()
     table.begin_frame([orb], epoch=1, effect_runtime=False)

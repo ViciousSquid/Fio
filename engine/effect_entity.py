@@ -24,6 +24,7 @@ EFFECT_ORB = "ORB"
 EFFECT_EXPLOSION = "EXPLOSION"
 EFFECT_TYPES = (EFFECT_FIRE, EFFECT_ORB, EFFECT_EXPLOSION)
 EFFECT_ANIMATED_TYPES = (EFFECT_FIRE, EFFECT_ORB)
+EFFECT_ORB_LIGHT_COLOUR = [74, 155, 255]
 EFFECT_FIRE_TEXTURES = tuple(
     f"assets/textures/effects/fire{i:02d}.gif" for i in range(1, 6)
 )
@@ -95,6 +96,8 @@ class Effect(_ThingBase):
                 self.properties["width"] = 32.0
             if "height" not in supplied_properties:
                 self.properties["height"] = 32.0
+            if "light_colour" not in supplied_properties:
+                self.properties["light_colour"] = list(EFFECT_ORB_LIGHT_COLOUR)
 
         fire_texture = str(
             self.properties.get("fire_texture", EFFECT_FIRE_TEXTURES[0])
@@ -155,6 +158,7 @@ class Effect(_ThingBase):
         if effect_type == EFFECT_ORB:
             self.properties["width"] = 32.0
             self.properties["height"] = 32.0
+            self.properties["light_colour"] = list(EFFECT_ORB_LIGHT_COLOUR)
         self._effect_spawn_time = 0.0
         self._effect_active = effect_type in EFFECT_ANIMATED_TYPES
         return True
