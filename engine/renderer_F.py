@@ -1445,8 +1445,7 @@ class Renderer_F(BaseRenderer):
                                     'player_glasses_positions', ())
                                 if player_positions:
                                     self.draw_player_glasses(
-                                        proj, vw, player_positions,
-                                        width=50.0, height=100.0)
+                                        proj, vw, player_positions)
 
                             gl.glEnable(gl.GL_BLEND)
                             gl.glDepthMask(gl.GL_FALSE)
