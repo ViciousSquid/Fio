@@ -1045,12 +1045,17 @@ def register_default_io():
     )
 
     # === EFFECT ===
-    # One-shot EXPLOSION primitive. FIRE has no triggerable state.
+    # Effect TYPE is a string-valued authored selector. SetType is deliberately
+    # generic so adding more Effect types only extends Effect.EFFECT_TYPES.
+    # Explode is the separate one-shot transition/playback command.
     register_io('effect',
         inputs=[
-            IODef('Explode', 'Play the EXPLOSION animation once and emit its intrinsic light'),
+            IODef('SetType', 'Set the Effect TYPE (fire, explosion, or another registered type)', 'string'),
+            IODef('Explode', 'Switch to EXPLOSION and play its animation once'),
         ],
-        outputs=[]
+        outputs=[
+            IODef('OnChanged', 'Fired when the Effect TYPE changes (parameter: new type)', 'string'),
+        ]
     )
 
     # === PORTAL ===
