@@ -67,7 +67,7 @@ class Effect(_ThingBase):
     The authored behaviour selector is properties['effect_type'].
     """
 
-    pixmap_path = "assets/sprites/light.png"
+    pixmap_path = "assets/sprites/fire.png"
 
     # All Effect controls are rendered by the dedicated property panel.
     EDITOR_PRIMARY_PROPERTIES = ()
