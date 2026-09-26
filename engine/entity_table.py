@@ -1120,7 +1120,7 @@ class EntityTable:
             size = max(0.01, _effect_float(props, 'size', 1.0))
             visual_intensity = max(0.0, _effect_float(props, 'intensity', 1.0))
             light_intensity = max(0.0, _effect_float(props, 'light_intensity', 2.5))
-            light_radius = max(0.01, _effect_float(props, 'light_radius', 5.0))
+            light_radius = max(0.01, _effect_float(props, 'light_radius', 128.0))
             lifetime = max(0.01, _effect_float(props, 'lifetime', 0.5))
             try:
                 seed = float((int(props.get('effect_seed', 1)) % 1000003) + 1)
