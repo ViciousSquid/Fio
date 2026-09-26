@@ -824,6 +824,156 @@ layout (location = 10) in vec4 iPayload;
                                                            'sprite_texture']):
             print(f'{_BASE_RENDERER_PREFIX} Sprite instancing shader compiled successfully.')
 
+    EFFECT_INSTANCE_FLOATS = 15
+
+    def _compile_instanced_effect_shader(self):
+        """Compile the single procedural FIRE/EXPLOSION instance shader."""
+        vert = DEFAULT_SHADERS.get('effect.vert', '')
+        frag = DEFAULT_SHADERS.get('effect.frag', '')
+        if not vert or not frag:
+            return
+        self._register_instanced_shader(
+            'effect_instanced',
+            vert,
+            frag,
+            extra_uniforms=['projection', 'view'],
+        )
+
+    def _ensure_effect_instance_buffer(self, count):
+        if self._effect_instance_vbo is None:
+            self._effect_instance_vbo = gl.glGenBuffers(1)
+        if count <= self._effect_instance_capacity:
+            return
+        capacity = max(count, 64, self._effect_instance_capacity * 2)
+        self._effect_instance_capacity = capacity
+        self._effect_instance_data = np.empty(
+            (capacity, self.EFFECT_INSTANCE_FLOATS), dtype=np.float32
+        )
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
+        gl.glBufferData(
+            gl.GL_ARRAY_BUFFER,
+            self._effect_instance_data.nbytes,
+            None,
+            gl.GL_DYNAMIC_DRAW,
+        )
+
+    def _ensure_effect_instance_vao(self):
+        if self._effect_instance_vao is not None:
+            return self._effect_instance_vao
+        self._ensure_effect_instance_buffer(1)
+        vao = gl.glGenVertexArrays(1)
+        gl.glBindVertexArray(vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_vbo)
+        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+        gl.glEnableVertexAttribArray(0)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
+        stride = self.EFFECT_INSTANCE_FLOATS * 4
+        for location, size, offset in (
+            (1, 3, 0),
+            (2, 4, 12),
+            (3, 4, 28),
+            (4, 4, 44),
+        ):
+            gl.glVertexAttribPointer(
+                location, size, gl.GL_FLOAT, gl.GL_FALSE,
+                stride, ctypes.c_void_p(offset)
+            )
+            gl.glEnableVertexAttribArray(location)
+            gl.glVertexAttribDivisor(location, 1)
+        gl.glBindVertexArray(0)
+        self._effect_instance_vao = vao
+        return vao
+
+    def draw_effects_instanced(
+        self, projection, view, table, slots, hidden=None,
+        play_mode=True, editor_time=0.0, camera_pos=None,
+    ):
+        """Draw all visible Effects as one numeric instanced pass.
+
+        The authored Effect objects never enter this path. FIRE and EXPLOSION
+        differ only through the numeric type/lifetime columns consumed by the
+        same OpenGL 3.3 shader.
+        """
+        if 'effect_instanced' not in self.shaders or not len(slots):
+            return 0
+
+        slots = np.asarray(slots, dtype=np.int32)
+        if hidden is not None:
+            live = ~np.asarray(hidden, dtype=bool)[slots]
+            slots = slots[live]
+        if not len(slots):
+            return 0
+
+        alive = table.effect_alive[slots]
+        slots = slots[alive]
+        if not len(slots):
+            return 0
+
+        count = len(slots)
+        if len(self._effect_order_scratch) < count:
+            grown = max(64, len(self._effect_order_scratch) * 2, count)
+            self._effect_order_scratch = np.empty(grown, dtype=np.int32)
+            self._effect_depth_scratch = np.empty(grown, dtype=np.float64)
+
+        depth = self._effect_depth_scratch[:count]
+        if camera_pos is None:
+            order = np.arange(count, dtype=np.int32)
+        else:
+            cx, _, cz = self._camera_xyz(camera_pos)
+            np.take(table.pos[:, 0], slots, out=depth)
+            np.subtract(depth, cx, out=depth)
+            np.square(depth, out=depth)
+            np.take(table.pos[:, 2], slots,
+                    out=self._effect_order_scratch[:count])
+            aux = self._effect_order_scratch[:count].astype(np.float64, copy=False)
+            np.subtract(aux, cz, out=aux)
+            np.square(aux, out=aux)
+            np.add(depth, aux, out=depth)
+            # Back-to-front for alpha blending.
+            order = np.argsort(depth, kind='stable')[::-1]
+
+        self._ensure_effect_instance_buffer(count)
+        data = self._effect_instance_data[:count]
+        sorted_slots = slots[order]
+
+        np.take(table.pos, sorted_slots, axis=0, out=data[:, 0:3])
+        np.take(table.effect_params[:, :2], sorted_slots, axis=0,
+               out=data[:, 3:5])
+        if play_mode:
+            np.take(table.effect_elapsed, sorted_slots, out=data[:, 5])
+        else:
+            types = table.effect_type[sorted_slots]
+            data[:, 5] = float(editor_time)
+            data[:, 5][types == 1] = 0.0
+        np.take(table.effect_lifetime, sorted_slots, out=data[:, 6])
+        np.take(table.effect_seed, sorted_slots, out=data[:, 7])
+        data[:, 8] = table.effect_type[sorted_slots]
+        data[:, 9:11] = 0.0
+        np.take(table.effect_color, sorted_slots, axis=0,
+               out=data[:, 11:14])
+        data[:, 14] = 1.0
+
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+
+        shader = self.shaders['effect_instanced']
+        uniforms = self.uniforms['effect_instanced']
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        self._upload_env_uniforms('effect_instanced')
+        gl.glUniformMatrix4fv(
+            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection)
+        )
+        gl.glUniformMatrix4fv(
+            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view)
+        )
+        gl.glBindVertexArray(self._ensure_effect_instance_vao())
+        gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, count)
+        self.render_stats.draw_calls += 1
+        self.render_stats.batched_draws += 1
+        gl.glBindVertexArray(0)
+        return count
+
     def _ensure_sprite_instance_buffer(self, count):
         """Grow the sprite instance VBO and its staging array to *count* rows."""
         if self._sprite_instance_vbo is None:
