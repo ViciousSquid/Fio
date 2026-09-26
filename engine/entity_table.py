@@ -76,6 +76,7 @@ head-less test -- still imports this module.
 from __future__ import annotations
 
 import os
+import time
 from itertools import chain
 
 import glm
