@@ -514,13 +514,16 @@ void main() {
         growth = mix(1.0, 3.0, smoothstep(0.0, 0.28, t));
     }
 
+    // Upright cylindrical billboard: world Y keeps the flame vertical
+    // while cameraRight makes the sheet face the camera in the horizontal plane.
+    // This is more appropriate for fire than pitching the flame with cameraUp.
     vec3 cameraRight = normalize(vec3(view[0][0], view[1][0], view[2][0]));
-    vec3 cameraUp = normalize(vec3(view[0][1], view[1][1], view[2][1]));
+    const vec3 worldUp = vec3(0.0, 1.0, 0.0);
 
     float vertical = aPos.y + 0.5;
     vec3 worldPos = iEffectPos
                   + cameraRight * aPos.x * size * growth
-                  + cameraUp * vertical * size * growth;
+                  + worldUp * vertical * size * 1.25 * growth;
 
     TexCoords = aPos + 0.5;
     FragPos = worldPos;
