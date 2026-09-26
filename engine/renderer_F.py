@@ -1359,7 +1359,7 @@ class Renderer_F(BaseRenderer):
                         try:
                             (portal_table, portal_groups,
                              portal_model_slots, portal_sprite_slots,
-                             portal_lights) = self._portal_numeric_scene_inputs(
+                             portal_effect_slots, portal_lights) = self._portal_numeric_scene_inputs(
                                  proj, vw, cfg)
                             mode = cfg.get('brush_display_mode', 'Textured')
 
