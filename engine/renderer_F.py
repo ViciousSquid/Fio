@@ -15,7 +15,7 @@ from engine import render_table
 from engine import entity_table as entity_projection
 from engine.render_keys import KeyLayout, sort_into_runs
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
-from editor.things import Thing
+from editor.things import Thing, Effect
 
 # Camera render-distance cull. The pure per-object geometry lives in
 # engine.render_cull (GL-free, so it is unit-testable without a GL context) and
@@ -1553,6 +1553,18 @@ class Renderer_F(BaseRenderer):
                 if pos is not None and not selected_object.get('lock', False):
                     self.render_gizmo(projection, view, pos)
             elif isinstance(selected_object, Thing):
+                if (isinstance(selected_object, Effect)
+                        and selected_object.properties.get('preview', False)):
+                    self.draw_effect_billboard_aabb(
+                        projection,
+                        view,
+                        selected_object,
+                        explosion=(
+                            str(selected_object.properties.get(
+                                'effect_type', 'FIRE'
+                            )).upper() == 'EXPLOSION'
+                        ),
+                    )
                 self.render_gizmo(projection, view, selected_object.pos)
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDisable(gl.GL_BLEND)
