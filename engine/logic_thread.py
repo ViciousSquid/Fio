@@ -1410,20 +1410,20 @@ class LogicThread(threading.Thread):
     def _fire_player_spawn_outputs(self):
         if not self.io_manager:
             return
+
+        # Start-on speakers initialise before the PlayerStart output chain, so
+        # an explicit OnPlayerSpawn connection can override the authored state.
+        self._start_speakers_on_spawn()
+
         if not PlayerStart:
             return
         for thing in self.things:
             if isinstance(thing, PlayerStart):
-                # Start-on speakers initialise before the PlayerStart output
-                # chain, so an explicit OnPlayerSpawn connection can override
-                # the authored default state.
-                self._start_speakers_on_spawn()
                 self.io_manager.fire_output(thing, 'OnPlayerSpawn')
                 self._plugin_emit("player_spawn", start=thing)
                 break
 
     @staticmethod
-    def _timer_key    @staticmethod
     def _timer_key(thing):
         """A timer's countdown is filed under its UUID, not its memory address.
 
