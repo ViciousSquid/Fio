@@ -155,14 +155,14 @@
         {
             "type": "playerstart",
             "pos": [
-                160.0,
-                40,
-                -64.0
+                176.0,
+                32,
+                256.0
             ],
             "properties": {
                 "type": "playerstart",
                 "name": "PlayerStart_1",
-                "angle": 0.0,
+                "angle": 45.0,
                 "id": "343e5fb3-76bf-4bcf-bbb2-ba384684e84e",
                 "io_enabled": true
             },
@@ -284,6 +284,43 @@
                 "disabled": false,
                 "collision_shape": "auto",
                 "render_mode": "model"
+            },
+            "io_connections": []
+        },
+        {
+            "type": "effect",
+            "pos": [
+                -192.0,
+                112,
+                192.0
+            ],
+            "properties": {
+                "type": "effect",
+                "io_enabled": true,
+                "name": "Effect_1",
+                "id": "734a15ed-4edd-4534-b9dd-982440f77d76",
+                "effect_type": "ORB",
+                "preview": false,
+                "fire_texture": "assets/textures/effects/fire01.gif",
+                "orb_texture": "assets/textures/effects/orb04.gif",
+                "width": 256.0,
+                "height": 256.0,
+                "intensity": 1.0,
+                "colour": [
+                    255,
+                    110,
+                    25
+                ],
+                "lifetime": 0.5,
+                "light_enabled": true,
+                "light_radius": 128.0,
+                "light_intensity": 2.5,
+                "light_colour": [
+                    255,
+                    165,
+                    70
+                ],
+                "effect_seed": 3390257483
             },
             "io_connections": []
         }
