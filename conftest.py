@@ -33,6 +33,9 @@ if _ROOT not in sys.path:
 # an OpenGL context — the visual tier needs the real one (under Xvfb in CI).
 if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    # PyOpenGL defaults to GLX, but the editor Qt tier intentionally runs without X11.
+    # Use EGL for context-free imports in that tier; the actual GL tier runs under Xvfb.
+    os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
 # Qt writes its runtime files here; without it every Qt test prints a warning.
 os.environ.setdefault("XDG_RUNTIME_DIR", os.path.join("/tmp", "fio-test-runtime"))
 try:
