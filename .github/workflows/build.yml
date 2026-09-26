@@ -101,13 +101,20 @@ jobs:
           # Also create a 1024x1024 version for high-res
           sips -z 1024 1024 build/icon.png --out build/icon_1024.png
 
+      - name: Read Fio version
+        run: |
+          FIO_VERSION="$(sed -n 's/^version //p' editor/version.txt)"
+          test -n "$FIO_VERSION"
+          echo "FIO_VERSION=$FIO_VERSION" >> "$GITHUB_ENV"
+          echo "Building Fio $FIO_VERSION"
+
       - name: Build with Nuitka (App Bundle)
         run: |
           python -m nuitka \
             --standalone \
             --macos-create-app-bundle \
             --macos-app-name=Fio \
-            --macos-app-version=1.0.0 \
+            --macos-app-version="$FIO_VERSION" \
             --output-filename=Fio \
             --assume-yes-for-downloads \
             --plugin-enable=pyqt5 \
@@ -131,6 +138,7 @@ jobs:
         run: |
           if [ -f "build/main.app/Contents/MacOS/Fio" ]; then
             echo "App bundle OK"
+            /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "build/main.app/Contents/Info.plist" | grep -Fx "$FIO_VERSION"
           else
             echo "App bundle broken"
             exit 1
