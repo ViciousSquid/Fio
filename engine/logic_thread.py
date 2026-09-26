@@ -382,6 +382,7 @@ class LogicThread(threading.Thread):
         # Portal name → Portal lookup cache; rebuilt on play start and when
         # the things list changes.  Avoids an O(n) rebuild every physics tick.
         self._portal_things: List = []
+        self._portal_target_things: List = []
         # Portal slots use the same enumerate(self.things) address space as
         # EntityTable.  Links are resolved once when the topology cache changes.
         self._portal_slots = np.empty(0, dtype=np.int32)
