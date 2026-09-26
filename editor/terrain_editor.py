@@ -909,6 +909,11 @@ class TerrainEditorPanel(QWidget):
 
         sculpt_layout.addStretch()
         tabs.addTab(sculpt_tab, "Sculpt")
+
+        # The tab widget must itself be inserted into the content layout.
+        # Without this, all of the tab pages exist but QTabWidget is never
+        # shown, leaving only the controls above and the stats label visible.
+        content_layout.addWidget(tabs)
         
         # Stats
         self.stats_label = QLabel("Visible: 0 chunks  |  Culled: 0  |  Triangles: 0")
