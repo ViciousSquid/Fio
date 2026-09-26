@@ -1031,7 +1031,12 @@ class EntityTable:
         self.things = list(things)
         self.count = n
         bits = self.class_bits[:n]
-        self.light_slots = np.flatnonzero(bits & ENT_LIGHT).astype(np.int32)
+        self.effect_slots = np.flatnonzero(
+            bits & ENT_EFFECT
+        ).astype(np.int32)
+        self.light_slots = np.flatnonzero(
+            bits & (ENT_LIGHT | ENT_EFFECT)
+        ).astype(np.int32)
         self.portal_slots = np.flatnonzero(bits & ENT_PORTAL).astype(np.int32)
         self.monster_slots = np.flatnonzero(bits & ENT_MONSTER).astype(np.int32)
         self.pickup_slots = np.flatnonzero(bits & ENT_PICKUP).astype(np.int32)
