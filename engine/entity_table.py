@@ -579,12 +579,13 @@ class EntityTable:
                  'portal_direction', 'portal_width_height', 'portal_basis',
                  'portal_fade', 'portal_color', 'portal_show_rim',
                  'monster_slots', 'pickup_slots', 'effect_slots',
-                 'effect_type', 'effect_fire_variant', 'effect_preview', 'effect_params', 'effect_color',
+                 'effect_type', 'effect_fire_variant', 'effect_custom_id', 'effect_preview', 'effect_params', 'effect_color',
                  'effect_light_color', 'effect_light_enabled', 'effect_lifetime', 'effect_seed',
                   'effect_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
                  'sprite_size', 'sprite_key_id',
                  'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
                  '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
+                 '_effect_custom_ids', '_effect_custom_paths',
                  '_epoch', '_hidden_buf')
 
     def __init__(self):
@@ -637,6 +638,7 @@ class EntityTable:
         self.effect_slots = np.empty(0, dtype=np.int32)
         self.effect_type = np.zeros((0,), dtype=np.uint8)
         self.effect_fire_variant = np.zeros((0,), dtype=np.uint8)
+        self.effect_custom_id = np.zeros((0,), dtype=np.int32)
         self.effect_preview = np.zeros((0,), dtype=bool)
         self.effect_params = np.zeros((0, 4), dtype=np.float32)
         self.effect_color = np.ones((0, 3), dtype=np.float32)
@@ -672,6 +674,9 @@ class EntityTable:
         #: indexed numerically.
         self._model_ids = {}
         self._model_recipes = []
+        #: Interned CUSTOM GIF paths; these remain cold data outside numeric rows.
+        self._effect_custom_ids = {}
+        self._effect_custom_paths = []
 
         self._epoch = None
         self._hidden_buf = np.empty(0, dtype=bool)
@@ -692,6 +697,25 @@ class EntityTable:
     def sprite_recipes(self) -> list:
         """Interned candidate lists, indexed by id."""
         return self._sprite_recipes
+
+    def intern_effect_custom_path(self, path) -> int:
+        """Intern a CUSTOM Effect GIF path as a stable dense id."""
+        value = str(path or "").strip().replace("\\", "/")
+        if not value:
+            return 0
+        custom_id = self._effect_custom_ids.get(value)
+        if custom_id is None:
+            custom_id = len(self._effect_custom_paths) + 1
+            self._effect_custom_ids[value] = custom_id
+            self._effect_custom_paths.append(value)
+        return custom_id
+
+    def effect_custom_path(self, custom_id: int) -> str:
+        """Resolve a dense CUSTOM GIF id without touching entity objects."""
+        index = int(custom_id) - 1
+        if index < 0 or index >= len(self._effect_custom_paths):
+            return ""
+        return self._effect_custom_paths[index]
 
     def intern_model_recipe(self, recipe) -> int:
         if recipe is None:
@@ -767,6 +791,11 @@ class EntityTable:
         if len(self.effect_fire_variant):
             effect_fire_variant[:len(self.effect_fire_variant)] = self.effect_fire_variant
         self.effect_fire_variant = effect_fire_variant
+
+        effect_custom_id = np.zeros((grown,), dtype=np.int32)
+        if len(self.effect_custom_id):
+            effect_custom_id[:len(self.effect_custom_id)] = self.effect_custom_id
+        self.effect_custom_id = effect_custom_id
 
         effect_preview = np.zeros((grown,), dtype=bool)
         if len(self.effect_preview):
@@ -1145,6 +1174,7 @@ class EntityTable:
                         self.sprite_size, self.sprite_key_id,
                         self.model_recipe_id, self.model_base_matrix,
                         self.model_normal_matrix, self.effect_type,
+                        self.effect_fire_variant, self.effect_custom_id,
                         self.effect_params, self.effect_color,
                         self.effect_light_color, self.effect_light_enabled, self.effect_lifetime,
                          self.effect_seed, self.effect_spawn_time,
@@ -1247,12 +1277,20 @@ class EntityTable:
             self.effect_type[slot] = (
                 1 if effect_type == 'EXPLOSION'
                 else 2 if effect_type == 'ORB'
+                else 3 if effect_type == 'CUSTOM'
                 else 0
             )
             self.effect_fire_variant[slot] = (
                 _effect_orb_variant(props)
                 if effect_type == 'ORB'
                 else _effect_fire_variant(props)
+                if effect_type == 'FIRE'
+                else 0
+            )
+            self.effect_custom_id[slot] = (
+                self.intern_effect_custom_path(props.get('custom_gif', ''))
+                if effect_type == 'CUSTOM'
+                else 0
             )
             self.effect_preview[slot] = _effect_bool(
                 props, 'preview', False
@@ -1311,6 +1349,7 @@ class EntityTable:
         else:
             self.effect_type[slot] = 0
             self.effect_fire_variant[slot] = 0
+            self.effect_custom_id[slot] = 0
             self.effect_preview[slot] = False
             self.effect_params[slot].fill(0.0)
             self.effect_color[slot] = 1.0
