@@ -640,6 +640,7 @@ class BaseRenderer:
         self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
         self._compile_instanced_depth_shader()
         self._compile_instanced_sprite_shader()
+        self._compile_instanced_effect_shader()
 
     def _compile_standard_shaders(self):
         lit_shader = self.shader_loader.compile_shader_program('lit.vert', 'lit.frag')
