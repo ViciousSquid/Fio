@@ -1333,9 +1333,14 @@ class Renderer_F(BaseRenderer):
             etable, tslots, thing_hidden,
             config.get('play_mode', False),
             config.get('show_sprites_in_play_mode', False))
-        effect_slots = tslots[
-            (etable.class_bits[tslots] & entity_projection.ENT_EFFECT) != 0
-        ]
+        # Effects own a dedicated dense slot vector. Do not derive this
+        # transient render pass from the generic Thing classification; a newly
+        # authored Effect must become visible as soon as the EntityTable row exists.
+        effect_slots = etable.effect_slots
+        if (config.get('camera_distance_cull', config.get('play_mode', False))
+                and cx is not None and len(effect_slots)):
+            effect_slots = self._distance_cull_thing_slots(
+                etable, effect_slots, cx, cz, self.view_distance.distance_sq)
 
         _tbl = table
         lights = self._get_active_lights(things, config)
