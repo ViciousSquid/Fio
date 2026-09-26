@@ -249,6 +249,14 @@ def test_sound_radius_gain_is_linear_and_zero_at_edge():
     assert "meta.get('radius', 512.0)" in src
 
 
+def test_global_and_looping_are_independent_speaker_flags():
+    src = read_source("editor", "io_handlers.py")
+    # Both authored flags are forwarded independently; Global must not disable
+    # looping, and Looping must not make a local speaker global.
+    assert "'looping': looping," in src
+    assert "'global': global_sound," in src
+
+
 def test_speaker_handlers_send_looping_and_stop():
     """io_handlers must emit the protocol qt_game_view consumes."""
     src = read_source("editor", "io_handlers.py")
