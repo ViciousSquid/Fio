@@ -498,7 +498,6 @@ void main() {
     'fog.frag': """#version 330 core
 precision mediump float;
 out vec4 FragColor;
-
 in highp vec3 localPos;
 
 uniform highp mat4 model;
@@ -997,8 +996,7 @@ void main()
     if (backside) {
         color = mix(
             color,
-            waterTint * 1.4 + vec3(0.10, 0.18, 0.20),
-            0.35
+            waterTint * 1.4 + vec3(0.10, 0.18, 0.20),            0.35
         );
         alpha = min(alpha + 0.15, 1.0);
     }
@@ -1327,7 +1325,7 @@ void main() {
     result = mix(vec3(gray), result, 1.15);
     
     FragColor = vec4(applyFog(result, FragPos), 1.0);
-}"""
+}""",
 
     'grass.vert': """#version 330 core
 precision highp float;
@@ -1497,8 +1495,7 @@ in vec2 TexCoords;
 uniform sampler2D texture_diffuse;
 struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; };
 uniform Light lights[""" + str(MAX_LIGHTS_ARM) + """];
-uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """
-void main() {
+uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """void main() {
     vec4 texColor = texture(texture_diffuse, TexCoords);
     if(texColor.a < 0.1) discard;
     vec3 norm = normalize(Normal);
