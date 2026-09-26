@@ -1521,17 +1521,8 @@ class PropertyEditor(QWidget):
             brush.get('water_plane', False),
             lambda c: self.update_object_prop('water_plane', c),
             _Style.CHECKBOX)
-        reflection_cb = _make_checkbox(
-            "Reflections",
-            brush.get('water_reflections', False),
-            lambda c: self.update_object_prop('water_reflections', c),
-            _Style.CHECKBOX)
-        reflection_cb.setToolTip(
-            "Render a 256×256 environment reflection cubemap around the water surface. "
-            "More expensive.")
-        layout.addLayout(_hbox(plane_cb, reflection_cb, stretch=False))
+        layout.addWidget(plane_cb)
         self._widgets['water_plane_cb'] = plane_cb
-        self._widgets['water_reflections_cb'] = reflection_cb
 
         return group
 
@@ -3743,8 +3734,6 @@ class PropertyEditor(QWidget):
                 self.current_object['water_wave_enabled'] = True
             if 'water_wave_height' not in self.current_object:
                 self.current_object['water_wave_height'] = 0.5
-            if 'water_reflections' not in self.current_object:
-                self.current_object['water_reflections'] = False
             if 'water_distortion' not in self.current_object:
                 self.current_object['water_distortion'] = 0.5
             if 'water_refraction' not in self.current_object:
