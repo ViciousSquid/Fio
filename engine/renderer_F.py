@@ -1134,6 +1134,9 @@ class Renderer_F(BaseRenderer):
                     capture_config.get(
                         'show_sprites_in_play_mode', False),
                 )
+                effect_slots = thing_slots[
+                    (entity_table.class_bits[thing_slots] & entity_projection.ENT_EFFECT) != 0
+                ]
                 if len(model_slots):
                     self.draw_models_instanced(
                         projection,
