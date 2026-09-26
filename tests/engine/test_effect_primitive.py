@@ -16,6 +16,7 @@ def test_effect_defaults_to_fire_with_intrinsic_light():
     assert effect.properties["fire_texture"] == EFFECT_FIRE_TEXTURES[0]
     assert len(EFFECT_FIRE_TEXTURES) == 5
     assert effect.properties["size"] == 32.0
+    assert effect.properties["scale"] == 1.0
     assert effect.properties["light_enabled"] is True
     assert effect.properties["light_radius"] == 128.0
     assert effect.properties["light_intensity"] == 2.5
@@ -105,6 +106,53 @@ def test_explosion_preview_off_remains_dormant_in_editor():
 
     assert not bool(table.effect_preview[0])
     assert not bool(table.effect_alive[0])
+
+
+def test_explosion_scale_is_projected_to_the_same_size_used_by_preview_and_runtime():
+    small = Effect(properties={
+        "effect_type": EFFECT_EXPLOSION,
+        "size": 32.0,
+        "scale": 0.5,
+        "preview": True,
+    })
+    large = Effect(properties={
+        "effect_type": EFFECT_EXPLOSION,
+        "size": 32.0,
+        "scale": 2.0,
+        "preview": True,
+    })
+    small_table = EntityTable()
+    large_table = EntityTable()
+
+    small_table.begin_frame([small], epoch=1, effect_runtime=False)
+    large_table.begin_frame([large], epoch=1, effect_runtime=False)
+
+    assert float(small_table.effect_params[0, 0]) == 16.0
+    assert float(large_table.effect_params[0, 0]) == 64.0
+
+
+def test_explosion_light_is_a_short_runtime_flash_not_a_constant_source():
+    explosion = Effect(properties={
+        "effect_type": EFFECT_EXPLOSION,
+        "lifetime": 0.5,
+    })
+    table = EntityTable()
+    table.begin_frame([explosion], epoch=1, effect_runtime=True)
+    assert not bool(table.effect_active[0])
+    assert not bool(table.light_enabled[0])
+
+    import time
+    table.effect_spawn_time[0] = time.perf_counter() - 0.02
+    table.effect_active[0] = True
+    table.begin_frame([explosion], epoch=1, effect_runtime=True)
+    assert bool(table.effect_alive[0])
+    assert bool(table.light_enabled[0])
+    assert float(table.light_params[0, 0]) <= float(table.effect_params[0, 2])
+
+    table.effect_spawn_time[0] = time.perf_counter() - 0.25
+    table.effect_active[0] = True
+    table.begin_frame([explosion], epoch=1, effect_runtime=True)
+    assert not bool(table.light_enabled[0])
 
 
 def test_effect_is_projected_as_one_dense_visual_and_light_primitive():
