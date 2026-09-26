@@ -2174,7 +2174,7 @@ class PropertyEditor(QWidget):
 
         preview_check = QCheckBox("Preview")
         preview_check.setToolTip(
-            "Show a static EXPLOSION frame in the editor. Runtime behavior is unchanged."
+            "Editor-only preview and billboard AABB. Runtime behavior is unchanged."
         )
         preview_check.setChecked(bool(props.get('preview', False)))
         form.addRow("Preview:", preview_check)
@@ -2203,7 +2203,7 @@ class PropertyEditor(QWidget):
                 thing.properties.get("effect_type", "FIRE")
             ).upper() == "EXPLOSION"
             fire_combo.setEnabled(not explosion)
-            preview_check.setEnabled(explosion)
+            preview_check.setEnabled(True)
 
         def fire_texture_changed(index):
             path = fire_combo.itemData(index)
@@ -2243,13 +2243,8 @@ class PropertyEditor(QWidget):
             form.addRow(label + ":", widget)
             return slider, value_label
 
-        add_scaled_slider("Size", "size", 4.0, 128.0, 32.0, "{:.1f}")
-        scale_slider, scale_label = add_scaled_slider(
-            "Scale", "scale", 0.1, 4.0, 1.0, "{:.2f}×"
-        )
-        scale_slider.setToolTip(
-            "Overall EXPLOSION scale. Preview uses the same scale as runtime."
-        )
+        add_scaled_slider("Width", "width", 4.0, 256.0, 32.0, "{:.1f}")
+        add_scaled_slider("Height", "height", 4.0, 256.0, 24.0, "{:.1f}")
         add_scaled_slider("Intensity", "intensity", 0.0, 3.0, 1.0, "{:.2f}")
 
         light_check = QCheckBox("Enable intrinsic light")
@@ -2313,12 +2308,6 @@ class PropertyEditor(QWidget):
             value = str(value).upper()
             self.update_object_prop('effect_type', value)
             refresh_fire_texture()
-            if value != 'EXPLOSION':
-                preview_check.blockSignals(True)
-                preview_check.setChecked(False)
-                preview_check.blockSignals(False)
-                if thing.properties.get('preview', False):
-                    self.update_object_prop('preview', False)
             if value == 'EXPLOSION':
                 try:
                     lifetime = float(thing.properties.get('lifetime', 0.5))
@@ -2327,12 +2316,10 @@ class PropertyEditor(QWidget):
                 if lifetime < 0.05:
                     self.update_object_prop('lifetime', 0.5)
             refresh_lifetime()
-            refresh_scale()
 
         type_combo.currentTextChanged.connect(effect_type_changed)
         refresh_fire_texture()
         refresh_lifetime()
-        refresh_scale()
 
     def _build_attach_to_mover(self, form, thing, prefix=''):
         """Shared attach-to-mover logic for Light and Portal."""
