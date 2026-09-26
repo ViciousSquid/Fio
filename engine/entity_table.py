@@ -514,6 +514,10 @@ _EFFECT_FIRE_LIGHT_COLOURS = np.asarray((
     (0xFE, 0xAC, 0x1D),  # fire04 #feac1d
 ), dtype=np.float32) / 255.0
 
+# EXPLOSION's atlas is 16 frames, numbered 1..16 for authoring.
+# The editor preview is intentionally locked to frame 10 (atlas index 9).
+_EXPLOSION_FRAME_COUNT = 16.0
+_EXPLOSION_PREVIEW_FRAME = 10
 
 def _effect_fire_variant(props):
     value = str(
@@ -982,7 +986,20 @@ class EntityTable:
                     self.effect_active[expired_slots] = False
                     active = self.effect_active[effect_ls]
 
-                self.effect_elapsed[effect_ls] = elapsed
+                # EXPLOSION preview is editor-only and static: place the
+                # sprite on atlas frame 10 without arming runtime playback.
+                if np.any(preview_explosion):
+                    preview_slots = effect_ls[preview_explosion]
+                    preview_t = (
+                        (float(_EXPLOSION_PREVIEW_FRAME) - 0.5)
+                        / _EXPLOSION_FRAME_COUNT
+                    )
+                    self.effect_elapsed[preview_slots] = (
+                        np.maximum(self.effect_lifetime[preview_slots], 0.01)
+                        * preview_t
+                    ).astype(np.float32, copy=False)
+                else:
+                    self.effect_elapsed[effect_ls] = elapsed
 
                 # FIRE light flicker is derived from the same deterministic
                 # seed/clock family as the procedural flame.  The base authored
