@@ -21,9 +21,13 @@ except ImportError:  # standalone player / Android: no PyQt5
 EFFECT_FIRE = "FIRE"
 EFFECT_EXPLOSION = "EXPLOSION"
 EFFECT_TYPES = (EFFECT_FIRE, EFFECT_EXPLOSION)
+EFFECT_FIRE_TEXTURES = tuple(
+    f"assets/textures/effects/fire{i:02d}.gif" for i in range(1, 6)
+)
 
 EFFECT_DEFAULTS = {
     "effect_type": EFFECT_FIRE,
+    "fire_texture": EFFECT_FIRE_TEXTURES[0],
     "size": 32.0,
     "intensity": 1.0,
     "colour": [255, 110, 25],
@@ -73,6 +77,13 @@ class Effect(_ThingBase):
         if effect_type not in EFFECT_TYPES:
             effect_type = EFFECT_FIRE
         self.properties["effect_type"] = effect_type
+
+        fire_texture = str(
+            self.properties.get("fire_texture", EFFECT_FIRE_TEXTURES[0])
+        ).replace("\\", "/")
+        if fire_texture not in EFFECT_FIRE_TEXTURES:
+            fire_texture = EFFECT_FIRE_TEXTURES[0]
+        self.properties["fire_texture"] = fire_texture
 
         try:
             seed = int(self.properties.get("effect_seed"))
