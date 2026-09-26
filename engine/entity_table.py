@@ -275,7 +275,10 @@ def sprite_candidates(thing):
         return _monster_sprite_candidates(thing) if 'monster_type' in thing else None
     if Portal is not None and isinstance(thing, Portal):
         return None            # the sprite pass has always skipped Portals
-    props = _props_of(thing)
+    if isinstance(thing, dict):
+        props = thing
+    else:
+        props = _props_of(thing)
     if Monster is not None and isinstance(thing, Monster):
         return _monster_sprite_candidates(props)
 
@@ -582,7 +585,7 @@ class EntityTable:
                  'effect_type', 'effect_fire_variant', 'effect_custom_id', 'effect_preview', 'effect_params', 'effect_color',
                  'effect_light_color', 'effect_light_enabled', 'effect_lifetime', 'effect_seed',
                   'effect_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
-                 'sprite_size', 'sprite_key_id',
+                 'sprite_size', 'sprite_key_id', '_sprite_state',
                  'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
                  '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
                  '_effect_custom_ids', '_effect_custom_paths',
@@ -655,6 +658,7 @@ class EntityTable:
         self.sprite_size = np.zeros((0, 2), dtype=np.float32)
         #: Dense sprite recipe id per entity slot.  -1 means no sprite.
         self.sprite_key_id = np.full((0,), SPRITE_NONE, dtype=np.int32)
+        self._sprite_state = np.zeros((0,), dtype=np.uint64)
         #: Dense model recipe id per entity slot.  -1 means no model.
         self.model_recipe_id = np.full((0,), -1, dtype=np.int32)
         #: Cold model transform, flattened as a mat4 per entity slot.
@@ -862,6 +866,11 @@ class EntityTable:
             keys[:len(self.sprite_key_id)] = self.sprite_key_id
         self.sprite_key_id = keys
 
+        sprite_state_bits = np.zeros((grown,), dtype=np.uint64)
+        if len(self._sprite_state):
+            sprite_state_bits[:len(self._sprite_state)] = self._sprite_state
+        self._sprite_state = sprite_state_bits
+
         model_ids = np.full((grown,), -1, dtype=np.int32)
         if len(self.model_recipe_id):
             model_ids[:len(self.model_recipe_id)] = self.model_recipe_id
@@ -974,6 +983,19 @@ class EntityTable:
         # published from the existing snapshot path, avoiding a second object walk.
         # Portal state is the other small live entity family; keep it numeric so
         # secondary render views never need Portal objects.
+        warm_slots = np.flatnonzero(
+            self.class_bits[:n] & ENT_SPRITE_WARM
+        ).astype(np.int32, copy=False)
+        if len(warm_slots):
+            changed = []
+            for slot_value in warm_slots:
+                slot = int(slot_value)
+                state = _sprite_state_fingerprint(sprite_state(things[slot]))
+                if state != self._sprite_state[slot]:
+                    changed.append(slot)
+            if changed:
+                self.refresh_rows(things, changed)
+
         self._refresh_portal_live(things)
 
         # Light state is render state, not renderer metadata. Ordinary Lights
@@ -1039,6 +1061,7 @@ class EntityTable:
                     expired_slots = effect_ls[expired]
                     self.effect_active[expired_slots] = False
                     active = self.effect_active[effect_ls]
+                explosion_active = explosion & active
 
                 # Effect lights are numeric too. FIRE keeps its authored light
                 # continuously; EXPLOSION gets only a short decaying flash when
@@ -1171,7 +1194,7 @@ class EntityTable:
             dst = np.asarray(move_dst, dtype=np.intp)
             for arr in (self.class_bits, self.light_color, self.light_params,
                         self.light_enabled, self.light_casts_shadows,
-                        self.sprite_size, self.sprite_key_id,
+                        self.sprite_size, self.sprite_key_id, self._sprite_state,
                         self.model_recipe_id, self.model_base_matrix,
                         self.model_normal_matrix, self.effect_type,
                         self.effect_fire_variant, self.effect_custom_id,
@@ -1263,6 +1286,7 @@ class EntityTable:
     def _resolve_entity_cold(self, slot, thing):
         """Resolve authored render state for one entity row."""
         self.class_bits[slot] = _entity_class_bits(thing)
+        self._sprite_state[slot] = _sprite_state_fingerprint(sprite_state(thing))
 
         # Sprite identity/size is cold for authored entities.  This must be
         # resolved at the same edit boundary as class_bits/model_recipe_id:
