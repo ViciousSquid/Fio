@@ -215,14 +215,19 @@ def camera_matrices(aspect=1.0, fov_deg=70.0, eye=CAMERA_EYE, target=CAMERA_TARG
 
 
 def render_config(**overrides):
-    """The ``config`` dict :meth:`Renderer_F.render_scene` reads.
+    """Build a renderer config including the current dense projections.
 
-    Only the keys the renderer actually looks up, with values that keep the
-    visual tests deterministic: no camera-distance cull (so geometry cannot
-    vanish because a machine picked a different default), no play mode, grid
-    off.
+    The production renderer requires RenderTable/EntityTable slots. Visual and
+    benchmark tests should not duplicate that plumbing merely to draw a scene,
+    so this helper projects the supplied world automatically unless a test
+    explicitly provides a projection.
     """
     from engine.constants import RENDER_MODE_LIT
+    from engine.render_table import RenderTable
+    from engine.entity_table import EntityTable
+
+    brushes = overrides.get("all_brushes", ())
+    things = overrides.get("all_things", ())
 
     config = {
         "render_mode": RENDER_MODE_LIT,
@@ -232,9 +237,28 @@ def render_config(**overrides):
         "camera_distance_cull": False,
         "shadows_enabled": True,
     }
+
+    if "render_table" not in overrides:
+        table = RenderTable()
+        table.begin_frame(brushes, epoch=1)
+        refs = np.empty(len(brushes), dtype=object)
+        if len(brushes):
+            refs[:] = brushes
+        slots = np.arange(table.count, dtype=np.int32)
+        config.update(render_table=table, render_refs=refs, all_brush_slots=slots)
+
+    if "entity_table" not in overrides:
+        etable = EntityTable()
+        hidden = etable.begin_frame(things, epoch=1)
+        refs = np.empty(len(things), dtype=object)
+        if len(things):
+            refs[:] = things
+        slots = np.arange(etable.count, dtype=np.int32)
+        config.update(entity_table=etable, entity_refs=refs,
+                      visible_thing_slots=slots, thing_hidden=hidden)
+
     config.update(overrides)
     return config
-
 
 def make_renderer(config=None):
     """A :class:`engine.renderer_F.Renderer_F` on the current GL context.
