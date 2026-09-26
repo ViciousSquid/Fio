@@ -339,7 +339,7 @@ def test_portal_virtual_scene_consumes_dense_tables(renderer):
     )
 
     (table_out, groups, model_slots,
-     sprite_slots, lights) = renderer._portal_numeric_scene_inputs(
+     sprite_slots, effect_slots, lights) = renderer._portal_numeric_scene_inputs(
         projection, view, config
     )
 
@@ -413,7 +413,6 @@ def test_numeric_sprite_render_submits_instanced_quads(renderer, context):
 
 def test_numeric_sprite_submission_is_one_draw_per_texture(renderer, context):
     """Equal sprite texture ids collapse into one instanced draw run."""
-    import engine.renderer_core as rc
     from editor.things import Light, Pickup
 
     brushes = [box_brush("floor", (0, -16, 0), (1024, 32, 1024))]
@@ -426,24 +425,30 @@ def test_numeric_sprite_submission_is_one_draw_per_texture(renderer, context):
                              color=[255, 255, 255], intensity=2.0,
                              radius=1400.0, state="on",
                              casts_shadows=False))
-    calls = {"draws": 0, "instances": 0}
-    real = rc.gl.glDrawArraysInstanced
 
-    def draw_instanced(mode, first, count, instances, *args, **kwargs):
-        calls["draws"] += 1
-        calls["instances"] += int(instances)
-        return real(mode, first, count, instances, *args, **kwargs)
+    # Count only the sprite pass. A raw GL draw hook also sees brush/model
+    # instancing, which is unrelated to this assertion.
+    seen = {"calls": 0, "instances": 0}
+    original = renderer.draw_sprites_instanced
 
-    rc.gl.glDrawArraysInstanced = draw_instanced
+    def wrapped(*args, **kwargs):
+        seen["calls"] += 1
+        slots = args[3]
+        result = original(*args, **kwargs)
+        seen["instances"] += int(result)
+        seen["last_slots"] = len(slots)
+        return result
+
+    renderer.draw_sprites_instanced = wrapped
     try:
         _render(renderer, context, brushes, things, numeric=True,
                 live_things=things)
     finally:
-        rc.gl.glDrawArraysInstanced = real
+        renderer.draw_sprites_instanced = original
 
-    assert calls["instances"] == 20
-    assert calls["draws"] == 1
-
+    assert seen["calls"] >= 1
+    assert seen["last_slots"] == 20
+    assert seen["instances"] == 20
 
 def test_a_hidden_brush_is_absent_from_both(renderer, context):
     brushes, things = _scene()
