@@ -992,35 +992,35 @@ class EntityTable:
                     self.effect_active[expired_slots] = False
                     active = self.effect_active[effect_ls]
 
-                 # Effect lights are numeric too. FIRE keeps its authored light
-                 # continuously; EXPLOSION gets only a short decaying flash when
-                 # actually triggered in runtime. Editor preview emits no light.
-                 self.light_enabled[effect_ls] = self.effect_light_enabled[effect_ls]
-                 self.light_params[effect_ls, 0] = self.effect_params[effect_ls, 2]
-                 self.light_params[effect_ls, 1] = self.effect_params[effect_ls, 3]
-                 if np.any(explosion):
-                     explosion_slots = effect_ls[explosion]
-                     if effect_runtime:
-                         explosion_elapsed = elapsed[explosion]
-                         explosion_lifetime = lifetime[explosion]
-                         flash_duration = np.minimum(explosion_lifetime, 0.12)
-                         flash_active = (
-                             explosion_active[explosion]
-                             & (explosion_elapsed < flash_duration)
-                         )
-                         decay = np.exp(-explosion_elapsed / 0.035).astype(
-                             np.float32, copy=False
-                         )
-                         base = self.effect_params[explosion_slots, 2]
-                         self.light_enabled[explosion_slots] = (
-                             self.effect_light_enabled[explosion_slots]
-                             & flash_active
-                         )
-                         self.light_params[explosion_slots, 0] = (
-                             base * (1.0 + 2.0 * decay)
-                         )
-                     else:
-                         self.light_enabled[explosion_slots] = False
+                # Effect lights are numeric too. FIRE keeps its authored light
+                # continuously; EXPLOSION gets only a short decaying flash when
+                # actually triggered in runtime. Editor preview emits no light.
+                self.light_enabled[effect_ls] = self.effect_light_enabled[effect_ls]
+                self.light_params[effect_ls, 0] = self.effect_params[effect_ls, 2]
+                self.light_params[effect_ls, 1] = self.effect_params[effect_ls, 3]
+                if np.any(explosion):
+                    explosion_slots = effect_ls[explosion]
+                    if effect_runtime:
+                        explosion_elapsed = elapsed[explosion]
+                        explosion_lifetime = lifetime[explosion]
+                        flash_duration = np.minimum(explosion_lifetime, 0.12)
+                        flash_active = (
+                            explosion_active[explosion]
+                            & (explosion_elapsed < flash_duration)
+                        )
+                        decay = np.exp(-explosion_elapsed / 0.035).astype(
+                            np.float32, copy=False
+                        )
+                        base = self.effect_params[explosion_slots, 2]
+                        self.light_enabled[explosion_slots] = (
+                            self.effect_light_enabled[explosion_slots]
+                            & flash_active
+                        )
+                        self.light_params[explosion_slots, 0] = (
+                            base * (1.0 + 2.0 * decay)
+                        )
+                    else:
+                        self.light_enabled[explosion_slots] = False
 
                 # EXPLOSION preview is editor-only and static: place the
                 # sprite on atlas frame 10 without arming runtime playback.
