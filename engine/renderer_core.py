@@ -367,10 +367,12 @@ class BaseRenderer:
         self._effect_instance_vbo = None
         self._effect_instance_vao = None
         self._effect_instance_capacity = 0
-        self._effect_instance_data = np.empty((0, 15), dtype=np.float32)
+        self._effect_instance_data = np.empty((0, 16), dtype=np.float32)
         self._effect_order_scratch = np.empty(0, dtype=np.int32)
         self._effect_depth_scratch = np.empty(0, dtype=np.float64)
         self._effect_depth_aux_scratch = np.empty(0, dtype=np.float64)
+        self._effect_expand_slots_scratch = np.empty(0, dtype=np.int32)
+        self._effect_expand_particle_scratch = np.empty(0, dtype=np.float32)
         # Capacity-stable scratch for the numeric sprite filter. The renderer
         # owns these arrays so steady-state drawing does not allocate key/mask/
         # texture arrays per frame.
@@ -845,7 +847,9 @@ layout (location = 10) in vec4 iPayload;
                                                            'sprite_texture']):
             print(f'{_BASE_RENDERER_PREFIX} Sprite instancing shader compiled successfully.')
 
-    EFFECT_INSTANCE_FLOATS = 15
+    # One Effect row expands into deterministic virtual flame cards.
+    EFFECT_INSTANCE_FLOATS = 16
+    FIRE_VIRTUAL_CARDS = 20
 
     def _compile_instanced_effect_shader(self):
         """Compile the single procedural FIRE/EXPLOSION instance shader."""
@@ -895,6 +899,7 @@ layout (location = 10) in vec4 iPayload;
             (2, 4, 12),
             (3, 4, 28),
             (4, 4, 44),
+            (5, 1, 60),
         ):
             gl.glVertexAttribPointer(
                 location, size, gl.GL_FLOAT, gl.GL_FALSE,
@@ -910,12 +915,7 @@ layout (location = 10) in vec4 iPayload;
         self, projection, view, table, slots, hidden=None,
         play_mode=True, editor_time=0.0, camera_pos=None,
     ):
-        """Draw all visible Effects as one numeric instanced pass.
-
-        The authored Effect objects never enter this path. FIRE and EXPLOSION
-        differ only through the numeric type/lifetime columns consumed by the
-        same OpenGL 3.3 shader.
-        """
+        """Draw FIRE/EXPLOSION as one dense OpenGL 3.3 effect pass."""
         if 'effect_instanced' not in self.shaders or not len(slots):
             return 0
 
@@ -951,34 +951,56 @@ layout (location = 10) in vec4 iPayload;
             np.subtract(aux, cz, out=aux)
             np.square(aux, out=aux)
             np.add(depth, aux, out=depth)
-            # Back-to-front for alpha blending.
             order = np.argsort(depth, kind='stable')[::-1]
 
-        self._ensure_effect_instance_buffer(count)
-        data = self._effect_instance_data[:count]
         sorted_slots = slots[order]
+        sorted_types = table.effect_type[sorted_slots]
+        repeats = np.where(
+            sorted_types == 0,
+            self.FIRE_VIRTUAL_CARDS,
+            1,
+        ).astype(np.int32)
+        expanded_count = int(repeats.sum())
 
-        np.take(table.pos, sorted_slots, axis=0, out=data[:, 0:3])
-        np.take(table.effect_params[:, :2], sorted_slots, axis=0,
+        if len(self._effect_expand_slots_scratch) < expanded_count:
+            grown = max(64, len(self._effect_expand_slots_scratch) * 2, expanded_count)
+            self._effect_expand_slots_scratch = np.empty(grown, dtype=np.int32)
+            self._effect_expand_particle_scratch = np.empty(
+                grown, dtype=np.float32)
+
+        expanded_slots = self._effect_expand_slots_scratch[:expanded_count]
+        np.repeat(sorted_slots, repeats, out=expanded_slots)
+
+        particle = self._effect_expand_particle_scratch[:expanded_count]
+        expanded_types = np.repeat(sorted_types, repeats)
+        particle.fill(0.0)
+        fire_mask = expanded_types == 0
+        if fire_mask.any():
+            fire_positions = np.flatnonzero(fire_mask)
+            particle[fire_positions] = (
+                np.arange(len(fire_positions), dtype=np.float32)
+                % float(self.FIRE_VIRTUAL_CARDS)
+            )
+
+        self._ensure_effect_instance_buffer(expanded_count)
+        data = self._effect_instance_data[:expanded_count]
+
+        np.take(table.pos, expanded_slots, axis=0, out=data[:, 0:3])
+        np.take(table.effect_params[:, :2], expanded_slots, axis=0,
                out=data[:, 3:5])
-        # EntityTable owns the effect clock. In the editor FIRE advances with
-        # the same clock that drives the intrinsic light, while EXPLOSION stays
-        # at t=0 until Play; runtime rows use elapsed-since-spawn.
-        np.take(table.effect_elapsed, sorted_slots, out=data[:, 5])
-        np.take(table.effect_lifetime, sorted_slots, out=data[:, 6])
-        np.take(table.effect_seed, sorted_slots, out=data[:, 7])
-        data[:, 8] = table.effect_type[sorted_slots]
+        np.take(table.effect_elapsed, expanded_slots, out=data[:, 5])
+        np.take(table.effect_lifetime, expanded_slots, out=data[:, 6])
+        np.take(table.effect_seed, expanded_slots, out=data[:, 7])
+        data[:, 8] = expanded_types
         data[:, 9:11] = 0.0
-        np.take(table.effect_color, sorted_slots, axis=0,
+        np.take(table.effect_color, expanded_slots, axis=0,
                out=data[:, 11:14])
         data[:, 14] = 1.0
+        data[:, 15] = particle
 
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
 
-        # Effects are translucent emissive billboards. Make their raster state
-        # explicit so a preceding material/portal pass cannot leave culling or
-        # an incompatible blend function behind.
         blend_was = bool(gl.glIsEnabled(gl.GL_BLEND))
         cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
         if not blend_was:
@@ -1005,7 +1027,9 @@ layout (location = 10) in vec4 iPayload;
         gl.glUniform1i(uniforms['explosion_texture'], 0)
 
         gl.glBindVertexArray(self._ensure_effect_instance_vao())
-        gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, count)
+        gl.glDrawArraysInstanced(
+            gl.GL_TRIANGLE_STRIP, 0, 4, expanded_count
+        )
         self.render_stats.draw_calls += 1
         self.render_stats.batched_draws += 1
         gl.glBindVertexArray(0)
@@ -1014,7 +1038,7 @@ layout (location = 10) in vec4 iPayload;
             gl.glEnable(gl.GL_CULL_FACE)
         if not blend_was:
             gl.glDisable(gl.GL_BLEND)
-        return count
+        return expanded_count
 
     def _ensure_sprite_instance_buffer(self, count):
         """Grow the sprite instance VBO and its staging array to *count* rows."""
