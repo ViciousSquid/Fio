@@ -1052,6 +1052,7 @@ class QtGameView(QOpenGLWidget):
             hidden = etable.begin_frame(
                 things_to_render,
                 getattr(self.editor.state, 'world_epoch', None),
+                effect_runtime=self.play_mode,
             )
             if etable.generation != generation:
                 self._editor_entity_refs = np.empty(
