@@ -491,6 +491,13 @@ def _effect_float(props, key, default):
         return float(default)
 
 
+def _effect_bool(props, key, default=True):
+    value = props.get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    return bool(value)
+
+
 def _effect_colour(props, key, default):
     value = props.get(key, default)
     try:
@@ -1138,8 +1145,8 @@ class EntityTable:
             self.sprite_size[slot] = (size * 3.25, size * 3.25)
             self.light_color[slot] = self.effect_light_color[slot]
             self.light_params[slot] = (light_intensity, light_radius)
-            self.light_enabled[slot] = _light_bool(
-                props.get('light_enabled', True), True
+            self.light_enabled[slot] = _effect_bool(
+                props, 'light_enabled', True
             )
             self.light_casts_shadows[slot] = False
         else:
