@@ -55,6 +55,8 @@ def test_monster_dead_snapshot_interns_distinct_dead_sprite_recipe():
     }
     dead = dict(idle, dead=True)
 
+    # The snapshot path updates an already-projected monster row.
+    table.begin_frame([idle], epoch=1)
     table.update_monster_snapshot(0, idle)
     idle_id = int(table.sprite_key_id[0])
     table.update_monster_snapshot(0, dead)
