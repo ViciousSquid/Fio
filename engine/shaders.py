@@ -548,6 +548,7 @@ uniform vec3 uAmbient;
 const float EXPLOSION_SHEET_COLUMNS = 5.0;
 const float EXPLOSION_SHEET_ROWS = 4.0;
 const float EXPLOSION_FRAME_COUNT = 16.0;
+const float EXPLOSION_PREVIEW_FRAME_INDEX = 9.0; // authoring frame 10
 
 float fogFactor(highp vec3 fragPos) {
     if (uFogEnabled == 0) return 0.0;
@@ -582,10 +583,16 @@ void main() {
     float lifetime = max(EffectParams.w, 0.001);
     float t = clamp(elapsed / lifetime, 0.0, 1.0);
 
-    float frame = min(
-        floor(t * EXPLOSION_FRAME_COUNT),
-        EXPLOSION_FRAME_COUNT - 1.0
-    );
+    float frame;
+    if (EffectMeta.w > 0.5) {
+        // Editor Preview is deliberately static: always show authoring frame 10.
+        frame = EXPLOSION_PREVIEW_FRAME_INDEX;
+    } else {
+        frame = min(
+            floor(t * EXPLOSION_FRAME_COUNT),
+            EXPLOSION_FRAME_COUNT - 1.0
+        );
+    }
     vec4 sheet = texture(explosion_texture, explosionAtlasUV(TexCoords, frame));
 
     if (sheet.a < 0.02 || visualIntensity <= 0.0) discard;
