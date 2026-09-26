@@ -15,8 +15,10 @@ def test_effect_defaults_to_fire_with_intrinsic_light():
     assert effect.properties["preview"] is False
     assert effect.properties["fire_texture"] == EFFECT_FIRE_TEXTURES[0]
     assert len(EFFECT_FIRE_TEXTURES) == 5
-    assert effect.properties["size"] == 32.0
-    assert effect.properties["scale"] == 1.0
+    assert effect.properties["width"] == 32.0
+    assert effect.properties["height"] == 24.0
+    assert "size" not in effect.properties
+    assert "scale" not in effect.properties
     assert effect.properties["light_enabled"] is True
     assert effect.properties["light_radius"] == 128.0
     assert effect.properties["light_intensity"] == 2.5
@@ -108,27 +110,31 @@ def test_explosion_preview_off_remains_dormant_in_editor():
     assert not bool(table.effect_alive[0])
 
 
-def test_explosion_scale_is_projected_to_the_same_size_used_by_preview_and_runtime():
-    small = Effect(properties={
+def test_effect_billboard_width_and_height_are_projected_directly():
+    effect = Effect(properties={
         "effect_type": EFFECT_EXPLOSION,
-        "size": 32.0,
-        "scale": 0.5,
+        "width": 48.0,
+        "height": 18.0,
         "preview": True,
     })
-    large = Effect(properties={
-        "effect_type": EFFECT_EXPLOSION,
-        "size": 32.0,
-        "scale": 2.0,
+    table = EntityTable()
+    table.begin_frame([effect], epoch=1, effect_runtime=False)
+
+    assert float(table.effect_params[0, 0]) == 48.0
+    np.testing.assert_allclose(table.sprite_size[0], (48.0, 18.0))
+
+
+def test_fire_preview_flag_is_available_for_the_same_effect_primitive():
+    effect = Effect(properties={
+        "effect_type": EFFECT_FIRE,
         "preview": True,
     })
-    small_table = EntityTable()
-    large_table = EntityTable()
+    table = EntityTable()
+    table.begin_frame([effect], epoch=1, effect_runtime=False)
 
-    small_table.begin_frame([small], epoch=1, effect_runtime=False)
-    large_table.begin_frame([large], epoch=1, effect_runtime=False)
-
-    assert float(small_table.effect_params[0, 0]) == 16.0
-    assert float(large_table.effect_params[0, 0]) == 64.0
+    assert bool(table.effect_preview[0])
+    assert bool(table.effect_alive[0])
+    np.testing.assert_allclose(table.sprite_size[0], (32.0, 24.0))
 
 
 def test_explosion_light_is_a_short_runtime_flash_not_a_constant_source():
