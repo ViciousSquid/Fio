@@ -861,9 +861,10 @@ class Renderer_F(BaseRenderer):
         else:
             model_slots = np.empty(0, dtype=np.int32)
             sprite_slots = np.empty(0, dtype=np.int32)
+            effect_slots = np.empty(0, dtype=np.int32)
 
         lights = self._get_active_lights((), config)
-        return table, groups, model_slots, sprite_slots, lights
+        return table, groups, model_slots, sprite_slots, effect_slots, lights
 
     def _render_water_reflections(
             self, table, water_slots, lights, config, projection, view, camera_pos):
