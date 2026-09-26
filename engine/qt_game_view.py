@@ -205,6 +205,8 @@ class QtGameView(QOpenGLWidget):
 
         self.player2 = None
         self.splitscreen_mode = False
+        # Player representation used by split-screen and portal views.
+        self.show_glasses = True
 
         # PYGAME INIT (MUST happen before _init_sound_system)
         pygame.init()
@@ -257,6 +259,8 @@ class QtGameView(QOpenGLWidget):
             "selected_object": None,
             "time": 0.0,
             "show_sprites_in_play_mode": False,
+            "show_glasses": True,
+            "player_glasses_positions": (),
             "grid_visible": True,
         }
 
@@ -671,25 +675,94 @@ class QtGameView(QOpenGLWidget):
         else:
             self.repaint()
 
-    def _process_sound_queue(self):
-        """Drain the logic thread's sound queue and play via pygame mixer.
+    @staticmethod
+    def _sound_radius_gain(distance, radius):
+        """Linear falloff: full volume at the source, zero at the radius."""
+        try:
+            distance = max(0.0, float(distance))
+            radius = max(0.0, float(radius))
+        except (TypeError, ValueError):
+            return 0.0
+        if radius <= 0.0:
+            return 0.0
+        if distance >= radius:
+            return 0.0
+        return 1.0 - (distance / radius)
 
-        Speaker requests carry an ``action`` ('play'/'stop'), a ``looping`` flag
-        and an ``entity_id``. Looping speakers play with ``loops=-1`` and their
-        channel is remembered under the entity id so a later StopSound can
-        actually silence them; plain one-shot sounds (no entity id) just play.
-        Requests without an 'action' default to 'play', so any existing caller
-        that queues a bare {'file', 'volume'} dict is unaffected.
+    def _spatial_sound_mix(self, position, radius=512.0, global_sound=False):
+        """Return (gain, left, right) for a world-space sound source."""
+        if global_sound or position is None:
+            return 1.0, 1.0, 1.0
+        try:
+            source = np.asarray(position, dtype=np.float32)
+            listener = np.asarray((
+                float(self.camera.pos.x), float(self.camera.pos.y),
+                float(self.camera.pos.z),
+            ), dtype=np.float32)
+            delta = source - listener
+            distance = float(np.linalg.norm(delta))
+        except (TypeError, ValueError, AttributeError):
+            return 1.0, 1.0, 1.0
+
+        gain = self._sound_radius_gain(distance, radius)
+        if gain <= 0.0:
+            return 0.0, 1.0, 1.0
+
+        try:
+            front = self.camera.get_front_vector()
+            right_vec = glm.normalize(
+                glm.cross(front, glm.vec3(0, 1, 0))
+            )
+            horizontal = glm.vec3(float(delta[0]), 0.0, float(delta[2]))
+            if glm.length(horizontal) > 0.0001:
+                horizontal = glm.normalize(horizontal)
+                pan = float(glm.dot(horizontal, right_vec))
+            else:
+                pan = 0.0
+        except Exception:
+            pan = 0.0
+
+        pan = max(-1.0, min(1.0, pan))
+        angle = (pan + 1.0) * (math.pi / 4.0)
+        return gain, math.cos(angle), math.sin(angle)
+
+    def _process_sound_queue(self):
+        """Drain queued sound requests and keep active speaker channels mixed.
+
+        Speaker requests carry an action ('play'/'stop'), looping,
+        position/radius for spatial speakers, and entity_id.
+        Looping speakers remain tracked so their attenuation follows the
+        listener as the player moves.
         """
         speaker_channels = getattr(self, "_speaker_channels", None)
         if speaker_channels is None:
             speaker_channels = self._speaker_channels = {}
+        speaker_mix = getattr(self, "_speaker_mix", None)
+        if speaker_mix is None:
+            speaker_mix = self._speaker_mix = {}
+
+        def apply_mix(channel, meta):
+            gain, left, right = self._spatial_sound_mix(
+                meta.get('position'),
+                meta.get('radius', 512.0),
+                bool(meta.get('global', False)),
+            )
+            volume = max(0.0, min(1.0, float(meta.get('volume', 1.0))))
+            if meta.get('position') is not None and not meta.get('global', False):
+                channel.set_volume(
+                    volume * gain * left,
+                    volume * gain * right,
+                )
+            else:
+                channel.set_volume(volume)
+
         for request in self.game_state.consume_sounds():
             action = request.get('action', 'play')
             entity_id = request.get('entity_id')
 
             if action == 'stop':
                 channel = speaker_channels.pop(entity_id, None)
+                speaker_mix.pop(entity_id, None)
                 if channel is not None:
                     try:
                         channel.stop()
@@ -705,22 +778,43 @@ class QtGameView(QOpenGLWidget):
             sound = self._get_sound_instance(sound_file)
             if not sound:
                 continue
-            # -1 loops = repeat until stopped; 0 = play once.
+
             loops = -1 if request.get('looping') else 0
+
             # If this speaker is already looping, stop the old channel first so
-            # a re-trigger doesn't stack a second copy on top of itself.
+            # a re-trigger does not stack a second copy on top of itself.
             if entity_id is not None:
                 prev = speaker_channels.pop(entity_id, None)
+                speaker_mix.pop(entity_id, None)
                 if prev is not None:
                     try:
                         prev.stop()
                     except Exception as exc:
                         print(f"[QtGameView] speaker restart stop failed: {exc}")
+
             channel = sound.play(loops=loops)
             if channel:
-                channel.set_volume(volume)
+                meta = {
+                    'position': request.get('position'),
+                    'radius': request.get('radius', 512.0),
+                    'global': bool(request.get('global', False)),
+                    'volume': volume,
+                }
+                apply_mix(channel, meta)
+
+                # Track only entity-owned looping channels. One-shots get the
+                # correct spatial mix at their start position.
                 if entity_id is not None and loops != 0:
                     speaker_channels[entity_id] = channel
+                    speaker_mix[entity_id] = meta
+
+        # Re-mix active looping speakers every render frame so walking toward
+        # or away from a speaker changes volume without re-triggering playback.
+        for entity_id, channel in list(speaker_channels.items()):
+            meta = speaker_mix.get(entity_id)
+            if meta is not None:
+                apply_mix(channel, meta)
+
 
     def _process_console_command_queue(self):
         """Run any console commands queued by the I/O system on the UI thread.
@@ -849,6 +943,29 @@ class QtGameView(QOpenGLWidget):
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
         gl.glBindVertexArray(0)
         gl.glDisable(gl.GL_BLEND)
+
+    def _render_player_glasses(self, positions, proj_matrix, view_matrix):
+        """Draw one or more player bodies as glasses billboards."""
+        if not getattr(self, 'show_glasses', True):
+            return
+        if not positions or not self.renderer:
+            return
+        eye_positions = [
+            (float(pos.x), float(pos.y) + 40.0, float(pos.z))
+            if hasattr(pos, 'x')
+            else (float(pos[0]), float(pos[1]) + 40.0, float(pos[2]))
+            for pos in positions
+        ]
+        self.renderer.draw_player_glasses(
+            proj_matrix,
+            view_matrix,
+            eye_positions,
+            width=40.0,
+            height=18.0,
+        )
+        # render_scene leaves depth testing disabled; restore that state after
+        # this explicit post-scene billboard pass.
+        gl.glDisable(gl.GL_DEPTH_TEST)
 
     def _render_projectiles(self, projectiles, proj_matrix, view_matrix):
         if not projectiles or 'sprite' not in self.renderer.shaders:
@@ -1033,6 +1150,17 @@ class QtGameView(QOpenGLWidget):
         self._render_config["selected_object"] = self.selected_object
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
+        self._render_config["show_glasses"] = bool(getattr(self, 'show_glasses', True))
+        _glass_positions = []
+        if render_state is not None and self.play_mode and self._render_config["show_glasses"]:
+            if not getattr(render_state, 'player_dead', False):
+                _p = render_state.player_pos
+                _glass_positions.append((float(_p.x), float(_p.y) + 40.0, float(_p.z)))
+            if (getattr(render_state, 'splitscreen_active', False)
+                    and not getattr(render_state, 'player2_dead', False)):
+                _p2 = render_state.player2_pos
+                _glass_positions.append((float(_p2.x), float(_p2.y) + 40.0, float(_p2.z)))
+        self._render_config["player_glasses_positions"] = tuple(_glass_positions)
         self._render_config["grid_visible"] = getattr(self, 'grid_visible', True) and not self.play_mode
         self._render_config["terrain"] = getattr(self.editor, 'terrain', None)
         if render_state and hasattr(render_state, 'all_brushes'):
@@ -1052,6 +1180,7 @@ class QtGameView(QOpenGLWidget):
             hidden = etable.begin_frame(
                 things_to_render,
                 getattr(self.editor.state, 'world_epoch', None),
+                effect_runtime=self.play_mode,
             )
             if etable.generation != generation:
                 self._editor_entity_refs = np.empty(
@@ -1106,6 +1235,24 @@ class QtGameView(QOpenGLWidget):
                 getattr(render_state, _field, None)
                 if render_state is not None else None
             )
+
+        # The EntityTable is shared by the editor/logic paths, while RenderState
+        # is a shallow snapshot. A structural entity change can therefore become
+        # visible in the live table one frame before the snapshot's hidden mask
+        # is refreshed. Repair only this transient mismatch; the normal frame
+        # keeps consuming the published dense mask without another object walk.
+        _etable = self._render_config.get("entity_table")
+        _hidden = self._render_config.get("thing_hidden")
+        if (_etable is not None
+                and (_hidden is None or len(_hidden) < _etable.count)):
+            self._render_config["thing_hidden"] = _etable.begin_frame(
+                things_to_render,
+                getattr(self.editor.state, 'world_epoch', None),
+                effect_runtime=self.play_mode,
+            )
+            self._render_config["visible_thing_slots"] = np.arange(
+                _etable.count, dtype=np.int32)
+
         _splitscreen = (
             self.play_mode
             and getattr(self, 'splitscreen_mode', False)
@@ -1175,6 +1322,14 @@ class QtGameView(QOpenGLWidget):
                                                 _split_proj, self.view_matrix)
             if self.play_mode and getattr(self, 'show_spatial_grid', False):
                 self._render_spatial_grid(_split_proj, self.view_matrix)
+            if (self.show_glasses and render_state is not None
+                    and not getattr(render_state, 'player2_dead', False)):
+                self._render_player_glasses(
+                    [render_state.player2_pos],
+                    _split_proj,
+                    self.view_matrix,
+                )
+
 
             gl.glScissor(_half, 0, _half, _h)
             gl.glViewport(_half, 0, _half, _h)
@@ -1187,11 +1342,16 @@ class QtGameView(QOpenGLWidget):
             _p2_view = render_state.player2_view_matrix
             _p2_cam_pos = render_state.player2_pos
 
+            # P2 has a different camera, so start from the complete live-hidden
+            # dense brush projection. render_scene performs the camera-specific
+            # narrowing from these slots; using P1's already-visible slots here
+            # would incorrectly hide geometry that only P2 can see.
+            _p2_brush_slots = self._render_config.get("all_brush_slots")
             self.renderer.render_scene(
                 _split_proj, _p2_view, _p2_cam_pos,
                 p2_brushes, things_to_render,
                 self.selected_object, self._render_config,
-                clear=False
+                clear=False, brush_slots=_p2_brush_slots
             )
 
             if render_state and hasattr(render_state, 'bullet_marks'):
@@ -1203,6 +1363,14 @@ class QtGameView(QOpenGLWidget):
                                                 _split_proj, _p2_view)
             if self.play_mode and getattr(self, 'show_spatial_grid', False):
                 self._render_spatial_grid(_split_proj, _p2_view)
+            if (self.show_glasses and render_state is not None
+                    and not getattr(render_state, 'player_dead', False)):
+                self._render_player_glasses(
+                    [render_state.player_pos],
+                    _split_proj,
+                    _p2_view,
+                )
+
 
             gl.glDisable(gl.GL_SCISSOR_TEST)
             gl.glViewport(0, 0, _w, _h)
@@ -1764,6 +1932,7 @@ class QtGameView(QOpenGLWidget):
     def load_all_sprite_textures(self):
         things = {
             'PlayerStart': 'player.png',
+            'Glasses': 'glasses.png',
             'Light': 'light.png',
             'Monster': 'monster.png',
             'Pickup': 'pickup.png',

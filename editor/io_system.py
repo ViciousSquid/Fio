@@ -1044,6 +1044,20 @@ def register_default_io():
         ]
     )
 
+    # === EFFECT ===
+    # Effect TYPE is a string-valued authored selector. SetType is deliberately
+    # generic so adding more Effect types only extends Effect.EFFECT_TYPES.
+    # Explode is the separate one-shot transition/playback command.
+    register_io('effect',
+        inputs=[
+            IODef('SetType', 'Set the Effect TYPE (fire, explosion, or another registered type)', 'string'),
+            IODef('Explode', 'Switch to EXPLOSION and play its animation once'),
+        ],
+        outputs=[
+            IODef('OnChanged', 'Fired when the Effect TYPE changes (parameter: new type)', 'string'),
+        ]
+    )
+
     # === PORTAL ===
     # Prey 2006-style portal that links two named portal entities.
     register_io('portal',

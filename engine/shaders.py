@@ -480,6 +480,142 @@ void main() {
     FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a);
 }""",
 
+    'effect.vert': """#version 330 core
+precision highp float;
+
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec3 iEffectPos;
+layout (location = 2) in vec4 iEffectParams;  // width, intensity, elapsed, lifetime
+layout (location = 3) in vec4 iEffectMeta;    // seed, type, height, spare
+layout (location = 4) in vec4 iEffectColor;
+layout (location = 5) in float iParticleIndex;
+
+uniform mat4 projection;
+uniform mat4 view;
+
+out vec2 TexCoords;
+out vec3 FragPos;
+out vec4 EffectParams;
+out vec4 EffectMeta;
+out vec3 EffectColor;
+
+void main() {
+    float width = max(iEffectParams.x, 0.01);
+    float height = max(iEffectMeta.z, 0.01);
+    float elapsed = max(iEffectParams.z, 0.0);
+    float lifetime = max(iEffectParams.w, 0.001);
+    float t = clamp(elapsed / lifetime, 0.0, 1.0);
+    if (iEffectMeta.w > 0.5) {
+        // Keep editor Preview visually locked to animation frame 10.
+        t = (9.5 / 16.0);
+    }
+    float growth = mix(1.0, 3.0, smoothstep(0.0, 0.28, t));
+
+    vec3 cameraRight = normalize(vec3(view[0][0], view[1][0], view[2][0]));
+    const vec3 worldUp = vec3(0.0, 1.0, 0.0);
+    float vertical = aPos.y + 0.5;
+
+    vec3 worldPos = iEffectPos
+                  + cameraRight * aPos.x * width * growth
+                  + worldUp * vertical * height * growth;
+
+    TexCoords = aPos + 0.5;
+    FragPos = worldPos;
+    EffectParams = iEffectParams;
+    EffectMeta = iEffectMeta;
+    EffectColor = iEffectColor.rgb;
+    gl_Position = projection * view * vec4(worldPos, 1.0);
+}
+""",
+
+    'effect.frag': """#version 330 core
+precision mediump float;
+
+out vec4 FragColor;
+
+in highp vec2 TexCoords;
+in highp vec3 FragPos;
+in highp vec4 EffectParams;
+in highp vec4 EffectMeta;
+in highp vec3 EffectColor;
+
+uniform sampler2D explosion_texture;
+
+uniform int uFogEnabled;
+uniform vec3 uFogColor;
+uniform float uFogStart;
+uniform float uFogEnd;
+uniform float uFogDensity;
+uniform highp vec3 uFogCamPos;
+uniform vec3 uAmbient;
+
+const float EXPLOSION_SHEET_COLUMNS = 5.0;
+const float EXPLOSION_SHEET_ROWS = 4.0;
+const float EXPLOSION_FRAME_COUNT = 16.0;
+const float EXPLOSION_PREVIEW_FRAME_INDEX = 9.0; // authoring frame 10
+
+float fogFactor(highp vec3 fragPos) {
+    if (uFogEnabled == 0) return 0.0;
+    highp float d = length(fragPos - uFogCamPos);
+    float band = max(uFogEnd - uFogStart, 1e-4);
+    float f = clamp((d - uFogStart) / band, 0.0, 1.0);
+    if (uFogDensity > 0.0) {
+        float e = uFogDensity * max(d - uFogStart, 0.0);
+        f = max(f, clamp(1.0 - exp(-e * e), 0.0, 1.0));
+    }
+    return f;
+}
+
+vec3 applyFog(vec3 color, highp vec3 fragPos) {
+    return mix(color, uFogColor, fogFactor(fragPos));
+}
+
+vec2 explosionAtlasUV(vec2 localUV, float frameIndex) {
+    float column = mod(frameIndex, EXPLOSION_SHEET_COLUMNS);
+    float rowTop = floor(frameIndex / EXPLOSION_SHEET_COLUMNS);
+    float rowBottom = EXPLOSION_SHEET_ROWS - 1.0 - rowTop;
+    vec2 cellSize = vec2(
+        1.0 / EXPLOSION_SHEET_COLUMNS,
+        1.0 / EXPLOSION_SHEET_ROWS
+    );
+    return (vec2(column, rowBottom) + localUV) * cellSize;
+}
+
+void main() {
+    float visualIntensity = max(EffectParams.y, 0.0);
+    float elapsed = max(EffectParams.z, 0.0);
+    float lifetime = max(EffectParams.w, 0.001);
+    float t = clamp(elapsed / lifetime, 0.0, 1.0);
+    if (EffectMeta.w > 0.5) {
+        // Keep the visual envelope aligned with the static frame-10 preview.
+        t = (9.5 / 16.0);
+    }
+
+    float frame;
+    if (EffectMeta.w > 0.5) {
+        // Editor Preview is deliberately static: always show authoring frame 10.
+        frame = EXPLOSION_PREVIEW_FRAME_INDEX;
+    } else {
+        frame = min(
+            floor(t * EXPLOSION_FRAME_COUNT),
+            EXPLOSION_FRAME_COUNT - 1.0
+        );
+    }
+    vec4 sheet = texture(explosion_texture, explosionAtlasUV(TexCoords, frame));
+
+    if (sheet.a < 0.02 || visualIntensity <= 0.0) discard;
+
+    float envelope = 1.0 - smoothstep(0.70, 1.0, t);
+    float flash = exp(-t * t * 48.0);
+    float burst = 1.0 + flash * 2.2;
+    vec3 tint = mix(vec3(1.0), max(EffectColor, vec3(0.001)), 0.35);
+    vec3 rgb = sheet.rgb * tint * visualIntensity * burst;
+    float alpha = sheet.a * envelope;
+
+    if (alpha < 0.01) discard;
+    FragColor = vec4(applyFog(rgb, FragPos), alpha);
+}
+""",
     'fog.vert': """#version 330 core
 precision highp float;
 layout (location = 0) in vec3 a_pos;

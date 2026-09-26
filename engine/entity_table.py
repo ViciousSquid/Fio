@@ -76,6 +76,7 @@ head-less test -- still imports this module.
 from __future__ import annotations
 
 import os
+import time
 from itertools import chain
 
 import glm
@@ -89,9 +90,9 @@ from .portal_transform import basis_from_rotation
 try:
     from editor.things import (Thing, PathNode, Portal, Pickup, Prop, Monster,
                                LogicGate, LogicRelay, LogicTimer, LevelChanger,
-                               Light, LogicSpawner, LogicCamera)
+                               Light, LogicSpawner, LogicCamera, Effect)
 except ImportError:                                   # pragma: no cover
-    Thing = PathNode = Portal = Pickup = Prop = Monster = None
+    Thing = PathNode = Portal = Pickup = Prop = Monster = Effect = None
     LogicGate = LogicRelay = LogicTimer = LevelChanger = Light = None
     LogicSpawner = LogicCamera = None
 
@@ -139,6 +140,8 @@ ENT_MONSTER         = 1 << 10
 #: also carries, because the distance cull exempts Portals and Lights and must
 #: not exempt monsters.
 ENT_PORTAL          = 1 << 11
+#: Procedural Effect primitive; FIRE and EXPLOSION share one render path.
+ENT_EFFECT          = 1 << 13
 #: This row's *sprite identity* can change without an edit, so it is re-resolved
 #: every frame.  Exactly the classes ``update_instance_textures`` re-hashes per
 #: frame -- a monster's sprite follows ``dead``/``is_shooting``, a gate's its
@@ -164,7 +167,8 @@ BIT_NAMES = (
     (ENT_MODE_BILLBOARD, 'MODE_BILLBOARD'), (ENT_HAS_SPRITE, 'HAS_SPRITE'),
     (ENT_PICKUP, 'PICKUP'), (ENT_ENTITY_SPRITE, 'ENTITY_SPRITE'),
     (ENT_PROP, 'PROP'), (ENT_LIGHT, 'LIGHT'), (ENT_MONSTER, 'MONSTER'),
-    (ENT_PORTAL, 'PORTAL'), (ENT_SPRITE_WARM, 'SPRITE_WARM'),
+    (ENT_PORTAL, 'PORTAL'), (ENT_EFFECT, 'EFFECT'),
+    (ENT_SPRITE_WARM, 'SPRITE_WARM'),
 )
 
 
@@ -394,6 +398,8 @@ def _entity_class_bits(thing) -> int:
         bits |= ENT_PROP
     if Light is not None and isinstance(thing, Light):
         bits |= ENT_LIGHT
+    if Effect is not None and isinstance(thing, Effect):
+        bits |= ENT_EFFECT
     warm_types = tuple(c for c in (Monster, LogicGate, Pickup, Prop)
                        if c is not None)
     if warm_types and isinstance(thing, warm_types):
@@ -478,6 +484,87 @@ def _light_color_of(thing):
         return np.asarray((1.0, 1.0, 1.0), dtype=np.float32)
 
 
+def _effect_float(props, key, default):
+    try:
+        return float(props.get(key, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _effect_bool(props, key, default=True):
+    value = props.get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    return bool(value)
+
+
+_EFFECT_FIRE_TEXTURES = tuple(
+    f"assets/textures/effects/fire{i:02d}.gif" for i in range(1, 6)
+)
+_EFFECT_FIRE_TEXTURE_TO_INDEX = {
+    path: index for index, path in enumerate(_EFFECT_FIRE_TEXTURES)
+}
+_EFFECT_ORB_TEXTURES = tuple(
+    f"assets/textures/effects/orb{i:02d}.gif" for i in range(1, 6)
+)
+_EFFECT_ORB_TEXTURE_TO_INDEX = {
+    path: index for index, path in enumerate(_EFFECT_ORB_TEXTURES)
+}
+
+# FIRE's emitted light follows the dominant colour of the selected texture.
+# These are authored by the effect variant, not by a global ambient setting.
+_EFFECT_FIRE_LIGHT_COLOURS = np.asarray((
+    (0xE4, 0x92, 0x34),  # fire01 #e49234
+    (0xFF, 0x9A, 0x00),  # fire02 #ff9a00
+    (0xFC, 0x24, 0x00),  # fire03 #fc2400
+    (0xFE, 0xAC, 0x1D),  # fire04 #feac1d
+), dtype=np.float32) / 255.0
+
+_EFFECT_ORB_LIGHT_COLOUR = np.asarray(
+    (0x4A, 0x9B, 0xFF), dtype=np.float32
+) / 255.0
+
+# EXPLOSION's atlas is 16 frames, numbered 1..16 for authoring.
+# The editor preview is intentionally locked to frame 10 (atlas index 9).
+_EXPLOSION_FRAME_COUNT = 16.0
+_EXPLOSION_PREVIEW_FRAME = 10
+
+def _effect_fire_variant(props):
+    value = str(
+        props.get("fire_texture", _EFFECT_FIRE_TEXTURES[0])
+    ).replace("\\", "/")
+    return _EFFECT_FIRE_TEXTURE_TO_INDEX.get(value, 0)
+
+
+def _effect_orb_variant(props):
+    value = str(
+        props.get("orb_texture", _EFFECT_ORB_TEXTURES[0])
+    ).replace("\\", "/")
+    return _EFFECT_ORB_TEXTURE_TO_INDEX.get(value, 0)
+
+
+def _effect_colour(props, key, default):
+    value = props.get(key, default)
+    try:
+        rgb = np.asarray(value[:3], dtype=np.float32)
+        if rgb.size != 3:
+            raise ValueError
+        return np.clip(rgb / 255.0, 0.0, 1.0)
+    except (TypeError, ValueError, IndexError):
+        return np.asarray(default, dtype=np.float32) / 255.0
+
+
+def _effect_flicker(seed, elapsed):
+    """Deterministic scalar noise shared conceptually with the Effect shader."""
+    phase = np.asarray(elapsed, dtype=np.float32) * 10.0 + np.asarray(seed, dtype=np.float32) * 0.013
+    cell = np.floor(phase)
+    frac = phase - cell
+    smooth = frac * frac * (3.0 - 2.0 * frac)
+    a = np.mod(np.sin((cell + seed) * 12.9898) * 43758.5453123, 1.0)
+    b = np.mod(np.sin((cell + 1.0 + seed) * 12.9898) * 43758.5453123, 1.0)
+    return a * (1.0 - smooth) + b * smooth
+
+
 class EntityTable:
     """A dense, disposable projection of a Thing list.
 
@@ -491,9 +578,14 @@ class EntityTable:
                  'portal_slots', 'portal_target_slot', 'portal_active',
                  'portal_direction', 'portal_width_height', 'portal_basis',
                  'portal_fade', 'portal_color', 'portal_show_rim',
-                 'monster_slots', 'pickup_slots', 'sprite_size', 'sprite_key_id',
+                 'monster_slots', 'pickup_slots', 'effect_slots',
+                 'effect_type', 'effect_fire_variant', 'effect_custom_id', 'effect_preview', 'effect_params', 'effect_color',
+                 'effect_light_color', 'effect_light_enabled', 'effect_lifetime', 'effect_seed',
+                  'effect_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
+                 'sprite_size', 'sprite_key_id',
                  'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
                  '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
+                 '_effect_custom_ids', '_effect_custom_paths',
                  '_epoch', '_hidden_buf')
 
     def __init__(self):
@@ -541,6 +633,24 @@ class EntityTable:
         #: to consider, so that filter costs pickups rather than entities.
         self.pickup_slots = np.empty(0, dtype=np.int32)
 
+        #: Dense procedural Effect state. Authored data is cold; elapsed/alive
+        #: are runtime columns and the renderer never touches Effect objects.
+        self.effect_slots = np.empty(0, dtype=np.int32)
+        self.effect_type = np.zeros((0,), dtype=np.uint8)
+        self.effect_fire_variant = np.zeros((0,), dtype=np.uint8)
+        self.effect_custom_id = np.zeros((0,), dtype=np.int32)
+        self.effect_preview = np.zeros((0,), dtype=bool)
+        self.effect_params = np.zeros((0, 4), dtype=np.float32)
+        self.effect_color = np.ones((0, 3), dtype=np.float32)
+        self.effect_light_color = np.ones((0, 3), dtype=np.float32)
+        self.effect_light_enabled = np.zeros((0,), dtype=bool)
+        self.effect_lifetime = np.full((0,), 0.5, dtype=np.float32)
+        self.effect_seed = np.ones((0,), dtype=np.float32)
+        self.effect_spawn_time = np.zeros((0,), dtype=np.float64)
+        self.effect_elapsed = np.zeros((0,), dtype=np.float32)
+        self.effect_active = np.zeros((0,), dtype=bool)
+        self.effect_alive = np.zeros((0,), dtype=bool)
+
         #: The billboard's world size. Cold: it comes from authored properties.
         self.sprite_size = np.zeros((0, 2), dtype=np.float32)
         #: Dense sprite recipe id per entity slot.  -1 means no sprite.
@@ -564,6 +674,9 @@ class EntityTable:
         #: indexed numerically.
         self._model_ids = {}
         self._model_recipes = []
+        #: Interned CUSTOM GIF paths; these remain cold data outside numeric rows.
+        self._effect_custom_ids = {}
+        self._effect_custom_paths = []
 
         self._epoch = None
         self._hidden_buf = np.empty(0, dtype=bool)
@@ -584,6 +697,25 @@ class EntityTable:
     def sprite_recipes(self) -> list:
         """Interned candidate lists, indexed by id."""
         return self._sprite_recipes
+
+    def intern_effect_custom_path(self, path) -> int:
+        """Intern a CUSTOM Effect GIF path as a stable dense id."""
+        value = str(path or "").strip().replace("\\", "/")
+        if not value:
+            return 0
+        custom_id = self._effect_custom_ids.get(value)
+        if custom_id is None:
+            custom_id = len(self._effect_custom_paths) + 1
+            self._effect_custom_ids[value] = custom_id
+            self._effect_custom_paths.append(value)
+        return custom_id
+
+    def effect_custom_path(self, custom_id: int) -> str:
+        """Resolve a dense CUSTOM GIF id without touching entity objects."""
+        index = int(custom_id) - 1
+        if index < 0 or index >= len(self._effect_custom_paths):
+            return ""
+        return self._effect_custom_paths[index]
 
     def intern_model_recipe(self, recipe) -> int:
         if recipe is None:
@@ -650,6 +782,76 @@ class EntityTable:
         if len(self.light_casts_shadows):
             light_casts[:len(self.light_casts_shadows)] = self.light_casts_shadows
         self.light_casts_shadows = light_casts
+        effect_type = np.zeros((grown,), dtype=np.uint8)
+        if len(self.effect_type):
+            effect_type[:len(self.effect_type)] = self.effect_type
+        self.effect_type = effect_type
+
+        effect_fire_variant = np.zeros((grown,), dtype=np.uint8)
+        if len(self.effect_fire_variant):
+            effect_fire_variant[:len(self.effect_fire_variant)] = self.effect_fire_variant
+        self.effect_fire_variant = effect_fire_variant
+
+        effect_custom_id = np.zeros((grown,), dtype=np.int32)
+        if len(self.effect_custom_id):
+            effect_custom_id[:len(self.effect_custom_id)] = self.effect_custom_id
+        self.effect_custom_id = effect_custom_id
+
+        effect_preview = np.zeros((grown,), dtype=bool)
+        if len(self.effect_preview):
+            effect_preview[:len(self.effect_preview)] = self.effect_preview
+        self.effect_preview = effect_preview
+
+        effect_params = np.zeros((grown, 4), dtype=np.float32)
+        if len(self.effect_params):
+            effect_params[:len(self.effect_params)] = self.effect_params
+        self.effect_params = effect_params
+
+        effect_color = np.ones((grown, 3), dtype=np.float32)
+        if len(self.effect_color):
+            effect_color[:len(self.effect_color)] = self.effect_color
+        self.effect_color = effect_color
+
+        effect_light_color = np.ones((grown, 3), dtype=np.float32)
+        if len(self.effect_light_color):
+            effect_light_color[:len(self.effect_light_color)] = self.effect_light_color
+        self.effect_light_color = effect_light_color
+
+        effect_light_enabled = np.zeros((grown,), dtype=bool)
+        if len(self.effect_light_enabled):
+            effect_light_enabled[:len(self.effect_light_enabled)] = self.effect_light_enabled
+        self.effect_light_enabled = effect_light_enabled
+
+        effect_lifetime = np.full((grown,), 0.5, dtype=np.float32)
+        if len(self.effect_lifetime):
+            effect_lifetime[:len(self.effect_lifetime)] = self.effect_lifetime
+        self.effect_lifetime = effect_lifetime
+
+        effect_seed = np.ones((grown,), dtype=np.float32)
+        if len(self.effect_seed):
+            effect_seed[:len(self.effect_seed)] = self.effect_seed
+        self.effect_seed = effect_seed
+
+        effect_spawn = np.zeros((grown,), dtype=np.float64)
+        if len(self.effect_spawn_time):
+            effect_spawn[:len(self.effect_spawn_time)] = self.effect_spawn_time
+        self.effect_spawn_time = effect_spawn
+
+        effect_elapsed = np.zeros((grown,), dtype=np.float32)
+        if len(self.effect_elapsed):
+            effect_elapsed[:len(self.effect_elapsed)] = self.effect_elapsed
+        self.effect_elapsed = effect_elapsed
+
+        effect_active = np.zeros((grown,), dtype=bool)
+        if len(self.effect_active):
+            effect_active[:len(self.effect_active)] = self.effect_active
+        self.effect_active = effect_active
+
+        effect_alive = np.zeros((grown,), dtype=bool)
+        if len(self.effect_alive):
+            effect_alive[:len(self.effect_alive)] = self.effect_alive
+        self.effect_alive = effect_alive
+
         size = np.zeros((grown, 2), dtype=np.float32)
         if len(self.sprite_size):
             size[:len(self.sprite_size)] = self.sprite_size
@@ -725,7 +927,8 @@ class EntityTable:
         """
         return epoch is None or epoch != self._epoch or len(things) != self.count
 
-    def begin_frame(self, things, epoch=None, dirty_objects=None):
+    def begin_frame(self, things, epoch=None, dirty_objects=None,
+                    effect_runtime=False):
         """Bring the table into line with *things*; return the live hidden mask.
 
         The whole of the projection's per-frame Python cost: one comprehension
@@ -773,24 +976,132 @@ class EntityTable:
         # secondary render views never need Portal objects.
         self._refresh_portal_live(things)
 
-        # Light state is render state, not renderer metadata. Refresh only the
-        # light rows each frame because I/O may toggle or retune a light without
-        # changing the world epoch, while position is already refreshed above.
+        # Light state is render state, not renderer metadata. Ordinary Lights
+        # retain their existing warm object-backed state; Effect rows stay fully
+        # numeric and derive animated light from the dense effect columns.
         if len(self.light_slots):
             ls = self.light_slots
-            light_rows = [things[int(i)] for i in ls]
-            self.light_color[ls] = np.asarray(
-                [_light_color_of(t) for t in light_rows], dtype=np.float32)
-            self.light_params[ls] = np.asarray(
-                [[_light_float(t, 'intensity', 1.0),
-                  _light_float(t, 'radius', 512.0)] for t in light_rows],
-                dtype=np.float32)
-            self.light_enabled[ls] = np.asarray(
-                [_light_bool(t, 'state', True) for t in light_rows], dtype=bool)
-            self.light_casts_shadows[ls] = np.asarray(
-                [_light_bool(t, 'casts_shadows', False) for t in light_rows],
-                dtype=bool)
+            effect_mask = (self.class_bits[ls] & ENT_EFFECT) != 0
+            normal_ls = ls[~effect_mask]
+            effect_ls = ls[effect_mask]
 
+            if len(normal_ls):
+                light_rows = [things[int(i)] for i in normal_ls]
+                self.light_color[normal_ls] = np.asarray(
+                    [_light_color_of(t) for t in light_rows], dtype=np.float32)
+                self.light_params[normal_ls] = np.asarray(
+                    [[_light_float(t, 'intensity', 1.0),
+                      _light_float(t, 'radius', 512.0)] for t in light_rows],
+                    dtype=np.float32)
+                self.light_enabled[normal_ls] = np.asarray(
+                    [_light_bool(t, 'state', True) for t in light_rows], dtype=bool)
+                self.light_casts_shadows[normal_ls] = np.asarray(
+                    [_light_bool(t, 'casts_shadows', False) for t in light_rows],
+                    dtype=bool)
+
+            if len(effect_ls):
+                now = float(time.perf_counter())
+                explosion = self.effect_type[effect_ls] == 1
+                fire = ~explosion
+
+                # FIRE is continuously active. EXPLOSION is dormant until the
+                # I/O handler starts it, then consumes its lifetime exactly once.
+                if np.any(fire):
+                    fire_slots = effect_ls[fire]
+                    unset_fire = self.effect_spawn_time[fire_slots] <= 0.0
+                    if np.any(unset_fire):
+                        self.effect_spawn_time[fire_slots[unset_fire]] = now
+                    self.effect_active[fire_slots] = True
+
+                active = self.effect_active[effect_ls]
+                explosion_active = explosion & active
+                if effect_runtime:
+                    elapsed = np.maximum(
+                        now - self.effect_spawn_time[effect_ls], 0.0
+                    ).astype(np.float32, copy=False)
+                else:
+                    # FIRE animates in the editor; EXPLOSION remains dormant
+                    # until an Explode input is fired.
+                    elapsed = np.where(
+                        fire, max(now, 0.0), 0.0
+                    ).astype(np.float32, copy=False)
+
+                lifetime = np.maximum(self.effect_lifetime[effect_ls], 0.01)
+                # Editor preview makes an otherwise dormant EXPLOSION visible
+                # at atlas frame 10 without arming its runtime state.
+                preview_explosion = (
+                    explosion
+                    & self.effect_preview[effect_ls]
+                    & (not effect_runtime)
+                )
+                expired = explosion_active & (elapsed >= lifetime)
+                if np.any(expired):
+                    expired_slots = effect_ls[expired]
+                    self.effect_active[expired_slots] = False
+                    active = self.effect_active[effect_ls]
+
+                # Effect lights are numeric too. FIRE keeps its authored light
+                # continuously; EXPLOSION gets only a short decaying flash when
+                # actually triggered in runtime. Editor preview emits no light.
+                self.light_enabled[effect_ls] = self.effect_light_enabled[effect_ls]
+                self.light_params[effect_ls, 0] = self.effect_params[effect_ls, 2]
+                self.light_params[effect_ls, 1] = self.effect_params[effect_ls, 3]
+                if np.any(explosion):
+                    explosion_slots = effect_ls[explosion]
+                    if effect_runtime:
+                        explosion_elapsed = elapsed[explosion]
+                        explosion_lifetime = lifetime[explosion]
+                        flash_duration = np.minimum(explosion_lifetime, 0.12)
+                        flash_active = (
+                            explosion_active[explosion]
+                            & (explosion_elapsed < flash_duration)
+                        )
+                        decay = np.exp(-explosion_elapsed / 0.035).astype(
+                            np.float32, copy=False
+                        )
+                        base = self.effect_params[explosion_slots, 2]
+                        self.light_enabled[explosion_slots] = (
+                            self.effect_light_enabled[explosion_slots]
+                            & flash_active
+                        )
+                        self.light_params[explosion_slots, 0] = (
+                            base * (1.0 + 2.0 * decay)
+                        )
+                    else:
+                        self.light_enabled[explosion_slots] = False
+
+                # EXPLOSION preview is editor-only and static: place the
+                # sprite on atlas frame 10 without arming runtime playback.
+                if np.any(preview_explosion):
+                    preview_slots = effect_ls[preview_explosion]
+                    preview_t = (
+                        (float(_EXPLOSION_PREVIEW_FRAME) - 0.5)
+                        / _EXPLOSION_FRAME_COUNT
+                    )
+                    self.effect_elapsed[preview_slots] = (
+                        np.maximum(self.effect_lifetime[preview_slots], 0.01)
+                        * preview_t
+                    ).astype(np.float32, copy=False)
+                else:
+                    self.effect_elapsed[effect_ls] = elapsed
+
+                # FIRE light flicker is derived from the same deterministic
+                # seed/clock family as the procedural flame.  The base authored
+                # intensity remains in effect_params[:, 2]; this only modulates
+                # the live light column so authored properties stay unchanged.
+                if np.any(fire):
+                    fire_slots = effect_ls[fire]
+                    flicker = _effect_flicker(
+                        self.effect_seed[fire_slots],
+                        elapsed[fire],
+                    )
+                    base_light = self.effect_params[fire_slots, 2]
+                    self.light_params[fire_slots, 0] = (
+                        base_light * (0.78 + 0.38 * flicker)
+                    )
+
+                alive = fire | explosion_active | preview_explosion
+                self.effect_alive[effect_ls] = alive
 
         if len(self._hidden_buf) < n:
             self._hidden_buf = np.empty(max(n, 16), dtype=bool)
@@ -862,7 +1173,14 @@ class EntityTable:
                         self.light_enabled, self.light_casts_shadows,
                         self.sprite_size, self.sprite_key_id,
                         self.model_recipe_id, self.model_base_matrix,
-                        self.model_normal_matrix, self.portal_target_slot,
+                        self.model_normal_matrix, self.effect_type,
+                        self.effect_fire_variant, self.effect_custom_id,
+                        self.effect_params, self.effect_color,
+                        self.effect_light_color, self.effect_light_enabled, self.effect_lifetime,
+                         self.effect_seed, self.effect_spawn_time,
+                        self.effect_elapsed, self.effect_active,
+                        self.effect_alive,
+                        self.portal_target_slot,
                         self.portal_active, self.portal_direction,
                         self.portal_width_height, self.portal_basis,
                         self.portal_fade, self.portal_color,
@@ -880,7 +1198,12 @@ class EntityTable:
         self.things = list(things)
         self.count = n
         bits = self.class_bits[:n]
-        self.light_slots = np.flatnonzero(bits & ENT_LIGHT).astype(np.int32)
+        self.effect_slots = np.flatnonzero(
+            bits & ENT_EFFECT
+        ).astype(np.int32)
+        self.light_slots = np.flatnonzero(
+            bits & (ENT_LIGHT | ENT_EFFECT)
+        ).astype(np.int32)
         self.portal_slots = np.flatnonzero(bits & ENT_PORTAL).astype(np.int32)
         self.monster_slots = np.flatnonzero(bits & ENT_MONSTER).astype(np.int32)
         self.pickup_slots = np.flatnonzero(bits & ENT_PICKUP).astype(np.int32)
@@ -947,6 +1270,97 @@ class EntityTable:
         # sprite recipe without changing the entity row itself.
         self.sprite_size[slot] = sprite_size(thing)
         self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(thing))
+
+        if self.class_bits[slot] & ENT_EFFECT:
+            props = _props_of(thing)
+            effect_type = str(props.get('effect_type', 'FIRE')).strip().upper()
+            self.effect_type[slot] = (
+                1 if effect_type == 'EXPLOSION'
+                else 2 if effect_type == 'ORB'
+                else 3 if effect_type == 'CUSTOM'
+                else 0
+            )
+            self.effect_fire_variant[slot] = (
+                _effect_orb_variant(props)
+                if effect_type == 'ORB'
+                else _effect_fire_variant(props)
+                if effect_type == 'FIRE'
+                else 0
+            )
+            self.effect_custom_id[slot] = (
+                self.intern_effect_custom_path(props.get('custom_gif', ''))
+                if effect_type == 'CUSTOM'
+                else 0
+            )
+            self.effect_preview[slot] = _effect_bool(
+                props, 'preview', False
+            )
+            width = max(0.01, _effect_float(props, 'width', 32.0))
+            height = max(
+                0.01,
+                _effect_float(
+                    props,
+                    'height',
+                    32.0 if effect_type == 'ORB' else 46.0,
+                ),
+            )
+            visual_intensity = max(0.0, _effect_float(props, 'intensity', 1.0))
+            light_intensity = max(0.0, _effect_float(props, 'light_intensity', 2.5))
+            light_radius = max(0.01, _effect_float(props, 'light_radius', 128.0))
+            lifetime = max(0.01, _effect_float(props, 'lifetime', 0.5))
+            try:
+                seed = float((int(props.get('effect_seed', 1)) % 1000003) + 1)
+            except (TypeError, ValueError):
+                seed = 1.0
+
+            self.effect_params[slot] = (
+                width, visual_intensity, light_intensity, light_radius
+            )
+            self.effect_color[slot] = _effect_colour(
+                props, 'colour', [255, 110, 25]
+            )
+            if effect_type == 'FIRE' and self.effect_fire_variant[slot] < len(_EFFECT_FIRE_LIGHT_COLOURS):
+                self.effect_light_color[slot] = _EFFECT_FIRE_LIGHT_COLOURS[
+                    self.effect_fire_variant[slot]
+                ]
+            elif effect_type == 'ORB':
+                self.effect_light_color[slot] = _EFFECT_ORB_LIGHT_COLOUR
+            else:
+                self.effect_light_color[slot] = _effect_colour(
+                    props, 'light_colour', [255, 165, 70]
+                )
+            self.effect_light_enabled[slot] = _effect_bool(
+                props, 'light_enabled', True
+            )
+            self.effect_lifetime[slot] = lifetime
+            self.effect_seed[slot] = seed
+            self.effect_spawn_time[slot] = 0.0
+            self.effect_elapsed[slot] = 0.0
+            self.effect_active[slot] = effect_type != 'EXPLOSION'
+            self.effect_alive[slot] = effect_type != 'EXPLOSION'
+
+            self.sprite_size[slot] = (width, height)
+            self.light_color[slot] = self.effect_light_color[slot]
+            self.light_params[slot] = (light_intensity, light_radius)
+            self.light_enabled[slot] = _effect_bool(
+                props, 'light_enabled', True
+            )
+            self.light_casts_shadows[slot] = False
+        else:
+            self.effect_type[slot] = 0
+            self.effect_fire_variant[slot] = 0
+            self.effect_custom_id[slot] = 0
+            self.effect_preview[slot] = False
+            self.effect_params[slot].fill(0.0)
+            self.effect_color[slot] = 1.0
+            self.effect_light_color[slot] = 1.0
+            self.effect_light_enabled[slot] = False
+            self.effect_lifetime[slot] = 0.5
+            self.effect_seed[slot] = 1.0
+            self.effect_spawn_time[slot] = 0.0
+            self.effect_elapsed[slot] = 0.0
+            self.effect_active[slot] = False
+            self.effect_alive[slot] = False
 
         # Model rendering is part of the dense entity projection too. The
         # classifier already sends Model-mode entities here, so their cold
@@ -1074,6 +1488,8 @@ def classify_slots(table, slots, hidden, is_play, show_sprites):
     is_hidden = np.asarray(hidden)[slots]
 
     skip = (bits & ENT_SKIP) != 0
+    effect = (bits & ENT_EFFECT) != 0
+    skip = skip | effect
     always_sprite = (bits & ENT_ALWAYS_SPRITE) != 0
 
     has_model = (bits & ENT_HAS_MODEL) != 0

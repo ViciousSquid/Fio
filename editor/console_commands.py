@@ -79,6 +79,7 @@ class ConsoleCommandHandler:
             'setpos': self.cmd_setpos,
             'teleport': self.cmd_setpos,
             'ss': self.cmd_split_screen,
+            'showglasses': self.cmd_show_glasses,
 
             'cam': self.cmd_cam,
             'camera': self.cmd_cam,
@@ -1956,6 +1957,26 @@ entity to drive them from the I/O system.</i><br>
             view_3d._toggle_splitscreen()
         else:
             debug_log("Error", "Split-screen toggle not available.")
+
+    def cmd_show_glasses(self, args):
+        """showglasses [on|off|1|0|toggle] — Toggle player glasses billboards."""
+        if not self._require_play_mode("showglasses"):
+            return
+        view_3d = self.main_window.view_3d
+        arg = args.strip().lower() if args else "toggle"
+        if arg in ("on", "1", "true"):
+            view_3d.show_glasses = True
+        elif arg in ("off", "0", "false"):
+            view_3d.show_glasses = False
+        elif arg == "toggle":
+            view_3d.show_glasses = not getattr(view_3d, 'show_glasses', True)
+        else:
+            debug_log("Error", "Usage: showglasses [on|off|1|0|toggle]")
+            return
+        state = "ON" if view_3d.show_glasses else "OFF"
+        self.main_window.show_toast(f"Player glasses: {state}")
+        debug_log("Info", f"Player glasses display set to {state}")
+        view_3d.update()
 
     def cmd_clear(self, args):
         self.main_window.debug_console.clear()

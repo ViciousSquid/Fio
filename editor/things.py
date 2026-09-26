@@ -2059,12 +2059,14 @@ ENTITY_TYPES = {
     'LogicSpawner': LogicSpawner,
     'Portal': Portal,
     'LogicState': LogicState,
+    # Core primitive is imported only after editor Thing/Model definitions exist.
+    'Effect': __import__('engine.effect_entity', fromlist=['Effect']).Effect,
 }
 
 # Categories for editor UI
 ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Pickup', 'LevelChanger'],
-    'Environment': ['Light', 'Speaker', 'Model', 'Portal'],
+    'Environment': ['Light', 'Effect', 'Speaker', 'Model', 'Portal'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicState'],
     'AI': ['PathNode'],
 }
@@ -2081,7 +2083,10 @@ ENTITY_CATEGORIES = {
 # Prop``), and before map deserialization via _load_core_entity_types() so the
 # subclass walk in Thing.from_dict can resolve their type tokens.
 
-_CORE_ENTITY_MODULES = {'Prop': 'engine.prop_entity'}
+_CORE_ENTITY_MODULES = {
+    'Prop': 'engine.prop_entity',
+    'Effect': 'engine.effect_entity',
+}
 
 
 def _load_core_entity_types():

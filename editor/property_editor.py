@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QTableWidget, QTableWidgetItem)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
-from editor.things import (Thing, Light, Pickup, Monster, Model, Prop, Speaker,
+from editor.things import (Thing, Light, Effect, Pickup, Monster, Model, Prop, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
                            LogicState)
 from editor import state_values as _sv
@@ -1870,6 +1870,9 @@ class PropertyEditor(QWidget):
                 )
                 form.addRow("", note)
 
+        if isinstance(thing, Effect):
+            self._build_effect_ui(form, thing)
+
         if isinstance(thing, Light):
             self.add_color_picker_widget(form, thing, 'colour')
             self._build_attach_to_mover(form, thing)
@@ -2157,6 +2160,255 @@ class PropertyEditor(QWidget):
         )
         section.addLayout(physics_form)
         parent_layout.addWidget(section)
+
+    def _build_effect_ui(self, form, thing):
+        """Compact authoring UI for the one Effect primitive."""
+        props = thing.properties
+
+        type_combo = QComboBox()
+        type_combo.addItems(["FIRE", "ORB", "EXPLOSION", "CUSTOM"])
+        type_combo.setCurrentText(
+            str(props.get('effect_type', 'FIRE')).upper()
+        )
+        form.addRow("Type:", type_combo)
+
+        preview_check = QCheckBox("Preview")
+        preview_check.setToolTip(
+            "Editor-only preview and billboard AABB. Runtime behavior is unchanged."
+        )
+        preview_check.setChecked(bool(props.get('preview', False)))
+        form.addRow("Preview:", preview_check)
+
+        silent_check = QCheckBox("Silent")
+        silent_check.setToolTip(
+            "Do not play the explosion sound when this Effect is triggered."
+        )
+        silent_check.setChecked(bool(props.get("silent", False)))
+        silent_check.toggled.connect(
+            lambda value: self.update_object_prop("silent", bool(value))
+        )
+        silent_label = QLabel("Audio:")
+        form.addRow(silent_label, silent_check)
+
+        fire_combo = QComboBox()
+        fire_textures = [
+            (f"Fire {index:02d}", f"assets/textures/effects/fire{index:02d}.gif")
+            for index in range(1, 6)
+        ]
+        for label, path in fire_textures:
+            fire_combo.addItem(label, path)
+
+        current_fire = str(
+            props.get("fire_texture", fire_textures[0][1])
+        ).replace("\\", "/")
+        fire_index = next(
+            (index for index, (_, path) in enumerate(fire_textures)
+             if path == current_fire),
+            0,
+        )
+        fire_combo.setCurrentIndex(fire_index)
+        fire_label = QLabel("Fire:")
+        form.addRow(fire_label, fire_combo)
+
+        orb_combo = QComboBox()
+        orb_textures = [
+            (f"Orb {index:02d}", f"assets/textures/effects/orb{index:02d}.gif")
+            for index in range(1, 6)
+        ]
+        for label, path in orb_textures:
+            orb_combo.addItem(label, path)
+
+        current_orb = str(
+            props.get("orb_texture", orb_textures[0][1])
+        ).replace("\\", "/")
+        orb_index = next(
+            (index for index, (_, path) in enumerate(orb_textures)
+             if path == current_orb),
+            0,
+        )
+        orb_combo.setCurrentIndex(orb_index)
+        orb_label = QLabel("Orb:")
+        form.addRow(orb_label, orb_combo)
+
+        custom_widget = QWidget()
+        custom_layout = QHBoxLayout(custom_widget)
+        custom_layout.setContentsMargins(0, 0, 0, 0)
+        custom_layout.setSpacing(4)
+        custom_edit = QLineEdit(str(props.get("custom_gif", "")))
+        custom_edit.setReadOnly(True)
+        custom_edit.setToolTip("Animated GIF used by the CUSTOM effect type.")
+        custom_button = QPushButton("Browse...")
+        custom_button.setToolTip("Choose a GIF for this CUSTOM effect.")
+
+        def pick_custom_gif():
+            start = os.path.join(
+                os.getcwd(), "assets", "textures", "effects"
+            )
+            os.makedirs(start, exist_ok=True)
+            fp, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Custom Effect GIF",
+                start,
+                "GIF Files (*.gif)",
+            )
+            if fp:
+                try:
+                    rel = os.path.relpath(fp, os.getcwd()).replace("\\", "/")
+                except Exception:
+                    rel = fp.replace("\\", "/")
+                if rel.startswith("./"):
+                    rel = rel[2:]
+                self.update_object_prop("custom_gif", rel)
+                custom_edit.setText(rel)
+
+        custom_button.clicked.connect(pick_custom_gif)
+        custom_layout.addWidget(custom_edit, 1)
+        custom_layout.addWidget(custom_button)
+        custom_label = QLabel("GIF:")
+        form.addRow(custom_label, custom_widget)
+
+        def refresh_fire_texture():
+            effect_type = str(
+                thing.properties.get("effect_type", "FIRE")
+            ).upper()
+            show_fire = effect_type == "FIRE"
+            show_orb = effect_type == "ORB"
+            show_custom = effect_type == "CUSTOM"
+            fire_label.setVisible(show_fire)
+            fire_combo.setVisible(show_fire)
+            orb_label.setVisible(show_orb)
+            orb_combo.setVisible(show_orb)
+            custom_label.setVisible(show_custom)
+            custom_widget.setVisible(show_custom)
+            show_silent = effect_type == "EXPLOSION"
+            silent_label.setVisible(show_silent)
+            silent_check.setVisible(show_silent)
+            preview_check.setEnabled(True)
+
+        def fire_texture_changed(index):
+            path = fire_combo.itemData(index)
+            if path:
+                self.update_object_prop("fire_texture", str(path))
+
+        fire_combo.currentIndexChanged.connect(fire_texture_changed)
+
+        def orb_texture_changed(index):
+            path = orb_combo.itemData(index)
+            if path:
+                self.update_object_prop("orb_texture", str(path))
+
+        orb_combo.currentIndexChanged.connect(orb_texture_changed)
+
+        preview_check.toggled.connect(
+            lambda value: self.update_object_prop('preview', bool(value))
+        )
+
+        def add_scaled_slider(label, key, minimum, maximum, default, fmt):
+            scale = 100
+            widget = QWidget()
+            h = QHBoxLayout(widget)
+            h.setContentsMargins(0, 0, 0, 0)
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(
+                int(minimum * scale),
+                int(maximum * scale),
+            )
+            value = float(props.get(key, default))
+            value = max(minimum, min(maximum, value))
+            slider.setValue(int(round(value * scale)))
+            value_label = QLabel(fmt.format(value))
+            value_label.setMinimumWidth(56)
+
+            def changed(raw):
+                real = raw / scale
+                value_label.setText(fmt.format(real))
+                self.update_object_prop(key, real)
+
+            slider.valueChanged.connect(changed)
+            h.addWidget(slider, 1)
+            h.addWidget(value_label)
+            form.addRow(label + ":", widget)
+            return slider, value_label
+
+        width_slider, width_label = add_scaled_slider(
+            "Width", "width", 4.0, 256.0, 32.0, "{:.1f}"
+        )
+        height_slider, height_label = add_scaled_slider(
+            "Height", "height", 4.0, 256.0, 46.0, "{:.1f}"
+        )
+        add_scaled_slider("Intensity", "intensity", 0.0, 3.0, 1.0, "{:.2f}")
+
+        light_check = QCheckBox("Enable intrinsic light")
+        light_check.setChecked(bool(props.get('light_enabled', True)))
+        light_check.toggled.connect(
+            lambda value: self.update_object_prop('light_enabled', bool(value))
+        )
+        form.addRow("Light:", light_check)
+
+        add_scaled_slider("Radius", "light_radius", 16.0, 512.0, 128.0, "{:.1f}")
+        add_scaled_slider(
+            "Brightness", "light_intensity", 0.0, 8.0, 2.5, "{:.2f}"
+        )
+
+        self.add_color_picker_widget(
+            form, thing, 'colour',
+            label="Colour:",
+            dialog_title="Choose Effect Colour",
+        )
+        self.add_color_picker_widget(
+            form, thing, 'light_colour',
+            label="Light Colour:",
+            dialog_title="Choose Effect Light Colour",
+        )
+
+        lifetime_slider, lifetime_label = add_scaled_slider(
+            "Lifetime", "lifetime", 0.05, 3.0, 0.5, "{:.2f} s"
+        )
+
+        def refresh_lifetime():
+            explosion = str(
+                thing.properties.get('effect_type', 'FIRE')
+            ).upper() == 'EXPLOSION'
+            lifetime_slider.setEnabled(explosion)
+            if explosion:
+                lifetime = float(thing.properties.get('lifetime', 0.5))
+                lifetime = max(0.05, min(3.0, lifetime))
+                lifetime_slider.blockSignals(True)
+                lifetime_slider.setValue(int(round(lifetime * 100)))
+                lifetime_slider.blockSignals(False)
+                lifetime_label.setText(f"{lifetime:.2f} s")
+            else:
+                lifetime_label.setText("∞")
+
+        def effect_type_changed(value):
+            value = str(value).upper()
+            self.update_object_prop('effect_type', value)
+
+            if value == 'ORB':
+                self.update_object_prop('width', 32.0)
+                self.update_object_prop('height', 32.0)
+                for slider, label in (
+                    (width_slider, width_label),
+                    (height_slider, height_label),
+                ):
+                    slider.blockSignals(True)
+                    slider.setValue(3200)
+                    slider.blockSignals(False)
+                    label.setText("32.0")
+
+            refresh_fire_texture()
+            if value == 'EXPLOSION':
+                try:
+                    lifetime = float(thing.properties.get('lifetime', 0.5))
+                except (TypeError, ValueError):
+                    lifetime = 0.5
+                if lifetime < 0.05:
+                    self.update_object_prop('lifetime', 0.5)
+            refresh_lifetime()
+
+        type_combo.currentTextChanged.connect(effect_type_changed)
+        refresh_fire_texture()
+        refresh_lifetime()
 
     def _build_attach_to_mover(self, form, thing, prefix=''):
         """Shared attach-to-mover logic for Light and Portal."""
@@ -4165,7 +4417,9 @@ class PropertyEditor(QWidget):
         h.addWidget(button)
         form_layout.addRow(key.replace('_', ' ').title() + ":", widget)
 
-    def add_color_picker_widget(self, form_layout, thing, key):
+    def add_color_picker_widget(
+            self, form_layout, thing, key,
+            label="Colour:", dialog_title="Choose Light Colour"):
         widget = QWidget()
         h = QHBoxLayout(widget)
         h.setContentsMargins(0, 0, 0, 0)
@@ -4179,7 +4433,7 @@ class PropertyEditor(QWidget):
 
         def open_dialog():
             rgb = thing.properties.get(key, [255, 255, 255])
-            color = QColorDialog.getColor(QColor(*rgb), self, "Choose Light Colour")
+            color = QColorDialog.getColor(QColor(*rgb), self, dialog_title)
             if color.isValid():
                 self.update_object_prop(key, [color.red(), color.green(), color.blue()])
                 update_swatch()
@@ -4187,7 +4441,7 @@ class PropertyEditor(QWidget):
         swatch.clicked.connect(open_dialog)
         update_swatch()
         h.addWidget(swatch)
-        form_layout.addRow("Colour:", widget)
+        form_layout.addRow(label, widget)
 
     def _on_prop_sprite_size_changed(self, thing, index, value):
         size = thing.properties.get('sprite_size', [32.0, 32.0])

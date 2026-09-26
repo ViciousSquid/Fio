@@ -22,7 +22,11 @@ import ctypes
 import re
 import math
 import os
+import io
 from dataclasses import dataclass
+
+from PyQt5.QtCore import QByteArray, QBuffer, QIODevice
+from PyQt5.QtGui import QImage, QImageReader
 
 import glm
 import numpy as np
@@ -208,6 +212,10 @@ class ShaderLoader:
             raise
 
     def compile_from_source(self, vertex_src, fragment_src):
+        if not vertex_src:
+            raise ValueError("empty vertex shader source")
+        if not fragment_src:
+            raise ValueError("empty fragment shader source")
         try:
             fragment_src = shaders.light_ubo_source(fragment_src)
             vs = compileShader(vertex_src, gl.GL_VERTEX_SHADER)
@@ -362,6 +370,25 @@ class BaseRenderer:
         self._sprite_recipes_seen = None
         self._sprite_instance_data = np.empty(
             (0, 5), dtype=np.float32)
+        # GPU-instanced EXPLOSION buffer. FIRE uses the ordinary instanced
+        # billboard texture path, with one draw per animated texture frame.
+        self._effect_instance_vbo = None
+        self._effect_instance_vao = None
+        self._effect_instance_capacity = 0
+        self._effect_instance_data = np.empty((0, 16), dtype=np.float32)
+        self._effect_order_scratch = np.empty(0, dtype=np.int32)
+        self._effect_depth_scratch = np.empty(0, dtype=np.float64)
+        self._effect_depth_aux_scratch = np.empty(0, dtype=np.float64)
+        self._effect_expand_slots_scratch = np.empty(0, dtype=np.int32)
+        self._effect_expand_particle_scratch = np.empty(0, dtype=np.float32)
+        # Decoded animated Effect GIF frames, indexed by dense variant.
+        # FIRE and ORB share this normal-instanced billboard path.
+        self.effect_fire_frames = {}
+        self.effect_fire_cumulative = {}
+        self.effect_orb_frames = {}
+        self.effect_orb_cumulative = {}
+        self.effect_custom_frames = {}
+        self.effect_custom_cumulative = {}
         # Capacity-stable scratch for the numeric sprite filter. The renderer
         # owns these arrays so steady-state drawing does not allocate key/mask/
         # texture arrays per frame.
@@ -494,9 +521,38 @@ class BaseRenderer:
         self.shader_loader = ShaderLoader()
         self._compile_common_shaders()
 
+        # EXPLOSION keeps its dedicated effect shader. FIRE is a plain animated
+        # texture and is rendered through the normal instanced sprite shader.
+        if not self._shader_init_failed:
+            self._compile_instanced_effect_shader()
+
         # Terrain normal map (water)
         self.water_normal_id = self.load_texture('water_normal.png', 'textures')
         self.noise_texture_id = 0
+
+        # Explosion animation atlas. The sheet is a 5x4 grid with 16 actual RGBA frames.
+        # Keep it un-mipmapped and clamp to the sheet edge so linear filtering
+        # cannot bleed neighbouring frames through transparent borders.
+        self.effect_explosion_texture = 0
+        explosion_path = os.path.join('assets', 'textures', 'effects', 'explosion.png')
+        if os.path.exists(explosion_path):
+            self.effect_explosion_texture = self.load_texture(
+                'explosion.png', 'textures/effects')
+            if self.effect_explosion_texture:
+                gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_explosion_texture)
+                gl.glTexParameteri(
+                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+                gl.glTexParameteri(
+                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+                gl.glTexParameteri(
+                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+                gl.glTexParameteri(
+                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+
+        # Animated FIRE/ORB texture sets. Each GIF is decoded once into
+        # individual GL textures; the render path only selects the current frame.
+        self._load_fire_effect_textures()
+        self._load_orb_effect_textures()
 
         # Create VAOs after shaders are ready
         if not self._shader_init_failed:
@@ -528,19 +584,34 @@ class BaseRenderer:
     # --------------------------------------------------------------------------
     # Shader compilation helpers
     # --------------------------------------------------------------------------
+    def _shader_source(self, name):
+        """Return an embedded shader or its loose asset-file fallback.
+
+        A few larger shaders intentionally live only in assets/shaders rather
+        than being duplicated in DEFAULT_SHADERS.  Never pass an empty string
+        to the GL compiler just because a default entry is absent.
+        """
+        source = DEFAULT_SHADERS.get(name)
+        if source:
+            return source
+        try:
+            return self.shader_loader._read_source(name)
+        except (FileNotFoundError, OSError):
+            return ''
+
     def _compile_common_shaders(self):
         """Compile shaders that are shared by both forward and deferred paths."""
         try:
             # simple (for grid, outlines, lines)
-            vs_src = DEFAULT_SHADERS.get('simple.vert', '')
-            fs_src = DEFAULT_SHADERS.get('simple.frag', '')
+            vs_src = self._shader_source('simple.vert')
+            fs_src = self._shader_source('simple.frag')
             self.shaders['simple'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['simple'] = UniformCache(self.shaders['simple'])
             self.uniforms['simple'].preload(['projection', 'view', 'model', 'color', 'alpha'])
 
             # sprite (billboards)
-            vs_src = DEFAULT_SHADERS.get('sprite.vert', '')
-            fs_src = DEFAULT_SHADERS.get('sprite.frag', '')
+            vs_src = self._shader_source('sprite.vert')
+            fs_src = self._shader_source('sprite.frag')
             self.shaders['sprite'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['sprite'] = UniformCache(self.shaders['sprite'])
             self.uniforms['sprite'].preload(['projection', 'view', 'sprite_texture', 'sprite_pos_world', 'sprite_size'])
@@ -548,22 +619,22 @@ class BaseRenderer:
 
             # depth_cube – renders scene depth into a point light's cube-map for
             # omnidirectional shadow mapping (replaces the old projected shadows).
-            vs_src = DEFAULT_SHADERS.get('depth_cube.vert', '')
-            fs_src = DEFAULT_SHADERS.get('depth_cube.frag', '')
+            vs_src = self._shader_source('depth_cube.vert')
+            fs_src = self._shader_source('depth_cube.frag')
             self.shaders['depth_cube'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['depth_cube'] = UniformCache(self.shaders['depth_cube'])
             self.uniforms['depth_cube'].preload(['model', 'lightSpaceMatrix', 'lightPos', 'far_plane'])
 
             # water
-            vs_src = DEFAULT_SHADERS.get('water.vert', '')
-            fs_src = DEFAULT_SHADERS.get('water.frag', '')
+            vs_src = self._shader_source('water.vert')
+            fs_src = self._shader_source('water.frag')
             self.shaders['water'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['water'] = UniformCache(self.shaders['water'])
             self._preload_water_uniforms()
 
             # glass
-            vs_src = DEFAULT_SHADERS.get('glass.vert', '')
-            fs_src = DEFAULT_SHADERS.get('glass.frag', '')
+            vs_src = self._shader_source('glass.vert')
+            fs_src = self._shader_source('glass.frag')
             self.shaders['glass'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['glass'] = UniformCache(self.shaders['glass'])
             self.uniforms['glass'].preload(['projection', 'view', 'model', 'viewPos', 'waterColor',
@@ -572,8 +643,8 @@ class BaseRenderer:
                                             'sceneColor', 'screenSize'])
             self.uniforms['glass'].preload(self.ENV_UNIFORMS)
             # fog – use ARM‑optimised fragment shader (works everywhere)
-            fog_vert = DEFAULT_SHADERS.get('fog.vert', '')
-            fog_frag = DEFAULT_SHADERS.get('fog_arm.frag', DEFAULT_SHADERS.get('fog.frag', ''))
+            fog_vert = self._shader_source('fog.vert')
+            fog_frag = self._shader_source('fog_arm.frag') or self._shader_source('fog.frag')
             self.shaders['fog'] = self.shader_loader.compile_from_source(fog_vert, fog_frag)
             self.uniforms['fog'] = UniformCache(self.shaders['fog'])
             self._preload_fog_uniforms()
@@ -632,6 +703,7 @@ class BaseRenderer:
         self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
         self._compile_instanced_depth_shader()
         self._compile_instanced_sprite_shader()
+        self._compile_instanced_effect_shader()
 
     def _compile_standard_shaders(self):
         lit_shader = self.shader_loader.compile_shader_program('lit.vert', 'lit.frag')
@@ -654,6 +726,7 @@ class BaseRenderer:
         self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
         self._compile_instanced_depth_shader()
         self._compile_instanced_sprite_shader()
+        self._compile_instanced_effect_shader()
 
     #: Floats per brush-face instance: a mat4 model matrix, a mat3 normal
     #: matrix padded to three vec4 (with the face's UV rotation tucked into the
@@ -757,8 +830,8 @@ layout (location = 10) in vec4 iPayload;
         payload slots go unused here, which costs a little upload bandwidth and
         buys one layout for the whole renderer.
         """
-        vert = DEFAULT_SHADERS.get('depth_cube.vert', '')
-        frag = DEFAULT_SHADERS.get('depth_cube.frag', '')
+        vert = self._shader_source('depth_cube.vert')
+        frag = self._shader_source('depth_cube.frag')
         if not vert or not frag:
             return
         vertex = self._instanced_vertex_source(vert, preamble='')
@@ -788,8 +861,8 @@ layout (location = 10) in vec4 iPayload;
         attributes rather than written out again, so the billboard's
         camera-facing maths cannot drift from the path it accelerates.
         """
-        vert = DEFAULT_SHADERS.get('sprite.vert', '')
-        frag = DEFAULT_SHADERS.get('sprite.frag', '')
+        vert = self._shader_source('sprite.vert')
+        frag = self._shader_source('sprite.frag')
         if not vert or not frag:
             return
         kept = [line for line in vert.splitlines()
@@ -814,6 +887,412 @@ layout (location = 10) in vec4 iPayload;
                                            extra_uniforms=['projection', 'view',
                                                            'sprite_texture']):
             print(f'{_BASE_RENDERER_PREFIX} Sprite instancing shader compiled successfully.')
+
+    # One Effect row expands into deterministic virtual flame cards.
+    EFFECT_INSTANCE_FLOATS = 16
+    FIRE_VIRTUAL_CARDS = 20
+
+    def _compile_instanced_effect_shader(self):
+        """Compile the single procedural FIRE/EXPLOSION instance shader."""
+        vert = DEFAULT_SHADERS.get('effect.vert', '')
+        frag = DEFAULT_SHADERS.get('effect.frag', '')
+        if not vert or not frag:
+            return
+        if self._register_instanced_shader(
+            'effect_instanced',
+            vert,
+            frag,
+            extra_uniforms=['projection', 'view', 'explosion_texture'],
+        ):
+            print(f'{_BASE_RENDERER_PREFIX} Effect instancing shader compiled successfully.')
+
+    def _ensure_effect_instance_buffer(self, count):
+        if self._effect_instance_vbo is None:
+            self._effect_instance_vbo = gl.glGenBuffers(1)
+        if count <= self._effect_instance_capacity:
+            return
+        capacity = max(count, 64, self._effect_instance_capacity * 2)
+        self._effect_instance_capacity = capacity
+        self._effect_instance_data = np.empty(
+            (capacity, self.EFFECT_INSTANCE_FLOATS), dtype=np.float32
+        )
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
+        gl.glBufferData(
+            gl.GL_ARRAY_BUFFER,
+            self._effect_instance_data.nbytes,
+            None,
+            gl.GL_DYNAMIC_DRAW,
+        )
+
+    def _ensure_effect_instance_vao(self):
+        if self._effect_instance_vao is not None:
+            return self._effect_instance_vao
+        self._ensure_effect_instance_buffer(1)
+        vao = gl.glGenVertexArrays(1)
+        gl.glBindVertexArray(vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_vbo)
+        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+        gl.glEnableVertexAttribArray(0)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
+        stride = self.EFFECT_INSTANCE_FLOATS * 4
+        for location, size, offset in (
+            (1, 3, 0),
+            (2, 4, 12),
+            (3, 4, 28),
+            (4, 4, 44),
+            (5, 1, 60),
+        ):
+            gl.glVertexAttribPointer(
+                location, size, gl.GL_FLOAT, gl.GL_FALSE,
+                stride, ctypes.c_void_p(offset)
+            )
+            gl.glEnableVertexAttribArray(location)
+            gl.glVertexAttribDivisor(location, 1)
+        gl.glBindVertexArray(0)
+        self._effect_instance_vao = vao
+        return vao
+
+    def draw_fire_effects_instanced(
+        self, projection, view, table, slots, hidden=None, camera_pos=None,
+    ):
+        """Draw FIRE and ORB as normal instanced billboards using decoded GIF frames."""
+        if 'sprite_instanced' not in self.shaders or not len(slots):
+            return 0
+
+        slots = np.asarray(slots, dtype=np.int32)
+        if hidden is not None:
+            live = ~np.asarray(hidden, dtype=bool)[slots]
+            slots = slots[live]
+        if not len(slots):
+            return 0
+
+        effect_types = table.effect_type[slots]
+        alive = table.effect_alive[slots]
+        animated = (effect_types != 1) & alive
+        slots = slots[animated]
+        effect_types = effect_types[animated]
+        if not len(slots):
+            return 0
+
+        count = len(slots)
+        if len(self._sprite_texture_scratch) < count:
+            grown = max(64, len(self._sprite_texture_scratch) * 2, count)
+            self._sprite_texture_scratch = np.empty(grown, dtype=np.int32)
+            self._sprite_draw_mask = np.empty(grown, dtype=bool)
+            self._sprite_depth_scratch = np.empty(grown, dtype=np.float64)
+            self._sprite_depth_aux_scratch = np.empty(grown, dtype=np.float64)
+            self._sprite_sorted_slots_scratch = np.empty(grown, dtype=np.int32)
+
+        textures = self._sprite_texture_scratch[:count]
+        drawn = self._sprite_draw_mask[:count]
+        textures.fill(0)
+
+        variants = table.effect_fire_variant[slots]
+        custom_ids = table.effect_custom_id[slots]
+        elapsed = table.effect_elapsed[slots]
+
+        # There are only five authored variants per animated Effect family.
+        # This bounded 10-way loop replaces an entity-by-entity Python loop
+        # while allowing FIRE and ORB to use separate GIF sets.
+        for effect_kind, frame_store, cumulative_store in (
+            (0, self.effect_fire_frames, self.effect_fire_cumulative),
+            (2, self.effect_orb_frames, self.effect_orb_cumulative),
+        ):
+            kind_mask = effect_types == effect_kind
+            if not np.any(kind_mask):
+                continue
+            kind_variants = variants[kind_mask]
+            kind_elapsed = elapsed[kind_mask]
+            kind_positions = np.flatnonzero(kind_mask)
+            for variant in range(5):
+                mask = kind_variants == variant
+                if not np.any(mask):
+                    continue
+                frames = frame_store.get(variant, ())
+                cumulative = cumulative_store.get(variant)
+                if not frames or cumulative is None or not len(cumulative):
+                    continue
+
+                local_elapsed = np.mod(
+                    kind_elapsed[mask], cumulative[-1]
+                )
+                frame_indices = np.searchsorted(
+                    cumulative, local_elapsed, side='right'
+                )
+                frame_indices = np.minimum(
+                    frame_indices, len(frames) - 1
+                ).astype(np.int32, copy=False)
+                positions = kind_positions[np.flatnonzero(mask)]
+                textures[positions] = np.asarray(
+                    frames, dtype=np.int32
+                )[frame_indices]
+
+        # CUSTOM can use any GIF path. Iterate only over unique authored GIFs,
+        # never over entities; each path is decoded and uploaded once per renderer.
+        custom_mask = effect_types == 3
+        if np.any(custom_mask):
+            custom_positions = np.flatnonzero(custom_mask)
+            custom_values = custom_ids[custom_mask]
+            custom_elapsed = elapsed[custom_mask]
+            for custom_id in np.unique(custom_values):
+                custom_id = int(custom_id)
+                if custom_id <= 0:
+                    continue
+                frames = self.effect_custom_frames.get(custom_id)
+                cumulative = self.effect_custom_cumulative.get(custom_id)
+                if frames is None:
+                    path = table.effect_custom_path(custom_id)
+                    if path:
+                        frames, cumulative = self._load_fire_gif(path)
+                    else:
+                        frames, cumulative = (), np.empty(0, dtype=np.float32)
+                    self.effect_custom_frames[custom_id] = tuple(frames)
+                    self.effect_custom_cumulative[custom_id] = cumulative
+                if not frames or cumulative is None or not len(cumulative):
+                    continue
+
+                mask = custom_values == custom_id
+                local_elapsed = np.mod(
+                    custom_elapsed[mask], cumulative[-1]
+                )
+                frame_indices = np.searchsorted(
+                    cumulative, local_elapsed, side='right'
+                )
+                frame_indices = np.minimum(
+                    frame_indices, len(frames) - 1
+                ).astype(np.int32, copy=False)
+                positions = custom_positions[np.flatnonzero(mask)]
+                textures[positions] = np.asarray(
+                    frames, dtype=np.int32
+                )[frame_indices]
+
+        drawn[:] = textures > 0
+        valid_count = int(np.count_nonzero(drawn))
+        if valid_count == 0:
+            return 0
+        if valid_count != count:
+            slots = slots[drawn]
+            textures = textures[drawn]
+
+        if camera_pos is None:
+            order, run_starts = sort_into_runs(textures)
+        else:
+            cx, _, cz = self._camera_xyz(camera_pos)
+            fire_count = len(slots)
+            depth_sq = self._sprite_depth_scratch[:fire_count]
+            depth_aux = self._sprite_depth_aux_scratch[:fire_count]
+            np.take(table.pos[:, 0], slots, out=depth_sq)
+            np.subtract(depth_sq, cx, out=depth_sq)
+            np.square(depth_sq, out=depth_sq)
+            np.take(table.pos[:, 2], slots, out=depth_aux)
+            np.subtract(depth_aux, cz, out=depth_aux)
+            np.square(depth_aux, out=depth_aux)
+            np.add(depth_sq, depth_aux, out=depth_sq)
+            np.negative(depth_sq, out=depth_aux)
+            order, run_starts = sort_into_runs(
+                textures, secondary=depth_aux
+            )
+
+        count = len(order)
+        self._ensure_sprite_instance_buffer(count)
+        data = self._sprite_instance_data[:count]
+        sorted_slots = self._sprite_sorted_slots_scratch[:count]
+        np.take(slots, order, out=sorted_slots)
+        np.take(table.pos, sorted_slots, axis=0, out=data[:, 0:3])
+        np.take(table.sprite_size, sorted_slots, axis=0, out=data[:, 3:5])
+
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+
+        shader, uniforms = (
+            self.shaders['sprite_instanced'],
+            self.uniforms['sprite_instanced'],
+        )
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        self._upload_env_uniforms('sprite_instanced')
+        gl.glUniformMatrix4fv(
+            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection)
+        )
+        gl.glUniformMatrix4fv(
+            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view)
+        )
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['sprite_texture'], 0)
+        gl.glBindVertexArray(self._ensure_sprite_instance_vao())
+
+        current_tex = None
+        for run in range(len(run_starts) - 1):
+            begin = int(run_starts[run])
+            length = int(run_starts[run + 1]) - begin
+            if length <= 0:
+                continue
+            tex_id = int(textures[order[run_starts[run]]])
+            if tex_id != current_tex:
+                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                current_tex = tex_id
+                self.render_stats.batched_draws += 1
+            self._point_sprite_instances_at(begin)
+            gl.glDrawArraysInstanced(
+                gl.GL_TRIANGLE_STRIP, 0, 4, length
+            )
+            self.render_stats.draw_calls += 1
+
+        gl.glBindVertexArray(0)
+        return count
+
+    def draw_effects_instanced(
+        self, projection, view, table, slots, hidden=None,
+        play_mode=True, editor_time=0.0, camera_pos=None,
+    ):
+        """Draw FIRE/ORB as animated billboards and EXPLOSION through its existing shader."""
+        if not len(slots):
+            return 0
+
+        slots = np.asarray(slots, dtype=np.int32)
+        if hidden is not None:
+            live = ~np.asarray(hidden, dtype=bool)[slots]
+            slots = slots[live]
+        if not len(slots):
+            return 0
+
+        fire_count = self.draw_fire_effects_instanced(
+            projection, view, table, slots, hidden=None, camera_pos=camera_pos
+        )
+
+        explosion = table.effect_type[slots] == 1
+        alive = table.effect_alive[slots]
+        slots = slots[explosion & alive]
+        if not len(slots) or 'effect_instanced' not in self.shaders:
+            return fire_count
+
+        count = len(slots)
+        if len(self._effect_order_scratch) < count:
+            grown = max(64, len(self._effect_order_scratch) * 2, count)
+            self._effect_order_scratch = np.empty(grown, dtype=np.int32)
+            self._effect_depth_scratch = np.empty(grown, dtype=np.float64)
+            self._effect_depth_aux_scratch = np.empty(grown, dtype=np.float64)
+
+        depth = self._effect_depth_scratch[:count]
+        if camera_pos is None:
+            order = np.arange(count, dtype=np.int32)
+        else:
+            cx, _, cz = self._camera_xyz(camera_pos)
+            np.take(table.pos[:, 0], slots, out=depth)
+            np.subtract(depth, cx, out=depth)
+            np.square(depth, out=depth)
+            aux = self._effect_depth_aux_scratch[:count]
+            np.take(table.pos[:, 2], slots, out=aux)
+            np.subtract(aux, cz, out=aux)
+            np.square(aux, out=aux)
+            np.add(depth, aux, out=depth)
+            order = np.argsort(depth, kind='stable')[::-1]
+
+        sorted_slots = slots[order]
+        self._ensure_effect_instance_buffer(count)
+        data = self._effect_instance_data[:count]
+
+        np.take(table.pos, sorted_slots, axis=0, out=data[:, 0:3])
+        np.take(table.effect_params[:, :2], sorted_slots, axis=0,
+               out=data[:, 3:5])
+        np.take(table.effect_elapsed, sorted_slots, out=data[:, 5])
+        np.take(table.effect_lifetime, sorted_slots, out=data[:, 6])
+        np.take(table.effect_seed, sorted_slots, out=data[:, 7])
+        data[:, 8] = 1.0
+        data[:, 9:11] = 0.0
+        np.take(table.sprite_size[:, 1], sorted_slots, out=data[:, 10])
+        np.take(table.effect_color, sorted_slots, axis=0,
+               out=data[:, 11:14])
+        data[:, 14] = 1.0
+        data[:, 15] = table.effect_preview[sorted_slots]
+
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+
+        blend_was = bool(gl.glIsEnabled(gl.GL_BLEND))
+        cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
+        if not blend_was:
+            gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        if cull_was:
+            gl.glDisable(gl.GL_CULL_FACE)
+
+        shader = self.shaders['effect_instanced']
+        uniforms = self.uniforms['effect_instanced']
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        self._upload_env_uniforms('effect_instanced')
+        gl.glUniformMatrix4fv(
+            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection)
+        )
+        gl.glUniformMatrix4fv(
+            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view)
+        )
+        prev_active_texture = gl.glGetIntegerv(gl.GL_ACTIVE_TEXTURE)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        if self.effect_explosion_texture:
+            gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_explosion_texture)
+        gl.glUniform1i(uniforms['explosion_texture'], 0)
+
+        gl.glBindVertexArray(self._ensure_effect_instance_vao())
+        gl.glDrawArraysInstanced(
+            gl.GL_TRIANGLE_STRIP, 0, 4, count
+        )
+        self.render_stats.draw_calls += 1
+        self.render_stats.batched_draws += 1
+        gl.glBindVertexArray(0)
+        gl.glActiveTexture(prev_active_texture)
+        if cull_was:
+            gl.glEnable(gl.GL_CULL_FACE)
+        if not blend_was:
+            gl.glDisable(gl.GL_BLEND)
+        return fire_count + count
+
+    def _ensure_effect_instance_buffer(self, count):
+        if self._effect_instance_vbo is None:
+            self._effect_instance_vbo = gl.glGenBuffers(1)
+        if count <= self._effect_instance_capacity:
+            return
+        capacity = max(count, 64, self._effect_instance_capacity * 2)
+        self._effect_instance_capacity = capacity
+        self._effect_instance_data = np.empty(
+            (capacity, self.EFFECT_INSTANCE_FLOATS), dtype=np.float32
+        )
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
+        gl.glBufferData(
+            gl.GL_ARRAY_BUFFER,
+            self._effect_instance_data.nbytes,
+            None,
+            gl.GL_DYNAMIC_DRAW,
+        )
+
+    def _ensure_effect_instance_vao(self):
+        if self._effect_instance_vao is not None:
+            return self._effect_instance_vao
+        self._ensure_effect_instance_buffer(1)
+        vao = gl.glGenVertexArrays(1)
+        gl.glBindVertexArray(vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_vbo)
+        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+        gl.glEnableVertexAttribArray(0)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
+        stride = self.EFFECT_INSTANCE_FLOATS * 4
+        for location, size, offset in (
+            (1, 3, 0),
+            (2, 4, 12),
+            (3, 4, 28),
+            (4, 4, 44),
+            (5, 1, 60),
+        ):
+            gl.glVertexAttribPointer(
+                location, size, gl.GL_FLOAT, gl.GL_FALSE,
+                stride, ctypes.c_void_p(offset)
+            )
+            gl.glEnableVertexAttribArray(location)
+            gl.glVertexAttribDivisor(location, 1)
+        gl.glBindVertexArray(0)
+        self._effect_instance_vao = vao
+        return vao
 
     def _ensure_sprite_instance_buffer(self, count):
         """Grow the sprite instance VBO and its staging array to *count* rows."""
@@ -1149,6 +1628,237 @@ layout (location = 9) in vec4 iNormal2;
         uniforms = self.uniforms['fog']
         uniforms.preload(['projection', 'view', 'model', 'viewPos', 'time', 'noiseTexture',
                           'density', 'fogColor', 'noiseScale', 'object_color', 'alpha', 'inverseModel'])
+
+    # --------------------------------------------------------------------------
+    # FIRE animation textures
+    # --------------------------------------------------------------------------
+    def _fire_asset_bytes(self, asset_path):
+        """Read an effect asset from the mounted ResourceManager or filesystem."""
+        try:
+            from engine.resource_manager import ResourceManager
+            data = ResourceManager().get_asset(asset_path)
+        except Exception:
+            data = None
+
+        if data is not None:
+            return data
+
+        disk_path = os.path.join(os.getcwd(), asset_path)
+        if os.path.exists(disk_path):
+            try:
+                with open(disk_path, "rb") as handle:
+                    return handle.read()
+            except OSError:
+                pass
+        return None
+
+    def _upload_fire_frame(self, cache_key, image):
+        """Upload one already-decoded FIRE frame and return its GL texture id."""
+        cached = self.texture_manager.get(cache_key)
+        if cached:
+            return int(cached)
+
+        image = image.convertToFormat(QImage.Format_RGBA8888)
+        image = image.mirrored(False, True)
+        width, height = image.width(), image.height()
+        bits = image.constBits()
+        try:
+            bits.setsize(image.sizeInBytes())
+            pixels = bytes(bits)
+        except AttributeError:
+            pixels = image.bits().asstring(image.byteCount())
+
+        tex_id = gl.glGenTextures(1)
+        self.texture_manager[cache_key] = tex_id
+        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE
+        )
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE
+        )
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR
+        )
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR
+        )
+
+        gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
+        try:
+            gl.glTexImage2D(
+                gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, width, height, 0,
+                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, pixels
+            )
+        finally:
+            gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
+        return int(tex_id)
+
+    def _load_fire_gif(self, asset_path):
+        """Decode one FIRE GIF into persistent GL textures and frame timings.
+
+        Pillow is already a Fio texture dependency and gives us the decoded
+        animation frame sequence directly, including per-frame GIF durations.
+        Qt's QImageReader remains the fallback for a malformed/unusual asset.
+        """
+        data = self._fire_asset_bytes(asset_path)
+        if not data:
+            print(f"{_BASE_RENDERER_PREFIX} FIRE texture not found: {asset_path}")
+            return [], np.empty(0, dtype=np.float32)
+
+        frames = []
+        durations = []
+
+        # Primary animated-GIF path. ImageSequence.Iterator handles GIF
+        # disposal/compositing, so each uploaded texture is the complete frame
+        # the player should actually display.
+        try:
+            from PIL import Image, ImageSequence
+
+            with Image.open(io.BytesIO(data)) as gif:
+                if getattr(gif, 'is_animated', False):
+                    for frame_index, frame in enumerate(ImageSequence.Iterator(gif)):
+                        rgba = frame.convert("RGBA")
+                        qimage = QImage(
+                            rgba.tobytes(),
+                            rgba.width,
+                            rgba.height,
+                            rgba.width * 4,
+                            QImage.Format_RGBA8888,
+                        ).copy()
+                        frames.append(
+                            self._upload_fire_frame(
+                                f"{asset_path}#frame={frame_index}",
+                                qimage,
+                            )
+                        )
+                        try:
+                            delay_seconds = max(
+                                float(frame.info.get("duration", 100)) / 1000.0,
+                                0.01,
+                            )
+                        except (TypeError, ValueError):
+                            delay_seconds = 0.1
+                        durations.append(delay_seconds)
+                else:
+                    rgba = gif.convert("RGBA")
+                    qimage = QImage(
+                        rgba.tobytes(),
+                        rgba.width,
+                        rgba.height,
+                        rgba.width * 4,
+                        QImage.Format_RGBA8888,
+                    ).copy()
+                    frames.append(
+                        self._upload_fire_frame(
+                            f"{asset_path}#frame=0",
+                            qimage,
+                        )
+                    )
+                    durations.append(0.1)
+
+            if frames:
+                return frames, np.cumsum(
+                    np.asarray(durations, dtype=np.float32),
+                    dtype=np.float32,
+                )
+        except Exception as exc:
+            print(
+                f"{_BASE_RENDERER_PREFIX} Error decoding FIRE GIF "
+                f"with Pillow '{asset_path}': {exc}"
+            )
+
+        # Qt fallback for assets Pillow cannot decode.
+        try:
+            payload = QByteArray(data)
+            buffer = QBuffer()
+            buffer.setData(payload)
+            buffer.open(QIODevice.ReadOnly)
+            reader = QImageReader(buffer, b"gif")
+            reader.setDecideFormatFromContent(True)
+
+            image_count = reader.imageCount()
+            if image_count < 0:
+                image_count = 0
+
+            for frame_index in range(image_count):
+                if not reader.jumpToImage(frame_index):
+                    continue
+                image = reader.read()
+                if image.isNull():
+                    continue
+                frames.append(
+                    self._upload_fire_frame(
+                        f"{asset_path}#qt-frame={frame_index}",
+                        image,
+                    )
+                )
+                try:
+                    delay_seconds = max(
+                        float(reader.nextImageDelay()) / 1000.0,
+                        0.01,
+                    )
+                except (TypeError, ValueError):
+                    delay_seconds = 0.1
+                durations.append(delay_seconds)
+
+            buffer.close()
+
+            if frames:
+                return frames, np.cumsum(
+                    np.asarray(durations, dtype=np.float32),
+                    dtype=np.float32,
+                )
+        except Exception as exc:
+            print(
+                f"{_BASE_RENDERER_PREFIX} FIRE Qt fallback failed "
+                f"'{asset_path}': {exc}"
+            )
+
+        return [], np.empty(0, dtype=np.float32)
+
+    def _load_fire_effect_textures(self):
+        """Load the five authored FIRE variants once after the GL context exists."""
+        self.effect_fire_frames.clear()
+        self.effect_fire_cumulative.clear()
+
+        for variant in range(5):
+            asset_path = (
+                f"assets/textures/effects/fire{variant + 1:02d}.gif"
+            )
+            frames, cumulative = self._load_fire_gif(asset_path)
+
+            # Optional variants may not exist yet.  Keep the selector usable
+            # without inventing an asset: an absent variant falls back to FIRE 01.
+            if not frames and variant != 0:
+                frames = self.effect_fire_frames.get(0, ())
+                cumulative = self.effect_fire_cumulative.get(
+                    0, np.empty(0, dtype=np.float32)
+                )
+
+            self.effect_fire_frames[variant] = tuple(frames)
+            self.effect_fire_cumulative[variant] = cumulative
+
+    def _load_orb_effect_textures(self):
+        """Load the five authored ORB variants once after the GL context exists."""
+        self.effect_orb_frames.clear()
+        self.effect_orb_cumulative.clear()
+
+        for variant in range(5):
+            asset_path = (
+                f"assets/textures/effects/orb{variant + 1:02d}.gif"
+            )
+            frames, cumulative = self._load_fire_gif(asset_path)
+
+            if not frames and variant != 0:
+                frames = self.effect_orb_frames.get(0, ())
+                cumulative = self.effect_orb_cumulative.get(
+                    0, np.empty(0, dtype=np.float32)
+                )
+
+            self.effect_orb_frames[variant] = tuple(frames)
+            self.effect_orb_cumulative[variant] = cumulative
+
 
     # --------------------------------------------------------------------------
     # Texture management
@@ -1883,6 +2593,64 @@ layout (location = 9) in vec4 iNormal2;
                     self.sprite_textures[key] = tex_id
                 return int(tex_id)
         return 0
+
+    def draw_player_glasses(self, projection, view, positions,
+                           width=40.0, height=18.0):
+        """Draw the player as the fixed glasses billboard.
+
+        Player bodies are deliberately not EntityTable rows, so this is the
+        small non-entity billboard path used only for player representation
+        (split-screen and portal virtual scenes). It reuses the existing sprite
+        shader/VAO and performs at most two draws in a normal split-screen view.
+        """
+        if not positions or 'sprite' not in self.shaders:
+            return 0
+        tex_id = self.sprite_textures.get('Glasses')
+        if not tex_id:
+            return 0
+        vao = self.vaos.get('sprite')
+        if not vao:
+            return 0
+
+        shader = self.shaders['sprite']
+        uniforms = self.uniforms['sprite']
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        gl.glUniformMatrix4fv(
+            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection)
+        )
+        gl.glUniformMatrix4fv(
+            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view)
+        )
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['sprite_texture'], 0)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, int(tex_id))
+        gl.glBindVertexArray(vao)
+
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDepthFunc(gl.GL_LESS)
+        gl.glDepthMask(gl.GL_FALSE)
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        pos_loc = uniforms['sprite_pos_world']
+        size_loc = uniforms['sprite_size']
+
+        count = 0
+        try:
+            for pos in positions:
+                try:
+                    px, py, pz = float(pos.x), float(pos.y), float(pos.z)
+                except AttributeError:
+                    px, py, pz = float(pos[0]), float(pos[1]), float(pos[2])
+                gl.glUniform3f(pos_loc, px, py, pz)
+                gl.glUniform2f(size_loc, float(width), float(height))
+                gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
+                count += 1
+        finally:
+            gl.glDepthMask(gl.GL_TRUE)
+            gl.glDisable(gl.GL_BLEND)
+            gl.glBindVertexArray(0)
+        return count
 
     def draw_sprites_instanced(self, projection, view, table, slots,
                                gl_ids=None, camera_pos=None):
@@ -3328,6 +4096,76 @@ layout (location = 9) in vec4 iNormal2;
             gl.glBindVertexArray(self._edge_vao)
             gl.glDrawArrays(gl.GL_LINES, 0, 24)
         gl.glBindVertexArray(0)
+
+    def draw_effect_billboard_aabb(
+        self, projection, view, effect, explosion=False
+    ):
+        """Draw the selected Effect billboard's editor-only world AABB.
+
+        The bounds are derived from the same width/height and billboard basis
+        used by the Effect shaders. EXPLOSION frame 10 uses its current shader
+        growth factor so the preview box remains visually accurate.
+        """
+        props = getattr(effect, 'properties', {}) or {}
+        try:
+            width = max(0.01, float(props.get('width', 32.0)))
+        except (TypeError, ValueError):
+            width = 32.0
+        try:
+            height = max(0.01, float(props.get('height', 24.0)))
+        except (TypeError, ValueError):
+            height = 24.0
+
+        right = np.asarray(
+            (float(view[0][0]), float(view[1][0]), float(view[2][0])),
+            dtype=np.float32,
+        )
+        right_norm = float(np.linalg.norm(right))
+        if right_norm <= 1e-6:
+            right = np.asarray((1.0, 0.0, 0.0), dtype=np.float32)
+        else:
+            right /= right_norm
+
+        if explosion:
+            up = np.asarray((0.0, 1.0, 0.0), dtype=np.float32)
+            t = (10.0 - 0.5) / 16.0
+            smooth = t * t * (3.0 - 2.0 * t)
+            growth = 1.0 + 2.0 * smooth
+        else:
+            up = np.asarray(
+                (float(view[0][1]), float(view[1][1]), float(view[2][1])),
+                dtype=np.float32,
+            )
+            up_norm = float(np.linalg.norm(up))
+            if up_norm <= 1e-6:
+                up = np.asarray((0.0, 1.0, 0.0), dtype=np.float32)
+            else:
+                up /= up_norm
+            growth = 1.0
+
+        half_width = width * growth * 0.5
+        half_height = height * growth * 0.5
+        extents = (
+            np.abs(right) * half_width
+            + np.abs(up) * half_height
+        )
+
+        pos = np.asarray(
+            getattr(effect, 'pos', [0.0, 0.0, 0.0]),
+            dtype=np.float32,
+        )
+        center = pos.copy()
+        if explosion:
+            center += up * half_height
+
+        self.draw_aabb_bounds(
+            projection,
+            view,
+            {
+                'pos': center.tolist(),
+                'size': (extents * 2.0).tolist(),
+            },
+        )
 
     def draw_aabb_bounds(self, projection, view, brush):
         """Draw the exact world-space trigger AABB as orange dashed lines."""

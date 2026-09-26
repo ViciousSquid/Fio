@@ -7,7 +7,7 @@ from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixma
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
 from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
-                          LogicCamera, LogicSpawner, Portal, LogicState)
+                          LogicCamera, LogicSpawner, Portal, LogicState, Effect)
 from engine import brush_geometry as bg  # convex/angled-brush geometry
 from engine.constants import brush_aabb_bounds
 from editor import component_edit as ce  # shared object/face/edge/vertex model
@@ -3893,6 +3893,7 @@ class View2D(QWidget):
         
         # Standard Things
         add_light_action = menu.addAction("Light")
+        add_effect_action = menu.addAction("Effect")
         add_player_start_action = menu.addAction("PlayerStart")
         add_pickup_action = menu.addAction("Pickup")
         add_prop_action = menu.addAction("Prop")
@@ -3955,8 +3956,10 @@ class View2D(QWidget):
         new_thing = None
         
         # Handle Object Creation
-        if action == add_light_action: 
+        if action == add_light_action:
             new_thing = Light(pos=pos_3d)
+        elif action == add_effect_action:
+            new_thing = Effect(pos=pos_3d)
         elif action == add_player_start_action: 
             new_thing = PlayerStart(pos=pos_3d)
         elif action == add_pickup_action: 

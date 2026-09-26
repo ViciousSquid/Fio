@@ -11,6 +11,7 @@ from .io_system import IOManager, authored_flag, set_authored_flag
 from . import state_values as _sv
 import glm
 import os
+import time
 
 # Import debug logger - with fallback to print if not available
 try:
@@ -155,6 +156,101 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('light', 'fadein', light_fade_in)
     io_manager.register_input_handler('light', 'fadeout', light_fade_out)
     
+    # ==========================================================================
+    # EFFECT INPUTS
+    # ==========================================================================
+
+    def effect_set_type(entity, param, logic):
+        """Set the Effect TYPE by name and notify connected outputs."""
+        effect_type = str(param or "").strip().upper()
+        if not entity.set_effect_type(effect_type):
+            return
+
+        table = getattr(logic, '_entity_table', None)
+        if table is not None:
+            slot = table.slot_of_id.get(entity.properties.get('id'))
+            if slot is not None:
+                slot = int(slot)
+                table.refresh_rows([entity], [slot])
+                # A SetType-to-EXPLOSION switch is not a trigger. It leaves
+                # EXPLOSION dormant until Explode is received.
+                animated = table.effect_type[slot] != 1
+                table.effect_active[slot] = animated
+                table.effect_alive[slot] = animated
+                table.light_enabled[slot] = (
+                    bool(table.effect_light_enabled[slot])
+                    if animated
+                    else False
+                )
+
+        logic.io_manager.fire_output(
+            entity, 'OnChanged', value=entity.properties['effect_type']
+        )
+
+    def effect_explode(entity, param, logic):
+        """Switch an Effect to EXPLOSION permanently and play it once."""
+        now = time.perf_counter()
+        if not entity.trigger_explosion(now):
+            return
+
+        game_state = getattr(logic, 'game_state', None)
+        if game_state is None and hasattr(logic, 'io_manager'):
+            game_state = logic.io_manager.get_game_state()
+        if (
+            game_state is not None
+            and not bool(entity.properties.get('silent', False))
+        ):
+            try:
+                source_position = [
+                    float(entity.pos.x),
+                    float(entity.pos.y),
+                    float(entity.pos.z),
+                ]
+            except AttributeError:
+                source_position = [
+                    float(entity.pos[0]),
+                    float(entity.pos[1]),
+                    float(entity.pos[2]),
+                ]
+            game_state.queue_sound({
+                'action': 'play',
+                'file': 'assets/sounds/explode.mp3',
+                'volume': 1.0,
+                'position': source_position,
+            })
+
+        table = getattr(logic, '_entity_table', None)
+        if table is None:
+            return
+        slot = table.slot_of_id.get(entity.properties.get('id'))
+        if slot is None:
+            return
+
+        slot = int(slot)
+        table.effect_type[slot] = 1  # EXPLOSION
+        table.effect_preview[slot] = False
+        table.effect_spawn_time[slot] = now
+        table.effect_elapsed[slot] = 0.0
+        table.effect_active[slot] = True
+        table.effect_alive[slot] = True
+
+        value = entity.properties.get('light_colour', [255, 165, 70])
+        try:
+            rgb = [
+                max(0.0, min(1.0, float(value[i]) / 255.0))
+                for i in range(3)
+            ]
+        except (TypeError, ValueError, IndexError):
+            rgb = [1.0, 165.0 / 255.0, 70.0 / 255.0]
+        table.effect_light_color[slot] = rgb
+        table.light_color[slot] = rgb
+        table.light_enabled[slot] = bool(
+            entity.properties.get('light_enabled', True)
+        )
+
+    io_manager.register_input_handler('effect', 'settype', effect_set_type)
+    io_manager.register_input_handler('effect', 'explode', effect_explode)
+
     # ==========================================================================
     # DOOR INPUTS
     # ==========================================================================
@@ -487,8 +583,18 @@ def register_all_input_handlers(io_manager: IOManager):
             debug_log('Error', f"Could not find game_state for speaker '{entity_name}'!")
             return
 
-        # Queue the sound for the main thread to play (thread-safe). ``looping``
-        # asks the mixer to repeat it until an explicit StopSound; ``entity_id``
+        # Speaker position/radius are consumed on the render thread so audio
+        # attenuation follows the authored radius in the editor. Global
+        # speakers remain non-spatial.
+        global_sound = bool(entity.properties.get('global', False))
+        try:
+            radius = max(0.0, float(entity.properties.get('radius', 512.0)))
+        except (TypeError, ValueError):
+            radius = 512.0
+        position = None if global_sound else list(entity.pos)
+
+        # Queue the sound for the main thread to play (thread-safe). looping
+        # asks the mixer to repeat it until an explicit StopSound; entity_id
         # lets that stop find and silence this speaker's channel.
         game_state.queue_sound({
             'action': 'play',
@@ -496,12 +602,20 @@ def register_all_input_handlers(io_manager: IOManager):
             'volume': volume,
             'looping': looping,
             'entity_id': speaker_id,
+            'position': position,
+            'radius': radius,
+            'global': global_sound,
         })
-        debug_log('Speaker', f"  Queued '{sound_file}'" + (" (looping)" if looping else ""))
+        debug_log(
+            'Speaker',
+            f"  Queued '{sound_file}'"
+            + (" (looping)" if looping else "")
+            + (f" (radius={radius:g})" if not global_sound else " (global)")
+        )
 
         # Fire output event
         logic.io_manager.fire_output(entity, 'OnSoundStarted')
-    
+
     def speaker_stop(entity, param, logic):
         entity.properties['state'] = 'off'
         speaker_id = id(entity)

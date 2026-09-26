@@ -15,7 +15,7 @@ from engine import render_table
 from engine import entity_table as entity_projection
 from engine.render_keys import KeyLayout, sort_into_runs
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
-from editor.things import Thing
+from editor.things import Thing, Effect
 
 # Camera render-distance cull. The pure per-object geometry lives in
 # engine.render_cull (GL-free, so it is unit-testable without a GL context) and
@@ -855,12 +855,16 @@ class Renderer_F(BaseRenderer):
                 config.get('play_mode', False),
                 config.get('show_sprites_in_play_mode', False),
             )
+            effect_slots = thing_slots[
+                (etable.class_bits[thing_slots] & entity_projection.ENT_EFFECT) != 0
+            ]
         else:
             model_slots = np.empty(0, dtype=np.int32)
             sprite_slots = np.empty(0, dtype=np.int32)
+            effect_slots = np.empty(0, dtype=np.int32)
 
         lights = self._get_active_lights((), config)
-        return table, groups, model_slots, sprite_slots, lights
+        return table, groups, model_slots, sprite_slots, effect_slots, lights
 
     def _render_water_reflections(
             self, table, water_slots, lights, config, projection, view, camera_pos):
@@ -1130,6 +1134,9 @@ class Renderer_F(BaseRenderer):
                     capture_config.get(
                         'show_sprites_in_play_mode', False),
                 )
+                effect_slots = thing_slots[
+                    (entity_table.class_bits[thing_slots] & entity_projection.ENT_EFFECT) != 0
+                ]
                 if len(model_slots):
                     self.draw_models_instanced(
                         projection,
@@ -1139,6 +1146,20 @@ class Renderer_F(BaseRenderer):
                         model_slots,
                         lights,
                         capture_config,
+                    )
+
+                if len(effect_slots):
+                    gl.glEnable(gl.GL_BLEND)
+                    gl.glDepthMask(gl.GL_FALSE)
+                    self.draw_effects_instanced(
+                        projection,
+                        reflection_view,
+                        entity_table,
+                        effect_slots,
+                        hidden=thing_hidden,
+                        play_mode=capture_config.get('play_mode', False),
+                        editor_time=capture_config.get('time', 0.0),
+                        camera_pos=reflection_pos,
                     )
 
                 if len(sprite_slots):
@@ -1273,6 +1294,7 @@ class Renderer_F(BaseRenderer):
         numeric = True
         sprite_slots = None
         numeric_model_slots = None
+        effect_slots = None
 
         cx = cz = None
         if camera_pos is not None:
@@ -1311,6 +1333,14 @@ class Renderer_F(BaseRenderer):
             etable, tslots, thing_hidden,
             config.get('play_mode', False),
             config.get('show_sprites_in_play_mode', False))
+        # Effects own a dedicated dense slot vector. Do not derive this
+        # transient render pass from the generic Thing classification; a newly
+        # authored Effect must become visible as soon as the EntityTable row exists.
+        effect_slots = etable.effect_slots
+        if (config.get('camera_distance_cull', config.get('play_mode', False))
+                and cx is not None and len(effect_slots)):
+            effect_slots = self._distance_cull_thing_slots(
+                etable, effect_slots, cx, cz, self.view_distance.distance_sq)
 
         _tbl = table
         lights = self._get_active_lights(things, config)
@@ -1355,7 +1385,7 @@ class Renderer_F(BaseRenderer):
                         try:
                             (portal_table, portal_groups,
                              portal_model_slots, portal_sprite_slots,
-                             portal_lights) = self._portal_numeric_scene_inputs(
+                             portal_effect_slots, portal_lights) = self._portal_numeric_scene_inputs(
                                  proj, vw, cfg)
                             mode = cfg.get('brush_display_mode', 'Textured')
 
@@ -1394,10 +1424,28 @@ class Renderer_F(BaseRenderer):
                                     portal_groups['glow'], portal_lights, cfg,
                                     table=portal_table)
 
+                            if len(portal_effect_slots):
+                                gl.glEnable(gl.GL_BLEND)
+                                gl.glDepthMask(gl.GL_FALSE)
+                                self.draw_effects_instanced(
+                                    proj, vw, cfg.get('entity_table'),
+                                    portal_effect_slots,
+                                    hidden=cfg.get('thing_hidden'),
+                                    play_mode=cfg.get('play_mode', False),
+                                    editor_time=cfg.get('time', 0.0),
+                                    camera_pos=cam)
+
                             if len(portal_sprite_slots):
                                 self.draw_sprites_instanced(
                                     proj, vw, cfg.get('entity_table'),
                                     portal_sprite_slots, camera_pos=cam)
+
+                            if cfg.get('show_glasses', True):
+                                player_positions = cfg.get(
+                                    'player_glasses_positions', ())
+                                if player_positions:
+                                    self.draw_player_glasses(
+                                        proj, vw, player_positions)
 
                             gl.glEnable(gl.GL_BLEND)
                             gl.glDepthMask(gl.GL_FALSE)
@@ -1474,6 +1522,14 @@ class Renderer_F(BaseRenderer):
         # The sprite renderer has one path: dense EntityTable columns -> GL
         # instanced draws. Missing projection data is a caller error, not a
         # reason to resurrect the object renderer.
+        if effect_slots is not None and len(effect_slots):
+            self.draw_effects_instanced(
+                projection, view, etable, effect_slots,
+                hidden=thing_hidden,
+                play_mode=config.get('play_mode', False),
+                editor_time=config.get('time', 0.0),
+                camera_pos=camera_pos)
+
         if len(sprite_slots):
             self.draw_sprites_instanced(
                 projection, view, etable, sprite_slots, camera_pos=camera_pos)
@@ -1504,6 +1560,18 @@ class Renderer_F(BaseRenderer):
                 if pos is not None and not selected_object.get('lock', False):
                     self.render_gizmo(projection, view, pos)
             elif isinstance(selected_object, Thing):
+                if (isinstance(selected_object, Effect)
+                        and selected_object.properties.get('preview', False)):
+                    self.draw_effect_billboard_aabb(
+                        projection,
+                        view,
+                        selected_object,
+                        explosion=(
+                            str(selected_object.properties.get(
+                                'effect_type', 'FIRE'
+                            )).upper() == 'EXPLOSION'
+                        ),
+                    )
                 self.render_gizmo(projection, view, selected_object.pos)
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDisable(gl.GL_BLEND)
