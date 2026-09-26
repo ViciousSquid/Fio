@@ -16,7 +16,7 @@ def test_effect_defaults_to_fire_with_intrinsic_light():
     assert effect.properties["fire_texture"] == EFFECT_FIRE_TEXTURES[0]
     assert len(EFFECT_FIRE_TEXTURES) == 5
     assert effect.properties["width"] == 32.0
-    assert effect.properties["height"] == 24.0
+    assert effect.properties["height"] == 46.0
     assert "size" not in effect.properties
     assert "scale" not in effect.properties
     assert effect.properties["light_enabled"] is True
@@ -75,7 +75,7 @@ def test_fire_texture_variants_set_dominant_emitted_light_colour():
         np.testing.assert_allclose(table.light_color[0], colour)
 
 
-def test_explosion_preview_is_editor_only_and_starts_at_frame_zero():
+def test_explosion_preview_is_editor_only_and_static_at_frame_ten():
     explosion = Effect(properties={
         "effect_type": EFFECT_EXPLOSION,
         "preview": True,
@@ -134,7 +134,7 @@ def test_fire_preview_flag_is_available_for_the_same_effect_primitive():
 
     assert bool(table.effect_preview[0])
     assert bool(table.effect_alive[0])
-    np.testing.assert_allclose(table.sprite_size[0], (32.0, 24.0))
+    np.testing.assert_allclose(table.sprite_size[0], (32.0, 46.0))
 
 
 def test_explosion_light_is_a_short_runtime_flash_not_a_constant_source():

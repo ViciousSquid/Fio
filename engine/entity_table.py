@@ -982,7 +982,7 @@ class EntityTable:
 
                 lifetime = np.maximum(self.effect_lifetime[effect_ls], 0.01)
                 # Editor preview makes an otherwise dormant EXPLOSION visible
-                # at frame zero without arming its runtime state.
+                # at atlas frame 10 without arming its runtime state.
                 preview_explosion = (
                     explosion
                     & self.effect_preview[effect_ls]
@@ -1233,7 +1233,7 @@ class EntityTable:
                 props, 'preview', False
             )
             width = max(0.01, _effect_float(props, 'width', 32.0))
-            height = max(0.01, _effect_float(props, 'height', 24.0))
+            height = max(0.01, _effect_float(props, 'height', 46.0))
             visual_intensity = max(0.0, _effect_float(props, 'intensity', 1.0))
             light_intensity = max(0.0, _effect_float(props, 'light_intensity', 2.5))
             light_radius = max(0.01, _effect_float(props, 'light_radius', 128.0))

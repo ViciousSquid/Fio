@@ -2244,7 +2244,7 @@ class PropertyEditor(QWidget):
             return slider, value_label
 
         add_scaled_slider("Width", "width", 4.0, 256.0, 32.0, "{:.1f}")
-        add_scaled_slider("Height", "height", 4.0, 256.0, 24.0, "{:.1f}")
+        add_scaled_slider("Height", "height", 4.0, 256.0, 46.0, "{:.1f}")
         add_scaled_slider("Intensity", "intensity", 0.0, 3.0, 1.0, "{:.2f}")
 
         light_check = QCheckBox("Enable intrinsic light")
