@@ -85,7 +85,8 @@ def pytest_ignore_collect(collection_path, config):
                          filename=str(collection_path))
     except (OSError, UnicodeDecodeError, SyntaxError):
         return False
-    for node in tree.body:
+    nodes = ast.walk(tree)
+    for node in nodes:
         if isinstance(node, ast.Import):
             roots = [alias.name.split('.')[0] for alias in node.names]
         elif isinstance(node, ast.ImportFrom):
