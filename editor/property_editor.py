@@ -2172,6 +2172,38 @@ class PropertyEditor(QWidget):
         )
         form.addRow("Type:", type_combo)
 
+        fire_combo = QComboBox()
+        fire_textures = [
+            (f"Fire {index:02d}", f"assets/textures/effects/fire{index:02d}.gif")
+            for index in range(1, 6)
+        ]
+        for label, path in fire_textures:
+            fire_combo.addItem(label, path)
+
+        current_fire = str(
+            props.get("fire_texture", fire_textures[0][1])
+        ).replace("\\", "/")
+        fire_index = next(
+            (index for index, (_, path) in enumerate(fire_textures)
+             if path == current_fire),
+            0,
+        )
+        fire_combo.setCurrentIndex(fire_index)
+        form.addRow("Fire:", fire_combo)
+
+        def refresh_fire_texture():
+            explosion = str(
+                thing.properties.get("effect_type", "FIRE")
+            ).upper() == "EXPLOSION"
+            fire_combo.setEnabled(not explosion)
+
+        def fire_texture_changed(index):
+            path = fire_combo.itemData(index)
+            if path:
+                self.update_object_prop("fire_texture", str(path))
+
+        fire_combo.currentIndexChanged.connect(fire_texture_changed)
+
         def add_scaled_slider(label, key, minimum, maximum, default, fmt):
             scale = 100
             widget = QWidget()
@@ -2247,6 +2279,7 @@ class PropertyEditor(QWidget):
         def effect_type_changed(value):
             value = str(value).upper()
             self.update_object_prop('effect_type', value)
+            refresh_fire_texture()
             if value == 'EXPLOSION':
                 try:
                     lifetime = float(thing.properties.get('lifetime', 0.5))
@@ -2257,6 +2290,7 @@ class PropertyEditor(QWidget):
             refresh_lifetime()
 
         type_combo.currentTextChanged.connect(effect_type_changed)
+        refresh_fire_texture()
         refresh_lifetime()
 
     def _build_attach_to_mover(self, form, thing, prefix=''):
