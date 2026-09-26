@@ -185,14 +185,22 @@ def light_ubo_source(source):
 
     count = int(match.group(1))
     block = (
-        "struct Light {\n"
-        "    highp vec4 position;\n"
-        "    vec4 color;\n"
-        "    vec4 params;       // x=intensity, y=radius\n"
-        "    ivec4 indices;     // x=shadow index\n"
-        "};\n"
-        "layout(std140) uniform FioLightBlock {\n"
-        f"    Light lights[{count}];\n"
+        "struct Light {
+"
+        "    highp vec4 position;
+"
+        "    vec4 color;
+"
+        "    vec4 params;       // x=intensity, y=radius
+"
+        "    ivec4 indices;     // x=shadow index
+"
+        "};
+"
+        "layout(std140) uniform FioLightBlock {
+"
+        f"    Light lights[{count}];
+"
         "};"
     )
     result = _LIGHT_DECL_RE.sub(block, source, count=1)
@@ -532,31 +540,20 @@ void main() {
         return;
     }
 
-    // FIRE is a deterministic collection of virtual flame cards. They are
-    // ordinary instanced quads, but each card gets its own height, width,
-    // starting height, lean and orientation. No CPU particle simulation exists.
+    // ------------------------------------------------------------------
+    // FIRE - single billboard. The procedural texture in the fragment
+    // shader supplies all the internal turbulence, so the eight crossed
+    // cards of the earlier version are no longer needed.
+    // ------------------------------------------------------------------
     const vec3 worldUp = vec3(0.0, 1.0, 0.0);
     float card = iParticleIndex;
+
     float r0 = hash11(iEffectMeta.x + card * 17.173);
     float r1 = hash11(iEffectMeta.x + card * 31.791);
-    float r2 = hash11(iEffectMeta.x + card * 53.417);
-    float r3 = hash11(iEffectMeta.x + card * 79.133);
 
-    bool baseCard = card < 8.0;
-    float base = baseCard ? 1.0 : 0.0;
+    float tilt = (r0 - 0.5) * 0.25;    // small lean
+    float yaw  = r1 * 6.2831853;       // random rotation around Y
 
-    float cardHeight = mix(0.58, 1.32, r1) * size;
-    float cardWidth = mix(0.13, 0.30, r2) * size;
-
-    // Broad crossed sheets build the burning mass; the remaining cards are
-    // narrower tongues which start at different heights and peel away.
-    cardWidth *= mix(0.78, 1.55, base);
-    cardHeight *= mix(0.82, 0.92, base);
-
-    float lift = base * (r3 - 0.5) * 0.12 * size
-               + (1.0 - base) * r3 * 0.38 * size;
-
-    float angle = (r0 * 6.2831853) + floor(card * 0.25) * 0.17;
     vec3 cameraRight = normalize(vec3(view[0][0], view[1][0], view[2][0]));
     vec3 cameraForward = vec3(-view[0][2], -view[1][2], -view[2][2]);
     cameraForward.y = 0.0;
@@ -565,19 +562,19 @@ void main() {
     } else {
         cameraForward = normalize(cameraForward);
     }
+
+    // Billboard plane with a random yaw so different fire instances
+    // don't all face the camera identically.
     vec3 cardRight = normalize(
-        cameraRight * cos(angle) + cameraForward * sin(angle)
+        cameraRight * cos(yaw) + cameraForward * sin(yaw)
     );
 
     float vertical = aPos.y + 0.5;
-    float y = vertical;
-    float lean = (r1 - 0.5) * size * mix(0.16, 0.52, y * y);
-    float sideways = sin(r0 * 17.0 + vertical * 2.3) * size * 0.05 * y;
 
     vec3 worldPos = iEffectPos
-                  + cardRight * aPos.x * cardWidth
-                  + worldUp * (lift + vertical * cardHeight)
-                  + normalize(vec3(cardRight.z, 0.0, -cardRight.x)) * (lean + sideways);
+                  + cardRight * aPos.x * size
+                  + worldUp * vertical * size * 1.35          // slightly taller
+                  + vec3(tilt * size * vertical, 0.0, 0.0);   // lean
 
     TexCoords = aPos + 0.5;
     FragPos = worldPos;
@@ -615,6 +612,9 @@ const float EXPLOSION_SHEET_ROWS = 4.0;
 const float EXPLOSION_FRAME_COUNT = 16.0;
 const float EXPLOSION_FRAME_RATE = 16.0;
 
+// ------------------------------------------------------------------
+// HASH / NOISE
+// ------------------------------------------------------------------
 highp float hash21(highp vec2 p, highp float seed) {
     return fract(
         sin(dot(p + vec2(seed, seed * 0.731), vec2(127.1, 311.7)))
@@ -633,17 +633,58 @@ highp float valueNoise(highp vec2 p, highp float seed) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-highp float fbm3(highp vec2 p, highp float seed) {
-    float value = 0.0;
-    float amplitude = 0.5;
-    for (int i = 0; i < 3; ++i) {
-        value += valueNoise(p, seed + float(i) * 13.71) * amplitude;
-        p = p * 2.03 + vec2(7.1, 3.7);
-        amplitude *= 0.5;
-    }
-    return value;
+// 3-D value noise: third axis is time, so the flame evolves in place
+// rather than scrolling a static 2-D pattern. Two hash lookups per
+// lattice point is enough for the turbulence scales used below; the
+// classic gradient-noise artefacts never get a chance to show through
+// the density field.
+highp float valueNoise3(highp vec3 p, highp float seed) {
+    highp vec3 i = floor(p);
+    highp vec3 f = fract(p);
+    highp vec3 u = f * f * (3.0 - 2.0 * f);
+
+    float n000 = hash21(i.xy + i.z * 17.0, seed);
+    float n100 = hash21(i.xy + vec2(1.0, 0.0) + i.z * 17.0, seed);
+    float n010 = hash21(i.xy + vec2(0.0, 1.0) + i.z * 17.0, seed);
+    float n110 = hash21(i.xy + vec2(1.0, 1.0) + i.z * 17.0, seed);
+    float n001 = hash21(i.xy + (i.z + 1.0) * 17.0, seed);
+    float n101 = hash21(i.xy + vec2(1.0, 0.0) + (i.z + 1.0) * 17.0, seed);
+    float n011 = hash21(i.xy + vec2(0.0, 1.0) + (i.z + 1.0) * 17.0, seed);
+    float n111 = hash21(i.xy + vec2(1.0, 1.0) + (i.z + 1.0) * 17.0, seed);
+
+    float nx00 = mix(n000, n100, u.x);
+    float nx10 = mix(n010, n110, u.x);
+    float nx01 = mix(n001, n101, u.x);
+    float nx11 = mix(n011, n111, u.x);
+
+    float nxy0 = mix(nx00, nx10, u.y);
+    float nxy1 = mix(nx01, nx11, u.y);
+
+    return mix(nxy0, nxy1, u.z);
 }
 
+// ------------------------------------------------------------------
+// BLACKBODY COLOUR RAMP
+// Maps 0..1 temperature to physically plausible fire colours:
+// dark red -> red -> orange -> yellow -> white.
+// ------------------------------------------------------------------
+vec3 blackbody(float t) {
+    t = clamp(t, 0.0, 1.0);
+    vec3 dark   = vec3(0.12, 0.01, 0.00);
+    vec3 red    = vec3(0.95, 0.10, 0.00);
+    vec3 orange = vec3(1.00, 0.45, 0.03);
+    vec3 yellow = vec3(1.00, 0.82, 0.30);
+    vec3 white  = vec3(1.00, 0.97, 0.88);
+
+    if (t < 0.20) return mix(dark,   red,    t / 0.20);
+    if (t < 0.48) return mix(red,    orange, (t - 0.20) / 0.28);
+    if (t < 0.76) return mix(orange, yellow, (t - 0.48) / 0.28);
+    return                mix(yellow, white,  (t - 0.76) / 0.24);
+}
+
+// ------------------------------------------------------------------
+// FOG
+// ------------------------------------------------------------------
 float fogFactor(highp vec3 fragPos) {
     if (uFogEnabled == 0) return 0.0;
     highp float d = length(fragPos - uFogCamPos);
@@ -660,6 +701,9 @@ vec3 applyFog(vec3 color, highp vec3 fragPos) {
     return mix(color, uFogColor, fogFactor(fragPos));
 }
 
+// ------------------------------------------------------------------
+// EXPLOSION ATLAS
+// ------------------------------------------------------------------
 vec2 explosionAtlasUV(vec2 localUV, float frameIndex) {
     float column = mod(frameIndex, EXPLOSION_SHEET_COLUMNS);
     float rowTop = floor(frameIndex / EXPLOSION_SHEET_COLUMNS);
@@ -669,6 +713,96 @@ vec2 explosionAtlasUV(vec2 localUV, float frameIndex) {
         1.0 / EXPLOSION_SHEET_ROWS
     );
     return (vec2(column, rowBottom) + localUV) * cellSize;
+}
+
+// ------------------------------------------------------------------
+// PROCEDURAL FIRE TEXTURE
+// Source-style: a base flame profile (wide at the base, tapering to a
+// point) is perturbed by 3-D noise that scrolls upward over time. No
+// texture atlas is needed; the density, temperature and colour are all
+// generated in the shader, which is exactly how the classic
+// env_fire sprites worked before the flipbook pipeline.
+// ------------------------------------------------------------------
+vec4 sampleFire(vec2 uv, float elapsed, float seed, float intensity) {
+    float x = uv.x - 0.5;   // -0.5 .. 0.5
+    float y = uv.y;         //  0.0 .. 1.0
+
+    // ---- base profile --------------------------------------------
+    float baseRadius = mix(0.48, 0.06, pow(y, 0.75));
+
+    // A gentle sway so the flame is never perfectly vertical.
+    float sway = sin(y * 3.8 + elapsed * 0.6 + seed * 2.1) * 0.07 * y;
+    float lateral = abs(x + sway);
+
+    float profile = 1.0 - smoothstep(0.0, baseRadius, lateral);
+    profile = pow(profile, 1.6);
+
+    profile *= smoothstep(0.0, 0.08, y);
+    profile *= 1.0 - smoothstep(0.85, 1.0, y);
+
+    if (profile <= 0.0) return vec4(0.0);
+
+    // ---- 3-D noise perturbation ----------------------------------
+    float speed = 0.9 + 0.4 * hash21(vec2(seed, 0.0), seed);
+
+    vec3 p;
+    p.x = x * 2.8;
+    p.y = y * 4.2 - elapsed * speed;
+    p.z = seed * 7.3;
+
+    // Large-scale turbulence: breaks the smooth profile into tongues.
+    float nLarge = valueNoise3(p * 0.9, seed + 11.0);
+    nLarge = mix(0.5, 1.5, nLarge);
+
+    // Medium detail: ragged edges and secondary tongues.
+    float nMid = valueNoise3(p * 2.3 + vec3(4.1, 1.7, 0.0), seed + 37.0);
+    nMid = mix(0.6, 1.4, nMid);
+
+    // Fine detail: small hot spots and holes.
+    float nFine = valueNoise3(p * 5.5 + vec3(11.0, -3.0, 5.0), seed + 73.0);
+    nFine = mix(0.7, 1.3, nFine);
+
+    float density = profile * nLarge * (0.7 + 0.3 * nMid) * (0.8 + 0.2 * nFine);
+
+    // A second, independent field carves holes so the flame is not a
+    // solid mass.
+    float holes = valueNoise3(p * 1.7 + vec3(2.9, -1.1, 8.0), seed + 91.0);
+    density *= mix(0.55, 1.0, smoothstep(0.35, 0.75, holes));
+
+    // Embers / detached hot fragments near the upper part.
+    float emberNoise = valueNoise3(p * 8.0 + vec3(3.0, 2.0, 1.0), seed + 127.0);
+    float embers = smoothstep(0.86, 0.98, emberNoise)
+                 * smoothstep(0.35, 0.75, y)
+                 * (1.0 - smoothstep(0.80, 1.0, y));
+    density = clamp(density + embers * 0.45, 0.0, 1.0);
+
+    // ---- temperature / colour ------------------------------------
+    float core = exp(-lateral * lateral * 3.2);
+    core *= smoothstep(0.02, 0.45, y);
+    core *= (0.65 + 0.35 * nLarge);
+
+    float temperature = clamp(
+        0.15
+        + core * 0.95
+        + nMid * 0.15
+        - y * 0.15,
+        0.0, 1.0
+    );
+
+    vec3 rgb = blackbody(temperature);
+
+    // ---- alpha / softness ----------------------------------------
+    float alpha = density * clamp(0.55 + temperature * 0.40, 0.0, 1.0);
+
+    // ---- flicker -------------------------------------------------
+    float slow = valueNoise3(vec3(elapsed * 0.35, seed * 0.01, 0.0), seed + 151.0);
+    float fast = valueNoise3(vec3(elapsed * 2.8, seed * 0.07, 0.0), seed + 173.0);
+    float flicker = mix(0.82, 1.18, clamp(slow * 0.7 + fast * 0.3, 0.0, 1.0));
+
+    rgb *= intensity * flicker;
+    alpha *= clamp(intensity, 0.0, 1.5);
+
+    return vec4(rgb, alpha);
 }
 
 void main() {
@@ -703,105 +837,13 @@ void main() {
     // ------------------------------------------------------------------
     // FIRE
     // ------------------------------------------------------------------
-    // The flame is a turbulent density field rather than a scrolling picture.
-    // Three noise scales establish the classic fire hierarchy:
-    //   large  = broad tongues and global body motion
-    //   detail = breakup into secondary tongues
-    //   fine   = ragged edge / small hot holes
-    float card = EffectMeta.z;
-    float cardSeed = seed + card * 19.37;
-    float cardRand = hash21(vec2(card, seed), cardSeed);
+    // The entire flame - shape, colour, turbulence, embers - is generated
+    // procedurally in sampleFire(). No texture atlas is needed.
+    vec4 fire = sampleFire(TexCoords, elapsed, seed, visualIntensity);
 
-    float y = clamp(TexCoords.y, 0.0, 1.0);
-    float x = TexCoords.x - 0.5;
+    if (fire.a < 0.012 || visualIntensity <= 0.0) discard;
 
-    float speed = mix(0.72, 1.55, fract(cardRand * 17.0));
-    float phase = hash21(vec2(card * 3.17, seed + 8.1), cardSeed + 4.7) * 6.2831853;
-
-    highp vec2 p = vec2(x * 2.35, y * 3.15);
-    p.y -= elapsed * speed + phase;
-    p.x += sin(elapsed * 0.9 + phase + y * 2.7) * 0.10 * y;
-
-    highp vec2 warp = vec2(
-        fbm3(p * 0.82 + vec2(0.0, -elapsed * 0.25), cardSeed + 11.0),
-        fbm3(p * 0.67 + vec2(3.7, elapsed * 0.18), cardSeed + 27.0)
-    ) - 0.5;
-    p += warp * vec2(0.95, 0.62);
-
-    float large = fbm3(p * 1.05, cardSeed + 41.0);
-    float detail = fbm3(p * 3.15 + vec2(4.2, -1.6), cardSeed + 57.0);
-    float fine = valueNoise(p * 9.0 + vec2(11.0, -7.0), cardSeed + 73.0);
-
-    // A flame is broad at the base and contracts aggressively toward the tips.
-    float baseWidth = mix(0.53, 0.075, pow(y, 0.68));
-    float silhouetteShift =
-        (large - 0.5) * 0.23 * (0.22 + 0.78 * y)
-        + (detail - 0.5) * 0.095;
-
-    float lateral = abs(x + silhouetteShift) / max(baseWidth, 0.012);
-    float body = 1.0 - smoothstep(0.54, 1.0, lateral);
-
-    // Domain-warped holes break the single sausage shape into separate tongues.
-    float voids = smoothstep(0.68, 0.94, fine);
-    float tongue = smoothstep(0.36, 0.88, detail)
-                 * smoothstep(0.12, 0.82, y);
-    body *= mix(1.0, 0.32, voids * (0.35 + 0.65 * tongue));
-
-    float bottomFade = smoothstep(0.0, 0.075, y);
-    float tipFade = 1.0 - smoothstep(0.68, 1.0, y);
-    float density = body * bottomFade * tipFade;
-
-    // A few tiny detached hot fragments make the upper edge lively without
-    // requiring another particle system.
-    float embers = smoothstep(0.965, 0.998, fine)
-                 * smoothstep(0.46, 0.88, y)
-                 * (1.0 - smoothstep(0.82, 1.0, y));
-    density = clamp(density + embers * 0.34, 0.0, 1.0);
-
-    // Temperature is concentrated in the inner combustion channel and falls
-    // toward the turbulent edge. The result is dark red -> orange -> yellow ->
-    // almost white, rather than a flat orange sprite.
-    float coreDistance = exp(-lateral * lateral * 4.6);
-    float coreMask = coreDistance
-                   * smoothstep(0.035, 0.52, y)
-                   * (0.70 + 0.30 * large);
-    float temperature = clamp(
-        0.20
-        + coreMask * 0.90
-        + detail * 0.20
-        - y * 0.10,
-        0.0, 1.0
-    );
-
-    vec3 outer = max(EffectColor, vec3(0.001)) * 0.55;
-    vec3 orange = vec3(1.0, 0.10, 0.008);
-    vec3 yellow = vec3(1.0, 0.60, 0.055);
-    vec3 hot = vec3(1.0, 0.93, 0.62);
-
-    vec3 rgb = mix(outer, orange, smoothstep(0.08, 0.34, temperature));
-    rgb = mix(rgb, yellow, smoothstep(0.30, 0.67, temperature));
-    rgb = mix(rgb, hot, smoothstep(0.58, 0.88, temperature));
-
-    // Low-frequency temporal modulation gives the light-looking flame a
-    // coherent pulse; a faster term supplies the small chaotic flicker.
-    float slowFlicker = fbm3(
-        vec2(elapsed * 0.42 + seed * 0.013, seed * 0.0011),
-        seed + 91.0
-    );
-    float fastFlicker = valueNoise(
-        vec2(elapsed * 3.6 + seed * 0.07, card * 0.31),
-        seed + 103.0
-    );
-    float flicker = mix(0.78, 1.16, clamp(
-        slowFlicker * 0.72 + fastFlicker * 0.28, 0.0, 1.0
-    ));
-
-    rgb *= visualIntensity * flicker;
-    float alpha = density * clamp(0.84 + temperature * 0.18, 0.0, 1.0);
-
-    if (alpha < 0.012 || visualIntensity <= 0.0) discard;
-
-    FragColor = vec4(applyFog(rgb, FragPos), alpha);
+    FragColor = vec4(applyFog(fire.rgb, FragPos), fire.a);
 }
 """,
     'fog.vert': """#version 330 core
