@@ -1372,8 +1372,8 @@ void main() {
 
     // The previous crossed quads were deliberately broad; these dimensions
     // keep the geometry in the proportions of a real grass blade.
-    float height = iSize * (0.72 + 0.22 * iVariation);
-    float width = iSize * (0.075 + 0.025 * iVariation);
+    float height = iSize * (1.35 + 0.45 * iVariation);
+    float width = iSize * (0.11 + 0.04 * iVariation);
 
     float rootSpread = (float(blade) - 1.0) * width * 0.9;
     vec2 root = iPosition.xz + side * rootSpread;
@@ -1389,7 +1389,9 @@ void main() {
     vec2 horizontal = side * (sideAmount * width * (1.0 - 0.30 * y));
     horizontal += forward * bendAmount;
 
-    vec3 p = vec3(root + horizontal, iPosition.y + y * height);
+    // Lift the root slightly above the sampled terrain surface so the
+    // base cannot disappear into the depth buffer on a shared surface.
+    vec3 p = vec3(root + horizontal, iPosition.y + 0.025 + y * height);
     FragPos = p;
     BladeHeight = y;
     ColorVariation = iVariation;
