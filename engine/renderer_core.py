@@ -3959,6 +3959,76 @@ layout (location = 9) in vec4 iNormal2;
             gl.glDrawArrays(gl.GL_LINES, 0, 24)
         gl.glBindVertexArray(0)
 
+    def draw_effect_billboard_aabb(
+        self, projection, view, effect, explosion=False
+    ):
+        """Draw the selected Effect billboard's editor-only world AABB.
+
+        The bounds are derived from the same width/height and billboard basis
+        used by the Effect shaders. EXPLOSION frame 10 uses its current shader
+        growth factor so the preview box remains visually accurate.
+        """
+        props = getattr(effect, 'properties', {}) or {}
+        try:
+            width = max(0.01, float(props.get('width', 32.0)))
+        except (TypeError, ValueError):
+            width = 32.0
+        try:
+            height = max(0.01, float(props.get('height', 24.0)))
+        except (TypeError, ValueError):
+            height = 24.0
+
+        right = np.asarray(
+            (float(view[0][0]), float(view[1][0]), float(view[2][0])),
+            dtype=np.float32,
+        )
+        right_norm = float(np.linalg.norm(right))
+        if right_norm <= 1e-6:
+            right = np.asarray((1.0, 0.0, 0.0), dtype=np.float32)
+        else:
+            right /= right_norm
+
+        if explosion:
+            up = np.asarray((0.0, 1.0, 0.0), dtype=np.float32)
+            t = (10.0 - 0.5) / 16.0
+            smooth = t * t * (3.0 - 2.0 * t)
+            growth = 1.0 + 2.0 * smooth
+        else:
+            up = np.asarray(
+                (float(view[0][1]), float(view[1][1]), float(view[2][1])),
+                dtype=np.float32,
+            )
+            up_norm = float(np.linalg.norm(up))
+            if up_norm <= 1e-6:
+                up = np.asarray((0.0, 1.0, 0.0), dtype=np.float32)
+            else:
+                up /= up_norm
+            growth = 1.0
+
+        half_width = width * growth * 0.5
+        half_height = height * growth * 0.5
+        extents = (
+            np.abs(right) * half_width
+            + np.abs(up) * half_height
+        )
+
+        pos = np.asarray(
+            getattr(effect, 'pos', [0.0, 0.0, 0.0]),
+            dtype=np.float32,
+        )
+        center = pos.copy()
+        if explosion:
+            center += up * half_height
+
+        self.draw_aabb_bounds(
+            projection,
+            view,
+            {
+                'pos': center.tolist(),
+                'size': (extents * 2.0).tolist(),
+            },
+        )
+
     def draw_aabb_bounds(self, projection, view, brush):
         """Draw the exact world-space trigger AABB as orange dashed lines."""
         if 'simple' not in self.shaders:
