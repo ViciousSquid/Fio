@@ -205,6 +205,8 @@ class QtGameView(QOpenGLWidget):
 
         self.player2 = None
         self.splitscreen_mode = False
+        # Player representation used by split-screen and portal views.
+        self.show_glasses = True
 
         # PYGAME INIT (MUST happen before _init_sound_system)
         pygame.init()
@@ -257,6 +259,8 @@ class QtGameView(QOpenGLWidget):
             "selected_object": None,
             "time": 0.0,
             "show_sprites_in_play_mode": False,
+            "show_glasses": True,
+            "player_glasses_positions": (),
             "grid_visible": True,
         }
 
@@ -940,6 +944,23 @@ class QtGameView(QOpenGLWidget):
         gl.glBindVertexArray(0)
         gl.glDisable(gl.GL_BLEND)
 
+    def _render_player_glasses(self, positions, proj_matrix, view_matrix):
+        """Draw one or more player bodies as glasses billboards."""
+        if not getattr(self, 'show_glasses', True):
+            return
+        if not positions or not self.renderer:
+            return
+        self.renderer.draw_player_glasses(
+            proj_matrix,
+            view_matrix,
+            positions,
+            width=50.0,
+            height=100.0,
+        )
+        # render_scene leaves depth testing disabled; restore that state after
+        # this explicit post-scene billboard pass.
+        gl.glDisable(gl.GL_DEPTH_TEST)
+
     def _render_projectiles(self, projectiles, proj_matrix, view_matrix):
         if not projectiles or 'sprite' not in self.renderer.shaders:
             return
@@ -1123,6 +1144,17 @@ class QtGameView(QOpenGLWidget):
         self._render_config["selected_object"] = self.selected_object
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
+        self._render_config["show_glasses"] = bool(getattr(self, 'show_glasses', True))
+        _glass_positions = []
+        if render_state is not None and self.play_mode and self._render_config["show_glasses"]:
+            if not getattr(render_state, 'player_dead', False):
+                _p = render_state.player_pos
+                _glass_positions.append((float(_p.x), float(_p.y), float(_p.z)))
+            if (getattr(render_state, 'splitscreen_active', False)
+                    and not getattr(render_state, 'player2_dead', False)):
+                _p2 = render_state.player2_pos
+                _glass_positions.append((float(_p2.x), float(_p2.y), float(_p2.z)))
+        self._render_config["player_glasses_positions"] = tuple(_glass_positions)
         self._render_config["grid_visible"] = getattr(self, 'grid_visible', True) and not self.play_mode
         self._render_config["terrain"] = getattr(self.editor, 'terrain', None)
         if render_state and hasattr(render_state, 'all_brushes'):
@@ -1265,7 +1297,14 @@ class QtGameView(QOpenGLWidget):
                 self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
                                                 _split_proj, self.view_matrix)
             if self.play_mode and getattr(self, 'show_spatial_grid', False):
-                self._render_spatial_grid(_split_proj, self.view_matrix)
+                self._render_spatial_grid(_split_proj, self.view_matrix)             if (self.show_glasses and render_state is not None
+                     and not getattr(render_state, 'player2_dead', False)):
+                 self._render_player_glasses(
+                     [render_state.player2_pos],
+                     _split_proj,
+                     self.view_matrix,
+                 )
+
 
             gl.glScissor(_half, 0, _half, _h)
             gl.glViewport(_half, 0, _half, _h)
@@ -1298,7 +1337,14 @@ class QtGameView(QOpenGLWidget):
                 self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
                                                 _split_proj, _p2_view)
             if self.play_mode and getattr(self, 'show_spatial_grid', False):
-                self._render_spatial_grid(_split_proj, _p2_view)
+                self._render_spatial_grid(_split_proj, _p2_view)             if (self.show_glasses and render_state is not None
+                     and not getattr(render_state, 'player_dead', False)):
+                 self._render_player_glasses(
+                     [render_state.player_pos],
+                     _split_proj,
+                     _p2_view,
+                 )
+
 
             gl.glDisable(gl.GL_SCISSOR_TEST)
             gl.glViewport(0, 0, _w, _h)
@@ -1860,6 +1906,7 @@ class QtGameView(QOpenGLWidget):
     def load_all_sprite_textures(self):
         things = {
             'PlayerStart': 'player.png',
+            'Glasses': 'glasses.png',
             'Light': 'light.png',
             'Monster': 'monster.png',
             'Pickup': 'pickup.png',
