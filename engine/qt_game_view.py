@@ -671,6 +671,48 @@ class QtGameView(QOpenGLWidget):
         else:
             self.repaint()
 
+    def _spatial_sound_mix(self, position):
+        """Return (gain, left, right) for a world-space sound source."""
+        if position is None:
+            return 1.0, 1.0, 1.0
+        try:
+            source = np.asarray(position, dtype=np.float32)
+            listener = np.asarray((
+                float(self.camera.pos.x), float(self.camera.pos.y),
+                float(self.camera.pos.z),
+            ), dtype=np.float32)
+            delta = source - listener
+            distance = float(np.linalg.norm(delta))
+        except (TypeError, ValueError, AttributeError):
+            return 1.0, 1.0, 1.0
+
+        reference_distance = 64.0
+        max_distance = 1024.0
+        if distance <= reference_distance:
+            gain = 1.0
+        elif distance >= max_distance:
+            gain = 0.0
+        else:
+            gain = 1.0 - ((distance - reference_distance) /
+                          (max_distance - reference_distance))
+
+        try:
+            front = self.camera.get_front_vector()
+            right_vec = glm.normalize(
+                glm.cross(front, glm.vec3(0, 1, 0))
+            )
+            horizontal = glm.vec3(float(delta[0]), 0.0, float(delta[2]))
+            if glm.length(horizontal) > 0.0001:
+                horizontal = glm.normalize(horizontal)
+                pan = float(glm.dot(horizontal, right_vec))
+            else:
+                pan = 0.0
+        except Exception:
+            pan = 0.0
+
+        pan = max(-1.0, min(1.0, pan))
+        angle = (pan + 1.0) * (math.pi / 4.0)
+        return gain, math.cos(angle), math.sin(angle)
     def _process_sound_queue(self):
         """Drain the logic thread's sound queue and play via pygame mixer.
 
@@ -707,6 +749,9 @@ class QtGameView(QOpenGLWidget):
                 continue
             # -1 loops = repeat until stopped; 0 = play once.
             loops = -1 if request.get('looping') else 0
+            gain, left, right = self._spatial_sound_mix(request.get('position'))
+            if gain <= 0.0:
+                continue
             # If this speaker is already looping, stop the old channel first so
             # a re-trigger doesn't stack a second copy on top of itself.
             if entity_id is not None:
@@ -718,7 +763,13 @@ class QtGameView(QOpenGLWidget):
                         print(f"[QtGameView] speaker restart stop failed: {exc}")
             channel = sound.play(loops=loops)
             if channel:
-                channel.set_volume(volume)
+                if request.get('position') is not None:
+                    channel.set_volume(
+                        max(0.0, min(1.0, float(volume) * gain * left)),
+                        max(0.0, min(1.0, float(volume) * gain * right)),
+                    )
+                else:
+                    channel.set_volume(volume)
                 if entity_id is not None and loops != 0:
                     speaker_channels[entity_id] = channel
 
