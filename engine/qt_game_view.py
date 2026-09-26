@@ -2132,12 +2132,32 @@ class QtGameView(QOpenGLWidget):
         self.update()
 
     def set_terrain_sculpt_active(self, active: bool):
+        active = bool(active)
         self.terrain_sculpt_active = active
         if active:
             self.setCursor(Qt.CrossCursor)
+            # Use the same persistent bottom-centre tool notification as the
+            # clip/scissor tool. The toast remains until sculpt mode is left.
+            if hasattr(self.editor, 'show_toast'):
+                self.editor.show_toast(
+                    "Sculpt mode - ESC to quit",
+                    duration=0,
+                )
         else:
             self.terrain_sculpt_painting = False
             self.setCursor(Qt.ArrowCursor)
+            if hasattr(self.editor, 'hide_toast'):
+                self.editor.hide_toast()
+            # ESC can leave sculpt mode without going through the Terrain
+            # Editor panel's toggle handler, so keep its button state honest.
+            panel = getattr(self.editor, 'terrain_editor_window', None)
+            if panel is not None:
+                btn = getattr(panel, 'sculpt_paint_btn', None)
+                if btn is not None:
+                    btn.blockSignals(True)
+                    btn.setChecked(False)
+                    btn.blockSignals(False)
+                    btn.setText("🎨  Start Painting")
 
     def raycast_terrain(self, mx: int, my: int):
         terrain = getattr(self.editor, 'terrain', None)
@@ -2900,6 +2920,13 @@ class QtGameView(QOpenGLWidget):
         self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
 
     def keyPressEvent(self, event):
+        # Sculpt mode owns Escape while active. Do this before normal
+        # editor/play-mode escape handling.
+        if event.key() == Qt.Key_Escape and self.terrain_sculpt_active and not self.play_mode:
+            self.set_terrain_sculpt_active(False)
+            self.setFocus()
+            return
+
         if self.play_mode and getattr(self, '_cached_level_complete_ui', None):
             if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_E):
                 self._confirm_level_complete()
