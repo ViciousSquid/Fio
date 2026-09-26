@@ -1402,6 +1402,15 @@ class Renderer_F(BaseRenderer):
                                     portal_groups['glow'], portal_lights, cfg,
                                     table=portal_table)
 
+                            if len(portal_effect_slots):
+                                self.draw_effects_instanced(
+                                    proj, vw, cfg.get('entity_table'),
+                                    portal_effect_slots,
+                                    hidden=cfg.get('thing_hidden'),
+                                    play_mode=cfg.get('play_mode', False),
+                                    editor_time=cfg.get('time', 0.0),
+                                    camera_pos=cam)
+
                             if len(portal_sprite_slots):
                                 self.draw_sprites_instanced(
                                     proj, vw, cfg.get('entity_table'),
