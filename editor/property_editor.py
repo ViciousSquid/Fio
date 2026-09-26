@@ -2274,21 +2274,6 @@ class PropertyEditor(QWidget):
             "Lifetime", "lifetime", 0.05, 3.0, 0.5, "{:.2f} s"
         )
 
-        def refresh_scale():
-            explosion = str(
-                thing.properties.get('effect_type', 'FIRE')
-            ).upper() == 'EXPLOSION'
-            scale_slider.setEnabled(explosion)
-            try:
-                scale = float(thing.properties.get('scale', 1.0))
-            except (TypeError, ValueError):
-                scale = 1.0
-            scale = max(0.1, min(4.0, scale))
-            scale_slider.blockSignals(True)
-            scale_slider.setValue(int(round(scale * 100)))
-            scale_slider.blockSignals(False)
-            scale_label.setText(f"{scale:.2f}×")
-
         def refresh_lifetime():
             explosion = str(
                 thing.properties.get('effect_type', 'FIRE')
