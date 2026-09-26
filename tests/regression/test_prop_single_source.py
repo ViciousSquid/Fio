@@ -3,6 +3,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
@@ -14,6 +16,7 @@ def _run(code):
     return result.stdout.strip().splitlines()[-1]
 
 
+@pytest.mark.qt
 def test_every_import_path_yields_the_same_class():
     import editor.things
     import plugins.entitybase
@@ -24,6 +27,7 @@ def test_every_import_path_yields_the_same_class():
     assert EDITOR_TIER and issubclass(Prop, editor.things.Model)
 
 
+@pytest.mark.qt
 def test_map_load_resolves_prop_before_anything_imports_it():
     out = _run(
         "from editor.things import Thing\n"
