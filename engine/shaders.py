@@ -1328,6 +1328,86 @@ void main() {
     
     FragColor = vec4(applyFog(result, FragPos), 1.0);
 }"""
+
+    'grass.vert': """#version 330 core
+precision highp float;
+
+// Two crossed, upright blade quads are expanded from each instance. The
+// instance buffer contains only base position, size, phase and colour variation.
+layout (location = 0) in vec2 aCorner;
+layout (location = 1) in float aAxis;
+layout (location = 2) in vec3 iPosition;
+layout (location = 3) in float iSize;
+layout (location = 4) in float iPhase;
+layout (location = 5) in float iVariation;
+
+out highp vec3 FragPos;
+out float BladeAlpha;
+out float ColorVariation;
+
+uniform mat4 projection;
+uniform mat4 view;
+uniform float time;
+uniform float windStrength;
+uniform vec3 cameraPos;
+
+void main() {
+    float y = aCorner.y;
+    float taper = mix(1.0, 0.10, y);
+    float width = aCorner.x * iSize * taper;
+    float height = iSize * (1.8 + 0.35 * iVariation);
+
+    float angle = aAxis;
+    float ca = cos(angle);
+    float sa = sin(angle);
+    vec2 side = vec2(ca, sa);
+
+    // The roots remain fixed. The top bends gently in a coherent field, but
+    // each tuft has a permanent phase offset so the animation never syncs.
+    float spatial = dot(iPosition.xz, vec2(0.031, 0.027));
+    float wave = sin(time * 0.85 + spatial + iPhase);
+    float gust = sin(time * 0.47 + iPosition.x * 0.011 - iPosition.z * 0.009 + iPhase * 1.7);
+    float bend = (wave * 0.65 + gust * 0.35) * windStrength * y * y;
+
+    vec3 base = iPosition;
+    vec3 offset = vec3(side.x * width, y * height, side.y * width);
+    offset.xz += vec2(0.42, -0.25) * bend * height;
+
+    FragPos = base + offset;
+    BladeAlpha = 1.0 - smoothstep(0.86, 1.0, abs(aCorner.x));
+    ColorVariation = iVariation;
+    gl_Position = projection * view * vec4(FragPos, 1.0);
+}
+""",
+
+    'grass.frag': """#version 330 core
+precision mediump float;
+out vec4 FragColor;
+
+in highp vec3 FragPos;
+in float BladeAlpha;
+in float ColorVariation;
+
+uniform vec3 grassColor;
+uniform vec3 cameraPos;
+""" + FOG_GLSL + """
+void main() {
+    float distanceFade = 1.0 - smoothstep(1800.0, 3072.0,
+                                           length(FragPos.xz - cameraPos.xz));
+    float alpha = BladeAlpha * distanceFade;
+    if (alpha < 0.34) discard;
+
+    // Grass uses a constant upward normal by design: terrain slope does not
+    // make blades lie down and no per-blade normal data is uploaded.
+    vec3 upwardNormal = vec3(0.0, 1.0, 0.0);
+    vec3 sunDir = normalize(vec3(0.4, 0.7, 0.3));
+    float sun = 0.45 + 0.55 * max(dot(upwardNormal, sunDir), 0.0);
+    float shade = mix(0.82, 1.08, clamp(ColorVariation - 0.82, 0.0, 1.0) / 0.30);
+    vec3 color = grassColor * sun * shade + uAmbient * grassColor;
+    FragColor = vec4(applyFog(color, FragPos), 1.0);
+}
+""",
+
 }
 
 # ----- Low-power shaders (used by BaseRenderer when lowpower_mode is True) ----
