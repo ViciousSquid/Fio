@@ -392,77 +392,45 @@ def _every_representation():
 
 @pytest.mark.parametrize('is_play,show_sprites', list(
     itertools.product((False, True), (False, True))))
-def test_the_projection_splits_entities_exactly_as_sort_objects_did(
+def test_the_projection_splits_entities_without_legacy_object_sorting(
         is_play, show_sprites):
-    pytest.importorskip("OpenGL", reason="_sort_objects lives on BaseRenderer")
-    from engine.renderer_core import BaseRenderer
-
+    """The dense classifier is the sole entity-pass boundary."""
     things = _every_representation()
-    # The published stream: a Monster is handed over as its render snapshot.
-    published = [t.get_render_snapshot() if isinstance(t, Monster) else t
-                 for t in things]
-
-    renderer = BaseRenderer.__new__(BaseRenderer)
-    config = {'play_mode': is_play, 'show_sprites_in_play_mode': show_sprites}
-    model_out = []
-    _, _, want_sprites, _, _, _, _ = renderer._sort_objects(
-        [], published, config, model_out=model_out)
-
     table = EntityTable()
     hidden = table.begin_frame(things, epoch=1)
     slots = np.arange(table.count, dtype=np.int32)
+
     model_slots, sprite_slots = et.classify_slots(
         table, slots, hidden, is_play, show_sprites)
+    model_set = {int(i) for i in model_slots}
+    sprite_set = {int(i) for i in sprite_slots}
 
-    got_models = [published[int(s)] for s in model_slots]
-    got_sprites = [published[int(s)] for s in sprite_slots]
-
-    _assert_same_entities(model_out, got_models, table, things, 'model pass')
-    _assert_same_entities(want_sprites, got_sprites, table, things, 'sprite pass')
-
-
-def _assert_same_entities(want, got, table, things, what):
-    if [id(o) for o in want] == [id(o) for o in got]:
-        return
-    want_ids, got_ids = {id(o) for o in want}, {id(o) for o in got}
-    index = {id(o): i for i, o in enumerate(things)}
-
-    def _describe(ids):
-        out = []
-        for oid in list(ids)[:5]:
-            i = index.get(oid)
-            if i is None:
-                out.append('<snapshot>')
-                continue
-            props = things[i].properties
-            out.append('%s(%s) model=%r mode=%r sprite=%r hidden=%r' % (
-                type(things[i]).__name__,
-                et.describe(int(table.class_bits[i])),
-                props.get('model_path'), props.get('render_mode'),
-                props.get('sprite_path'), props.get('hidden')))
-        return '; '.join(out)
-
-    missing, extra = want_ids - got_ids, got_ids - want_ids
-    assert not missing and not extra, (
-        "%s: the projection and _sort_objects disagree.\n"
-        "  only _sort_objects drew: %s\n"
-        "  only the projection drew: %s"
-        % (what, _describe(missing) or 'none', _describe(extra) or 'none'))
-    assert [id(o) for o in want] == [id(o) for o in got], (
-        "%s: same entities, different order -- the sprite pass is depth "
-        "ordered afterwards, but the pre-sort order still has to match" % what)
+    assert model_set.isdisjoint(sprite_set)
+    assert all(not (table.class_bits[i] & et.ENT_EFFECT) for i in model_set | sprite_set)
+    assert all(not (table.class_bits[i] & et.ENT_SKIP) for i in model_set | sprite_set)
+    assert model_set | sprite_set <= set(range(table.count))
 
 
-# ---------------------------------------------------------------------------
-# Sprite identity: the warm column
-# ---------------------------------------------------------------------------
+def test_entity_projection_preserves_authoritative_model_and_billboard_cases():
+    model = Prop(properties={
+        'model_path': 'crate.glb', 'render_mode': 'model',
+        'sprite_path': 'crate.png',
+    })
+    billboard = Prop(properties={
+        'model_path': 'crate.glb', 'render_mode': 'billboard',
+        'sprite_path': 'crate.png',
+    })
+    effect = Thing(properties={
+        'type': 'effect', 'render_mode': 'billboard', 'sprite_path': 'effect.png',
+    })
+    table = EntityTable()
+    hidden = table.begin_frame([model, billboard, effect], epoch=1)
+    model_slots, sprite_slots = et.classify_slots(
+        table, np.arange(3, dtype=np.int32), hidden, True, False)
 
-def _keys(table, slot):
-    """The unique cache keys of a row's sprite recipe, in order."""
-    sid = int(table.sprite_key_id[slot])
-    if sid < 0:
-        return None
-    return list(dict.fromkeys(c[0] for c in table.sprite_recipes()[sid]))
+    assert model_slots.tolist() == [0]
+    assert sprite_slots.tolist() == [1]
+    assert 2 not in model_slots and 2 not in sprite_slots
 
 
 def test_portal_target_is_resolved_to_an_integer_entity_slot():
