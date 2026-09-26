@@ -93,6 +93,7 @@ class Renderer_F(BaseRenderer):
     def set_instance_textures(self, textures):
         self.instance_textures = textures
 
+    @staticmethod
     def _selected_slot(table, config):
         """The slot of the selected brush, or -1.
 
