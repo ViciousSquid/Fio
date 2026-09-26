@@ -915,6 +915,7 @@ layout (location = 10) in vec4 iPayload;
             grown = max(64, len(self._effect_order_scratch) * 2, count)
             self._effect_order_scratch = np.empty(grown, dtype=np.int32)
             self._effect_depth_scratch = np.empty(grown, dtype=np.float64)
+            self._effect_depth_aux_scratch = np.empty(grown, dtype=np.float64)
 
         depth = self._effect_depth_scratch[:count]
         if camera_pos is None:
