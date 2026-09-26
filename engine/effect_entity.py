@@ -96,8 +96,7 @@ class Effect(_ThingBase):
                 self.properties["width"] = 32.0
             if "height" not in supplied_properties:
                 self.properties["height"] = 32.0
-            if "light_colour" not in supplied_properties:
-                self.properties["light_colour"] = list(EFFECT_ORB_LIGHT_COLOUR)
+            self.properties["light_colour"] = list(EFFECT_ORB_LIGHT_COLOUR)
 
         fire_texture = str(
             self.properties.get("fire_texture", EFFECT_FIRE_TEXTURES[0])
