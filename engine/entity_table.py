@@ -398,6 +398,8 @@ def _entity_class_bits(thing) -> int:
         bits |= ENT_PROP
     if Light is not None and isinstance(thing, Light):
         bits |= ENT_LIGHT
+    if Effect is not None and isinstance(thing, Effect):
+        bits |= ENT_EFFECT
     warm_types = tuple(c for c in (Monster, LogicGate, Pickup, Prop)
                        if c is not None)
     if warm_types and isinstance(thing, warm_types):
