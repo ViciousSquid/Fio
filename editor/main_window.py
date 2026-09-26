@@ -1922,6 +1922,97 @@ class MainWindow(QMainWindow):
                 self.config.getboolean('Editor', 'toolbar_tooltips',
                                        fallback=True))
 
+    def copy_selection(self):
+        """Copy the current object/multi-selection into the editor clipboard."""
+        sources = list(getattr(self.state, 'selected_objects', []) or [])
+        if self.state.selected_object is not None and self.state.selected_object not in sources:
+            sources.append(self.state.selected_object)
+
+        if sources:
+            clipboard = []
+            for source in sources:
+                if isinstance(source, dict):
+                    source = {
+                        k: v for k, v in source.items()
+                        if k not in brush_geometry.GEO_RUNTIME_KEYS
+                    }
+                clipboard.append(copy.deepcopy(source))
+            self._brush_clipboard = clipboard
+
+            names = []
+            for source in clipboard:
+                if isinstance(source, dict):
+                    names.append(source.get('name', 'Brush'))
+                else:
+                    names.append(source.properties.get('name', 'Entity'))
+            if len(names) == 1:
+                self.show_toast(f"Copied: {names[0]}")
+            else:
+                self.show_toast(f"Copied {len(names)} objects")
+        else:
+            self._brush_clipboard = None
+            self.show_toast("Nothing to copy", is_error=True)
+
+    def paste_selection(self):
+        """Paste the editor clipboard with fresh UUIDs and a grid offset."""
+        if not self._brush_clipboard:
+            self.show_toast("Nothing to paste", is_error=True)
+            return
+
+        self.save_state()
+        offset = self.grid_size_spinbox.value()
+        delta = [offset, 0.0, offset]
+        pasted_objects = []
+        taken_names = set(self.state.get_all_entity_names())
+
+        for source in self._brush_clipboard:
+            pasted = copy.deepcopy(source)
+
+            if isinstance(pasted, dict):
+                pasted['id'] = str(uuid.uuid4())
+                base_name = pasted.get('name', 'Brush')
+                if base_name:
+                    pasted['name'] = self._copy_name(base_name, taken_names)
+
+                if brush_geometry.brush_has_geometry(pasted):
+                    brush_geometry.translate_brush(pasted, delta)
+                else:
+                    pasted['pos'] = [
+                        pasted['pos'][0] + delta[0],
+                        pasted['pos'][1] + delta[1],
+                        pasted['pos'][2] + delta[2],
+                    ]
+
+                pasted.pop('_io_connections', None)
+                pasted.pop('io_connections', None)
+                self.state.brushes.append(pasted)
+            else:
+                pasted.properties['id'] = str(uuid.uuid4())
+                base_name = pasted.properties.get('name', 'Entity')
+                pasted.properties['name'] = self._copy_name(base_name, taken_names)
+                pasted.pos = [
+                    pasted.pos[0] + delta[0],
+                    pasted.pos[1] + delta[1],
+                    pasted.pos[2] + delta[2],
+                ]
+                pasted.properties.pop('_io_connections', None)
+                pasted.properties.pop('io_connections', None)
+                self.state.things.append(pasted)
+
+            pasted_objects.append(pasted)
+
+        self.set_selected_objects(pasted_objects)
+        self.show_toast(
+            f"Pasted {len(pasted_objects)} object(s)"
+            if len(pasted_objects) != 1
+            else f"Pasted: {pasted_objects[0].get('name', 'Brush') if isinstance(pasted_objects[0], dict) else pasted_objects[0].properties.get('name', 'Entity')}"
+        )
+
+        for pasted in pasted_objects:
+            if isinstance(pasted, dict):
+                pasted['_flash_until'] = time.time() + 0.5
+                QTimer.singleShot(500, lambda o=pasted: self._clear_flash(o))
+
     def handle_escape(self):
         """Back out of whatever is in progress, innermost first.
 
@@ -3241,108 +3332,16 @@ class MainWindow(QMainWindow):
                 return
 
             elif event.key() == Qt.Key_F3:
-                self.view_3d.show_sprites_in_play_mode = not self.view_3d.show_sprites_in_play_mode
-                self.view_3d.update()
-                return
-
-            elif event.key() == Qt.Key_F1:
-                self.view_3d.show_connections_in_play_mode = not getattr(self.view_3d, 'show_connections_in_play_mode', False)
-                self.update_all_ui()
-                return
-
-            elif event.key() == Qt.Key_F12:
-                if getattr(self, 'is_kiosk_mode', False):
-                    self.exit_kiosk_mode(keep_play_mode=True)
-                else:
-                    self.enter_kiosk_mode()
-                return
-
-            elif event.key() == Qt.Key_E:
-                if hasattr(self.view_3d, 'game_state') and self.view_3d.game_state:
-                    self.view_3d.game_state.set_use_key_pressed()
-                self.keys_pressed.add(event.key())
-                return
-
-            elif event.key() == Qt.Key_QuoteLeft:  # Tilde/backtick
-                self.toggle_debug_console()
-                return
-
-            else:
-                # Check for user‑defined key bindings (only if console input does NOT have focus)
-                console_input = self.debug_console.command_input
-                if not console_input.hasFocus():
-                    key_seq = QKeySequence(event.key() | int(event.modifiers()))
-                    key_str = key_seq.toString()
-                    if key_str in self.key_bindings:
-                        command = self.key_bindings[key_str]
-                        self.console_handler.handle_command(command)
-                        return
-                # If no binding, just record the key for later use (e.g., movement)
-                self.keys_pressed.add(event.key())
-                return
-
-        # ------------------------------------------------------------------
-        # EDITOR MODE HANDLING (including bindings)
-        # ------------------------------------------------------------------
-
-        # Tilde always toggles console (works in both modes)
-        if event.key() == Qt.Key_QuoteLeft:
-            self.toggle_debug_console()
-            return
-
-        # ESC: back out of whatever is in progress, innermost first
-        if event.key() == Qt.Key_Escape:
-            if self.handle_escape():
-                return
-
-        # Component modes — Radiant's V / E / F reflexes, spelled with the Shift
-        # modifier Fio already uses for tool switches (Shift+S select, Shift+B
-        # brush) so none of the existing single-key bindings move.  A key the
-        # user has bound to a console command in Settings always wins.
-        user_bound = self._has_user_binding(event)
-
-        if not user_bound and event.modifiers() == Qt.ShiftModifier and \
-                event.key() in (Qt.Key_V, Qt.Key_E, Qt.Key_F):
-            self.set_component_mode({Qt.Key_V: MODE_VERTEX,
-                                     Qt.Key_E: MODE_EDGE,
-                                     Qt.Key_F: MODE_FACE}[event.key()])
-            return
-        if not user_bound and event.key() == Qt.Key_Q and not event.modifiers():
-            self.cycle_component_mode()
-            return
-
-        # Radiant's area selections (Select Touching / Inside / Tall).
-        if not user_bound:
-            ctrl = Qt.ControlModifier
-            ctrl_shift = Qt.ControlModifier | Qt.ShiftModifier
-            area_ops = {
-                (int(ctrl), Qt.Key_T): self.select_touching,
-                (int(ctrl), Qt.Key_I): self.select_inside,
-                (int(ctrl_shift), Qt.Key_T): self.select_partial_tall,
-                (int(ctrl_shift), Qt.Key_I): self.select_complete_tall,
-            }
-            handler = area_ops.get((int(event.modifiers()), event.key()))
-            if handler is not None:
-                handler()
-                return
-
-        # Ctrl+C: Copy the current selection.  The clipboard stores a
-        # detached list so a multi-selection can be pasted as one unit.
+                self.view_3d.show_sprites_in_p        # Ctrl+C / Ctrl+V: keep the keyboard path identical to the Edit menu.
         if event.key() == Qt.Key_C and event.modifiers() == Qt.ControlModifier:
-            sources = list(getattr(self.state, 'selected_objects', []) or [])
-            if self.state.selected_object is not None and self.state.selected_object not in sources:
-                sources.append(self.state.selected_object)
+            self.copy_selection()
+            return
 
-            if sources:
-                clipboard = []
-                for source in sources:
-                    if isinstance(source, dict):
-                        source = {
-                            k: v for k, v in source.items()
-                            if k not in brush_geometry.GEO_RUNTIME_KEYS
-                        }
-                    clipboard.append(copy.deepcopy(source))
-                self._brush_clipboard = clipboard
+        if event.key() == Qt.Key_V and event.modifiers() == Qt.ControlModifier:
+            self.paste_selection()
+            return
+
+d = clipboard
 
                 names = []
                 for source in clipboard:
