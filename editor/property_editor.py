@@ -2187,7 +2187,8 @@ class PropertyEditor(QWidget):
         silent_check.toggled.connect(
             lambda value: self.update_object_prop("silent", bool(value))
         )
-        form.addRow("Audio:", silent_check)
+        silent_label = QLabel("Audio:")
+        form.addRow(silent_label, silent_check)
 
         fire_combo = QComboBox()
         fire_textures = [
@@ -2279,6 +2280,9 @@ class PropertyEditor(QWidget):
             orb_combo.setVisible(show_orb)
             custom_label.setVisible(show_custom)
             custom_widget.setVisible(show_custom)
+            show_silent = effect_type == "EXPLOSION"
+            silent_label.setVisible(show_silent)
+            silent_check.setVisible(show_silent)
             preview_check.setEnabled(True)
 
         def fire_texture_changed(index):
