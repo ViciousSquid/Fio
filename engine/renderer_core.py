@@ -969,7 +969,7 @@ layout (location = 10) in vec4 iPayload;
                 grown, dtype=np.float32)
 
         expanded_slots = self._effect_expand_slots_scratch[:expanded_count]
-        np.repeat(sorted_slots, repeats, out=expanded_slots)
+        expanded_slots[:] = np.repeat(sorted_slots, repeats)
 
         particle = self._effect_expand_particle_scratch[:expanded_count]
         expanded_types = np.repeat(sorted_types, repeats)
