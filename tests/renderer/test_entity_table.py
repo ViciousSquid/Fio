@@ -491,6 +491,12 @@ def test_shared_portal_transform_matches_the_authoring_wrapper():
         a.map_direction(b, *direction),
     )
 
+def _keys(table, slot):
+    sid = int(table.sprite_key_id[slot])
+    if sid < 0:
+        return None
+    return list(dict.fromkeys(candidate[0] for candidate in table.sprite_recipes()[sid]))
+
 def test_a_portal_draws_no_sprite():
     """The sprite pass has always skipped Portals; the column says so."""
     table = _synced([make_thing(Portal, 'p')])
@@ -543,8 +549,10 @@ def test_a_custom_monster_sprite_is_loaded_from_its_own_path():
                        custom_idle='assets/sprites/mine/idle.png')
     table = _synced([grunt])
     recipe = table.sprite_recipes()[int(table.sprite_key_id[0])]
-    assert recipe == (('msprite_human_<None>_idle_assets/sprites/mine/idle.png',
-                       'idle.png', 'sprites/mine', True),)
+    assert recipe[0] == ('msprite_human_<None>_idle_assets/sprites/mine/idle.png',
+                         'idle.png', 'sprites/mine', True)
+    assert recipe[1] == ('msprite_human_<None>_idle_assets/sprites/mine/idle.png',
+                         'idle.png', 'sprites/monsters/human', True)
 
 
 def test_a_logic_gates_sprite_follows_its_type():

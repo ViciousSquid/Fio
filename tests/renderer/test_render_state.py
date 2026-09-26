@@ -217,26 +217,25 @@ def test_the_culled_count_and_the_visible_list_agree(logic):
            accounted, published.total_brushes))
 
 
-def test_a_mover_is_submitted_as_a_snapshot_not_as_the_live_brush(logic):
-    """The renderer reads this on another thread while the logic thread moves it."""
+def test_a_mover_is_snapshotted_into_the_dense_render_table(logic):
+    """The published compatibility view may reference the world; the dense table is the frame snapshot."""
     mover = box_brush("lift", (0, 0, -400), (128, 32, 128), is_mover=True)
     thread = logic(brushes=[mover])
     thread.culling_enabled = False
 
     thread._prepare_render_state()
-    published = thread.game_state.get_write_state()
-    submitted = published.all_brushes[0]
-
-    assert submitted is not mover, (
-        "the live mover dict was handed to the renderer; the logic thread "
-        "would rewrite its position mid-frame")
-    assert submitted["pos"] == mover["pos"]
+    state = thread.game_state.get_write_state()
+    table = state.render_table
+    slot = int(state.all_brush_slots[0])
+    first = table.center[slot].copy()
+    assert first.tolist() == [0.0, 0.0, -400.0]
 
     mover["pos"] = [0.0, 500.0, -400.0]
-    assert submitted["pos"] != mover["pos"], (
-        "the snapshot shares its pos list with the live brush, so moving the "
-        "brush changed the frame already published")
+    assert table.center[slot].tolist() == first.tolist(), (
+        "the dense frame projection changed before the next render-state publish")
 
+    thread._prepare_render_state()
+    assert table.center[slot].tolist() == [0.0, 500.0, -400.0]
 
 def test_a_static_brush_is_submitted_by_reference(logic):
     """Copying every static brush per frame would be the whole cost of a level."""

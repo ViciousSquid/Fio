@@ -23,6 +23,8 @@ jobs:
         # without the desktop dependency set at all.
         run: pip install pytest numpy PyGLM
       - name: Run the tests that need no Qt, no OpenGL, no display
+        env:
+          FIO_HEADLESS_TIER: '1'
         run: python -m pytest -m "not qt and not gl and not benchmark" -q
 
   editor:
@@ -38,7 +40,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libegl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
+            xvfb libgl1 libglx0 libopengl0 libgl1-mesa-dri libglx-mesa0 libegl1 \
+            libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
             libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
       - name: Install dependencies
@@ -47,8 +50,8 @@ jobs:
           pip install -r requirements.txt
       - name: Run everything that does not need a GPU
         env:
-          QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -m "not gl and not benchmark" -q
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: xvfb-run -a python -m pytest -m "not gl and not benchmark" -q
 
   opengl:
     name: Renderer (OpenGL, software rasteriser)
