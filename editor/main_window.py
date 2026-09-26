@@ -3322,80 +3322,98 @@ class MainWindow(QMainWindow):
                 handler()
                 return
 
-        # Ctrl+C: Copy selected brush/entity
+        # Ctrl+C: Copy the current selection.  The clipboard stores a
+        # detached list so a multi-selection can be pasted as one unit.
         if event.key() == Qt.Key_C and event.modifiers() == Qt.ControlModifier:
-            if self.state.selected_object:
-                source = self.state.selected_object
-                if isinstance(source, dict):
-                    # Leave the runtime geometry caches behind: the paste
-                    # derives its own, and a stale one would travel with it.
-                    source = {k: v for k, v in source.items()
-                              if k not in brush_geometry.GEO_RUNTIME_KEYS}
-                self._brush_clipboard = copy.deepcopy(source)
-                name = ''
-                if isinstance(self._brush_clipboard, dict):
-                    name = self._brush_clipboard.get('name', 'Brush')
+            sources = list(getattr(self.state, 'selected_objects', []) or [])
+            if self.state.selected_object is not None and self.state.selected_object not in sources:
+                sources.append(self.state.selected_object)
+
+            if sources:
+                clipboard = []
+                for source in sources:
+                    if isinstance(source, dict):
+                        source = {
+                            k: v for k, v in source.items()
+                            if k not in brush_geometry.GEO_RUNTIME_KEYS
+                        }
+                    clipboard.append(copy.deepcopy(source))
+                self._brush_clipboard = clipboard
+
+                names = []
+                for source in clipboard:
+                    if isinstance(source, dict):
+                        names.append(source.get('name', 'Brush'))
+                    else:
+                        names.append(source.properties.get('name', 'Entity'))
+                if len(names) == 1:
+                    self.show_toast(f"Copied: {names[0]}")
                 else:
-                    name = self._brush_clipboard.properties.get('name', 'Entity')
-                self.show_toast(f"Copied: {name}")
+                    self.show_toast(f"Copied {len(names)} objects")
+            else:
+                self._brush_clipboard = None
+                self.show_toast("Nothing to copy", is_error=True)
             return
 
-        # Ctrl+V: Paste copied brush/entity
+        # Ctrl+V: Paste the copied brush or multi-selection.  Every pasted
+        # object receives a fresh UUID; the copied UUID is never reused.
         if event.key() == Qt.Key_V and event.modifiers() == Qt.ControlModifier:
-            if self._brush_clipboard is not None:
+            if self._brush_clipboard:
                 self.save_state()
-                pasted = copy.deepcopy(self._brush_clipboard)
-
-                # A paste is a new entity, not the one that was copied.
-                # clone_selected_object and the clip tool both re-stamp the
-                # UUID for the same reason: two live objects sharing one id
-                # make find_entity_by_id -- and every I/O target_id routed
-                # through it -- resolve to whichever comes first in the list.
-                if isinstance(pasted, dict):
-                    pasted['id'] = str(uuid.uuid4())
-                else:
-                    pasted.properties['id'] = str(uuid.uuid4())
-
-                # Offset the pasted object so it doesn't sit exactly on top
                 offset = self.grid_size_spinbox.value()
-                if isinstance(pasted, dict):
-                    # Give it a unique name
-                    base_name = pasted.get('name', 'Brush')
-                    pasted['name'] = f"{base_name}_copy"
-                    from engine.brush_geometry import translate_brush, brush_has_geometry
-                    if brush_has_geometry(pasted):
-                        # Angled brush: move the plane set with the offset.
-                        translate_brush(pasted, [offset, 0.0, offset])
+                delta = [offset, 0.0, offset]
+                pasted_objects = []
+                taken_names = set(self.state.get_all_entity_names())
+
+                for source in self._brush_clipboard:
+                    pasted = copy.deepcopy(source)
+
+                    if isinstance(pasted, dict):
+                        pasted['id'] = str(uuid.uuid4())
+                        base_name = pasted.get('name', 'Brush')
+                        if base_name:
+                            pasted['name'] = self._copy_name(base_name, taken_names)
+
+                        if brush_geometry.brush_has_geometry(pasted):
+                            brush_geometry.translate_brush(pasted, delta)
+                        else:
+                            pasted['pos'] = [
+                                pasted['pos'][0] + delta[0],
+                                pasted['pos'][1] + delta[1],
+                                pasted['pos'][2] + delta[2],
+                            ]
+
+                        # Connections are authored relationships, not geometry.
+                        # Do not duplicate them onto a pasted object.
+                        pasted.pop('_io_connections', None)
+                        pasted.pop('io_connections', None)
+                        self.state.brushes.append(pasted)
                     else:
-                        pasted['pos'] = [
-                            pasted['pos'][0] + offset,
-                            pasted['pos'][1],
-                            pasted['pos'][2] + offset,
+                        pasted.properties['id'] = str(uuid.uuid4())
+                        base_name = pasted.properties.get('name', 'Entity')
+                        pasted.properties['name'] = self._copy_name(base_name, taken_names)
+                        pasted.pos = [
+                            pasted.pos[0] + delta[0],
+                            pasted.pos[1] + delta[1],
+                            pasted.pos[2] + delta[2],
                         ]
-                    # Clear I/O connections on the copy so wires don't duplicate
-                    pasted.pop('_io_connections', None)
-                    pasted.pop('io_connections', None)
-                    self.state.brushes.append(pasted)
-                else:
-                    base_name = pasted.properties.get('name', 'Entity')
-                    pasted.properties['name'] = f"{base_name}_copy"
-                    pasted.pos = [
-                        pasted.pos[0] + offset,
-                        pasted.pos[1],
-                        pasted.pos[2] + offset,
-                    ]
-                    pasted.properties.pop('_io_connections', None)
-                    pasted.properties.pop('io_connections', None)
-                    self.state.things.append(pasted)
+                        pasted.properties.pop('_io_connections', None)
+                        pasted.properties.pop('io_connections', None)
+                        self.state.things.append(pasted)
 
-                self.set_selected_object(pasted)
-                self.show_toast(f"Pasted: {base_name}")
+                    pasted_objects.append(pasted)
 
-                # Flash effect for brushes
-                if isinstance(pasted, dict):
-                    import time as _time
-                    pasted['_flash_until'] = _time.time() + 0.5
-                    QTimer.singleShot(500, lambda: self._clear_flash(pasted))
+                self.set_selected_objects(pasted_objects)
+                self.show_toast(
+                    f"Pasted {len(pasted_objects)} object(s)"
+                    if len(pasted_objects) != 1
+                    else f"Pasted: {pasted_objects[0].get('name', 'Brush') if isinstance(pasted_objects[0], dict) else pasted_objects[0].properties.get('name', 'Entity')}"
+                )
+
+                for pasted in pasted_objects:
+                    if isinstance(pasted, dict):
+                        pasted['_flash_until'] = time.time() + 0.5
+                        QTimer.singleShot(500, lambda o=pasted: self._clear_flash(o))
             else:
                 self.show_toast("Nothing to paste", is_error=True)
             return
