@@ -597,6 +597,12 @@ def sprite_state(thing):
             'Prop',
             str(props.get('render_mode', 'model')).lower(),
             str(props.get('sprite_path', '')),
+            str(props.get('model_path', '')),
+            str(props.get('texture', '')),
+            repr(props.get('color', [0.8, 0.8, 0.8])),
+            repr(props.get('rotation', [0.0, 0.0, 0.0])),
+            repr(props.get('scale', 1.0)),
+            repr(props.get('sprite_size', [32.0, 32.0])),
         )
     return None
 
