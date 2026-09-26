@@ -1,5 +1,11 @@
 from editor.things import Effect, Thing
-from engine.effect_entity import EFFECT_EXPLOSION, EFFECT_FIRE, EFFECT_FIRE_TEXTURES
+from engine.effect_entity import (
+    EFFECT_EXPLOSION,
+    EFFECT_FIRE,
+    EFFECT_ORB,
+    EFFECT_FIRE_TEXTURES,
+    EFFECT_ORB_TEXTURES,
+)
 from engine.entity_table import ENT_EFFECT, EntityTable
 from editor.io_system import IOManager, get_input_names, get_output_names
 from editor.io_handlers import register_all_input_handlers
@@ -17,12 +23,33 @@ def test_effect_defaults_to_fire_with_intrinsic_light():
     assert len(EFFECT_FIRE_TEXTURES) == 5
     assert effect.properties["width"] == 32.0
     assert effect.properties["height"] == 46.0
+    assert effect.properties["orb_texture"] == EFFECT_ORB_TEXTURES[0]
     assert "size" not in effect.properties
     assert "scale" not in effect.properties
     assert effect.properties["light_enabled"] is True
     assert effect.properties["light_radius"] == 128.0
     assert effect.properties["light_intensity"] == 2.5
     assert effect.properties["effect_seed"] != 0
+
+
+def test_orb_defaults_to_blue_square_animation():
+    orb = Effect(properties={"effect_type": EFFECT_ORB})
+    assert orb.properties["effect_type"] == EFFECT_ORB
+    assert orb.properties["orb_texture"] == EFFECT_ORB_TEXTURES[0]
+    assert orb.properties["width"] == 32.0
+    assert orb.properties["height"] == 32.0
+
+    table = EntityTable()
+    table.begin_frame([orb], epoch=1, effect_runtime=False)
+
+    assert table.effect_type[0] == 2
+    assert bool(table.effect_alive[0])
+    assert bool(table.effect_active[0])
+    np.testing.assert_allclose(table.sprite_size[0], (32.0, 32.0))
+    np.testing.assert_allclose(
+        table.effect_light_color[0],
+        np.asarray((0x4A, 0x9B, 0xFF), dtype=np.float32) / 255.0,
+    )
 
 
 def test_effect_seed_is_stable_and_copy_gets_a_new_seed():
@@ -259,6 +286,14 @@ def test_effect_set_type_input_changes_type_and_fires_onchanged():
     set_type(effect, "future_type", logic)
     assert effect.properties["effect_type"] == EFFECT_FIRE
     assert events[-1] == ("OnChanged", "FIRE")
+
+    set_type(effect, "orb", logic)
+    assert effect.properties["effect_type"] == EFFECT_ORB
+    assert table.effect_type[0] == 2
+    assert bool(table.effect_active[0])
+    assert bool(table.effect_alive[0])
+    np.testing.assert_allclose(table.sprite_size[0], (32.0, 32.0))
+    assert events[-1] == ("OnChanged", "ORB")
 
 
 def test_explode_input_forces_fire_to_explosion_and_never_reverts():

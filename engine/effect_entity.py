@@ -1,8 +1,9 @@
 """The one and only Effect entity class.
 
 Effect is a core world primitive: one authored object that describes both a
-procedural visual effect and its emitted dynamic light. FIRE and EXPLOSION
-are behaviours of this same primitive; there is no second explosion system.
+procedural visual effect and its emitted dynamic light. FIRE, ORB and
+EXPLOSION are behaviours of this same primitive; there is no second explosion
+system.
 
 The class contains authored data only. Rendering/runtime state is projected
 into engine.entity_table and consumed numerically by the renderer.
@@ -19,16 +20,22 @@ except ImportError:  # standalone player / Android: no PyQt5
 
 
 EFFECT_FIRE = "FIRE"
+EFFECT_ORB = "ORB"
 EFFECT_EXPLOSION = "EXPLOSION"
-EFFECT_TYPES = (EFFECT_FIRE, EFFECT_EXPLOSION)
+EFFECT_TYPES = (EFFECT_FIRE, EFFECT_ORB, EFFECT_EXPLOSION)
+EFFECT_ANIMATED_TYPES = (EFFECT_FIRE, EFFECT_ORB)
 EFFECT_FIRE_TEXTURES = tuple(
     f"assets/textures/effects/fire{i:02d}.gif" for i in range(1, 6)
+)
+EFFECT_ORB_TEXTURES = tuple(
+    f"assets/textures/effects/orb{i:02d}.gif" for i in range(1, 6)
 )
 
 EFFECT_DEFAULTS = {
     "effect_type": EFFECT_FIRE,
     "preview": False,
     "fire_texture": EFFECT_FIRE_TEXTURES[0],
+    "orb_texture": EFFECT_ORB_TEXTURES[0],
     "width": 32.0,
     "height": 46.0,
     "intensity": 1.0,
@@ -51,7 +58,7 @@ def _seed_from_id(value: object) -> int:
 
 
 class Effect(_ThingBase):
-    """Procedural FIRE/EXPLOSION effect with intrinsic dynamic light.
+    """Procedural FIRE/ORB/EXPLOSION effect with intrinsic dynamic light.
 
     properties['type'] remains 'effect' because it is the map entity token.
     The authored behaviour selector is properties['effect_type'].
@@ -68,6 +75,7 @@ class Effect(_ThingBase):
         self.properties["type"] = "effect"
         self.properties.pop("size", None)
         self.properties.pop("scale", None)
+        supplied_properties = set(self.properties)
 
         for key, value in EFFECT_DEFAULTS.items():
             if key not in self.properties:
@@ -82,12 +90,25 @@ class Effect(_ThingBase):
             effect_type = EFFECT_FIRE
         self.properties["effect_type"] = effect_type
 
+        if effect_type == EFFECT_ORB:
+            if "width" not in supplied_properties:
+                self.properties["width"] = 32.0
+            if "height" not in supplied_properties:
+                self.properties["height"] = 32.0
+
         fire_texture = str(
             self.properties.get("fire_texture", EFFECT_FIRE_TEXTURES[0])
         ).replace("\\", "/")
         if fire_texture not in EFFECT_FIRE_TEXTURES:
             fire_texture = EFFECT_FIRE_TEXTURES[0]
         self.properties["fire_texture"] = fire_texture
+
+        orb_texture = str(
+            self.properties.get("orb_texture", EFFECT_ORB_TEXTURES[0])
+        ).replace("\\", "/")
+        if orb_texture not in EFFECT_ORB_TEXTURES:
+            orb_texture = EFFECT_ORB_TEXTURES[0]
+        self.properties["orb_texture"] = orb_texture
 
         try:
             seed = int(self.properties.get("effect_seed"))
@@ -96,7 +117,7 @@ class Effect(_ThingBase):
         self.properties["effect_seed"] = int(seed) & 0xFFFFFFFF or 1
 
         self._effect_spawn_time = 0.0
-        self._effect_active = effect_type == EFFECT_FIRE
+        self._effect_active = effect_type in EFFECT_ANIMATED_TYPES
 
     def duplicate(self, existing_names=()):
         """Duplicate with a fresh UUID, seed and runtime lifetime origin."""
@@ -105,7 +126,7 @@ class Effect(_ThingBase):
             clone.properties.get("id", "effect")
         )
         clone._effect_spawn_time = 0.0
-        clone._effect_active = clone.effect_type == EFFECT_FIRE
+        clone._effect_active = clone.effect_type in EFFECT_ANIMATED_TYPES
         return clone
 
     @property
@@ -132,13 +153,13 @@ class Effect(_ThingBase):
         self.properties["effect_type"] = effect_type
         self.properties["preview"] = False
         self._effect_spawn_time = 0.0
-        self._effect_active = effect_type == EFFECT_FIRE
+        self._effect_active = effect_type in EFFECT_ANIMATED_TYPES
         return True
 
     def reset_runtime(self) -> None:
         """Reset transient runtime state without changing authored data."""
         self._effect_spawn_time = 0.0
-        self._effect_active = self.effect_type == EFFECT_FIRE
+        self._effect_active = self.effect_type in EFFECT_ANIMATED_TYPES
 
     def trigger_explosion(self, now: float) -> bool:
         """Permanently switch to EXPLOSION and start/restart its playback."""

@@ -2166,7 +2166,7 @@ class PropertyEditor(QWidget):
         props = thing.properties
 
         type_combo = QComboBox()
-        type_combo.addItems(["FIRE", "EXPLOSION"])
+        type_combo.addItems(["FIRE", "ORB", "EXPLOSION"])
         type_combo.setCurrentText(
             str(props.get('effect_type', 'FIRE')).upper()
         )
@@ -2199,13 +2199,36 @@ class PropertyEditor(QWidget):
         fire_label = QLabel("Fire:")
         form.addRow(fire_label, fire_combo)
 
+        orb_combo = QComboBox()
+        orb_textures = [
+            (f"Orb {index:02d}", f"assets/textures/effects/orb{index:02d}.gif")
+            for index in range(1, 6)
+        ]
+        for label, path in orb_textures:
+            orb_combo.addItem(label, path)
+
+        current_orb = str(
+            props.get("orb_texture", orb_textures[0][1])
+        ).replace("\\", "/")
+        orb_index = next(
+            (index for index, (_, path) in enumerate(orb_textures)
+             if path == current_orb),
+            0,
+        )
+        orb_combo.setCurrentIndex(orb_index)
+        orb_label = QLabel("Orb:")
+        form.addRow(orb_label, orb_combo)
+
         def refresh_fire_texture():
-            explosion = str(
+            effect_type = str(
                 thing.properties.get("effect_type", "FIRE")
-            ).upper() == "EXPLOSION"
-            show_fire = not explosion
+            ).upper()
+            show_fire = effect_type == "FIRE"
+            show_orb = effect_type == "ORB"
             fire_label.setVisible(show_fire)
             fire_combo.setVisible(show_fire)
+            orb_label.setVisible(show_orb)
+            orb_combo.setVisible(show_orb)
             preview_check.setEnabled(True)
 
         def fire_texture_changed(index):
@@ -2214,6 +2237,13 @@ class PropertyEditor(QWidget):
                 self.update_object_prop("fire_texture", str(path))
 
         fire_combo.currentIndexChanged.connect(fire_texture_changed)
+
+        def orb_texture_changed(index):
+            path = orb_combo.itemData(index)
+            if path:
+                self.update_object_prop("orb_texture", str(path))
+
+        orb_combo.currentIndexChanged.connect(orb_texture_changed)
 
         preview_check.toggled.connect(
             lambda value: self.update_object_prop('preview', bool(value))
@@ -2246,8 +2276,12 @@ class PropertyEditor(QWidget):
             form.addRow(label + ":", widget)
             return slider, value_label
 
-        add_scaled_slider("Width", "width", 4.0, 256.0, 32.0, "{:.1f}")
-        add_scaled_slider("Height", "height", 4.0, 256.0, 46.0, "{:.1f}")
+        width_slider, width_label = add_scaled_slider(
+            "Width", "width", 4.0, 256.0, 32.0, "{:.1f}"
+        )
+        height_slider, height_label = add_scaled_slider(
+            "Height", "height", 4.0, 256.0, 46.0, "{:.1f}"
+        )
         add_scaled_slider("Intensity", "intensity", 0.0, 3.0, 1.0, "{:.2f}")
 
         light_check = QCheckBox("Enable intrinsic light")
@@ -2295,6 +2329,19 @@ class PropertyEditor(QWidget):
         def effect_type_changed(value):
             value = str(value).upper()
             self.update_object_prop('effect_type', value)
+
+            if value == 'ORB':
+                self.update_object_prop('width', 32.0)
+                self.update_object_prop('height', 32.0)
+                for slider, label in (
+                    (width_slider, width_label),
+                    (height_slider, height_label),
+                ):
+                    slider.blockSignals(True)
+                    slider.setValue(3200)
+                    slider.blockSignals(False)
+                    label.setText("32.0")
+
             refresh_fire_texture()
             if value == 'EXPLOSION':
                 try:

@@ -381,11 +381,12 @@ class BaseRenderer:
         self._effect_depth_aux_scratch = np.empty(0, dtype=np.float64)
         self._effect_expand_slots_scratch = np.empty(0, dtype=np.int32)
         self._effect_expand_particle_scratch = np.empty(0, dtype=np.float32)
-        # Decoded FIRE GIF frames, indexed by the dense fire variant.
-        # Each entry is a tuple of persistent GL texture ids plus cumulative
-        # frame durations in seconds.
+        # Decoded animated Effect GIF frames, indexed by dense variant.
+        # FIRE and ORB share this normal-instanced billboard path.
         self.effect_fire_frames = {}
         self.effect_fire_cumulative = {}
+        self.effect_orb_frames = {}
+        self.effect_orb_cumulative = {}
         # Capacity-stable scratch for the numeric sprite filter. The renderer
         # owns these arrays so steady-state drawing does not allocate key/mask/
         # texture arrays per frame.
@@ -546,9 +547,10 @@ class BaseRenderer:
                 gl.glTexParameteri(
                     gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
 
-        # Animated FIRE texture sets. Each GIF is decoded once into individual
-        # GL textures; the render path only selects the current frame.
+        # Animated FIRE/ORB texture sets. Each GIF is decoded once into
+        # individual GL textures; the render path only selects the current frame.
         self._load_fire_effect_textures()
+        self._load_orb_effect_textures()
 
         # Create VAOs after shaders are ready
         if not self._shader_init_failed:
@@ -951,7 +953,7 @@ layout (location = 10) in vec4 iPayload;
     def draw_fire_effects_instanced(
         self, projection, view, table, slots, hidden=None, camera_pos=None,
     ):
-        """Draw FIRE as normal instanced billboards using decoded GIF frames."""
+        """Draw FIRE and ORB as normal instanced billboards using decoded GIF frames."""
         if 'sprite_instanced' not in self.shaders or not len(slots):
             return 0
 
@@ -962,9 +964,11 @@ layout (location = 10) in vec4 iPayload;
         if not len(slots):
             return 0
 
-        fire = table.effect_type[slots] == 0
+        effect_types = table.effect_type[slots]
         alive = table.effect_alive[slots]
-        slots = slots[fire & alive]
+        animated = (effect_types != 1) & alive
+        slots = slots[animated]
+        effect_types = effect_types[animated]
         if not len(slots):
             return 0
 
@@ -984,27 +988,41 @@ layout (location = 10) in vec4 iPayload;
         variants = table.effect_fire_variant[slots]
         elapsed = table.effect_elapsed[slots]
 
-        # There are only five authored variants, so this bounded loop replaces
-        # an entity-by-entity Python loop while still allowing each GIF to have
-        # its own frame count and timing.
-        for variant in range(5):
-            mask = variants == variant
-            if not np.any(mask):
+        # There are only five authored variants per animated Effect family.
+        # This bounded 10-way loop replaces an entity-by-entity Python loop
+        # while allowing FIRE and ORB to use separate GIF sets.
+        for effect_kind, frame_store, cumulative_store in (
+            (0, self.effect_fire_frames, self.effect_fire_cumulative),
+            (2, self.effect_orb_frames, self.effect_orb_cumulative),
+        ):
+            kind_mask = effect_types == effect_kind
+            if not np.any(kind_mask):
                 continue
-            frames = self.effect_fire_frames.get(variant, ())
-            cumulative = self.effect_fire_cumulative.get(variant)
-            if not frames or cumulative is None or not len(cumulative):
-                continue
+            kind_variants = variants[kind_mask]
+            kind_elapsed = elapsed[kind_mask]
+            kind_positions = np.flatnonzero(kind_mask)
+            for variant in range(5):
+                mask = kind_variants == variant
+                if not np.any(mask):
+                    continue
+                frames = frame_store.get(variant, ())
+                cumulative = cumulative_store.get(variant)
+                if not frames or cumulative is None or not len(cumulative):
+                    continue
 
-            local_elapsed = np.mod(elapsed[mask], cumulative[-1])
-            frame_indices = np.searchsorted(
-                cumulative, local_elapsed, side='right'
-            )
-            frame_indices = np.minimum(
-                frame_indices, len(frames) - 1
-            ).astype(np.int32, copy=False)
-            positions = np.flatnonzero(mask)
-            textures[positions] = np.asarray(frames, dtype=np.int32)[frame_indices]
+                local_elapsed = np.mod(
+                    kind_elapsed[mask], cumulative[-1]
+                )
+                frame_indices = np.searchsorted(
+                    cumulative, local_elapsed, side='right'
+                )
+                frame_indices = np.minimum(
+                    frame_indices, len(frames) - 1
+                ).astype(np.int32, copy=False)
+                positions = kind_positions[np.flatnonzero(mask)]
+                textures[positions] = np.asarray(
+                    frames, dtype=np.int32
+                )[frame_indices]
 
         drawn[:] = textures > 0
         valid_count = int(np.count_nonzero(drawn))
@@ -1085,7 +1103,7 @@ layout (location = 10) in vec4 iPayload;
         self, projection, view, table, slots, hidden=None,
         play_mode=True, editor_time=0.0, camera_pos=None,
     ):
-        """Draw FIRE as animated billboards and EXPLOSION through its existing shader."""
+        """Draw FIRE/ORB as animated billboards and EXPLOSION through its existing shader."""
         if not len(slots):
             return 0
 
@@ -1778,6 +1796,26 @@ layout (location = 9) in vec4 iNormal2;
 
             self.effect_fire_frames[variant] = tuple(frames)
             self.effect_fire_cumulative[variant] = cumulative
+
+    def _load_orb_effect_textures(self):
+        """Load the five authored ORB variants once after the GL context exists."""
+        self.effect_orb_frames.clear()
+        self.effect_orb_cumulative.clear()
+
+        for variant in range(5):
+            asset_path = (
+                f"assets/textures/effects/orb{variant + 1:02d}.gif"
+            )
+            frames, cumulative = self._load_fire_gif(asset_path)
+
+            if not frames and variant != 0:
+                frames = self.effect_orb_frames.get(0, ())
+                cumulative = self.effect_orb_cumulative.get(
+                    0, np.empty(0, dtype=np.float32)
+                )
+
+            self.effect_orb_frames[variant] = tuple(frames)
+            self.effect_orb_cumulative[variant] = cumulative
 
 
     # --------------------------------------------------------------------------

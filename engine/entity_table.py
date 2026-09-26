@@ -504,6 +504,12 @@ _EFFECT_FIRE_TEXTURES = tuple(
 _EFFECT_FIRE_TEXTURE_TO_INDEX = {
     path: index for index, path in enumerate(_EFFECT_FIRE_TEXTURES)
 }
+_EFFECT_ORB_TEXTURES = tuple(
+    f"assets/textures/effects/orb{i:02d}.gif" for i in range(1, 6)
+)
+_EFFECT_ORB_TEXTURE_TO_INDEX = {
+    path: index for index, path in enumerate(_EFFECT_ORB_TEXTURES)
+}
 
 # FIRE's emitted light follows the dominant colour of the selected texture.
 # These are authored by the effect variant, not by a global ambient setting.
@@ -513,6 +519,10 @@ _EFFECT_FIRE_LIGHT_COLOURS = np.asarray((
     (0xFC, 0x24, 0x00),  # fire03 #fc2400
     (0xFE, 0xAC, 0x1D),  # fire04 #feac1d
 ), dtype=np.float32) / 255.0
+
+_EFFECT_ORB_LIGHT_COLOUR = np.asarray(
+    (0x4A, 0x9B, 0xFF), dtype=np.float32
+) / 255.0
 
 # EXPLOSION's atlas is 16 frames, numbered 1..16 for authoring.
 # The editor preview is intentionally locked to frame 10 (atlas index 9).
@@ -524,6 +534,13 @@ def _effect_fire_variant(props):
         props.get("fire_texture", _EFFECT_FIRE_TEXTURES[0])
     ).replace("\\", "/")
     return _EFFECT_FIRE_TEXTURE_TO_INDEX.get(value, 0)
+
+
+def _effect_orb_variant(props):
+    value = str(
+        props.get("orb_texture", _EFFECT_ORB_TEXTURES[0])
+    ).replace("\\", "/")
+    return _EFFECT_ORB_TEXTURE_TO_INDEX.get(value, 0)
 
 
 def _effect_colour(props, key, default):
@@ -1227,13 +1244,28 @@ class EntityTable:
         if self.class_bits[slot] & ENT_EFFECT:
             props = _props_of(thing)
             effect_type = str(props.get('effect_type', 'FIRE')).strip().upper()
-            self.effect_type[slot] = 1 if effect_type == 'EXPLOSION' else 0
-            self.effect_fire_variant[slot] = _effect_fire_variant(props)
+            self.effect_type[slot] = (
+                1 if effect_type == 'EXPLOSION'
+                else 2 if effect_type == 'ORB'
+                else 0
+            )
+            self.effect_fire_variant[slot] = (
+                _effect_orb_variant(props)
+                if effect_type == 'ORB'
+                else _effect_fire_variant(props)
+            )
             self.effect_preview[slot] = _effect_bool(
                 props, 'preview', False
             )
             width = max(0.01, _effect_float(props, 'width', 32.0))
-            height = max(0.01, _effect_float(props, 'height', 46.0))
+            height = max(
+                0.01,
+                _effect_float(
+                    props,
+                    'height',
+                    32.0 if effect_type == 'ORB' else 46.0,
+                ),
+            )
             visual_intensity = max(0.0, _effect_float(props, 'intensity', 1.0))
             light_intensity = max(0.0, _effect_float(props, 'light_intensity', 2.5))
             light_radius = max(0.01, _effect_float(props, 'light_radius', 128.0))
@@ -1253,6 +1285,8 @@ class EntityTable:
                 self.effect_light_color[slot] = _EFFECT_FIRE_LIGHT_COLOURS[
                     self.effect_fire_variant[slot]
                 ]
+            elif effect_type == 'ORB':
+                self.effect_light_color[slot] = _EFFECT_ORB_LIGHT_COLOUR
             else:
                 self.effect_light_color[slot] = _effect_colour(
                     props, 'light_colour', [255, 165, 70]
