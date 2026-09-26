@@ -2161,6 +2161,104 @@ class PropertyEditor(QWidget):
         section.addLayout(physics_form)
         parent_layout.addWidget(section)
 
+    def _build_effect_ui(self, form, thing):
+        """Compact authoring UI for the one Effect primitive."""
+        props = thing.properties
+
+        type_combo = QComboBox()
+        type_combo.addItems(["FIRE", "EXPLOSION"])
+        type_combo.setCurrentText(
+            str(props.get('effect_type', 'FIRE')).upper()
+        )
+        form.addRow("Type:", type_combo)
+
+        def add_scaled_slider(label, key, minimum, maximum, default, fmt):
+            scale = 100
+            widget = QWidget()
+            h = QHBoxLayout(widget)
+            h.setContentsMargins(0, 0, 0, 0)
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(
+                int(minimum * scale),
+                int(maximum * scale),
+            )
+            value = float(props.get(key, default))
+            value = max(minimum, min(maximum, value))
+            slider.setValue(int(round(value * scale)))
+            value_label = QLabel(fmt.format(value))
+            value_label.setMinimumWidth(56)
+
+            def changed(raw):
+                real = raw / scale
+                value_label.setText(fmt.format(real))
+                self.update_object_prop(key, real)
+
+            slider.valueChanged.connect(changed)
+            h.addWidget(slider, 1)
+            h.addWidget(value_label)
+            form.addRow(label + ":", widget)
+            return slider, value_label
+
+        add_scaled_slider("Size", "size", 0.1, 8.0, 1.0, "{:.2f}")
+        add_scaled_slider("Intensity", "intensity", 0.0, 3.0, 1.0, "{:.2f}")
+
+        light_check = QCheckBox("Enable intrinsic light")
+        light_check.setChecked(bool(props.get('light_enabled', True)))
+        light_check.toggled.connect(
+            lambda value: self.update_object_prop('light_enabled', bool(value))
+        )
+        form.addRow("Light:", light_check)
+
+        add_scaled_slider("Radius", "light_radius", 0.5, 20.0, 5.0, "{:.1f}")
+        add_scaled_slider(
+            "Brightness", "light_intensity", 0.0, 8.0, 2.5, "{:.2f}"
+        )
+
+        self.add_color_picker_widget(
+            form, thing, 'colour',
+            label="Colour:",
+            dialog_title="Choose Effect Colour",
+        )
+        self.add_color_picker_widget(
+            form, thing, 'light_colour',
+            label="Light Colour:",
+            dialog_title="Choose Effect Light Colour",
+        )
+
+        lifetime_slider, lifetime_label = add_scaled_slider(
+            "Lifetime", "lifetime", 0.05, 3.0, 0.5, "{:.2f} s"
+        )
+
+        def refresh_lifetime():
+            explosion = str(
+                thing.properties.get('effect_type', 'FIRE')
+            ).upper() == 'EXPLOSION'
+            lifetime_slider.setEnabled(explosion)
+            if explosion:
+                lifetime = float(thing.properties.get('lifetime', 0.5))
+                lifetime = max(0.05, min(3.0, lifetime))
+                lifetime_slider.blockSignals(True)
+                lifetime_slider.setValue(int(round(lifetime * 100)))
+                lifetime_slider.blockSignals(False)
+                lifetime_label.setText(f"{lifetime:.2f} s")
+            else:
+                lifetime_label.setText("∞")
+
+        def effect_type_changed(value):
+            value = str(value).upper()
+            self.update_object_prop('effect_type', value)
+            if value == 'EXPLOSION':
+                try:
+                    lifetime = float(thing.properties.get('lifetime', 0.5))
+                except (TypeError, ValueError):
+                    lifetime = 0.5
+                if lifetime < 0.05:
+                    self.update_object_prop('lifetime', 0.5)
+            refresh_lifetime()
+
+        type_combo.currentTextChanged.connect(effect_type_changed)
+        refresh_lifetime()
+
     def _build_attach_to_mover(self, form, thing, prefix=''):
         """Shared attach-to-mover logic for Light and Portal."""
         current = thing.properties.get('parent_mover', '')
