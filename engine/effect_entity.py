@@ -29,7 +29,7 @@ EFFECT_DEFAULTS = {
     "colour": [255, 110, 25],
     "lifetime": 0.5,
     "light_enabled": True,
-    "light_radius": 5.0,
+    "light_radius": 128.0,
     "light_intensity": 2.5,
     "light_colour": [255, 165, 70],
 }
