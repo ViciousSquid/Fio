@@ -3020,9 +3020,13 @@ class LogicThread(threading.Thread):
             key_name = pickup.properties.get('key_name', '')
             if key_name:
                 self.collected_keys.add(key_name)
-        elif item_type in ['gun1', 'gun2', 'cig']:
-            self.active_weapon = item_type
-            self.current_hud_message = f"Picked up {item_type.upper()}"
+        elif item_type == 'weapon' or item_type in ['gun1', 'gun2', 'cig']:
+            weapon = pickup.properties.get(
+                'weapon',
+                item_type if item_type in ['gun1', 'gun2', 'cig'] else 'gun1',
+            )
+            self.active_weapon = weapon
+            self.current_hud_message = f"Picked up {weapon.upper()}"
         pickup.properties['collected'] = True
         pid = id(pickup)
         self.collected_pickups.add(pid)

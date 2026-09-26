@@ -782,6 +782,7 @@ class Pickup(Thing):
     pixmap_path = "assets/sprites/pickup.png"
     EDITOR_PRIMARY_PROPERTIES = (
         'item_type',
+        'weapon',
         'value',
         'activation',
         'collected',
@@ -806,6 +807,7 @@ class Pickup(Thing):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'pickup')
         self.properties.setdefault('item_type', 'health')
+        self.properties.setdefault('weapon', 'gun1')
         self.properties.setdefault('value', 25)
         self.properties.setdefault('activation', 'walk_over')
         self.properties.setdefault('collected', False)
@@ -814,8 +816,15 @@ class Pickup(Thing):
         self.properties.setdefault('key_name', 'blue_key')
         self.properties.setdefault('custom_sprite', '')
 
+    def get_weapon(self):
+        """Return the pickup's weapon id, including legacy pickup maps."""
+        item_type = self.properties.get('item_type')
+        if item_type in self.GUN_SPRITES:
+            return item_type
+        return self.properties.get('weapon', 'gun1')
+
     def is_gun(self):
-        return self.properties.get('item_type') in ['gun1', 'gun2', 'cig']
+        return self.properties.get('item_type') == 'weapon' or self.properties.get('item_type') in self.GUN_SPRITES
     
     def is_key(self):
         return self.properties.get('item_type') == 'key'
@@ -832,9 +841,9 @@ class Pickup(Thing):
             key_name = self.get_key_name()
             return self.KEY_SPRITES.get(key_name, 'assets/sprites/pickup.png')
         
-        item_type = self.properties.get('item_type')
-        if item_type in self.GUN_SPRITES:
-            return self.GUN_SPRITES[item_type]
+        weapon = self.get_weapon()
+        if self.is_gun():
+            return self.GUN_SPRITES.get(weapon, self.GUN_SPRITES['gun1'])
         
         if custom:
             return custom
