@@ -258,22 +258,28 @@ def test_reducing_the_far_plane_leaves_the_rest_of_the_scene_alone(renderer, con
 
 
 def test_the_broad_phase_cull_follows_the_view_distance(renderer, context):
-    """The object cull reads the live setting, not a fixed constant."""
-    inside = {"pos": [0.0, 0.0, 1500.0]}
-    outside = {"pos": [0.0, 0.0, 6000.0]}
+    """The entity broad-phase cull reads the live distance through dense slots."""
+    import numpy as np
+    from editor.things import Thing
+    from engine.entity_table import EntityTable
+    from engine.renderer_core import BaseRenderer
+
+    inside = Thing(pos=[0.0, 0.0, 1500.0])
+    outside = Thing(pos=[0.0, 0.0, 6000.0])
+    table = EntityTable()
+    table.begin_frame([inside, outside], epoch=1)
+    slots = np.asarray([0, 1], dtype=np.int32)
 
     renderer.view_distance = settings(8192.0)
-    kept, _ = renderer._camera_distance_cull([inside, outside], [], (0.0, 0.0, 0.0))
-    assert kept == [inside, outside]
+    kept = BaseRenderer._distance_cull_thing_slots(
+        table, slots, 0.0, 0.0, renderer.view_distance.distance ** 2)
+    assert kept.tolist() == [0, 1]
 
     renderer.view_distance = settings(2048.0)
-    kept, _ = renderer._camera_distance_cull([inside, outside], [], (0.0, 0.0, 0.0))
-    assert kept == [inside]
+    kept = BaseRenderer._distance_cull_thing_slots(
+        table, slots, 0.0, 0.0, renderer.view_distance.distance ** 2)
+    assert kept.tolist() == [0]
 
-
-# ---------------------------------------------------------------------------
-# The configurable parts
-# ---------------------------------------------------------------------------
 
 def test_fog_colour_is_what_distance_fades_to(renderer, context):
     """Same geometry, two fog colours: the far band takes each one."""
