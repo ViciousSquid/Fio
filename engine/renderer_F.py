@@ -1498,7 +1498,8 @@ class Renderer_F(BaseRenderer):
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         if selected_object:
             if isinstance(selected_object, dict):
-                self.draw_selected_brush_outline(projection, view, selected_object)
+                self.draw_selected_brush_outline(
+                    projection, view, selected_object, table=_tbl)
                 if selected_object.get('is_trigger', False) and selected_object.get('show_aabb_bounds', False):
                     self.draw_aabb_bounds(projection, view, selected_object)
                 pos = selected_object.get('pos')
