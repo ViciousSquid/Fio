@@ -1156,10 +1156,14 @@ class TerrainEditorPanel(QWidget):
 
     def _update_grass_color_preview(self):
         r, g, b = self.terrain.grass_color
-        self.grass_color_preview.setStyleSheet(
-            f"QFrame {{ background-color: rgb({int(r * 255)}, {int(g * 255)}, {int(b * 255)}); "
-            f"border: 1px solid #777; border-radius: 3px; }}"
-        )
+        # Use the palette for the colour swatch rather than injecting a
+        # per-widget stylesheet. This avoids QSS parser warnings on QFrame
+        # while the application-wide stylesheet supplies the border.
+        from PyQt5.QtGui import QPalette
+        palette = self.grass_color_preview.palette()
+        palette.setColor(QPalette.Window, QColor.fromRgbF(r, g, b))
+        self.grass_color_preview.setAutoFillBackground(True)
+        self.grass_color_preview.setPalette(palette)
 
     def on_wireframe_changed(self, enabled):
         if self._building_ui:
