@@ -810,6 +810,7 @@ class Terrain:
     def mark_all_dirty(self):
         for chunk in self.chunks.values():
             chunk.is_dirty = True
+            chunk.grass_dirty = True
             if chunk.height_cache:
                 chunk.height_cache.invalidate()
     
@@ -1627,6 +1628,7 @@ class Terrain:
             half = chunk.size / 2 + radius
             if abs(cx - world_x) < half and abs(cz - world_z) < half:
                 chunk.is_dirty = True
+                chunk.grass_dirty = True
                 if chunk.height_cache:
                     chunk.height_cache.invalidate()
 
