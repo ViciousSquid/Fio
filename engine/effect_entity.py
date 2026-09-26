@@ -29,8 +29,8 @@ EFFECT_DEFAULTS = {
     "effect_type": EFFECT_FIRE,
     "preview": False,
     "fire_texture": EFFECT_FIRE_TEXTURES[0],
-    "size": 32.0,
-    "scale": 1.0,
+    "width": 32.0,
+    "height": 24.0,
     "intensity": 1.0,
     "colour": [255, 110, 25],
     "lifetime": 0.5,
@@ -66,6 +66,8 @@ class Effect(_ThingBase):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties["type"] = "effect"
+        self.properties.pop("size", None)
+        self.properties.pop("scale", None)
 
         for key, value in EFFECT_DEFAULTS.items():
             if key not in self.properties:
