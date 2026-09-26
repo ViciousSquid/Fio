@@ -2244,6 +2244,12 @@ class PropertyEditor(QWidget):
             return slider, value_label
 
         add_scaled_slider("Size", "size", 4.0, 128.0, 32.0, "{:.1f}")
+        scale_slider, scale_label = add_scaled_slider(
+            "Scale", "scale", 0.1, 4.0, 1.0, "{:.2f}×"
+        )
+        scale_slider.setToolTip(
+            "Overall EXPLOSION scale. Preview uses the same scale as runtime."
+        )
         add_scaled_slider("Intensity", "intensity", 0.0, 3.0, 1.0, "{:.2f}")
 
         light_check = QCheckBox("Enable intrinsic light")
@@ -2272,6 +2278,21 @@ class PropertyEditor(QWidget):
         lifetime_slider, lifetime_label = add_scaled_slider(
             "Lifetime", "lifetime", 0.05, 3.0, 0.5, "{:.2f} s"
         )
+
+        def refresh_scale():
+            explosion = str(
+                thing.properties.get('effect_type', 'FIRE')
+            ).upper() == 'EXPLOSION'
+            scale_slider.setEnabled(explosion)
+            try:
+                scale = float(thing.properties.get('scale', 1.0))
+            except (TypeError, ValueError):
+                scale = 1.0
+            scale = max(0.1, min(4.0, scale))
+            scale_slider.blockSignals(True)
+            scale_slider.setValue(int(round(scale * 100)))
+            scale_slider.blockSignals(False)
+            scale_label.setText(f"{scale:.2f}×")
 
         def refresh_lifetime():
             explosion = str(
@@ -2306,10 +2327,12 @@ class PropertyEditor(QWidget):
                 if lifetime < 0.05:
                     self.update_object_prop('lifetime', 0.5)
             refresh_lifetime()
+            refresh_scale()
 
         type_combo.currentTextChanged.connect(effect_type_changed)
         refresh_fire_texture()
         refresh_lifetime()
+        refresh_scale()
 
     def _build_attach_to_mover(self, form, thing, prefix=''):
         """Shared attach-to-mover logic for Light and Portal."""
