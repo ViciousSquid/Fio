@@ -362,6 +362,14 @@ class BaseRenderer:
         self._sprite_recipes_seen = None
         self._sprite_instance_data = np.empty(
             (0, 5), dtype=np.float32)
+        # GPU-instanced procedural Effect buffer. One draw can carry every
+        # visible FIRE/EXPLOSION instance because texture state is not involved.
+        self._effect_instance_vbo = None
+        self._effect_instance_vao = None
+        self._effect_instance_capacity = 0
+        self._effect_instance_data = np.empty((0, 15), dtype=np.float32)
+        self._effect_order_scratch = np.empty(0, dtype=np.int32)
+        self._effect_depth_scratch = np.empty(0, dtype=np.float64)
         # Capacity-stable scratch for the numeric sprite filter. The renderer
         # owns these arrays so steady-state drawing does not allocate key/mask/
         # texture arrays per frame.
