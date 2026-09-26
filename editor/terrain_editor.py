@@ -437,7 +437,40 @@ class TerrainEditorPanel(QWidget):
         
         plateaus_group.setLayout(plateaus_layout)
         features_layout.addWidget(plateaus_group)
-        
+
+
+        # Grass
+        grass_group = QGroupBox("Grass")
+        grass_layout = QFormLayout(grass_group)
+        grass_layout.setSpacing(8)
+        grass_layout.setContentsMargins(12, 20, 12, 12)
+
+        self.grass_checkbox = QCheckBox("Enable Grass")
+        self.grass_checkbox.toggled.connect(self.on_grass_changed)
+        grass_layout.addRow(self.grass_checkbox)
+
+        self.grass_density_slider = QSlider(Qt.Horizontal)
+        self.grass_density_slider.setRange(0, 100)
+        self.grass_density_slider.setSingleStep(1)
+        self.grass_density_slider.valueChanged.connect(self.on_grass_density_changed)
+        self.grass_density_value = QLabel("20%")
+        density_row = QHBoxLayout()
+        density_row.addWidget(self.grass_density_slider, 1)
+        density_row.addWidget(self.grass_density_value)
+        grass_layout.addRow("Density:", density_row)
+
+        self.grass_color_btn = QPushButton("Grass Colour")
+        self.grass_color_btn.clicked.connect(self.choose_grass_color)
+        self.grass_color_preview = QFrame()
+        self.grass_color_preview.setFixedSize(28, 28)
+        color_row = QHBoxLayout()
+        color_row.addWidget(self.grass_color_btn)
+        color_row.addWidget(self.grass_color_preview)
+        color_row.addStretch()
+        grass_layout.addRow("Colour:", color_row)
+
+        features_layout.addWidget(grass_group)
+
         features_layout.addStretch()
         tabs.addTab(features_scroll, "Features")
         
@@ -710,6 +743,11 @@ class TerrainEditorPanel(QWidget):
         self.hm_strength_spin = QDoubleSpinBox()
         self.hm_strength_spin.setRange(1, 2000)
         self.hm_strength_spin.setSingleStep(10)
+        self.grass_checkbox.setChecked(getattr(self.terrain, 'grass_enabled', False))
+        self.grass_density_slider.setValue(int(round(getattr(self.terrain, 'grass_density', 0.02) / 0.06 * 100.0)))
+        self.grass_density_value.setText(f"{self.grass_density_slider.value()}%")
+        self._update_grass_color_preview()
+
         self.hm_strength_spin.setValue(self.terrain.heightmap_strength)
         self.hm_strength_spin.valueChanged.connect(self.on_heightmap_settings_changed)
         hm_settings_layout.addRow("Strength:", self.hm_strength_spin)
@@ -1066,6 +1104,41 @@ class TerrainEditorPanel(QWidget):
             self.progress.close()
             self.progress = None
     
+
+    def on_grass_changed(self, enabled):
+        if self._building_ui:
+            return
+        self.terrain.set_grass(enabled=enabled)
+        self.terrain_changed.emit()
+
+    def on_grass_density_changed(self, value):
+        self.grass_density_value.setText(f"{value}%")
+        if self._building_ui:
+            return
+        self.terrain.set_grass(enabled=self.grass_checkbox.isChecked(),
+                               density=(value / 100.0) * 0.06)
+        self.terrain_changed.emit()
+
+    def choose_grass_color(self):
+        current = QColor.fromRgbF(*self.terrain.grass_color)
+        color = QColorDialog.getColor(current, self, "Grass Colour")
+        if not color.isValid():
+            return
+        rgb = (color.redF(), color.greenF(), color.blueF())
+        self.terrain.set_grass(
+            enabled=self.grass_checkbox.isChecked(),
+            color=rgb,
+        )
+        self._update_grass_color_preview()
+        self.terrain_changed.emit()
+
+    def _update_grass_color_preview(self):
+        r, g, b = self.terrain.grass_color
+        self.grass_color_preview.setStyleSheet(
+            f"QFrame {{ background-color: rgb({int(r*255)}, {int(g*255)}, {int(b*255)}); "
+            "border: 1px solid #777; border-radius: 3px; }}"
+        )
+
     def on_wireframe_changed(self, enabled):
         if self._building_ui:
             return
