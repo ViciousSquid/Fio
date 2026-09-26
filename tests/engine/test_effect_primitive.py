@@ -12,6 +12,7 @@ def test_effect_defaults_to_fire_with_intrinsic_light():
     effect = Effect()
     assert effect.properties["type"] == "effect"
     assert effect.properties["effect_type"] == EFFECT_FIRE
+    assert effect.properties["preview"] is False
     assert effect.properties["fire_texture"] == EFFECT_FIRE_TEXTURES[0]
     assert len(EFFECT_FIRE_TEXTURES) == 5
     assert effect.properties["size"] == 32.0
@@ -69,6 +70,38 @@ def test_fire_texture_variants_set_dominant_emitted_light_colour():
 
         np.testing.assert_allclose(table.effect_light_color[0], colour)
         np.testing.assert_allclose(table.light_color[0], colour)
+
+
+def test_explosion_preview_is_editor_only_and_starts_at_frame_zero():
+    explosion = Effect(properties={
+        "effect_type": EFFECT_EXPLOSION,
+        "preview": True,
+        "lifetime": 0.5,
+    })
+    table = EntityTable()
+
+    table.begin_frame([explosion], epoch=1, effect_runtime=False)
+    assert table.effect_type[0] == 1
+    assert bool(table.effect_preview[0])
+    assert not bool(table.effect_active[0])
+    assert bool(table.effect_alive[0])
+    assert float(table.effect_elapsed[0]) == 0.0
+
+    table.begin_frame([explosion], epoch=1, effect_runtime=True)
+    assert not bool(table.effect_active[0])
+    assert not bool(table.effect_alive[0])
+
+
+def test_explosion_preview_off_remains_dormant_in_editor():
+    explosion = Effect(properties={
+        "effect_type": EFFECT_EXPLOSION,
+        "preview": False,
+    })
+    table = EntityTable()
+    table.begin_frame([explosion], epoch=1, effect_runtime=False)
+
+    assert not bool(table.effect_preview[0])
+    assert not bool(table.effect_alive[0])
 
 
 def test_effect_is_projected_as_one_dense_visual_and_light_primitive():
