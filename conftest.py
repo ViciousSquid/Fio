@@ -17,6 +17,7 @@ rules:
 See ``tests/README.md`` for how the tiers are meant to be run.
 """
 
+import ast
 import os
 import random
 import sys
@@ -67,6 +68,33 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "benchmark" in item.keywords:
             item.add_marker(skip)
+
+
+# ---------------------------------------------------------------------------
+# Collection isolation
+# ---------------------------------------------------------------------------
+
+def pytest_ignore_collect(collection_path, config):
+    """Do not import Qt/GL test modules in the dependency-light CI tier."""
+    if not os.environ.get("FIO_HEADLESS_TIER"):
+        return False
+    try:
+        if not collection_path.is_file() or collection_path.suffix != ".py":
+            return False
+        tree = ast.parse(collection_path.read_text(encoding="utf-8"),
+                         filename=str(collection_path))
+    except (OSError, UnicodeDecodeError, SyntaxError):
+        return False
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            roots = [alias.name.split('.')[0] for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            roots = [node.module.split('.')[0]] if node.module else []
+        else:
+            continue
+        if "PyQt5" in roots or "OpenGL" in roots:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
