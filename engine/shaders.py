@@ -1336,55 +1336,65 @@ layout (location = 4) in float iPhase;
 layout (location = 5) in float iVariation;
 
 out highp vec3 FragPos;
-out float BladeAlpha;
+out float BladeHeight;
 out float ColorVariation;
 
 uniform mat4 projection;
 uniform mat4 view;
 uniform float time;
 uniform float windStrength;
-uniform vec3 cameraPos;
 
 void main() {
-    int vertex = gl_VertexID;
-    int plane = vertex / 6;
-    int corner = vertex - plane * 6;
+    // Three narrow blades make one tuft. Each blade is a tapered ribbon with
+    // a pointed, wind-bent tip rather than a large crossed billboard.
+    int blade = gl_VertexID / 6;
+    int vertex = gl_VertexID - blade * 6;
 
-    // Two crossed upright quads: six vertices per plane.
-    vec2 corners[6] = vec2[](
-        vec2(-1.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0),
-        vec2(-1.0, 0.0), vec2(1.0, 1.0), vec2(-1.0, 1.0)
-    );
-    vec2 c = corners[corner];
+    float y;
+    float sideAmount;
+    if (vertex == 0) {
+        y = 0.0; sideAmount = -1.0;
+    } else if (vertex == 1) {
+        y = 0.0; sideAmount = 1.0;
+    } else if (vertex == 2) {
+        y = 0.58; sideAmount = 0.48;
+    } else if (vertex == 3) {
+        y = 0.0; sideAmount = -1.0;
+    } else if (vertex == 4) {
+        y = 0.58; sideAmount = 0.48;
+    } else {
+        y = 1.0; sideAmount = 0.0;
+    }
 
-    float y = c.y;
-    float taper = mix(1.0, 0.10, y);
-    float width = c.x * iSize * 0.55 * taper;
-    float height = iSize * (1.8 + 0.35 * iVariation);
+    float bladePhase = iPhase + float(blade) * 2.0943951;
+    float angle = bladePhase + float(blade) * 0.55;
+    vec2 forward = vec2(cos(angle), sin(angle));
+    vec2 side = vec2(-forward.y, forward.x);
 
-    float angle = (plane == 0 ? 0.0 : 1.5707963);
-    float ca = cos(angle);
-    float sa = sin(angle);
-    vec2 side = vec2(ca, sa);
+    // The previous crossed quads were deliberately broad; these dimensions
+    // keep the geometry in the proportions of a real grass blade.
+    float height = iSize * (0.72 + 0.22 * iVariation);
+    float width = iSize * (0.075 + 0.025 * iVariation);
 
-    // Fixed roots + spatially varying phase = cheap, desynchronised wind.
-    float spatial = dot(iPosition.xz, vec2(0.031, 0.027));
-    float wave = sin(time * 0.85 + spatial + iPhase);
-    float gust = sin(time * 0.47 + iPosition.x * 0.011 - iPosition.z * 0.009
-                     + iPhase * 1.7);
-    float bend = (wave * 0.65 + gust * 0.35) * windStrength * y * y;
+    float rootSpread = (float(blade) - 1.0) * width * 0.9;
+    vec2 root = iPosition.xz + side * rootSpread;
 
-    vec3 base = iPosition;
-    vec3 offset = vec3(side.x * width, y * height, side.y * width);
-    offset.xz += vec2(0.42, -0.25) * bend * height;
+    // Root stays planted while the upper blade bends in desynchronised waves.
+    float spatial = dot(iPosition.xz, vec2(0.021, 0.017));
+    float wave = sin(time * 0.95 + spatial + bladePhase);
+    float gust = sin(time * 0.43 + iPosition.x * 0.009
+                     - iPosition.z * 0.011 + bladePhase * 1.37);
+    float bend = (wave * 0.68 + gust * 0.32) * windStrength;
 
-    FragPos = base + offset;
-    // The generated quad has only edge vertices, so abs(c.x) is always 1.
-    // Fading from it therefore made every grass fragment alpha zero.
-    // The tapered geometry already supplies the blade silhouette.
-    BladeAlpha = 1.0;
+    float bendAmount = bend * height * y * y;
+    vec2 horizontal = side * (sideAmount * width * (1.0 - 0.30 * y));
+    horizontal += forward * bendAmount;
+
+    vec3 p = vec3(root + horizontal, iPosition.y + y * height);
+    FragPos = p;
+    BladeHeight = y;
     ColorVariation = iVariation;
-    gl_Position = projection * view * vec4(FragPos, 1.0);
+    gl_Position = projection * view * vec4(p, 1.0);
 }
 """,
 
