@@ -2083,7 +2083,10 @@ ENTITY_CATEGORIES = {
 # Prop``), and before map deserialization via _load_core_entity_types() so the
 # subclass walk in Thing.from_dict can resolve their type tokens.
 
-_CORE_ENTITY_MODULES = {'Prop': 'engine.prop_entity'}
+_CORE_ENTITY_MODULES = {
+    'Prop': 'engine.prop_entity',
+    'Effect': 'engine.effect_entity',
+}
 
 
 def _load_core_entity_types():
