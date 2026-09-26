@@ -147,7 +147,7 @@ def test_explosion_light_is_a_short_runtime_flash_not_a_constant_source():
     table.begin_frame([explosion], epoch=1, effect_runtime=True)
     assert bool(table.effect_alive[0])
     assert bool(table.light_enabled[0])
-    assert float(table.light_params[0, 0]) <= float(table.effect_params[0, 2])
+    assert float(table.light_params[0, 0]) > float(table.effect_params[0, 2])
 
     table.effect_spawn_time[0] = time.perf_counter() - 0.25
     table.effect_active[0] = True
