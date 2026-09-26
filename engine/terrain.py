@@ -389,7 +389,12 @@ class TerrainChunk:
 # ============================================================================
 
 class Terrain:
-    LOD_DISTANCES_SQ = [400**2, 800**2, 1600**2, 3200**2]
+    # Terrain inside this radius is a protected high-detail zone. A chunk is
+    # never allowed to change LOD while any part of it lies within 4096 world
+    # units of the camera.
+    NEAR_DETAIL_RADIUS = 4096.0
+    NEAR_DETAIL_RADIUS_SQ = NEAR_DETAIL_RADIUS ** 2
+    LOD_DISTANCES_SQ = [4608**2, 6144**2, 8192**2, 12288**2]
     LOD_RESOLUTIONS = [48, 32, 16, 8]
     LOD_HYSTERESIS_FRAMES = 10
     HEIGHT_CACHE_RESOLUTION = 33
@@ -442,7 +447,8 @@ class Terrain:
         # (bounds widened by ``set_world_extent``) render without tessellating
         # the whole grid up-front — meshes appear around the camera as it moves.
         self.streaming: bool = False
-        self.stream_radius: float = 1536.0
+        # Keep the protected high-detail zone resident while the camera moves.
+        self.stream_radius: float = 4096.0
         self.stream_evict_padding: float = 512.0
         self.streamed_chunks: int = 0
         # A ``set_bounds(..., prune=False)`` defers its out-of-bounds chunk
@@ -966,6 +972,19 @@ class Terrain:
             if dist_sq < threshold:
                 return self.LOD_RESOLUTIONS[i]
         return self.LOD_RESOLUTIONS[-1]
+
+    def _chunk_nearest_dist_sq(self, chunk: TerrainChunk,
+                               camera_pos: glm.vec3) -> float:
+        """Squared XZ distance from the camera to the nearest point of a chunk."""
+        min_x = chunk.world_x
+        max_x = min_x + chunk.size
+        min_z = chunk.world_z
+        max_z = min_z + chunk.size
+        nx = min(max(float(camera_pos.x), min_x), max_x)
+        nz = min(max(float(camera_pos.z), min_z), max_z)
+        dx = nx - float(camera_pos.x)
+        dz = nz - float(camera_pos.z)
+        return dx * dx + dz * dz
     
     def _is_chunk_visible(self, chunk: TerrainChunk, frustum_planes) -> bool:
         if frustum_planes is None: return True
@@ -1041,8 +1060,9 @@ class Terrain:
             self._pending_prune = False
 
         if self.streaming:
-            # Stream only the chunks around the camera; a world-spanning terrain
-            # never tessellates its whole grid up-front.
+            # Never allow streaming to evict terrain from the protected zone.
+            if self.stream_radius < self.NEAR_DETAIL_RADIUS:
+                self.stream_radius = self.NEAR_DETAIL_RADIUS
             self._stream_chunks(camera_pos)
         else:
             for cz in range(self.min_chunk_z, self.max_chunk_z + 1):
@@ -1121,10 +1141,13 @@ class Terrain:
             if not self._is_chunk_visible(chunk, frustum_planes):
                 self.culled_chunks += 1
                 continue
-            dx = chunk.center[0] - camera_pos.x
-            dz = chunk.center[2] - camera_pos.z
-            dist_sq = dx * dx + dz * dz
-            target_resolution = self._get_lod_resolution(dist_sq)
+            # Use nearest chunk-point distance so an edge cannot drop LOD
+            # while it is still inside the protected radius.
+            dist_sq = self._chunk_nearest_dist_sq(chunk, camera_pos)
+            if dist_sq <= self.NEAR_DETAIL_RADIUS_SQ:
+                target_resolution = self.LOD_RESOLUTIONS[0]
+            else:
+                target_resolution = self._get_lod_resolution(dist_sq)
             current_resolution = self.LOD_RESOLUTIONS[chunk.lod_level] if chunk.is_uploaded else 0
             needs_update = chunk.is_dirty or not chunk.is_uploaded
             if not needs_update and current_resolution != target_resolution:
