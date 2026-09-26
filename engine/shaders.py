@@ -498,7 +498,6 @@ void main() {
     'fog.frag': """#version 330 core
 precision mediump float;
 out vec4 FragColor;
-
 in highp vec3 localPos;
 
 uniform highp mat4 model;
@@ -997,8 +996,7 @@ void main()
     if (backside) {
         color = mix(
             color,
-            waterTint * 1.4 + vec3(0.10, 0.18, 0.20),
-            0.35
+            waterTint * 1.4 + vec3(0.10, 0.18, 0.20),            0.35
         );
         alpha = min(alpha + 0.15, 1.0);
     }
@@ -1291,7 +1289,7 @@ void main() {
         );
         texColor = splatColor * VertexColor * 1.1;
     } else {
-        texColor = VertexColor;
+        texColor = VertexColor * 1.1;
     }
     
     vec3 skyColor    = vec3(0.6, 0.75, 0.9);
@@ -1327,7 +1325,105 @@ void main() {
     result = mix(vec3(gray), result, 1.15);
     
     FragColor = vec4(applyFog(result, FragPos), 1.0);
-}"""
+}""",
+
+    'grass.vert': """#version 330 core
+
+layout (location = 2) in vec3 iPosition;
+layout (location = 3) in float iSize;
+layout (location = 4) in float iPhase;
+layout (location = 5) in float iVariation;
+
+out vec3 FragPos;
+out float BladeHeight;
+out float ColorVariation;
+
+uniform mat4 projection;
+uniform mat4 view;
+uniform float time;
+uniform float windStrength;
+
+void main() {
+    // One instance is a small crossed pair of ordinary grass blades.
+    // The CPU supplies only the tuft position and a few cheap random values;
+    // the GPU builds the 12 vertices for the two blades.
+    int blade = gl_VertexID / 6;
+    int vertex = gl_VertexID - blade * 6;
+
+    float y;
+    float sideAmount;
+
+    if (vertex == 0) {
+        y = 0.0; sideAmount = -1.0;
+    } else if (vertex == 1) {
+        y = 0.0; sideAmount = 1.0;
+    } else if (vertex == 2) {
+        y = 1.0; sideAmount = 1.0;
+    } else if (vertex == 3) {
+        y = 0.0; sideAmount = -1.0;
+    } else if (vertex == 4) {
+        y = 1.0; sideAmount = 1.0;
+    } else {
+        y = 1.0; sideAmount = -1.0;
+    }
+
+    float angle = iPhase + float(blade) * 1.5707963;
+    vec2 forward = vec2(cos(angle), sin(angle));
+    vec2 side = vec2(-forward.y, forward.x);
+
+    // Tall, thin blades: this is intentionally simple geometry.
+    float height = iSize * (2.0 + 0.55 * iVariation);
+    float width = iSize * (0.16 + 0.04 * iVariation);
+
+    // Slightly separate the crossed blades so their bases do not z-fight.
+    vec2 root = iPosition.xz + forward * (float(blade) - 0.5) * width * 0.25;
+
+    // Cheap, spatially varying wind. The root stays planted.
+    float spatial = dot(iPosition.xz, vec2(0.021, 0.017));
+    float wave = sin(time * 1.1 + spatial + iPhase);
+    float gust = sin(time * 0.47 + iPosition.x * 0.009
+                     - iPosition.z * 0.011 + iPhase * 1.7);
+    float bend = (wave * 0.72 + gust * 0.28) * windStrength;
+
+    float bendAmount = bend * height * y * y;
+    vec2 horizontal = side * sideAmount * width;
+    horizontal += forward * bendAmount;
+
+    vec3 p = vec3(root + horizontal, iPosition.y + 0.02 + y * height);
+    FragPos = p;
+    BladeHeight = y;
+    ColorVariation = iVariation;
+    gl_Position = projection * view * vec4(p, 1.0);
+}
+
+""",
+
+    'grass.frag': """#version 330 core
+out vec4 FragColor;
+
+in vec3 FragPos;
+in float BladeHeight;
+in float ColorVariation;
+
+uniform vec3 grassColor;
+uniform vec3 cameraPos;
+""" + FOG_GLSL + """
+void main() {
+    // Geometry supplies the silhouette; unlike the old billboard pass there
+    // is no alpha-card coverage to discard. Fade is handled by fog.
+    float heightShade = mix(0.82, 1.08, clamp(BladeHeight, 0.0, 1.0));
+    
+    // Grass uses a constant upward normal by design: terrain slope does not
+    // make blades lie down and no per-blade normal data is uploaded.
+    vec3 upwardNormal = vec3(0.0, 1.0, 0.0);
+    vec3 sunDir = normalize(vec3(0.4, 0.7, 0.3));
+    float sun = 0.45 + 0.55 * max(dot(upwardNormal, sunDir), 0.0);
+    float variation = mix(0.88, 1.08, clamp((ColorVariation - 0.82) / 0.30, 0.0, 1.0));
+    vec3 color = grassColor * sun * heightShade * variation + uAmbient * grassColor;
+    FragColor = vec4(applyFog(color, FragPos), 1.0);
+}
+""",
+
 }
 
 # ----- Low-power shaders (used by BaseRenderer when lowpower_mode is True) ----
@@ -1410,8 +1506,7 @@ in vec2 TexCoords;
 uniform sampler2D texture_diffuse;
 struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; };
 uniform Light lights[""" + str(MAX_LIGHTS_ARM) + """];
-uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """
-void main() {
+uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """void main() {
     vec4 texColor = texture(texture_diffuse, TexCoords);
     if(texColor.a < 0.1) discard;
     vec3 norm = normalize(Normal);

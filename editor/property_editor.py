@@ -42,7 +42,7 @@ class _Style:
         QTabBar::tab:hover { background: #5a7a82; }
     """
     SCROLL_V = """
-        QScrollBar:vertical { width: 18px; background: #2b2b2b; border: none; margin: 0px; }
+        QScrollBar:vertical { width: 26px; background: #2b2b2b; border: none; margin: 0px; }
         QScrollBar::handle:vertical { background: #4b4d4d; min-height: 20px; border-radius: 4px; }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
     """

@@ -1319,6 +1319,32 @@ class QtGameView(QOpenGLWidget):
                 painter, self.fps, self.logic_thread, self.renderer,
                 self.editor.state, getattr(self.editor, 'terrain', None)
             )
+
+        # Live terrain sculpting hint: draw this inside the 3D viewport rather
+        # than using the editor toast system. This is intentionally styled as
+        # the compact dark tool-mode banner used by the other viewport tools.
+        if self.terrain_sculpt_active and not self.play_mode:
+            text = "Sculpt mode - ESC to quit"
+            font = self._face_mode_font_top
+            painter.save()
+            painter.setFont(font)
+            metrics = QFontMetrics(font)
+            padding_x = 20
+            padding_y = 9
+            box_w = metrics.horizontalAdvance(text) + padding_x * 2
+            box_h = metrics.height() + padding_y * 2
+            box_x = (self.width() - box_w) // 2
+            box_y = self.height() - box_h - 30
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(0, 0, 0, 180)))
+            painter.drawRoundedRect(box_x, box_y, box_w, box_h, 5, 5)
+            painter.setPen(QColor(255, 255, 255))
+            painter.drawText(
+                box_x + padding_x,
+                box_y + padding_y + metrics.ascent(),
+                text.upper(),
+            )
+            painter.restore()
         if self.face_mode_active:
             painter.setFont(self._face_mode_font_top)
             ht = self._face_mode_font_top.pointSize() + 6
@@ -2132,12 +2158,23 @@ class QtGameView(QOpenGLWidget):
         self.update()
 
     def set_terrain_sculpt_active(self, active: bool):
+        active = bool(active)
         self.terrain_sculpt_active = active
         if active:
             self.setCursor(Qt.CrossCursor)
         else:
             self.terrain_sculpt_painting = False
             self.setCursor(Qt.ArrowCursor)
+            # ESC can leave sculpt mode without going through the Terrain
+            # Editor panel's toggle handler, so keep its button state honest.
+            panel = getattr(self.editor, 'terrain_editor_window', None)
+            if panel is not None:
+                btn = getattr(panel, 'sculpt_paint_btn', None)
+                if btn is not None:
+                    btn.blockSignals(True)
+                    btn.setChecked(False)
+                    btn.blockSignals(False)
+                    btn.setText("🎨  Start Painting")
 
     def raycast_terrain(self, mx: int, my: int):
         terrain = getattr(self.editor, 'terrain', None)
@@ -2900,6 +2937,13 @@ class QtGameView(QOpenGLWidget):
         self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
 
     def keyPressEvent(self, event):
+        # Sculpt mode owns Escape while active. Do this before normal
+        # editor/play-mode escape handling.
+        if event.key() == Qt.Key_Escape and self.terrain_sculpt_active and not self.play_mode:
+            self.set_terrain_sculpt_active(False)
+            self.setFocus()
+            return
+
         if self.play_mode and getattr(self, '_cached_level_complete_ui', None):
             if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_E):
                 self._confirm_level_complete()
