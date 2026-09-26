@@ -1005,6 +1005,7 @@ class TerrainEditorPanel(QWidget):
 
         # Sculpt info
         self._update_sculpt_info()
+        self.set_sculpt_mode(self.sculpt_mode_combo.currentData() or "raise")
 
         self._building_ui = False
     
