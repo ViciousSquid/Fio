@@ -992,6 +992,13 @@ class TerrainEditorPanel(QWidget):
         
         # Checkboxes
         self.solid_checkbox.setChecked(self.terrain.solid)
+        self.grass_checkbox.setChecked(getattr(self.terrain, 'grass_enabled', False))
+        grass_density = getattr(self.terrain, 'grass_density', 0.02)
+        self.grass_density_slider.setValue(
+            int(round(max(0.0, min(0.06, grass_density)) / 0.06 * 100.0))
+        )
+        self.grass_density_value.setText(f"{self.grass_density_slider.value()}%")
+        self._update_grass_color_preview()
         self.flat_checkbox.setChecked(self.terrain.flat_mode)
         
         # Height
