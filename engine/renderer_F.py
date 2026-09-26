@@ -1510,7 +1510,7 @@ class Renderer_F(BaseRenderer):
         # The sprite renderer has one path: dense EntityTable columns -> GL
         # instanced draws. Missing projection data is a caller error, not a
         # reason to resurrect the object renderer.
-        if len(effect_slots):
+        if effect_slots is not None and len(effect_slots):
             self.draw_effects_instanced(
                 projection, view, etable, effect_slots,
                 hidden=thing_hidden,
