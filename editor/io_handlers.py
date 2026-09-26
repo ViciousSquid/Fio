@@ -583,8 +583,18 @@ def register_all_input_handlers(io_manager: IOManager):
             debug_log('Error', f"Could not find game_state for speaker '{entity_name}'!")
             return
 
-        # Queue the sound for the main thread to play (thread-safe). ``looping``
-        # asks the mixer to repeat it until an explicit StopSound; ``entity_id``
+        # Speaker position/radius are consumed on the render thread so audio
+        # attenuation follows the authored radius in the editor. Global
+        # speakers remain non-spatial.
+        global_sound = bool(entity.properties.get('global', False))
+        try:
+            radius = max(0.0, float(entity.properties.get('radius', 512.0)))
+        except (TypeError, ValueError):
+            radius = 512.0
+        position = None if global_sound else list(entity.pos)
+
+        # Queue the sound for the main thread to play (thread-safe). looping
+        # asks the mixer to repeat it until an explicit StopSound; entity_id
         # lets that stop find and silence this speaker's channel.
         game_state.queue_sound({
             'action': 'play',
@@ -592,12 +602,20 @@ def register_all_input_handlers(io_manager: IOManager):
             'volume': volume,
             'looping': looping,
             'entity_id': speaker_id,
+            'position': position,
+            'radius': radius,
+            'global': global_sound,
         })
-        debug_log('Speaker', f"  Queued '{sound_file}'" + (" (looping)" if looping else ""))
+        debug_log(
+            'Speaker',
+            f"  Queued '{sound_file}'"
+            + (" (looping)" if looping else "")
+            + (f" (radius={radius:g})" if not global_sound else " (global)")
+        )
 
         # Fire output event
         logic.io_manager.fire_output(entity, 'OnSoundStarted')
-    
+
     def speaker_stop(entity, param, logic):
         entity.properties['state'] = 'off'
         speaker_id = id(entity)
