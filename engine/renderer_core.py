@@ -957,6 +957,17 @@ layout (location = 10) in vec4 iPayload;
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
 
+        # Effects are translucent emissive billboards. Make their raster state
+        # explicit so a preceding material/portal pass cannot leave culling or
+        # an incompatible blend function behind.
+        blend_was = bool(gl.glIsEnabled(gl.GL_BLEND))
+        cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
+        if not blend_was:
+            gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        if cull_was:
+            gl.glDisable(gl.GL_CULL_FACE)
+
         shader = self.shaders['effect_instanced']
         uniforms = self.uniforms['effect_instanced']
         gl.glUseProgram(shader)
@@ -973,6 +984,10 @@ layout (location = 10) in vec4 iPayload;
         self.render_stats.draw_calls += 1
         self.render_stats.batched_draws += 1
         gl.glBindVertexArray(0)
+        if cull_was:
+            gl.glEnable(gl.GL_CULL_FACE)
+        if not blend_was:
+            gl.glDisable(gl.GL_BLEND)
         return count
 
     def _ensure_sprite_instance_buffer(self, count):
