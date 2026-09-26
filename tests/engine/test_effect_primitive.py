@@ -237,6 +237,7 @@ def test_effect_set_type_input_changes_type_and_fires_onchanged():
     assert table.effect_type[0] == 1
     assert not bool(table.effect_active[0])
     assert not bool(table.effect_alive[0])
+    assert not bool(table.light_enabled[0])
     assert events == [("OnChanged", "EXPLOSION")]
 
     set_type(effect, "explosion", logic)
