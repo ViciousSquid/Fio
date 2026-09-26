@@ -85,7 +85,10 @@ def test_explosion_preview_is_editor_only_and_starts_at_frame_zero():
     assert bool(table.effect_preview[0])
     assert not bool(table.effect_active[0])
     assert bool(table.effect_alive[0])
-    assert float(table.effect_elapsed[0]) == 0.0
+    # Human-facing frame 10 is atlas index 9; the midpoint of that frame keeps
+    # the shader's floor(t * 16) selection unambiguous.
+    expected_elapsed = 0.5 * (9.5 / 16.0)
+    assert abs(float(table.effect_elapsed[0]) - expected_elapsed) < 1e-6
 
     table.begin_frame([explosion], epoch=1, effect_runtime=True)
     assert not bool(table.effect_active[0])
