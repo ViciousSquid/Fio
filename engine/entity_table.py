@@ -563,8 +563,8 @@ class EntityTable:
                  'portal_fade', 'portal_color', 'portal_show_rim',
                  'monster_slots', 'pickup_slots', 'effect_slots',
                  'effect_type', 'effect_fire_variant', 'effect_preview', 'effect_params', 'effect_color',
-                 'effect_light_color', 'effect_lifetime', 'effect_seed',
-                 'effect_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
+                 'effect_light_color', 'effect_light_enabled', 'effect_lifetime', 'effect_seed',
+                  'effect_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
                  'sprite_size', 'sprite_key_id',
                  'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
                  '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
@@ -624,6 +624,7 @@ class EntityTable:
         self.effect_params = np.zeros((0, 4), dtype=np.float32)
         self.effect_color = np.ones((0, 3), dtype=np.float32)
         self.effect_light_color = np.ones((0, 3), dtype=np.float32)
+        self.effect_light_enabled = np.zeros((0,), dtype=bool)
         self.effect_lifetime = np.full((0,), 0.5, dtype=np.float32)
         self.effect_seed = np.ones((0,), dtype=np.float32)
         self.effect_spawn_time = np.zeros((0,), dtype=np.float64)
@@ -769,6 +770,11 @@ class EntityTable:
         if len(self.effect_light_color):
             effect_light_color[:len(self.effect_light_color)] = self.effect_light_color
         self.effect_light_color = effect_light_color
+
+        effect_light_enabled = np.zeros((grown,), dtype=bool)
+        if len(self.effect_light_enabled):
+            effect_light_enabled[:len(self.effect_light_enabled)] = self.effect_light_enabled
+        self.effect_light_enabled = effect_light_enabled
 
         effect_lifetime = np.full((grown,), 0.5, dtype=np.float32)
         if len(self.effect_lifetime):
@@ -986,6 +992,36 @@ class EntityTable:
                     self.effect_active[expired_slots] = False
                     active = self.effect_active[effect_ls]
 
+                 # Effect lights are numeric too. FIRE keeps its authored light
+                 # continuously; EXPLOSION gets only a short decaying flash when
+                 # actually triggered in runtime. Editor preview emits no light.
+                 self.light_enabled[effect_ls] = self.effect_light_enabled[effect_ls]
+                 self.light_params[effect_ls, 0] = self.effect_params[effect_ls, 2]
+                 self.light_params[effect_ls, 1] = self.effect_params[effect_ls, 3]
+                 if np.any(explosion):
+                     explosion_slots = effect_ls[explosion]
+                     if effect_runtime:
+                         explosion_elapsed = elapsed[explosion]
+                         explosion_lifetime = lifetime[explosion]
+                         flash_duration = np.minimum(explosion_lifetime, 0.12)
+                         flash_active = (
+                             explosion_active[explosion]
+                             & (explosion_elapsed < flash_duration)
+                         )
+                         decay = np.exp(-explosion_elapsed / 0.035).astype(
+                             np.float32, copy=False
+                         )
+                         base = self.effect_params[explosion_slots, 2]
+                         self.light_enabled[explosion_slots] = (
+                             self.effect_light_enabled[explosion_slots]
+                             & flash_active
+                         )
+                         self.light_params[explosion_slots, 0] = (
+                             base * (0.15 + 0.85 * decay)
+                         )
+                     else:
+                         self.light_enabled[explosion_slots] = False
+
                 # EXPLOSION preview is editor-only and static: place the
                 # sprite on atlas frame 10 without arming runtime playback.
                 if np.any(preview_explosion):
@@ -1091,8 +1127,8 @@ class EntityTable:
                         self.model_recipe_id, self.model_base_matrix,
                         self.model_normal_matrix, self.effect_type,
                         self.effect_params, self.effect_color,
-                        self.effect_light_color, self.effect_lifetime,
-                        self.effect_seed, self.effect_spawn_time,
+                        self.effect_light_color, self.effect_light_enabled, self.effect_lifetime,
+                         self.effect_seed, self.effect_spawn_time,
                         self.effect_elapsed, self.effect_active,
                         self.effect_alive,
                         self.portal_target_slot,
@@ -1199,14 +1235,16 @@ class EntityTable:
             light_intensity = max(0.0, _effect_float(props, 'light_intensity', 2.5))
             light_radius = max(0.01, _effect_float(props, 'light_radius', 128.0))
             lifetime = max(0.01, _effect_float(props, 'lifetime', 0.5))
+            scale = max(0.01, _effect_float(props, 'scale', 1.0))
             try:
                 seed = float((int(props.get('effect_seed', 1)) % 1000003) + 1)
             except (TypeError, ValueError):
                 seed = 1.0
 
-            self.effect_params[slot] = (
-                size, visual_intensity, light_intensity, light_radius
-            )
+            effect_size = size * scale if effect_type == 'EXPLOSION' else size
+self.effect_params[slot] = (
+                effect_size, visual_intensity, light_intensity, light_radius
+             )
             self.effect_color[slot] = _effect_colour(
                 props, 'colour', [255, 110, 25]
             )
@@ -1218,6 +1256,9 @@ class EntityTable:
                 self.effect_light_color[slot] = _effect_colour(
                     props, 'light_colour', [255, 165, 70]
                 )
+            self.effect_light_enabled[slot] = _effect_bool(
+                props, 'light_enabled', True
+            )
             self.effect_lifetime[slot] = lifetime
             self.effect_seed[slot] = seed
             self.effect_spawn_time[slot] = 0.0
@@ -1239,6 +1280,7 @@ class EntityTable:
             self.effect_params[slot].fill(0.0)
             self.effect_color[slot] = 1.0
             self.effect_light_color[slot] = 1.0
+            self.effect_light_enabled[slot] = False
             self.effect_lifetime[slot] = 0.5
             self.effect_seed[slot] = 1.0
             self.effect_spawn_time[slot] = 0.0
