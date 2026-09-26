@@ -17,6 +17,16 @@ uniform float uFogDensity;
 uniform highp vec3 uFogCamPos;
 uniform vec3 uAmbient;
 
+highp float effectFlicker(highp float elapsed, highp float seed) {
+    highp float phase = elapsed * 10.0 + seed * 0.013;
+    highp float cell = floor(phase);
+    highp float fracPart = phase - cell;
+    highp float smoothPart = fracPart * fracPart * (3.0 - 2.0 * fracPart);
+    highp float a = fract(sin((cell + seed) * 12.9898) * 43758.5453123);
+    highp float b = fract(sin((cell + 1.0 + seed) * 12.9898) * 43758.5453123);
+    return mix(a, b, smoothPart);
+}
+
 highp float hash21(highp vec2 p, highp float seed) {
     return fract(
         sin(dot(p + vec2(seed, seed * 0.731), vec2(127.1, 311.7)))
@@ -110,7 +120,8 @@ void main() {
         alpha *= envelope;
     }
 
-    rgb *= visualIntensity * burst * (0.80 + 0.20 * n1);
+    float flicker = effectFlicker(elapsed, seed);
+    rgb *= visualIntensity * burst * (0.80 + 0.20 * flicker);
     if (alpha < 0.01 || visualIntensity <= 0.0) discard;
 
     FragColor = vec4(applyFog(rgb, FragPos), alpha);
