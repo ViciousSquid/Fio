@@ -14,7 +14,7 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="the entity classes live in editor.things")
 
-from editor.things import (Light, LevelChanger, LogicGate,  # noqa: E402
+from editor.things import (Effect, Light, LevelChanger, LogicGate,  # noqa: E402
                            LogicRelay, LogicTimer, Monster, PathNode, Pickup,
                            Portal, Thing)
 from engine import entity_table as et                        # noqa: E402
@@ -420,9 +420,7 @@ def test_entity_projection_preserves_authoritative_model_and_billboard_cases():
         'model_path': 'crate.glb', 'render_mode': 'billboard',
         'sprite_path': 'crate.png',
     })
-    effect = Thing(properties={
-        'type': 'effect', 'render_mode': 'billboard', 'sprite_path': 'effect.png',
-    })
+    effect = Effect(properties={'effect_type': 'FIRE'})
     table = EntityTable()
     hidden = table.begin_frame([model, billboard, effect], epoch=1)
     model_slots, sprite_slots = et.classify_slots(
