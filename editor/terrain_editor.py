@@ -570,7 +570,7 @@ class TerrainEditorPanel(QWidget):
         scale_group_layout.setSpacing(10)
         scale_group_layout.setContentsMargins(12, 20, 12, 12)
 
-        scale_info = QLabel("Scales the physical dimensions of each chunk. 1x = 256 units.")
+        scale_info = QLabel("Uniformly scales the physical terrain. X, Y and Z stay proportional; 1x = 256 units.")
         scale_info.setStyleSheet("color: #aaa; font-style: italic;")
         scale_info.setWordWrap(True)
         scale_group_layout.addWidget(scale_info)
@@ -1130,15 +1130,11 @@ class TerrainEditorPanel(QWidget):
         self.terrain_changed.emit()
 
     def apply_mesh_scale(self, factor):
-        """Apply a physical scaling factor to chunk size."""
-        self.show_progress(f"Scaling mesh by {factor}x...")
-        # Default chunk size is 256.0
-        new_size = 256.0 * factor
-        self.terrain.chunk_size = new_size
-        
-        # Important: clear existing chunks so they are recreated with new size
-        self.terrain.cleanup()
-        self.terrain.mark_all_dirty()
+        """Apply a uniform physical terrain scale without flattening relief."""
+        self.show_progress(f"Scaling terrain by {factor}x...")
+        # Terrain owns the representation boundary: X, Y and Z scale together
+        # while the procedural generator continues to operate in terrain-space.
+        self.terrain.set_mesh_scale(factor)
         self.update_size_info()
         self.terrain_changed.emit()
         self.hide_progress()
