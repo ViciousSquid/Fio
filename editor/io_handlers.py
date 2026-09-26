@@ -193,6 +193,32 @@ def register_all_input_handlers(io_manager: IOManager):
         if not entity.trigger_explosion(now):
             return
 
+        game_state = getattr(logic, 'game_state', None)
+        if game_state is None and hasattr(logic, 'io_manager'):
+            game_state = logic.io_manager.get_game_state()
+        if (
+            game_state is not None
+            and not bool(entity.properties.get('silent', False))
+        ):
+            try:
+                source_position = [
+                    float(entity.pos.x),
+                    float(entity.pos.y),
+                    float(entity.pos.z),
+                ]
+            except AttributeError:
+                source_position = [
+                    float(entity.pos[0]),
+                    float(entity.pos[1]),
+                    float(entity.pos[2]),
+                ]
+            game_state.queue_sound({
+                'action': 'play',
+                'file': 'assets/sounds/explode.mp3',
+                'volume': 1.0,
+                'position': source_position,
+            })
+
         table = getattr(logic, '_entity_table', None)
         if table is None:
             return
