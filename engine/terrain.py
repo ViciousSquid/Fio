@@ -1211,7 +1211,16 @@ class Terrain:
         if not self.enabled: return
         if not self.shader_program:
             self._init_shader()
-            if not self.shader_program: return
+            if not self.shader_program:
+                return
+
+        # Terrain can be constructed before the GL context exists. In that
+        # case _init_shader() cannot create the grass program either, and the
+        # renderer may later inject an externally compiled terrain program
+        # without calling _init_shader() again. Retry grass independently once
+        # a real GL context is current.
+        if self.grass_enabled and not self.grass_shader_program:
+            self._init_grass_shader()
 
         # Re-resolve late-bound uniforms against the *current* program.  The
         # renderer can swap in an externally-compiled program whose uniform
