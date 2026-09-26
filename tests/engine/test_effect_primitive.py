@@ -163,6 +163,44 @@ def test_explosion_expires_but_fire_does_not():
     assert bool(table.light_enabled[0])
 
 
+def test_explode_input_forces_fire_to_explosion_and_never_reverts():
+    effect = Effect(properties={
+        "id": "fire-to-explosion",
+        "effect_type": EFFECT_FIRE,
+    })
+    table = EntityTable()
+    table.begin_frame([effect], epoch=1, effect_runtime=True)
+    assert table.effect_type[0] == 0
+    assert bool(table.effect_alive[0])
+
+    io_manager = IOManager()
+    register_all_input_handlers(io_manager)
+    logic = SimpleNamespace(_entity_table=table, io_manager=io_manager)
+    explode = io_manager._input_handlers[("effect", "explode")]
+
+    explode(effect, "", logic)
+
+    assert effect.properties["effect_type"] == EFFECT_EXPLOSION
+    assert effect.properties["preview"] is False
+    assert table.effect_type[0] == 1
+    assert bool(table.effect_active[0])
+    assert bool(table.effect_alive[0])
+    assert float(table.effect_elapsed[0]) == 0.0
+
+    table.effect_spawn_time[0] -= 1.0
+    table.begin_frame([effect], epoch=1, effect_runtime=True)
+    assert not bool(table.effect_active[0])
+    assert not bool(table.effect_alive[0])
+    assert effect.properties["effect_type"] == EFFECT_EXPLOSION
+
+    explode(effect, "", logic)
+    assert effect.properties["effect_type"] == EFFECT_EXPLOSION
+    assert table.effect_type[0] == 1
+    assert bool(table.effect_active[0])
+    assert bool(table.effect_alive[0])
+    assert float(table.effect_elapsed[0]) == 0.0
+
+
 def test_effect_explode_io_plays_once_and_can_be_retriggered():
     explosion = Effect(
         properties={
