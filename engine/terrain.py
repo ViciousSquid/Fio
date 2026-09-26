@@ -420,7 +420,8 @@ class Terrain:
         self.offset_x: float = 0.0
         self.offset_z: float = 0.0
         self.offset_y: float = 0.0
-        self.use_textures: bool = True
+        # Terrain starts in vertex-colour mode; texture blending is opt-in.
+        self.use_textures: bool = False
         self.flat_mode: bool = False
         self.chunks: Dict[Tuple[int, int], TerrainChunk] = {}
         self.min_chunk_x: int = -2
