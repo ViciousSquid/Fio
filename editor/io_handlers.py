@@ -161,12 +161,10 @@ def register_all_input_handlers(io_manager: IOManager):
     # ==========================================================================
 
     def effect_explode(entity, param, logic):
-        """Start an EXPLOSION Effect from frame zero."""
-        if not getattr(entity, 'is_explosion', False):
-            return
-
+        """Switch an Effect to EXPLOSION permanently and play it once."""
         now = time.perf_counter()
-        entity.trigger_explosion(now)
+        if not entity.trigger_explosion(now):
+            return
 
         table = getattr(logic, '_entity_table', None)
         if table is None:
@@ -174,11 +172,25 @@ def register_all_input_handlers(io_manager: IOManager):
         slot = table.slot_of_id.get(entity.properties.get('id'))
         if slot is None:
             return
+
         slot = int(slot)
+        table.effect_type[slot] = 1  # EXPLOSION
+        table.effect_preview[slot] = False
         table.effect_spawn_time[slot] = now
         table.effect_elapsed[slot] = 0.0
         table.effect_active[slot] = True
         table.effect_alive[slot] = True
+
+        value = entity.properties.get('light_colour', [255, 165, 70])
+        try:
+            rgb = [
+                max(0.0, min(1.0, float(value[i]) / 255.0))
+                for i in range(3)
+            ]
+        except (TypeError, ValueError, IndexError):
+            rgb = [1.0, 165.0 / 255.0, 70.0 / 255.0]
+        table.effect_light_color[slot] = rgb
+        table.light_color[slot] = rgb
         table.light_enabled[slot] = bool(
             entity.properties.get('light_enabled', True)
         )
