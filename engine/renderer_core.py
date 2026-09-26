@@ -925,9 +925,8 @@ layout (location = 10) in vec4 iPayload;
             np.take(table.pos[:, 0], slots, out=depth)
             np.subtract(depth, cx, out=depth)
             np.square(depth, out=depth)
-            np.take(table.pos[:, 2], slots,
-                    out=self._effect_order_scratch[:count])
-            aux = self._effect_order_scratch[:count].astype(np.float64, copy=False)
+            aux = self._effect_depth_aux_scratch[:count]
+            np.take(table.pos[:, 2], slots, out=aux)
             np.subtract(aux, cz, out=aux)
             np.square(aux, out=aux)
             np.add(depth, aux, out=depth)
