@@ -25,6 +25,9 @@ import os
 import io
 from dataclasses import dataclass
 
+from PyQt5.QtCore import QByteArray, QBuffer, QIODevice
+from PyQt5.QtGui import QImage, QImageReader
+
 import glm
 import numpy as np
 import OpenGL.GL as gl
@@ -1692,117 +1695,141 @@ layout (location = 9) in vec4 iNormal2;
     # --------------------------------------------------------------------------
     # FIRE animation textures
     # --------------------------------------------------------------------------
-    def _load_fire_gif(self, asset_path):
-        """Decode one FIRE GIF into persistent GL textures and frame timings."""
-        try:
-            from PIL import Image
-        except ImportError:
-            print(f"{_BASE_RENDERER_PREFIX} Pillow is required for FIRE GIF textures")
-            return [], np.empty(0, dtype=np.float32)
-
+    def _fire_asset_bytes(self, asset_path):
+        """Read an effect asset from the mounted ResourceManager or filesystem."""
         try:
             from engine.resource_manager import ResourceManager
             data = ResourceManager().get_asset(asset_path)
         except Exception:
             data = None
 
-        if data is None:
-            disk_path = os.path.join(os.getcwd(), asset_path)
-            if os.path.exists(disk_path):
-                try:
-                    with open(disk_path, "rb") as handle:
-                        data = handle.read()
-                except OSError:
-                    data = None
+        if data is not None:
+            return data
 
+        disk_path = os.path.join(os.getcwd(), asset_path)
+        if os.path.exists(disk_path):
+            try:
+                with open(disk_path, "rb") as handle:
+                    return handle.read()
+            except OSError:
+                pass
+        return None
+
+    def _upload_fire_frame(self, cache_key, image):
+        """Upload one already-decoded FIRE frame and return its GL texture id."""
+        cached = self.texture_manager.get(cache_key)
+        if cached:
+            return int(cached)
+
+        image = image.convertToFormat(QImage.Format_RGBA8888)
+        image = image.mirrored(False, True)
+        width, height = image.width(), image.height()
+        bits = image.constBits()
+        try:
+            bits.setsize(image.sizeInBytes())
+            pixels = bytes(bits)
+        except AttributeError:
+            pixels = image.bits().asstring(image.byteCount())
+
+        tex_id = gl.glGenTextures(1)
+        self.texture_manager[cache_key] = tex_id
+        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE
+        )
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE
+        )
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR
+        )
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR
+        )
+
+        gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
+        try:
+            gl.glTexImage2D(
+                gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, width, height, 0,
+                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, pixels
+            )
+        finally:
+            gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
+        return int(tex_id)
+
+    def _load_fire_gif(self, asset_path):
+        """Decode one FIRE GIF into persistent GL textures and frame timings."""
+        data = self._fire_asset_bytes(asset_path)
         if not data:
             print(f"{_BASE_RENDERER_PREFIX} FIRE texture not found: {asset_path}")
             return [], np.empty(0, dtype=np.float32)
 
+        frames = []
+        durations = []
         try:
-            image = Image.open(io.BytesIO(data))
-            frame_count = max(1, int(getattr(image, "n_frames", 1)))
-            texture_ids = []
-            durations = []
+            payload = QByteArray(data)
+            buffer = QBuffer()
+            buffer.setData(payload)
+            buffer.open(QIODevice.ReadOnly)
 
-            for frame_index in range(frame_count):
-                image.seek(frame_index)
-                duration_ms = image.info.get("duration", 100)
+            reader = QImageReader(buffer, b"gif")
+            reader.setDecideFormatFromContent(True)
+
+            while reader.canRead():
+                image = reader.read()
+                if image.isNull():
+                    break
+
+                cache_key = (
+                    f"{asset_path}#frame={len(frames)}"
+                )
+                frames.append(self._upload_fire_frame(cache_key, image))
+
+                delay = reader.nextImageDelay()
                 try:
-                    duration = max(float(duration_ms) / 1000.0, 0.001)
+                    delay_seconds = max(float(delay) / 1000.0, 0.001)
                 except (TypeError, ValueError):
-                    duration = 0.1
-                durations.append(duration)
+                    delay_seconds = 0.1
+                durations.append(delay_seconds)
 
-                frame = image.convert("RGBA").transpose(Image.FLIP_TOP_BOTTOM)
-                frame_bytes = frame.tobytes()
-                width, height = frame.size
+                if not reader.jumpToNextImage():
+                    break
 
-                cache_key = f"{asset_path}#frame={frame_index}"
-                tex_id = self.texture_manager.get(cache_key)
-                if tex_id:
-                    texture_ids.append(int(tex_id))
-                    frame.close()
-                    continue
+            buffer.close()
 
-                tex_id = gl.glGenTextures(1)
-                self.texture_manager[cache_key] = tex_id
-                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                gl.glTexParameteri(
-                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE
+            if frames:
+                return frames, np.cumsum(
+                    np.asarray(durations, dtype=np.float32),
+                    dtype=np.float32,
                 )
-                gl.glTexParameteri(
-                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE
-                )
-                gl.glTexParameteri(
-                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR
-                )
-                gl.glTexParameteri(
-                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR
-                )
-                gl.glTexImage2D(
-                    gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, width, height, 0,
-                    gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, frame_bytes
-                )
-                gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
-                texture_ids.append(int(tex_id))
-                frame.close()
 
-            return texture_ids, np.cumsum(
-                np.asarray(durations, dtype=np.float32), dtype=np.float32
+            print(
+                f"{_BASE_RENDERER_PREFIX} FIRE GIF decoded with no frames: "
+                f"{asset_path}"
             )
         except Exception as exc:
-            print(f"{_BASE_RENDERER_PREFIX} Error decoding FIRE texture '{asset_path}': {exc}")
-            return [], np.empty(0, dtype=np.float32)
+            print(
+                f"{_BASE_RENDERER_PREFIX} Error decoding FIRE GIF "
+                f"'{asset_path}': {exc}"
+            )
 
-    def _load_fire_effect_textures(self):
-        """Load FIRE 01..05 and cache their cumulative frame timings."""
-        self.effect_fire_frames = {}
-        self.effect_fire_cumulative = {}
-        default_frames = None
-        default_cumulative = None
+        # Last-resort static frame.  This uses the same image loader as the
+        # rest of Fio and guarantees a FIRE image can still appear if an
+        # animated GIF decoder rejects the file.
+        try:
+            image = QImage.fromData(data)
+            if not image.isNull():
+                tex_id = self._upload_fire_frame(
+                    f"{asset_path}#frame=0", image
+                )
+                return [tex_id], np.asarray([0.1], dtype=np.float32)
+        except Exception as exc:
+            print(
+                f"{_BASE_RENDERER_PREFIX} FIRE static fallback failed "
+                f"for '{asset_path}': {exc}"
+            )
 
-        for variant in range(5):
-            asset_path = f"assets/textures/effects/fire{variant + 1:02d}.gif"
-            frames, cumulative = self._load_fire_gif(asset_path)
-            if frames:
-                self.effect_fire_frames[variant] = frames
-                self.effect_fire_cumulative[variant] = cumulative
-                if variant == 0:
-                    default_frames = frames
-                    default_cumulative = cumulative
-            else:
-                self.effect_fire_frames[variant] = []
-                self.effect_fire_cumulative[variant] = np.empty(0, dtype=np.float32)
-
-        # A missing optional variant falls back to FIRE 01 rather than making
-        # the authored effect disappear. If FIRE 01 itself is missing, it stays
-        # genuinely missing so the author gets a clear diagnostic.
-        if default_frames:
-            for variant in range(5):
-                if not self.effect_fire_frames[variant]:
-                    self.effect_fire_frames[variant] = default_frames
-                    self.effect_fire_cumulative[variant] = default_cumulative
+        return [], np.empty(0, dtype=np.float32)
 
     # --------------------------------------------------------------------------
     # Texture management
