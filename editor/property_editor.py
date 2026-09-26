@@ -2199,7 +2199,7 @@ class PropertyEditor(QWidget):
             form.addRow(label + ":", widget)
             return slider, value_label
 
-        add_scaled_slider("Size", "size", 0.1, 8.0, 1.0, "{:.2f}")
+        add_scaled_slider("Size", "size", 4.0, 128.0, 32.0, "{:.1f}")
         add_scaled_slider("Intensity", "intensity", 0.0, 3.0, 1.0, "{:.2f}")
 
         light_check = QCheckBox("Enable intrinsic light")
