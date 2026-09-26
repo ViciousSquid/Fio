@@ -507,7 +507,7 @@ class BaseRenderer:
         self.water_normal_id = self.load_texture('water_normal.png', 'textures')
         self.noise_texture_id = 0
 
-        # Fire animation atlas. The sheet is a 4x2 grid of RGBA frames.
+        # Explosion animation atlas. The sheet is a 5x4 grid with 16 actual RGBA frames.
         # Keep it un-mipmapped and clamp to the sheet edge so linear filtering
         # cannot bleed neighbouring frames through transparent borders.
         self.effect_explosion_texture = 0
