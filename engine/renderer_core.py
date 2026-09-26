@@ -2595,7 +2595,7 @@ layout (location = 9) in vec4 iNormal2;
         return 0
 
     def draw_player_glasses(self, projection, view, positions,
-                           width=50.0, height=100.0):
+                           width=40.0, height=18.0):
         """Draw the player as the fixed glasses billboard.
 
         Player bodies are deliberately not EntityTable rows, so this is the
