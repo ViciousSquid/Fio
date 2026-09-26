@@ -2594,6 +2594,64 @@ layout (location = 9) in vec4 iNormal2;
                 return int(tex_id)
         return 0
 
+    def draw_player_glasses(self, projection, view, positions,
+                           width=50.0, height=100.0):
+        """Draw the player as the fixed glasses billboard.
+
+        Player bodies are deliberately not EntityTable rows, so this is the
+        small non-entity billboard path used only for player representation
+        (split-screen and portal virtual scenes). It reuses the existing sprite
+        shader/VAO and performs at most two draws in a normal split-screen view.
+        """
+        if not positions or 'sprite' not in self.shaders:
+            return 0
+        tex_id = self.sprite_textures.get('Glasses')
+        if not tex_id:
+            return 0
+        vao = self.vaos.get('sprite')
+        if not vao:
+            return 0
+
+        shader = self.shaders['sprite']
+        uniforms = self.uniforms['sprite']
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        gl.glUniformMatrix4fv(
+            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection)
+        )
+        gl.glUniformMatrix4fv(
+            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view)
+        )
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['sprite_texture'], 0)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, int(tex_id))
+        gl.glBindVertexArray(vao)
+
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDepthFunc(gl.GL_LESS)
+        gl.glDepthMask(gl.GL_FALSE)
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        pos_loc = uniforms['sprite_pos_world']
+        size_loc = uniforms['sprite_size']
+
+        count = 0
+        try:
+            for pos in positions:
+                try:
+                    px, py, pz = float(pos.x), float(pos.y), float(pos.z)
+                except AttributeError:
+                    px, py, pz = float(pos[0]), float(pos[1]), float(pos[2])
+                gl.glUniform3f(pos_loc, px, py, pz)
+                gl.glUniform2f(size_loc, float(width), float(height))
+                gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
+                count += 1
+        finally:
+            gl.glDepthMask(gl.GL_TRUE)
+            gl.glDisable(gl.GL_BLEND)
+            gl.glBindVertexArray(0)
+        return count
+
     def draw_sprites_instanced(self, projection, view, table, slots,
                                gl_ids=None, camera_pos=None):
         """The sprite pass over dense columns: one draw per texture run.
