@@ -43,8 +43,7 @@ Designed on low-power ARM hardware with an efficiency-first philosophy.
 
 ##  The World Machine
 
-A data-oriented world engine with an object-oriented authoring model
-Fio treats a world as more than a collection of geometry.
+a modern data-oriented engine wearing the skin of a 1998 GtkRadiant workflow, with Source-style entity I/O instead of a scripting language — deliberately recreating the immediacy of classic Radiant/Worldcraft, but where pressing Play just... runs the world you're editing.
 
 A Fio world contains:
 
