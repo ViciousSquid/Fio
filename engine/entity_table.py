@@ -1279,6 +1279,8 @@ def classify_slots(table, slots, hidden, is_play, show_sprites):
     is_hidden = np.asarray(hidden)[slots]
 
     skip = (bits & ENT_SKIP) != 0
+    effect = (bits & ENT_EFFECT) != 0
+    skip = skip | effect
     always_sprite = (bits & ENT_ALWAYS_SPRITE) != 0
 
     has_model = (bits & ENT_HAS_MODEL) != 0
