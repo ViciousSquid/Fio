@@ -998,17 +998,10 @@ layout (location = 10) in vec4 iPayload;
         gl.glUniformMatrix4fv(
             uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view)
         )
-        if not self.effect_explosion_texture:
-            gl.glBindVertexArray(0)
-            if cull_was:
-                gl.glEnable(gl.GL_CULL_FACE)
-            if not blend_was:
-                gl.glDisable(gl.GL_BLEND)
-            return 0
-
         prev_active_texture = gl.glGetIntegerv(gl.GL_ACTIVE_TEXTURE)
         gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_explosion_texture)
+        if self.effect_explosion_texture:
+            gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_explosion_texture)
         gl.glUniform1i(uniforms['explosion_texture'], 0)
 
         gl.glBindVertexArray(self._ensure_effect_instance_vao())
