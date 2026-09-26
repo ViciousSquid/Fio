@@ -505,6 +505,15 @@ _EFFECT_FIRE_TEXTURE_TO_INDEX = {
     path: index for index, path in enumerate(_EFFECT_FIRE_TEXTURES)
 }
 
+# FIRE's emitted light follows the dominant colour of the selected texture.
+# These are authored by the effect variant, not by a global ambient setting.
+_EFFECT_FIRE_LIGHT_COLOURS = np.asarray((
+    (0xE4, 0x92, 0x34),  # fire01 #e49234
+    (0xFF, 0x9A, 0x00),  # fire02 #ff9a00
+    (0xFC, 0x24, 0x00),  # fire03 #fc2400
+    (0xFE, 0xAC, 0x1D),  # fire04 #feac1d
+), dtype=np.float32) / 255.0
+
 
 def _effect_fire_variant(props):
     value = str(
@@ -1170,9 +1179,14 @@ class EntityTable:
             self.effect_color[slot] = _effect_colour(
                 props, 'colour', [255, 110, 25]
             )
-            self.effect_light_color[slot] = _effect_colour(
-                props, 'light_colour', [255, 165, 70]
-            )
+            if effect_type == 'FIRE' and self.effect_fire_variant[slot] < len(_EFFECT_FIRE_LIGHT_COLOURS):
+                self.effect_light_color[slot] = _EFFECT_FIRE_LIGHT_COLOURS[
+                    self.effect_fire_variant[slot]
+                ]
+            else:
+                self.effect_light_color[slot] = _effect_colour(
+                    props, 'light_colour', [255, 165, 70]
+                )
             self.effect_lifetime[slot] = lifetime
             self.effect_seed[slot] = seed
             self.effect_spawn_time[slot] = 0.0
