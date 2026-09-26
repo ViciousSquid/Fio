@@ -235,6 +235,18 @@ class Ui_MainWindow(object):
         MainWindow.redo_action.triggered.connect(MainWindow.redo)
         edit_menu.addAction(MainWindow.redo_action)
 
+        MainWindow.copy_action = QAction('Copy', MainWindow)
+        MainWindow.copy_action.setShortcut('Ctrl+C')
+        MainWindow.copy_action.setToolTip('Copy the selected brush or objects')
+        MainWindow.copy_action.triggered.connect(MainWindow.copy_selection)
+        edit_menu.addAction(MainWindow.copy_action)
+
+        MainWindow.paste_action = QAction('Paste', MainWindow)
+        MainWindow.paste_action.setShortcut('Ctrl+V')
+        MainWindow.paste_action.setToolTip('Paste the copied brush or objects')
+        MainWindow.paste_action.triggered.connect(MainWindow.paste_selection)
+        edit_menu.addAction(MainWindow.paste_action)
+
         edit_menu.addSeparator()
         edit_menu.addAction(QAction('Hide Brush', MainWindow, shortcut='H', triggered=MainWindow.hide_selected_brush))
         edit_menu.addAction(QAction('Unhide All Brushes', MainWindow, shortcut='Shift+H', triggered=MainWindow.unhide_all_brushes))
