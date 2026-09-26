@@ -57,6 +57,7 @@ class View2D(QWidget):
         # whose point stays under the cursor.
         self.drag_group = []
         self.drag_primary = None
+        self._object_drag_undo_saved = False
 
         # --- Select tool: rubber-band marquee state ---
         # marquee_start/current are world-space (axis1, axis2) points; marquee
@@ -3544,6 +3545,7 @@ class View2D(QWidget):
                     self.drag_primary = clicked_object
 
                     self.is_dragging_object = True
+                    self._object_drag_undo_saved = False
                     self.drag_start_pos = world_pos
                     pos_ref = clicked_object['pos'] if isinstance(clicked_object, dict) else clicked_object.pos
                     obj_pos_2d = QPointF(pos_ref[i1], pos_ref[i2])
@@ -3685,6 +3687,12 @@ class View2D(QWidget):
                 d2 = new_primary_pos.y() - p_ref[i2]
 
                 if d1 != 0 or d2 != 0:
+                    # Stage the undo snapshot only once the drag actually moves.
+                    # A press/release click therefore creates no phantom undo step,
+                    # while every real brush move remains undoable.
+                    if not self._object_drag_undo_saved:
+                        self.main_window.save_state()
+                        self._object_drag_undo_saved = True
                     self._maybe_toggle_manip = False  # a real drag, not a toggle-click
                     for obj in group:
                         self._translate_object_2d(obj, d1, d2, i1, i2)
@@ -3773,6 +3781,7 @@ class View2D(QWidget):
                 self.is_dragging_object = False
                 self.drag_group = []
                 self.drag_primary = None
+                self._object_drag_undo_saved = False
                 # A click (no drag) inside an existing group flips scale/rotate.
                 if getattr(self, '_maybe_toggle_manip', False):
                     self._maybe_toggle_manip = False

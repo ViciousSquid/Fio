@@ -395,13 +395,18 @@ class Terrain:
     HEIGHT_CACHE_RESOLUTION = 33
     MAX_UPDATES_PER_FRAME = 2
     TILING_SCALE = 20.0
+    # Physical mesh scale is a true uniform terrain scale. It changes the
+    # world-space footprint and vertical relief together; procedural sampling
+    # remains in terrain-space so enlarging the mesh cannot flatten it.
+    DEFAULT_CHUNK_SIZE = 256.0
     
     def __init__(self, texture_manager=None, seed: int = 42):
         self.seed = seed
         self.noise = PerlinNoise(seed)
         self.features = TerrainFeatures(self.noise, seed)
         self.biome: BiomeConfig = BIOMES['grassy_hills']
-        self.chunk_size: float = 256.0
+        self.chunk_size: float = self.DEFAULT_CHUNK_SIZE
+        self.mesh_scale: float = 1.0
         self.base_resolution: int = 48
         self.offset_x: float = 0.0
         self.offset_z: float = 0.0
@@ -527,8 +532,8 @@ class Terrain:
         return total
     
     def _get_height_scalar(self, world_x: float, world_z: float) -> float:
-        x = world_x - self.offset_x
-        z = world_z - self.offset_z
+        x = (world_x - self.offset_x) / self.mesh_scale
+        z = (world_z - self.offset_z) / self.mesh_scale
         height = self.features.get_rolling_hills_scalar(x, z, self.biome.hills_scale)
         height = height * self.biome.hills_intensity
         if self.biome.mountains_enabled:
@@ -543,11 +548,12 @@ class Terrain:
         height = (height + 1.0) * 0.5
         height = max(0.0, min(1.0, height))
         base = self.biome.base_height + height * self.biome.height_scale + self.offset_y
-        # Heightmap contribution
+        # All height sources are authored in terrain-space. Apply physical
+        # scale once at the representation boundary so horizontal enlargement
+        # preserves the same vertical proportions.
         base += self._sample_heightmap_scalar(world_x, world_z, base)
-        # Sculpt deformation contribution
         base += self._sample_sculpt_scalar(world_x, world_z)
-        return base
+        return base * self.mesh_scale
     
     def get_height_at(self, world_x: float, world_z: float) -> float:
         chunk_x = int(math.floor((world_x - self.offset_x) / self.chunk_size))
@@ -577,6 +583,14 @@ class Terrain:
         max_z = (self.max_chunk_z + 1) * self.chunk_size + self.offset_z
         return ((min_x, max_x), (min_z, max_z))
     
+    def set_mesh_scale(self, factor: float):
+        """Set uniform physical terrain scale without changing morphology."""
+        factor = max(0.01, float(factor))
+        self.mesh_scale = factor
+        self.chunk_size = self.DEFAULT_CHUNK_SIZE * factor
+        self.cleanup()
+        self.mark_all_dirty()
+
     def set_biome(self, biome_name: str):
         if biome_name in BIOMES:
             self.biome = BIOMES[biome_name]
@@ -754,8 +768,8 @@ class Terrain:
         return self.chunks[key]
     
     def _get_heights_batch(self, world_x: np.ndarray, world_z: np.ndarray) -> np.ndarray:
-        x = world_x - self.offset_x
-        z = world_z - self.offset_z
+        x = (world_x - self.offset_x) / self.mesh_scale
+        z = (world_z - self.offset_z) / self.mesh_scale
         height = self.features.get_rolling_hills_batch(x, z, self.biome.hills_scale)
         height = height * self.biome.hills_intensity
         if self.biome.mountains_enabled:
@@ -770,11 +784,11 @@ class Terrain:
         height = (height + 1.0) * 0.5
         height = np.clip(height, 0.0, 1.0)
         result = self.biome.base_height + height * self.biome.height_scale + self.offset_y
-        # Heightmap contribution (batch)
+        # Keep the generator in terrain-space; physical scaling is applied once
+        # after all height sources have been combined.
         result = result + self._sample_heightmap_batch(world_x, world_z, result)
-        # Sculpt deformation contribution (batch)
         result = result + self._sample_sculpt_batch(world_x, world_z)
-        return result
+        return result * self.mesh_scale
     
     def _get_colors_batch(self, heights: np.ndarray, normalized_heights: np.ndarray) -> np.ndarray:
         colors = self.biome.color_gradient
@@ -1518,6 +1532,7 @@ class Terrain:
             'seed': self.seed,
             'biome': self.biome.name,
             'chunk_size': self.chunk_size,
+            'mesh_scale': self.mesh_scale,
             'base_resolution': self.base_resolution,
             'offset_x': self.offset_x,
             'offset_z': self.offset_z,
@@ -1553,7 +1568,8 @@ class Terrain:
         self.features = TerrainFeatures(self.noise, self.seed)
         biome_name = data.get('biome', 'grassy_hills')
         if biome_name in BIOMES: self.biome = BIOMES[biome_name]
-        self.chunk_size = data.get('chunk_size', 256.0)
+        self.chunk_size = data.get('chunk_size', self.DEFAULT_CHUNK_SIZE)
+        self.mesh_scale = float(data.get('mesh_scale', self.chunk_size / self.DEFAULT_CHUNK_SIZE))
         self.base_resolution = data.get('base_resolution', 48)
         self.offset_x = data.get('offset_x', 0.0)
         self.offset_z = data.get('offset_z', 0.0)

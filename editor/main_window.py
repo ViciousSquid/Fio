@@ -2729,8 +2729,12 @@ class MainWindow(QMainWindow):
         self.update_all_ui()
         self._refresh_logic_graph()
 
-    def perform_subtraction(self, push_undo=True):
-        """CSG-subtract the selected brush from everything it intersects.
+    def perform_subtraction(self, push_undo=True, target_brush=None):
+        """CSG-subtract the selected brush, optionally from one target brush only.
+
+        ``target_brush`` is used by compound editor operations such as Hollow:
+        the temporary cutter must not modify unrelated geometry that happens to
+        sit inside the selected brush.
 
         ``push_undo`` lets a caller that has already opened an undo checkpoint
         (Hollow, which runs a subtract as one step of a larger operation) fold
@@ -2754,6 +2758,14 @@ class MainWindow(QMainWindow):
         new_brushes = []
         for brush in self.state.brushes:
             if brush is subtract_brush:
+                continue
+
+            # A targeted subtraction is deliberately isolated to the caller's
+            # brush.  This is essential for Hollow: an object already inside
+            # the outer box is not part of the hollowing operation and must be
+            # left completely untouched.
+            if target_brush is not None and brush is not target_brush:
+                new_brushes.append(brush)
                 continue
                 
             if brush.get('operation') == 'subtract':
@@ -2963,89 +2975,86 @@ class MainWindow(QMainWindow):
         return False
 
     def hollow_selected_brush(self):
-        """Hollow out the selected brush by creating an inner subtraction brush."""
+        """Hollow the selected outer box without modifying enclosed geometry.
+
+        The selected brush is converted into a shell with the requested wall
+        thickness.  Other brushes, including arbitrary/many-sided geometry
+        already enclosed by the box, are intentionally left untouched.
+        """
         if not isinstance(self.state.selected_object, dict):
             QMessageBox.warning(self, "Invalid Selection", "Select a brush to hollow.")
             return
 
         outer_brush = self.state.selected_object
-        
-        # Check if brush is locked
+
         if outer_brush.get('lock', False):
             QMessageBox.warning(self, "Brush Locked", "Cannot hollow a locked brush.")
             return
 
-        # Prompt for wall thickness, defaulting to whatever was used last so a
-        # run of hollows is a keypress each rather than a re-typed number.
         max_thickness = int(min(outer_brush['size']) // 2 - 1)
-        default_thickness = min(max(int(getattr(self, 'last_hollow_thickness', 16)), 8),
-                                max(8, max_thickness))
+        default_thickness = min(
+            max(int(getattr(self, 'last_hollow_thickness', 16)), 8),
+            max(8, max_thickness)
+        )
         thickness, ok = QInputDialog.getInt(
             self,
             "Hollow Brush",
             "Wall thickness (grid units):",
             value=default_thickness,
-            min=8,  # Changed from 1 to 8
-            max=max(8, max_thickness)  # Ensure at least 8
+            min=8,
+            max=max(8, max_thickness)
         )
 
         if not ok:
-            return          # cancelled: nothing has been touched yet
+            return
         self.last_hollow_thickness = thickness
-        
-        # Check if the brush is large enough to hollow
+
         min_size = min(outer_brush['size'])
         if min_size <= thickness * 2:
             QMessageBox.warning(
-                self, 
-                "Brush Too Small", 
-                f"The brush is too small to hollow with thickness {thickness}.\n"
+                self,
+                "Brush Too Small",
+                f"The brush is too small to hollow with thickness {thickness}.\\n"
                 f"Minimum dimension ({min_size}) must be greater than {thickness * 2}."
             )
             return
 
         self.save_state()
-        
-        # Get outer brush properties
+
+        # Keep the original scene intact except for the selected outer brush.
+        # The generic subtract operation normally cuts every intersecting
+        # additive brush; Hollow must not do that because enclosed geometry is
+        # part of the user's scene, not part of the box shell.
+        before = set(id(b) for b in self.state.brushes)
+
         outer_pos = outer_brush['pos']
         outer_size = outer_brush['size']
-        
-        # Calculate inner brush size (reduced by thickness on each side = thickness * 2 total)
-        inner_size = [
-            outer_size[0] - thickness * 2,
-            outer_size[1] - thickness * 2,
-            outer_size[2] - thickness * 2
-        ]
-        
-        # Inner brush has the same center position
-        inner_pos = list(outer_pos)
-        
-        # Create inner brush with subtract operation
         inner_brush = {
-            'pos': inner_pos,
-            'size': inner_size,
+            'pos': list(outer_pos),
+            'size': [
+                outer_size[0] - thickness * 2,
+                outer_size[1] - thickness * 2,
+                outer_size[2] - thickness * 2
+            ],
             'operation': 'subtract',
             'textures': outer_brush.get('textures', {}).copy(),
-            'name': f"{outer_brush.get('name', 'Brush')}_hollow_sub"  # Mark as temporary
+            'name': f"{outer_brush.get('name', 'Brush')}_hollow_sub"
         }
-        
-        # Add the inner brush to the scene
-        self.state.brushes.append(inner_brush)
-        
-        # Now perform the subtraction using the inner brush.  The checkpoint
-        # above already covers the whole operation, so the subtract must not
-        # push a second one — hollow is one undo step, not two.
-        before = set(id(b) for b in self.state.brushes)
-        self.state.selected_object = inner_brush
-        self.perform_subtraction(push_undo=False)
 
-        # Remove the inner brush after subtraction (it's no longer needed)
+        self.state.brushes.append(inner_brush)
+        self.state.selected_object = inner_brush
+
+        # Only subtract the temporary inner volume from the selected outer
+        # brush.  An enclosed many-sided brush therefore survives unchanged.
+        self.perform_subtraction(push_undo=False, target_brush=outer_brush)
+
         if inner_brush in self.state.brushes:
             self.state.brushes.remove(inner_brush)
 
-        # Select the walls the operation just produced, so the next tool acts on
-        # them straight away instead of on an empty selection.
-        walls = [b for b in self.state.brushes if id(b) not in before]
+        walls = [
+            b for b in self.state.brushes
+            if id(b) not in before
+        ]
         if walls:
             self.set_selected_objects(walls)
         else:
@@ -3313,80 +3322,98 @@ class MainWindow(QMainWindow):
                 handler()
                 return
 
-        # Ctrl+C: Copy selected brush/entity
+        # Ctrl+C: Copy the current selection.  The clipboard stores a
+        # detached list so a multi-selection can be pasted as one unit.
         if event.key() == Qt.Key_C and event.modifiers() == Qt.ControlModifier:
-            if self.state.selected_object:
-                source = self.state.selected_object
-                if isinstance(source, dict):
-                    # Leave the runtime geometry caches behind: the paste
-                    # derives its own, and a stale one would travel with it.
-                    source = {k: v for k, v in source.items()
-                              if k not in brush_geometry.GEO_RUNTIME_KEYS}
-                self._brush_clipboard = copy.deepcopy(source)
-                name = ''
-                if isinstance(self._brush_clipboard, dict):
-                    name = self._brush_clipboard.get('name', 'Brush')
+            sources = list(getattr(self.state, 'selected_objects', []) or [])
+            if self.state.selected_object is not None and self.state.selected_object not in sources:
+                sources.append(self.state.selected_object)
+
+            if sources:
+                clipboard = []
+                for source in sources:
+                    if isinstance(source, dict):
+                        source = {
+                            k: v for k, v in source.items()
+                            if k not in brush_geometry.GEO_RUNTIME_KEYS
+                        }
+                    clipboard.append(copy.deepcopy(source))
+                self._brush_clipboard = clipboard
+
+                names = []
+                for source in clipboard:
+                    if isinstance(source, dict):
+                        names.append(source.get('name', 'Brush'))
+                    else:
+                        names.append(source.properties.get('name', 'Entity'))
+                if len(names) == 1:
+                    self.show_toast(f"Copied: {names[0]}")
                 else:
-                    name = self._brush_clipboard.properties.get('name', 'Entity')
-                self.show_toast(f"Copied: {name}")
+                    self.show_toast(f"Copied {len(names)} objects")
+            else:
+                self._brush_clipboard = None
+                self.show_toast("Nothing to copy", is_error=True)
             return
 
-        # Ctrl+V: Paste copied brush/entity
+        # Ctrl+V: Paste the copied brush or multi-selection.  Every pasted
+        # object receives a fresh UUID; the copied UUID is never reused.
         if event.key() == Qt.Key_V and event.modifiers() == Qt.ControlModifier:
-            if self._brush_clipboard is not None:
+            if self._brush_clipboard:
                 self.save_state()
-                pasted = copy.deepcopy(self._brush_clipboard)
-
-                # A paste is a new entity, not the one that was copied.
-                # clone_selected_object and the clip tool both re-stamp the
-                # UUID for the same reason: two live objects sharing one id
-                # make find_entity_by_id -- and every I/O target_id routed
-                # through it -- resolve to whichever comes first in the list.
-                if isinstance(pasted, dict):
-                    pasted['id'] = str(uuid.uuid4())
-                else:
-                    pasted.properties['id'] = str(uuid.uuid4())
-
-                # Offset the pasted object so it doesn't sit exactly on top
                 offset = self.grid_size_spinbox.value()
-                if isinstance(pasted, dict):
-                    # Give it a unique name
-                    base_name = pasted.get('name', 'Brush')
-                    pasted['name'] = f"{base_name}_copy"
-                    from engine.brush_geometry import translate_brush, brush_has_geometry
-                    if brush_has_geometry(pasted):
-                        # Angled brush: move the plane set with the offset.
-                        translate_brush(pasted, [offset, 0.0, offset])
+                delta = [offset, 0.0, offset]
+                pasted_objects = []
+                taken_names = set(self.state.get_all_entity_names())
+
+                for source in self._brush_clipboard:
+                    pasted = copy.deepcopy(source)
+
+                    if isinstance(pasted, dict):
+                        pasted['id'] = str(uuid.uuid4())
+                        base_name = pasted.get('name', 'Brush')
+                        if base_name:
+                            pasted['name'] = self._copy_name(base_name, taken_names)
+
+                        if brush_geometry.brush_has_geometry(pasted):
+                            brush_geometry.translate_brush(pasted, delta)
+                        else:
+                            pasted['pos'] = [
+                                pasted['pos'][0] + delta[0],
+                                pasted['pos'][1] + delta[1],
+                                pasted['pos'][2] + delta[2],
+                            ]
+
+                        # Connections are authored relationships, not geometry.
+                        # Do not duplicate them onto a pasted object.
+                        pasted.pop('_io_connections', None)
+                        pasted.pop('io_connections', None)
+                        self.state.brushes.append(pasted)
                     else:
-                        pasted['pos'] = [
-                            pasted['pos'][0] + offset,
-                            pasted['pos'][1],
-                            pasted['pos'][2] + offset,
+                        pasted.properties['id'] = str(uuid.uuid4())
+                        base_name = pasted.properties.get('name', 'Entity')
+                        pasted.properties['name'] = self._copy_name(base_name, taken_names)
+                        pasted.pos = [
+                            pasted.pos[0] + delta[0],
+                            pasted.pos[1] + delta[1],
+                            pasted.pos[2] + delta[2],
                         ]
-                    # Clear I/O connections on the copy so wires don't duplicate
-                    pasted.pop('_io_connections', None)
-                    pasted.pop('io_connections', None)
-                    self.state.brushes.append(pasted)
-                else:
-                    base_name = pasted.properties.get('name', 'Entity')
-                    pasted.properties['name'] = f"{base_name}_copy"
-                    pasted.pos = [
-                        pasted.pos[0] + offset,
-                        pasted.pos[1],
-                        pasted.pos[2] + offset,
-                    ]
-                    pasted.properties.pop('_io_connections', None)
-                    pasted.properties.pop('io_connections', None)
-                    self.state.things.append(pasted)
+                        pasted.properties.pop('_io_connections', None)
+                        pasted.properties.pop('io_connections', None)
+                        self.state.things.append(pasted)
 
-                self.set_selected_object(pasted)
-                self.show_toast(f"Pasted: {base_name}")
+                    pasted_objects.append(pasted)
 
-                # Flash effect for brushes
-                if isinstance(pasted, dict):
-                    import time as _time
-                    pasted['_flash_until'] = _time.time() + 0.5
-                    QTimer.singleShot(500, lambda: self._clear_flash(pasted))
+                self.set_selected_objects(pasted_objects)
+                self.show_toast(
+                    f"Pasted {len(pasted_objects)} object(s)"
+                    if len(pasted_objects) != 1
+                    else f"Pasted: {pasted_objects[0].get('name', 'Brush') if isinstance(pasted_objects[0], dict) else pasted_objects[0].properties.get('name', 'Entity')}"
+                )
+
+                for pasted in pasted_objects:
+                    if isinstance(pasted, dict):
+                        pasted['_flash_until'] = time.time() + 0.5
+                        QTimer.singleShot(500, lambda o=pasted: self._clear_flash(o))
             else:
                 self.show_toast("Nothing to paste", is_error=True)
             return

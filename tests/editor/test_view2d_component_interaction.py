@@ -24,7 +24,7 @@ import configparser  # noqa: E402
 
 from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
 from PyQt5.QtGui import QMouseEvent  # noqa: E402
-from PyQt5.QtWidgets import QApplication, QWidget  # noqa: E402
+from PyQt5.QtWidgets import QApplication, QWidget, QInputDialog  # noqa: E402
 
 from editor import component_edit as ce  # noqa: E402
 from editor.editor_state import EditorState  # noqa: E402
@@ -121,6 +121,8 @@ class FakeEditorWindow(QWidget):
     selected_objects_list = MainWindow.selected_objects_list
     apply_rotation_to_selection = MainWindow.apply_rotation_to_selection
     apply_clip_to_selection = MainWindow.apply_clip_to_selection
+    perform_subtraction = MainWindow.perform_subtraction
+    hollow_selected_brush = MainWindow.hollow_selected_brush
 
     def __init__(self):
         super().__init__()
@@ -664,6 +666,40 @@ def test_subtract_can_fold_into_a_caller_s_undo_step(editor):
     host.perform_subtraction(push_undo=False)
 
     assert undo_depth(host) == before                # no second checkpoint
+
+
+def test_hollow_preserves_geometry_inside_outer_box(editor, monkeypatch):
+    """Hollow converts only the selected outer box into a shell."""
+    host, _ = editor
+    outer = make_box(pos=(0, 0, 0), size=(256, 256, 256), name="Outer")
+    enclosed = make_box(pos=(0, 0, 0), size=(64, 96, 80), name="ManySidedShape")
+    host.state.brushes.extend([outer, enclosed])
+    host.set_selected_object(outer)
+
+    monkeypatch.setattr(
+        QInputDialog,
+        "getInt",
+        staticmethod(lambda *args, **kwargs: (16, True)),
+    )
+
+    before = undo_depth(host)
+    host.hollow_selected_brush()
+
+    # Hollow is one undoable operation.
+    assert undo_depth(host) == before + 1
+
+    # The enclosed authored brush survives unchanged as a scene object.
+    assert enclosed in host.state.brushes
+    assert enclosed["name"] == "ManySidedShape"
+    assert enclosed["size"] == [64, 96, 80]
+
+    # The original outer box is replaced by its six shell slabs.
+    walls = [b for b in host.state.brushes if b is not enclosed]
+    assert outer not in walls
+    assert len(walls) == 6
+    assert all(b.get("operation") == "add" for b in walls)
+    assert all(b.get("name", "").startswith("Outer_") for b in walls)
+    assert len(host.state.selected_objects) == 6
 
 
 # ---------------------------------------------------------------------------

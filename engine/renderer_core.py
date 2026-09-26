@@ -1346,6 +1346,11 @@ layout (location = 9) in vec4 iNormal2;
             order = np.argsort(dx * dx + dy * dy + dz * dz, kind='stable')
             terrain_lights = (light_table, light_slots[order[:max_terrain_lights]])
 
+        # _upload_lights_once() writes regular uniforms as well as the shared
+        # light UBO, so the terrain program must be current before that call.
+        # Without this, glUniform1i/uFogEnabled can raise GL_INVALID_OPERATION
+        # when terrain follows a pass that has left another program bound.
+        gl.glUseProgram(terrain.shader_program)
         self._current_shader = terrain.shader_program
         self._upload_lights_once('terrain', terrain_lights)
         active_lights_count = len(terrain_lights[1])
