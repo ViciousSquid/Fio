@@ -272,12 +272,12 @@ def sprite_candidates(thing):
     sprite pass draws nothing for.
     """
     if isinstance(thing, dict):
-        return _monster_sprite_candidates(thing) if 'monster_type' in thing else None
-    if Portal is not None and isinstance(thing, Portal):
-        return None            # the sprite pass has always skipped Portals
-    if isinstance(thing, dict):
+        if 'monster_type' in thing:
+            return _monster_sprite_candidates(thing)
         props = thing
     else:
+        if Portal is not None and isinstance(thing, Portal):
+            return None            # the sprite pass has always skipped Portals
         props = _props_of(thing)
     if Monster is not None and isinstance(thing, Monster):
         return _monster_sprite_candidates(props)
