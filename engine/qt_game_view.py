@@ -1297,13 +1297,14 @@ class QtGameView(QOpenGLWidget):
                 self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
                                                 _split_proj, self.view_matrix)
             if self.play_mode and getattr(self, 'show_spatial_grid', False):
-                self._render_spatial_grid(_split_proj, self.view_matrix)             if (self.show_glasses and render_state is not None
-                     and not getattr(render_state, 'player2_dead', False)):
-                 self._render_player_glasses(
-                     [render_state.player2_pos],
-                     _split_proj,
-                     self.view_matrix,
-                 )
+                self._render_spatial_grid(_split_proj, self.view_matrix)
+            if (self.show_glasses and render_state is not None
+                    and not getattr(render_state, 'player2_dead', False)):
+                self._render_player_glasses(
+                    [render_state.player2_pos],
+                    _split_proj,
+                    self.view_matrix,
+                )
 
 
             gl.glScissor(_half, 0, _half, _h)
@@ -1337,13 +1338,14 @@ class QtGameView(QOpenGLWidget):
                 self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
                                                 _split_proj, _p2_view)
             if self.play_mode and getattr(self, 'show_spatial_grid', False):
-                self._render_spatial_grid(_split_proj, _p2_view)             if (self.show_glasses and render_state is not None
-                     and not getattr(render_state, 'player_dead', False)):
-                 self._render_player_glasses(
-                     [render_state.player_pos],
-                     _split_proj,
-                     _p2_view,
-                 )
+                self._render_spatial_grid(_split_proj, _p2_view)
+            if (self.show_glasses and render_state is not None
+                    and not getattr(render_state, 'player_dead', False)):
+                self._render_player_glasses(
+                    [render_state.player_pos],
+                    _split_proj,
+                    _p2_view,
+                )
 
 
             gl.glDisable(gl.GL_SCISSOR_TEST)
