@@ -57,7 +57,7 @@ def test_orb_defaults_to_blue_square_animation():
 def test_custom_effect_uses_selected_gif_path():
     custom = Effect(properties={
         "effect_type": EFFECT_CUSTOM,
-        "custom_gif": r"custom\\magic.gif",
+        "custom_gif": r"custom\magic.gif",
     })
     assert custom.properties["effect_type"] == EFFECT_CUSTOM
     assert custom.properties["custom_gif"] == "custom/magic.gif"
