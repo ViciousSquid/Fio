@@ -2806,8 +2806,17 @@ class PropertyEditor(QWidget):
                 form.addRow(QLabel("Logic Type:"), combo)
                 continue
 
-            # Pickup item type.
+            # Pickup item type + explicit weapon selection.
             if is_pickup and key == 'item_type':
+                current = str(value or 'health')
+                # Older maps encoded gun1/gun2/cig directly in item_type.
+                legacy_weapon = current if current in ('gun1', 'gun2', 'cig') else None
+                if legacy_weapon:
+                    current = 'weapon'
+                    self.update_object_prop('item_type', 'weapon')
+                    if 'weapon' not in thing.properties:
+                        self.update_object_prop('weapon', legacy_weapon)
+
                 combo = QComboBox()
                 combo.addItems([
                     'health',
@@ -2816,20 +2825,30 @@ class PropertyEditor(QWidget):
                     'key',
                     'custom',
                 ])
-
-                current = str(value or 'health')
                 index = combo.findText(current)
                 if index >= 0:
                     combo.setCurrentIndex(index)
 
-                combo.currentTextChanged.connect(
-                    lambda text: self.update_object_prop(
-                        'item_type',
-                        text,
-                    )
-                )
-
+                combo.currentTextChanged.connect(self.on_pickup_item_type_changed)
                 form.addRow(QLabel("Item Type:"), combo)
+
+                weapon_lbl = QLabel("Weapon:")
+                weapon_combo = QComboBox()
+                weapon_combo.addItems(['gun1', 'gun2', 'cig'])
+                weapon_combo.setCurrentText(
+                    thing.properties.get('weapon', legacy_weapon or 'gun1')
+                )
+                weapon_combo.currentTextChanged.connect(self.on_pickup_weapon_changed)
+                form.addRow(weapon_lbl, weapon_combo)
+
+                visible = current == 'weapon'
+                weapon_lbl.setVisible(visible)
+                weapon_combo.setVisible(visible)
+                self._pickup_weapon_widgets = [(weapon_lbl, weapon_combo)]
+                continue
+
+            # The weapon is edited by the Item Type row above.
+            if is_pickup and key == 'weapon':
                 continue
 
             # Legacy maps store show_radius as "True"/"False"; normalise so it
