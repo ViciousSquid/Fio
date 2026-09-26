@@ -140,6 +140,8 @@ ENT_MONSTER         = 1 << 10
 #: also carries, because the distance cull exempts Portals and Lights and must
 #: not exempt monsters.
 ENT_PORTAL          = 1 << 11
+#: Procedural Effect primitive; FIRE and EXPLOSION share one render path.
+ENT_EFFECT          = 1 << 13
 #: This row's *sprite identity* can change without an edit, so it is re-resolved
 #: every frame.  Exactly the classes ``update_instance_textures`` re-hashes per
 #: frame -- a monster's sprite follows ``dead``/``is_shooting``, a gate's its
