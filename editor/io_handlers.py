@@ -160,6 +160,31 @@ def register_all_input_handlers(io_manager: IOManager):
     # EFFECT INPUTS
     # ==========================================================================
 
+    def effect_set_type(entity, param, logic):
+        """Set the Effect TYPE by name and notify connected outputs."""
+        effect_type = str(param or "").strip().upper()
+        if not entity.set_effect_type(effect_type):
+            return
+
+        table = getattr(logic, '_entity_table', None)
+        if table is not None:
+            slot = table.slot_of_id.get(entity.properties.get('id'))
+            if slot is not None:
+                slot = int(slot)
+                table.refresh_rows([entity], [slot])
+                # A SetType-to-EXPLOSION switch is not a trigger. It leaves
+                # EXPLOSION dormant until Explode is received.
+                table.effect_active[slot] = (
+                    table.effect_type[slot] == 0
+                )
+                table.effect_alive[slot] = (
+                    table.effect_type[slot] == 0
+                )
+
+        logic.io_manager.fire_output(
+            entity, 'OnChanged', value=entity.properties['effect_type']
+        )
+
     def effect_explode(entity, param, logic):
         """Switch an Effect to EXPLOSION permanently and play it once."""
         now = time.perf_counter()
@@ -195,6 +220,7 @@ def register_all_input_handlers(io_manager: IOManager):
             entity.properties.get('light_enabled', True)
         )
 
+    io_manager.register_input_handler('effect', 'settype', effect_set_type)
     io_manager.register_input_handler('effect', 'explode', effect_explode)
 
     # ==========================================================================
