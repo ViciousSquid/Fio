@@ -1634,7 +1634,12 @@ layout (location = 9) in vec4 iNormal2;
         return int(tex_id)
 
     def _load_fire_gif(self, asset_path):
-        """Decode one FIRE GIF into persistent GL textures and frame timings."""
+        """Decode one FIRE GIF into persistent GL textures and frame timings.
+
+        Pillow is already a Fio texture dependency and gives us the decoded
+        animation frame sequence directly, including per-frame GIF durations.
+        Qt's QImageReader remains the fallback for a malformed/unusual asset.
+        """
         data = self._fire_asset_bytes(asset_path)
         if not data:
             print(f"{_BASE_RENDERER_PREFIX} FIRE texture not found: {asset_path}")
@@ -1642,38 +1647,96 @@ layout (location = 9) in vec4 iNormal2;
 
         frames = []
         durations = []
+
+        # Primary animated-GIF path. ImageSequence.Iterator handles GIF
+        # disposal/compositing, so each uploaded texture is the complete frame
+        # the player should actually display.
+        try:
+            from PIL import Image, ImageSequence
+
+            with Image.open(io.BytesIO(data)) as gif:
+                if getattr(gif, 'is_animated', False):
+                    for frame_index, frame in enumerate(ImageSequence.Iterator(gif)):
+                        rgba = frame.convert("RGBA")
+                        qimage = QImage(
+                            rgba.tobytes(),
+                            rgba.width,
+                            rgba.height,
+                            rgba.width * 4,
+                            QImage.Format_RGBA8888,
+                        ).copy()
+                        frames.append(
+                            self._upload_fire_frame(
+                                f"{asset_path}#frame={frame_index}",
+                                qimage,
+                            )
+                        )
+                        try:
+                            delay_seconds = max(
+                                float(frame.info.get("duration", 100)) / 1000.0,
+                                0.01,
+                            )
+                        except (TypeError, ValueError):
+                            delay_seconds = 0.1
+                        durations.append(delay_seconds)
+                else:
+                    rgba = gif.convert("RGBA")
+                    qimage = QImage(
+                        rgba.tobytes(),
+                        rgba.width,
+                        rgba.height,
+                        rgba.width * 4,
+                        QImage.Format_RGBA8888,
+                    ).copy()
+                    frames.append(
+                        self._upload_fire_frame(
+                            f"{asset_path}#frame=0",
+                            qimage,
+                        )
+                    )
+                    durations.append(0.1)
+
+            if frames:
+                return frames, np.cumsum(
+                    np.asarray(durations, dtype=np.float32),
+                    dtype=np.float32,
+                )
+        except Exception as exc:
+            print(
+                f"{_BASE_RENDERER_PREFIX} Error decoding FIRE GIF "
+                f"with Pillow '{asset_path}': {exc}"
+            )
+
+        # Qt fallback for assets Pillow cannot decode.
         try:
             payload = QByteArray(data)
             buffer = QBuffer()
             buffer.setData(payload)
             buffer.open(QIODevice.ReadOnly)
-
             reader = QImageReader(buffer, b"gif")
             reader.setDecideFormatFromContent(True)
 
-            # GIF animation is an indexed image sequence. Read each image
-            # explicitly rather than relying on canRead()/jumpToNextImage(),
-            # which can stop after the first decoded image on some Qt builds.
             image_count = reader.imageCount()
             if image_count < 0:
                 image_count = 0
 
             for frame_index in range(image_count):
                 if not reader.jumpToImage(frame_index):
-                    if frame_index == 0:
-                        break
                     continue
-
                 image = reader.read()
                 if image.isNull():
                     continue
-
-                cache_key = f"{asset_path}#frame={frame_index}"
-                frames.append(self._upload_fire_frame(cache_key, image))
-
-                delay = reader.nextImageDelay()
+                frames.append(
+                    self._upload_fire_frame(
+                        f"{asset_path}#qt-frame={frame_index}",
+                        image,
+                    )
+                )
                 try:
-                    delay_seconds = max(float(delay) / 1000.0, 0.01)
+                    delay_seconds = max(
+                        float(reader.nextImageDelay()) / 1000.0,
+                        0.01,
+                    )
                 except (TypeError, ValueError):
                     delay_seconds = 0.1
                 durations.append(delay_seconds)
@@ -1685,30 +1748,10 @@ layout (location = 9) in vec4 iNormal2;
                     np.asarray(durations, dtype=np.float32),
                     dtype=np.float32,
                 )
-
-            print(
-                f"{_BASE_RENDERER_PREFIX} FIRE GIF decoded with no frames: "
-                f"{asset_path}"
-            )
         except Exception as exc:
             print(
-                f"{_BASE_RENDERER_PREFIX} Error decoding FIRE GIF "
+                f"{_BASE_RENDERER_PREFIX} FIRE Qt fallback failed "
                 f"'{asset_path}': {exc}"
-            )
-
-        # Last-resort static frame. This guarantees a FIRE image can still
-        # appear if Qt's animated GIF reader rejects the sequence.
-        try:
-            image = QImage.fromData(data)
-            if not image.isNull():
-                tex_id = self._upload_fire_frame(
-                    f"{asset_path}#frame=0", image
-                )
-                return [tex_id], np.asarray([0.1], dtype=np.float32)
-        except Exception as exc:
-            print(
-                f"{_BASE_RENDERER_PREFIX} FIRE static fallback failed "
-                f"for '{asset_path}': {exc}"
             )
 
         return [], np.empty(0, dtype=np.float32)
