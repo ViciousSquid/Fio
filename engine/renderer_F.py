@@ -1148,6 +1148,20 @@ class Renderer_F(BaseRenderer):
                         capture_config,
                     )
 
+                if len(effect_slots):
+                    gl.glEnable(gl.GL_BLEND)
+                    gl.glDepthMask(gl.GL_FALSE)
+                    self.draw_effects_instanced(
+                        projection,
+                        reflection_view,
+                        entity_table,
+                        effect_slots,
+                        hidden=thing_hidden,
+                        play_mode=capture_config.get('play_mode', False),
+                        editor_time=capture_config.get('time', 0.0),
+                        camera_pos=reflection_pos,
+                    )
+
                 if len(sprite_slots):
                     gl.glEnable(gl.GL_BLEND)
                     gl.glDepthMask(gl.GL_FALSE)
