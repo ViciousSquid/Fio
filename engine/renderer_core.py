@@ -3277,7 +3277,7 @@ layout (location = 9) in vec4 iNormal2;
             return 1.0
         return clamped
 
-    def draw_selected_brush_outline(self, projection, view, brush):
+    def draw_selected_brush_outline(self, projection, view, brush, table=None):
         if 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
@@ -3309,7 +3309,20 @@ layout (location = 9) in vec4 iNormal2;
             gl.glBindVertexArray(0)
             self._edge_vbo = vbo
         gl.glLineWidth(1.0)
-        mesh = self._get_geo_mesh(brush)
+        # Editor selection is still represented by the authored selection dict,
+        # but convex geometry comes from the dense RenderTable geometry records.
+        # Do not reintroduce the removed object-based mesh lookup here.
+        mesh = None
+        if table is not None and isinstance(brush, dict):
+            slot = table.slot_of_id.get(brush.get('id'))
+            if slot is not None:
+                slot = int(slot)
+                gid = int(table.geometry_id[slot])
+                if gid >= 0 and gid < len(table.geometry_records):
+                    record = table.geometry_records[gid]
+                    mesh = self._get_geo_mesh_record(
+                        record, geometry_id=gid,
+                        geometry_generation=table.generation)
         if mesh is not None and mesh.edge_count:
             # Angled brush: outline its real convex edges instead of the AABB.
             gl.glBindVertexArray(mesh.edge_vao)
