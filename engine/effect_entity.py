@@ -24,7 +24,7 @@ EFFECT_TYPES = (EFFECT_FIRE, EFFECT_EXPLOSION)
 
 EFFECT_DEFAULTS = {
     "effect_type": EFFECT_FIRE,
-    "size": 1.0,
+    "size": 32.0,
     "intensity": 1.0,
     "colour": [255, 110, 25],
     "lifetime": 0.5,
