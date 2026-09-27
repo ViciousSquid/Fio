@@ -404,6 +404,13 @@ class ThreadedGameState:
         with self._sound_lock:
             self.sound_queue.append(request)
 
+    def clear_sounds(self) -> int:
+        """Cancel all pending sound requests and return how many were removed."""
+        with self._sound_lock:
+            count = len(self.sound_queue)
+            self.sound_queue.clear()
+            return count
+
     # --- Player 2 Input ---
 
     def set_p2_input(self, move_x: float, move_z: float,
