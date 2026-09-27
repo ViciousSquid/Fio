@@ -756,9 +756,15 @@ def main():
     # Configure this separate Qt process from the same Fio settings.ini.
     settings_path = os.path.join(os.path.abspath(args.root), "settings.ini")
     config = configparser.ConfigParser()
+    config.read_dict({
+        "Display": {
+            "font_size": "11",
+            "high_dpi_scaling": "True",
+        }
+    })
     config.read(settings_path)
-    font_size = config.getint("Display", "font_size", fallback=11)
-    high_dpi = config.getboolean("Display", "high_dpi_scaling", fallback=True)
+    font_size = config.getint("Display", "font_size")
+    high_dpi = config.getboolean("Display", "high_dpi_scaling")
 
     if hasattr(Qt, "AA_EnableHighDpiScaling"):
         QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, high_dpi)
