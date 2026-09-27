@@ -2197,13 +2197,16 @@ class MainWindow(QMainWindow):
             self.show_surface_inspector(brushes[0], keys[0], raise_window=False)
 
     def toggle_surface_inspector(self):
-        """Shift+S: open the Surface Inspector on whatever is being worked on.
+        """Open (or close) the Surface Inspector on the current texture target.
 
-        It targets, in order of preference, the face currently hovered in Face
-        Mode, the face last textured, or the first face of the selected brush —
-        so the shortcut does something useful whether the user is mid-texturing
-        or has just picked a brush.  Pressing it again closes the panel.
+        T/Shift+S are plain editor shortcuts.  Never let a modified keystroke
+        such as Ctrl+Z reach this toggle, even if Qt delivers the QAction while
+        another shortcut is being processed.
         """
+        modifiers = QApplication.keyboardModifiers()
+        if modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier):
+            return
+
         inspector = self.surface_inspector
         if inspector is not None and inspector.isVisible():
             inspector.hide()
