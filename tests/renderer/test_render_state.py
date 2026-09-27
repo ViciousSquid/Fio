@@ -612,12 +612,15 @@ def test_dense_projections_are_double_buffered():
 
 
 def test_recycled_render_state_keeps_dense_projection_objects():
-    """Resetting a published buffer must not drop the dense renderer contract."""
+    """Resetting a free buffer must not drop the dense renderer contract."""
     game_state = ThreadedGameState()
     initial_read = game_state.get_render_state()
     render_table = initial_read.render_table
     entity_table = initial_read.entity_table
 
+    # The initial read is borrowed by the caller, so explicitly release it
+    # before asking the logic side to recycle that buffer.
+    game_state.release_render_state(initial_read)
     game_state.request_swap()
     recycled = game_state.get_write_state()
 
@@ -627,6 +630,40 @@ def test_recycled_render_state_keeps_dense_projection_objects():
     assert len(recycled.all_brush_slots) == 0
     assert len(recycled.visible_thing_slots) == 0
     assert len(recycled.thing_hidden) == 0
+
+
+def test_a_borrowed_render_state_cannot_be_recycled_under_the_renderer():
+    """A slow renderer must keep the published dense projection immutable."""
+    game_state = ThreadedGameState()
+    brush = box_brush("wall")
+
+    write = game_state.get_write_state()
+    write.render_table.sync([brush], epoch=1)
+    assert game_state.request_swap() is True
+
+    snapshot = game_state.get_render_state()
+    first_table = snapshot.render_table
+    first_slots = snapshot.all_brush_slots
+
+    write = game_state.get_write_state()
+    brush["shader"] = "Fog"
+    brush["is_fog"] = True
+    write.render_table.sync([brush], epoch=2)
+
+    # The first publication is still borrowed, so the newer write buffer must
+    # not be published into it or recycle it.
+    assert game_state.request_swap() is False
+    assert snapshot.render_table is first_table
+    assert bool(first_table.class_bits[0] & render_table_module.CLASS_FOG) is False
+    assert len(first_slots) == 1
+
+    # The latest frame is published once the renderer releases its borrow.
+    game_state.release_render_state(snapshot)
+    assert game_state.request_swap() is True
+
+    latest = game_state.get_render_state()
+    assert bool(latest.render_table.class_bits[0] & render_table_module.CLASS_FOG) is True
+    game_state.release_render_state(latest)
 
 
 def test_the_published_brush_lists_are_not_materialised_unless_read(logic):
