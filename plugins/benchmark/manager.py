@@ -350,7 +350,7 @@ class BenchmarkManager(QDialog):
 
         # Nothing to export until a run has produced results, so it stays out
         # of the opening screen entirely rather than sitting there greyed out.
-        self.export_button = QPushButton("Export HTML Report…")
+        self.export_button = QPushButton("Export to HTML")
         self.export_button.setEnabled(False)
         self.export_button.setVisible(False)
         self.export_button.clicked.connect(self.export_html)
@@ -525,6 +525,7 @@ class BenchmarkManager(QDialog):
             self._set_checks_enabled(True)
             self.run_button.setEnabled(True)
             self.export_button.setEnabled(bool(self.results))
+            self.export_button.setVisible(bool(self.results))
             self.status.setText("Benchmark complete.")
             self._append(
                 f'<div style="margin-top:12px; padding:14px 16px; background:#1f241f; '
@@ -603,6 +604,8 @@ class BenchmarkManager(QDialog):
 
         self.output.clear()
         self.results = []
+        self.export_button.setEnabled(False)
+        self.export_button.setVisible(False)
         self.current_test = None
         self.done = False
         self.running = True
@@ -692,63 +695,104 @@ class BenchmarkManager(QDialog):
                 pass
 
     def export_html(self):
+        """Write the completed benchmark report directly into the Fio root."""
         if not self.results:
             return
 
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export Benchmark Report",
-            "fio_benchmark_report.html",
-            "HTML files (*.html)",
+        report_path = os.path.join(
+            os.path.abspath(self.args.root),
+            "BENCHMARK_REPORT.html",
         )
-        if not path:
-            return
 
         sections = []
-        for result in self.results:
-            label = html.escape(str(result.get("test", "benchmark")))
-            status = html.escape(str(result.get("status", "passed")))
-            description = html.escape(str(result.get("description", "")))
-            rows = []
+        for index, result in enumerate(self.results, 1):
+            if not isinstance(result, dict):
+                continue
 
-            for key in (
-                "average_fps", "min_fps", "max_fps",
-                "io_elapsed_ms", "io_dispatch_ms", "io_hops",
-                "io_bursts", "io_total_hops", "io_average_ms",
-                "io_p95_ms", "hops_per_second", "dispatch_hops_per_second",
-                "flying_count", "team_counts", "aggro_count",
-                "ai_decisions", "ai_update_calls", "ai_decisions_per_second",
-                "alive_monsters", "dead_monsters", "witness_duration_s",
-                "seed", "pathnode_name", "viewport_width", "viewport_height",
-                "visible_brushes", "culled_brushes", "total_brushes",
-            ):
-                if key in result:
-                    rows.append(
-                        "<tr><th>%s</th><td>%s</td></tr>"
-                        % (html.escape(key), html.escape(str(result[key])))
+            test_name = result.get("test") or result.get("scenario") or "benchmark"
+            label = html.escape(str(test_name))
+            description = html.escape(str(result.get("description", "")))
+            status = html.escape(str(result.get("status", "passed")))
+
+            rows = []
+            for key in sorted(result):
+                value = result[key]
+                if isinstance(value, (dict, list, tuple)):
+                    rendered = html.escape(
+                        json.dumps(value, indent=2, sort_keys=True, default=str)
                     )
+                    rendered = "<pre>%s</pre>" % rendered
+                else:
+                    rendered = html.escape(str(value))
+                rows.append(
+                    "<tr><th>%s</th><td>%s</td></tr>"
+                    % (html.escape(str(key)), rendered)
+                )
 
             sections.append(
-                "<section><h2>%s</h2><p>Status: <b>%s</b></p>"
-                "<p>%s</p><table>%s</table></section>"
-                % (label, status, description, "".join(rows))
+                "<section><h2>Result %d: %s</h2>"
+                "<p>Status: <b>%s</b></p>"
+                "%s"
+                "<table>%s</table></section>"
+                % (
+                    index,
+                    label,
+                    status,
+                    "<p>%s</p>" % description if description else "",
+                    "".join(rows),
+                )
             )
 
         report = (
             "<!doctype html><html><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
             "<title>Fio Benchmark Report</title><style>"
             "body{font-family:Segoe UI,Arial,sans-serif;background:#171717;"
-            "color:#eee;margin:32px}"
-            "section{border:1px solid #444;padding:18px;margin:0 0 20px}"
-            "table{border-collapse:collapse}th,td{padding:5px 10px;text-align:left}"
-            "th{color:#aaa}</style></head><body>"
+            "color:#eee;margin:32px;line-height:1.4}"
+            "h1{color:#63d471}"
+            "h2{margin-top:0;color:#ff9a32}"
+            "section{border:1px solid #444;padding:18px;margin:0 0 20px;"
+            "background:#1d1d1d}"
+            "table{border-collapse:collapse;width:100%}"
+            "th,td{padding:6px 10px;text-align:left;vertical-align:top;"
+            "border-bottom:1px solid #333}"
+            "th{color:#aaa;width:28%}"
+            "pre{margin:0;white-space:pre-wrap;word-break:break-word;"
+            "font-family:Consolas,monospace;color:#ddd}"
+            "</style></head><body>"
             "<h1>Fio Benchmark Report</h1>"
-            "<p>Fio PID: %s</p>%s</body></html>"
+            "<p>Fio PID: %s</p>"
+            "%s"
+            "</body></html>"
             % (html.escape(str(self.args.pid)), "".join(sections))
         )
 
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(report)
+        temporary_path = report_path + ".tmp"
+        try:
+            with open(temporary_path, "w", encoding="utf-8", newline="") as handle:
+                handle.write(report)
+            os.replace(temporary_path, report_path)
+        except OSError as exc:
+            try:
+                os.remove(temporary_path)
+            except OSError:
+                pass
+            QMessageBox.critical(
+                self,
+                "Export failed",
+                "Could not write BENCHMARK_REPORT.html to the Fio root.\\n\\n%s"
+                % exc,
+            )
+            return
+
+        self.export_button.setEnabled(False)
+        self.export_button.setVisible(False)
+        self.status.setText("Benchmark report exported.")
+        self._append(
+            '<div style="color:#63d471; padding:8px 0;">'
+            'Exported <b>BENCHMARK_REPORT.html</b> to the Fio root.'
+            "</div>"
+        )
 
     def close_manager(self):
         self.close()
