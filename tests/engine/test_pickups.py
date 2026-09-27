@@ -157,3 +157,19 @@ def test_collect_prop_equips_legacy_cig_weapon():
 
     session.collect_prop(loaded)
     assert logic.active_weapon == "cig"
+
+
+def test_weapon_pickup_sword_uses_sword_sprite_and_sets_active_weapon():
+    pickup = Pickup(properties={
+        "item_type": "weapon",
+        "weapon": "sword",
+    })
+
+    assert pickup.properties["weapon"] == "sword"
+    assert pickup.get_collect_sprite_path() == "assets/sprites/sword.png"
+
+
+def test_sword_is_a_non_firing_weapon():
+    from engine.monster_constants import NON_FIRING_WEAPONS
+
+    assert "sword" in NON_FIRING_WEAPONS
