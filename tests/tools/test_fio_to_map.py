@@ -4,7 +4,7 @@ from tools.fio_to_map import convert_fio_entity
 
 
 def _prop(collect_type, weapon=None):
-    props = {"type": "prop", "collect_type": collect_type}
+    props = {"type": "prop", "collect_enabled": True, "collect_type": collect_type}
     if weapon is not None:
         props["collect_weapon"] = weapon
     return convert_fio_entity({
