@@ -2481,7 +2481,18 @@ class MainWindow(QMainWindow):
             self.view_3d.update()
 
     def set_cull_distance(self, distance):
+        """Set Cull Dist and mirror the actual clamped value in the spinner."""
         self.view_3d.set_cull_distance(distance)
+        spin = getattr(self, "cull_dist_spinbox", None)
+        if spin is not None:
+            # ViewDistance is authoritative because it clamps the request.
+            # Block the signal so external changes do not recurse through the
+            # spinner's valueChanged handler.
+            spin.blockSignals(True)
+            try:
+                spin.setValue(int(round(self.view_3d.view_distance.distance)))
+            finally:
+                spin.blockSignals(False)
 
     def zoom_in_2d(self):
         current_view = self.right_tabs.currentWidget()
