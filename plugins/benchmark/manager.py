@@ -76,140 +76,140 @@ class BenchmarkManager(QDialog):
         self.resize(900, 700)
         self._font_size = max(6, QApplication.font().pointSize())
         self.setStyleSheet(
-            f"""
-            QDialog {{{{
+            """
+            QDialog {
                 background: #171717;
                 color: #eeeeee;
-                font-size: {self._font_size}pt;
-            }}}}
-            QLabel {{
+                font-size: __FONT_SIZE__pt;
+            }
+            QLabel {
                 color: #dddddd;
-                font-size: __FONT_EXPR__pt;
-            }}
-            QToolButton {{
+                font-size: __FONT_SIZE__pt;
+            }
+            QToolButton {
                 color: #63d471;
-                font-size: __FONT_EXPR__pt;
+                font-size: __FONT_SIZE__pt;
                 background: transparent;
                 border: none;
                 font-weight: bold;
                 padding: 4px;
-            }}
-            QToolButton:hover {{
+            }
+            QToolButton:hover {
                 color: #ff9a32;
-            }}
-            QCheckBox {{
+            }
+            QCheckBox {
                 color: #dddddd;
                 spacing: 8px;
-                font-size: __FONT_EXPR__pt;
+                font-size: __FONT_SIZE__pt;
                 padding: 3px;
-            }}
-            QCheckBox:hover {{
+            }
+            QCheckBox:hover {
                 color: #ff9a32;
-            }}
-            QCheckBox::indicator {{
+            }
+            QCheckBox::indicator {
                 width: 15px;
                 height: 15px;
-            }}
-            QCheckBox::indicator:unchecked {{
+            }
+            QCheckBox::indicator:unchecked {
                 background: #202020;
                 border: 1px solid #666666;
-            }}
-            QCheckBox::indicator:checked {{
+            }
+            QCheckBox::indicator:checked {
                 background: #63d471;
                 border: 1px solid #63d471;
-            }}
-            QScrollArea {{
+            }
+            QScrollArea {
                 background: #171717;
                 border: 1px solid #444444;
-            }}
-            QScrollBar:vertical {{
+            }
+            QScrollBar:vertical {
                 background: #202020;
                 width: 12px;
                 margin: 0;
                 border: none;
-            }}
-            QScrollBar::handle:vertical {{
+            }
+            QScrollBar::handle:vertical {
                 background: #555555;
                 min-height: 24px;
                 border-radius: 2px;
-            }}
-            QScrollBar::handle:vertical:hover {{
+            }
+            QScrollBar::handle:vertical:hover {
                 background: #ff9a32;
-            }}
+            }
             QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {{
+            QScrollBar::sub-line:vertical {
                 background: #202020;
                 height: 0;
                 border: none;
-            }}
+            }
             QScrollBar::add-page:vertical,
-            QScrollBar::sub-page:vertical {{
+            QScrollBar::sub-page:vertical {
                 background: #202020;
-            }}
-            QScrollBar:horizontal {{
+            }
+            QScrollBar:horizontal {
                 background: #202020;
                 height: 12px;
                 margin: 0;
                 border: none;
-            }}
-            QScrollBar::handle:horizontal {{
+            }
+            QScrollBar::handle:horizontal {
                 background: #555555;
                 min-width: 24px;
                 border-radius: 2px;
-            }}
-            QScrollBar::handle:horizontal:hover {{
+            }
+            QScrollBar::handle:horizontal:hover {
                 background: #ff9a32;
-            }}
+            }
             QScrollBar::add-line:horizontal,
-            QScrollBar::sub-line:horizontal {{
+            QScrollBar::sub-line:horizontal {
                 background: #202020;
                 width: 0;
                 border: none;
-            }}
+            }
             QScrollBar::add-page:horizontal,
-            QScrollBar::sub-page:horizontal {{
+            QScrollBar::sub-page:horizontal {
                 background: #202020;
-            }}
-            QProgressBar {{
+            }
+            QProgressBar {
                 background: #202020;
                 border: 1px solid #444444;
                 height: 3px;
                 min-height: 3px;
                 max-height: 3px;
                 text-align: center;
-            }}
-            QProgressBar::chunk {{
+            }
+            QProgressBar::chunk {
                 background: #ff9a32;
-            }}
-            QPushButton {{
+            }
+            QPushButton {
                 background: #202020;
                 color: #eeeeee;
-                font-size: __FONT_EXPR__pt;
+                font-size: __FONT_SIZE__pt;
                 border: 1px solid #555555;
                 padding: 7px 14px;
                 border-radius: 2px;
-            }}
-            QPushButton:hover {{
+            }
+            QPushButton:hover {
                 border: 1px solid #ff9a32;
                 color: #ff9a32;
-            }}
-            QPushButton:pressed {{
+            }
+            QPushButton:pressed {
                 background: #2a2a2a;
-            }}
-            QPushButton:disabled {{
+            }
+            QPushButton:disabled {
                 color: #666666;
                 border-color: #333333;
-            }}
-            QTextBrowser {{
+            }
+            QTextBrowser {
                 background: #171717;
-                font-size: __FONT_EXPR__pt;
+                font-size: __FONT_SIZE__pt;
                 color: #dddddd;
                 border: 1px solid #444444;
                 selection-background-color: #ff9a32;
                 selection-color: #111111;
-            }}
+            }
             """
-        )
+        ).replace("__FONT_SIZE__", str(self._font_size))
 
         root = QVBoxLayout(self)
 
@@ -320,20 +320,20 @@ class BenchmarkManager(QDialog):
         self.run_button.setEnabled(False)
         self.run_button.setMinimumHeight(44)
         self.run_button.setStyleSheet(
-            f"""
-            QPushButton {{{{
+            """
+            QPushButton {
                 background: #3aa757;
                 color: #ffffff;
                 border: none;
                 border-radius: 3px;
-                font-size: {self._font_size + 5}pt;
+                font-size: __RUN_FONT_SIZE__pt;
                 font-weight: bold;
-            }}
-            QPushButton:hover   {{ background: #45bd66; }}
-            QPushButton:pressed {{ background: #2f8b47; }}
-            QPushButton:disabled {{ background: #2f4636; color: #7d8b81; }}
+            }
+            QPushButton:hover   { background: #45bd66; }
+            QPushButton:pressed { background: #2f8b47; }
+            QPushButton:disabled { background: #2f4636; color: #7d8b81; }
             """
-        )
+        ).replace("__RUN_FONT_SIZE__", str(self._font_size + 5))
         self.run_button.clicked.connect(self.start)
         root.addWidget(self.run_button)
 
@@ -520,7 +520,7 @@ class BenchmarkManager(QDialog):
                 'line-height:1.2; margin-bottom:6px;">Benchmark complete.</div>'
                 '<div style="color:#eeeeee; font-size:%dpt; font-weight:bold;">'
                 '%d result(s) recorded.</div>'
-                '</div>' % len(self.results)
+                '</div>' % (self._font_size + 5, self._font_size, len(self.results))
             )
 
         elif event == "error":
