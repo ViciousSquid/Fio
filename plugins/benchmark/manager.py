@@ -39,11 +39,11 @@ from PyQt5.QtWidgets import (
 
 
 TESTS = (
-    ("live_io_1000", "I/O: 1,000-entity live chain / repeated bursts"),
-    ("live_1000_brushes", "Renderer: 1,000 brushes / live camera sweep"),
-    ("live_10000_brushes", "Renderer: 10,000 brushes / live camera sweep"),
-    ("live_100000_brushes", "Renderer: 100,000 brushes / live camera sweep"),
-    ("monster_chaos_witness", "Monster AI: 100 monsters / 5-second decision-rate witness"),
+    ("live_io_1000", "I/O chain: 1,000 entities"),
+    ("live_1000_brushes", "Renderer scene: 1,000 brushes"),
+    ("live_10000_brushes", "Renderer scene: 10,000 brushes"),
+    ("live_100000_brushes", "Renderer scene: 100,000 brushes"),
+    ("monster_chaos_witness", "Monster chaos: 50 monsters / 10-second live witness"),
     ("borderless_window", "Window mode: borderless maximized"),
     ("fullscreen_window", "Window mode: true fullscreen"),
     ("editor_windowed_1280", "Editor mode: windowed 1280×720 (3D view pane)"),
@@ -75,20 +75,18 @@ class BenchmarkManager(QDialog):
         self.setWindowTitle("Fio Benchmark")
         self.resize(900, 700)
         self._font_size = max(6, QApplication.font().pointSize())
+        self.setFont(QApplication.font())
         self.setStyleSheet(
             """
             QDialog {
                 background: #171717;
                 color: #eeeeee;
-                font-size: __FONT_SIZE__pt;
             }
             QLabel {
                 color: #dddddd;
-                font-size: __FONT_SIZE__pt;
             }
             QToolButton {
                 color: #63d471;
-                font-size: __FONT_SIZE__pt;
                 background: transparent;
                 border: none;
                 font-weight: bold;
@@ -100,7 +98,6 @@ class BenchmarkManager(QDialog):
             QCheckBox {
                 color: #dddddd;
                 spacing: 8px;
-                font-size: __FONT_SIZE__pt;
                 padding: 3px;
             }
             QCheckBox:hover {
@@ -184,7 +181,6 @@ class BenchmarkManager(QDialog):
             QPushButton {
                 background: #202020;
                 color: #eeeeee;
-                font-size: __FONT_SIZE__pt;
                 border: 1px solid #555555;
                 padding: 7px 14px;
                 border-radius: 2px;
@@ -202,14 +198,13 @@ class BenchmarkManager(QDialog):
             }
             QTextBrowser {
                 background: #171717;
-                font-size: __FONT_SIZE__pt;
                 color: #dddddd;
                 border: 1px solid #444444;
                 selection-background-color: #ff9a32;
                 selection-color: #111111;
             }
             """
-        ).replace("__FONT_SIZE__", str(self._font_size))
+        )
 
         root = QVBoxLayout(self)
 
@@ -273,7 +268,7 @@ class BenchmarkManager(QDialog):
             "Additional stress tests (I/O, renderer, gameplay)"
         )
         additional.setToolTip(
-            "Run the live dense renderer, repeated I/O dispatcher, and real MonsterAI workloads."
+            "Run the standard live I/O, renderer and monster-capacity workloads."
         )
         additional.toggled.connect(self._refresh_run_enabled)
         self.checkboxes["additional_tests"] = additional
@@ -320,20 +315,20 @@ class BenchmarkManager(QDialog):
         self.run_button.setEnabled(False)
         self.run_button.setMinimumHeight(44)
         self.run_button.setStyleSheet(
-            """
-            QPushButton {
+            f"""
+            QPushButton {{
                 background: #3aa757;
                 color: #ffffff;
                 border: none;
                 border-radius: 3px;
-                font-size: __RUN_FONT_SIZE__pt;
+                font-size: {self._font_size + 5}pt;
                 font-weight: bold;
-            }
-            QPushButton:hover   { background: #45bd66; }
-            QPushButton:pressed { background: #2f8b47; }
-            QPushButton:disabled { background: #2f4636; color: #7d8b81; }
+            }}
+            QPushButton:hover   {{ background: #45bd66; }}
+            QPushButton:pressed {{ background: #2f8b47; }}
+            QPushButton:disabled {{ background: #2f4636; color: #7d8b81; }}
             """
-        ).replace("__RUN_FONT_SIZE__", str(self._font_size + 5))
+        )
         self.run_button.clicked.connect(self.start)
         root.addWidget(self.run_button)
 
@@ -514,13 +509,14 @@ class BenchmarkManager(QDialog):
             self.export_button.setEnabled(bool(self.results))
             self.status.setText("Benchmark complete.")
             self._append(
-                '<div style="margin-top:12px; padding:14px 16px; background:#1f241f; '
-                'border:1px solid #63d471; color:#eeeeee;">'
-                '<div style="color:#63d471; font-size:%dpt; font-weight:bold; '
-                'line-height:1.2; margin-bottom:6px;">Benchmark complete.</div>'
-                '<div style="color:#eeeeee; font-size:%dpt; font-weight:bold;">'
-                '%d result(s) recorded.</div>'
-                '</div>' % (self._font_size + 5, self._font_size, len(self.results))
+                f'<div style="margin-top:12px; padding:14px 16px; background:#1f241f; '
+                f'border:1px solid #63d471; color:#eeeeee;">'
+                f'<div style="color:#63d471; font-size:{self._font_size + 5}pt; '
+                f'font-weight:bold; line-height:1.2; margin-bottom:6px;">'
+                f'Benchmark complete.</div>'
+                f'<div style="color:#eeeeee; font-size:{self._font_size}pt; '
+                f'font-weight:bold;">{len(self.results)} result(s) recorded.</div>'
+                f'</div>'
             )
 
         elif event == "error":
@@ -689,11 +685,8 @@ class BenchmarkManager(QDialog):
 
             for key in (
                 "average_fps", "min_fps", "max_fps",
-                "io_elapsed_ms", "io_dispatch_ms", "io_hops",
-                "io_bursts", "io_total_hops", "io_average_ms",
-                "io_p95_ms", "hops_per_second", "dispatch_hops_per_second",
+                "io_elapsed_ms", "io_hops", "hops_per_second",
                 "flying_count", "team_counts", "aggro_count",
-                "ai_decisions", "ai_update_calls", "ai_decisions_per_second",
                 "alive_monsters", "dead_monsters", "witness_duration_s",
                 "seed", "pathnode_name", "viewport_width", "viewport_height",
                 "visible_brushes", "culled_brushes", "total_brushes",
@@ -757,9 +750,8 @@ def main():
     parser.add_argument("--auto-start", action="store_true")
     args = parser.parse_args()
 
-    # Match Fio's global font and high-DPI policy from the same settings.ini
-    # used by the editor. The benchmark is a separate process, so it cannot
-    # inherit QApplication's configured font from the running Fio instance.
+    # The manager is a separate Qt process, so configure it from the same
+    # settings.ini as the editor instead of inheriting the editor's QApplication.
     settings_path = os.path.join(os.path.abspath(args.root), "settings.ini")
     config = configparser.ConfigParser()
     config.read(settings_path)
