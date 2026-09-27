@@ -200,7 +200,7 @@ class LogicThread(threading.Thread):
         # and consumed in _prepare_render_state to blend the view matrix.
         self.camera_transition = None
         # HUD visibility follows LogicCamera control. When a cinematic ends,
-        # the health/ammo display fades back in over two seconds.
+        # the entire HUD fades back in over two seconds.
         self._hud_cinematic_last_active = False
         self._hud_health_fade_started = None
 
