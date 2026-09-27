@@ -1637,8 +1637,8 @@ class View2D(QWidget):
 
     def draw_patrol_paths(self, painter, visible_bounds):
         """
-        Draw dashed teal lines between connected PathNodes (next_node chains)
-        and thin dotted lines from patrolling Monsters to their patrol_target.
+        Draw dashed olive lines between connected PathNodes (next_node chains)
+        and thin dotted teal lines from patrolling Monsters to their patrol_target.
         """
         ax1, ax2 = self.get_axes()
         if not ax1 or not ax2:
