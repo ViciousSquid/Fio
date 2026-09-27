@@ -39,11 +39,11 @@ from PyQt5.QtWidgets import (
 
 
 TESTS = (
-    ("live_io_1000", "I/O chain: 1,000 entities"),
-    ("live_1000_brushes", "Renderer scene: 1,000 brushes"),
-    ("live_10000_brushes", "Renderer scene: 10,000 brushes"),
-    ("live_100000_brushes", "Renderer scene: 100,000 brushes"),
-    ("monster_chaos_witness", "Monster chaos: 50 monsters / 10-second live witness"),
+    ("live_io_1000", "I/O: 1,000-entity live chain / repeated bursts"),
+    ("live_1000_brushes", "Renderer: 1,000 brushes / live camera sweep"),
+    ("live_10000_brushes", "Renderer: 10,000 brushes / live camera sweep"),
+    ("live_100000_brushes", "Renderer: 100,000 brushes / live camera sweep"),
+    ("monster_chaos_witness", "Monster AI: 100 monsters / 5-second decision-rate witness"),
     ("borderless_window", "Window mode: borderless maximized"),
     ("fullscreen_window", "Window mode: true fullscreen"),
     ("editor_windowed_1280", "Editor mode: windowed 1280×720 (3D view pane)"),
@@ -268,7 +268,7 @@ class BenchmarkManager(QDialog):
             "Additional stress tests (I/O, renderer, gameplay)"
         )
         additional.setToolTip(
-            "Run the standard live I/O, renderer and monster-capacity workloads."
+            "Run the live dense renderer, repeated I/O dispatcher, and real MonsterAI workloads."
         )
         additional.toggled.connect(self._refresh_run_enabled)
         self.checkboxes["additional_tests"] = additional
@@ -685,8 +685,11 @@ class BenchmarkManager(QDialog):
 
             for key in (
                 "average_fps", "min_fps", "max_fps",
-                "io_elapsed_ms", "io_hops", "hops_per_second",
+                "io_elapsed_ms", "io_dispatch_ms", "io_hops",
+                "io_bursts", "io_total_hops", "io_average_ms",
+                "io_p95_ms", "hops_per_second", "dispatch_hops_per_second",
                 "flying_count", "team_counts", "aggro_count",
+                "ai_decisions", "ai_update_calls", "ai_decisions_per_second",
                 "alive_monsters", "dead_monsters", "witness_duration_s",
                 "seed", "pathnode_name", "viewport_width", "viewport_height",
                 "visible_brushes", "culled_brushes", "total_brushes",
@@ -750,8 +753,7 @@ def main():
     parser.add_argument("--auto-start", action="store_true")
     args = parser.parse_args()
 
-    # The manager is a separate Qt process, so configure it from the same
-    # settings.ini as the editor instead of inheriting the editor's QApplication.
+    # Configure this separate Qt process from the same Fio settings.ini.
     settings_path = os.path.join(os.path.abspath(args.root), "settings.ini")
     config = configparser.ConfigParser()
     config.read(settings_path)
