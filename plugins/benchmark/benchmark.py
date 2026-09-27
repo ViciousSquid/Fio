@@ -1505,7 +1505,7 @@ class BenchmarkRunner:
         view.update()
         app.processEvents()
 
-def _tick_live_io(self, now, app, view):
+    def _tick_live_io(self, now, app, view):
         """Fire repeated real LogicRelay chains while Fio's live runtime is running."""
         manager = getattr(self, "_live_io_manager", None)
         source = getattr(self, "_live_io_source", None)
