@@ -688,7 +688,6 @@ class Ui_MainWindow(object):
         # Capture this exact arrangement once.  View > Reset Layout restores
         # this Qt state instead of trying to reconstruct a nested dock tree
         # after the user has moved/floated panels around.
-        MainWindow._default_layout_geometry = QByteArray(MainWindow.saveGeometry())
         MainWindow._default_layout_state = QByteArray(
             MainWindow.saveState(LAYOUT_VERSION))
 
