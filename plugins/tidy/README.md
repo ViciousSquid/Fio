@@ -4,7 +4,7 @@ Tidy adds **put-it-away gameplay** to Fio without introducing a second object or
 physics system.
 
 A tidyable object is an ordinary core **Prop** with a non-empty
-`tidy_category`. The core Prop system remains responsible for pickup,
+`tidy_category`. The core Prop system remains responsible for carry,
 carrying, dropping, and physics. The Tidy plugin adds the rules for where that
 Prop can be put, tracks progress, and provides receptacles and goals.
 
@@ -38,7 +38,7 @@ Set:
 | `tidy_category` | The logical category of the object, such as `book`, `fossil`, or `pot`. A non-empty value makes the Prop tidyable. |
 
 Everything else remains a normal core Prop property. Use the normal Prop
-controls for its model, collision, mass, friction, pickup behaviour, and other
+controls for its model, collision, mass, friction, carry/collect behaviour, and other
 physical properties.
 
 For example:
@@ -163,7 +163,7 @@ When a Prop is placed successfully, Tidy:
 
 1. consumes the core Prop drop;
 2. snaps the Prop to the next receptacle slot;
-3. temporarily disables pickup for that stowed Prop;
+3. temporarily disables carry/collect for that stowed Prop;
 4. updates tidy progress;
 5. fires `OnTidied`, `OnObjectPlaced`, `OnProgress`, and `OnFull` as
    appropriate.
@@ -203,7 +203,7 @@ Tidy deliberately stays out of the systems that already belong to core Fio.
 
 **Core Prop owns:**
 
-- pickup and carrying;
+- carry/collect and carrying;
 - ordinary dropping;
 - physical simulation;
 - collision and wake/rest behaviour;
@@ -217,7 +217,7 @@ Tidy deliberately stays out of the systems that already belong to core Fio.
 - goal completion;
 - Tidy-specific I/O.
 
-There is no duplicate pickup implementation, second Prop physics simulation,
+There is no duplicate carry/collect implementation, second Prop physics simulation,
 or second Prop spatial hash.
 
 This keeps a large collection of ordinary Props in the core runtime while Tidy
