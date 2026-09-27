@@ -201,10 +201,11 @@ class BigWorldSession:
         # explicit terrain_stream_radius remains authoritative.
         if self._terrain_stream_radius_authored <= 0.0:
             self.terrain_stream_radius = activation
-            terrain = self._terrain
-            if terrain is not None:
+            # _sync_visual_horizon() runs from the tick hot path; only touch
+            # the terrain object when the effective boundary actually changed.
+            if changed and self._terrain is not None:
                 try:
-                    terrain.set_streaming(True, self.terrain_stream_radius)
+                    self._terrain.set_streaming(True, self.terrain_stream_radius)
                 except Exception:
                     pass
         self._visual_horizon = horizon
