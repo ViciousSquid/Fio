@@ -21,7 +21,7 @@ try:
 except Exception:  # pragma: no cover - exercised only in the PyQt-free player
     from plugins.entitybase import Thing
 
-from .config import BY_KEY, coerce, defaults
+from .config import BY_KEY, FIELDS, coerce, defaults
 
 
 class BigWorldSettings(Thing):
@@ -46,9 +46,7 @@ class BigWorldSettings(Thing):
     # properties before invoking the plugin schema renderer. BigWorldSettings
     # has no bespoke widget group, so derive that classification directly from
     # the same field table instead of maintaining a second list of keys.
-    EDITOR_PRIMARY_PROPERTIES = tuple(field.key for field in __import__(
-        "plugins.bigworld.config", fromlist=["FIELDS"]).FIELDS
-    )
+    EDITOR_PRIMARY_PROPERTIES = tuple(field.key for field in FIELDS)
 
     #: 2D-view sprite. Without this the entity draws nothing and is invisible /
     #: unselectable in the top/front/side views; the plugin ships its own icon
