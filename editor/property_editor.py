@@ -2591,7 +2591,7 @@ class PropertyEditor(QWidget):
         form.addRow(self._section("Interaction"))
 
         carry_cb = _make_checkbox(
-            "Can carry",
+            "Carryable",
             bool(thing.properties.get('carry_enabled', True)),
             lambda checked: self.update_object_prop('carry_enabled', bool(checked)),
             _Style.CHECKBOX,
