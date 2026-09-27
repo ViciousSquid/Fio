@@ -15,6 +15,39 @@ from engine.brush_geometry import GEO_RUNTIME_KEYS
 from engine.monster_constants import MONSTER_VARIANTS
 from editor.tooltips import set_tooltips_enabled
 
+def _project_root() -> str:
+    """Return Fio's project root independently of the process working directory."""
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+
+
+def _normalise_project_asset_path(path: object) -> str:
+    """Return an authored asset path relative to Fio's project root.
+
+    Asset paths are serialized with forward slashes on every platform.  The
+    selected file may arrive from Qt with native separators, and Fio may have
+    been launched with a working directory other than the project root.
+    """
+    raw = str(path or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+
+    root = _project_root()
+    native = raw.replace("/", os.sep)
+    absolute = os.path.abspath(native)
+    try:
+        relative = os.path.relpath(absolute, root)
+    except ValueError:
+        # Different Windows drives cannot have a relative path; retain the
+        # normalized absolute path so the renderer can still address it.
+        relative = raw
+
+    relative = relative.replace("\\", "/")
+    if relative.startswith("./"):
+        relative = relative[2:]
+    return relative
+
+
+
 try:
     from editor.debug_console import debug_log
 except Exception:  # pragma: no cover - console unavailable (headless/import cycle)
@@ -2241,8 +2274,9 @@ class PropertyEditor(QWidget):
         custom_button.setToolTip("Choose a GIF for this CUSTOM effect.")
 
         def pick_custom_gif():
+            project_root = _project_root()
             start = os.path.join(
-                os.getcwd(), "assets", "textures", "effects"
+                project_root, "assets", "textures", "effects"
             )
             os.makedirs(start, exist_ok=True)
             fp, _ = QFileDialog.getOpenFileName(
@@ -2252,14 +2286,10 @@ class PropertyEditor(QWidget):
                 "GIF Files (*.gif)",
             )
             if fp:
-                try:
-                    rel = os.path.relpath(fp, os.getcwd()).replace("\\", "/")
-                except Exception:
-                    rel = fp.replace("\\", "/")
-                if rel.startswith("./"):
-                    rel = rel[2:]
-                self.update_object_prop("custom_gif", rel)
-                custom_edit.setText(rel)
+                rel = _normalise_project_asset_path(fp)
+                if rel:
+                    self.update_object_prop("custom_gif", rel)
+                    custom_edit.setText(rel)
 
         custom_button.clicked.connect(pick_custom_gif)
         custom_layout.addWidget(custom_edit, 1)
