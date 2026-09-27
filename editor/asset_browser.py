@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
                              QFileSystemModel, QTabWidget, QAbstractItemView,
                              QSizePolicy, QListWidget, QListWidgetItem)
 from PyQt5.QtCore import Qt, QDir, QRect, QPointF, QTimer
-from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QPen, QPolygonF
+from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QPen, QPolygonF, QIcon
 from engine.glb_loader import render_glb_thumbnail
 # The Surface Inspector's FACE toggle sets this colour; the INSPECTOR button
 # that opens that panel borrows it so the two read as a pair.
@@ -330,8 +330,11 @@ class AssetBrowserTab(QWidget):
         """
         self.add_btn = None
         self.inspector_btn = None
+        self.tint_btn = None
 
-        # Create a container widget for buttons to allow stretching
+        # Create a container widget for buttons to allow stretching.
+        # The texture tab keeps INSPECTOR on the left and Tint brush on the
+        # far right; the stretch between them follows the browser width.
         button_container = QWidget()
         button_layout = QHBoxLayout(button_container)
         button_layout.setContentsMargins(0, 0, 0, 0)
@@ -345,25 +348,25 @@ class AssetBrowserTab(QWidget):
             self.add_btn.clicked.connect(self.on_add_clicked)
             button_layout.addWidget(self.add_btn)
         else:
-            # The only button here: texturing is the Surface Inspector's job,
-            # and this opens it.  It borrows the FACE toggle's purple so the
-            # button and the panel it opens read as a pair.
-            # Sized to its label rather than stretched across the bar: it is one
-            # button that opens one panel, and a full-width slab reads as the
-            # bar's primary action when the primary action here is the texture
-            # grid below it.
             self.inspector_btn = QPushButton("INSPECTOR")
             self.inspector_btn.setStyleSheet(INSPECTOR_BUTTON_STYLE)
-            self.inspector_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)
+            self.inspector_btn.setFixedHeight(32)
+            self.inspector_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             self.inspector_btn.setToolTip(
                 "Open the Surface Inspector (T)\n"
                 "Fit / Natural / Axial projections, shift, scale and rotation,\n"
                 "for one face or every face of the selection")
             self.inspector_btn.clicked.connect(self.on_inspector_clicked)
             button_layout.addWidget(self.inspector_btn)
-            # Take up the rest of the row so the button stays left-aligned next
-            # to the folder toggle instead of drifting to the middle.
+
             button_layout.addStretch()
+
+            self.tint_btn = QPushButton(QIcon("assets/tint.png"), "Tint brush")
+            self.tint_btn.setFixedHeight(32)
+            self.tint_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            self.tint_btn.setToolTip("Tint the selected brush")
+            self.tint_btn.clicked.connect(self.on_tint_clicked)
+            button_layout.addWidget(self.tint_btn)
 
         if self.is_model_tab:
             # "Add to Scene" is this tab's primary action and stays centred.
@@ -573,6 +576,12 @@ class AssetBrowserTab(QWidget):
         toggle = getattr(self.editor, 'toggle_surface_inspector', None)
         if toggle is not None:
             toggle()
+
+    def on_tint_clicked(self):
+        """Tint the selected brush."""
+        tint = getattr(self.editor, 'tint_selected_brush', None)
+        if tint is not None:
+            tint()
 
 
 class MapsBrowserTab(QWidget):
