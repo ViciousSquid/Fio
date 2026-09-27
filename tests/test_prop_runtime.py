@@ -155,7 +155,7 @@ def test_is_prop_is_the_one_type_contract():
 
 def test_prop_has_a_default_billboard_and_2d_menu_entry():
     prop = Prop()
-    assert prop.get_sprite_path() == 'assets/sprites/carry.png'
+    assert prop.get_sprite_path() == 'assets/sprites/pickup.png'
     source = Path('editor/view_2d.py').read_text()
     assert 'add_prop_action = menu.addAction("Prop")' in source
     assert 'new_thing = Prop(pos=pos_3d)' in source
