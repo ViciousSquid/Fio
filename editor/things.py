@@ -291,7 +291,14 @@ class Thing:
             # crashing_the_load pins.
             return None
 
-        properties = data.get('properties', {})
+        legacy_pickup = str(thing_type).replace('_', '').lower() == 'pickup'
+        if legacy_pickup:
+            _load_core_entity_types()
+            from engine.prop_entity import migrate_legacy_pickup_properties
+            properties = migrate_legacy_pickup_properties(data.get('properties', {}))
+            thing_type = 'prop'
+        else:
+            properties = data.get('properties', {})
         for key, value in properties.items():
             if isinstance(value, str):
                 try:
@@ -320,7 +327,15 @@ class Thing:
                       f"preserved unchanged (is a plugin missing or disabled?).")
                 return UnresolvedThing(original_record)
         
-        io_data = data.get('io_connections', [])
+        io_data = copy.deepcopy(data.get('io_connections', []))
+        if isinstance(io_data, list):
+            for connection in io_data:
+                if not isinstance(connection, dict):
+                    continue
+                if connection.get('output') == 'OnPickedUp':
+                    connection['output'] = (
+                        'OnCollected' if legacy_pickup else 'OnCarried'
+                    )
         if io_data:
             try:
                 from .io_system import OutputConnection
@@ -787,156 +802,6 @@ class Monster(Thing):
         """Clear the 2D icon cache (called after sprite_2d changes)."""
         cls._icon_cache.clear()
 
-
-class Pickup(Thing):
-    """Collectible item entity."""
-    pixmap_path = "assets/sprites/pickup.png"
-    EDITOR_PRIMARY_PROPERTIES = (
-        'item_type',
-        'weapon',
-        'value',
-        'activation',
-        'collected',
-    )
-    
-    KEY_SPRITES = {
-        'blue_key': 'assets/sprites/bluekey.png',
-        'red_key': 'assets/sprites/redkey.png',
-        'yellow_key': 'assets/sprites/yellowkey.png',
-    }
-    KEY_NAMES = tuple(KEY_SPRITES)
-    DEFAULT_KEY_NAME = 'blue_key'
-    
-    GUN_SPRITES = {
-        'gun1': 'assets/sprites/gun1.png',
-        'gun2': 'assets/sprites/gun2.png',
-        'cig': 'assets/sprites/cig.png'
-    }
-    
-    _dynamic_sprite_cache = {}
-    
-    def __init__(self, pos=None, properties=None):
-        super().__init__(pos, properties)
-        self.properties.setdefault('type', 'pickup')
-
-        # Migrate the old pickup representation before installing defaults.
-        # Pre-2.5.6 maps stored gun1/gun2/cig directly in item_type.  Applying
-        # the new weapon='gun1' default first would erase gun2/cig on load.
-        legacy_weapon = self.properties.get('item_type')
-        if legacy_weapon in self.GUN_SPRITES and 'weapon' not in self.properties:
-            self.properties['weapon'] = legacy_weapon
-            self.properties['item_type'] = 'weapon'
-
-        self.properties.setdefault('item_type', 'health')
-        self.properties.setdefault('weapon', 'gun1')
-        self.properties.setdefault('value', 25)
-        self.properties.setdefault('activation', 'walk_over')
-        self.properties.setdefault('collected', False)
-        self.properties.setdefault('respawns', False)
-        self.properties.setdefault('respawn_time', 20.0)
-        self.properties.setdefault('key_name', self.DEFAULT_KEY_NAME)
-        self.properties.setdefault('custom_sprite', '')
-
-    def get_weapon(self):
-        """Return the pickup's weapon id, including legacy pickup maps."""
-        item_type = self.properties.get('item_type')
-        if item_type in self.GUN_SPRITES:
-            return item_type
-        return self.properties.get('weapon', 'gun1')
-
-    def is_gun(self):
-        return self.properties.get('item_type') == 'weapon' or self.properties.get('item_type') in self.GUN_SPRITES
-    
-    def is_key(self):
-        return self.properties.get('item_type') == 'key'
-    
-    def get_key_name(self):
-        return self.properties.get('key_name', self.DEFAULT_KEY_NAME)
-    
-    def get_sprite_path(self):
-        custom = self.properties.get('custom_sprite', '')
-        if custom and not self.is_key() and not self.is_gun():
-            return custom
-        
-        if self.is_key():
-            key_name = self.get_key_name()
-            return self.KEY_SPRITES.get(key_name, 'assets/sprites/pickup.png')
-        
-        weapon = self.get_weapon()
-        if self.is_gun():
-            return self.GUN_SPRITES.get(weapon, self.GUN_SPRITES['gun1'])
-        
-        if custom:
-            return custom
-        
-        return 'assets/sprites/pickup.png'
-    
-    def get_instance_pixmap(self):
-        sprite_path = self.get_sprite_path()
-        
-        if sprite_path in Pickup._dynamic_sprite_cache:
-            return Pickup._dynamic_sprite_cache[sprite_path]
-        
-        try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
-        except NameError:
-            project_root = os.path.abspath(os.path.join(os.getcwd()))
-        
-        if os.path.isabs(sprite_path):
-            absolute_path = sprite_path
-        else:
-            absolute_path = os.path.join(project_root, sprite_path)
-        
-        pixmap = None
-        if os.path.exists(absolute_path):
-            loaded_pixmap = QPixmap(absolute_path)
-            if not loaded_pixmap.isNull():
-                custom = self.properties.get('custom_sprite', '')
-                if custom and loaded_pixmap.width() != 75:
-                    pixmap = loaded_pixmap.scaled(75, 75)
-                else:
-                    pixmap = loaded_pixmap
-            else:
-                print(f"Error: QPixmap failed to load sprite from {absolute_path}")
-        else:
-            print(f"Warning: Sprite file not found at: {absolute_path}")
-            pixmap = Pickup.get_pixmap()
-        
-        Pickup._dynamic_sprite_cache[sprite_path] = pixmap
-        return pixmap
-    
-    @classmethod
-    def get_key_sprite_path(cls, key_name):
-        return cls.KEY_SPRITES.get(key_name, 'assets/sprites/pickup.png')
-    
-    @classmethod
-    def get_key_pixmap(cls, key_name):
-        sprite_path = cls.get_key_sprite_path(key_name)
-        
-        if sprite_path in cls._dynamic_sprite_cache:
-            return cls._dynamic_sprite_cache[sprite_path]
-        
-        try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
-        except NameError:
-            project_root = os.path.abspath(os.path.join(os.getcwd()))
-        
-        absolute_path = os.path.join(project_root, sprite_path)
-        
-        pixmap = None
-        if os.path.exists(absolute_path):
-            loaded_pixmap = QPixmap(absolute_path)
-            if not loaded_pixmap.isNull():
-                pixmap = loaded_pixmap
-        
-        cls._dynamic_sprite_cache[sprite_path] = pixmap
-        return pixmap
-    
-    @classmethod
-    def clear_sprite_cache(cls):
-        cls._dynamic_sprite_cache.clear()
 
 
 class Trigger(Thing):
@@ -2098,7 +1963,7 @@ ENTITY_TYPES = {
 
 # Categories for editor UI
 ENTITY_CATEGORIES = {
-    'Gameplay': ['PlayerStart', 'Monster', 'Pickup', 'LevelChanger'],
+    'Gameplay': ['PlayerStart', 'Monster', 'Prop', 'LevelChanger'],
     'Environment': ['Light', 'Effect', 'Speaker', 'Model', 'Portal'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicState'],
     'AI': ['PathNode'],
