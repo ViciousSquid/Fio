@@ -4024,13 +4024,21 @@ class LogicThread(threading.Thread):
             dirty_objects=render_dirty,
             effect_runtime=self.play_mode,
         )
-        if etable.generation != entity_generation:
-            erefs = np.empty(etable.count, dtype=object)
-            for i, t in enumerate(things):
-                erefs[i] = t
-            self._entity_refs = erefs
+        if (etable.generation != entity_generation
+                or len(self._entity_refs) != etable.count):
+            # EntityTable owns the stable row snapshot for this publication.
+            # The live EditorState.things list may be mutated concurrently by
+            # editor/benchmark code; using it here can expose a newly appended
+            # entity that the table has not reconciled yet, producing a refs
+            # array shorter than the enumerate() source. Do not copy the live
+            # list again -- use the table's already-materialised row references.
+            entity_refs = np.empty(etable.count, dtype=object)
+            for i, thing in enumerate(etable.things):
+                entity_refs[i] = thing
+            self._entity_refs = entity_refs
             self._entity_all_slots = np.arange(etable.count, dtype=np.int32)
         erefs = self._entity_refs
+        entity_things = etable.things
         thing_count = etable.count
 
         self.editor_state.clear_render_dirty(render_dirty_snapshot)
@@ -4040,7 +4048,7 @@ class LogicThread(threading.Thread):
         # rows are the entity table's dynamic rows, and refreshing them is the
         # only per-entity work left that is not a column operation.
         for i in etable.monster_slots:
-            snapshot = things[i].get_render_snapshot()
+            snapshot = entity_things[i].get_render_snapshot()
             erefs[i] = snapshot
             etable.update_monster_snapshot(int(i), snapshot)
 
@@ -4078,7 +4086,9 @@ class LogicThread(threading.Thread):
 
         write_state.visible_things = visible_things
         write_state.visible_thing_position_count = visible_count
-        write_state.all_things = list(things)
+        # Keep the compatibility object list aligned with the exact dense
+        # entity snapshot that produced the published slots.
+        write_state.all_things = list(entity_things)
         write_state.all_lights = all_lights
         # Portal existence is a numeric projection fact; the renderer reads
         # the published portal slot vector directly.
