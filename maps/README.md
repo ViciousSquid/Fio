@@ -17,7 +17,7 @@ Playable level with two rooms, pickups, a moving platform and a light that can b
 
 ### `_SHOWCASE.json`
 
-Player spawn triggers a cutscene, demonstrating the Camera entity
+Demonstrates LogicCamera, Effects, Triggers, Messages and engine capabilities
 
 ### `MonsterTest.json`
 
