@@ -240,6 +240,51 @@ class BenchmarkTests:
     
     
 
+    def _focus_camera_on_brush_batch(self, batch):
+        """Keep the live construction frontier inside the benchmark camera."""
+        if not batch:
+            return
+
+        first = batch[0]
+        pos = first.get("pos") or [0.0, 0.0, 0.0]
+        target_x = float(pos[0])
+        target_y = float(pos[1])
+        target_z = float(pos[2])
+
+        camera = self.main_window.view_3d.camera
+        current_yaw = float(camera.yaw)
+        yaw_rad = math.radians(current_yaw)
+
+        # Put the camera a fixed distance behind the frontier along its current
+        # horizontal facing direction, then aim directly at the first newly
+        # constructed brush. The camera therefore follows the construction
+        # frontier without depending on the batch's overall spatial extent.
+        distance = 700.0
+        forward_x = math.cos(yaw_rad)
+        forward_z = math.sin(yaw_rad)
+        camera_x = target_x - forward_x * distance
+        camera_z = target_z - forward_z * distance
+        camera_y = target_y + 350.0
+
+        horizontal = max(
+            1.0,
+            math.hypot(target_x - camera_x, target_z - camera_z),
+        )
+        look_yaw = math.degrees(
+            math.atan2(target_z - camera_z, target_x - camera_x)
+        )
+        look_pitch = math.degrees(
+            math.atan2(target_y - camera_y, horizontal)
+        )
+
+        self._set_benchmark_camera(
+            camera_x,
+            camera_z,
+            camera_y,
+            look_yaw,
+            look_pitch,
+        )
+
     def _live_cooperative_yield(self, label):
         """Yield from long live-test batches without leaving the Qt thread."""
         self._monitor_beat(label, deadline=self._preparation_deadline)
@@ -464,13 +509,17 @@ class BenchmarkTests:
 
                 created = 0
                 for batch_index, batch in enumerate(brush_batches, 1):
+                    # Follow the construction frontier so the user can actually
+                    # watch each batch appear rather than only seeing the first
+                    # camera-facing part of the generated scene.
+                    self._focus_camera_on_brush_batch(batch)
                     window.state.brushes.extend(batch)
                     # RenderTable reconciliation already detects the changing
                     # row count; do not bump world_epoch for every batch.
                     created += len(batch)
 
                     # Give the live renderer, Qt views and editor hierarchy a
-                    # chance to consume the intermediate 500-row projection.
+                    # chance to consume the intermediate dense projection.
                     QApplication.processEvents()
                     cooperative_yield()
 
