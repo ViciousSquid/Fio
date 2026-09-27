@@ -555,6 +555,18 @@ def test_a_custom_monster_sprite_is_loaded_from_its_own_path():
                          'idle.png', 'sprites/monsters/human', True)
 
 
+@pytest.mark.parametrize('cls,expected', [
+    (LogicRelay, ('LogicRelay', 'logic_relay.png', 'sprites', True)),
+    (LogicTimer, ('LogicTimer', 'logic_timer.png', 'sprites', True)),
+    (LevelChanger, ('LevelChanger', 'levelchanger.png', 'sprites', True)),
+])
+def test_logic_entity_sprite_recipe_has_a_real_texture_source(cls, expected):
+    thing = make_thing(cls, 'e')
+    table = _synced([thing])
+    recipe = table.sprite_recipes()[int(table.sprite_key_id[0])]
+    assert recipe == (expected,)
+
+
 def test_a_logic_gates_sprite_follows_its_type():
     gate = make_thing(LogicGate, 'g', logic_type='and')
     table = _synced([gate])
