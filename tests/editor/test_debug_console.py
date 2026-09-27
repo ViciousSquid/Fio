@@ -49,6 +49,31 @@ def test_github_startup_link_is_dark_green_and_clickable(qt_app):
     console.deleteLater()
 
 
+def test_version_filter_links_are_green_and_not_nested(qt_app):
+    console = DebugConsole()
+    console.clear()
+
+    message = (
+        '<b>Fio version</b> '
+        '<a href="filter:2" style="color: #2AA63E; font-weight: bold; '
+        'text-decoration: none;">2</a><b>.</b>'
+        '<a href="filter:5" style="color: #2AA63E; font-weight: bold; '
+        'text-decoration: none;">5</a><b>.</b>'
+        '<a href="filter:8" style="color: #2AA63E; font-weight: bold; '
+        'text-decoration: none;">8</a><b>.</b><b>2709</b>'
+    )
+    console._append_message("Info", message)
+    html = console.console.toHtml()
+
+    assert "#2AA63E" in html or "#2aa63e" in html
+    assert 'href="filter:2"' in html
+    assert 'href="filter:5"' in html
+    assert 'href="filter:8"' in html
+    assert '<a href="filter:2"><b>2</b></a>' not in html
+
+    console.deleteLater()
+
+
 def test_startup_banner_source_matches_requested_shape():
     source = Path("editor/io_handlers.py").read_text(encoding="utf-8")
 
