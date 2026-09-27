@@ -396,6 +396,7 @@ class BenchmarkTests:
                 self._monster_chaos_aggro_injected = False
                 self._monster_chaos_ai_decisions = 0
                 self._monster_chaos_ai_updates = 0
+                self._monster_chaos_ai_counting = False
                 self._monster_chaos_aggro_delay = 2.0
                 self._monster_chaos_info = dict(chaos_info)
                 self._show_monster_chaos_overlay(15.0)
@@ -415,6 +416,7 @@ class BenchmarkTests:
 
                 self._current = ("monster_chaos_witness", 15.0, None)
                 self._phase_started = time.perf_counter()
+                self._monster_chaos_ai_counting = True
                 self._measurement_deadline = self._phase_started + 15.0
                 self._measurement_watchdog_deadline = (
                     self._phase_started + self._live_stress_timeout_for(label)
