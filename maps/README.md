@@ -15,9 +15,9 @@ Hub map with doors, one of them leads to `map_test_Extended` - _demonstrates the
 
 Playable level with two rooms, pickups, a moving platform and a light that can be triggered on/off
 
-### `Maze.json`
+### `_SHOWCASE.json`
 
-Player spawn triggers a cutscene, demonstrating the Camera entity
+Demonstrates LogicCamera, Effects, Triggers, Messages and engine capabilities
 
 ### `MonsterTest.json`
 
