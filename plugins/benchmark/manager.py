@@ -19,7 +19,7 @@ import sys
 import time
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QCursor, QFont
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -43,7 +43,7 @@ TESTS = (
     ("live_1000_brushes", "Renderer: 1,000 brushes / live camera sweep"),
     ("live_10000_brushes", "Renderer: 10,000 brushes / live camera sweep"),
     ("live_100000_brushes", "Renderer: 100,000 brushes / live camera sweep"),
-    ("monster_chaos_witness", "Monster AI: 100 monsters / 5-second decision-rate witness"),
+    ("monster_chaos_witness", "Monster AI: 40 monsters / 5-second decision-rate witness"),
     ("borderless_window", "Window mode: borderless maximized"),
     ("fullscreen_window", "Window mode: true fullscreen"),
     ("editor_windowed_1280", "Editor mode: windowed 1280×720 (3D view pane)"),
@@ -74,8 +74,10 @@ class BenchmarkManager(QDialog):
 
         self.setWindowTitle("Fio Benchmark")
         self.resize(760, 580)
-        self._font_size = max(6, QApplication.font().pointSize())
-        self.setFont(QApplication.font())
+        benchmark_font = QFont(QApplication.font())
+        benchmark_font.setPointSize(max(6, benchmark_font.pointSize() - 2))
+        self._font_size = benchmark_font.pointSize()
+        self.setFont(benchmark_font)
         self.setStyleSheet(
             """
             QDialog {
@@ -287,7 +289,8 @@ class BenchmarkManager(QDialog):
         )
         scroll.viewport().setStyleSheet("background: #171717;")
         scroll.setWidget(options)
-        scroll.setMaximumHeight(260)
+        scroll.setMaximumHeight(160)
+        scroll.setMinimumHeight(0)
         scroll.setVisible(False)
         root.addWidget(scroll)
 
@@ -304,6 +307,7 @@ class BenchmarkManager(QDialog):
 
         self.output = QTextBrowser()
         self.output.setOpenExternalLinks(False)
+        self.output.setMinimumHeight(200)
         self.output.setStyleSheet(
             "QTextBrowser { font-family: Consolas, monospace; "
             f"font-size: {self._font_size}pt; "
@@ -352,6 +356,10 @@ class BenchmarkManager(QDialog):
         actions.addWidget(self.close_button)
 
         root.addLayout(actions)
+
+        # Keep the manager out of the way of the editor: open it in the
+        # lower-right corner of the current display's usable area.
+        self._position_bottom_right()
 
         self.socket_timer = QTimer(self)
         self.socket_timer.setInterval(50)
@@ -537,6 +545,16 @@ class BenchmarkManager(QDialog):
     def _set_checks_enabled(self, enabled):
         for box in self.checkboxes.values():
             box.setEnabled(enabled)
+
+    def _position_bottom_right(self):
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        self.move(
+            available.right() - self.width() + 1,
+            available.bottom() - self.height() + 1,
+        )
 
     def _selected_tests(self):
         """The stress tests ticked right now, additional_tests first."""
