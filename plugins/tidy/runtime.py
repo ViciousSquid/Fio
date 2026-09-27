@@ -1,6 +1,6 @@
 """Runtime behaviour for the Tidy plugin.
 
-Core Prop owns pickup, carrying, dropping and physics. This module only handles
+Core Prop owns carry, carry/drop and physics. This module only handles
 Tidy-specific metadata, receptacle placement, progress and goal I/O.
 """
 
@@ -101,7 +101,7 @@ class TidySession:
         for obj in self.objects:
             category = self._category(obj)
             self._total_by_cat[category] = self._total_by_cat.get(category, 0) + 1
-            obj.properties.pop("_tidy_previous_pickup_enabled", None)
+            obj.properties.pop("_tidy_previous_carry_enabled", None)
 
         self.total = len(self.objects)
         self.tidied = 0
@@ -110,9 +110,9 @@ class TidySession:
         # Core PropSession restores transforms. Tidy only restores the one
         # core property it temporarily changed while an object was stowed.
         for obj in self.objects:
-            previous = obj.properties.pop("_tidy_previous_pickup_enabled", None)
+            previous = obj.properties.pop("_tidy_previous_carry_enabled", None)
             if previous is not None:
-                obj.properties["pickup_enabled"] = bool(previous)
+                obj.properties["carry_enabled"] = bool(previous)
         self._fill.clear()
         self._full_fired.clear()
         self._goal_done.clear()
@@ -191,10 +191,10 @@ class TidySession:
         if prop_session is not None:
             prop_session.moved(obj)
         obj.properties.setdefault(
-            "_tidy_previous_pickup_enabled",
-            bool(obj.properties.get("pickup_enabled", True)),
+            "_tidy_previous_carry_enabled",
+            bool(obj.properties.get("carry_enabled", True)),
         )
-        obj.properties["pickup_enabled"] = False
+        obj.properties["carry_enabled"] = False
 
         physics = getattr(self.logic, "_physics_world", None)
         if physics is not None:
@@ -241,9 +241,9 @@ class TidySession:
                 0, self._tidied_by_cat.get(category, 0) - 1
             )
 
-        previous = obj.properties.pop("_tidy_previous_pickup_enabled", None)
+        previous = obj.properties.pop("_tidy_previous_carry_enabled", None)
         if previous is not None:
-            obj.properties["pickup_enabled"] = bool(previous)
+            obj.properties["carry_enabled"] = bool(previous)
 
         home = obj.properties.get("_prop_home_pos")
         if home is not None:
