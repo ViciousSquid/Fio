@@ -10,6 +10,8 @@ into engine.entity_table and consumed numerically by the renderer.
 
 from __future__ import annotations
 
+import random
+
 try:
     from editor.things import Thing as _ThingBase
     EDITOR_TIER = True
@@ -130,6 +132,9 @@ class Effect(_ThingBase):
         self.properties["effect_seed"] = int(seed) & 0xFFFFFFFF or 1
 
         self._effect_spawn_time = 0.0
+        # Runtime animation phase: each playback starts at a random point in
+        # the GIF cycle so multiple FIRE effects do not march in lockstep.
+        self._effect_animation_phase = random.random()
         self._effect_active = effect_type in EFFECT_ANIMATED_TYPES
 
     def duplicate(self, existing_names=()):
@@ -139,6 +144,7 @@ class Effect(_ThingBase):
             clone.properties.get("id", "effect")
         )
         clone._effect_spawn_time = 0.0
+        clone._effect_animation_phase = random.random()
         clone._effect_active = clone.effect_type in EFFECT_ANIMATED_TYPES
         return clone
 
@@ -170,12 +176,14 @@ class Effect(_ThingBase):
             self.properties["height"] = 32.0
             self.properties["light_colour"] = list(EFFECT_ORB_LIGHT_COLOUR)
         self._effect_spawn_time = 0.0
+        self._effect_animation_phase = random.random()
         self._effect_active = effect_type in EFFECT_ANIMATED_TYPES
         return True
 
     def reset_runtime(self) -> None:
         """Reset transient runtime state without changing authored data."""
         self._effect_spawn_time = 0.0
+        self._effect_animation_phase = random.random()
         self._effect_active = self.effect_type in EFFECT_ANIMATED_TYPES
 
     def trigger_explosion(self, now: float) -> bool:
@@ -183,5 +191,6 @@ class Effect(_ThingBase):
         self.properties["effect_type"] = EFFECT_EXPLOSION
         self.properties["preview"] = False
         self._effect_spawn_time = float(now)
+        self._effect_animation_phase = 0.0
         self._effect_active = True
         return True
