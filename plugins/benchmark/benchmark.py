@@ -12,6 +12,7 @@ import html
 import os
 import platform
 import subprocess
+import statistics
 import sys
 import tempfile
 import threading
@@ -1068,7 +1069,7 @@ class BenchmarkRunner:
             elapsed = float(self._live_io_elapsed or 0.0)
             fires = int(getattr(self, "_live_io_fires", 0))
             total_hops = int(hops * fires)
-            elapsed_per_hop = elapsed / max(fires, 1)
+            dispatch_s = float(metrics.get("io_dispatch_s", 0.0))
             metrics.update({
                 "io_elapsed_s": elapsed,
                 "io_elapsed_ms": elapsed * 1000.0,
@@ -1087,6 +1088,9 @@ class BenchmarkRunner:
                 "hops_per_second": (
                     total_hops / elapsed if elapsed > 0.0 else 0.0
                 ),
+                "dispatch_hops_per_second": (
+                    total_hops / dispatch_s if dispatch_s > 0.0 else 0.0
+                ),
                 "burst_hops": int(hops),
             })
             metrics["description"] = (
@@ -1095,12 +1099,13 @@ class BenchmarkRunner:
             )
             self._append(
                 "  Live I/O: %d bursts, %d total hops, %.0f hops/s "
-                "(%.3f ms average burst)."
+                "(%.3f ms average dispatch; %.0f hops/s dispatch-only)."
                 % (
                     fires,
                     total_hops,
                     metrics["hops_per_second"],
                     metrics["io_average_ms"],
+                    metrics["dispatch_hops_per_second"],
                 )
             )
     
@@ -1509,7 +1514,6 @@ class BenchmarkRunner:
             io_system.IO_DEBUG_ENABLED = False
             sys.setrecursionlimit(max(old_limit, 10000))
             try:
-                manager.reset()
                 started = time.perf_counter()
                 manager.fire_output(source, "OnTrigger")
                 elapsed = time.perf_counter() - started
@@ -1530,9 +1534,9 @@ class BenchmarkRunner:
         self._measurement_active = False
         self._timer.stop()
         samples = list(getattr(self, "_live_io_samples", ()))
-        total_elapsed = sum(samples)
+        dispatch_elapsed = sum(samples)
         mean_elapsed = (
-            statistics.fmean(samples)
+            dispatch_elapsed / len(samples)
             if samples else 0.0
         )
         ordered = sorted(samples)
@@ -1540,13 +1544,16 @@ class BenchmarkRunner:
             ordered[min(len(ordered) - 1, int(round(0.95 * (len(ordered) - 1))))]
             if ordered else 0.0
         )
-        self._live_io_elapsed = total_elapsed
+        wall_elapsed = max(0.0, now - self._phase_started)
+        self._live_io_elapsed = wall_elapsed
 
         metrics = {
             "viewport_width": int(view.width()),
             "viewport_height": int(view.height()),
-            "io_elapsed_s": total_elapsed,
-            "io_elapsed_ms": total_elapsed * 1000.0,
+            "io_elapsed_s": wall_elapsed,
+            "io_elapsed_ms": wall_elapsed * 1000.0,
+            "io_dispatch_s": dispatch_elapsed,
+            "io_dispatch_ms": dispatch_elapsed * 1000.0,
             "io_burst_count": len(samples),
             "io_average_ms": mean_elapsed * 1000.0,
             "io_p95_ms": p95_elapsed * 1000.0,
