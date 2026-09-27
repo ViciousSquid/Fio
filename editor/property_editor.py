@@ -2766,7 +2766,7 @@ class PropertyEditor(QWidget):
         # Only expose a picker when the user is actually authoring a custom/
         # generic sprite.
         sprite_label = QLabel("Sprite:")
-        sprite_widget = QWidget()
+        sprite_widget = QWidget(self.tab_widget)
         sprite_layout = QHBoxLayout(sprite_widget)
         sprite_layout.setContentsMargins(0, 0, 0, 0)
         sprite_path = QLineEdit(
@@ -2788,7 +2788,7 @@ class PropertyEditor(QWidget):
         form.addRow(sprite_label, sprite_widget)
 
         respawn = bool(thing.properties.get('collect_respawns', False))
-        respawn_widget = QWidget()
+        respawn_widget = QWidget(self.tab_widget)
         respawn_layout = QHBoxLayout(respawn_widget)
         respawn_layout.setContentsMargins(0, 0, 0, 0)
         respawn_cb = _make_checkbox(
