@@ -78,6 +78,8 @@ class RenderState:
         self.player_max_health = 100
         self.player_dead = False
         self.active_weapon = None
+        self.player_ammo = 0
+        self.shot_ready = False
         self.player_underwater = False
         self.underwater_tint = [0.0, 0.4, 0.6]
 
@@ -210,6 +212,8 @@ class RenderState:
         self.player_max_health = 100
         self.player_dead = False
         self.active_weapon = None
+        self.player_ammo = 0
+        self.shot_ready = False
         self.player_underwater = False
         self.underwater_tint = [0.0, 0.4, 0.6]
         self.player2_pos = glm.vec3(0, 0, 0)
