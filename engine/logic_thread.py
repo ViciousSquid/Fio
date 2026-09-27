@@ -51,7 +51,6 @@ try:
     from editor.io_system import IOManager, get_connections
     from editor.io_handlers import register_all_input_handlers
     IO_AVAILABLE = True
-    print("[LogicThread] I/O System loaded successfully.")
 except ImportError as e:
     print(f"################################################")
     print(f"CRITICAL ERROR: I/O SYSTEM FAILED TO LOAD")
