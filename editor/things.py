@@ -803,7 +803,6 @@ class Pickup(Thing):
         'blue_key': 'assets/sprites/bluekey.png',
         'red_key': 'assets/sprites/redkey.png',
         'yellow_key': 'assets/sprites/yellowkey.png',
-        'green_key': 'assets/sprites/greenkey.png',
     }
     KEY_NAMES = tuple(KEY_SPRITES)
     DEFAULT_KEY_NAME = 'blue_key'
