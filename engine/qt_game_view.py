@@ -1781,6 +1781,12 @@ class QtGameView(QOpenGLWidget):
         painter.drawText(10, 20, "Sprites")
 
     def _draw_hud(self, painter, render_state, viewport_width=None, viewport_height=None):
+        # A LogicCamera owns the player's view completely: no HUD is shown
+        # while the cinematic is running.
+        if render_state is not None and getattr(
+            render_state, "cinematic_camera_active", False
+        ):
+            return
         if viewport_width is None:
             viewport_width = self.width()
         if viewport_height is None:
@@ -1846,6 +1852,14 @@ class QtGameView(QOpenGLWidget):
         health_x = 8
         health_y = viewport_height - 8 - metrics.descent()
 
+        # Health/ammo fade in for two seconds after a LogicCamera gives
+        # control back to the player. Weapon/key icons are not part of this fade.
+        hud_health_alpha = max(
+            0.0, min(1.0, float(getattr(render_state, "hud_health_alpha", 1.0)))
+        )
+        painter.save()
+        painter.setOpacity(hud_health_alpha)
+
         # Health is the large orange count. Ammo is a smaller green count
         # touching it directly, with no layout gap.
         painter.setPen(self._hud_count_shadow_pen)
@@ -1869,6 +1883,8 @@ class QtGameView(QOpenGLWidget):
             painter.drawText(ammo_x + 2, health_y + 2, ammo_text)
             painter.setPen(self._hud_ammo_green)
             painter.drawText(ammo_x, health_y, ammo_text)
+
+        painter.restore()
 
         # The centre-screen crosshair is a first-person aiming reticle: it marks
         # where the camera-forward hitscan lands. In overhead (top-down) mode the
@@ -1990,6 +2006,10 @@ class QtGameView(QOpenGLWidget):
                     self._draw_key_fallback(painter, key_name, icon_x, key_y, key_size)
 
     def _draw_hud_splitscreen(self, painter, render_state):
+        if render_state is not None and getattr(
+            render_state, "cinematic_camera_active", False
+        ):
+            return
         w, h = self.width(), self.height()
         half = w // 2
         painter.setPen(QPen(QColor(0, 0, 0), 4))
@@ -2011,6 +2031,10 @@ class QtGameView(QOpenGLWidget):
         margin = 8
         health_font = QFont(self._hud_health_font)
         health_font.setPointSize(max(42, min(68, int(h * 0.085))))
+        painter.save()
+        painter.setOpacity(max(
+            0.0, min(1.0, float(getattr(render_state, "hud_health_alpha", 1.0)))
+        ))
         painter.setFont(health_font)
         painter.setPen(self._hud_health_orange)
         health_text = str(int(p2_health))
@@ -2020,6 +2044,7 @@ class QtGameView(QOpenGLWidget):
             h - margin - metrics.descent(),
             health_text,
         )
+        painter.restore()
         cx = half + half // 2
         cy = h // 2
         sz = 10
