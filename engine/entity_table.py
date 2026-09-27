@@ -546,6 +546,15 @@ def _effect_flicker(seed, elapsed):
     return a * (1.0 - smooth) + b * smooth
 
 
+def _carry_sprite_yaw(thing):
+    """Return the numeric carry yaw, or the sentinel for a free billboard."""
+    value = getattr(thing, '_carry_sprite_yaw', -10000.0)
+    try:
+        return -10000.0 if value is None else float(value)
+    except (TypeError, ValueError):
+        return -10000.0
+
+
 def sprite_state(thing):
     """Return the authored state that can change an entity's sprite recipe."""
     props = thing if isinstance(thing, dict) else _props_of(thing)
@@ -573,7 +582,7 @@ def sprite_state(thing):
             repr(props.get('rotation', [0.0, 0.0, 0.0])),
             repr(props.get('scale', 1.0)),
             repr(props.get('sprite_size', [32.0, 32.0])),
-            float(getattr(thing, '_carry_sprite_yaw', -10000.0)),
+            _carry_sprite_yaw(thing),
         )
     return None
 
@@ -1353,11 +1362,7 @@ class EntityTable:
         # switching a Prop model -> billboard changes the render class and the
         # sprite recipe without changing the entity row itself.
         self.sprite_size[slot] = sprite_size(thing)
-        carry_yaw = getattr(thing, '_carry_sprite_yaw', -10000.0)
-        try:
-            carry_yaw = float(carry_yaw)
-        except (TypeError, ValueError):
-            carry_yaw = -10000.0
+        carry_yaw = _carry_sprite_yaw(thing)
         self.sprite_fixed_yaw[slot] = carry_yaw
         self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(thing))
 
