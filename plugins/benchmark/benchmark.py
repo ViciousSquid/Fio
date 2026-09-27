@@ -885,6 +885,7 @@ class BenchmarkRunner:
         self._running = False
         self.throbber.setVisible(False)
         self._set_controls_enabled(True)
+        self.status_label.setStyleSheet("font-size: 36px; font-weight: bold; color: #63d471;")
         self.status_label.setText("Benchmark complete.")
         self.export_button.setEnabled(bool(self._results))
         self.export_button.setVisible(bool(self._results))
