@@ -1913,7 +1913,7 @@ def register_all_input_handlers(io_manager: IOManager):
     else:
         version_markup = f'<b>{version_str}</b>'
 
-    debug_log('Info', f"<b>Fio version</b> {version_markup}")
+    debug_log('Info', f"Fio version {version_str}")
     debug_log_raw("github.com/vicioussquid/Fio")
     debug_log('Info', f"Registered {len(io_manager._input_handlers)} input handlers")
     debug_log('Info', f"Type 'help' to see all available commands")
