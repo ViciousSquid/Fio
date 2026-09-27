@@ -162,12 +162,19 @@ class Prop(_ModelBase):
         self.properties['type'] = 'prop'
 
         authored_render_mode = 'render_mode' in self.properties
+        authored_sprite_path = 'sprite_path' in self.properties
         for key, value in PROP_DEFAULTS.items():
             self.properties.setdefault(
                 key, list(value) if isinstance(value, list) else value)
 
         if not authored_render_mode:
             self.properties['render_mode'] = self._implied_render_mode()
+
+        # A collectible Prop with no explicit appearance follows its collection
+        # payload. An authored sprite_path always wins.
+        if (self.properties.get('collect_enabled', False)
+                and not authored_sprite_path):
+            self.properties['sprite_path'] = self.get_collect_sprite_path()
 
         # Collected Props are not useful as carry targets.
         if self.properties.get('collect_collected'):
@@ -196,6 +203,9 @@ class Prop(_ModelBase):
             return self.GUN_SPRITES.get(
                 self.properties.get('collect_weapon', 'gun1'),
                 self.GUN_SPRITES['gun1'])
+        if collect_type == 'health':
+            return self.properties.get(
+                'collect_custom_sprite') or 'assets/sprites/health.png'
         return self.properties.get(
             'collect_custom_sprite') or self.get_sprite_path()
 
