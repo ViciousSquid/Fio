@@ -118,6 +118,8 @@ def _logic_for(prop):
             "things": [prop],
             "player_health": 100,
             "player_max_health": 100,
+            "player_ammo": 0,
+            "gun2_obtained": False,
             "collected_keys": set(),
             "current_hud_message": "",
             "current_hud_key_name": None,
