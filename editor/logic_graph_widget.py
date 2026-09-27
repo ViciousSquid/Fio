@@ -96,7 +96,7 @@ TYPE_HDR: Dict[str, QColor] = {
     'logic_relay':  QColor( 50, 185,  95),
     'logic_gate':   QColor( 55, 175,  90),
     'logic_timer':  QColor( 60, 165,  80),
-    'pickup':       QColor( 75, 185,  75),
+    'prop':         QColor( 75, 185,  75),
     'playerstart':  QColor( 50, 195, 195),
     'levelchanger': QColor(205,  75, 160),
     'model':        QColor(115, 115, 115),
