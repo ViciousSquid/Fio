@@ -104,6 +104,25 @@ def test_the_tool_toolbar_round_trips_as_a_vertical_right_dock(toolbar):
     assert window.tool_toolbar.orientation() == Qt.Vertical
 
 
+def test_the_play_button_rotates_and_narrows_when_toolbar_is_vertical(toolbar):
+    window = toolbar
+    window.addToolBar(Qt.RightToolBarArea, window.tool_toolbar)
+
+    assert window.tool_toolbar.orientation() == Qt.Vertical
+    assert window.play_button.property("_vertical") is True
+    assert window.play_button.width() < window.play_button.height()
+
+
+def test_the_play_button_returns_to_horizontal_shape_when_toolbar_is_top(toolbar):
+    window = toolbar
+    window.addToolBar(Qt.RightToolBarArea, window.tool_toolbar)
+    window.addToolBar(Qt.TopToolBarArea, window.tool_toolbar)
+
+    assert window.tool_toolbar.orientation() == Qt.Horizontal
+    assert window.play_button.property("_vertical") is False
+    assert window.play_button.width() > window.play_button.height()
+
+
 def test_the_tool_toolbar_round_trips_while_remaining_floatable(toolbar):
     """QToolBar exposes floating as read-only; setFloatable() controls whether
     the user may tear it off, while saveState() persists its dock position."""
