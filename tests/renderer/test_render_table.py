@@ -31,6 +31,39 @@ def _synced(brushes, epoch=1):
     return t
 
 
+def test_reconcile_freezes_the_observed_row_count_during_live_append():
+    """A benchmark append during reconciliation belongs to the next frame."""
+    first = _brush(id='first')
+    late = _brush(id='late')
+
+    class GrowingBrushes(list):
+        def __init__(self, values, extra):
+            super().__init__(values)
+            self.extra = extra
+            self.grown = False
+
+        def __getitem__(self, index):
+            if index == 0 and not self.grown:
+                self.grown = True
+                super().append(self.extra)
+            return super().__getitem__(index)
+
+    brushes = GrowingBrushes([first], late)
+    table = RenderTable()
+
+    table.sync(brushes, 1)
+
+    assert table.count == 1
+    assert table.brushes == [first]
+    assert table.geometry_records == []
+    assert table.ids == ['first']
+
+    # The concurrently appended row is reconciled normally on the next frame.
+    table.sync(brushes, 1)
+    assert table.count == 2
+    assert table.ids == ['first', 'late']
+
+
 # ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
