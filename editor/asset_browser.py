@@ -665,6 +665,12 @@ class MapsBrowserTab(QWidget):
                 return
             files = [f for f in os.listdir(folder) if f.lower().endswith(extension)]
             files.sort()
+            # _SHOWCASE.json is a reserved maps-browser entry: when present,
+            # keep it at the very top regardless of normal filename sorting.
+            showcase = "_SHOWCASE.json"
+            if showcase in files:
+                files.remove(showcase)
+                files.insert(0, showcase)
             for filename in files:
                 full_path = os.path.join(folder, filename)
                 item = QListWidgetItem(filename)
