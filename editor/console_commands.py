@@ -80,6 +80,7 @@ class ConsoleCommandHandler:
             'teleport': self.cmd_setpos,
             'ss': self.cmd_split_screen,
             'showglasses': self.cmd_show_glasses,
+            'message': self.cmd_message,
 
             'cam': self.cmd_cam,
             'camera': self.cmd_cam,
@@ -743,6 +744,27 @@ class ConsoleCommandHandler:
         debug_log("Info", f"Deleted portal(s): {', '.join(deleted)}")
         self.main_window.update_all_ui()
 
+    def cmd_message(self, args):
+        """Draw a transient message at the bottom of the play view."""
+        text = (args or "").strip()
+        if len(text) >= 2 and text[0] in ('"', "'") and text[-1] == text[0]:
+            text = text[1:-1].strip()
+        if not text:
+            debug_log("Error", 'Usage: message "text"')
+            return
+
+        view_3d = getattr(self.main_window, 'view_3d', None)
+        if view_3d is None or not getattr(view_3d, 'play_mode', False):
+            debug_log("Error", "message is only available in Play Mode.")
+            return
+
+        show_message = getattr(view_3d, 'show_view_message', None)
+        if not callable(show_message):
+            debug_log("Error", "3D view message support is unavailable.")
+            return
+
+        show_message(text[:50])
+
     def cmd_help(self, args):
         
         sep = '<span style="color:white;"> / </span>'
@@ -753,6 +775,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">clear</b> — Clear console<br>
 <b style="color:orange;">help</b> — Show this help<br>
 <b style="color:orange;">fps</b> — Toggle FPS display<br>
+<b style="color:orange;">message</b> &quot;text&quot; — Show a timed message in the play view<br>
 <b style="color:orange;">map</b> &lt;name&gt; — Load a different map<br>
 <b style="color:cyan;">=== Save / Load (Play Session) ===</b><br>
 <b style="color:orange;">save</b> [name] — Save the current play session (Play Mode only)<br>
