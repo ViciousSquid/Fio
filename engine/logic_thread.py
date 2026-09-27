@@ -201,7 +201,7 @@ class LogicThread(threading.Thread):
         # and consumed in _prepare_render_state to blend the view matrix.
         self.camera_transition = None
         # HUD visibility follows LogicCamera control. When a cinematic ends,
-        # the entire HUD fades back in over two seconds.
+        # the entire HUD fades back in over four seconds.
         self._hud_cinematic_last_active = False
         self._hud_health_fade_started = None
 
@@ -3935,7 +3935,7 @@ class LogicThread(threading.Thread):
             hud_health_alpha = 0.0
         elif self._hud_health_fade_started is not None:
             hud_health_alpha = min(
-                1.0, max(0.0, (now - self._hud_health_fade_started) / 2.0)
+                1.0, max(0.0, (now - self._hud_health_fade_started) / 4.0)
             )
             if hud_health_alpha >= 1.0:
                 self._hud_health_fade_started = None
