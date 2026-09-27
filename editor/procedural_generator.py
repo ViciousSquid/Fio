@@ -801,7 +801,7 @@ def create_map_data(params, yield_hook=None):
         if allowed_rooms:
             # Minimum distance from any monster (world units)
             MIN_DIST_TO_MONSTER = 128.0
-            # How many attempts to place each health pickup
+            # How many attempts to place each collectible Prop
             MAX_ATTEMPTS = 50
 
             for i in range(health_count):
@@ -824,16 +824,19 @@ def create_map_data(params, yield_hook=None):
                             "pos": [wx, wy, wz],
                             "properties": {
                                 "type": "prop",
-                                "name": f"HealthPickup_{i}",
-                                "item_type": "health",
+                                "name": f"HealthProp_{i}",
+                                "collect_enabled": True,
+                                "carry_enabled": False,
+                                "collect_type": "health",
                                 "collect_value": 25,
                                 "collect_activation": "walk_over",
                                 "collect_respawns": False,
                                 "collect_respawn_time": 20.0,
                                 "collect_collected": False,
                                 "collect_key_name": "",
-                                "custom_sprite": "assets/sprites/health.png",
-                                "id": f"health_pickup_{i}"
+                                "collect_custom_sprite": "assets/sprites/health.png",
+                                "sprite_path": "assets/sprites/health.png",
+                                "id": f"health_prop_{i}"
                             },
                             "io_connections": []
                         })
@@ -841,10 +844,10 @@ def create_map_data(params, yield_hook=None):
                         break
                 # If we couldn't place after MAX_ATTEMPTS, just skip this pickup
                 if not placed:
-                    print(f"Warning: Could not place health pickup #{i} after {MAX_ATTEMPTS} attempts. Skipping.")
+                    print(f"Warning: Could not place collectible Prop #{i} after {MAX_ATTEMPTS} attempts. Skipping.")
 
     # ------------------- UPPER FLOOR REWARDS -------------------
-    # Reward the climb: drop a health pickup on top of each generated upper floor.
+    # Reward the climb: drop a collectible Prop on top of each generated upper floor.
     if params.get('spawn_health', False):
         for j, info in enumerate(upper_floor_infos):
             things.append({
@@ -855,15 +858,18 @@ def create_map_data(params, yield_hook=None):
                 "properties": {
                     "type": "prop",
                     "name": f"UpperFloorHealth_{j}",
-                    "item_type": "health",
+                    "collect_enabled": True,
+                                "carry_enabled": False,
+                                "collect_type": "health",
                     "collect_value": 25,
                     "collect_activation": "walk_over",
                     "collect_respawns": False,
                     "collect_respawn_time": 20.0,
                     "collect_collected": False,
                     "collect_key_name": "",
-                    "custom_sprite": "assets/sprites/health.png",
-                    "id": f"upper_floor_pickup_{j}"
+                    "collect_custom_sprite": "assets/sprites/health.png",
+                                "sprite_path": "assets/sprites/health.png",
+                    "id": f"upper_floor_prop_{j}"
                 },
                 "io_connections": []
             })
