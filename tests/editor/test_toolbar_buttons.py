@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import (  # noqa: E402
 )
 
 from editor.main_window import MainWindow  # noqa: E402
-from editor.ui import LAYOUT_VERSION, Ui_MainWindow  # noqa: E402
+from editor.ui import LAYOUT_VERSION, RotatablePlayButton, Ui_MainWindow  # noqa: E402
 
 # Qt tier: PyQt5 must be importable.  No display and no GPU - the suite runs
 # against the offscreen platform plugin.
@@ -57,7 +57,7 @@ class FakeEditorWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.config = configparser.ConfigParser()
-        self.play_button = QPushButton("Play")
+        self.play_button = RotatablePlayButton("Play")
         self.terrain_action = QAction("Terrain", self)
         self.procedural_action = QAction("Procedural", self)
 
