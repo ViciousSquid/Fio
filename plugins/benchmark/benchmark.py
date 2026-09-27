@@ -1381,12 +1381,9 @@ class BenchmarkRunner:
                         thing for thing in getattr(ai_self.lt, "things", ())
                         if isinstance(thing, Monster)
                     ]
-                self._monster_chaos_ai_decisions += sum(
-                    1
-                    for thing in monsters
-                    if not thing.properties.get("hidden", False)
-                    and not thing.properties.get("disabled", False)
-                )
+                # The chaos witness keeps all 50 monsters active; one AI
+                # update therefore represents one decision per Monster row.
+                self._monster_chaos_ai_decisions += len(monsters)
                 self._monster_chaos_ai_updates += 1
             return original(delta)
 
