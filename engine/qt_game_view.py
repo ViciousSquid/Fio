@@ -1,6 +1,7 @@
 import time
 import os
 import math
+from collections import deque
 import numpy as np
 import ctypes
 from typing import Optional
@@ -437,6 +438,7 @@ class QtGameView(QOpenGLWidget):
         self._view_message_text = ""
         self._view_message_started_at = 0.0
         self._view_message_width = 0
+        self._view_message_queue = deque()
         self._cached_gun_hud = {}
         self._cached_weapon_pickup = {}   # (item_type, size) -> scaled QPixmap
         self._cached_key_pixmaps = {}
@@ -478,22 +480,28 @@ class QtGameView(QOpenGLWidget):
         self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
 
 
-    def show_view_message(self, text: str):
-        """Show a transient console message directly in the 3D play view.
-
-        The message is independent from the normal interaction HUD prompt.
-        It fades in for one second, remains fully visible for five seconds,
-        then fades out for one second.
-        """
-        text = str(text).strip()[:50]
-        if not text:
-            return
-
+    def _start_view_message(self, text: str):
+        """Start displaying one transient view message immediately."""
         self._view_message_text = text
         self._view_message_started_at = time.perf_counter()
         self._view_message_width = QFontMetrics(
             self._hud_msg_font
         ).horizontalAdvance(text)
+
+    def show_view_message(self, text: str):
+        """Show a transient console message, queueing it behind the current one."""
+        text = str(text).strip()[:50]
+        if not text:
+            return
+
+        if self._view_message_text:
+            elapsed = time.perf_counter() - self._view_message_started_at
+            if elapsed < 7.0:
+                self._view_message_queue.append(text)
+                self.update()
+                return
+
+        self._start_view_message(text)
         self.update()
 
     def _draw_view_message(self, painter, viewport_width, viewport_height):
@@ -504,10 +512,15 @@ class QtGameView(QOpenGLWidget):
 
         elapsed = time.perf_counter() - self._view_message_started_at
         if elapsed >= 7.0:
-            self._view_message_text = ""
-            self._view_message_started_at = 0.0
-            self._view_message_width = 0
-            return
+            if self._view_message_queue:
+                self._start_view_message(self._view_message_queue.popleft())
+                text = self._view_message_text
+                elapsed = 0.0
+            else:
+                self._view_message_text = ""
+                self._view_message_started_at = 0.0
+                self._view_message_width = 0
+                return
 
         if elapsed < 1.0:
             opacity = elapsed
