@@ -438,6 +438,8 @@ class QtGameView(QOpenGLWidget):
         self._face_mode_font_bot = QFont("Arial", 10, QFont.Bold)
 
         self._hud_health_orange = QColor(179, 75, 0)
+        self._hud_ammo_green = QColor("#0b4519")
+        self._hud_count_shadow_pen = QPen(QColor(0, 0, 0, 85))
         self._hud_white_pen = QPen(QColor(255, 255, 255))
         self._hud_black_pen = QPen(QColor(0, 0, 0))
         self._hud_grey_pen = QPen(QColor(200, 200, 200))
@@ -1254,6 +1256,8 @@ class QtGameView(QOpenGLWidget):
             if render_state:
                 self._cached_health = render_state.player_health
                 self._cached_max_health = render_state.player_max_health
+                self._cached_player_ammo = getattr(render_state, 'player_ammo', 0)
+                self._cached_shot_ready = getattr(render_state, 'shot_ready', False)
                 self._cached_active_weapon = getattr(render_state, 'active_weapon', None)
                 self._cached_hud_message = getattr(render_state, 'hud_message', '')
                 self._cached_collected_keys = getattr(render_state, 'collected_keys', set())
@@ -1785,8 +1789,31 @@ class QtGameView(QOpenGLWidget):
         metrics = QFontMetrics(health_font)
         health_x = hud_margin
         health_y = viewport_height - hud_margin - metrics.descent()
+
+        # Health is the large orange count. Ammo is a smaller green count
+        # touching it directly, with no layout gap.
+        painter.setPen(self._hud_count_shadow_pen)
+        painter.drawText(health_x + 2, health_y + 2, health_text)
+        painter.setPen(self._hud_health_orange)
         painter.drawText(health_x, health_y, health_text)
+
         active_weapon = getattr(self, '_cached_active_weapon', None)
+        if active_weapon in ('gun1', 'gun2'):
+            ammo_font = QFont(self._hud_health_font)
+            ammo_font.setPointSize(max(
+                22, min(36, int(viewport_height * 0.045))))
+            ammo_text = (
+                "∞"
+                if active_weapon == 'gun1'
+                else str(max(0, int(getattr(
+                    self, '_cached_player_ammo', 0))))
+            )
+            ammo_x = health_x + metrics.horizontalAdvance(health_text)
+            painter.setFont(ammo_font)
+            painter.setPen(self._hud_count_shadow_pen)
+            painter.drawText(ammo_x + 2, health_y + 2, ammo_text)
+            painter.setPen(self._hud_ammo_green)
+            painter.drawText(ammo_x, health_y, ammo_text)
         # The centre-screen crosshair is a first-person aiming reticle: it marks
         # where the camera-forward hitscan lands. In overhead (top-down) mode the
         # shot travels along the player's ground heading, not through screen
@@ -1875,7 +1902,10 @@ class QtGameView(QOpenGLWidget):
                     img = hud_pixmap.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
                     scaled = QPixmap.fromImage(img).scaled(target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                     self._cached_gun_hud[cache_key] = scaled
-                x = viewport_width - scaled.width() - 20
+                if active_weapon == 'gun2':
+                    x = (viewport_width - scaled.width()) // 2
+                else:
+                    x = viewport_width - scaled.width() - 20
                 y = viewport_height - scaled.height()
                 painter.save()
                 painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
@@ -3000,15 +3030,15 @@ class QtGameView(QOpenGLWidget):
                 return
             active_weapon = getattr(render_state, 'active_weapon', None)
             if active_weapon:
-                from engine.monster_constants import WEAPON_SHOOT_SOUND, NON_FIRING_WEAPONS
-                # Non-firing weapons (e.g. cig) are display-only: clicking
-                # equips nothing to shoot — no shot, no muzzle flash, no sound.
-                if active_weapon not in NON_FIRING_WEAPONS:
+                from engine.monster_constants import NON_FIRING_WEAPONS
+                # Non-firing weapons (e.g. cig) are display-only. For firing
+                # weapons, the published shot_ready flag prevents clicks from
+                # piling up while gun2 is cooling down or out of ammo.
+                if (
+                    active_weapon not in NON_FIRING_WEAPONS
+                    and getattr(render_state, 'shot_ready', False)
+                ):
                     self.game_state.queue_shot()
-                    sound_file = WEAPON_SHOOT_SOUND.get(active_weapon, 'shoot.wav')
-                    sound = self._get_sound_instance(sound_file)
-                    if sound:
-                        sound.play()
                 return
         _shift_select = (Qt.ShiftModifier, Qt.ShiftModifier | Qt.AltModifier)
         if (event.button() == Qt.LeftButton and not self.play_mode and
