@@ -79,7 +79,11 @@ class ArrayModel(QAbstractTableModel):
         elif a.ndim == 1:
             a = a.reshape(-1, 1)
         else:
-            a = a.reshape(a.shape[0], -1)
+            # Reshaping to (rows, -1) cannot infer a dimension for zero-row
+            # arrays. Keep the column count explicit so empty live tables
+            # remain valid read-only views.
+            width = int(np.prod(a.shape[1:], dtype=np.int64))
+            a = a.reshape(a.shape[0], width)
         self.array = a
         self.names = list(names or [f"[{i}]" for i in range(a.shape[1])])
         self.offset = int(offset)
@@ -160,7 +164,11 @@ class RawTable(QWidget):
         if shown.ndim == 1:
             names = [name]
         else:
-            width = shown.reshape(shown.shape[0], -1).shape[1]
+            # shown may have zero rows when a table's live count is
+            # temporarily empty. Derive the flattened width from the
+            # original array shape rather than asking NumPy to infer it from
+            # a zero-sized view.
+            width = int(np.prod(shown.shape[1:], dtype=np.int64))
             names = [f"{name}[{i}]" for i in range(width)]
         self.model.set_array(shown, names=names)
 
