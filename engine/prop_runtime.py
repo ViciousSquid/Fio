@@ -196,11 +196,15 @@ class PropSession:
         self.held = None
         self.collected_ids.clear()
         self.respawn_timers.clear()
+        self.respawn_fades.clear()
         self.rebuild()
+        for prop in self.props:
+            prop._respawn_fade_alpha = 1.0
 
     def stop(self):
         for prop in self.props:
             self._release(prop)
+            prop._respawn_fade_alpha = 1.0
         self.held = None
         self.props = []
         self._by_id = {}
