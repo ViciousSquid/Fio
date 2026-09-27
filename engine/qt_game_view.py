@@ -640,7 +640,7 @@ class QtGameView(QOpenGLWidget):
         return text, started_at, width
 
     def _draw_view_message(self, painter, viewport_width, viewport_height):
-        """Draw message-1 one line above message-2 / held-item HUDs."""
+        """Draw message-1 at the top of the shared near-bottom message stack."""
         self._view_message_text, self._view_message_started_at, self._view_message_width = (
             self._draw_queued_view_message(
                 painter, viewport_width, viewport_height,
@@ -649,11 +649,12 @@ class QtGameView(QOpenGLWidget):
                 self._view_message_width,
                 self._view_message_queue,
                 self._start_view_message,
+                stack_slot=2,
             )
         )
 
     def _draw_view_message2(self, painter, viewport_width, viewport_height):
-        """Draw message-2 directly underneath message-1."""
+        """Draw message-2 in the middle of the shared near-bottom stack."""
         self._view_message2_text, self._view_message2_started_at, self._view_message2_width = (
             self._draw_queued_view_message(
                 painter, viewport_width, viewport_height,
@@ -667,7 +668,7 @@ class QtGameView(QOpenGLWidget):
         )
 
     def _draw_view_message3(self, painter, viewport_width, viewport_height):
-        """Draw message-3 in Rushford at the bottom-right of the play view."""
+        """Draw message-3 in Rushford at the bottom of the shared message stack."""
         self._view_message3_text, self._view_message3_started_at, self._view_message3_width = (
             self._draw_queued_view_message(
                 painter, viewport_width, viewport_height,
