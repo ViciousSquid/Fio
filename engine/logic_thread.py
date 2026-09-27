@@ -3916,7 +3916,7 @@ class LogicThread(threading.Thread):
             hud_health_alpha = 1.0
 
         write_state.cinematic_camera_active = cinematic_active
-        write_state.hud_health_alpha = hud_health_alpha
+        write_state.hud_alpha = hud_health_alpha
         write_state.player_health = self.player_health
         write_state.player_max_health = self.player_max_health
         write_state.player_dead = self.player_dead
