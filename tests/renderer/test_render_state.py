@@ -20,7 +20,7 @@ import pytest
 pytest.importorskip("PyQt5", reason="the logic thread pulls in editor.things")
 
 from editor.editor_state import EditorState             # noqa: E402
-from editor.things import Light, Monster, Pickup        # noqa: E402
+from editor.things import Light, Monster, Prop        # noqa: E402
 from engine.logic_thread import LogicThread             # noqa: E402
 from engine import render_table as render_table_module      # noqa: E402
 from engine.threaded_game_state import RenderState, ThreadedGameState  # noqa: E402
@@ -723,13 +723,13 @@ def test_a_monster_row_is_republished_as_a_snapshot_every_frame(logic):
         "the previous frame's snapshot was mutated under the renderer")
 
 
-def test_a_collected_pickup_is_not_published(logic):
+def test_a_collected_prop_is_not_published(logic):
     keep = make_thing(Light, "lamp", (0, 100, 0))
-    taken = make_thing(Pickup, "medkit", (200, 0, 0))
+    taken = make_thing(Prop, "medkit", (200, 0, 0), collect_enabled=True, collect_collected=True)
     thread = logic(things=[keep, taken])
     thread.set_play_mode(True)
     try:
-        thread.collected_pickups.add(id(taken))
+        thread._props.collected_ids.add(id(taken))
         thread._prepare_render_state()
         state = thread.game_state.get_write_state()
 
