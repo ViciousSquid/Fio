@@ -144,7 +144,8 @@ def test_selecting_a_prop_does_not_show_a_transient_top_level_window(panel, qt_a
         % [type(widget).__name__ for widget in spy.shown]
     )
     assert editor._page is not None
-    assert editor._page.window() is editor
+    assert editor._page.parentWidget() is editor
+    assert not editor._page.isWindow()
 
 
 def test_custom_gif_path_is_project_relative_and_uses_forward_slashes(monkeypatch):
