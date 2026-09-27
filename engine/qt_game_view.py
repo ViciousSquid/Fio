@@ -589,7 +589,7 @@ class QtGameView(QOpenGLWidget):
     def _draw_queued_view_message(
         self, painter, viewport_width, viewport_height,
         text, started_at, width, queue, start_message,
-        line_offset=0, message_font=None, align_right=False
+        line_offset=0, message_font=None, align_right=False, bottom_right=False
     ):
         """Draw one queued transient message and return its active state."""
         if not text:
@@ -615,9 +615,13 @@ class QtGameView(QOpenGLWidget):
             opacity = 1.0 - (elapsed - 6.0)
 
         cx = viewport_width // 2
-        held_item_row_top = viewport_height - 20 - 100
-        line_height = QFontMetrics(font).height() + 2
-        baseline = held_item_row_top - 12 - line_height + (line_height * line_offset)
+        metrics = QFontMetrics(font)
+        if bottom_right:
+            baseline = viewport_height - 10 - metrics.descent()
+        else:
+            held_item_row_top = viewport_height - 20 - 100
+            line_height = metrics.height() + 2
+            baseline = held_item_row_top - 12 - line_height + (line_height * line_offset)
 
         text_x = viewport_width - 10 - width if align_right else cx - width // 2
         painter.save()
@@ -658,7 +662,7 @@ class QtGameView(QOpenGLWidget):
         )
 
     def _draw_view_message3(self, painter, viewport_width, viewport_height):
-        """Draw message-3 directly underneath message-2 in Rushford."""
+        """Draw message-3 in Rushford at the bottom-right of the play view."""
         self._view_message3_text, self._view_message3_started_at, self._view_message3_width = (
             self._draw_queued_view_message(
                 painter, viewport_width, viewport_height,
@@ -667,9 +671,9 @@ class QtGameView(QOpenGLWidget):
                 self._view_message3_width,
                 self._view_message3_queue,
                 self._start_view_message3,
-                line_offset=2,
                 message_font=self._hud_health_font,
                 align_right=True,
+                bottom_right=True,
             )
         )
 
