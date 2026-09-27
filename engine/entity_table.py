@@ -1284,8 +1284,8 @@ class EntityTable:
             dst = np.asarray(move_dst, dtype=np.intp)
             for arr in (self.class_bits, self.light_color, self.light_params,
                         self.light_enabled, self.light_casts_shadows,
-                        self.sprite_size, self.sprite_key_id, self.sprite_fixed_yaw,
-                        self._sprite_state, self.model_recipe_id, self.model_base_matrix,
+                        self.sprite_size, self.render_alpha, self.sprite_key_id,
+                        self.sprite_fixed_yaw, self._sprite_state, self.model_recipe_id, self.model_base_matrix,
                         self.model_normal_matrix, self.effect_type,
                         self.effect_fire_variant, self.effect_custom_id,
                         self.effect_custom_loop, self.effect_params, self.effect_color,
