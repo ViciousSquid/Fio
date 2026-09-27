@@ -79,10 +79,17 @@ class BenchmarkManager(QDialog):
         self._font_size = benchmark_font.pointSize()
         self.setFont(benchmark_font)
         self.setStyleSheet(
-            """
+            f"""
             QDialog {
                 background: #171717;
                 color: #eeeeee;
+            }
+            QToolTip {
+                background: #202020;
+                color: #dddddd;
+                border: 1px solid #555555;
+                font-size: {self._font_size}pt;
+                padding: 2px 4px;
             }
             QLabel {
                 color: #dddddd;
@@ -280,7 +287,8 @@ class BenchmarkManager(QDialog):
         options.setStyleSheet(
             "QWidget { background: #171717; color: #dddddd; }"
             "QCheckBox { background: #171717; color: #dddddd; "
-            "font-size: 7pt; padding: 1px 2px; }"
+            "font-size: %dpt; padding: 1px 2px; }"
+            % max(6, self._font_size - 3)
         )
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
