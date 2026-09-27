@@ -27,6 +27,8 @@ GLB/glTF 2.0 binary model loader. Extracts mesh geometry, normals, UVs, indices,
 ### `logic_thread.py`
 Fixed-timestep game simulation thread. Handles player movement and physics, entity interaction, trigger evaluation, I/O dispatch, movers, pickups, death, portals and monster AI.
 
+Runtime entity creation is treated as a world mutation, not as a separate renderer-side operation: the relevant derived caches are rebuilt at the mutation boundary, including the prefiltered monster list used by MonsterAI. This keeps the authored `things` collection authoritative while allowing live-spawn workloads to enter the execution representation immediately.
+
 ### `monster_ai.py`
 Monster behaviour, movement, sight, pursuit, attacks, projectile spawning, death handling and spatial-grid pathfinding.
 
@@ -107,7 +109,11 @@ The single world-cell convention used by Fio. Defines the 512-unit cell maths, A
 Also owns the distinction between mapper-authored hidden state and streaming-parked state.
 
 ### `sysmon.py`
-System monitor overlay. Tracks FPS, frame time, visible/culled geometry, triangle counts and GPU-memory information using reusable buffers and cached display text.
+System monitor overlay and machine-readable performance snapshot.
+
+SysMon's metrics have deliberately distinct time bases. Its FPS value is Fio's runtime FPS over the latest one-second interval maintained by `QtGameView`. Its frame-time values are derived from the current frame and a rolling 60-frame ring buffer, including the rolling p95. Geometry counts, draw calls, TPS and VRAM are read from the live renderer/runtime state. `get_metrics()` is a read-only snapshot of those existing values; asking for it does not introduce a second frame timer or a second renderer measurement path.
+
+Benchmark tooling consumes these same SysMon values rather than inventing a separate FPS/frame-time definition.
 
 ### `terrain.py`
 Chunked terrain generation and rendering, including Perlin-noise heightmaps, chunk LOD meshes, normals, texture blending and collision queries.
@@ -139,6 +145,8 @@ OpenGL
 ```
 
 The renderer therefore is not merely a collection of Python draw calls with NumPy sprinkled around it. `render_table.py`, `entity_table.py`, `render_cull.py` and `render_keys.py` form a numerical frontend between the flexible world model and the GPU backend. Brushes and entities are projected the same way and on the same refresh discipline, so neither half of the world is re-interrogated object by object once a frame starts.
+
+This boundary is also the primary observability boundary. The Debug Tables instrumentation can inspect the live dense tables, packed key/range data and related counters directly, making the numerical execution state visible without adding a parallel representation or changing the renderer's production data path.
 
 The same principle is used by `physics.py`: simulation state is dense and contiguous while `PhysicsBody` remains a convenient object/API handle.
 
