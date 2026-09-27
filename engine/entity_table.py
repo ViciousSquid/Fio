@@ -573,6 +573,7 @@ def sprite_state(thing):
             repr(props.get('rotation', [0.0, 0.0, 0.0])),
             repr(props.get('scale', 1.0)),
             repr(props.get('sprite_size', [32.0, 32.0])),
+            float(getattr(thing, '_carry_sprite_yaw', -10000.0)),
         )
     return None
 
@@ -599,7 +600,7 @@ class EntityTable:
                  'effect_type', 'effect_fire_variant', 'effect_custom_id', 'effect_custom_loop', 'effect_preview', 'effect_params', 'effect_color',
                  'effect_light_color', 'effect_light_enabled', 'effect_lifetime', 'effect_seed',
                   'effect_spawn_time', 'effect_shared_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
-                 'sprite_size', 'sprite_key_id', '_sprite_state',
+                 'sprite_size', 'sprite_key_id', 'sprite_fixed_yaw', '_sprite_state',
                  'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
                  '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
                  '_effect_custom_ids', '_effect_custom_paths',
@@ -668,6 +669,9 @@ class EntityTable:
 
         #: The billboard's world size. Cold: it comes from authored properties.
         self.sprite_size = np.zeros((0, 2), dtype=np.float32)
+        #: Locked world-facing yaw for a carried billboard. -10000 means
+        #: ordinary camera-facing billboard behaviour.
+        self.sprite_fixed_yaw = np.full((0,), -10000.0, dtype=np.float32)
         #: Dense sprite recipe id per entity slot.  -1 means no sprite.
         self.sprite_key_id = np.full((0,), SPRITE_NONE, dtype=np.int32)
         self._sprite_state = np.zeros((0,), dtype=np.uint64)
@@ -882,6 +886,11 @@ class EntityTable:
         if len(self.sprite_size):
             size[:len(self.sprite_size)] = self.sprite_size
         self.sprite_size = size
+
+        fixed_yaw = np.full((grown,), -10000.0, dtype=np.float32)
+        if len(self.sprite_fixed_yaw):
+            fixed_yaw[:len(self.sprite_fixed_yaw)] = self.sprite_fixed_yaw
+        self.sprite_fixed_yaw = fixed_yaw
 
         keys = np.full((grown,), SPRITE_NONE, dtype=np.int32)
         if len(self.sprite_key_id):
@@ -1246,8 +1255,8 @@ class EntityTable:
             dst = np.asarray(move_dst, dtype=np.intp)
             for arr in (self.class_bits, self.light_color, self.light_params,
                         self.light_enabled, self.light_casts_shadows,
-                        self.sprite_size, self.sprite_key_id, self._sprite_state,
-                        self.model_recipe_id, self.model_base_matrix,
+                        self.sprite_size, self.sprite_key_id, self.sprite_fixed_yaw,
+                        self._sprite_state, self.model_recipe_id, self.model_base_matrix,
                         self.model_normal_matrix, self.effect_type,
                         self.effect_fire_variant, self.effect_custom_id,
                         self.effect_custom_loop, self.effect_params, self.effect_color,
@@ -1344,6 +1353,12 @@ class EntityTable:
         # switching a Prop model -> billboard changes the render class and the
         # sprite recipe without changing the entity row itself.
         self.sprite_size[slot] = sprite_size(thing)
+        carry_yaw = getattr(thing, '_carry_sprite_yaw', -10000.0)
+        try:
+            carry_yaw = float(carry_yaw)
+        except (TypeError, ValueError):
+            carry_yaw = -10000.0
+        self.sprite_fixed_yaw[slot] = carry_yaw
         self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(thing))
 
         if self.class_bits[slot] & ENT_EFFECT:
