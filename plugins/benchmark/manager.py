@@ -212,7 +212,8 @@ class BenchmarkManager(QDialog):
                 selection-background-color: #ff9a32;
                 selection-color: #111111;
             }
-            """ .replace("{self._font_size}", str(self._font_size))
+            """
+            % self._font_size
         )
 
         root = QVBoxLayout(self)
