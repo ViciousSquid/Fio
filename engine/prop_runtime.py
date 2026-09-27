@@ -370,9 +370,25 @@ class PropSession:
             if key_name:
                 self.logic.collected_keys.add(key_name)
                 self.logic.current_hud_key_name = key_name
+        elif collect_type == "ammo":
+            try:
+                current_ammo = max(0, int(
+                    getattr(self.logic, "player_ammo", 0)))
+            except (AttributeError, TypeError, ValueError):
+                current_ammo = 0
+            self.logic.player_ammo = current_ammo + max(0, value_num)
         elif collect_type == "weapon":
             weapon = p.get("collect_weapon", "gun1")
             self.logic.active_weapon = weapon
+            if weapon == "gun2" and not getattr(
+                    self.logic, "gun2_obtained", False):
+                self.logic.gun2_obtained = True
+                try:
+                    current_ammo = max(
+                        0, int(getattr(self.logic, "player_ammo", 0)))
+                except (AttributeError, TypeError, ValueError):
+                    current_ammo = 0
+                self.logic.player_ammo = max(current_ammo, 8)
             self.logic.current_hud_message = f"Collected {str(weapon).upper()}"
 
         p["collect_collected"] = True
