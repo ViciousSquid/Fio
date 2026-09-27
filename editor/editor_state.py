@@ -73,6 +73,8 @@ class EditorState:
         self._render_dirty_epoch_by_id = {}
         self._render_dirty_all = False
         self._render_dirty_all_epoch = -1
+        # Bounded replay history for double-buffered render projections.
+        self._render_dirty_history = deque(maxlen=32)
         self.brushes = []
         self.things = []
         self.selected_object = None
@@ -124,6 +126,40 @@ class EditorState:
             else:
                 dirty = set(self._render_dirty_objects)
             return self.world_epoch, dirty
+
+    def render_dirty_since(self, epoch, through_epoch=None):
+        """Return precise render dirtiness newer than *epoch*.
+
+        Each double-buffered render projection has its own last-published epoch.
+        The live frame journal is consumed after publication, so a second
+        projection needs replayable history rather than the already-cleared set.
+        A bounded history is sufficient for the alternating render buffers; if
+        a consumer falls behind it, return None for a safe global rebuild.
+        """
+        with self._render_dirty_lock:
+            current = self.world_epoch
+            limit = current if through_epoch is None else min(current, int(through_epoch))
+            if epoch is None:
+                return limit, None
+            epoch = int(epoch)
+            if epoch >= limit:
+                return limit, set()
+            history = getattr(self, "_render_dirty_history", ())
+            if not history:
+                return limit, None
+            oldest_epoch = history[0][0]
+            if epoch < oldest_epoch - 1:
+                return limit, None
+            dirty = set()
+            for change_epoch, objects in history:
+                if change_epoch <= epoch:
+                    continue
+                if change_epoch > limit:
+                    break
+                if objects is None:
+                    return limit, None
+                dirty.update(objects)
+            return limit, dirty
 
     def clear_render_dirty(self, snapshot=None) -> None:
         """Consume only render dirtiness covered by a previously captured snapshot."""
@@ -184,7 +220,10 @@ class EditorState:
                 self._render_dirty_epoch_by_id.clear()
                 self._render_dirty_all = True
                 self._render_dirty_all_epoch = self.world_epoch
+                self._render_dirty_history.append((self.world_epoch, None))
             else:
+                object_ids = frozenset(id(obj) for obj in objects if obj is not None)
+                self._render_dirty_history.append((self.world_epoch, object_ids))
                 self.mark_render_dirty(*objects)
 
     def mark_lighting_dirty(self, objects=None) -> None:

@@ -4003,8 +4003,16 @@ class LogicThread(threading.Thread):
         etable = write_state.entity_table
         self._render_table = table
         self._entity_table = etable
+        # Capture the live journal epoch for this frame boundary, then replay
+        # every precise invalidation newer than this write buffer's own epoch.
+        # The two RenderState buffers alternate ownership, so the first buffer
+        # can consume the live journal before the second reaches the edit.
         render_dirty_snapshot = self.editor_state.render_dirty_snapshot()
-        world_epoch, render_dirty = render_dirty_snapshot
+        snapshot_epoch, _current_dirty = render_dirty_snapshot
+        table_epoch = getattr(table, "_epoch", None)
+        world_epoch, render_dirty = self.editor_state.render_dirty_since(
+            table_epoch, through_epoch=snapshot_epoch
+        )
         # Rows are named by the brush's UUID, so ids have to exist before the
         # table reconciles -- but only then, not on every frame.
         # Stable ids are needed when rows are first created/replaced, not

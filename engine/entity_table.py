@@ -308,11 +308,11 @@ def sprite_candidates(thing):
             # does -- load_texture has its own cache, so this is not a re-read.
             out.append(('', filename, 'sprites', False))
     elif LevelChanger is not None and isinstance(thing, LevelChanger):
-        out.append(('LevelChanger', 'levelchanger.png', 'sprites', True))
+        return (('LevelChanger', 'levelchanger.png', 'sprites', True),)
     elif LogicRelay is not None and isinstance(thing, LogicRelay):
-        out.append(('LogicRelay', 'logic_relay.png', 'sprites', True))
+        return (('LogicRelay', 'logic_relay.png', 'sprites', True),)
     elif LogicTimer is not None and isinstance(thing, LogicTimer):
-        out.append(('LogicTimer', 'logic_timer.png', 'sprites', True))
+        return (('LogicTimer', 'logic_timer.png', 'sprites', True),)
 
     # -- and then the class's shared sprite, which draw_sprites falls back to -
     class_name = type(thing).__name__
@@ -631,7 +631,7 @@ class EntityTable:
                  'monster_slots', 'pickup_slots', 'effect_slots',
                  'effect_type', 'effect_fire_variant', 'effect_custom_id', 'effect_custom_loop', 'effect_preview', 'effect_params', 'effect_color',
                  'effect_light_color', 'effect_light_enabled', 'effect_lifetime', 'effect_seed',
-                  'effect_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
+                  'effect_spawn_time', 'effect_shared_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
                  'sprite_size', 'sprite_key_id', '_sprite_state',
                  'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
                  '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
@@ -698,6 +698,7 @@ class EntityTable:
         self.effect_lifetime = np.full((0,), 0.5, dtype=np.float32)
         self.effect_seed = np.ones((0,), dtype=np.float32)
         self.effect_spawn_time = np.zeros((0,), dtype=np.float64)
+        self.effect_shared_spawn_time = np.zeros((0,), dtype=np.float64)
         self.effect_elapsed = np.zeros((0,), dtype=np.float32)
         self.effect_active = np.zeros((0,), dtype=bool)
         self.effect_alive = np.zeros((0,), dtype=bool)
@@ -894,6 +895,11 @@ class EntityTable:
             effect_spawn[:len(self.effect_spawn_time)] = self.effect_spawn_time
         self.effect_spawn_time = effect_spawn
 
+        effect_shared_spawn = np.zeros((grown,), dtype=np.float64)
+        if len(self.effect_shared_spawn_time):
+            effect_shared_spawn[:len(self.effect_shared_spawn_time)] = self.effect_shared_spawn_time
+        self.effect_shared_spawn_time = effect_shared_spawn
+
         effect_elapsed = np.zeros((grown,), dtype=np.float32)
         if len(self.effect_elapsed):
             effect_elapsed[:len(self.effect_elapsed)] = self.effect_elapsed
@@ -1088,7 +1094,12 @@ class EntityTable:
                     dtype=np.float64,
                     count=len(effect_ls),
                 )
-                self.effect_spawn_time[effect_ls] = runtime_spawns
+                shared_spawns = self.effect_shared_spawn_time[effect_ls]
+                changed_shared = runtime_spawns != shared_spawns
+                if np.any(changed_shared):
+                    changed_slots = effect_ls[changed_shared]
+                    self.effect_spawn_time[changed_slots] = runtime_spawns[changed_shared]
+                self.effect_shared_spawn_time[effect_ls] = runtime_spawns
 
                 now = float(time.perf_counter())
                 explosion = self.effect_type[effect_ls] == 1
@@ -1102,6 +1113,7 @@ class EntityTable:
                     if np.any(unset_fire):
                         start_slots = fire_slots[unset_fire]
                         self.effect_spawn_time[start_slots] = now
+                        self.effect_shared_spawn_time[start_slots] = now
                         # Persist the same origin on the authored Effect runtime
                         # object so the other render buffer sees it on its next
                         # publication instead of inventing a second origin.

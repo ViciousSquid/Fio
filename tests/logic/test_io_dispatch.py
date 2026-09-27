@@ -638,7 +638,7 @@ def test_logic_camera_arrival_fires_the_individual_path_node_output():
     logic.cinematic_state = {
         'active': True, 'paused': False, 'entity': camera,
         'current_node': 'B', 'lerp_t': 0.0,
-        'origin': list(a.pos), 'speed': 100.0,
+        'origin': list(a.pos), 'speed': 25.0,
         'fov': None, 'look_ahead': True,
         'cam_angle': 0.0, 'cam_pitch': 0.0,
         '_look_initialized': True,
@@ -663,7 +663,7 @@ def test_logic_camera_look_ahead_turn_is_smoothed():
     logic.cinematic_state = {
         'active': True, 'paused': False, 'entity': camera,
         'current_node': 'B', 'lerp_t': 0.0,
-        'origin': list(a.pos), 'speed': 100.0,
+        'origin': list(a.pos), 'speed': 25.0,
         'fov': None, 'look_ahead': True,
         'cam_angle': 0.0, 'cam_pitch': 0.0,
         '_look_initialized': True,
