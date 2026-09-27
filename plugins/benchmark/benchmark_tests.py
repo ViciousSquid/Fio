@@ -49,7 +49,7 @@ class BenchmarkTests:
             "live_1000_brushes": 6.0,
             "live_10000_brushes": 6.0,
             "live_100000_brushes": 4.0,
-            "monster_chaos_witness": 15.0,
+            "monster_chaos_witness": 35.0,
         }.get(label, 3.0)
     
     
@@ -300,7 +300,69 @@ class BenchmarkTests:
         )
 
 
+    def _spawn_monster_chaos_entity(self, logic, rng, team, position, spawn_index, monster_type=None):
+        """Insert one live Monster and rebuild the same cache used by LogicSpawner."""
+        from editor.things import Monster
+
+        if monster_type is None:
+            monster_type = rng.choice(("human", "flying"))
+
+        props = {
+            "name": "MonsterChaos_%03d" % int(spawn_index),
+            "monster_id": int(spawn_index),
+            "monster_type": str(monster_type),
+            "health": 100,
+            "damage": 10,
+            "awake": True,
+            "wake_on_sight": True,
+            "dead": False,
+            "team": str(team),
+            "variant": "<None>",
+            "patrol": False,
+            "is_shooting": False,
+        }
+        if monster_type == "flying":
+            position = [float(position[0]), max(160.0, float(position[1])), float(position[2])]
+        else:
+            position = [float(position[0]), max(96.0, float(position[1])), float(position[2])]
+
+        monster = Monster(pos=position, properties=props)
+        with logic._monster_lock:
+            logic.editor_state.things.append(monster)
+            logic._build_entity_caches()
+        return monster
+
+    def _monster_chaos_random_position(self, rng, monster_type):
+        """Choose a safe point inside the 1024^3 witness room."""
+        x = rng.uniform(-400.0, 400.0)
+        z = rng.uniform(-400.0, 400.0)
+        if monster_type == "flying":
+            y = rng.uniform(160.0, 320.0)
+        else:
+            y = 128.0
+        return [x, y, z]
+
+    def _face_monster_chaos_camera(self, logic, monster):
+        """Aim the Play camera at the first witness monster."""
+        player = getattr(logic, "player", None)
+        if player is None:
+            raise RuntimeError("Monster chaos witness has no live player")
+
+        dx = float(monster.pos[0]) - float(player.pos.x)
+        dy = float(monster.pos[1]) - (float(player.pos.y) + float(player.camera_height))
+        dz = float(monster.pos[2]) - float(player.pos.z)
+        horizontal = max(1e-6, math.hypot(dx, dz))
+        player.angle = math.atan2(dx, dz)
+        player.pitch = math.atan2(dy, horizontal)
+
+        camera = getattr(self.main_window.view_3d, "camera", None)
+        if camera is not None:
+            camera.pos = getattr(camera, "pos", player.pos)
+            camera.yaw = math.degrees(player.angle)
+            camera.pitch = math.degrees(player.pitch)
+
     def _run_live_stress_test(self, label, value):
+
         """Prepare a live stress test; _tick drives the real workload."""
         bench = self._bench
         window = self.main_window
@@ -360,7 +422,7 @@ class BenchmarkTests:
                 cooperative_yield = lambda: self._live_cooperative_yield(label)
                 data, chaos_info = bench.make_monster_chaos_witness_world(
                     seed="43",
-                    monster_count=50,
+                    monster_count=100,
                     yield_hook=cooperative_yield,
                 )
                 bench.load_live_benchmark_world(
@@ -387,47 +449,54 @@ class BenchmarkTests:
                     raise RuntimeError(
                         "Monster chaos witness has no live LogicThread"
                     )
-                # God mode protects the benchmark player without disabling AI.
-                # MonsterAI must remain in its normal targeting/combat path.
+
+                # God mode protects the benchmark player while the real MonsterAI
+                # remains fully active and is allowed to target opposing teams.
                 logic.god_mode = True
                 logic.notarget = False
                 self._install_monster_chaos_ai_counter(logic)
 
-                self._monster_chaos_aggro_injected = False
-                self._monster_chaos_ai_decisions = 0
-                self._monster_chaos_ai_updates = 0
-                self._monster_chaos_ai_counting = False
-                self._monster_chaos_aggro_delay = 2.0
+                import random
+                rng = random.Random("43")
+                self._monster_chaos_rng = rng
+                self._monster_chaos_spawn_index = 0
+                self._monster_chaos_total = 0
+                self._monster_chaos_phase = "team1"
                 self._monster_chaos_info = dict(chaos_info)
-                self._show_monster_chaos_overlay(15.0)
-                self._append(
-                    "  Monster chaos witness: seed 43, 50 mixed monsters (30 human / 20 flying) in two hostile teams, "
-                    "PathNode '%s'. All monsters are converging; infighting "
-                    "will be injected after %.1f seconds."
-                    % (
-                        self._html_escape(
-                            self._monster_chaos_info.get(
-                                "pathnode_name", "ChaosPathNode"
-                            )
-                        ),
-                        self._monster_chaos_aggro_delay,
+                self._monster_chaos_measurement_started = 0.0
+                self._monster_chaos_measurement_deadline = 0.0
+                self._monster_chaos_ai_counting = False
+
+                first_monster = None
+                team1_z = (-64.0, -32.0, 0.0, 32.0, 64.0)
+                for z in team1_z:
+                    monster_type = rng.choice(("human", "flying"))
+                    monster_y = 128.0 if monster_type == "human" else 192.0
+                    monster = self._spawn_monster_chaos_entity(
+                        logic,
+                        rng,
+                        "team1",
+                        [384.0 + rng.uniform(-8.0, 8.0), monster_y, z],
+                        self._monster_chaos_spawn_index,
+                        monster_type=monster_type,
                     )
-                )
+                    self._monster_chaos_spawn_index += 1
+                    self._monster_chaos_total += 1
+                    if first_monster is None:
+                        first_monster = monster
 
-                self._current = ("monster_chaos_witness", 15.0, None)
-                self._phase_started = time.perf_counter()
-                self._monster_chaos_ai_counting = True
-                self._measurement_deadline = self._phase_started + 15.0
-                self._measurement_watchdog_deadline = (
-                    self._phase_started + self._live_stress_timeout_for(label)
-                )
-                self._measurement_active = True
-                self._sysmon_samples = []
-                self._last_sysmon_sample = 0.0
-                view.update()
-                QApplication.processEvents()
-                self._timer.start()
+                if first_monster is None:
+                    raise RuntimeError("Monster chaos witness failed to create its first monster")
+                self._face_monster_chaos_camera(logic, first_monster)
 
+                self._append(
+                    "  Monster witness: 1024x1024x1024 room, PlayerStart at one end, "
+                    "5 team1 monsters staged at the opposite end; god mode enabled."
+                )
+                self._append(
+                    "  Population schedule: +5 team2 monsters at 0.5s, then +1 random-team "
+                    "monster every 0.25s until 100."
+                )
             elif label == "live_io_1000":
                 cooperative_yield = lambda: self._live_cooperative_yield(label)
                 data = bench._generate_procedural_map(
@@ -490,6 +559,12 @@ class BenchmarkTests:
                 self._phase_started + self._live_stress_timeout_for(label)
             )
             self._measurement_active = True
+            if label == "monster_chaos_witness":
+                self._monster_chaos_phase = "team2_wait"
+                self._monster_chaos_next_spawn = self._phase_started + 0.5
+                self._monster_chaos_measurement_started = 0.0
+                self._monster_chaos_measurement_deadline = 0.0
+                self._monster_chaos_ai_counting = False
             view.update()
             QApplication.processEvents()
             self._timer.start()
