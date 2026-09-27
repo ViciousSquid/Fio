@@ -31,6 +31,7 @@ DEFAULT_KEY_NAME = 'blue_key'
 GUN_SPRITES = {
     'gun1': 'assets/sprites/gun1.png',
     'gun2': 'assets/sprites/gun2.png',
+    'sword': 'assets/sprites/sword.png',
     'cig': 'assets/sprites/cig.png',
 }
 GUN_NAMES = tuple(GUN_SPRITES)
