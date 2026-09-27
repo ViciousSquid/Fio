@@ -872,12 +872,17 @@ layout (location = 10) in vec4 iPayload;
         source = '\n'.join(kept)
         if 'out vec2 TexCoords;' not in source:
             return
-        source = source.replace(
-            'out vec2 TexCoords;',
-            'layout (location = 1) in vec3 iSpritePos;\n'
-            'layout (location = 2) in vec2 iSpriteSize;\n'
-            'layout (location = 3) in float iSpriteFixedYaw;\n'
-            'out vec2 TexCoords;', 1)
+        # sprite.vert already declares the fixed-facing input for the
+        # non-instanced path. Keep that declaration and only inject the
+        # position/size instance inputs that the instanced rewrite needs.
+        instance_decls = (
+            'layout (location = 1) in vec3 iSpritePos;\\n'
+            'layout (location = 2) in vec2 iSpriteSize;\\n'
+        )
+        if 'iSpritePos' not in source:
+            source = source.replace(
+                'out vec2 TexCoords;',
+                instance_decls + 'out vec2 TexCoords;', 1)
         source = source.replace('sprite_pos_world', 'iSpritePos')
         source = source.replace('sprite_size.x', 'iSpriteSize.x')
         source = source.replace('sprite_size.y', 'iSpriteSize.y')
