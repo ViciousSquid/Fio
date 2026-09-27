@@ -7,7 +7,7 @@ import ctypes
 from typing import Optional
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
 from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent
-from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient
+from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
@@ -396,6 +396,33 @@ class QtGameView(QOpenGLWidget):
        
 
 
+    def _load_health_font(self):
+        """Load the bundled Rushford Clean font for the numeric health HUD."""
+        fonts_dir = os.path.join(os.getcwd(), 'assets', 'fonts')
+        candidates = []
+        try:
+            for filename in os.listdir(fonts_dir):
+                lower = filename.lower()
+                if 'rushford' not in lower:
+                    continue
+                if lower.endswith(('.ttf', '.otf')):
+                    candidates.append(filename)
+        except OSError:
+            candidates = []
+
+        for filename in sorted(candidates):
+            path = os.path.join(fonts_dir, filename)
+            font_id = QFontDatabase.addApplicationFont(path)
+            if font_id < 0:
+                continue
+            families = QFontDatabase.applicationFontFamilies(font_id)
+            if families:
+                return QFont(families[0], 56)
+
+        # Development fallback: use an installed copy if present. Once the
+        # bundled font is placed in assets/fonts, this path is not used.
+        return QFont("Rushford Clean", 56)
+
     def _init_hud_caches(self):
         self._hud_font = QFont("Arial", 11)
         self._hud_font.setBold(True)
@@ -406,8 +433,7 @@ class QtGameView(QOpenGLWidget):
         self._sprites_font.setBold(True)
         self._death_title_font = QFont("Arial", 64, QFont.Bold)
         self._death_sub_font = QFont("Arial", 18)
-        self._hud_health_font = QFont("Rushford Clean", 56)
-        self._hud_health_font.setBold(False)
+        self._hud_health_font = self._load_health_font()
         self._face_mode_font_top = QFont("Arial", 14, QFont.Bold)
         self._face_mode_font_bot = QFont("Arial", 10, QFont.Bold)
 
