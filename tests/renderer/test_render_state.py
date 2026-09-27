@@ -633,37 +633,80 @@ def test_recycled_render_state_keeps_dense_projection_objects():
 
 
 def test_a_borrowed_render_state_survives_multiple_publication_cycles():
-    """A held snapshot remains immutable while other persistent buffers rotate."""
+    """A held snapshot keeps tables and published slot buffers immutable."""
     game_state = ThreadedGameState()
     brush = box_brush("wall")
+    second_brush = box_brush("wall2", (128, 0, 0))
+    lamp = make_thing(Light, "lamp", (0, 100, 0))
+    second_thing = make_thing(Monster, "grunt", (0, 96, -300))
 
     write = game_state.get_write_state()
+
+    # Build an actually published frame, including the three pieces whose
+    # lifetime matters at the render boundary: dense tables plus slot vectors.
     write.render_table.sync([brush], epoch=1)
+    write.all_brush_slots = np.array([0], dtype=np.int32)
+    write.visible_brush_slots = np.array([0], dtype=np.int32)
+
+    write.entity_table.begin_frame([lamp], epoch=1)
+    write.visible_thing_slots = np.array([0], dtype=np.int32)
+
     assert game_state.request_swap() is True
 
     snapshot = game_state.get_render_state()
-    first_table = snapshot.render_table
-    first_slots = snapshot.all_brush_slots
+    first_render_table = snapshot.render_table
+    first_entity_table = snapshot.entity_table
+    first_all_brush_slots = snapshot.all_brush_slots
+    first_visible_brush_slots = snapshot.visible_brush_slots
+    first_visible_thing_slots = snapshot.visible_thing_slots
+
+    assert first_render_table.count == 1
+    assert first_entity_table.count == 1
+    assert first_all_brush_slots.tolist() == [0]
+    assert first_visible_brush_slots.tolist() == [0]
+    assert first_visible_thing_slots.tolist() == [0]
 
     # Publish two newer frames while the first frame is still borrowed. The
-    # spare RenderState must absorb the first extra publication, then the
-    # persistent buffers must rotate without touching the borrowed table.
+    # spare RenderState absorbs the extra publication, and each write buffer
+    # gets materially different projection/slot data. Any accidental alias
+    # with the borrowed snapshot will therefore be visible here.
     for epoch in (2, 3):
         write = game_state.get_write_state()
+
         brush["shader"] = "Fog"
         brush["is_fog"] = True
-        write.render_table.sync([brush], epoch=epoch)
+        write.render_table.sync([brush, second_brush], epoch=epoch)
+        write.all_brush_slots = np.array([0, 1], dtype=np.int32)
+        write.visible_brush_slots = np.array([1], dtype=np.int32)
+
+        write.entity_table.begin_frame([lamp, second_thing], epoch=epoch)
+        write.visible_thing_slots = np.array([1], dtype=np.int32)
+
         assert game_state.request_swap() is True
 
-        assert snapshot.render_table is first_table
-        assert bool(first_table.class_bits[0] & render_table_module.CLASS_FOG) is False
-        assert len(first_slots) == 1
+        # The originally published frame must still be byte-for-byte
+        # equivalent in the critical state that the renderer owns.
+        assert snapshot.render_table is first_render_table
+        assert snapshot.entity_table is first_entity_table
+        assert first_render_table.count == 1
+        assert first_entity_table.count == 1
+        assert bool(
+            first_render_table.class_bits[0]
+            & render_table_module.CLASS_FOG
+        ) is False
+        assert first_all_brush_slots.tolist() == [0]
+        assert first_visible_brush_slots.tolist() == [0]
+        assert first_visible_thing_slots.tolist() == [0]
 
     # Once the renderer releases the old frame, that retired buffer becomes
     # reusable and publication continues without allocating a fourth state.
     game_state.release_render_state(snapshot)
     write = game_state.get_write_state()
     write.render_table.sync([brush], epoch=4)
+    write.all_brush_slots = np.array([0], dtype=np.int32)
+    write.visible_brush_slots = np.array([0], dtype=np.int32)
+    write.entity_table.begin_frame([lamp], epoch=4)
+    write.visible_thing_slots = np.array([0], dtype=np.int32)
     assert game_state.request_swap() is True
 
 
