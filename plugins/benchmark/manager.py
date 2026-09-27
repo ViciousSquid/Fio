@@ -289,7 +289,7 @@ class BenchmarkManager(QDialog):
         )
         scroll.viewport().setStyleSheet("background: #171717;")
         scroll.setWidget(options)
-        scroll.setMaximumHeight(160)
+        scroll.setMaximumHeight(100)
         scroll.setMinimumHeight(0)
         scroll.setVisible(False)
         root.addWidget(scroll)
