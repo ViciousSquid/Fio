@@ -2141,6 +2141,9 @@ class BenchmarkResults:
         width = int(metrics.get("viewport_width", self.main_window.view_3d.width()))
         height = int(metrics.get("viewport_height", self.main_window.view_3d.height()))
         avg_fps = float(metrics.get("average_fps", 0.0))
+        current_frame_ms = float(
+            metrics.get("current_frame_time_ms", metrics.get("frame_time_ms", 0.0))
+        )
         avg_ms = float(metrics.get("average_frame_time_ms", 0.0))
         p95_ms = float(metrics.get("p95_frame_time_ms", 0.0))
         samples = int(metrics.get("sample_count", 0))
@@ -2159,19 +2162,20 @@ class BenchmarkResults:
         self.output.append(
             '<div style="background:#222; border:1px solid #555; padding:12px; margin:4px 0 10px 0;">'
             '<div style="font-size:15px; font-weight:bold; color:#eeeeee; margin-bottom:4px;">%s</div>'
-            '<div style="color:#aaa;">%dx%d &nbsp; • &nbsp; %.2f ms average frame &nbsp; • &nbsp; %.2f ms p95</div>'
-            '<div style="color:#aaa;">%d SysMon samples &nbsp; • &nbsp; %.2f s measured &nbsp; • &nbsp; wall-clock %.2f FPS</div>'
+            '<div style="color:#aaa;">%dx%d &nbsp; • &nbsp; current frame %.2f ms &nbsp; • &nbsp; 60-frame average %.2f ms &nbsp; • &nbsp; p95 %.2f ms</div>'
+            '<div style="color:#aaa;">%d SysMon snapshots &nbsp; • &nbsp; %.2f s measured &nbsp; • &nbsp; SysMon FPS %.2f</div>'
             '<div style="color:#aaa;">VRAM %s &nbsp; • &nbsp; brushes %d visible / %d culled / %d total &nbsp; • &nbsp; entities %d</div>'
             '</div>'
             % (
                 self._html_escape(display_label),
                 width,
                 height,
+                current_frame_ms,
                 avg_ms,
                 p95_ms,
                 samples,
                 duration,
-                float(metrics.get("wall_clock_fps", 0.0)),
+                avg_fps,
                 self._format_vram(metrics),
                 int(metrics.get("visible_brushes", 0)),
                 int(metrics.get("culled_brushes", 0)),
