@@ -546,6 +546,24 @@ def test_a_render_state_snapshot_is_independent_of_later_writes():
         "published; it now reads %r" % snapshot.hud_message)
 
 
+def test_recycled_render_state_keeps_dense_projection_objects():
+    """Resetting a published buffer must not drop the dense renderer contract."""
+    game_state = ThreadedGameState()
+    initial_read = game_state.get_render_state()
+    render_table = initial_read.render_table
+    entity_table = initial_read.entity_table
+
+    game_state.request_swap()
+    recycled = game_state.get_write_state()
+
+    assert recycled.render_table is render_table
+    assert recycled.entity_table is entity_table
+    assert len(recycled.visible_brush_slots) == 0
+    assert len(recycled.all_brush_slots) == 0
+    assert len(recycled.visible_thing_slots) == 0
+    assert len(recycled.thing_hidden) == 0
+
+
 def test_the_published_brush_lists_are_not_materialised_unless_read(logic):
     """The frame must not end by converting visibility back into objects.
 
