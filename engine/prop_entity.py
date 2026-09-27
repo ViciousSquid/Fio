@@ -157,6 +157,8 @@ class Prop(_ModelBase):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties['type'] = 'prop'
+        # Runtime-only render state; never serialized into the map.
+        self._respawn_fade_alpha = 1.0
 
         authored_render_mode = 'render_mode' in self.properties
         authored_sprite_path = 'sprite_path' in self.properties
