@@ -3660,6 +3660,21 @@ class MainWindow(QMainWindow):
             self.view_3d.grid_visible = visible
             self.view_3d.update()
 
+    def set_connection_links_enabled(self, enabled):
+        """Set visibility of editor I/O connection links in all views."""
+        self.show_logic_links = bool(enabled)
+
+        action = getattr(self, 'connection_links_action', None)
+        if action is not None and action.isChecked() != self.show_logic_links:
+            action.blockSignals(True)
+            action.setChecked(self.show_logic_links)
+            action.blockSignals(False)
+
+        self.update_views()
+        self.show_toast(
+            "Connection Links: %s" % ("ON" if self.show_logic_links else "OFF")
+        )
+
     # ======================================================================
     # Base 2D tool: Select (marquee) vs Brush (draw geometry), Hammer-style
     # ======================================================================
