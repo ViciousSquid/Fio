@@ -502,6 +502,7 @@ class BenchmarkRunner:
         self._monster_chaos_aggro_injected = False
         self._monster_chaos_fighters = []
         self._monster_chaos_aggro_count = 0
+        self._restore_monster_chaos_ai_counter()
         self._timer.stop()
         self._measurement_active = False
         self._live_stress_active = False
@@ -802,6 +803,7 @@ class BenchmarkRunner:
         self._remove_monster_chaos_overlay()
         self._monster_chaos_aggro_injected = False
         self._monster_chaos_fighters = []
+        self._restore_monster_chaos_ai_counter()
         self._timer.stop()
         self._measurement_active = False
         self._live_stress_active = False
@@ -853,6 +855,7 @@ class BenchmarkRunner:
         self._remove_monster_chaos_overlay()
         self._monster_chaos_aggro_injected = False
         self._monster_chaos_fighters = []
+        self._restore_monster_chaos_ai_counter()
         self._timer.stop()
         self._measurement_active = False
         self._worker_active = False
@@ -924,6 +927,7 @@ class BenchmarkRunner:
         self._remove_monster_chaos_overlay()
         self._monster_chaos_aggro_injected = False
         self._monster_chaos_fighters = []
+        self._restore_monster_chaos_ai_counter()
         label = self._live_stress_label or (
             self._current[0] if self._current else "unknown"
         )
