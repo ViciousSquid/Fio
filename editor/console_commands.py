@@ -751,7 +751,7 @@ class ConsoleCommandHandler:
         self.main_window.update_all_ui()
 
     def _cmd_view_message(self, args, line):
-        """Draw a transient message in one of the two play-view message lines."""
+        """Draw a transient message in one of the play-view message lines."""
         text = (args or "").strip()
         if len(text) >= 2 and text[0] in ('"', "'") and text[-1] == text[0]:
             text = text[1:-1].strip()
@@ -766,7 +766,10 @@ class ConsoleCommandHandler:
 
         show_message = getattr(
             view_3d,
-            "show_view_message2" if line == "2" else "show_view_message",
+            {
+                "2": "show_view_message2",
+                "3": "show_view_message3",
+            }.get(line, "show_view_message"),
             None,
         )
         if not callable(show_message):
