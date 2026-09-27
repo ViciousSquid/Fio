@@ -788,7 +788,7 @@ def create_map_data(params, yield_hook=None):
             monster_positions.append((wx, wz))
             monster_rooms.add(grid.rooms.index(room))
 
-    # ------------------- HEALTH PICKUP SPAWNING -------------------
+    # ------------------- HEALTH COLLECTIBLE SPAWNING -------------------
     if params.get('spawn_health', False):
         health_count = params.get('health_count', 4)
         # Rooms that are allowed for health: no monster in them
@@ -842,7 +842,7 @@ def create_map_data(params, yield_hook=None):
                         })
                         placed = True
                         break
-                # If we couldn't place after MAX_ATTEMPTS, just skip this pickup
+                # If we couldn't place after MAX_ATTEMPTS, just skip this collectible
                 if not placed:
                     print(f"Warning: Could not place collectible Prop #{i} after {MAX_ATTEMPTS} attempts. Skipping.")
 
