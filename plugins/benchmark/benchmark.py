@@ -2207,11 +2207,11 @@ class BenchmarkResults:
             self.output.append(sweep_line)
             self.output.append(
                 '<div style="padding:4px 0;">'
-                '<span style="color:#eeeeee; font-weight:bold;">Average visible triangles: </span>'
+                '<span style="color:#eeeeee; font-weight:bold;">SysMon snapshot visible triangles: </span>'
                 '<span style="color:#ff9a32; font-weight:bold;">%.0f</span>'
-                '<span style="color:#eeeeee; font-weight:bold;"> &nbsp; • &nbsp; Average total triangles: </span>'
+                '<span style="color:#eeeeee; font-weight:bold;"> &nbsp; • &nbsp; SysMon snapshot total triangles: </span>'
                 '<span style="color:#ff9a32; font-weight:bold;">%.0f</span>'
-                '<span style="color:#eeeeee; font-weight:bold;"> &nbsp; • &nbsp; Average culled triangles: </span>'
+                '<span style="color:#eeeeee; font-weight:bold;"> &nbsp; • &nbsp; SysMon snapshot culled triangles: </span>'
                 '<span style="color:#ff9a32; font-weight:bold;">%.0f</span>'
                 '<span style="color:#eeeeee; font-weight:bold;"> &nbsp; • &nbsp; Culling efficiency: </span>'
                 '<span style="color:#ff9a32; font-weight:bold;">%.1f%%</span>'
