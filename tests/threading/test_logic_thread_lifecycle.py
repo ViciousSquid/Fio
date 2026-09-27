@@ -354,13 +354,13 @@ def test_further_health_changes_restart_the_fade_from_current_opacity(logic):
         first_change = start + 12.0
         thread.player_health = 90
         thread._update_hud_health_alpha(first_change + 6.0)
-        assert thread._hud_health_alpha == pytest.approx(0.75)
+        assert thread._hud_health_alpha == pytest.approx(0.875)
         assert thread._hud_health_fade_phase == "out"
 
         second_change = first_change + 6.0
         thread.player_health = 80
         alpha = thread._update_hud_health_alpha(second_change)
-        assert alpha == pytest.approx(0.75)
+        assert alpha == pytest.approx(0.875)
         assert thread._hud_health_fade_phase == "in"
 
         alpha = thread._update_hud_health_alpha(second_change + 4.0)
