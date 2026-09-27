@@ -203,7 +203,18 @@ class LogicThread(threading.Thread):
         # HUD visibility follows LogicCamera control. When a cinematic ends,
         # the entire HUD fades back in over four seconds.
         self._hud_cinematic_last_active = False
+        self._hud_cinematic_fade_started = None
+
+        # The health count has its own fade state. It starts hidden at player
+        # spawn, fades to full over four seconds, then settles to 50% opacity.
+        # Any health-value change starts a four-second fade to full opacity and
+        # holds full for five seconds before fading back to the 50% idle state.
+        self._hud_health_alpha = 0.5
+        self._hud_health_last_value = None
         self._hud_health_fade_started = None
+        self._hud_health_fade_from = 0.5
+        self._hud_health_hold_until = None
+        self._hud_health_fade_phase = "idle"
 
         # RenderState already owns one persistent RenderTable/EntityTable pair.
         # Keep these aliases only for diagnostics and older tests/code that inspect
@@ -1155,7 +1166,17 @@ class LogicThread(threading.Thread):
             self.cinematic_state = None
             self.camera_transition = None
             self._hud_cinematic_last_active = False
-            self._hud_health_fade_started = None
+            self._hud_cinematic_fade_started = None
+
+            # Start the health HUD hidden; it fades to full over four seconds
+            # from player spawn, then begins its normal 50% idle fade-out.
+            _hud_now = time.perf_counter()
+            self._hud_health_alpha = 0.0
+            self._hud_health_last_value = self.player_health
+            self._hud_health_fade_started = _hud_now
+            self._hud_health_fade_from = 0.0
+            self._hud_health_hold_until = None
+            self._hud_health_fade_phase = "in"
 
             # Reset portal transit state
             self._portal_cooldowns.clear()
@@ -1243,7 +1264,13 @@ class LogicThread(threading.Thread):
             self.cinematic_state = None
             self.camera_transition = None
             self._hud_cinematic_last_active = False
+            self._hud_cinematic_fade_started = None
+            self._hud_health_alpha = 0.5
+            self._hud_health_last_value = None
             self._hud_health_fade_started = None
+            self._hud_health_fade_from = 0.5
+            self._hud_health_hold_until = None
+            self._hud_health_fade_phase = "idle"
 
             # Reset portal transit state
             self._portal_cooldowns.clear()
@@ -3843,6 +3870,77 @@ class LogicThread(threading.Thread):
     # RENDER STATE PREPARATION
     # =========================================================================
 
+    def _update_hud_health_alpha(self, now: float) -> float:
+        """Advance the health HUD opacity state machine and return its alpha."""
+        health = self.player_health
+        if self._hud_health_last_value is None:
+            self._hud_health_last_value = health
+
+        # Any actual health-value change gets the health count back toward full
+        # opacity. The five-second quiet period starts at the value change, not
+        # after the four-second fade-in has completed.
+        if health != self._hud_health_last_value:
+            self._hud_health_last_value = health
+            self._hud_health_fade_started = now
+            self._hud_health_fade_from = self._hud_health_alpha
+            self._hud_health_hold_until = now + 5.0
+            self._hud_health_fade_phase = "in"
+
+        phase = self._hud_health_fade_phase
+        if phase == "in":
+            started = self._hud_health_fade_started
+            if started is None:
+                self._hud_health_alpha = 1.0
+            else:
+                t = max(0.0, min(1.0, (now - started) / 4.0))
+                self._hud_health_alpha = (
+                    self._hud_health_fade_from
+                    + (1.0 - self._hud_health_fade_from) * t
+                )
+
+                if t >= 1.0:
+                    self._hud_health_alpha = 1.0
+                    hold_until = self._hud_health_hold_until
+                    if hold_until is None:
+                        # Spawn behaviour: once full opacity has been reached,
+                        # immediately begin the four-second fade to the 50% idle
+                        # state.
+                        self._hud_health_fade_started = now
+                        self._hud_health_fade_from = 1.0
+                        self._hud_health_fade_phase = "out"
+                    elif now < hold_until:
+                        self._hud_health_fade_phase = "hold"
+                    else:
+                        self._hud_health_fade_started = now
+                        self._hud_health_fade_from = 1.0
+                        self._hud_health_fade_phase = "out"
+
+        elif phase == "hold":
+            self._hud_health_alpha = 1.0
+            hold_until = self._hud_health_hold_until
+            if hold_until is None or now >= hold_until:
+                self._hud_health_fade_started = now
+                self._hud_health_fade_from = 1.0
+                self._hud_health_fade_phase = "out"
+
+        elif phase == "out":
+            started = self._hud_health_fade_started
+            if started is None:
+                self._hud_health_alpha = 0.5
+                self._hud_health_fade_phase = "idle"
+            else:
+                t = max(0.0, min(1.0, (now - started) / 4.0))
+                self._hud_health_alpha = 1.0 - (0.5 * t)
+                if t >= 1.0:
+                    self._hud_health_alpha = 0.5
+                    self._hud_health_fade_started = None
+                    self._hud_health_fade_phase = "idle"
+
+        else:
+            self._hud_health_alpha = 0.5
+
+        return self._hud_health_alpha
+
     def _prepare_render_state(self):
         write_state = self.game_state.get_write_state()
         write_state.is_play_mode = self.play_mode
@@ -3927,23 +4025,26 @@ class LogicThread(threading.Thread):
         now = time.perf_counter()
         if cinematic_active:
             self._hud_cinematic_last_active = True
-            self._hud_health_fade_started = None
-            hud_health_alpha = 0.0
+            self._hud_cinematic_fade_started = None
+            hud_alpha = 0.0
         elif self._hud_cinematic_last_active:
             self._hud_cinematic_last_active = False
-            self._hud_health_fade_started = now
-            hud_health_alpha = 0.0
-        elif self._hud_health_fade_started is not None:
-            hud_health_alpha = min(
-                1.0, max(0.0, (now - self._hud_health_fade_started) / 4.0)
+            self._hud_cinematic_fade_started = now
+            hud_alpha = 0.0
+        elif self._hud_cinematic_fade_started is not None:
+            hud_alpha = min(
+                1.0, max(0.0, (now - self._hud_cinematic_fade_started) / 4.0)
             )
-            if hud_health_alpha >= 1.0:
-                self._hud_health_fade_started = None
+            if hud_alpha >= 1.0:
+                self._hud_cinematic_fade_started = None
         else:
-            hud_health_alpha = 1.0
+            hud_alpha = 1.0
+
+        health_hud_alpha = self._update_hud_health_alpha(now)
 
         write_state.cinematic_camera_active = cinematic_active
-        write_state.hud_alpha = hud_health_alpha
+        write_state.hud_alpha = hud_alpha
+        write_state.hud_health_alpha = health_hud_alpha
         write_state.player_health = self.player_health
         write_state.player_max_health = self.player_max_health
         write_state.player_dead = self.player_dead
