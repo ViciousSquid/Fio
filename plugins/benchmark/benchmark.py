@@ -1415,18 +1415,21 @@ class BenchmarkRunner:
             raise RuntimeError("Monster chaos witness lost its live state")
 
         if phase == "team2_wait" and now >= self._monster_chaos_next_spawn:
-            for _ in range(5):
-                monster_type = rng.choice(("human", "flying"))
-                monster = self.tests._spawn_monster_chaos_entity(
+            team2_types = [rng.choice(("human", "flying")) for _ in range(5)]
+            if all(mtype == "human" for mtype in team2_types):
+                team2_types[-1] = "flying"
+            elif all(mtype == "flying" for mtype in team2_types):
+                team2_types[-1] = "human"
+
+            for monster_type in team2_types:
+                self.tests._spawn_monster_chaos_entity(
                     logic,
                     rng,
                     team="team2",
                     position=self.tests._monster_chaos_random_position(rng, monster_type),
                     spawn_index=self._monster_chaos_spawn_index,
                     monster_type=monster_type,
-                ) if hasattr(self, "_bench_spawn_monster_chaos") else None
-                if monster is None:
-                    raise RuntimeError("Monster chaos witness spawn helper unavailable")
+                )
                 self._monster_chaos_spawn_index += 1
                 self._monster_chaos_total += 1
 
