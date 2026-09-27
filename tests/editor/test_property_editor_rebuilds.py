@@ -237,7 +237,7 @@ def test_shader_change_immediately_invalidates_dense_brush_classification(panel)
     table.begin_frame(host.state.brushes, epoch, dirty_objects=dirty)
 
     assert id(brush) in dirty
-    assert not (table.class_bits[0] & 2)
+    assert not (table.class_bits[0] & CLASS_FOG)
 
 
 def test_trigger_change_immediately_invalidates_dense_brush_classification(panel):
