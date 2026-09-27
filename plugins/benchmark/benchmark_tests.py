@@ -426,11 +426,13 @@ class BenchmarkTests:
                     "live_10000_brushes": 10000,
                     "live_100000_brushes": 100000,
                 }[label]
-                # Preparation is staged in fixed 500-brush batches. The
-                # renderer and Qt event loop get a real opportunity to process
-                # each published intermediate scene, without the old 25 ms
-                # per-brush delay that made 100K take tens of minutes.
-                batch_count = int(math.ceil(brush_count / 500.0))
+                # Keep the smaller workloads finely staged, but let the
+                # 100K workload move in moderately larger chunks so construction
+                # does not spend most of its time crossing the live-publish
+                # boundary. This is still small enough to keep the renderer and
+                # Qt event loop responsive between insertions.
+                batch_size = 1000 if brush_count >= 100000 else 500
+                batch_count = int(math.ceil(brush_count / float(batch_size)))
                 self._preparation_deadline = max(
                     self._preparation_deadline,
                     time.perf_counter() + batch_count * 3.0 + 60.0,
@@ -452,7 +454,7 @@ class BenchmarkTests:
                     yield_hook=cooperative_yield,
                     camera_position=camera_position,
                     camera_yaw=camera_yaw,
-                    batch_size=500,
+                    batch_size=batch_size,
                 )
                 bench.load_live_benchmark_world(
                     window,
