@@ -1129,7 +1129,7 @@ layout (location = 10) in vec4 iPayload;
         gl.glUseProgram(shader)
         self._current_shader = shader
         self._upload_env_uniforms('sprite_instanced')
-        gl.glUniform1i(self.uniforms['sprite_instanced']['use_fixed_facing'], 0)
+        gl.glUniform1i(uniforms['use_fixed_facing'], 0)
         gl.glUniformMatrix4fv(
             uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection)
         )
@@ -1138,7 +1138,6 @@ layout (location = 10) in vec4 iPayload;
         )
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniforms['sprite_texture'], 0)
-        gl.glUniform1i(uniforms['use_fixed_facing'], 1)
         gl.glBindVertexArray(self._ensure_sprite_instance_vao())
 
         current_tex = None
@@ -2779,6 +2778,7 @@ layout (location = 9) in vec4 iNormal2;
                               glm.value_ptr(view))
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniforms['sprite_texture'], 0)
+        gl.glUniform1i(uniforms['use_fixed_facing'], 1)
         gl.glBindVertexArray(self._ensure_sprite_instance_vao())
 
         current_tex = None
