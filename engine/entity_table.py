@@ -122,9 +122,6 @@ ENT_MODE_MODEL      = 1 << 3
 ENT_MODE_BILLBOARD  = 1 << 4
 #: Carries a ``sprite_path``.
 ENT_HAS_SPRITE      = 1 << 5
-#: A Pickup.  Tested first by ``_thing_render_kind``, so it wins over the bits
-#: below even for an entity that would otherwise classify as a sprite.
-ENT_PICKUP          = 1 << 6
 #: Monster / LogicGate / LogicRelay / LogicTimer / LevelChanger -- the classes
 #: ``_thing_render_kind`` calls ``entity_sprite``.
 ENT_ENTITY_SPRITE   = 1 << 7
@@ -294,19 +291,6 @@ def sprite_candidates(thing):
                 key = 'propsprite__%s' % path.replace('/', '__').replace('.', '_')
                 filename, subfolder = _split_asset_path(path)
                 out.append((key, filename, subfolder, True))
-    elif Pickup is not None and isinstance(thing, Pickup):
-        if thing.is_key():
-            # Lookup only: update_instance_textures never loads this one, so a
-            # key sprite that was never registered falls through to the class
-            # texture rather than being loaded here.
-            out.append(('key_%s' % thing.get_key_name(),) + _LOOKUP_ONLY[:2]
-                       + (False,))
-        elif props.get('custom_sprite'):
-            custom = str(props.get('custom_sprite'))
-            filename = os.path.basename(custom.replace('\\', '/'))
-            # Loaded but not cached under a key of its own, as the object path
-            # does -- load_texture has its own cache, so this is not a re-read.
-            out.append(('', filename, 'sprites', False))
     elif LevelChanger is not None and isinstance(thing, LevelChanger):
         return (('LevelChanger', 'levelchanger.png', 'sprites', True),)
     elif LogicRelay is not None and isinstance(thing, LogicRelay):
@@ -393,8 +377,6 @@ def _entity_class_bits(thing) -> int:
     elif render_mode == 'billboard':
         bits |= ENT_MODE_BILLBOARD
 
-    if Pickup is not None and isinstance(thing, Pickup):
-        bits |= ENT_PICKUP
     entity_sprite_types = tuple(
         c for c in (Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger)
         if c is not None)
@@ -406,7 +388,7 @@ def _entity_class_bits(thing) -> int:
         bits |= ENT_LIGHT
     if Effect is not None and isinstance(thing, Effect):
         bits |= ENT_EFFECT
-    warm_types = tuple(c for c in (Monster, LogicGate, Pickup, Prop)
+    warm_types = tuple(c for c in (Monster, LogicGate, Prop)
                        if c is not None)
     if warm_types and isinstance(thing, warm_types):
         bits |= ENT_SPRITE_WARM
@@ -587,14 +569,6 @@ def sprite_state(thing):
         )
     if LogicGate is not None and isinstance(thing, LogicGate):
         return ('LogicGate', str(props.get('logic_type', 'and')).lower())
-    if Pickup is not None and isinstance(thing, Pickup):
-        return (
-            'Pickup',
-            str(props.get('item_type', 'health')),
-            str(props.get('weapon', 'gun1')),
-            str(props.get('key_name', 'blue_key')),
-            str(props.get('custom_sprite', '')),
-        )
     if Prop is not None and isinstance(thing, Prop):
         return (
             'Prop',
@@ -1584,7 +1558,7 @@ def classify_slots(table, slots, hidden, is_play, show_sprites):
     2. a Portal, or a monster snapshot, is a sprite;
     3. a visible model (``model_path``, ``render_mode == 'model'``, not hidden)
        goes to the model pass;
-    4. otherwise the entity's *kind* decides -- Pickup first, then the
+    4. otherwise the entity's *kind* decides -- the
        entity-sprite classes, then billboard-with-a-sprite, then ordinary --
        with a Prop drawn only as a billboard, a model-but-hidden entity drawn
        nowhere, and an ordinary entity drawn only while editing or with
