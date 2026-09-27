@@ -269,15 +269,17 @@ def test_entity_refs_follow_the_dense_snapshot_when_things_are_appended_mid_fram
     rather than enumerate a list that has just grown.
     """
     thread = logic(things=[])
-    original_begin_frame = thread._entity_table.begin_frame
+    table_type = type(thread._entity_table)
+    original_begin_frame = table_type.begin_frame
     monster = make_thing(Monster, "late_monster", (0, 96, -300))
 
-    def begin_frame_then_append(things, *args, **kwargs):
-        hidden = original_begin_frame(things, *args, **kwargs)
-        things.append(monster)
+    def begin_frame_then_append(table, things, *args, **kwargs):
+        hidden = original_begin_frame(table, things, *args, **kwargs)
+        if table is thread._entity_table:
+            things.append(monster)
         return hidden
 
-    monkeypatch.setattr(thread._entity_table, "begin_frame", begin_frame_then_append)
+    monkeypatch.setattr(table_type, "begin_frame", begin_frame_then_append)
 
     thread._prepare_render_state()
 
@@ -286,7 +288,7 @@ def test_entity_refs_follow_the_dense_snapshot_when_things_are_appended_mid_fram
     assert len(published.entity_refs) == 0
 
     # The appended entity is reconciled normally on the next publication.
-    monkeypatch.setattr(thread._entity_table, "begin_frame", original_begin_frame)
+    monkeypatch.setattr(table_type, "begin_frame", original_begin_frame)
     thread._prepare_render_state()
 
     published = thread.game_state.get_write_state()
