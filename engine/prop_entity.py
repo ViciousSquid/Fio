@@ -134,27 +134,18 @@ class Prop(_ModelBase):
     COLLECT_TYPES = COLLECT_TYPES
 
     pixmap_path = "assets/sprites/pickup.png"
+    # These are serialized implementation fields, not an inspector checklist.
+    # The Prop editor presents them as Representation / Interaction /
+    # Collection / Carry settings and only reveals type-relevant controls.
     EDITOR_PRIMARY_PROPERTIES = (
-        'render_mode',
-        'sprite_path',
-        'sprite_size',
-        'carry_enabled',
+        'disabled',
+    )
+    EDITOR_ADVANCED_PROPERTIES = (
         'carry_reach',
         'carry_distance',
         'carry_offset',
         'drop_velocity',
         'drop_angular_velocity',
-        'collect_enabled',
-        'collect_type',
-        'collect_weapon',
-        'collect_value',
-        'collect_activation',
-        'collect_key_name',
-        'collect_custom_sprite',
-        'collect_respawns',
-        'collect_respawn_time',
-        'collect_collected',
-        'disabled',
     )
 
     def __init__(self, pos=None, properties=None):
@@ -169,6 +160,16 @@ class Prop(_ModelBase):
 
         if not authored_render_mode:
             self.properties['render_mode'] = self._implied_render_mode()
+
+        # Model representation must always have a usable mesh, even for a map
+        # authored with render_mode="model" but no model_path. This keeps the
+        # representation switch a complete editor operation rather than a blank
+        # entity waiting for an implementation detail to be filled in.
+        if (
+            self.properties.get('render_mode') == 'model'
+            and not self.properties.get('model_path')
+        ):
+            self.properties['model_path'] = self.DEFAULT_MODEL_PATH
 
         # A collectible Prop with no explicit appearance follows its collection
         # payload. An authored sprite_path always wins.
