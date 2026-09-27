@@ -1122,17 +1122,13 @@ class View2D(QWidget):
 
         # F1 Synchronization ---
         if event.key() == Qt.Key_F1:
-            # Toggle the global flag on the editor state
+            # Keep the View-menu action and the 2D/3D shortcut in sync.
             current_state = getattr(self.editor, 'show_logic_links', False)
-            self.editor.show_logic_links = not current_state
-
-            # Force redraw of both views (2D and 3D)
-            self.editor.update_views()
-
-            # Show toast
-            if hasattr(self.main_window, 'show_toast'):
-                status = "ON" if self.editor.show_logic_links else "OFF"
-                self.main_window.show_toast(f"Logic Links: {status}")
+            if hasattr(self.main_window, 'set_connection_links_enabled'):
+                self.main_window.set_connection_links_enabled(not current_state)
+            else:
+                self.editor.show_logic_links = not current_state
+                self.editor.update_views()
             return
 
         # --- Arrow Key Nudging ---
