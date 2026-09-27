@@ -572,8 +572,19 @@ class PropSession:
 
         self.held = None
         carry_yaw = getattr(prop, "_carry_sprite_yaw", None)
-        if self.physics is not None and p.get("physics_enabled", False):
+        physics_body = (
+            self.physics.get_body(prop)
+            if self.physics is not None
+            and hasattr(self.physics, "get_body")
+            else None
+        )
+        use_physics_drop = (
+            physics_body is not None
+            and bool(p.get("physics_enabled", False))
+        )
+        if self.physics is not None:
             self.physics.set_kinematic(prop, False)
+        if use_physics_drop:
             self.physics.wake(
                 prop,
                 [0.0, float(p.get("drop_velocity", 0.0)), 0.0],
