@@ -438,6 +438,9 @@ class QtGameView(QOpenGLWidget):
         self._cached_weapon_pickup = {}   # (item_type, size) -> scaled QPixmap
         self._cached_key_pixmaps = {}
         self._cached_key_size = 100
+        self._cached_prompt_key = None
+        self._cached_prompt_key_pixmap = None
+        self._cached_prompt_key_size = 64
 
         self._key_fallback_cache = {
             'blue_key':   (QColor(50, 100, 200), QPen(QColor(40, 80, 160), 2), QBrush(QColor(50, 100, 200))),
@@ -1637,6 +1640,7 @@ class QtGameView(QOpenGLWidget):
             painter.drawLine(cx - size, cy, cx + size, cy)
             painter.drawLine(cx, cy - size, cx, cy + size)
         msg = getattr(self, '_cached_hud_message', '')
+        prompt_key = getattr(render_state, 'hud_prompt_key', None) if render_state is not None else None
         if msg:
             if self._cached_hud_message != msg:
                 self._cached_hud_message = msg
@@ -1649,6 +1653,37 @@ class QtGameView(QOpenGLWidget):
             painter.drawText(cx - tw // 2 + 2, cy + 2, msg)
             painter.setPen(self._hud_grey_pen)
             painter.drawText(cx - tw // 2, cy, msg)
+
+            if prompt_key:
+                prompt_size = self._cached_prompt_key_size
+                if self._cached_prompt_key != prompt_key:
+                    self._cached_prompt_key = prompt_key
+                    self._cached_prompt_key_pixmap = None
+                if self._cached_prompt_key_pixmap is None:
+                    try:
+                        pixmap = Pickup.get_key_pixmap(prompt_key)
+                        if pixmap and not pixmap.isNull():
+                            self._cached_prompt_key_pixmap = pixmap.scaled(
+                                prompt_size, prompt_size,
+                                Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    except Exception:
+                        self._cached_prompt_key_pixmap = None
+                if (self._cached_prompt_key_pixmap is not None
+                        and not self._cached_prompt_key_pixmap.isNull()):
+                    scaled = self._cached_prompt_key_pixmap
+                    painter.drawPixmap(
+                        cx - scaled.width() // 2,
+                        cy + 10,
+                        scaled,
+                    )
+                else:
+                    self._draw_key_fallback(
+                        painter,
+                        prompt_key,
+                        cx - prompt_size // 2,
+                        cy + 10,
+                        prompt_size,
+                    )
         hint = getattr(self, '_play_mode_hint', '')
         if hint and not msg:
             if self._cached_hint_text != hint:
