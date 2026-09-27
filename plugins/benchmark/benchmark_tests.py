@@ -391,12 +391,14 @@ class BenchmarkTests:
                 # MonsterAI must remain in its normal targeting/combat path.
                 logic.god_mode = True
                 logic.notarget = False
+                self._install_monster_chaos_ai_counter(logic)
 
                 self._monster_chaos_aggro_injected = False
-                self._monster_chaos_fighters = []
+                self._monster_chaos_ai_decisions = 0
+                self._monster_chaos_ai_updates = 0
                 self._monster_chaos_aggro_delay = 2.0
                 self._monster_chaos_info = dict(chaos_info)
-                self._show_monster_chaos_overlay(10.0)
+                self._show_monster_chaos_overlay(15.0)
                 self._append(
                     "  Monster chaos witness: seed 43, 50 mixed monsters (30 human / 20 flying) in two hostile teams, "
                     "PathNode '%s'. All monsters are converging; infighting "
@@ -411,9 +413,9 @@ class BenchmarkTests:
                     )
                 )
 
-                self._current = ("monster_chaos_witness", 10.0, None)
+                self._current = ("monster_chaos_witness", 15.0, None)
                 self._phase_started = time.perf_counter()
-                self._measurement_deadline = self._phase_started + 10.0
+                self._measurement_deadline = self._phase_started + 15.0
                 self._measurement_watchdog_deadline = (
                     self._phase_started + self._live_stress_timeout_for(label)
                 )
