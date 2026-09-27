@@ -52,7 +52,7 @@ TESTS = (
 
 
 class BenchmarkManager(QDialog):
-    STARTUP_TIMEOUT = 300.0
+    STARTUP_TIMEOUT = 120.0
     INACTIVITY_TIMEOUT = 120.0
     ABSOLUTE_TIMEOUT = 900.0
 
@@ -73,7 +73,7 @@ class BenchmarkManager(QDialog):
         self.has_current_map = False
 
         self.setWindowTitle("Fio Benchmark")
-        self.resize(760, 580)
+        self.resize(640, 580)
         benchmark_font = QFont(QApplication.font())
         benchmark_font.setPointSize(max(6, benchmark_font.pointSize() - 2))
         self._font_size = benchmark_font.pointSize()
