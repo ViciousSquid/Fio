@@ -265,6 +265,10 @@ class DebugTablesWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.setInterval(250)
         self.timer.timeout.connect(self.refresh)
+        self._last_raw_signature = {}
+        self._last_keys_text = None
+        self._last_memory_text = None
+        self._last_follow_text = None
         self.timer.start()
         self.destroyed.connect(self._stop)
         self.refresh()
@@ -552,12 +556,29 @@ class DebugTablesWindow(QMainWindow):
             self.status.setText("ATTACHED — dense tables not published yet")
             return
 
-        self.render_raw.update_table(self.render)
-        self.entity_raw.update_table(self.entities)
+        self._update_raw_tables()
         self._update_dashboard(started)
         self._update_keys()
         self._update_memory()
         self._update_follow()
+
+    def _update_raw_tables(self):
+        """Refresh raw models only when their selected array actually changed."""
+        for raw, table in (
+            (self.render_raw, self.render), (self.entity_raw, self.entities)
+        ):
+            name = raw.selector.currentText()
+            value = getattr(table, name, None) if name else None
+            count = int(getattr(table, "count", 0))
+            signature = (
+                id(table), name, id(value), count,
+                tuple(value.shape) if isinstance(value, np.ndarray) else None,
+                str(value.dtype) if isinstance(value, np.ndarray) else None,
+            )
+            if signature == self._last_raw_signature.get(id(raw)):
+                continue
+            self._last_raw_signature[id(raw)] = signature
+            raw.update_table(table)
 
     def _update_dashboard(self, started):
         rbytes, _ = _num_bytes(self.render)
@@ -670,7 +691,10 @@ class DebugTablesWindow(QMainWindow):
             lines.append(
                 f"  0x{int(key):09X} {bar:<30} {int(count):,}"
             )
-        self.keys_text.setText("\n".join(lines))
+        text = "\n".join(lines)
+        if text != self._last_keys_text:
+            self.keys_text.setText(text)
+            self._last_keys_text = text
 
     def _update_memory(self):
         lines = [
@@ -692,7 +716,10 @@ class DebugTablesWindow(QMainWindow):
                     f"  {name:<30} {str(shown_shape):<20} "
                     f"{str(value.dtype):<10} {int(value.nbytes):>10,}"
                 )
-        self.memory_text.setText("\n".join(lines))
+        text = "\n".join(lines)
+        if text != self._last_memory_text:
+            self.memory_text.setText(text)
+            self._last_memory_text = text
 
     def _update_follow(self):
         if not self.follow.isChecked():
@@ -767,10 +794,13 @@ class DebugTablesWindow(QMainWindow):
             key_id = int(self.entities.sprite_key_id[int(eslot)])
             if key_id >= 0:
                 chain.append(f"sprite-key={key_id}")
-        self.status.setText(
-            self.status.text().split("  |  FOLLOW")[0]
-            + "  |  " + " -> ".join(chain)
-        )
+        follow_text = " -> ".join(chain)
+        if follow_text != self._last_follow_text:
+            self.status.setText(
+                self.status.text().split("  |  FOLLOW")[0]
+                + "  |  " + follow_text
+            )
+            self._last_follow_text = follow_text
 
 
 _INSTANCE = None
