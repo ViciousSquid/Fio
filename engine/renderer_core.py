@@ -843,10 +843,10 @@ layout (location = 10) in vec4 iPayload;
                 extra_uniforms=['lightSpaceMatrix', 'lightPos', 'far_plane']):
             print(f'{_BASE_RENDERER_PREFIX} Shadow depth instancing shader compiled successfully.')
 
-    #: Per-instance attributes the sprite pass carries: the billboard's centre
-    #: and its world size.  Five floats, against the two uniform uploads and
+    #: Per-instance attributes the sprite pass carries: the billboard's centre,
+    #: world size, and optional locked world-facing yaw.  Six floats.
     #: the draw call each sprite used to cost.
-    SPRITE_INSTANCE_FLOATS = 5
+    SPRITE_INSTANCE_FLOATS = 6
 
     def _compile_instanced_sprite_shader(self):
         """Compile the billboard shader with its centre and size per instance.
@@ -876,17 +876,20 @@ layout (location = 10) in vec4 iPayload;
             'out vec2 TexCoords;',
             'layout (location = 1) in vec3 iSpritePos;\n'
             'layout (location = 2) in vec2 iSpriteSize;\n'
+            'layout (location = 3) in float iSpriteFixedYaw;\n'
             'out vec2 TexCoords;', 1)
         source = source.replace('sprite_pos_world', 'iSpritePos')
         source = source.replace('sprite_size.x', 'iSpriteSize.x')
         source = source.replace('sprite_size.y', 'iSpriteSize.y')
+        source = source.replace('sprite_fixed_yaw', 'iSpriteFixedYaw')
         if 'iSpritePos' not in source or 'iSpriteSize.x' not in source:
             # The shader did not look the way this rewrite assumes; leaving the
             # program absent keeps the per-sprite path, which every caller has.
             return
         if self._register_instanced_shader('sprite_instanced', source, frag,
                                            extra_uniforms=['projection', 'view',
-                                                           'sprite_texture']):
+                                                           'sprite_texture',
+                                                           'use_fixed_facing']):
             print(f'{_BASE_RENDERER_PREFIX} Sprite instancing shader compiled successfully.')
 
     # One Effect row expands into deterministic virtual flame cards.
@@ -1126,6 +1129,7 @@ layout (location = 10) in vec4 iPayload;
         gl.glUseProgram(shader)
         self._current_shader = shader
         self._upload_env_uniforms('sprite_instanced')
+        gl.glUniform1i(self.uniforms['sprite_instanced']['use_fixed_facing'], 0)
         gl.glUniformMatrix4fv(
             uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection)
         )
@@ -1134,6 +1138,7 @@ layout (location = 10) in vec4 iPayload;
         )
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniforms['sprite_texture'], 0)
+        gl.glUniform1i(uniforms['use_fixed_facing'], 1)
         gl.glBindVertexArray(self._ensure_sprite_instance_vao())
 
         current_tex = None
@@ -1343,7 +1348,9 @@ layout (location = 10) in vec4 iPayload;
         gl.glEnableVertexAttribArray(0)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
         stride = self.SPRITE_INSTANCE_FLOATS * 4
-        for location, size, offset in ((1, 3, 0), (2, 2, 12)):
+        for location, size, offset in (
+            (1, 3, 0), (2, 2, 12), (3, 1, 20)
+        ):
             gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
                                      stride, ctypes.c_void_p(offset))
             gl.glEnableVertexAttribArray(location)
@@ -1365,7 +1372,9 @@ layout (location = 10) in vec4 iPayload;
         #: submission tests to recover what a run actually drew.
         self._sprite_instance_base = base
         origin = base * stride
-        for location, size, offset in ((1, 3, 0), (2, 2, 12)):
+        for location, size, offset in (
+            (1, 3, 0), (2, 2, 12), (3, 1, 20)
+        ):
             gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
                                      stride, ctypes.c_void_p(origin + offset))
 
@@ -2749,10 +2758,11 @@ layout (location = 9) in vec4 iNormal2;
         data = self._sprite_instance_data[:count]
         sorted_slots = self._sprite_sorted_slots_scratch[:count]
         np.take(slots, order, out=sorted_slots)
-        # Gather directly into the reusable GPU staging buffer.  The explicit
+        # Gather directly into the reusable GPU staging buffer. The explicit
         # out= avoids a temporary (N,3)/(N,2) array on every sprite frame.
         np.take(table.pos, sorted_slots, axis=0, out=data[:, 0:3])
-        np.take(table.sprite_size, sorted_slots, axis=0, out=data[:, 3:5])
+        np.take(table.sprite_size, sorted_slots, out=data[:, 3:5])
+        np.take(table.sprite_fixed_yaw, sorted_slots, out=data[:, 5])
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
 
