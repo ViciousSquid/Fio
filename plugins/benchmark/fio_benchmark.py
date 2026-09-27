@@ -455,12 +455,20 @@ def _make_renderer_stress_scene():
     return state.brushes, state.things
 
 
-def _prepare_brush_stress_scene(brush_count, yield_hook=None):
-    """Prepare the non-brush scene data and a lazy brush factory.
+def _prepare_brush_stress_scene(
+    brush_count,
+    yield_hook=None,
+    camera_position=None,
+    camera_yaw=None,
+    batch_size=500,
+):
+    """Prepare scene data and a lazy camera-aware brush batch factory.
 
-    The live benchmark consumes the returned iterator gradually so it never
-    inserts the entire 1K/10K/100K brush workload into EditorState in one
-    synchronous burst.
+    The live benchmark inserts fixed-size batches into EditorState so the real
+    3D view and LogicThread get time between staging steps. Tile order is biased
+    toward the camera's forward half-space, so the first published batches are
+    immediately useful to the live 3D renderer instead of beginning at an
+    arbitrary far corner of the stress grid.
     """
     import copy
     import math
@@ -534,6 +542,8 @@ def _prepare_brush_stress_scene(brush_count, yield_hook=None):
         dtype=np.float64,
     )
 
+    batch_size = max(1, int(batch_size))
+
     # Keep non-brush entities aligned with the shifted scene tile immediately;
     # only brushes themselves are staged over time.
     for thing in data.get("things", []):
@@ -542,53 +552,108 @@ def _prepare_brush_stress_scene(brush_count, yield_hook=None):
             pos[0] = float(pos[0]) + scene_shift[0]
             pos[2] = float(pos[2]) + scene_shift[1]
 
-    def _iter_brushes():
-        for output_index in range(brush_count):
-            if yield_hook is not None:
-                yield_hook()
+    # Order tiles by camera usefulness rather than raw grid index. The first
+    # batches are the tiles in front of the current 3D camera, nearest first.
+    # Remaining tiles follow by distance so the whole scene remains identical.
+    tile_order = list(range(tile_count))
+    if camera_position is not None and camera_yaw is not None:
+        camera_x = float(camera_position[0])
+        camera_z = float(camera_position[2])
+        yaw = math.radians(float(camera_yaw))
+        forward_x = math.sin(yaw)
+        forward_z = math.cos(yaw)
+        forward_norm = max(1e-9, math.hypot(forward_x, forward_z))
+        forward_x /= forward_norm
+        forward_z /= forward_norm
 
-            source_index = output_index % source_count
-            tile_index = output_index // source_count
-            tile_offset_x = (tile_index % grid_dim) - (grid_dim - 1) * 0.5
-            tile_offset_z = (tile_index // grid_dim) - (grid_dim - 1) * 0.5
-
-            brush = copy.deepcopy(source[source_index])
-            position = list(brush.get("pos", [0.0, 0.0, 0.0]))
-            size = np.asarray(
-                brush.get("size", [64.0, 64.0, 64.0]),
-                dtype=np.float64,
+        scored = []
+        for tile_index in tile_order:
+            tile_offset_x = (
+                (tile_index % grid_dim) - (grid_dim - 1) * 0.5
             )
-            scale = size_patterns[output_index % len(size_patterns)]
-
-            position[0] = (
-                float(position[0])
-                + scene_shift[0]
-                + float(tile_offset_x * tile_spacing_x)
+            tile_offset_z = (
+                (tile_index // grid_dim) - (grid_dim - 1) * 0.5
             )
-            position[2] = (
-                float(position[2])
-                + scene_shift[1]
-                + float(tile_offset_z * tile_spacing_z)
-            )
-            size = np.maximum(np.abs(size) * scale, 8.0)
+            tile_x = scene_shift[0] + float(tile_offset_x * tile_spacing_x)
+            tile_z = scene_shift[1] + float(tile_offset_z * tile_spacing_z)
+            dx = tile_x - camera_x
+            dz = tile_z - camera_z
+            distance_sq = dx * dx + dz * dz
+            forward_dot = dx * forward_x + dz * forward_z
+            scored.append((
+                0 if forward_dot >= 0.0 else 1,
+                distance_sq,
+                tile_index,
+            ))
+        scored.sort()
+        tile_order = [item[2] for item in scored]
 
-            brush["pos"] = [
-                float(position[0]),
-                float(position[1]),
-                float(position[2]),
-            ]
-            brush["size"] = [float(v) for v in size]
-            brush["id"] = "benchmark_generated_%d" % output_index
-            yield brush
+    def _iter_brush_batches():
+        batch = []
+        for tile_index in tile_order:
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+
+            tile_offset_x = (
+                (tile_index % grid_dim) - (grid_dim - 1) * 0.5
+            )
+            tile_offset_z = (
+                (tile_index // grid_dim) - (grid_dim - 1) * 0.5
+            )
+            tile_start = tile_index * source_count
+            tile_end = min(tile_start + source_count, brush_count)
+
+            for output_index in range(tile_start, tile_end):
+                source_index = output_index % source_count
+                brush = copy.deepcopy(source[source_index])
+                position = list(brush.get("pos", [0.0, 0.0, 0.0]))
+                size = np.asarray(
+                    brush.get("size", [64.0, 64.0, 64.0]),
+                    dtype=np.float64,
+                )
+                scale = size_patterns[output_index % len(size_patterns)]
+
+                position[0] = (
+                    float(position[0])
+                    + scene_shift[0]
+                    + float(tile_offset_x * tile_spacing_x)
+                )
+                position[2] = (
+                    float(position[2])
+                    + scene_shift[1]
+                    + float(tile_offset_z * tile_spacing_z)
+                )
+                size = np.maximum(np.abs(size) * scale, 8.0)
+
+                brush["pos"] = [
+                    float(position[0]),
+                    float(position[1]),
+                    float(position[2]),
+                ]
+                brush["size"] = [float(v) for v in size]
+                brush["id"] = "benchmark_generated_%d" % output_index
+                batch.append(brush)
+
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
+
+        if batch:
+            yield batch
 
     data["brushes"] = []
-    return data, _iter_brushes()
+    return data, _iter_brush_batches()
 
 
 def _make_brush_stress_scene(brush_count, yield_hook=None):
     """Create a complete brush stress scene for the standalone benchmark path."""
-    data, brushes = _prepare_brush_stress_scene(brush_count, yield_hook=yield_hook)
-    data["brushes"] = list(brushes)
+    data, batches = _prepare_brush_stress_scene(
+        brush_count,
+        yield_hook=yield_hook,
+        batch_size=500,
+    )
+    data["brushes"] = [brush for batch in batches for brush in batch]
     return data
 
 
