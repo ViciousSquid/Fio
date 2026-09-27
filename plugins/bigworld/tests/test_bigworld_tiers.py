@@ -12,6 +12,8 @@ import pytest
 from engine.spatial import (SIM_TIER_KEY, TIER_ACTIVE, TIER_DISTANT,
                             TIER_DORMANT, TIER_NAMES, TIER_NEAR,
                             tier_of)
+from engine.view_distance import ViewDistance
+from plugins.bigworld.config import effective_streaming_radii
 from plugins.bigworld.manager import BigWorldManager
 from plugins.bigworld.runtime import BigWorldSession
 from plugins.bigworld.tiers import TIER_HYSTERESIS, TierClassifier
@@ -37,6 +39,7 @@ class FakeLogic:
         self.brushes = brushes or []
         self.things = things or []
         self.player = player
+        self.view_distance = ViewDistance()
 
 
 class FakePlayer:
@@ -172,6 +175,40 @@ def test_the_session_publishes_one_pair_of_radii():
     assert session.logic.sim_active_radius == 4096.0
     assert session.logic.sim_near_radius == 1024.0
     assert session.tiers.active_radius == session.manager.activation_radius
+
+
+def test_bigworld_residency_never_ends_inside_the_visual_horizon():
+    things = [FakeThing(3000.0, 0.0, uuid="far")]
+    session = started_session(
+        things, activation=1024.0, deactivation=1280.0, at=(0.0, 0.0)
+    )
+    expected_a, expected_d = effective_streaming_radii(
+        1024.0, 1280.0, session.logic.view_distance.visual_horizon
+    )
+    assert session.manager.activation_radius == pytest.approx(expected_a)
+    assert session.manager.deactivation_radius == pytest.approx(expected_d)
+    assert session.manager.is_thing_active(things[0]), (
+        "geometry inside the renderer's visual horizon was parked by Big World"
+    )
+
+
+def test_changing_view_distance_updates_bigworld_without_player_motion():
+    subject = FakeThing(3000.0, 0.0, uuid="far")
+    logic = FakeLogic(things=[subject], player=FakePlayer(0.0, 0.0))
+    logic.view_distance = ViewDistance(4096.0)
+    session = BigWorldSession(
+        logic, activation_radius=1024.0, deactivation_radius=1280.0
+    )
+    session.start()
+    assert session.manager.is_thing_active(subject)
+
+    logic.view_distance.distance = 2048.0
+    assert logic.view_distance.visual_horizon < 3000.0
+    session.tick()
+
+    assert not session.manager.is_thing_active(subject), (
+        "Big World did not tighten after the camera horizon changed"
+    )
 
 
 def test_persistent_globals_are_never_demoted_by_distance():
