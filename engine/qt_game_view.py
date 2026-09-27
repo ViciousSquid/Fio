@@ -1716,6 +1716,19 @@ class QtGameView(QOpenGLWidget):
                        play_mode=self.play_mode)
 
         painter.end()
+
+        # The render state is a borrowed snapshot. Release it as soon as this
+        # synchronous paint is complete so its persistent buffer can be recycled
+        # on the next logic publication. weakref.finalize remains as a safety
+        # net for exceptional exits.
+        if (
+            render_state is not None
+            and self.use_threading
+            and self.logic_thread is not None
+        ):
+            self.game_state.release_render_state(render_state)
+            render_state = None
+
         if self._muzzle_flash_counter > 0:
             self._muzzle_flash_counter -= 1
 
