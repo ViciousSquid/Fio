@@ -66,7 +66,7 @@ class GenerateTilemapDialog(QDialog):
 #: an older version is dropped once, so a new default actually reaches an
 #: install that has been opened before -- settings.ini stores the layout on
 #: every close, and restoreState() would otherwise win forever.
-LAYOUT_VERSION = 2
+LAYOUT_VERSION = 3
 
 
 class Ui_MainWindow(object):
@@ -90,9 +90,18 @@ class Ui_MainWindow(object):
         MainWindow.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
 
         # Scene Hierarchy Dock (Left)
-        MainWindow.scene_hierarchy_dock = QDockWidget("Scene", MainWindow)
+        #
+        # Keep a useful windowTitle for toggleViewAction() in View, but replace
+        # the visible dock title bar with a zero-height widget.  The hierarchy
+        # itself should start at the top instead of wasting a row on "Scene".
+        MainWindow.scene_hierarchy_dock = QDockWidget("Scene Hierarchy", MainWindow)
         MainWindow.scene_hierarchy_dock.setObjectName("SceneDock")
         MainWindow.scene_hierarchy_dock.setWidget(MainWindow.scene_hierarchy)
+        scene_title_bar = QWidget()
+        scene_title_bar.setFixedHeight(0)
+        scene_title_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        MainWindow.scene_hierarchy_dock.setTitleBarWidget(scene_title_bar)
+        MainWindow.scene_hierarchy_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         MainWindow.addDockWidget(Qt.LeftDockWidgetArea, MainWindow.scene_hierarchy_dock)
         
         screen_width = QApplication.primaryScreen().geometry().width()
@@ -102,6 +111,7 @@ class Ui_MainWindow(object):
         MainWindow.view_3d_dock = QDockWidget("3D View", MainWindow)
         MainWindow.view_3d_dock.setObjectName("View3DDock")
         MainWindow.view_3d_dock.setWidget(MainWindow.view_3d)
+        MainWindow.view_3d_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.view_3d_dock)
 
         # 2D Views Dock (Right, Tabbed)
@@ -113,6 +123,7 @@ class Ui_MainWindow(object):
         MainWindow.right_tabs.addTab(MainWindow.view_side, "Side (YZ)")
         MainWindow.right_tabs.addTab(MainWindow.view_front, "Front (XY)")
         MainWindow.right_dock.setWidget(MainWindow.right_tabs)
+        MainWindow.right_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.right_dock)
         
         # Properties Dock (Right, Bottom) — tabbed with Debug Console
@@ -130,6 +141,7 @@ class Ui_MainWindow(object):
         MainWindow.properties_dock = QDockWidget(" ", MainWindow)
         MainWindow.properties_dock.setObjectName("PropertiesDock")
         MainWindow.properties_dock.setWidget(MainWindow.properties_tab_widget)
+        MainWindow.properties_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         toggle_action = MainWindow.properties_dock.toggleViewAction()
         toggle_action.setText("Properties/Console")
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.properties_dock)
@@ -283,11 +295,12 @@ class Ui_MainWindow(object):
         # T is the primary key; Shift+S is kept as Radiant's own binding.
         MainWindow.surface_inspector_action.setShortcuts(
             [QKeySequence('T'), QKeySequence('Shift+S')])
-        # T is an editor shortcut, not an application-wide action.  Keeping it
-        # on the MainWindow's child widget tree prevents unrelated shortcut
-        # delivery (notably during Ctrl+Z history actions) from invoking it.
+        # T must work from every editor child, including OpenGL views and
+        # docked/floating panels.  WindowShortcut is the correct scope for a
+        # MainWindow action; WidgetWithChildrenShortcut is too narrow once
+        # focus moves through Qt's dock/toolbar hierarchy.
         MainWindow.surface_inspector_action.setShortcutContext(
-            Qt.WidgetWithChildrenShortcut)
+            Qt.WindowShortcut)
         MainWindow.surface_inspector_action.setToolTip(
             'Texture the hovered face, or the selected brush (T)')
         MainWindow.surface_inspector_action.triggered.connect(
@@ -473,7 +486,10 @@ class Ui_MainWindow(object):
         tool_toolbar = QToolBar("Tools")
         tool_toolbar.setObjectName("ToolToolbar")
         tool_toolbar.setMovable(True)
-        tool_toolbar.setAllowedAreas(Qt.TopToolBarArea | Qt.BottomToolBarArea)
+        tool_toolbar.setFloatable(True)
+        tool_toolbar.setAllowedAreas(
+            Qt.TopToolBarArea | Qt.BottomToolBarArea | Qt.RightToolBarArea)
+        tool_toolbar.setOrientation(Qt.Horizontal)
         MainWindow.addToolBar(Qt.TopToolBarArea, tool_toolbar)
         # Kept so Settings > Editor > Tooltips can reach its buttons.
         MainWindow.tool_toolbar = tool_toolbar
@@ -668,6 +684,13 @@ class Ui_MainWindow(object):
 
         tool_toolbar.addSeparator()
         tool_toolbar.addWidget(MainWindow.play_button)
+
+        # Capture this exact arrangement once.  View > Reset Layout restores
+        # this Qt state instead of trying to reconstruct a nested dock tree
+        # after the user has moved/floated panels around.
+        MainWindow._default_layout_geometry = QByteArray(MainWindow.saveGeometry())
+        MainWindow._default_layout_state = QByteArray(
+            MainWindow.saveState(LAYOUT_VERSION))
 
     def create_status_bar(self, MainWindow):
         status_bar = QStatusBar()
