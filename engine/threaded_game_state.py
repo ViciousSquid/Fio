@@ -227,7 +227,7 @@ class RenderState:
         self.all_lights = []
         self.visible_brush_position_count = 0
         self.visible_thing_position_count = 0
-        self.entity_table = EntityTable()
+        self.entity_table = None
         self.entity_refs = np.empty(0, dtype=object)
         self.visible_thing_slots = np.empty(0, dtype=np.int32)
         self.thing_hidden = np.empty(0, dtype=bool)
