@@ -37,7 +37,8 @@
                     1.0,
                     1.0
                 ]
-            }
+            },
+            "hidden": false
         },
         {
             "pos": [
@@ -74,7 +75,8 @@
                     1.0,
                     1.0
                 ]
-            }
+            },
+            "hidden": false
         },
         {
             "pos": [
@@ -112,7 +114,8 @@
             "uv_natural": {},
             "uv_angle": {
                 "top": 0.0
-            }
+            },
+            "hidden": false
         },
         {
             "pos": [
@@ -135,7 +138,8 @@
                 "down": "default.png"
             },
             "lock": true,
-            "id": "6e012f3b-651f-4fd5-a1ea-e0d7d172f402"
+            "id": "6e012f3b-651f-4fd5-a1ea-e0d7d172f402",
+            "hidden": false
         },
         {
             "pos": [
@@ -157,7 +161,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "6e78c2e0-249f-4dbb-8aed-dd7e442c8f47"
+            "id": "6e78c2e0-249f-4dbb-8aed-dd7e442c8f47",
+            "hidden": false
         },
         {
             "pos": [
@@ -179,7 +184,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "b70446b9-c940-432b-b547-559b716c1240"
+            "id": "b70446b9-c940-432b-b547-559b716c1240",
+            "hidden": false
         },
         {
             "pos": [
@@ -201,7 +207,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "b3d8c6c0-7a4c-4b7f-891a-51c67bcba193"
+            "id": "b3d8c6c0-7a4c-4b7f-891a-51c67bcba193",
+            "hidden": false
         },
         {
             "pos": [
@@ -222,7 +229,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "b2f3e416-bf8c-4d9b-9e73-7689f4abb2d0"
+            "id": "b2f3e416-bf8c-4d9b-9e73-7689f4abb2d0",
+            "hidden": false
         },
         {
             "pos": [
@@ -243,7 +251,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "32f49761-ff29-4752-86cb-4c6b451f8680"
+            "id": "32f49761-ff29-4752-86cb-4c6b451f8680",
+            "hidden": false
         },
         {
             "pos": [
@@ -264,7 +273,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "a6c6903b-f2aa-4ff7-b874-cb52c2f5a7e4"
+            "id": "a6c6903b-f2aa-4ff7-b874-cb52c2f5a7e4",
+            "hidden": false
         },
         {
             "pos": [
@@ -285,7 +295,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "8537d6bd-d40d-423a-b5b5-956851f6ad28"
+            "id": "8537d6bd-d40d-423a-b5b5-956851f6ad28",
+            "hidden": false
         },
         {
             "pos": [
@@ -306,7 +317,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "afd388d0-c362-4673-8b47-36caecb49a91"
+            "id": "afd388d0-c362-4673-8b47-36caecb49a91",
+            "hidden": false
         },
         {
             "pos": [
@@ -327,7 +339,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "51eb1f01-2eff-40a0-b1aa-89adbf213541"
+            "id": "51eb1f01-2eff-40a0-b1aa-89adbf213541",
+            "hidden": false
         },
         {
             "pos": [
@@ -348,7 +361,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "9ae6369a-6ef6-4949-90f0-f33caed3f719"
+            "id": "9ae6369a-6ef6-4949-90f0-f33caed3f719",
+            "hidden": false
         },
         {
             "pos": [
@@ -369,7 +383,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "210e5ce1-9568-4d9e-bb6f-73b14c0e740c"
+            "id": "210e5ce1-9568-4d9e-bb6f-73b14c0e740c",
+            "hidden": false
         },
         {
             "pos": [
@@ -391,7 +406,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "81089d8e-4a5e-42cb-8a26-4ce17b8f7cc7"
+            "id": "81089d8e-4a5e-42cb-8a26-4ce17b8f7cc7",
+            "hidden": false
         },
         {
             "pos": [
@@ -413,7 +429,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "ae0062ad-cf01-4344-999a-d2464ea82d96"
+            "id": "ae0062ad-cf01-4344-999a-d2464ea82d96",
+            "hidden": false
         },
         {
             "pos": [
@@ -569,7 +586,8 @@
                 "north": 0.0,
                 "south": 0.0
             },
-            "uv_natural": {}
+            "uv_natural": {},
+            "hidden": false
         },
         {
             "pos": [
@@ -664,7 +682,8 @@
                         "texture": "default.png"
                     }
                 ]
-            }
+            },
+            "hidden": false
         },
         {
             "pos": [
@@ -685,7 +704,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "aa956ec9-d1fc-4da0-9512-be52fe28f127"
+            "id": "aa956ec9-d1fc-4da0-9512-be52fe28f127",
+            "hidden": false
         },
         {
             "pos": [
@@ -706,7 +726,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f"
+            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "hidden": false
         },
         {
             "pos": [
@@ -727,7 +748,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f"
+            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "hidden": false
         },
         {
             "pos": [
@@ -748,7 +770,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f"
+            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "hidden": false
         },
         {
             "pos": [
@@ -769,7 +792,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f"
+            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "hidden": false
         },
         {
             "pos": [
@@ -790,7 +814,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f"
+            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "hidden": false
         },
         {
             "pos": [
@@ -811,7 +836,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f"
+            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "hidden": false
         },
         {
             "pos": [
@@ -832,7 +858,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f"
+            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "hidden": false
         },
         {
             "pos": [
@@ -853,7 +880,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f"
+            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "hidden": false
         },
         {
             "pos": [
@@ -874,7 +902,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f"
+            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "hidden": false
         },
         {
             "pos": [
@@ -895,7 +924,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "4f3f5c99-a3ff-4d56-a793-39fb74eafdcf"
+            "id": "4f3f5c99-a3ff-4d56-a793-39fb74eafdcf",
+            "hidden": false
         },
         {
             "pos": [
@@ -916,7 +946,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "690b26ee-154c-4be6-8a95-e8e257b3abbb"
+            "id": "690b26ee-154c-4be6-8a95-e8e257b3abbb",
+            "hidden": false
         },
         {
             "pos": [
@@ -937,7 +968,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "8699003b-8d91-40c4-b747-5a9ad16be8a4"
+            "id": "8699003b-8d91-40c4-b747-5a9ad16be8a4",
+            "hidden": false
         },
         {
             "pos": [
@@ -976,7 +1008,8 @@
                     1.0
                 ]
             },
-            "uv_natural": {}
+            "uv_natural": {},
+            "hidden": false
         },
         {
             "pos": [
@@ -997,7 +1030,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "7bd153cf-7dfd-431d-84a5-b8efc366c9d0"
+            "id": "7bd153cf-7dfd-431d-84a5-b8efc366c9d0",
+            "hidden": false
         },
         {
             "pos": [
@@ -1021,7 +1055,8 @@
             "id": "893dac64-7550-4c0a-8a4b-e660faae7a6c",
             "uv_angle": {
                 "east": 90.0
-            }
+            },
+            "hidden": false
         },
         {
             "pos": [
@@ -1055,7 +1090,8 @@
             "glass_roughness": 0.0,
             "glass_fresnel": 0.84,
             "is_trigger": false,
-            "id": "dfff1036-5229-4e1b-9172-1f7a8ff39786"
+            "id": "dfff1036-5229-4e1b-9172-1f7a8ff39786",
+            "hidden": false
         },
         {
             "pos": [
@@ -1076,7 +1112,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "aa956ec9-d1fc-4da0-9512-be52fe28f127"
+            "id": "aa956ec9-d1fc-4da0-9512-be52fe28f127",
+            "hidden": false
         },
         {
             "pos": [
@@ -1097,7 +1134,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "15114d57-9fa0-4cdd-8111-462f0cf680d7"
+            "id": "15114d57-9fa0-4cdd-8111-462f0cf680d7",
+            "hidden": false
         },
         {
             "pos": [
@@ -1118,7 +1156,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "15114d57-9fa0-4cdd-8111-462f0cf680d7"
+            "id": "15114d57-9fa0-4cdd-8111-462f0cf680d7",
+            "hidden": false
         },
         {
             "pos": [
@@ -1139,7 +1178,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "15114d57-9fa0-4cdd-8111-462f0cf680d7"
+            "id": "15114d57-9fa0-4cdd-8111-462f0cf680d7",
+            "hidden": false
         },
         {
             "pos": [
@@ -1160,7 +1200,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "15114d57-9fa0-4cdd-8111-462f0cf680d7"
+            "id": "15114d57-9fa0-4cdd-8111-462f0cf680d7",
+            "hidden": false
         },
         {
             "pos": [
@@ -1181,7 +1222,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "15114d57-9fa0-4cdd-8111-462f0cf680d7"
+            "id": "15114d57-9fa0-4cdd-8111-462f0cf680d7",
+            "hidden": false
         },
         {
             "pos": [
@@ -1202,7 +1244,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "7d44d98d-10b0-42d9-87f9-7d3bab5fff5e"
+            "id": "7d44d98d-10b0-42d9-87f9-7d3bab5fff5e",
+            "hidden": false
         },
         {
             "pos": [
@@ -1223,7 +1266,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "e6639871-61f0-464d-8c47-c6eac2e3727c"
+            "id": "e6639871-61f0-464d-8c47-c6eac2e3727c",
+            "hidden": false
         },
         {
             "pos": [
@@ -1244,7 +1288,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "5ecf8340-076c-4b09-ac68-bf7ed4ad6953"
+            "id": "5ecf8340-076c-4b09-ac68-bf7ed4ad6953",
+            "hidden": false
         },
         {
             "pos": [
@@ -1265,7 +1310,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "9a39b6a1-cb91-4425-a4e2-b6a729e4572f"
+            "id": "9a39b6a1-cb91-4425-a4e2-b6a729e4572f",
+            "hidden": false
         },
         {
             "pos": [
@@ -1286,7 +1332,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "5acbb354-f3b2-42d0-a2e7-eede16887f62"
+            "id": "5acbb354-f3b2-42d0-a2e7-eede16887f62",
+            "hidden": false
         },
         {
             "pos": [
@@ -1307,7 +1354,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "605ed589-c79a-4e0d-bc23-28ea1303ef3d"
+            "id": "605ed589-c79a-4e0d-bc23-28ea1303ef3d",
+            "hidden": false
         },
         {
             "pos": [
@@ -1328,7 +1376,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "0b9170a4-24f7-4779-9936-914ea875b26a"
+            "id": "0b9170a4-24f7-4779-9936-914ea875b26a",
+            "hidden": false
         },
         {
             "pos": [
@@ -1350,7 +1399,8 @@
                 "down": "Metal_08-512x512.png"
             },
             "texture_tiling": true,
-            "id": "90c4e0ce-ba59-4321-bfd3-8019be6f5017"
+            "id": "90c4e0ce-ba59-4321-bfd3-8019be6f5017",
+            "hidden": false
         },
         {
             "pos": [
@@ -1371,7 +1421,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "0633eca5-0aac-434c-8aaa-3c3631dffd4f"
+            "id": "0633eca5-0aac-434c-8aaa-3c3631dffd4f",
+            "hidden": false
         },
         {
             "pos": [
@@ -1392,7 +1443,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "935b22d8-64bd-48a2-ac10-6c648816fc71"
+            "id": "935b22d8-64bd-48a2-ac10-6c648816fc71",
+            "hidden": false
         },
         {
             "pos": [
@@ -1413,7 +1465,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "87b8c75a-0edf-44d4-b85e-479e6b452830"
+            "id": "87b8c75a-0edf-44d4-b85e-479e6b452830",
+            "hidden": false
         },
         {
             "pos": [
@@ -1434,7 +1487,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "f93e8edb-4a5f-4573-8359-c5bc20d11168"
+            "id": "f93e8edb-4a5f-4573-8359-c5bc20d11168",
+            "hidden": false
         },
         {
             "pos": [
@@ -1455,7 +1509,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "00d992fe-9b03-40d8-80ae-639e7ccb0672"
+            "id": "00d992fe-9b03-40d8-80ae-639e7ccb0672",
+            "hidden": false
         },
         {
             "pos": [
@@ -1476,7 +1531,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "aa956ec9-d1fc-4da0-9512-be52fe28f127"
+            "id": "aa956ec9-d1fc-4da0-9512-be52fe28f127",
+            "hidden": false
         },
         {
             "pos": [
@@ -1497,7 +1553,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "aa956ec9-d1fc-4da0-9512-be52fe28f127"
+            "id": "aa956ec9-d1fc-4da0-9512-be52fe28f127",
+            "hidden": false
         },
         {
             "pos": [
@@ -1582,7 +1639,8 @@
                         "face": "south"
                     }
                 ]
-            }
+            },
+            "hidden": false
         },
         {
             "pos": [
@@ -1603,7 +1661,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "9c8f2a20-2892-4cc4-a696-4b881cf21aa5"
+            "id": "9c8f2a20-2892-4cc4-a696-4b881cf21aa5",
+            "hidden": false
         },
         {
             "pos": [
@@ -1624,7 +1683,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "690b26ee-154c-4be6-8a95-e8e257b3abbb"
+            "id": "690b26ee-154c-4be6-8a95-e8e257b3abbb",
+            "hidden": false
         },
         {
             "pos": [
@@ -1645,7 +1705,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "52cac55f-03ab-4ac2-8fb9-140b1ae50c38"
+            "id": "52cac55f-03ab-4ac2-8fb9-140b1ae50c38",
+            "hidden": false
         },
         {
             "pos": [
@@ -1757,7 +1818,8 @@
                 "down": true,
                 "north": true,
                 "south": true
-            }
+            },
+            "hidden": false
         },
         {
             "pos": [
@@ -1913,7 +1975,8 @@
                 "south": 0.0,
                 "#6": 270.0
             },
-            "uv_natural": {}
+            "uv_natural": {},
+            "hidden": false
         },
         {
             "pos": [
@@ -2139,7 +2202,8 @@
                 "south": 0.0,
                 "#6": 270.0
             },
-            "uv_natural": {}
+            "uv_natural": {},
+            "hidden": false
         },
         {
             "pos": [
@@ -2160,7 +2224,8 @@
                 "top": "sci_fi_metal_wall_panel.jpg",
                 "down": "default.png"
             },
-            "id": "313f466c-f822-4b56-8004-6b62c76be995"
+            "id": "313f466c-f822-4b56-8004-6b62c76be995",
+            "hidden": false
         },
         {
             "pos": [
@@ -2415,7 +2480,8 @@
                 "north": 0.0,
                 "south": 0.0
             },
-            "uv_natural": {}
+            "uv_natural": {},
+            "hidden": false
         },
         {
             "pos": [
@@ -2509,7 +2575,8 @@
                         "texture": "default.png"
                     }
                 ]
-            }
+            },
+            "hidden": false
         },
         {
             "pos": [
@@ -2538,6 +2605,7 @@
                 "player"
             ],
             "trigger_poll_interval": 1.0,
+            "hidden": false,
             "io_connections": [
                 {
                     "output": "OnTrigger",
@@ -2571,22 +2639,29 @@
                 680.0
             ],
             "textures": {
-                "north": "default.png",
-                "south": "default.png",
-                "east": "default.png",
-                "west": "default.png",
-                "top": "default.png",
-                "down": "default.png"
+                "north": "trigger.jpg",
+                "south": "trigger.jpg",
+                "east": "trigger.jpg",
+                "west": "trigger.jpg",
+                "top": "trigger.jpg",
+                "down": "default.png",
+                "bottom": "trigger.jpg"
             },
             "id": "de33cd67-fa6d-4eb1-b2bd-3d27ecd5804b",
             "shader": "Fog",
             "is_fog": true,
             "is_trigger": false,
-            "fog_density": 4.0,
+            "hidden": false,
+            "trigger_type": "Once",
+            "trigger_filters": [
+                "player"
+            ],
+            "trigger_poll_interval": 1.0,
+            "fog_density": 2.0,
             "fog_color": [
-                0.1450980392156863,
-                0.17647058823529413,
-                0.20392156862745098
+                0.5,
+                0.6,
+                0.7
             ]
         },
         {
@@ -2608,7 +2683,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "a25cac8b-adee-4a9b-ba1d-e90e89590ad2"
+            "id": "a25cac8b-adee-4a9b-ba1d-e90e89590ad2",
+            "hidden": false
         },
         {
             "pos": [
@@ -2762,7 +2838,8 @@
                         "texture": "default.png"
                     }
                 ]
-            }
+            },
+            "hidden": false
         },
         {
             "pos": [
@@ -2925,7 +3002,8 @@
                         "texture": "default.png"
                     }
                 ]
-            }
+            },
+            "hidden": false
         },
         {
             "pos": [
@@ -3051,7 +3129,8 @@
             "uv_natural": {
                 "east": true
             },
-            "water_plane": true
+            "water_plane": true,
+            "hidden": false
         }
     ],
     "things": [
@@ -3082,7 +3161,8 @@
                     0.0,
                     0.0
                 ],
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -3113,7 +3193,8 @@
                     0.0,
                     0.0
                 ],
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -3144,7 +3225,8 @@
                     0.0,
                     0.0
                 ],
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -3175,7 +3257,8 @@
                     0.0,
                     0.0
                 ],
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -3206,7 +3289,8 @@
                     0.0,
                     0.0
                 ],
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -3237,7 +3321,8 @@
                     0.0,
                     0.0
                 ],
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -3268,7 +3353,8 @@
                     0.0,
                     0.0
                 ],
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -3299,7 +3385,8 @@
                     0.0,
                     0.0
                 ],
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -3330,7 +3417,8 @@
                     0.0,
                     0.0
                 ],
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -3346,7 +3434,9 @@
                 "name": "PlayerStart_1",
                 "id": "5c3a0f3e-5c76-474c-ae05-192cdd30259e",
                 "angle": 90.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": [
                 {
@@ -3422,7 +3512,8 @@
                     0.0,
                     0.0
                 ],
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -3453,7 +3544,8 @@
                     0.0,
                     0.0
                 ],
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -3484,7 +3576,8 @@
                     0.0,
                     0.0
                 ],
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -3515,7 +3608,8 @@
                     0.0,
                     0.0
                 ],
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -3536,7 +3630,9 @@
                 "next_node": "PathNode_2",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3558,7 +3654,8 @@
                 "wait_time": 0.0,
                 "speed": 1.0,
                 "hidden": true,
-                "io_enabled": true
+                "io_enabled": true,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3579,7 +3676,9 @@
                 "next_node": "PathNode_1",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3603,16 +3702,18 @@
                 "key_name": "blue_key",
                 "custom_sprite": "assets/sprites/gun2.png",
                 "io_enabled": true,
-                "weapon": "gun2"
+                "weapon": "gun2",
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
         {
             "type": "monster",
             "pos": [
-                -1639.642578125,
-                106.7698974609375,
-                881.1350708007812
+                -1487.7962646484375,
+                102.25432586669922,
+                819.0241088867188
             ],
             "properties": {
                 "type": "monster",
@@ -3633,7 +3734,9 @@
                 "sprite_height": 160,
                 "sight": 512,
                 "non_hostile": false,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3654,7 +3757,9 @@
                 "next_node": "PathNode_19",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3675,7 +3780,9 @@
                 "next_node": "PathNode_camtarget02",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3696,7 +3803,9 @@
                 "next_node": "PathNode_18",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3717,7 +3826,9 @@
                 "next_node": "PathNode_camtarget04",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3738,7 +3849,9 @@
                 "next_node": "PathNode_9",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3759,7 +3872,9 @@
                 "next_node": "PathNode_10",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3780,7 +3895,9 @@
                 "next_node": "",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3799,7 +3916,9 @@
                 "speed": 200.0,
                 "fov_override": 0.0,
                 "look_ahead": true,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3820,7 +3939,9 @@
                 "next_node": "PathNode_camtarget",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3841,7 +3962,9 @@
                 "next_node": "PathNode_camtarget1",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3862,7 +3985,9 @@
                 "next_node": "PathNode_21",
                 "wait_time": 0.0,
                 "speed": 2.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3883,7 +4008,9 @@
                 "next_node": "PathNode_20",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3904,7 +4031,9 @@
                 "next_node": "PathNode_17",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3925,7 +4054,9 @@
                 "next_node": "PathNode_22",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3946,7 +4077,9 @@
                 "next_node": "PathNode_23",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3967,7 +4100,9 @@
                 "next_node": "PathNode_24",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -3988,7 +4123,9 @@
                 "next_node": "PathNode_27",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -4009,7 +4146,9 @@
                 "next_node": "PathNode_camtarget03",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -4030,7 +4169,9 @@
                 "next_node": "PathNode_25",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -4051,7 +4192,9 @@
                 "next_node": "PathNode_26",
                 "wait_time": 0.0,
                 "speed": 1.0,
-                "io_enabled": true
+                "io_enabled": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -4091,7 +4234,9 @@
                     53,
                     124
                 ],
-                "effect_seed": 2620696981
+                "effect_seed": 2620696981,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -4131,7 +4276,9 @@
                     165,
                     70
                 ],
-                "effect_seed": 413659506
+                "effect_seed": 413659506,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -4171,7 +4318,9 @@
                     155,
                     255
                 ],
-                "effect_seed": 906286290
+                "effect_seed": 906286290,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -4202,7 +4351,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "hidden": false
             },
             "io_connections": []
         },
@@ -4233,7 +4383,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "hidden": false
             },
             "io_connections": []
         },
@@ -4293,7 +4444,8 @@
                     0.0,
                     0.0
                 ],
-                "disabled": false
+                "disabled": false,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -4353,7 +4505,8 @@
                     0.0,
                     0.0
                 ],
-                "disabled": false
+                "disabled": false,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -4413,7 +4566,8 @@
                     0.0,
                     0.0
                 ],
-                "disabled": false
+                "disabled": false,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -4430,7 +4584,8 @@
                 "name": "intromessage1",
                 "id": "1afce153-1528-45ae-8e24-cd584967fb5b",
                 "command": "message \"ViciousSquid presents\"",
-                "disabled": false
+                "disabled": false,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -4447,7 +4602,8 @@
                 "name": "intromessage2",
                 "id": "368c92bd-c9e0-4cd4-9efe-3d529226fa28",
                 "command": "message \"Fio\"",
-                "disabled": false
+                "disabled": false,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -4464,7 +4620,8 @@
                 "name": "intromessage3",
                 "id": "7f2acc02-a76f-4a77-a6fd-8b8d59c19828",
                 "command": "message2 \"real-time world machine\"",
-                "disabled": false
+                "disabled": false,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -4504,7 +4661,9 @@
                     165,
                     70
                 ],
-                "effect_seed": 1313590320
+                "effect_seed": 1313590320,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -4613,7 +4772,9 @@
                     1
                 ],
                 "collision_shape": "auto",
-                "no_collision": true
+                "no_collision": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -4641,7 +4802,9 @@
                     1
                 ],
                 "collision_shape": "auto",
-                "no_collision": true
+                "no_collision": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -4669,7 +4832,9 @@
                     0.59
                 ],
                 "collision_shape": "auto",
-                "no_collision": true
+                "no_collision": true,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -4692,7 +4857,9 @@
                 "volume": 1.0,
                 "looping": true,
                 "play_on_start": true,
-                "state": "on"
+                "state": "on",
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         },
@@ -4709,7 +4876,8 @@
                 "name": "plat_message1",
                 "id": "e0caeab1-c106-4eeb-aee8-b29064d9ebe6",
                 "command": "message \"Ride the platform...      \"",
-                "disabled": false
+                "disabled": false,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -4726,7 +4894,8 @@
                 "name": "plat_message2",
                 "id": "65f7b732-4baf-4349-b32e-65b1609cd0a2",
                 "command": "message2 \"        ...get the shotgun\"",
-                "disabled": false
+                "disabled": false,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -4743,7 +4912,8 @@
                 "name": "LogicCommand_3",
                 "id": "a78b9e00-f3f3-4a2f-afbf-c8c38d9969c9",
                 "command": "message \"SHOTGUN!\"",
-                "disabled": false
+                "disabled": false,
+                "hidden": false
             },
             "io_connections": []
         },
@@ -4783,7 +4953,9 @@
                     155,
                     255
                 ],
-                "effect_seed": 1946512464
+                "effect_seed": 1946512464,
+                "hidden": false,
+                "disabled": false
             },
             "io_connections": []
         }
