@@ -2731,27 +2731,9 @@ class PropertyEditor(QWidget):
                 self._widgets[f'{thing.properties.get("id", id(thing))}_angle'] = angle_combo
                 continue
 
-            # Monster type.
+            # Monster type + its type-specific sprite variant.
             if isinstance(thing, Monster) and key == 'monster_type':
-                combo = QComboBox()
-                combo.addItems([
-                    'zombie',
-                    'goblin',
-                    'orc',
-                    'skeleton',
-                    'custom',
-                ])
-
-                current = str(value or 'zombie')
-                index = combo.findText(current)
-                if index >= 0:
-                    combo.setCurrentIndex(index)
-
-                combo.currentTextChanged.connect(
-                    lambda text: self.update_object_prop('monster_type', text)
-                )
-
-                form.addRow(QLabel("Monster Type:"), combo)
+                self._build_monster_type_row(form, thing)
                 continue
 
             # Light state.
@@ -2933,7 +2915,8 @@ class PropertyEditor(QWidget):
             )
 
     def _build_monster_type_row(self, form, thing):
-        combo = _make_combo(['human', 'flying'], thing.properties.get('monster_type', 'human'))
+        from engine.monster_constants import MONSTER_TYPES
+        combo = _make_combo(MONSTER_TYPES, thing.properties.get('monster_type', 'human'))
         form.addRow("Monster Type:", combo)
 
         variant_combo = ClickableComboBox()
@@ -2956,7 +2939,7 @@ class PropertyEditor(QWidget):
         populate()
 
         def on_variant(text):
-            thing.properties['variant'] = text
+            self.update_object_prop('variant', text)
             try:
                 Monster.clear_sprite_cache()
             except Exception:
@@ -2974,7 +2957,7 @@ class PropertyEditor(QWidget):
             default_w, default_h = MONSTER_SPRITE_SIZES.get(new_type, (128, 128))
             self.update_object_prop('sprite_width', default_w)
             self.update_object_prop('sprite_height', default_h)
-            thing.properties['variant'] = '<None>'
+            self.update_object_prop('variant', '<None>')
             populate(new_type)
             is_flying = new_type == 'flying'
             for k in ('projectile_sprite_label', 'projectile_sprite_path'):
