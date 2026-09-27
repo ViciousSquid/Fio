@@ -1,7 +1,8 @@
-"""Core interaction runtime for generic carryable Prop entities.
+"""Runtime interaction domain for the unified Prop primitive.
 
-Physics simulation itself lives in :mod:`engine.physics`; this module only
-handles pickup, carrying, dropping and Prop-specific I/O.
+Physics simulation lives in engine.physics. PropSession owns all Prop
+interaction state: carrying, collecting, dropping, collection respawns,
+and the Prop spatial index.
 """
 from __future__ import annotations
 
@@ -29,56 +30,30 @@ def _dot(a, b):
 
 
 class PropSession:
-    """The Prop domain: which Things are Props, and their session state.
+    """Authoritative runtime registry and interaction state for Props.
 
-    PropSession is the authoritative registry for Props at runtime. The
-    authoritative *world* data is still the thing list -- ``editor_state.things``
-    in the editor, the package's things in the standalone player -- and the
-    registry here is derived from it by :meth:`rebuild`, called from the one
-    place each tier re-derives its entity caches. Nothing else keeps a second
-    list of Props: ``LogicThread`` asks this session.
-
-    Ownership, stated once so it can be checked:
-
-    ===========================  =========================================
-    Prop data and session state  ``PropSession``
-    Position while in motion     ``PhysicsWorld``
-    Placement / reset / restore  whichever subsystem performs the operation
-    Spatial membership           ``PropSession``'s :class:`CellIndex`
-    Synchronisation              an explicit :meth:`moved` call
-    ===========================  =========================================
-
-    **``prop.pos`` is the source of truth. The cell index is a derived
-    acceleration structure.** It narrows a query to a few cells; the answer is
-    then decided by reading live positions. A cell that has gone stale can
-    therefore cost a Prop its place in a result, never put a wrong one in it —
-    and :meth:`moved` is how a subsystem that moves a Prop keeps even that from
-    happening.
-
-    No ``PhysicsBody`` state is mirrored here: the session asks
-    ``PhysicsWorld`` to make a body kinematic, to wake it, or to call back on
-    rest, and reads nothing back. ``SpatialGrid`` remains the index of the
-    static world; this index holds Props, which are dynamic and deliberately
-    absent from it.
+    PropSession owns the Prop domain. The authoritative world data remains
+    the Thing list; this registry and its spatial index are derived from it.
+    No separate Pickup system exists.
     """
 
-    #: Query radius used when a Prop declares no ``pickup_reach`` of its own.
-    DEFAULT_PICKUP_REACH = 110.0
+    DEFAULT_CARRY_REACH = 110.0
+    DEFAULT_COLLECT_USE_REACH = 80.0
+    DEFAULT_COLLECT_WALK_REACH = 32.0
 
     def __init__(self, logic):
         self.logic = logic
         self.props = []
         self.held = None
+        self.collected_ids = set()
+        self.respawn_timers = {}
         self._by_id = {}
-        # Spatial membership for the Prop domain, on the one cell convention
-        # the rest of Fio partitions space with (engine.spatial).
         self._cells = CellIndex()
-        self._filed = {}          # id(prop) -> the cell it is filed under
-        self._max_reach = self.DEFAULT_PICKUP_REACH
+        self._filed = {}
+        self._max_reach = self.DEFAULT_CARRY_REACH
 
     @staticmethod
     def is_prop(thing):
-        """The serialised type contract, so every tier agrees what a Prop is."""
         return getattr(thing, "properties", {}).get("type") == "prop"
 
     @property
@@ -88,19 +63,7 @@ class PropSession:
     # -- registry ---------------------------------------------------------
 
     def rebuild(self, things=None):
-        """Re-derive the registry from the authoritative thing list.
-
-        Called wherever a tier rebuilds its entity caches -- play-mode enter,
-        ``LogicSpawner``, savegame load, a console spawn, package load in the
-        player -- so the Prop registry goes stale at exactly the same moments as
-        every other derived entity list, and at no others. There is no polling:
-        a Prop that enters or leaves the world does so through a code path that
-        already has to say so.
-
-        Adopting and releasing are per-Prop, so a rebuild never disturbs a Prop
-        that was already registered -- its authored home position and its
-        physics wiring survive a spawn elsewhere in the map.
-        """
+        """Re-derive the Prop registry from the authoritative Thing list."""
         if things is None:
             things = self.logic.things
         current = [t for t in things if self.is_prop(t)]
@@ -117,15 +80,19 @@ class PropSession:
 
         self.props = current
         self._by_id = {id(t): t for t in current}
+        self.collected_ids = {
+            id(t) for t in current
+            if t.properties.get("collect_collected", False)
+        }
         if self.held is not None and id(self.held) not in current_ids:
             self.held = None
 
+        self._recalculate_max_reach()
+
     def by_id(self, entity_id):
-        """The Prop with this ``id()``, or None. The engine's Prop lookup."""
         return self._by_id.get(entity_id)
 
     def _adopt(self, prop):
-        """Take responsibility for a Prop that has entered the world."""
         prop.properties["_prop_home_pos"] = list(prop.pos)
         prop.properties.pop("_drop_requested", None)
         self._file(prop)
@@ -134,7 +101,6 @@ class PropSession:
             self.physics.set_kinematic(prop, False)
 
     def _release(self, prop, restore_home=True):
-        """Hand a Prop back: drop our callbacks and our authored state."""
         home = prop.properties.pop("_prop_home_pos", None)
         prop.properties.pop("_drop_requested", None)
         self._unfile(prop)
@@ -146,22 +112,38 @@ class PropSession:
 
     # -- spatial membership -----------------------------------------------
 
-    def _reach_of(self, prop):
-        try:
-            return float(prop.properties.get("pickup_reach", self.DEFAULT_PICKUP_REACH))
-        except (TypeError, ValueError):
-            return self.DEFAULT_PICKUP_REACH
+    def _interaction_reach(self, prop):
+        p = prop.properties
+        reach = 0.0
+
+        if p.get("carry_enabled", True):
+            try:
+                reach = max(reach, float(
+                    p.get("carry_reach", self.DEFAULT_CARRY_REACH)))
+            except (TypeError, ValueError):
+                reach = max(reach, self.DEFAULT_CARRY_REACH)
+
+        if p.get("collect_enabled", False):
+            activation = p.get("collect_activation", "walk_over")
+            reach = max(
+                reach,
+                self.DEFAULT_COLLECT_USE_REACH
+                if activation == "use"
+                else self.DEFAULT_COLLECT_WALK_REACH,
+            )
+
+        return reach
+
+    def _recalculate_max_reach(self):
+        self._max_reach = self.DEFAULT_CARRY_REACH
+        for prop in self.props:
+            self._max_reach = max(self._max_reach, self._interaction_reach(prop))
 
     def _file(self, prop):
         coord = cell_of_point(float(prop.pos[0]), float(prop.pos[2]))
         self._cells.insert_point(prop, float(prop.pos[0]), float(prop.pos[2]))
         self._filed[id(prop)] = coord
-        # The query radius has to cover the furthest-reaching Prop, or a Prop
-        # with a large authored reach would be filtered out by a radius derived
-        # from the default one.
-        reach = self._reach_of(prop)
-        if reach > self._max_reach:
-            self._max_reach = reach
+        self._max_reach = max(self._max_reach, self._interaction_reach(prop))
 
     def _unfile(self, prop):
         coord = self._filed.pop(id(prop), None)
@@ -169,17 +151,6 @@ class PropSession:
             self._cells.remove_point(prop, coord)
 
     def moved(self, prop):
-        """Tell the Prop domain that *prop* has been moved to a new position.
-
-        The synchronisation half of the ownership contract. Whoever moved the
-        Prop — a placement, a reset, a savegame restore, a streaming layer
-        bringing a cell back — calls this once afterwards, and its cell
-        membership is brought back in line with ``prop.pos``.
-
-        Cheap and idempotent: a Prop that has not left its cell costs a
-        comparison. Unknown Props are ignored, so a caller never has to check
-        whether the thing it moved was a Prop.
-        """
         previous = self._filed.get(id(prop))
         if previous is None:
             return
@@ -192,28 +163,10 @@ class PropSession:
         self._filed[id(prop)] = coord
 
     def refile(self, props):
-        """Batch half of the synchronisation contract.
-
-        A subsystem that moves many Props at once does not call :meth:`moved`
-        in a loop — it hands the set over here. Everything that can be decided
-        in bulk already has been by then: the caller's own batch interface
-        (see ``PhysicsWorld.entities_that_changed_cell``) is what narrows a
-        world of bodies down to the few that actually left their cell, so what
-        arrives is the set whose membership is genuinely wrong, and re-filing
-        it is a handful of dict and list operations.
-        """
         for prop in props:
             self.moved(prop)
 
     def sync_physics_positions(self):
-        """Take the Props physics has moved out of their cells, and re-file them.
-
-        The Prop domain owns its index, so it is the session that asks — after
-        the physics update, once per frame. The question costs one vectorised
-        comparison over the body arrays no matter how many bodies there are,
-        and normally answers "none", because a body has to cross a whole
-        512-unit column to need re-filing.
-        """
         physics = self.physics
         if physics is None:
             return
@@ -225,22 +178,18 @@ class PropSession:
             self.refile(moved)
 
     def props_within(self, x, z, radius):
-        """Broad phase: Props filed in cells the circle ``(x, z, radius)`` reaches.
-
-        A superset — a cell is bigger than the circle — so every caller filters
-        the result against live positions. That is the point: the index picks
-        which Props are worth looking at, and ``prop.pos`` decides.
-        """
         cells = self._cells
         found = []
         for coord in cells.cells_within(x, z, radius):
             found.extend(cells.cell(coord))
         return found
 
-    # -- session lifecycle ------------------------------------------------
+    # -- lifecycle --------------------------------------------------------
 
     def start(self):
         self.held = None
+        self.collected_ids.clear()
+        self.respawn_timers.clear()
         self.rebuild()
 
     def stop(self):
@@ -249,9 +198,13 @@ class PropSession:
         self.held = None
         self.props = []
         self._by_id = {}
+        self.collected_ids.clear()
+        self.respawn_timers.clear()
         self._cells.clear()
         self._filed.clear()
-        self._max_reach = self.DEFAULT_PICKUP_REACH
+        self._max_reach = self.DEFAULT_CARRY_REACH
+
+    # -- I/O --------------------------------------------------------------
 
     def _fire(self, prop, output):
         io = getattr(self.logic, "io_manager", None)
@@ -261,82 +214,250 @@ class PropSession:
     def _on_rest(self, prop):
         self._fire(prop, "OnRest")
 
+    # -- interaction ------------------------------------------------------
+
     def tick(self, delta, use_pressed):
-        del delta
         player = getattr(self.logic, "player", None)
         if player is None:
             return
+
+        self._update_respawns(delta)
+
         eye_pos = _vec(player.pos)
-        eye = (eye_pos[0], eye_pos[1] + float(getattr(player, "camera_height", 40.0)), eye_pos[2])
+        eye = (
+            eye_pos[0],
+            eye_pos[1] + float(getattr(player, "camera_height", 40.0)),
+            eye_pos[2],
+        )
         forward = _forward(player)
+
         if self.held is not None:
             self._carry(eye, forward, use_pressed)
-        elif use_pressed:
-            self._pick_in_view(eye, forward)
+            return
 
-    def _pick_in_view(self, eye, forward):
-        """The Prop the player is looking at, within its pickup reach.
+        # Walk-over collection is passive and therefore happens before any
+        # use-driven carry/collection decision.
+        if self._collect_walk_over():
+            return
 
-        Spatial membership narrows this to the Props filed near the player;
-        the decision is then made on live positions, so the index can only ever
-        affect *which* Props are examined, never the answer for one that is.
-        """
-        candidates = self.props_within(eye[0], eye[2], self._max_reach)
+        if use_pressed:
+            # A use-activated collectible wins over carrying the same Prop.
+            if self._collect_in_view(eye, forward):
+                return
+            self._carry_in_view(eye, forward)
+
+    def _carry_in_view(self, eye, forward):
+        candidates = self.props_within(
+            eye[0], eye[2], self._max_reach)
         best = None
         best_distance = None
+
         for prop in candidates:
             p = prop.properties
-            if p.get("disabled") or not p.get("pickup_enabled", True):
+            if p.get("disabled") or not p.get("carry_enabled", True):
                 continue
+            if p.get("collect_collected", False):
+                continue
+
             dx = float(prop.pos[0]) - eye[0]
             dy = float(prop.pos[1]) - eye[1]
             dz = float(prop.pos[2]) - eye[2]
             distance = _length((dx, dy, dz))
-            reach = float(p.get("pickup_reach", 110.0))
+            reach = float(p.get("carry_reach", self.DEFAULT_CARRY_REACH))
             if distance < 0.001 or distance > reach:
                 continue
-            if _dot(forward, (dx / distance, dy / distance, dz / distance)) < 0.86:
+            if _dot(forward, (
+                dx / distance, dy / distance, dz / distance
+            )) < 0.86:
                 continue
             if best_distance is None or distance < best_distance:
                 best, best_distance = prop, distance
+
         if best is not None:
             self.held = best
             if self.physics is not None:
                 self.physics.set_kinematic(best, True)
-            self._fire(best, "OnPickedUp")
+            self._fire(best, "OnCarried")
+
+    def _collectable(self, prop):
+        p = prop.properties
+        return (
+            p.get("collect_enabled", False)
+            and not p.get("collect_collected", False)
+            and not p.get("disabled", False)
+        )
+
+    def _collect_walk_over(self):
+        player = getattr(self.logic, "player", None)
+        if player is None:
+            return False
+
+        player_pos = _vec(player.pos)
+        for prop in self.props_within(
+            player_pos[0], player_pos[2],
+            self.DEFAULT_COLLECT_WALK_REACH,
+        ):
+            p = prop.properties
+            if not self._collectable(prop):
+                continue
+            if p.get("collect_activation", "walk_over") != "walk_over":
+                continue
+
+            dx = float(prop.pos[0]) - player_pos[0]
+            dy = float(prop.pos[1]) - player_pos[1]
+            dz = float(prop.pos[2]) - player_pos[2]
+            if _length((dx, dy, dz)) <= self.DEFAULT_COLLECT_WALK_REACH:
+                self._collect(prop)
+                return True
+        return False
+
+    def _collect_in_view(self, eye, forward):
+        candidates = self.props_within(
+            eye[0], eye[2], self.DEFAULT_COLLECT_USE_REACH)
+        best = None
+        best_distance = None
+
+        for prop in candidates:
+            p = prop.properties
+            if not self._collectable(prop):
+                continue
+            if p.get("collect_activation", "walk_over") != "use":
+                continue
+
+            dx = float(prop.pos[0]) - eye[0]
+            dy = float(prop.pos[1]) - eye[1]
+            dz = float(prop.pos[2]) - eye[2]
+            distance = _length((dx, dy, dz))
+            if distance < 0.001 or distance > self.DEFAULT_COLLECT_USE_REACH:
+                continue
+            if _dot(forward, (
+                dx / distance, dy / distance, dz / distance
+            )) <= 0.8:
+                continue
+            if best_distance is None or distance < best_distance:
+                best, best_distance = prop, distance
+
+        if best is None:
+            return False
+
+        item_type = str(
+            best.properties.get("collect_type", "custom")
+        ).replace("_", " ").title()
+        self.logic.current_hud_message = f"[E] Collect {item_type}"
+        self._collect(best)
+        return True
+
+    def _collect(self, prop):
+        p = prop.properties
+        collect_type = p.get("collect_type", "custom")
+        value = p.get("collect_value", 25)
+
+        try:
+            value_num = int(value)
+        except (TypeError, ValueError):
+            value_num = 25
+
+        if collect_type == "health":
+            try:
+                self.logic.player_health = min(
+                    self.logic.player_max_health,
+                    self.logic.player_health + value_num,
+                )
+            except (AttributeError, TypeError):
+                pass
+        elif collect_type == "key":
+            key_name = p.get("collect_key_name", "")
+            if key_name:
+                self.logic.collected_keys.add(key_name)
+                self.logic.current_hud_key_name = key_name
+        elif collect_type == "weapon":
+            weapon = p.get("collect_weapon", "gun1")
+            self.logic.active_weapon = weapon
+            self.logic.current_hud_message = f"Collected {str(weapon).upper()}"
+
+        p["collect_collected"] = True
+        p["carry_enabled"] = False
+        self.collected_ids.add(id(prop))
+        if self.physics is not None:
+            self.physics.set_kinematic(prop, True)
+
+        self._fire(prop, "OnCollected")
+
+        emit = getattr(self.logic, "_plugin_emit", None)
+        if emit is not None:
+            emit(
+                "prop_collected",
+                prop=prop,
+                collect_type=collect_type,
+                value=value_num,
+            )
+
+        if p.get("collect_respawns", False):
+            try:
+                respawn_time = float(
+                    p.get("collect_respawn_time", 20.0))
+            except (TypeError, ValueError):
+                respawn_time = 20.0
+            self.respawn_timers[id(prop)] = {
+                "remaining": max(0.0, respawn_time),
+                "entity": prop,
+            }
+
+    def _update_respawns(self, delta):
+        if not self.respawn_timers:
+            return
+
+        finished = []
+        for pid, state in list(self.respawn_timers.items()):
+            state["remaining"] -= delta
+            if state["remaining"] <= 0.0:
+                finished.append(pid)
+
+        for pid in finished:
+            state = self.respawn_timers.pop(pid)
+            prop = state.get("entity")
+            if prop is None or id(prop) != pid:
+                continue
+            if id(prop) not in self._by_id:
+                continue
+
+            prop.properties["collect_collected"] = False
+            prop.properties["carry_enabled"] = True
+            self.collected_ids.discard(pid)
+            if self.physics is not None:
+                self.physics.set_kinematic(prop, False)
+            self._fire(prop, "OnRespawn")
 
     def _carry(self, eye, forward, use_pressed):
         prop = self.held
         p = prop.properties
         offset = p.get("carry_offset", [0.0, -6.0, 0.0])
         distance = float(p.get("carry_distance", 55.0))
+
         prop.pos = [
             eye[0] + forward[0] * distance + float(offset[0]),
             eye[1] + forward[1] * distance + float(offset[1]),
             eye[2] + forward[2] * distance + float(offset[2]),
         ]
         self.moved(prop)
+
         if not (use_pressed or p.pop("_drop_requested", False)):
-            self.logic.current_hud_message = "[E] Drop"
+            self.logic.current_hud_message = "[E] Carry / Drop"
             return
 
-        # Drop requested this tick: no "[E] Drop" prompt, so a gameplay
-        # plugin's HUD line (e.g. Tidy progress) is not suppressed.
-        # A plugin may consume the drop (for example, a Tidy receptacle
-        # placement) while the core Prop still owns pickup, carrying and the
-        # eventual ordinary drop.
         interceptor = getattr(self.logic, "_prop_drop_interceptor", None)
         if interceptor is not None:
             try:
                 if interceptor(prop):
                     return
             except Exception as exc:
-                # A broken plugin must not prevent the core prop from
-                # dropping normally, but the failure must be visible.
                 print(f"[PropSession] drop interceptor failed: {exc!r}")
 
         self.held = None
         if self.physics is not None:
             self.physics.set_kinematic(prop, False)
-            self.physics.wake(prop, [0.0, float(p.get("drop_velocity", 0.0)), 0.0])
+            self.physics.wake(
+                prop,
+                [0.0, float(p.get("drop_velocity", 0.0)), 0.0],
+            )
         self._fire(prop, "OnDropped")
