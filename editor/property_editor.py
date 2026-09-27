@@ -2794,15 +2794,9 @@ class PropertyEditor(QWidget):
 
             # Speaker sound file.
             if isinstance(thing, Speaker) and key == 'sound_file':
-                edit = QLineEdit(str(value or ''))
-                edit.editingFinished.connect(
-                    lambda e=edit: self.update_object_prop(
-                        'sound_file',
-                        e.text(),
-                    )
+                self.add_sound_file_widget(
+                    form, thing, 'sound_file', str(value or '')
                 )
-
-                form.addRow(QLabel("Sound File:"), edit)
                 continue
 
             # Logic gate type.
@@ -4524,25 +4518,30 @@ class PropertyEditor(QWidget):
         h.setContentsMargins(0, 0, 0, 0)
         line_edit = QLineEdit(str(value))
         line_edit.setReadOnly(True)
-        button = QPushButton("...")
-        button.setFixedWidth(30)
+        button = QPushButton("Browse...")
+        button.setToolTip("Choose a sound file from the Fio project.")
+        button.setFixedWidth(80)
 
         def open_dialog():
-            start = os.path.join('assets', 'sounds')
-            if not os.path.exists(start):
-                os.makedirs(start)
-            fp, _ = QFileDialog.getOpenFileName(self, "Select Sound File", start, "Sound Files (*.wav *.mp3)")
+            start = os.path.join(_project_root(), 'assets', 'sounds')
+            os.makedirs(start, exist_ok=True)
+            fp, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Sound File",
+                start,
+                "Sound Files (*.wav *.mp3 *.ogg)",
+            )
             if fp:
-                try:
-                    rel = os.path.relpath(fp, ".").replace('\\', '/')
-                except ValueError:
-                    rel = os.path.basename(fp)
-                self.update_object_prop(key, rel)
-                line_edit.setText(rel)
+                rel = _normalise_project_asset_path(fp)
+                if rel:
+                    self.update_object_prop(key, rel)
+                    line_edit.setText(rel)
 
         button.clicked.connect(open_dialog)
-        h.addWidget(line_edit)
+        h.addWidget(line_edit, 1)
         h.addWidget(button)
+
+        form_layout.addRow(QLabel("Sound File:"), widget)
         form_layout.addRow(key.replace('_', ' ').title() + ":", widget)
 
     def add_color_picker_widget(
