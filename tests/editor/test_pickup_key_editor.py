@@ -1,4 +1,4 @@
-"""Pickup key colour is directly editable in the property editor."""
+"""Key collection data is directly editable in the Prop property editor."""
 
 import types
 
@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("PyQt5", reason="the property panel is editor-tier")
 
 from editor.property_editor import PropertyEditor
-from editor.things import Pickup
+from editor.things import Prop
 
 pytestmark = pytest.mark.qt
 
@@ -25,39 +25,46 @@ def panel(qt_app):
     widget.deleteLater()
 
 
-def pickup_key_combo(panel, pickup):
-    panel.current_object = pickup
-    panel.populate_for_thing(pickup)
-    assert panel._pickup_key_widgets, "the Pickup inspector has no key control"
-    return panel._pickup_key_widgets[0][1]
+def collect_key_combo(panel, prop):
+    panel.current_object = prop
+    panel.populate_for_thing(prop)
+    assert panel._collect_key_widgets, "the Prop inspector has no key control"
+    return panel._collect_key_widgets[0][1]
 
 
-def test_key_pickup_exposes_a_selectable_colour(panel):
-    pickup = Pickup(pos=[0, 0, 0], properties={"item_type": "key"})
-    combo = pickup_key_combo(panel, pickup)
+def test_key_prop_exposes_a_selectable_colour(panel):
+    prop = Prop(
+        pos=[0, 0, 0],
+        properties={"collect_enabled": True, "collect_type": "key"},
+    )
+    combo = collect_key_combo(panel, prop)
 
     assert combo.isVisibleTo(panel)
     assert combo.isEnabled()
-    assert [combo.itemText(i) for i in range(combo.count())] == list(Pickup.KEY_NAMES)
-    assert combo.currentText() == Pickup.DEFAULT_KEY_NAME
+    assert [combo.itemText(i) for i in range(combo.count())] == list(Prop.KEY_NAMES)
+    assert combo.currentText() == Prop.DEFAULT_KEY_NAME
 
     combo.setCurrentText("red_key")
 
-    assert pickup.properties["key_name"] == "red_key"
+    assert prop.properties["collect_key_name"] == "red_key"
+    assert prop.properties["sprite_path"] == "assets/sprites/redkey.png"
 
 
-def test_switching_item_type_to_key_enables_the_colour_selector(panel):
-    pickup = Pickup(pos=[0, 0, 0], properties={"item_type": "health"})
-    combo = pickup_key_combo(panel, pickup)
+def test_switching_collection_type_to_key_enables_the_colour_selector(panel):
+    prop = Prop(
+        pos=[0, 0, 0],
+        properties={"collect_enabled": True, "collect_type": "health"},
+    )
+    combo = collect_key_combo(panel, prop)
 
     assert not combo.isVisibleTo(panel)
     assert not combo.isEnabled()
 
-    panel.on_pickup_item_type_changed("key")
+    panel.on_collect_type_changed("key")
 
-    assert pickup.properties["item_type"] == "key"
+    assert prop.properties["collect_type"] == "key"
     assert combo.isVisibleTo(panel)
     assert combo.isEnabled()
 
     combo.setCurrentText("yellow_key")
-    assert pickup.properties["key_name"] == "yellow_key"
+    assert prop.properties["collect_key_name"] == "yellow_key"
