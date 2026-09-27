@@ -260,6 +260,40 @@ def test_lights_and_entities_reach_the_render_state(logic):
     assert len(published.visible_things) == 2
 
 
+def test_entity_refs_follow_the_dense_snapshot_when_things_are_appended_mid_frame(logic, monkeypatch):
+    """A concurrent append must wait for the next table reconciliation.
+
+    The editor/benchmark can append to the live Thing list while the logic
+    thread is publishing. The EntityTable has already established the row set
+    for this frame, so reference publication must use its stable snapshot
+    rather than enumerate a list that has just grown.
+    """
+    thread = logic(things=[])
+    original_begin_frame = thread._entity_table.begin_frame
+    monster = make_thing(Monster, "late_monster", (0, 96, -300))
+
+    def begin_frame_then_append(things, *args, **kwargs):
+        hidden = original_begin_frame(things, *args, **kwargs)
+        things.append(monster)
+        return hidden
+
+    monkeypatch.setattr(thread._entity_table, "begin_frame", begin_frame_then_append)
+
+    thread._prepare_render_state()
+
+    published = thread.game_state.get_write_state()
+    assert published.entity_table.count == 0
+    assert len(published.entity_refs) == 0
+
+    # The appended entity is reconciled normally on the next publication.
+    monkeypatch.setattr(thread._entity_table, "begin_frame", original_begin_frame)
+    thread._prepare_render_state()
+
+    published = thread.game_state.get_write_state()
+    assert published.entity_table.count == 1
+    assert published.entity_refs[0] is not None
+
+
 def test_visible_things_stays_lazy_until_an_object_consumer_reads_it(logic):
     lamp = make_thing(Light, "lamp", (100, 200, -300))
     monster = make_thing(Monster, "grunt", (-50, 96, -700))
