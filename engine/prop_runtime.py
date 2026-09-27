@@ -571,7 +571,6 @@ class PropSession:
                 print(f"[PropSession] drop interceptor failed: {exc!r}")
 
         self.held = None
-        carry_yaw = getattr(prop, "_carry_sprite_yaw", None)
         physics_body = (
             self.physics.get_body(prop)
             if self.physics is not None
