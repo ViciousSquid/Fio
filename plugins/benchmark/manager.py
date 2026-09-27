@@ -677,7 +677,9 @@ class BenchmarkManager(QDialog):
 
             for key in (
                 "average_fps", "min_fps", "max_fps",
-                "io_elapsed_ms", "io_hops", "hops_per_second",
+                "io_elapsed_ms", "io_dispatch_ms", "io_hops",
+                "io_bursts", "io_total_hops", "io_average_ms",
+                "io_p95_ms", "hops_per_second", "dispatch_hops_per_second",
                 "flying_count", "team_counts", "aggro_count",
                 "alive_monsters", "dead_monsters", "witness_duration_s",
                 "seed", "pathnode_name", "viewport_width", "viewport_height",
