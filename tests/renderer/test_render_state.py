@@ -462,6 +462,22 @@ def test_the_general_path_is_used_when_the_brush_set_changes_mid_session(logic):
         thread.set_play_mode(False)
 
 
+def test_a_new_threaded_state_exposes_empty_dense_projections():
+    """The renderer may paint before the first logic frame is published."""
+    game_state = ThreadedGameState()
+    state = game_state.get_render_state()
+
+    assert state.render_table is not None
+    assert state.render_table.count == 0
+    assert state.entity_table is not None
+    assert state.entity_table.count == 0
+    assert len(state.render_refs) == 0
+    assert len(state.visible_brush_slots) == 0
+    assert len(state.all_brush_slots) == 0
+    assert len(state.visible_thing_slots) == 0
+    assert len(state.thing_hidden) == 0
+
+
 # ---------------------------------------------------------------------------
 # Double buffering
 # ---------------------------------------------------------------------------
