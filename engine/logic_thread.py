@@ -3168,22 +3168,87 @@ class LogicThread(threading.Thread):
 
         cs['cam_pos'] = current_pos.tolist()
 
+        # Normal path-facing target.  With "look ahead" enabled this is the
+        # next node; otherwise it is the node currently being approached.
         if cs.get('look_ahead'):
             next_name = node.get_next_node_name()
             look_node = self._find_path_node_by_name(next_name) if next_name else node
-            look_target = np.array(look_node.pos if look_node else node.pos, dtype=float)
+            path_look_target = np.array(
+                look_node.pos if look_node else node.pos,
+                dtype=float,
+            )
         else:
-            look_target = target
+            path_look_target = target
+
+        look_target = path_look_target
+
+        # An explicit LookAt temporarily overrides the path target.  The live
+        # entity is retained so moving targets are tracked automatically.
+        focus_target = cs.get('lookat_target')
+        if focus_target is not None:
+            if isinstance(focus_target, dict):
+                focus_pos = focus_target.get('pos')
+            else:
+                focus_pos = getattr(focus_target, 'pos', None)
+            try:
+                if focus_pos is not None:
+                    look_target = np.asarray(focus_pos, dtype=float)
+                else:
+                    cs['lookat_target'] = None
+                    cs['lookat_return_remaining'] = None
+            except (TypeError, ValueError):
+                cs['lookat_target'] = None
+                cs['lookat_return_remaining'] = None
+
+        # Return from LookAt is timed in the camera's logic clock, so pausing
+        # the cinematic camera also pauses the focus timer.
+        if cs.get('lookat_target') is not None:
+            remaining = cs.get('lookat_return_remaining')
+            if remaining is not None:
+                remaining -= max(0.0, float(delta))
+                if remaining <= 0.0:
+                    cs['lookat_target'] = None
+                    cs['lookat_return_remaining'] = None
+                    look_target = path_look_target
+                else:
+                    cs['lookat_return_remaining'] = remaining
 
         diff = look_target - current_pos
         dist = np.linalg.norm(diff)
         if dist > 0.01:
-            cs['cam_angle'] = math.atan2(diff[0], diff[2])
-            cs['cam_pitch'] = math.asin(np.clip(diff[1] / dist, -1.0, 1.0))
+            desired_angle = math.atan2(diff[0], diff[2])
+            desired_pitch = math.asin(np.clip(diff[1] / dist, -1.0, 1.0))
+
+            if not cs.get('_look_initialized', False):
+                cs['cam_angle'] = desired_angle
+                cs['cam_pitch'] = desired_pitch
+                cs['_look_initialized'] = True
+            else:
+                # Exponential smoothing is frame-rate independent and removes
+                # the hard bearing jump at each PathNode boundary.
+                alpha = 1.0 - math.exp(-8.0 * max(0.0, float(delta)))
+                current_angle = cs.get('cam_angle', desired_angle)
+                angle_delta = (
+                    (desired_angle - current_angle + math.pi)
+                    % (2.0 * math.pi)
+                ) - math.pi
+                cs['cam_angle'] = current_angle + angle_delta * alpha
+                current_pitch = cs.get('cam_pitch', desired_pitch)
+                cs['cam_pitch'] = (
+                    current_pitch + (desired_pitch - current_pitch) * alpha
+                )
 
         if cs['lerp_t'] >= 1.0:
+            # PathNodes are real I/O sources for cinematic camera arrival.
+            # Fire the node first so it can drive arbitrary I/O, including
+            # stopping or replacing this camera.
             if self.io_manager:
+                self.io_manager.fire_output(node, 'OnCameraArrived')
                 self.io_manager.fire_output(cs['entity'], 'OnReachNode')
+
+            # Arrival outputs may mutate the cinematic state.
+            if self.cinematic_state is not cs:
+                return
 
             next_name = node.get_next_node_name()
             if next_name:
