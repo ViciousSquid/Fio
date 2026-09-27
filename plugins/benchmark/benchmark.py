@@ -95,8 +95,10 @@ class BenchmarkRunner:
         self._monster_chaos_fighters = []
         self._monster_chaos_aggro_count = 0
         self._monster_chaos_ai_original_update = None
+        self._monster_chaos_ai_counting = False
         self._monster_chaos_ai_decisions = 0
         self._monster_chaos_ai_updates = 0
+        self._monster_chaos_ai_counting = False
         self.tests = BenchmarkTests(self)
         self.results = BenchmarkResults(self)
 
@@ -1363,10 +1365,15 @@ class BenchmarkRunner:
         self._monster_chaos_ai_original_update = original
         self._monster_chaos_ai_decisions = 0
         self._monster_chaos_ai_updates = 0
+        self._monster_chaos_ai_counting = False
 
         def counted_update(ai_self, delta):
             player = getattr(ai_self.lt, "player", None)
-            if player is not None and not getattr(ai_self.lt, "player_dead", False):
+            if (
+                self._monster_chaos_ai_counting
+                and player is not None
+                and not getattr(ai_self.lt, "player_dead", False)
+            ):
                 monsters = getattr(ai_self.lt, "_monster_things", None)
                 if monsters is None:
                     from editor.things import Monster
