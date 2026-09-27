@@ -448,8 +448,8 @@ def test_the_asset_browser_owns_no_texture_controls(qt_app, tmp_path):
         assert not hasattr(tab, gone), "%s should have moved to the Inspector" % gone
 
 
-def test_the_asset_browser_action_bar_keeps_only_the_two_it_should(qt_app, tmp_path):
-    """The hamburger folder toggle stays; INSPECTOR is the only other button."""
+def test_the_asset_browser_action_bar_keeps_only_the_expected_buttons(qt_app, tmp_path):
+    """The hamburger folder toggle, INSPECTOR, and Tint button are the action bar."""
     from PyQt5.QtWidgets import QPushButton
 
     from editor.asset_browser import AssetBrowserTab
@@ -457,7 +457,7 @@ def test_the_asset_browser_action_bar_keeps_only_the_two_it_should(qt_app, tmp_p
     tab = AssetBrowserTab(str(tmp_path), ['.png'], editor=None)
     labels = [b.text() for b in tab.action_bar.findChildren(QPushButton)]
 
-    assert sorted(labels) == sorted(['\u2630', 'INSPECTOR'])
+    assert sorted(labels) == sorted(['\u2630', 'INSPECTOR', ''])
 
 
 def test_the_inspector_button_needs_no_texture_selected(qt_app, tmp_path):
