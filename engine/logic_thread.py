@@ -199,6 +199,10 @@ class LogicThread(threading.Thread):
         # Set by start_camera_transition, advanced by _update_camera_transition,
         # and consumed in _prepare_render_state to blend the view matrix.
         self.camera_transition = None
+        # HUD visibility follows LogicCamera control. When a cinematic ends,
+        # the health/ammo display fades back in over two seconds.
+        self._hud_cinematic_last_active = False
+        self._hud_health_fade_started = None
 
         # RenderState already owns one persistent RenderTable/EntityTable pair.
         # Keep these aliases only for diagnostics and older tests/code that inspect
@@ -3884,6 +3888,31 @@ class LogicThread(threading.Thread):
             fov = self.editor_camera.fov
 
         write_state.camera_view_matrix = view_matrix
+
+        # LogicCamera owns the view while cinematic_state exists, including
+        # paused cinematics. Publish HUD state so the render thread never needs
+        # to inspect LogicThread directly.
+        cinematic_active = bool(self.cinematic_state)
+        now = time.perf_counter()
+        if cinematic_active:
+            self._hud_cinematic_last_active = True
+            self._hud_health_fade_started = None
+            hud_health_alpha = 0.0
+        elif self._hud_cinematic_last_active:
+            self._hud_cinematic_last_active = False
+            self._hud_health_fade_started = now
+            hud_health_alpha = 0.0
+        elif self._hud_health_fade_started is not None:
+            hud_health_alpha = min(
+                1.0, max(0.0, (now - self._hud_health_fade_started) / 2.0)
+            )
+            if hud_health_alpha >= 1.0:
+                self._hud_health_fade_started = None
+        else:
+            hud_health_alpha = 1.0
+
+        write_state.cinematic_camera_active = cinematic_active
+        write_state.hud_health_alpha = hud_health_alpha
         write_state.player_health = self.player_health
         write_state.player_max_health = self.player_max_health
         write_state.player_dead = self.player_dead
