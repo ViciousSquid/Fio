@@ -2580,10 +2580,7 @@ class PropertyEditor(QWidget):
     def _build_collect_ui(self, form, thing):
         """Build the compact, human-facing Prop interaction editor.
 
-        This builder owns the form used by all Prop interaction rows.
-        """
-
-        The serialized schema is deliberately richer than the inspector.  A
+        The serialized schema is deliberately richer than the inspector. A
         Prop is one world object with a handful of obvious behaviours; the
         editor should expose those behaviours and reveal the type-specific
         controls only when they matter.
