@@ -336,6 +336,16 @@ class Ui_MainWindow(object):
         system_monitor_action.triggered.connect(MainWindow.toggle_system_monitor)
         view_menu.addAction(system_monitor_action)
         
+        MainWindow.connection_links_action = QAction(
+            'Connection Links', MainWindow, checkable=True)
+        MainWindow.connection_links_action.setChecked(
+            getattr(MainWindow, 'show_logic_links', True))
+        MainWindow.connection_links_action.setToolTip(
+            'Show I/O connection links in the editor views (F1)')
+        MainWindow.connection_links_action.triggered.connect(
+            MainWindow.set_connection_links_enabled)
+        view_menu.addAction(MainWindow.connection_links_action)
+
         view_menu.addSeparator()
         MainWindow.save_layout_action = QAction("Save Layout", MainWindow)
         MainWindow.save_layout_action.triggered.connect(MainWindow.save_layout)
