@@ -15,6 +15,39 @@ from engine.brush_geometry import GEO_RUNTIME_KEYS
 from engine.monster_constants import MONSTER_VARIANTS
 from editor.tooltips import set_tooltips_enabled
 
+def _project_root() -> str:
+    """Return Fio's project root independently of the process working directory."""
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+
+
+def _normalise_project_asset_path(path: object) -> str:
+    """Return an authored asset path relative to Fio's project root.
+
+    Asset paths are serialized with forward slashes on every platform.  The
+    selected file may arrive from Qt with native separators, and Fio may have
+    been launched with a working directory other than the project root.
+    """
+    raw = str(path or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+
+    root = _project_root()
+    native = raw.replace("/", os.sep)
+    absolute = os.path.abspath(native)
+    try:
+        relative = os.path.relpath(absolute, root)
+    except ValueError:
+        # Different Windows drives cannot have a relative path; retain the
+        # normalized absolute path so the renderer can still address it.
+        relative = raw
+
+    relative = relative.replace("\\", "/")
+    if relative.startswith("./"):
+        relative = relative[2:]
+    return relative
+
+
+
 try:
     from editor.debug_console import debug_log
 except Exception:  # pragma: no cover - console unavailable (headless/import cycle)
@@ -2241,8 +2274,9 @@ class PropertyEditor(QWidget):
         custom_button.setToolTip("Choose a GIF for this CUSTOM effect.")
 
         def pick_custom_gif():
+            project_root = _project_root()
             start = os.path.join(
-                os.getcwd(), "assets", "textures", "effects"
+                project_root, "assets", "textures", "effects"
             )
             os.makedirs(start, exist_ok=True)
             fp, _ = QFileDialog.getOpenFileName(
@@ -2252,14 +2286,10 @@ class PropertyEditor(QWidget):
                 "GIF Files (*.gif)",
             )
             if fp:
-                try:
-                    rel = os.path.relpath(fp, os.getcwd()).replace("\\", "/")
-                except Exception:
-                    rel = fp.replace("\\", "/")
-                if rel.startswith("./"):
-                    rel = rel[2:]
-                self.update_object_prop("custom_gif", rel)
-                custom_edit.setText(rel)
+                rel = _normalise_project_asset_path(fp)
+                if rel:
+                    self.update_object_prop("custom_gif", rel)
+                    custom_edit.setText(rel)
 
         custom_button.clicked.connect(pick_custom_gif)
         custom_layout.addWidget(custom_edit, 1)
@@ -2764,15 +2794,9 @@ class PropertyEditor(QWidget):
 
             # Speaker sound file.
             if isinstance(thing, Speaker) and key == 'sound_file':
-                edit = QLineEdit(str(value or ''))
-                edit.editingFinished.connect(
-                    lambda e=edit: self.update_object_prop(
-                        'sound_file',
-                        e.text(),
-                    )
+                self.add_sound_file_widget(
+                    form, thing, 'sound_file', str(value or '')
                 )
-
-                form.addRow(QLabel("Sound File:"), edit)
                 continue
 
             # Logic gate type.
@@ -4494,26 +4518,30 @@ class PropertyEditor(QWidget):
         h.setContentsMargins(0, 0, 0, 0)
         line_edit = QLineEdit(str(value))
         line_edit.setReadOnly(True)
-        button = QPushButton("...")
-        button.setFixedWidth(30)
+        button = QPushButton("Browse...")
+        button.setToolTip("Choose a sound file from the Fio project.")
+        button.setFixedWidth(80)
 
         def open_dialog():
-            start = os.path.join('assets', 'sounds')
-            if not os.path.exists(start):
-                os.makedirs(start)
-            fp, _ = QFileDialog.getOpenFileName(self, "Select Sound File", start, "Sound Files (*.wav *.mp3)")
+            start = os.path.join(_project_root(), 'assets', 'sounds')
+            os.makedirs(start, exist_ok=True)
+            fp, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Sound File",
+                start,
+                "Sound Files (*.wav *.mp3 *.ogg)",
+            )
             if fp:
-                try:
-                    rel = os.path.relpath(fp, ".").replace('\\', '/')
-                except ValueError:
-                    rel = os.path.basename(fp)
-                self.update_object_prop(key, rel)
-                line_edit.setText(rel)
+                rel = _normalise_project_asset_path(fp)
+                if rel:
+                    self.update_object_prop(key, rel)
+                    line_edit.setText(rel)
 
         button.clicked.connect(open_dialog)
-        h.addWidget(line_edit)
+        h.addWidget(line_edit, 1)
         h.addWidget(button)
-        form_layout.addRow(key.replace('_', ' ').title() + ":", widget)
+
+        form_layout.addRow(QLabel("Sound File:"), widget)
 
     def add_color_picker_widget(
             self, form_layout, thing, key,

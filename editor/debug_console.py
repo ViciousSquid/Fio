@@ -217,7 +217,6 @@ class DebugConsole(QWidget):
     _RE_NO_CONNS     = re.compile(r'(no connections|0 connections)')
     _RE_DELAYED      = re.compile(r'\[Delayed\]')
     _RE_ARROW        = re.compile(r' -> ')
-
     _instance = None
 
     @classmethod
@@ -769,6 +768,26 @@ class DebugConsole(QWidget):
 
         # --- HIGHLIGHTING LOGIC ---
 
+        # Render the startup version banner in one dedicated pass. Keeping its
+        # source text plain prevents the generic entity highlighter from
+        # rewriting its own filter anchors.
+        version_prefix = "[Info] Fio version "
+        if message.startswith(version_prefix):
+            version = message[len(version_prefix):].strip()
+            version_parts = version.split('.')
+            if len(version_parts) == 4 and all(part.isdigit() for part in version_parts):
+                version_html = self._version_banner_html(version)
+                html = f'<span style="color: {color};">{version_html}</span><br>'
+                cursor = self.console.textCursor()
+                cursor.movePosition(QTextCursor.End)
+                cursor.insertHtml(html)
+                if self.auto_scroll:
+                    self.console.setTextCursor(cursor)
+                    self.console.ensureCursorVisible()
+                self.message_count += 1
+                self.count_label.setText(f"{self.message_count} messages")
+                return
+
         # Protect any pre-existing HTML tags in the message so our regexes
         # don't corrupt entity links / colours injected by MonsterAI.
         _protected_tags = []
@@ -873,6 +892,27 @@ class DebugConsole(QWidget):
         # Update count
         self.message_count += 1
         self.count_label.setText(f"{self.message_count} messages")
+
+    def _version_banner_html(self, version: str) -> str:
+        """Render the startup version banner exactly once."""
+        parts = version.split('.')
+        if len(parts) != 4:
+            return f'<b>Fio version</b> <b>{version}</b>'
+
+        # Version numbers remain the familiar Fio orange; only the anchor
+        # itself uses the lighter green requested for hyperlinks.
+        link_style = 'color: #66BB6A; text-decoration: none;'
+        number_style = 'color: #F08000; font-weight: bold;'
+
+        rendered = []
+        for part in parts[:3]:
+            rendered.append(
+                f'<a href="filter:{part}" style="{link_style}">'
+                f'<span style="{number_style}">{part}</span></a>'
+            )
+            rendered.append('<b>.</b>')
+        rendered.append(f'<b>{parts[3]}</b>')
+        return '<b>Fio version</b> ' + ''.join(rendered)
 
     def _plugin_message_color(self, message: str) -> str:
         """Pick a colour for a 'Plugins' message based on its content.
