@@ -4015,31 +4015,35 @@ class LogicThread(threading.Thread):
         # What used to be one Python pass per entity per frame -- two NumPy
         # scalar stores, three isinstance tests and a list append each -- is a
         # bulk position store, a live `hidden` read, and masks over columns.
-        things = self.things
-        etable = self._entity_table
-        entity_generation = etable.generation
-        thing_hidden = etable.begin_frame(
-            things,
-            world_epoch,
-            dirty_objects=render_dirty,
-            effect_runtime=self.play_mode,
-        )
-        if (etable.generation != entity_generation
-                or len(self._entity_refs) != etable.count):
-            # EntityTable owns the stable row snapshot for this publication.
-            # The live EditorState.things list may be mutated concurrently by
-            # editor/benchmark code; using it here can expose a newly appended
-            # entity that the table has not reconciled yet, producing a refs
-            # array shorter than the enumerate() source. Do not copy the live
-            # list again -- use the table's already-materialised row references.
-            entity_refs = np.empty(etable.count, dtype=object)
-            for i, thing in enumerate(etable.things):
-                entity_refs[i] = thing
-            self._entity_refs = entity_refs
-            self._entity_all_slots = np.arange(etable.count, dtype=np.int32)
-        erefs = self._entity_refs
-        entity_things = etable.things
-        thing_count = etable.count
+        # Monster benchmark/editor mutations already use this lock when they
+        # mutate EditorState.things. Hold the same lock through the table
+        # reconciliation and reference publication so the live list cannot
+        # change between those two operations. This avoids taking a full
+        # per-frame Python copy of the entity list.
+        with self._monster_lock:
+            things = self.things
+            etable = self._entity_table
+            entity_generation = etable.generation
+            thing_hidden = etable.begin_frame(
+                things,
+                world_epoch,
+                dirty_objects=render_dirty,
+                effect_runtime=self.play_mode,
+            )
+            if (etable.generation != entity_generation
+                    or len(self._entity_refs) != etable.count):
+                # EntityTable owns the stable row snapshot for this publication.
+                # Do not enumerate the live list again here: benchmark/editor
+                # code can mutate it from another thread immediately after the
+                # lock is released.
+                entity_refs = np.empty(etable.count, dtype=object)
+                for i, thing in enumerate(etable.things):
+                    entity_refs[i] = thing
+                self._entity_refs = entity_refs
+                self._entity_all_slots = np.arange(etable.count, dtype=np.int32)
+            erefs = self._entity_refs
+            entity_things = etable.things
+            thing_count = etable.count
 
         self.editor_state.clear_render_dirty(render_dirty_snapshot)
 
