@@ -412,7 +412,7 @@ def convert_fio_entity(fio_thing: Dict[str, Any]) -> Optional[MapEntity]:
         monster_type = props.get('monster_type', 'human')
         classname = MONSTER_CLASSNAMES.get(monster_type, MONSTER_CLASSNAMES['default'])
     
-    elif entity_type == 'Prop' and props.get('collect_enabled', False):
+    elif str(entity_type).lower() == 'prop' and props.get('collect_enabled', False):
         collect_type = props.get('collect_type', 'health')
         weapon = props.get('collect_weapon', collect_type)
         collect_class = weapon if collect_type == 'weapon' else collect_type
