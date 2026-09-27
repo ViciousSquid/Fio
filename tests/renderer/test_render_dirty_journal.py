@@ -6,6 +6,7 @@ Edits made after that snapshot must remain pending for the next frame.
 
 import pytest
 import threading
+from collections import deque
 
 
 def _state():
@@ -63,5 +64,64 @@ def test_snapshot_preserves_global_invalidation_after_capture():
     state.clear_render_dirty(snapshot)
 
     epoch, dirty = state.render_dirty_snapshot()
+    assert epoch == 2
+    assert dirty is None
+
+
+def test_dirty_history_replays_for_a_second_render_buffer():
+    """A consumed semantic edit remains precise for the other render buffer."""
+    from engine.render_table import RenderTable, CLASS_FOG
+
+    state = _state()
+    brush = {
+        'id': 'brush-a',
+        'pos': [0, 0, 0],
+        'size': [64, 64, 64],
+        'shader': '<None>',
+    }
+
+    # Establish the identical starting state in both persistent tables.
+    state.mark_world_changed([brush])
+    initial = state.render_dirty_snapshot()
+    epoch, dirty = state.render_dirty_since(0, through_epoch=initial[0])
+
+    first = RenderTable()
+    second = RenderTable()
+    first.begin_frame([brush], epoch, dirty_objects=dirty)
+    second.begin_frame([brush], epoch, dirty_objects=dirty)
+    state.clear_render_dirty(initial)
+
+    # Edit the brush. The first buffer consumes the live journal.
+    brush['shader'] = 'Fog'
+    brush['is_fog'] = True
+    state.mark_world_changed([brush])
+    edit = state.render_dirty_snapshot()
+
+    epoch, dirty = state.render_dirty_since(first._epoch, through_epoch=edit[0])
+    first.begin_frame([brush], epoch, dirty_objects=dirty)
+    assert first.class_bits[0] & CLASS_FOG
+
+    # The live journal is now consumed, but history must let the second buffer
+    # replay exactly the same row without falling back to a global rebuild.
+    state.clear_render_dirty(edit)
+    epoch, dirty = state.render_dirty_since(second._epoch, through_epoch=edit[0])
+    second.begin_frame([brush], epoch, dirty_objects=dirty)
+
+    assert second.class_bits[0] & CLASS_FOG
+    assert dirty == {id(brush)}
+
+
+def test_dirty_history_replays_global_invalidation():
+    state = _state()
+    brush = object()
+
+    state.mark_world_changed([brush])
+    initial = state.render_dirty_snapshot()
+    state.clear_render_dirty(initial)
+
+    state.mark_world_changed()
+    snapshot = state.render_dirty_snapshot()
+    epoch, dirty = state.render_dirty_since(1, through_epoch=snapshot[0])
+
     assert epoch == 2
     assert dirty is None
