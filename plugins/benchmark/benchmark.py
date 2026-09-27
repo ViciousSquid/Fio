@@ -12,7 +12,6 @@ import html
 import os
 import platform
 import subprocess
-import statistics
 import sys
 import tempfile
 import threading
@@ -1129,7 +1128,7 @@ class BenchmarkRunner:
             hops = int(metrics.get("io_hops", 0))
             hops_per_second = float(metrics.get("hops_per_second", 0.0))
             metrics["test"] = label
-            metrics["description"] = "Live LogicRelay I/O"
+            metrics.setdefault("description", "Live LogicRelay I/O")
             self._results.append(metrics)
             self.export_button.setEnabled(True)
             self.export_button.setVisible(True)
