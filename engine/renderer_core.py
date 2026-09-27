@@ -1647,7 +1647,7 @@ layout (location = 10) in float iInstanceAlpha;
         )
         textured_instance_frag = tex_frag.replace(
             'out vec4 FragColor;',
-            'out vec4 FragColor;\nin float InstanceAlpha;',
+            'out vec4 FragColor;\nflat in float InstanceAlpha;',
             1,
         ).replace(
             'uniform sampler2D texture_diffuse;',
