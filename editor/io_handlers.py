@@ -317,6 +317,7 @@ def register_all_input_handlers(io_manager: IOManager):
         table.effect_type[slot] = 1  # EXPLOSION
         table.effect_preview[slot] = False
         table.effect_spawn_time[slot] = now
+        table.effect_shared_spawn_time[slot] = now
         table.effect_elapsed[slot] = 0.0
         table.effect_active[slot] = True
         table.effect_alive[slot] = True
