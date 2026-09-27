@@ -426,20 +426,33 @@ class BenchmarkTests:
                     "live_10000_brushes": 10000,
                     "live_100000_brushes": 100000,
                 }[label]
-                # The requested cadence is part of preparation, not measurement.
-                # Give the paced creation phase enough room without changing the
-                # hard external benchmark supervision.
+                # Preparation is staged in fixed 500-brush batches. The
+                # renderer and Qt event loop get a real opportunity to process
+                # each published intermediate scene, without the old 25 ms
+                # per-brush delay that made 100K take tens of minutes.
+                batch_count = int(math.ceil(brush_count / 500.0))
                 self._preparation_deadline = max(
                     self._preparation_deadline,
-                    time.perf_counter() + brush_count * 0.025 + 60.0,
+                    time.perf_counter() + batch_count * 3.0 + 60.0,
                 )
 
-                # Prepare the scene shell, then insert the requested brushes
-                # gradually. The renderer gets a chance to publish and consume
-                # intermediate dense-table states instead of swallowing one huge
-                # 1K/10K/100K insertion burst.
-                data, brush_iter = bench._prepare_brush_stress_scene(
-                    brush_count, yield_hook=cooperative_yield,
+                camera = getattr(view, "camera", None)
+                camera_position = None
+                camera_yaw = None
+                if camera is not None:
+                    camera_position = (
+                        float(camera.pos.x),
+                        float(camera.pos.y),
+                        float(camera.pos.z),
+                    )
+                    camera_yaw = float(camera.yaw)
+
+                data, brush_batches = bench._prepare_brush_stress_scene(
+                    brush_count,
+                    yield_hook=cooperative_yield,
+                    camera_position=camera_position,
+                    camera_yaw=camera_yaw,
+                    batch_size=500,
                 )
                 bench.load_live_benchmark_world(
                     window,
@@ -447,27 +460,17 @@ class BenchmarkTests:
                     yield_hook=cooperative_yield,
                 )
 
-                # Keep the requested 25 ms cadence between brush creations.
-                # This is intentionally a real wall-clock delay rather than
-                # merely chunking a tight Python loop.
-                next_creation = time.perf_counter()
                 created = 0
-                for brush in brush_iter:
-                    now = time.perf_counter()
-                    if now < next_creation:
-                        while now < next_creation:
-                            cooperative_yield()
-                            time.sleep(min(0.005, next_creation - now))
-                            now = time.perf_counter()
-
-                    window.state.brushes.append(brush)
+                for batch_index, batch in enumerate(brush_batches, 1):
+                    window.state.brushes.extend(batch)
                     # RenderTable reconciliation already detects the changing
-                    # row count; do not bump world_epoch for every insertion.
-                    created += 1
-                    next_creation = time.perf_counter() + 0.025
+                    # row count; do not bump world_epoch for every batch.
+                    created += len(batch)
 
-                    if created % 25 == 0:
-                        QApplication.processEvents()
+                    # Give the live renderer, Qt views and editor hierarchy a
+                    # chance to consume the intermediate 500-row projection.
+                    QApplication.processEvents()
+                    cooperative_yield()
 
                 # The renderer consumes the published dense projection, not
                 # EditorState.brushes directly. Wait for the LogicThread to publish
