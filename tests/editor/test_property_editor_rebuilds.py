@@ -18,6 +18,7 @@ pytest.importorskip("PyQt5", reason="Qt is not available in this environment")
 
 import configparser  # noqa: E402
 
+from PyQt5.QtCore import QEvent, QObject  # noqa: E402
 from PyQt5.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
 
 from editor import io_system  # noqa: E402
@@ -28,6 +29,7 @@ from editor.property_editor import (  # noqa: E402
     _normalise_project_asset_path,
 )
 from editor.things import Light, Speaker  # noqa: E402
+from engine.prop_entity import Prop  # noqa: E402
 from engine import brush_geometry as bg  # noqa: E402
 from engine.render_table import (  # noqa: E402
     RenderTable, CLASS_FOG, CLASS_TRIGGER,
@@ -103,6 +105,46 @@ class FakeHost(QWidget):
 
     def show_toast(self, message, is_error=False, duration=None):
         pass
+
+
+class _TopLevelShowSpy(QObject):
+    def __init__(self, app, baseline):
+        super().__init__(app)
+        self.baseline = baseline
+        self.shown = []
+
+    def eventFilter(self, obj, event):
+        if (
+            event.type() == QEvent.Show
+            and isinstance(obj, QWidget)
+            and obj.window() is obj
+            and obj not in self.baseline
+        ):
+            self.shown.append(obj)
+        return False
+
+
+def test_selecting_a_prop_does_not_show_a_transient_top_level_window(panel, qt_app):
+    """A Prop page must never exist as a top-level Qt window while it is built."""
+    host, editor = panel
+    prop = Prop(pos=[0, 0, 0])
+    host.state.things = [prop]
+
+    baseline = set(qt_app.topLevelWidgets())
+    spy = _TopLevelShowSpy(qt_app, baseline)
+    qt_app.installEventFilter(spy)
+    try:
+        editor.set_object(prop, force=True)
+        qt_app.processEvents()
+    finally:
+        qt_app.removeEventFilter(spy)
+
+    assert not spy.shown, (
+        "selecting a Prop showed transient top-level Qt widgets: %r"
+        % [type(widget).__name__ for widget in spy.shown]
+    )
+    assert editor._page is not None
+    assert editor._page.window() is editor
 
 
 def test_custom_gif_path_is_project_relative_and_uses_forward_slashes(monkeypatch):
