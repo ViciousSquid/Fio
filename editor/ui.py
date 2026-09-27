@@ -391,6 +391,17 @@ class Ui_MainWindow(object):
         MainWindow.tools_menu.addAction(MainWindow.procedural_action)
         MainWindow.tools_menu.addSeparator()
 
+        # Debug Tables is deliberately lazy: importing/constructing the
+        # numerical instrument happens only after the user asks for it.
+        MainWindow.debug_tables_action = QAction("Debug Tables", MainWindow)
+        MainWindow.debug_tables_action.setToolTip(
+            "Live RenderTable / EntityTable numerical instrument panel")
+        def _open_debug_tables():
+            from tools.debug_tables import show_debug_tables
+            show_debug_tables(MainWindow)
+        MainWindow.debug_tables_action.triggered.connect(_open_debug_tables)
+        MainWindow.tools_menu.addAction(MainWindow.debug_tables_action)
+
         view_menu.addSeparator()
         toggle_triggers_action = QAction('Opaque Triggers', MainWindow, checkable=True)
         toggle_triggers_action.setChecked(MainWindow.view_3d.show_triggers_as_solid)
