@@ -88,6 +88,56 @@ def test_core_prop_carry_drop_rest_without_plugins():
     assert session.props == []
 
 
+def test_non_physics_prop_still_falls_to_ground_on_drop():
+    prop = Prop(pos=[0.0, 120.0, 30.0])
+    io = IO()
+    grid = _floor_grid()
+    logic = SimpleNamespace(
+        things=[prop], io_manager=io,
+        _spatial_grid=grid, _physics_world=None,
+        player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
+                               camera_height=40.0),
+        current_hud_message='',
+    )
+    session = PropSession(logic)
+    session.start()
+
+    # Pick the prop up, then release it. It has no authored physics at all.
+    session.tick(1 / 60, use_pressed=True)
+    assert session.held is prop
+    session.tick(1 / 60, use_pressed=True)
+    assert session.held is None
+    assert id(prop) in session._falling
+
+    for _ in range(60):
+        session.tick(1 / 60, use_pressed=False)
+
+    assert abs(prop.pos[1] - 16.0) < 1e-3
+    assert id(prop) not in session._falling
+    assert 'OnRest' in io.names()
+
+
+def test_carried_billboard_keeps_its_facing_when_player_turns():
+    prop = Prop(pos=[0.0, 40.0, 55.0])
+    logic = SimpleNamespace(
+        things=[prop], io_manager=IO(),
+        _spatial_grid=None, _physics_world=None,
+        player=SimpleNamespace(pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
+                               camera_height=40.0),
+        current_hud_message='',
+    )
+    session = PropSession(logic)
+    session.start()
+
+    session.tick(1 / 60, use_pressed=True)
+    assert session.held is prop
+    assert prop._carry_sprite_yaw == 0.0
+
+    logic.player.angle = 1.25
+    session.tick(1 / 60, use_pressed=False)
+    assert prop._carry_sprite_yaw == 0.0
+
+
 def test_the_registry_is_derived_from_the_authoritative_thing_list():
     """PropSession is the Prop registry; the thing list is still the world."""
     prop, light = Prop(pos=[0, 0, 0]), SimpleNamespace(properties={'type': 'light'})
