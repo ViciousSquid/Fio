@@ -3945,10 +3945,14 @@ class LogicThread(threading.Thread):
         # and an unannounced change to the row set.
         live_hidden = table.begin_frame(
             brushes, world_epoch, dirty_objects=render_dirty)
-        if table.generation != generation:
+        if (table.generation != generation
+                or len(self._render_refs) != table.count):
+            # RenderTable owns the stable row snapshot for this publication.
+            # The live EditorState.brushes list may grow during benchmark
+            # insertion, so never enumerate it after the table has reconciled.
             refs = np.empty(table.count, dtype=object)
-            for i, b in enumerate(brushes):
-                refs[i] = b
+            for i, brush in enumerate(table.brushes):
+                refs[i] = brush
             self._render_refs = refs
         refs = self._render_refs
         total_count = table.count
