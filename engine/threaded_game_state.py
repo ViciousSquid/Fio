@@ -232,7 +232,7 @@ class RenderState:
         self.visible_thing_slots = np.empty(0, dtype=np.int32)
         self.thing_hidden = np.empty(0, dtype=bool)
         self.has_portals = False
-        self.render_table = RenderTable()
+        self.render_table = None
         #: slot -> the render reference for that row: the live brush dict, or
         #: for a mover or a door the per-frame snapshot. Indexed by the slot
         #: arrays below, so a consumer converts an index to an object once, at
