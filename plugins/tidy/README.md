@@ -105,7 +105,7 @@ Tidy adds:
 
 **Outputs**
 
-- `OnPickedUp`
+- `OnCarried`
 - `OnDropped`
 - `OnRest`
 
