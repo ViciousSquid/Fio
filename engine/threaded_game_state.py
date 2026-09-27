@@ -164,6 +164,9 @@ class RenderState:
         self.cinematic_camera_active = False
         # Opacity for the entire HUD after cinematic control returns.
         self.hud_alpha = 1.0
+        # Independent opacity for the health count; the logic thread keeps this
+        # at 50% while idle and raises it in response to health-value changes.
+        self.hud_health_alpha = 0.5
 
         # Monster debug visualisation (F7 toggle)
         self.monster_debug_active = False
@@ -264,6 +267,7 @@ class RenderState:
         self.camera_transition_active = False
         self.cinematic_camera_active = False
         self.hud_alpha = 1.0
+        self.hud_health_alpha = 0.5
         self.monster_debug_active = False
         self.monster_debug_rays = []
         self.total_brushes = 0
