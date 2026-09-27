@@ -284,11 +284,44 @@ class DebugTablesWindow(QMainWindow):
         controls.addStretch(1)
         controls.addWidget(self.follow)
         controls.addWidget(self.always_top)
-        refresh = QPushButton("REFRESH NOW")
+        refresh = QPushButton("Refresh")
+        refresh.setStyleSheet("""
+            QPushButton {
+                background-color: #F08000;
+                color: white;
+                font-weight: bold;
+                border: 1px solid #d06000;
+                border-radius: 4px;
+                padding: 5px 12px;
+            }
+            QPushButton:hover {
+                background-color: #ff9800;
+            }
+            QPushButton:pressed {
+                background-color: #d06000;
+            }
+        """)
         refresh.clicked.connect(self.refresh)
         controls.addWidget(refresh)
-        export = QPushButton("EXPORT...")
+
+        export = QPushButton("Export")
         export.setToolTip("Export the complete numerical snapshot for later analysis")
+        export.setStyleSheet("""
+            QPushButton {
+                background-color: #22b14c;
+                color: white;
+                font-weight: bold;
+                border: 1px solid #1a8f3d;
+                border-radius: 4px;
+                padding: 5px 12px;
+            }
+            QPushButton:hover {
+                background-color: #28d157;
+            }
+            QPushButton:pressed {
+                background-color: #1a8f3d;
+            }
+        """)
         export.clicked.connect(self.export_snapshot)
         controls.addWidget(export)
         root = QWidget()
