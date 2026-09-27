@@ -948,11 +948,12 @@ def test_re_binding_can_leave_the_focus_alone(inspector):
 
 
 def test_the_surface_inspector_action_uses_window_shortcut_scope(qt_app):
-    from editor.ui import Ui_MainWindow
-    import inspect
+    from pathlib import Path
+    import editor.ui as ui_module
 
-    source = inspect.getsource(Ui_MainWindow.create_menu_bar)
-    assert 'setShortcutContext(\n            Qt.WindowShortcut)' in source
+    source = Path(ui_module.__file__).read_text(encoding='utf-8')
+    assert "MainWindow.surface_inspector_action.setShortcutContext(" in source
+    assert "Qt.WindowShortcut" in source
 
 
 # ────────────────────────────
