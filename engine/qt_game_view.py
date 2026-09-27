@@ -440,6 +440,7 @@ class QtGameView(QOpenGLWidget):
         self._cached_key_size = 100
         self._cached_prompt_key = None
         self._cached_prompt_key_pixmap = None
+        self._cached_prompt_key_loaded = False
         self._cached_prompt_key_size = 64
 
         self._key_fallback_cache = {
@@ -1659,7 +1660,9 @@ class QtGameView(QOpenGLWidget):
                 if self._cached_prompt_key != prompt_key:
                     self._cached_prompt_key = prompt_key
                     self._cached_prompt_key_pixmap = None
-                if self._cached_prompt_key_pixmap is None:
+                    self._cached_prompt_key_loaded = False
+                if not self._cached_prompt_key_loaded:
+                    self._cached_prompt_key_loaded = True
                     try:
                         pixmap = Pickup.get_key_pixmap(prompt_key)
                         if pixmap and not pixmap.isNull():
