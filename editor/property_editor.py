@@ -2577,6 +2577,19 @@ class PropertyEditor(QWidget):
         self._pickup_key_widgets = []
         self._pickup_sprite_widgets = []
 
+        # A key pickup's colour is gameplay data, not a sprite-only choice.
+        # Build the selector here because key_name is intentionally excluded
+        # from the generic property editor.
+        key_label = QLabel("Key:")
+        key_combo = _make_combo(
+            list(Pickup.KEY_NAMES),
+            thing.properties.get('key_name', Pickup.DEFAULT_KEY_NAME),
+            self.on_pickup_key_name_changed,
+        )
+        key_combo.setEnabled(thing.properties.get('item_type') == 'key')
+        form.addRow(key_label, key_combo)
+        self._pickup_key_widgets.append((key_label, key_combo))
+
     def _iterate_thing_properties(self, form, thing, property_keys=None):
         """Add generic Thing properties to a form.
 
@@ -4329,12 +4342,16 @@ class PropertyEditor(QWidget):
             self.respawn_time_spin.setVisible(respawns)
 
     def on_pickup_key_name_changed(self, key_name):
+        if self.current_object is None:
+            return
         self.update_object_prop('key_name', key_name)
-        is_custom = key_name == 'custom'
         if hasattr(self, '_pickup_sprite_widgets'):
             for lbl, widget in self._pickup_sprite_widgets:
-                lbl.setVisible(is_custom)
-                widget.setVisible(is_custom)
+                lbl.setVisible(False)
+                widget.setVisible(False)
+        self._update_pickup_door_link(self.current_object)
+        if hasattr(self.editor, 'view_3d'):
+            self.editor.view_3d.update()
 
     def on_pickup_sprite_select(self):
         if self.current_object is None or not isinstance(self.current_object, Pickup):
