@@ -24,7 +24,7 @@ def _floor_grid():
     return grid
 
 
-def test_core_prop_pickup_carry_drop_rest_without_plugins():
+def test_core_prop_carry_drop_rest_without_plugins():
     spin = 90.0  # degrees per second about X
     prop = Prop(pos=[0.0, 40.0, 30.0], properties={
         'physics_enabled': True,
@@ -52,11 +52,11 @@ def test_core_prop_pickup_carry_drop_rest_without_plugins():
     session = PropSession(logic)
     session.start()
 
-    # Pick up: the prop is directly ahead at eye height.
+    # Carry: the prop is directly ahead at eye height.
     session.tick(1 / 60, use_pressed=True)
     assert session.held is prop
     assert physics.get_body(prop).kinematic
-    assert io.names()[-1] == 'OnPickedUp'
+    assert io.names()[-1] == 'OnCarried'
 
     # Carry: the prop follows the view; physics must not move it.
     session.tick(1 / 60, use_pressed=False)
@@ -155,7 +155,7 @@ def test_is_prop_is_the_one_type_contract():
 
 def test_prop_has_a_default_billboard_and_2d_menu_entry():
     prop = Prop()
-    assert prop.get_sprite_path() == 'assets/sprites/pickup.png'
+    assert prop.get_sprite_path() == 'assets/sprites/carry.png'
     source = Path('editor/view_2d.py').read_text()
     assert 'add_prop_action = menu.addAction("Prop")' in source
     assert 'new_thing = Prop(pos=pos_3d)' in source
