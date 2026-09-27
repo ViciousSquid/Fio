@@ -8,6 +8,7 @@ running Fio process, using its actual MainWindow, QtGameView, renderer and I/O.
 from __future__ import annotations
 
 import argparse
+import configparser
 import html
 import json
 import os
@@ -18,7 +19,8 @@ import sys
 import time
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import (
+from PyQt5.QtGui import QFont
+from PyQt5.QtWidgets (
     QApplication,
     QCheckBox,
     QDialog,
@@ -72,17 +74,21 @@ class BenchmarkManager(QDialog):
 
         self.setWindowTitle("Fio Benchmark")
         self.resize(900, 700)
+        self._font_size = max(6, QApplication.font().pointSize())
         self.setStyleSheet(
-            """
-            QDialog {
+            f"""
+            QDialog {{
                 background: #171717;
                 color: #eeeeee;
-            }
+                font-size: {self._font_size}pt;
+            }}
             QLabel {
                 color: #dddddd;
+                font-size: {self._font_size}pt;
             }
             QToolButton {
                 color: #63d471;
+                font-size: {self._font_size}pt;
                 background: transparent;
                 border: none;
                 font-weight: bold;
@@ -94,6 +100,7 @@ class BenchmarkManager(QDialog):
             QCheckBox {
                 color: #dddddd;
                 spacing: 8px;
+                font-size: {self._font_size}pt;
                 padding: 3px;
             }
             QCheckBox:hover {
@@ -177,6 +184,7 @@ class BenchmarkManager(QDialog):
             QPushButton {
                 background: #202020;
                 color: #eeeeee;
+                font-size: {self._font_size}pt;
                 border: 1px solid #555555;
                 padding: 7px 14px;
                 border-radius: 2px;
@@ -194,6 +202,7 @@ class BenchmarkManager(QDialog):
             }
             QTextBrowser {
                 background: #171717;
+                font-size: {self._font_size}pt;
                 color: #dddddd;
                 border: 1px solid #444444;
                 selection-background-color: #ff9a32;
@@ -211,7 +220,9 @@ class BenchmarkManager(QDialog):
         )
         description.setTextFormat(Qt.RichText)
         description.setWordWrap(True)
-        description.setStyleSheet("font-size: 15px; padding: 6px 2px 10px 2px;")
+        description.setStyleSheet(
+            f"font-size: {self._font_size + 2}pt; padding: 6px 2px 10px 2px;"
+        )
         root.addWidget(description)
 
         # Connection state and map availability are only worth screen space
@@ -300,6 +311,7 @@ class BenchmarkManager(QDialog):
         self.output.setOpenExternalLinks(False)
         self.output.setStyleSheet(
             "QTextBrowser { font-family: Consolas, monospace; "
+            f"font-size: {self._font_size}pt; "
             "background: #171717; border: 1px solid #444; }"
         )
         root.addWidget(self.output, 1)
@@ -308,13 +320,13 @@ class BenchmarkManager(QDialog):
         self.run_button.setEnabled(False)
         self.run_button.setMinimumHeight(44)
         self.run_button.setStyleSheet(
-            """
-            QPushButton {
+            f"""
+            QPushButton {{
                 background: #3aa757;
                 color: #ffffff;
                 border: none;
                 border-radius: 3px;
-                font-size: 16px;
+                font-size: {self._font_size + 5}pt;
                 font-weight: bold;
             }
             QPushButton:hover   { background: #45bd66; }
@@ -504,9 +516,9 @@ class BenchmarkManager(QDialog):
             self._append(
                 '<div style="margin-top:12px; padding:14px 16px; background:#1f241f; '
                 'border:1px solid #63d471; color:#eeeeee;">'
-                '<div style="color:#63d471; font-size:22px; font-weight:bold; '
+                '<div style="color:#63d471; font-size:%dpt; font-weight:bold; '
                 'line-height:1.2; margin-bottom:6px;">Benchmark complete.</div>'
-                '<div style="color:#eeeeee; font-size:14px; font-weight:bold;">'
+                '<div style="color:#eeeeee; font-size:%dpt; font-weight:bold;">'
                 '%d result(s) recorded.</div>'
                 '</div>' % len(self.results)
             )
@@ -745,8 +757,23 @@ def main():
     parser.add_argument("--auto-start", action="store_true")
     args = parser.parse_args()
 
+    # Match Fio's global font and high-DPI policy from the same settings.ini
+    # used by the editor. The benchmark is a separate process, so it cannot
+    # inherit QApplication's configured font from the running Fio instance.
+    settings_path = os.path.join(os.path.abspath(args.root), "settings.ini")
+    config = configparser.ConfigParser()
+    config.read(settings_path)
+    font_size = config.getint("Display", "font_size", fallback=11)
+    high_dpi = config.getboolean("Display", "high_dpi_scaling", fallback=True)
+
+    if hasattr(Qt, "AA_EnableHighDpiScaling"):
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, high_dpi)
+
     app = QApplication(sys.argv)
     app.setApplicationName("Fio Benchmark Manager")
+    font = QFont(app.font())
+    font.setPointSize(font_size)
+    app.setFont(font)
 
     dialog = BenchmarkManager(args)
     dialog.show()
