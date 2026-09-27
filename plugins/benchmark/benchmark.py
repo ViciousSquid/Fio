@@ -1440,18 +1440,19 @@ class BenchmarkRunner:
             self.status_label.setText("Monster witness: 10/40 — ramping at 0.25 s intervals")
             self._append("  0.5s: spawned 5 random team2 monsters.")
         elif phase == "ramp" and now >= self._monster_chaos_next_spawn:
-            monster_type = rng.choice(("human", "flying"))
-            team = rng.choice(("team1", "team2"))
-            self.tests._spawn_monster_chaos_entity(
-                logic,
-                rng,
-                team=team,
-                position=self.tests._monster_chaos_random_position(rng, monster_type),
-                spawn_index=self._monster_chaos_spawn_index,
-                monster_type=monster_type,
-            )
-            self._monster_chaos_spawn_index += 1
-            self._monster_chaos_total += 1
+            for _ in range(2):
+                monster_type = rng.choice(("human", "flying"))
+                team = rng.choice(("team1", "team2"))
+                self.tests._spawn_monster_chaos_entity(
+                    logic,
+                    rng,
+                    team=team,
+                    position=self.tests._monster_chaos_random_position(rng, monster_type),
+                    spawn_index=self._monster_chaos_spawn_index,
+                    monster_type=monster_type,
+                )
+                self._monster_chaos_spawn_index += 1
+                self._monster_chaos_total += 1
             self._monster_chaos_next_spawn = now + 0.25
 
             if self._monster_chaos_total >= 40:
