@@ -160,6 +160,10 @@ class RenderState:
         # The overhead ground sprite is suppressed during the blend so it does
         # not pop in/out mid-swoop.
         self.camera_transition_active = False
+        # True while LogicCamera owns the player's view; HUD is suppressed.
+        self.cinematic_camera_active = False
+        # Opacity for the health/ammo HUD after cinematic control returns.
+        self.hud_health_alpha = 1.0
 
         # Monster debug visualisation (F7 toggle)
         self.monster_debug_active = False
@@ -258,6 +262,8 @@ class RenderState:
         self.projectiles = []
         self.muzzle_flash_active = False
         self.camera_transition_active = False
+        self.cinematic_camera_active = False
+        self.hud_health_alpha = 1.0
         self.monster_debug_active = False
         self.monster_debug_rays = []
         self.total_brushes = 0
