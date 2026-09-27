@@ -376,7 +376,6 @@ class PropSession:
             self.logic.current_hud_message = f"Collected {str(weapon).upper()}"
 
         p["collect_collected"] = True
-        p["carry_enabled"] = False
         self.collected_ids.add(id(prop))
         if self.physics is not None:
             self.physics.set_kinematic(prop, True)
@@ -403,6 +402,30 @@ class PropSession:
                 "entity": prop,
             }
 
+    def collect_prop(self, prop):
+        """Collect *prop* through the same path as player collection."""
+        if prop is None or id(prop) not in self._by_id:
+            return False
+        if not self._collectable(prop):
+            return False
+        self._collect(prop)
+        return True
+
+    def respawn_prop(self, prop):
+        """Force a collected Prop back into its authored live state."""
+        if prop is None or id(prop) not in self._by_id:
+            return False
+        pid = id(prop)
+        self.respawn_timers.pop(pid, None)
+        prop.properties["collect_collected"] = False
+        self.collected_ids.discard(pid)
+        if self.held is prop:
+            self.held = None
+        if self.physics is not None:
+            self.physics.set_kinematic(prop, False)
+        self._fire(prop, "OnRespawn")
+        return True
+
     def _update_respawns(self, delta):
         if not self.respawn_timers:
             return
@@ -422,7 +445,6 @@ class PropSession:
                 continue
 
             prop.properties["collect_collected"] = False
-            prop.properties["carry_enabled"] = True
             self.collected_ids.discard(pid)
             if self.physics is not None:
                 self.physics.set_kinematic(prop, False)
