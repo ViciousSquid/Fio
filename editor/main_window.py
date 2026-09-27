@@ -2447,6 +2447,12 @@ class MainWindow(QMainWindow):
         
         self.view_3d.update()
 
+        action = getattr(self, 'system_monitor_action', None)
+        if action is not None and action.isChecked() != self.view_3d.sysmon.is_active():
+            action.blockSignals(True)
+            action.setChecked(self.view_3d.sysmon.is_active())
+            action.blockSignals(False)
+
     def set_grid_size(self, size):
         snapped_size = self._snap_to_power_of_two(size)
         self.grid_size_spinbox.blockSignals(True)       # sync the spinbox
