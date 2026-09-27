@@ -1905,6 +1905,9 @@ class QtGameView(QOpenGLWidget):
                 if active_weapon == 'gun2':
                     x = (viewport_width - scaled.width()) // 2
                     y = (viewport_height - scaled.height()) // 2
+                elif active_weapon == 'sword':
+                    x = 20
+                    y = viewport_height - scaled.height()
                 else:
                     x = viewport_width - scaled.width() - 20
                     y = viewport_height - scaled.height()
@@ -2161,7 +2164,7 @@ class QtGameView(QOpenGLWidget):
             'Portal': 'portal.png',
             'LogicCommand': 'logic_command.png',
         }
-        for weapon in ['gun1', 'gun2', 'cig']:
+        for weapon in ['gun1', 'gun2', 'sword', 'cig']:
             tid = self.load_texture(f'{weapon}HUD.png', 'sprites')
             if tid:
                 self.sprite_textures[f'{weapon}_hud'] = tid
