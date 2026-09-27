@@ -15,7 +15,7 @@ import pytest
 pytest.importorskip("PyQt5", reason="the entity classes live in editor.things")
 
 from editor.things import (Effect, Light, LevelChanger, LogicGate,  # noqa: E402
-                           LogicRelay, LogicTimer, Monster, PathNode, Pickup,
+                           LogicRelay, LogicTimer, Monster, PathNode,
                            Portal, Thing)
 from plugins.bigworld.entities import BigWorldSettings  # noqa: E402
 from engine import entity_table as et                        # noqa: E402
@@ -39,7 +39,6 @@ def _synced(things, epoch=1):
 @pytest.mark.parametrize('cls,bit', [
     (PathNode, et.ENT_SKIP),
     (Portal, et.ENT_PORTAL),
-    (Pickup, et.ENT_PICKUP),
     (Monster, et.ENT_MONSTER),
     (LogicGate, et.ENT_ENTITY_SPRITE),
     (LogicRelay, et.ENT_ENTITY_SPRITE),
@@ -389,7 +388,7 @@ def _every_representation():
     fall-through branches and an ordering between them, and a mask that gets
     one of them wrong draws an entity in the wrong pass -- or not at all.
     """
-    classes = [Thing, PathNode, Portal, Pickup, Monster, LogicGate, LogicRelay,
+    classes = [Thing, PathNode, Portal, Monster, LogicGate, LogicRelay,
                LogicTimer, LevelChanger, Light, Prop]
     things = []
     for cls, model_path, render_mode, sprite_path, hidden in itertools.product(
@@ -673,7 +672,7 @@ def test_a_steady_frame_re_resolves_no_sprite_at_all(monkeypatch):
     """
     calls = _count_resolves(monkeypatch)
     things = [make_thing(Light, 'l'), make_thing(Monster, 'm'),
-              make_thing(LogicRelay, 'r'), make_thing(Pickup, 'p'),
+              make_thing(LogicRelay, 'r'), make_thing(Prop, 'p'),
               make_thing(Prop, 'prop', render_mode='billboard',
                          sprite_path='s.png')]
     table = EntityTable()
@@ -724,9 +723,6 @@ def test_a_cold_row_is_never_re_resolved_by_a_frame(monkeypatch):
     (Monster, 'monster_type', 'alien'),
     (Monster, 'variant', 'red'),
     (Monster, 'custom_idle', 'assets/sprites/x.png'),
-    (Pickup, 'item_type', 'gun1'),
-    (Pickup, 'key_name', 'blue_key'),
-    (Pickup, 'custom_sprite', 'assets/sprites/x.png'),
     (LogicGate, 'logic_type', 'or'),
     (Prop, 'render_mode', 'billboard'),
     (Prop, 'sprite_path', 'assets/sprites/x.png'),
@@ -755,16 +751,16 @@ def test_every_field_the_identity_reads_is_in_the_state_check(cls, field, value)
 
 
 def test_identical_recipes_intern_to_one_id():
-    """Two pickups of the same kind share a run, so they share an id."""
-    table = _synced([make_thing(Pickup, 'a', item_type='health'),
-                     make_thing(Pickup, 'b', item_type='health')])
+    """Two identical collectible Props share a run, so they share an id."""
+    table = _synced([make_thing(Prop, 'a', sprite_path='assets/sprites/health.png'),
+                     make_thing(Prop, 'b', sprite_path='assets/sprites/health.png')])
     assert table.sprite_key_id[0] == table.sprite_key_id[1]
     assert len(table.sprite_recipes()) == 1
 
 
 def test_sprite_columns_are_a_pure_projection():
     things = [make_thing(Monster, 'm'), make_thing(Light, 'l'),
-              make_thing(Pickup, 'p'), make_thing(Portal, 'pt')]
+              make_thing(Prop, 'p'), make_thing(Portal, 'pt')]
     first, second = _synced(things), _synced(things)
     assert np.array_equal(first.sprite_size[:first.count],
                           second.sprite_size[:second.count])
