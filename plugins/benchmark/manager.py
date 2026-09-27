@@ -37,11 +37,11 @@ from PyQt5.QtWidgets import (
 
 
 TESTS = (
-    ("live_io_1000", "I/O chain: 1,000 entities"),
-    ("live_1000_brushes", "Renderer scene: 1,000 brushes"),
-    ("live_10000_brushes", "Renderer scene: 10,000 brushes"),
-    ("live_100000_brushes", "Renderer scene: 100,000 brushes"),
-    ("monster_chaos_witness", "Monster chaos: 50 monsters / 10-second live witness"),
+    ("live_io_1000", "I/O: 1,000-entity live chain / repeated bursts"),
+    ("live_1000_brushes", "Renderer: 1,000 brushes / live camera sweep"),
+    ("live_10000_brushes", "Renderer: 10,000 brushes / live camera sweep"),
+    ("live_100000_brushes", "Renderer: 100,000 brushes / live camera sweep"),
+    ("monster_chaos_witness", "Monster AI: 50 monsters / 15-second combat witness"),
     ("borderless_window", "Window mode: borderless maximized"),
     ("fullscreen_window", "Window mode: true fullscreen"),
     ("editor_windowed_1280", "Editor mode: windowed 1280×720 (3D view pane)"),
@@ -262,7 +262,7 @@ class BenchmarkManager(QDialog):
             "Additional stress tests (I/O, renderer, gameplay)"
         )
         additional.setToolTip(
-            "Run the standard live I/O, renderer and monster-capacity workloads."
+            "Run the live dense renderer, repeated I/O dispatcher, and real MonsterAI workloads."
         )
         additional.toggled.connect(self._refresh_run_enabled)
         self.checkboxes["additional_tests"] = additional
