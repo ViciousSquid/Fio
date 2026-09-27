@@ -500,7 +500,7 @@ class QtGameView(QOpenGLWidget):
 
         if self._view_message_text:
             elapsed = time.perf_counter() - self._view_message_started_at
-            if elapsed < 7.0:
+            if elapsed < 7.0 or self._view_message_queue:
                 self._view_message_queue.append(text)
                 self.update()
                 return
@@ -524,7 +524,7 @@ class QtGameView(QOpenGLWidget):
 
         if self._view_message2_text:
             elapsed = time.perf_counter() - self._view_message2_started_at
-            if elapsed < 7.0:
+            if elapsed < 7.0 or self._view_message2_queue:
                 self._view_message2_queue.append(text)
                 self.update()
                 return
