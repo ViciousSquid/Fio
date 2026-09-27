@@ -248,6 +248,8 @@ class MainWindow(QMainWindow):
         if self.config.getboolean('Display', 'always_show_sysmon', fallback=False):
             self.view_3d.sysmon.set_active(True)
             self.view_3d.sysmon.set_expanded(True)
+            if hasattr(self, 'system_monitor_action'):
+                self.system_monitor_action.setChecked(True)
 
         self.show_logic_links = True
         
