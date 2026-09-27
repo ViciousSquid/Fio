@@ -619,7 +619,7 @@ class QtGameView(QOpenGLWidget):
         line_height = QFontMetrics(font).height() + 2
         baseline = held_item_row_top - 12 - line_height + (line_height * line_offset)
 
-        text_x = viewport_width - 20 - width if align_right else cx - width // 2
+        text_x = viewport_width - 10 - width if align_right else cx - width // 2
         painter.save()
         painter.setOpacity(max(0.0, min(1.0, opacity)))
         painter.setFont(font)
