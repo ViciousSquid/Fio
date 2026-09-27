@@ -1910,7 +1910,24 @@ class QtGameView(QOpenGLWidget):
         health_font = QFont(self._hud_health_font)
         health_font.setPointSize(max(42, min(68, int(viewport_height * 0.085))))
         painter.setFont(health_font)
-        painter.setPen(self._hud_health_orange)
+        health_ratio = max(
+            0.0,
+            min(
+                1.0,
+                float(health) / float(max_health)
+                if float(max_health) > 0.0 else 0.0,
+            ),
+        )
+        # Full health keeps the established orange; as health falls, blend
+        # continuously toward a much darker red.
+        full_r, full_g, full_b = self._hud_health_orange.red(), self._hud_health_orange.green(), self._hud_health_orange.blue()
+        low_r, low_g, low_b = 100, 0, 0
+        health_color = QColor(
+            int(low_r + (full_r - low_r) * health_ratio),
+            int(low_g + (full_g - low_g) * health_ratio),
+            int(low_b + (full_b - low_b) * health_ratio),
+        )
+        painter.setPen(health_color)
         health_text = str(int(health))
         metrics = QFontMetrics(health_font)
         # Pin health against the absolute bottom-left edge of the viewport.
