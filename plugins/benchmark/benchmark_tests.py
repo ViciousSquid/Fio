@@ -422,7 +422,7 @@ class BenchmarkTests:
                 cooperative_yield = lambda: self._live_cooperative_yield(label)
                 data, chaos_info = bench.make_monster_chaos_witness_world(
                     seed="43",
-                    monster_count=100,
+                    monster_count=40,
                     yield_hook=cooperative_yield,
                 )
                 bench.load_live_benchmark_world(
@@ -495,7 +495,7 @@ class BenchmarkTests:
                 )
                 self._append(
                     "  Population schedule: +5 team2 monsters at 0.5s, then +1 random-team "
-                    "monster every 0.25s until 100."
+                    "monster every 0.25s until 40."
                 )
             elif label == "live_io_1000":
                 cooperative_yield = lambda: self._live_cooperative_yield(label)
