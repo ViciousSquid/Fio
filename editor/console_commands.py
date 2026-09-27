@@ -839,7 +839,7 @@ class ConsoleCommandHandler:
 <i>Fog always reaches full opacity before the clip, so pulling the view
 distance in never makes geometry pop. Fire these from a logic_command
 entity to drive them from the I/O system.</i><br>
-<b style="color:orange;">r_viewdistance</b>{sep}<b style="color:orange;">culldistance</b>{sep}<b style="color:orange;">farplane</b> &lt;units&gt; — Max render distance (also the far plane)<br>
+<b style="color:orange;">r_viewdistance</b>{sep}<b style="color:orange;">culldistance</b>{sep}<b style="color:orange;">cullfogdist</b>{sep}<b style="color:orange;">cullfogdistance</b>{sep}<b style="color:orange;">farplane</b> &lt;units&gt; — Max render/cull/fog distance<br>
 <b style="color:orange;">r_distancefog</b>{sep}<b style="color:orange;">distancefog</b> [on|off] — Toggle far-plane fog<br>
 <b style="color:orange;">r_fogdistance</b>{sep}<b style="color:orange;">fogdist</b> &lt;start&gt; &lt;end&gt;{sep}<b style="color:orange;">auto</b> — Where fog ramps up and goes opaque<br>
 <b style="color:orange;">r_fogstart</b> &lt;units&gt;{sep}<b style="color:orange;">auto</b> — Where fog begins<br>
