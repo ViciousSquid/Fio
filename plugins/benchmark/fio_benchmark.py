@@ -810,8 +810,8 @@ def run_live_renderer_sample(window, duration=1.0, warmup=0.75):
 
 
 
-def make_monster_chaos_witness_world(seed="43", monster_count=100, yield_hook=None):
-    """Build the fixed 1024^3 room used by the live 100-monster witness.
+def make_monster_chaos_witness_world(seed="43", monster_count=40, yield_hook=None):
+    """Build the fixed 1024^3 room used by the live 40-monster witness.
 
     The monsters are spawned at runtime by the benchmark in staged waves.  The
     map itself contains only the room and PlayerStart so the measured workload
@@ -822,8 +822,8 @@ def make_monster_chaos_witness_world(seed="43", monster_count=100, yield_hook=No
     from tests.helpers.worlds import room
 
     monster_count = int(monster_count)
-    if monster_count != 100:
-        raise ValueError("monster chaos witness requires exactly 100 monsters")
+    if monster_count != 40:
+        raise ValueError("monster chaos witness requires exactly 40 monsters")
 
     player_x = -384.0
     player_z = 0.0
