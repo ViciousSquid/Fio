@@ -72,6 +72,11 @@ def test_there_is_exactly_one_bigworld_settings_class():
         "map carrying the entity would not switch streaming on")
 
 
+def test_bigworld_settings_exposes_schema_fields_to_the_property_editor():
+    """Schema fields must be explicitly classified so the Properties tab invokes the plugin renderer."""
+    assert BigWorldSettings.EDITOR_PRIMARY_PROPERTIES == tuple(config.BY_KEY)
+
+
 def test_the_entity_the_schema_and_the_coercer_describe_the_same_keys():
     entity_keys = set(BigWorldSettings().properties) - {"type", "id", "name"}
     schema_keys = {spec.name for spec in _registered_schema()}

@@ -283,6 +283,11 @@ class Ui_MainWindow(object):
         # T is the primary key; Shift+S is kept as Radiant's own binding.
         MainWindow.surface_inspector_action.setShortcuts(
             [QKeySequence('T'), QKeySequence('Shift+S')])
+        # T is an editor shortcut, not an application-wide action.  Keeping it
+        # on the MainWindow's child widget tree prevents unrelated shortcut
+        # delivery (notably during Ctrl+Z history actions) from invoking it.
+        MainWindow.surface_inspector_action.setShortcutContext(
+            Qt.WidgetWithChildrenShortcut)
         MainWindow.surface_inspector_action.setToolTip(
             'Texture the hovered face, or the selected brush (T)')
         MainWindow.surface_inspector_action.triggered.connect(

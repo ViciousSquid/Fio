@@ -1310,11 +1310,74 @@ def register_all_input_handlers(io_manager: IOManager):
             except (TypeError, ValueError):
                 pass
 
+    def _camera_target_position(target):
+        if isinstance(target, dict):
+            pos = target.get('pos')
+        else:
+            pos = getattr(target, 'pos', None)
+        if pos is None:
+            return None
+        try:
+            return [float(pos[0]), float(pos[1]), float(pos[2])]
+        except (TypeError, ValueError, IndexError):
+            return None
+
+    def camera_look_at(entity, param, logic):
+        """Smoothly focus the active camera on an entity named by name or UUID.
+
+        The authored LogicCamera 'lookat_return_time' controls when the
+        normal path-facing target resumes. Zero keeps the explicit focus
+        indefinitely.
+        """
+        cs = logic.cinematic_state
+        if not cs or cs.get('entity') is not entity:
+            debug_log(
+                "IO",
+                f"LogicCamera '{entity.name}': LookAt ignored because the camera is not active."
+            )
+            return
+
+        target_ref = (param or '').strip()
+        if not target_ref:
+            debug_log("IO", f"LogicCamera '{entity.name}': LookAt requires a target name or UUID.")
+            return
+
+        target = None
+        if hasattr(logic, '_find_entity_by_id'):
+            target = logic._find_entity_by_id(target_ref)
+        if target is None and hasattr(logic, '_find_entity_by_name'):
+            target = logic._find_entity_by_name(target_ref)
+
+        target_pos = _camera_target_position(target)
+        if target is None or target_pos is None:
+            debug_log(
+                "IO",
+                f"LogicCamera '{entity.name}': LookAt target '{target_ref}' not found or has no position."
+            )
+            return
+
+        try:
+            return_time = max(
+                0.0,
+                float(entity.properties.get('lookat_return_time', 5.0)),
+            )
+        except (TypeError, ValueError):
+            return_time = 5.0
+
+        cs['lookat_target'] = target
+        cs['lookat_return_remaining'] = None if return_time == 0.0 else return_time
+        debug_log(
+            "IO",
+            f"LogicCamera '{entity.name}': focusing on '{target_ref}'"
+            + (" indefinitely" if return_time == 0.0 else f" for {return_time:g}s")
+        )
+
     io_manager.register_input_handler('logic_camera', 'start',    camera_start)
     io_manager.register_input_handler('logic_camera', 'stop',     camera_stop)
     io_manager.register_input_handler('logic_camera', 'pause',    camera_pause)
     io_manager.register_input_handler('logic_camera', 'resume',   camera_resume)
     io_manager.register_input_handler('logic_camera', 'setspeed', camera_set_speed)
+    io_manager.register_input_handler('logic_camera', 'lookat',   camera_look_at)
 
     # ==========================================================================
     # LOGIC COMMAND INPUTS

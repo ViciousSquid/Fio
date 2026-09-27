@@ -859,6 +859,23 @@ class QtGameView(QOpenGLWidget):
         angle = (pan + 1.0) * (math.pi / 4.0)
         return gain, math.cos(angle), math.sin(angle)
 
+    def stop_all_sounds(self):
+        """Immediately stop every mixer channel and cancel queued audio."""
+        try:
+            if pygame.mixer.get_init():
+                pygame.mixer.stop()
+        except (pygame.error, AttributeError):
+            pass
+
+        self.game_state.clear_sounds()
+
+        speaker_channels = getattr(self, '_speaker_channels', None)
+        if speaker_channels is not None:
+            speaker_channels.clear()
+        speaker_mix = getattr(self, '_speaker_mix', None)
+        if speaker_mix is not None:
+            speaker_mix.clear()
+
     def _process_sound_queue(self):
         """Drain queued sound requests and keep active speaker channels mixed.
 
@@ -972,6 +989,7 @@ class QtGameView(QOpenGLWidget):
         COLOR_LOGIC   = (1.0, 1.0, 0.0)
         COLOR_IO      = (0.0, 1.0, 1.0)
         COLOR_PATROL  = (0.15, 0.65, 0.60)
+        COLOR_PATHNODE = (128.0 / 255.0, 128.0 / 255.0, 0.0)
         try:
             from editor.io_system import get_connections
             io_available = True
@@ -1021,7 +1039,7 @@ class QtGameView(QOpenGLWidget):
                 next_node = node_lookup.get(next_name)
                 if next_node is None:
                     continue
-                lines.append({'src': node.pos, 'dst': next_node.pos, 'color': COLOR_PATROL})
+                lines.append({'src': node.pos, 'dst': next_node.pos, 'color': COLOR_PATHNODE})
         if Monster is not None and PathNode is not None:
             for t in self.editor.state.things:
                 if not isinstance(t, Monster):
@@ -2309,6 +2327,10 @@ class QtGameView(QOpenGLWidget):
                     if self.logic_thread:
                         self.logic_thread.set_frustum_aspect(self._cached_aspect_ratio)
         else:
+            # Leaving Play Mode is an audio lifecycle boundary: stop both
+            # looping speaker channels and one-shot mixer channels, and discard
+            # any sound requests queued by the logic thread during teardown.
+            self.stop_all_sounds()
             if self.console_overlay_active:
                 self._console_input.hide()
                 self.console_overlay_active = False

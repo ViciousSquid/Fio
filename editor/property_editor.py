@@ -2673,6 +2673,7 @@ class PropertyEditor(QWidget):
                 'speed',
                 'fov_override',
                 'look_ahead',
+                'lookat_return_time',
             ):
                 continue
 
@@ -2731,27 +2732,9 @@ class PropertyEditor(QWidget):
                 self._widgets[f'{thing.properties.get("id", id(thing))}_angle'] = angle_combo
                 continue
 
-            # Monster type.
+            # Monster type + its type-specific sprite variant.
             if isinstance(thing, Monster) and key == 'monster_type':
-                combo = QComboBox()
-                combo.addItems([
-                    'zombie',
-                    'goblin',
-                    'orc',
-                    'skeleton',
-                    'custom',
-                ])
-
-                current = str(value or 'zombie')
-                index = combo.findText(current)
-                if index >= 0:
-                    combo.setCurrentIndex(index)
-
-                combo.currentTextChanged.connect(
-                    lambda text: self.update_object_prop('monster_type', text)
-                )
-
-                form.addRow(QLabel("Monster Type:"), combo)
+                self._build_monster_type_row(form, thing)
                 continue
 
             # Light state.
@@ -2933,7 +2916,8 @@ class PropertyEditor(QWidget):
             )
 
     def _build_monster_type_row(self, form, thing):
-        combo = _make_combo(['human', 'flying'], thing.properties.get('monster_type', 'human'))
+        from engine.monster_constants import MONSTER_TYPES
+        combo = _make_combo(MONSTER_TYPES, thing.properties.get('monster_type', 'human'))
         form.addRow("Monster Type:", combo)
 
         variant_combo = ClickableComboBox()
@@ -2956,7 +2940,7 @@ class PropertyEditor(QWidget):
         populate()
 
         def on_variant(text):
-            thing.properties['variant'] = text
+            self.update_object_prop('variant', text)
             try:
                 Monster.clear_sprite_cache()
             except Exception:
@@ -2974,7 +2958,7 @@ class PropertyEditor(QWidget):
             default_w, default_h = MONSTER_SPRITE_SIZES.get(new_type, (128, 128))
             self.update_object_prop('sprite_width', default_w)
             self.update_object_prop('sprite_height', default_h)
-            thing.properties['variant'] = '<None>'
+            self.update_object_prop('variant', '<None>')
             populate(new_type)
             is_flying = new_type == 'flying'
             for k in ('projectile_sprite_label', 'projectile_sprite_path'):
@@ -3243,9 +3227,22 @@ class PropertyEditor(QWidget):
 
         # Look ahead
         look = _make_checkbox("Look at next node", thing.properties.get('look_ahead', True),
-                              lambda c: thing.properties.update({'look_ahead': bool(c)}), _Style.CHECKBOX)
-        look.setToolTip("Camera faces the next PathNode instead of forward")
+                              lambda c: self.update_object_prop('look_ahead', bool(c)),
+                              _Style.CHECKBOX)
+        look.setToolTip("Camera smoothly faces the next PathNode")
+
+        return_time = _make_spin(
+            thing.properties.get('lookat_return_time', 5.0),
+            0.0, 3600.0,
+            suffix=" sec", decimals=1, step=0.5,
+            tooltip="LookAt focus duration. 0 = remain focused forever."
+        )
+        return_time.valueChanged.connect(
+            lambda v: self.update_object_prop('lookat_return_time', float(v))
+        )
+
         form.addRow("", look)
+        form.addRow("LookAt Return:", return_time)
 
         tab_layout.addWidget(group)
 
@@ -4058,6 +4055,12 @@ class PropertyEditor(QWidget):
         if shader_type != '<None>':
             self.current_object['is_trigger'] = False
 
+        # Shader selection changes dense render classification/material state
+        # (fog, water, glass, glow, trigger exclusion). Journal this exact
+        # brush so the write-side RenderTable cold row is refreshed immediately.
+        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'mark_world_changed'):
+            self.editor.state.mark_world_changed([self.current_object])
+
         # Defer refresh to avoid interrupting shader combo's own update cycle
         QTimer.singleShot(0, self._deferred_shader_refresh)
 
@@ -4087,6 +4090,11 @@ class PropertyEditor(QWidget):
             if is_trigger:
                 self.tab_widget.setCurrentIndex(self.trigger_tab_index)
         self._update_io_tab_presence()
+
+        # Trigger state changes the render classification and face textures.
+        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'mark_world_changed'):
+            self.editor.state.mark_world_changed([self.current_object])
+
         self.editor.update_views()
         self.editor.scene_hierarchy.refresh_list()
 
@@ -4103,6 +4111,8 @@ class PropertyEditor(QWidget):
             if hasattr(self, 'door_tab_index'):
                 self.tab_widget.setTabVisible(self.door_tab_index, False)
         self.current_object['is_mover'] = is_mover
+        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'mark_world_changed'):
+            self.editor.state.mark_world_changed([self.current_object])
         if is_mover:
             self.current_object.setdefault('speed', 64.0)
             self.current_object.setdefault('distance', 128.0)
@@ -4128,6 +4138,8 @@ class PropertyEditor(QWidget):
             if hasattr(self, 'mover_tab_index'):
                 self.tab_widget.setTabVisible(self.mover_tab_index, False)
         self.current_object['is_door'] = is_door
+        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'mark_world_changed'):
+            self.editor.state.mark_world_changed([self.current_object])
         if is_door:
             self.current_object.setdefault('door_direction', 'up')
             self.current_object.setdefault('door_distance', 128.0)

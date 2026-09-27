@@ -22,6 +22,7 @@ pytest.importorskip("PyQt5", reason="the logic thread pulls in editor.things")
 from editor.editor_state import EditorState             # noqa: E402
 from editor.things import Light, Monster, Pickup        # noqa: E402
 from engine.logic_thread import LogicThread             # noqa: E402
+from engine import render_table as render_table_module      # noqa: E402
 from engine.threaded_game_state import RenderState, ThreadedGameState  # noqa: E402
 from tests.helpers.worlds import box_brush, make_thing, pillar_grid  # noqa: E402
 
@@ -580,6 +581,34 @@ def test_a_render_state_snapshot_is_independent_of_later_writes():
     assert snapshot.hud_message == "one", (
         "a snapshot handed to the renderer changed when the next frame was "
         "published; it now reads %r" % snapshot.hud_message)
+
+
+def test_dense_projections_are_double_buffered():
+    """The renderer's published tables must stay immutable while the next frame is built."""
+    game_state = ThreadedGameState()
+    brush = box_brush("wall")
+
+    first_write = game_state.get_write_state()
+    first_write.render_table.sync([brush], epoch=1)
+    first_table = first_write.render_table
+    assert not bool(first_table.class_bits[0] & render_table_module.CLASS_FOG)
+
+    game_state.request_swap()
+    published = game_state.get_render_state()
+    next_write = game_state.get_write_state()
+
+    assert published.render_table is first_table
+    assert next_write.render_table is not first_table
+
+    brush["shader"] = "Fog"
+    brush["is_fog"] = True
+    next_write.render_table.sync([brush], epoch=2)
+
+    assert bool(next_write.render_table.class_bits[0] & render_table_module.CLASS_FOG)
+    assert not bool(first_table.class_bits[0] & render_table_module.CLASS_FOG), (
+        "editing the write-side table changed the table already published "
+        "to the renderer"
+    )
 
 
 def test_recycled_render_state_keeps_dense_projection_objects():

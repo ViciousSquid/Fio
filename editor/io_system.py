@@ -1007,6 +1007,7 @@ def register_default_io():
             IODef('OnMonsterLeft',    'Fires when a patrolling monster leaves this node\'s radius'),
             IODef('OnWaitStart',      'Fires when a monster begins waiting at this node'),
             IODef('OnWaitEnd',        'Fires when a monster finishes waiting and advances to next node'),
+            IODef('OnCameraArrived',  'Fires when a LogicCamera arrives at this node'),
         ]
     )
 
@@ -1019,6 +1020,7 @@ def register_default_io():
             IODef('Pause',    'Freeze camera at current chain position'),
             IODef('Resume',   'Continue a paused sequence'),
             IODef('SetSpeed', 'Override travel speed', 'float'),
+            IODef('LookAt',    'Smoothly face an entity by name or UUID', 'string'),
         ],
         outputs=[
             IODef('OnStart',       'Fired when sequence begins'),

@@ -119,10 +119,10 @@ class RenderState:
         # The dense render projection (engine.render_table.RenderTable) and the
         # visibility result as integer slots into it. These are what let the
         # renderer classify, sort and batch numerically instead of walking the
-        # published object lists to rediscover what it already knows. The table
-        # is shared by reference, not copied: its cold columns are immutable
-        # between world-epoch bumps, and its warm columns are refreshed only on
-        # the logic thread.
+        # published object lists to rediscover what it already knows. Every
+        # RenderState owns its own persistent table, so the logic thread refreshes
+        # only the write-side projection while the renderer consumes the read-side
+        # projection unchanged.
         self.render_table = RenderTable()
         #: slot -> the render reference for that row: the live brush dict, or
         #: for a mover or a door the per-frame snapshot. Indexed by the slot
@@ -403,6 +403,13 @@ class ThreadedGameState:
         """Thread-safe: enqueue a sound request from any thread."""
         with self._sound_lock:
             self.sound_queue.append(request)
+
+    def clear_sounds(self) -> int:
+        """Cancel all pending sound requests and return how many were removed."""
+        with self._sound_lock:
+            count = len(self.sound_queue)
+            self.sound_queue.clear()
+            return count
 
     # --- Player 2 Input ---
 

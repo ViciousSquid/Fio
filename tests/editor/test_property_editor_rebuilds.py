@@ -26,7 +26,9 @@ from editor.io_system import OutputConnection  # noqa: E402
 from editor.property_editor import PropertyEditor  # noqa: E402
 from editor.things import Light  # noqa: E402
 from engine import brush_geometry as bg  # noqa: E402
-from engine.render_table import RenderTable  # noqa: E402
+from engine.render_table import (  # noqa: E402
+    RenderTable, CLASS_FOG, CLASS_TRIGGER,
+)
 
 # Qt tier: PyQt5 must be importable.  No display and no GPU - the suite runs
 # against the offscreen platform plugin.
@@ -210,6 +212,50 @@ def test_property_edit_marks_the_dense_render_row_dirty(panel):
     table = RenderTable()
     table.begin_frame(host.state.brushes, epoch, dirty_objects=dirty)
     assert table.glass_params[0].tolist() == pytest.approx([0.3, 0.5, 2.4, 0.0, 0.5], rel=1e-6)
+
+
+def test_shader_change_immediately_invalidates_dense_brush_classification(panel):
+    host, editor = panel
+    brush = make_brush()
+    host.state.brushes.append(brush)
+    editor.set_object(brush)
+    initial = host.state.render_dirty_snapshot()
+    host.state.clear_render_dirty(initial)
+
+    editor.on_shader_changed('Fog')
+    epoch, dirty = host.state.render_dirty_snapshot()
+    table = RenderTable()
+    table.begin_frame(host.state.brushes, epoch, dirty_objects=dirty)
+
+    assert id(brush) in dirty
+    assert brush['shader'] == 'Fog'
+    assert table.class_bits[0] & CLASS_FOG
+
+    host.state.clear_render_dirty((epoch, dirty))
+    editor.on_shader_changed('<None>')
+    epoch, dirty = host.state.render_dirty_snapshot()
+    table.begin_frame(host.state.brushes, epoch, dirty_objects=dirty)
+
+    assert id(brush) in dirty
+    assert not (table.class_bits[0] & CLASS_FOG)
+
+
+def test_trigger_change_immediately_invalidates_dense_brush_classification(panel):
+    host, editor = panel
+    brush = make_brush()
+    host.state.brushes.append(brush)
+    editor.set_object(brush)
+    initial = host.state.render_dirty_snapshot()
+    host.state.clear_render_dirty(initial)
+
+    editor.on_trigger_changed(True)
+    epoch, dirty = host.state.render_dirty_snapshot()
+    table = RenderTable()
+    table.begin_frame(host.state.brushes, epoch, dirty_objects=dirty)
+
+    assert id(brush) in dirty
+    assert brush['is_trigger'] is True
+    assert table.class_bits[0] & CLASS_TRIGGER
 
 
 def test_toggling_a_behaviour_rebuilds_for_the_new_tabs(panel):

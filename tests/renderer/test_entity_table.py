@@ -504,6 +504,16 @@ def test_a_portal_draws_no_sprite():
     assert _keys(table, 0) is None
 
 
+def test_monster_type_and_variant_are_constrained():
+    invalid = make_thing(Monster, 'invalid', monster_type='orc', variant='unknown')
+    assert invalid.properties['monster_type'] == 'human'
+    assert invalid.properties['variant'] == '<None>'
+
+    flying = make_thing(Monster, 'flying', monster_type='flying', variant='variant1')
+    assert flying.properties['monster_type'] == 'flying'
+    assert flying.properties['variant'] == 'variant1'
+
+
 def test_a_monsters_sprite_key_names_its_current_frame():
     grunt = make_thing(Monster, 'grunt', monster_type='human')
     table = _synced([grunt])
@@ -553,6 +563,18 @@ def test_a_custom_monster_sprite_is_loaded_from_its_own_path():
                          'idle.png', 'sprites/mine', True)
     assert recipe[1] == ('msprite_human_<None>_idle_assets/sprites/mine/idle.png',
                          'idle.png', 'sprites/monsters/human', True)
+
+
+@pytest.mark.parametrize('cls,expected', [
+    (LogicRelay, ('LogicRelay', 'logic_relay.png', 'sprites', True)),
+    (LogicTimer, ('LogicTimer', 'logic_timer.png', 'sprites', True)),
+    (LevelChanger, ('LevelChanger', 'levelchanger.png', 'sprites', True)),
+])
+def test_logic_entity_sprite_recipe_has_a_real_texture_source(cls, expected):
+    thing = make_thing(cls, 'e')
+    table = _synced([thing])
+    recipe = table.sprite_recipes()[int(table.sprite_key_id[0])]
+    assert recipe == (expected,)
 
 
 def test_a_logic_gates_sprite_follows_its_type():

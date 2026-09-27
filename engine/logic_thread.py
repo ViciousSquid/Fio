@@ -28,6 +28,7 @@ from .prop_runtime import PropSession
 from .render_table import RenderTable
 from .entity_table import EntityTable
 from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
+from .effect_entity import Effect
 
 # Import Thing subclasses for type checking
 try:
@@ -200,18 +201,17 @@ class LogicThread(threading.Thread):
         # and consumed in _prepare_render_state to blend the view matrix.
         self.camera_transition = None
 
-        # The dense render projection (T3) and the per-slot render references
-        # published alongside it.  The table owns the numbers; `_render_refs`
-        # is the object-reference escape hatch used only where a renderer path
-        # still needs authored object data (for example, convex brush planes).
-        self._render_table = RenderTable()
-        # The entity half of the same projection.  Entities move every
-        # tick and their classification does not, so the table splits
-        # those two costs the way the brush one does.
-        self._entity_table = EntityTable()
-        self._entity_refs = np.empty(0, dtype=object)
+        # RenderState already owns one persistent RenderTable/EntityTable pair.
+        # Keep these aliases only for diagnostics and older tests/code that inspect
+        # the logic thread; the authoritative tables now belong to the write buffer
+        # and therefore cannot be mutated while the renderer is reading the other
+        # buffer.
+        write_state = self.game_state.get_write_state()
+        self._render_table = write_state.render_table
+        self._entity_table = write_state.entity_table
+        self._entity_refs = write_state.entity_refs
         self._entity_all_slots = np.empty(0, dtype=np.int32)
-        self._render_refs = np.empty(0, dtype=object)
+        self._render_refs = write_state.render_refs
 
         # Editor camera
         self.editor_camera = Camera()
@@ -1061,6 +1061,14 @@ class LogicThread(threading.Thread):
                 if b.get('_physics_body')
             ]
             self._refresh_collision_brushes_cache()
+
+            # Reset transient Effect playback so every Play Mode session
+            # starts its animations from a fresh runtime origin. The origin itself
+            # is stored on Effect objects and then projected into both render
+            # buffers, preventing A/B buffer phase jumps.
+            for thing in self.things:
+                if isinstance(thing, Effect):
+                    thing.reset_runtime()
 
             # Reset player stats
             self.player_health = 100
@@ -3169,22 +3177,87 @@ class LogicThread(threading.Thread):
 
         cs['cam_pos'] = current_pos.tolist()
 
+        # Normal path-facing target.  With "look ahead" enabled this is the
+        # next node; otherwise it is the node currently being approached.
         if cs.get('look_ahead'):
             next_name = node.get_next_node_name()
             look_node = self._find_path_node_by_name(next_name) if next_name else node
-            look_target = np.array(look_node.pos if look_node else node.pos, dtype=float)
+            path_look_target = np.array(
+                look_node.pos if look_node else node.pos,
+                dtype=float,
+            )
         else:
-            look_target = target
+            path_look_target = target
+
+        look_target = path_look_target
+
+        # An explicit LookAt temporarily overrides the path target.  The live
+        # entity is retained so moving targets are tracked automatically.
+        focus_target = cs.get('lookat_target')
+        if focus_target is not None:
+            if isinstance(focus_target, dict):
+                focus_pos = focus_target.get('pos')
+            else:
+                focus_pos = getattr(focus_target, 'pos', None)
+            try:
+                if focus_pos is not None:
+                    look_target = np.asarray(focus_pos, dtype=float)
+                else:
+                    cs['lookat_target'] = None
+                    cs['lookat_return_remaining'] = None
+            except (TypeError, ValueError):
+                cs['lookat_target'] = None
+                cs['lookat_return_remaining'] = None
+
+        # Return from LookAt is timed in the camera's logic clock, so pausing
+        # the cinematic camera also pauses the focus timer.
+        if cs.get('lookat_target') is not None:
+            remaining = cs.get('lookat_return_remaining')
+            if remaining is not None:
+                remaining -= max(0.0, float(delta))
+                if remaining <= 0.0:
+                    cs['lookat_target'] = None
+                    cs['lookat_return_remaining'] = None
+                    look_target = path_look_target
+                else:
+                    cs['lookat_return_remaining'] = remaining
 
         diff = look_target - current_pos
         dist = np.linalg.norm(diff)
         if dist > 0.01:
-            cs['cam_angle'] = math.atan2(diff[0], diff[2])
-            cs['cam_pitch'] = math.asin(np.clip(diff[1] / dist, -1.0, 1.0))
+            desired_angle = math.atan2(diff[0], diff[2])
+            desired_pitch = math.asin(np.clip(diff[1] / dist, -1.0, 1.0))
+
+            if not cs.get('_look_initialized', False):
+                cs['cam_angle'] = desired_angle
+                cs['cam_pitch'] = desired_pitch
+                cs['_look_initialized'] = True
+            else:
+                # Exponential smoothing is frame-rate independent and removes
+                # the hard bearing jump at each PathNode boundary.
+                alpha = 1.0 - math.exp(-8.0 * max(0.0, float(delta)))
+                current_angle = cs.get('cam_angle', desired_angle)
+                angle_delta = (
+                    (desired_angle - current_angle + math.pi)
+                    % (2.0 * math.pi)
+                ) - math.pi
+                cs['cam_angle'] = current_angle + angle_delta * alpha
+                current_pitch = cs.get('cam_pitch', desired_pitch)
+                cs['cam_pitch'] = (
+                    current_pitch + (desired_pitch - current_pitch) * alpha
+                )
 
         if cs['lerp_t'] >= 1.0:
+            # PathNodes are real I/O sources for cinematic camera arrival.
+            # Fire the node first so it can drive arbitrary I/O, including
+            # stopping or replacing this camera.
             if self.io_manager:
+                self.io_manager.fire_output(node, 'OnCameraArrived')
                 self.io_manager.fire_output(cs['entity'], 'OnReachNode')
+
+            # Arrival outputs may mutate the cinematic state.
+            if self.cinematic_state is not cs:
+                return
 
             next_name = node.get_next_node_name()
             if next_name:
@@ -3922,13 +3995,14 @@ class LogicThread(threading.Thread):
         brushes = self.brushes
 
         # ---- T3: the dense render projection ----------------------------
-        # Fio already paid to describe the world numerically for culling; this
-        # keeps the other half -- what each brush *is* -- numerical too, so the
-        # renderer never has to go back to the dicts to rediscover it.  The
-        # table is a projection, not a second world: it is rebuilt from
-        # `brushes` whenever the editor's coarse world epoch moves, and holds
-        # nothing that is not already in them.
-        table = self._render_table
+        # Each RenderState owns its own dense projections.  The active write
+        # buffer is the only table the logic thread may mutate; the renderer can
+        # therefore continue consuming the previously published read buffer
+        # without observing torn material/transform/classification columns.
+        table = write_state.render_table
+        etable = write_state.entity_table
+        self._render_table = table
+        self._entity_table = etable
         render_dirty_snapshot = self.editor_state.render_dirty_snapshot()
         world_epoch, render_dirty = render_dirty_snapshot
         # Rows are named by the brush's UUID, so ids have to exist before the
@@ -3945,16 +4019,18 @@ class LogicThread(threading.Thread):
         # and an unannounced change to the row set.
         live_hidden = table.begin_frame(
             brushes, world_epoch, dirty_objects=render_dirty)
-        if (table.generation != generation
-                or len(self._render_refs) != table.count):
-            # RenderTable owns the stable row snapshot for this publication.
-            # The live EditorState.brushes list may grow during benchmark
-            # insertion, so never enumerate it after the table has reconciled.
+        refs = write_state.render_refs
+        if (table.generation != generation or len(refs) != table.count):
+            # RenderState owns the reference array for this buffer as well.  Never
+            # reuse the other buffer's object array: the renderer may still be
+            # holding its previous frame while this one is being prepared.
             refs = np.empty(table.count, dtype=object)
             for i, brush in enumerate(table.brushes):
                 refs[i] = brush
+            write_state.render_refs = refs
             self._render_refs = refs
-        refs = self._render_refs
+        else:
+            self._render_refs = refs
         total_count = table.count
 
         # ---- warm columns ------------------------------------------------
@@ -4026,7 +4102,10 @@ class LogicThread(threading.Thread):
         # per-frame Python copy of the entity list.
         with self._monster_lock:
             things = self.things
-            etable = self._entity_table
+            # etable is the table owned by the current write buffer.  It is the
+            # only EntityTable touched until request_swap publishes this frame.
+            etable = write_state.entity_table
+            self._entity_table = etable
             entity_generation = etable.generation
             thing_hidden = etable.begin_frame(
                 things,
@@ -4034,18 +4113,23 @@ class LogicThread(threading.Thread):
                 dirty_objects=render_dirty,
                 effect_runtime=self.play_mode,
             )
+            entity_refs = write_state.entity_refs
             if (etable.generation != entity_generation
-                    or len(self._entity_refs) != etable.count):
+                    or len(entity_refs) != etable.count):
                 # EntityTable owns the stable row snapshot for this publication.
                 # Do not enumerate the live list again here: benchmark/editor
                 # code can mutate it from another thread immediately after the
-                # lock is released.
+                # lock is released.  Keep the reference array with the same
+                # RenderState as the dense table it indexes.
                 entity_refs = np.empty(etable.count, dtype=object)
                 for i, thing in enumerate(etable.things):
                     entity_refs[i] = thing
+                write_state.entity_refs = entity_refs
                 self._entity_refs = entity_refs
                 self._entity_all_slots = np.arange(etable.count, dtype=np.int32)
-            erefs = self._entity_refs
+            else:
+                self._entity_refs = entity_refs
+            erefs = entity_refs
             entity_things = etable.things
             thing_count = etable.count
 

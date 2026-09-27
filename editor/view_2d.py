@@ -1637,8 +1637,8 @@ class View2D(QWidget):
 
     def draw_patrol_paths(self, painter, visible_bounds):
         """
-        Draw dashed teal lines between connected PathNodes (next_node chains)
-        and thin dotted lines from patrolling Monsters to their patrol_target.
+        Draw dashed olive lines between connected PathNodes (next_node chains)
+        and thin dotted teal lines from patrolling Monsters to their patrol_target.
         """
         ax1, ax2 = self.get_axes()
         if not ax1 or not ax2:
@@ -1655,10 +1655,11 @@ class View2D(QWidget):
                 if n:
                     node_lookup[n] = t
 
-        # --- 1. PathNode → next_node chain lines (teal, dashed) ----------
-        teal = QColor(38, 166, 154, 200)
-        teal_dim = QColor(38, 166, 154, 80)
-        chain_pen = QPen(teal, 2, Qt.DashLine)
+        # --- 1. PathNode → next_node chain lines (olive, dashed) ---------
+        # Navigation edges are deliberately distinct from entity I/O links.
+        olive = QColor(128, 128, 0, 200)
+        olive_dim = QColor(128, 128, 0, 80)
+        chain_pen = QPen(olive, 2, Qt.DashLine)
 
         for name, node in node_lookup.items():
             next_name = node.get_next_node_name()
@@ -1686,12 +1687,12 @@ class View2D(QWidget):
             painter.drawLine(p1, p2)
 
             # Small arrowhead at destination
-            self._draw_connection_arrow(painter, p1, p2, teal)
+            self._draw_connection_arrow(painter, p1, p2, olive)
 
             # Tiny "next" label at midpoint
             mid = QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
             painter.save()
-            painter.setPen(QPen(teal_dim))
+            painter.setPen(QPen(olive_dim))
             font = QFont()
             font.setPointSize(7)
             painter.setFont(font)

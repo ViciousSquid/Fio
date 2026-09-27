@@ -70,8 +70,14 @@ class Renderer_F(BaseRenderer):
         # Python objects.
         # Reusable model/normal matrix buffers for the batched transform build.
         self._brush_mat_buf = np.empty((0, 16), dtype=np.float32)
-        # name id -> GL texture id / (w, h), grown as the projection interns
-        # names. Resolved once per unique name, never per brush.
+        # Dense texture ids are local to a RenderTable. With double-buffered
+        # projections the two tables may have discovered different names first,
+        # so a single name_id -> GL-id array is no longer a valid cache boundary.
+        # Cache the resolved arrays per table; each array still grows only when
+        # that table interns a new name.
+        self._gl_tex_by_table = {}
+        self._tex_size_by_table = {}
+        # Compatibility/debug views of the most recently resolved table.
         self._gl_tex_by_name_id = np.zeros(0, dtype=np.int32)
         self._tex_size_by_name_id = np.zeros((0, 2), dtype=np.float32)
         self._brush_nmat_buf = np.empty((0, 9), dtype=np.float32)
@@ -276,46 +282,57 @@ class Renderer_F(BaseRenderer):
             )
 
     def _gl_texture_ids(self, table):
-        """``name id -> GL texture id``, for every name the projection interned.
+        """Return the dense texture-id array for one RenderTable projection.
 
-        The projection is GL-free, so it interns texture *names* to dense ints
-        and the resolution to a GL id happens here, once per unique name, on
-        the thread that has a context.  Tens of entries, not thousands, and the
-        per-face path then reads it as an array.
+        Texture ids are projection-local, so the renderer cache is keyed by
+        table identity rather than by numeric id alone. A table resolves only
+        names appended since its previous use; steady-state brush drawing still
+        reads an array in the hot path.
         """
         names = table.texture_names()
-        cached = self._gl_tex_by_name_id
-        if len(cached) >= len(names):
+        key = id(table)
+        entry = self._gl_tex_by_table.get(key)
+        if entry is None or entry[0] is not table:
+            cached = np.zeros(0, dtype=np.int32)
+        else:
+            cached = entry[1]
+        if len(cached) == len(names):
+            self._gl_tex_by_name_id = cached
             return cached
         grown = np.zeros(len(names), dtype=np.int32)
-        grown[:len(cached)] = cached
+        if len(cached):
+            grown[:len(cached)] = cached
         for name_id in range(len(cached), len(names)):
             name = names[name_id]
             grown[name_id] = (
                 self.texture_manager.get(self._tex_cache_path(name))
                 or self.load_texture_callback(name, 'textures') or 0)
+        self._gl_tex_by_table[key] = (table, grown)
         self._gl_tex_by_name_id = grown
         return grown
 
     def _texture_sizes_by_name_id(self, table):
-        """``name id -> (width, height)``, for the NATURAL scale calculation.
-
-        Same shape as :meth:`_gl_texture_ids`: resolved once per unique name so
-        the per-face path is an array read rather than a dict lookup.
-        """
+        """Return texture dimensions using the same projection-local boundary."""
         names = table.texture_names()
-        cached = self._tex_size_by_name_id
-        if len(cached) >= len(names):
+        key = id(table)
+        entry = self._tex_size_by_table.get(key)
+        if entry is None or entry[0] is not table:
+            cached = np.zeros((0, 2), dtype=np.float32)
+        else:
+            cached = entry[1]
+        if len(cached) == len(names):
+            self._tex_size_by_name_id = cached
             return cached
         grown = np.full((len(names), 2), 128.0, dtype=np.float32)
-        grown[:len(cached)] = cached
+        if len(cached):
+            grown[:len(cached)] = cached
         dims = getattr(self, '_texture_dimensions', {})
         for name_id in range(len(cached), len(names)):
             w, h = dims.get(self._tex_cache_path(names[name_id]), (128, 128))
             grown[name_id] = (w, h)
+        self._tex_size_by_table[key] = (table, grown)
         self._tex_size_by_name_id = grown
         return grown
-
     @staticmethod
     def lit_instance_payload(table, row_slots, selected_slot=-1):
         """Colour and alpha per brush, as the lit pass's instance payload.
