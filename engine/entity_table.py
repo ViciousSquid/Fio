@@ -619,7 +619,7 @@ class EntityTable:
                  'effect_type', 'effect_fire_variant', 'effect_custom_id', 'effect_custom_loop', 'effect_preview', 'effect_params', 'effect_color',
                  'effect_light_color', 'effect_light_enabled', 'effect_lifetime', 'effect_seed',
                   'effect_spawn_time', 'effect_shared_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
-                 'sprite_size', 'sprite_key_id', 'sprite_fixed_yaw', '_sprite_state',
+                 'sprite_size', 'sprite_key_id', 'render_alpha', 'sprite_fixed_yaw', '_sprite_state',
                  'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
                  '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
                  '_effect_custom_ids', '_effect_custom_paths',
