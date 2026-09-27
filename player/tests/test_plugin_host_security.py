@@ -94,3 +94,53 @@ def test_load_does_not_extract_foreign_plugins_when_user_denies(monkeypatch):
 
     assert called == []
     assert host._extract_root is None
+
+def test_player_prompt_requires_an_explicit_allow(monkeypatch):
+    import sys
+    import types
+
+    calls = {}
+
+    def fake_messagebox(title, message, **kwargs):
+        calls["title"] = title
+        calls["message"] = message
+        calls["kwargs"] = kwargs
+        return 0
+
+    video = types.ModuleType("pygame._sdl2.video")
+    video.messagebox = fake_messagebox
+    sdl2 = types.ModuleType("pygame._sdl2")
+    sdl2.video = video
+    pygame = types.ModuleType("pygame")
+    pygame._sdl2 = sdl2
+
+    monkeypatch.setitem(sys.modules, "pygame", pygame)
+    monkeypatch.setitem(sys.modules, "pygame._sdl2", sdl2)
+    monkeypatch.setitem(sys.modules, "pygame._sdl2.video", video)
+
+    from player.app import FioPlayerApp
+
+    package = SimpleNamespace(title="Untrusted package")
+    assert FioPlayerApp()._confirm_plugin_execution(package) is True
+    assert calls["kwargs"]["buttons"] == ("Allow", "Deny")
+    assert calls["kwargs"]["return_button"] == 1
+    assert calls["kwargs"]["escape_button"] == 1
+
+
+def test_player_prompt_denies_when_modal_ui_is_unavailable(monkeypatch):
+    import sys
+
+    for name in ("pygame._sdl2.video", "pygame._sdl2", "pygame"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    import player.app as player_app
+
+    class BrokenImport:
+        def __getattr__(self, _name):
+            raise ImportError("no SDL message box")
+
+    monkeypatch.setitem(sys.modules, "pygame", BrokenImport())
+    monkeypatch.setattr(player_app, "is_android", lambda: True)
+
+    package = SimpleNamespace(title="Untrusted package")
+    assert player_app.FioPlayerApp()._confirm_plugin_execution(package) is False
