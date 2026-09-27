@@ -2488,10 +2488,10 @@ layout (location = 10) in float iInstanceAlpha;
                 gl.glBindTexture(
                     gl.GL_TEXTURE_2D,
                     self._model_texture_id(manual_texture, manual=True))
+                gl.glUniform1f(u['alpha'], 1.0)
                 if shader_kind != 'textured':
                     colour = override_color or (0.8, 0.8, 0.8)
                     gl.glUniform3fv(u['object_color'], 1, colour)
-                    gl.glUniform1f(u['alpha'], 1.0)
                 gl.glDrawArraysInstanced(
                     gl.GL_TRIANGLES, 0, obj.vertex_count, len(run_slots))
                 self.render_stats.draw_calls += 1
@@ -2540,7 +2540,7 @@ layout (location = 10) in float iInstanceAlpha;
                 else:
                     colour = tuple(material.get('color', [0.8, 0.8, 0.8]))
                     gl.glUniform3fv(u['object_color'], 1, colour)
-                    gl.glUniform1f(u['alpha'], 1.0)
+                gl.glUniform1f(u['alpha'], 1.0)
                 if group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
                     gl.glDrawElementsInstanced(
                         gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
