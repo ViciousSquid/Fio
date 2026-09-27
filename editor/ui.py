@@ -701,8 +701,8 @@ class Ui_MainWindow(object):
         MainWindow.cull_dist_spinbox.setToolTip(
             "Maximum render distance. Nothing is drawn beyond it, and the fog "
             "fades geometry out before the clip so there is no pop-out.\n"
-            "Updates live. Console: r_viewdistance / r_fogdistance / "
-            "r_fogdensity / r_fogcolor.")
+            "Updates live. Console: r_viewdistance / cullfogdist / "
+            "cullfogdistance / r_fogdistance / r_fogdensity / r_fogcolor.")
         MainWindow.cull_dist_spinbox.valueChanged.connect(MainWindow.set_cull_distance)
         bottom_layout.addWidget(MainWindow.cull_dist_spinbox)
 

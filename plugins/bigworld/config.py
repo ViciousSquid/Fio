@@ -25,6 +25,7 @@ all three can read without any of them paying for the others.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, NamedTuple, Optional
 
 
@@ -130,6 +131,42 @@ def coerce(key: str, value: Any) -> Any:
     if field.kind == "float":
         return _as_float(value, float(field.default))
     return value
+
+
+def effective_streaming_radii(
+    activation_radius: float,
+    deactivation_radius: float,
+    visual_horizon: Optional[float] = None,
+) -> tuple[float, float]:
+    """Return runtime residency radii after cooperating with visibility.
+
+    The authored activation radius remains the minimum residency radius. The
+    renderer's visual horizon can only widen it, so Big World never parks
+    geometry while the camera can still reasonably show it. The authored
+    hysteresis width is preserved when the visual horizon becomes the active
+    boundary.
+    """
+    authored_activation = max(0.0, float(activation_radius))
+    authored_deactivation = max(
+        authored_activation, float(deactivation_radius)
+    )
+    if visual_horizon is None:
+        return authored_activation, authored_deactivation
+
+    try:
+        horizon = float(visual_horizon)
+    except (TypeError, ValueError):
+        return authored_activation, authored_deactivation
+    if not math.isfinite(horizon):
+        return authored_activation, authored_deactivation
+
+    effective_activation = max(authored_activation, horizon)
+    hysteresis = max(0.0, authored_deactivation - authored_activation)
+    effective_deactivation = max(
+        authored_deactivation,
+        effective_activation + hysteresis,
+    )
+    return effective_activation, effective_deactivation
 
 
 def config_from_properties(props: Optional[dict]) -> Dict[str, Any]:

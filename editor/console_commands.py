@@ -123,6 +123,8 @@ class ConsoleCommandHandler:
             # e.g. "r_fogcolor 40 30 60" is how a map changes the weather.
             'r_viewdistance': self.cmd_view_distance,
             'r_culldistance': self.cmd_view_distance,
+            'r_cullfogdist': self.cmd_view_distance,
+            'r_cullfogdistance': self.cmd_view_distance,
             'r_distancefog': self.cmd_distance_fog,
             'r_fogdistance': self.cmd_fog_distance,
             'r_fogstart': self.cmd_fog_start,
@@ -144,6 +146,8 @@ class ConsoleCommandHandler:
             'reloadshaders': self.cmd_reload_shaders,
             'viewdistance': self.cmd_view_distance,
             'culldistance': self.cmd_view_distance,
+            'cullfogdist': self.cmd_view_distance,
+            'cullfogdistance': self.cmd_view_distance,
             'farplane': self.cmd_view_distance,
             'distancefog': self.cmd_distance_fog,
             'fogdistance': self.cmd_fog_distance,
@@ -835,7 +839,7 @@ class ConsoleCommandHandler:
 <i>Fog always reaches full opacity before the clip, so pulling the view
 distance in never makes geometry pop. Fire these from a logic_command
 entity to drive them from the I/O system.</i><br>
-<b style="color:orange;">r_viewdistance</b>{sep}<b style="color:orange;">culldistance</b>{sep}<b style="color:orange;">farplane</b> &lt;units&gt; — Max render distance (also the far plane)<br>
+<b style="color:orange;">r_viewdistance</b>{sep}<b style="color:orange;">culldistance</b>{sep}<b style="color:orange;">cullfogdist</b>{sep}<b style="color:orange;">cullfogdistance</b>{sep}<b style="color:orange;">farplane</b> &lt;units&gt; — Max render/cull/fog distance<br>
 <b style="color:orange;">r_distancefog</b>{sep}<b style="color:orange;">distancefog</b> [on|off] — Toggle far-plane fog<br>
 <b style="color:orange;">r_fogdistance</b>{sep}<b style="color:orange;">fogdist</b> &lt;start&gt; &lt;end&gt;{sep}<b style="color:orange;">auto</b> — Where fog ramps up and goes opaque<br>
 <b style="color:orange;">r_fogstart</b> &lt;units&gt;{sep}<b style="color:orange;">auto</b> — Where fog begins<br>
@@ -1088,7 +1092,11 @@ entity to drive them from the I/O system.</i><br>
                   f"clip at {vd.far_plane:.0f}")
 
     def cmd_view_distance(self, args):
-        """r_viewdistance [units] - max render distance; also moves the far plane."""
+        """Set the camera cull/fog distance.
+
+        The view-distance aliases all reach this same setter so console use,
+        I/O-driven map logic and the editor spinner cannot diverge.
+        """
         vd = self._get_view_distance()
         if vd is None:
             return
@@ -1102,15 +1110,10 @@ entity to drive them from the I/O system.</i><br>
         except ValueError:
             debug_log("Error", "Usage: r_viewdistance <units>")
             return
-        # Go through the viewport rather than writing ViewDistance directly: it
-        # is the one place that also refreshes the LOD bands and the logic
-        # thread, and it clamps to the supported span.
-        self.main_window.view_3d.set_cull_distance(requested)
-        # Keep the editor's "Cull Dist" spinbox showing the truth. setValue on
-        # the value it already holds emits nothing, so this cannot recurse.
-        spin = getattr(self.main_window, 'cull_dist_spinbox', None)
-        if spin is not None:
-            spin.setValue(int(vd.distance))
+        # Go through MainWindow's authoritative setter. It refreshes the
+        # renderer/logic state and keeps the bottom "Cull Dist" spinner aligned,
+        # including when this command arrived from map I/O.
+        self.main_window.set_cull_distance(requested)
         if abs(vd.distance - requested) > 0.5:
             debug_log("Warning",
                       f"View distance clamped to {vd.distance:.0f} units.")

@@ -145,6 +145,19 @@ class ViewDistance:
 
     # -- fog --------------------------------------------------------------
     @property
+    def visual_horizon(self):
+        """The distance at which camera-visible geometry is no longer useful.
+
+        With distance fog enabled this is the resolved fog end, because
+        geometry beyond that point is already fully blended into the fog colour.
+        With fog disabled there is no soft visual hand-off, so the far plane is
+        the horizon Big World must respect.
+        """
+        if not self.fog_enabled:
+            return self.far_plane
+        return self.resolve()[1]
+
+    @property
     def fog_start(self):
         """Where fog begins, or ``None`` when it tracks the view distance."""
         return self._fog_start

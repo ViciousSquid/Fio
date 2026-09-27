@@ -207,11 +207,14 @@ class BigWorldPlugin(FioPlugin):
         s = session.stats()
         pc = s.get("player_cell")
         pc_txt = f"{pc[0]}, {pc[1]}" if pc else "-"
+        horizon = s.get("visual_horizon")
         lines = [
             ("Player Cell", pc_txt),
             ("Active Cells", f"{s['active_cells']}"),
             ("Loaded Cells", f"{s['loaded_cells']}"),
-            ("Activation Radius", f"{s['activation_radius']:.0f}"),
+            ("Configured Radius", f"{s['configured_activation_radius']:.0f}"),
+            ("Visual Horizon", f"{horizon:.0f}" if horizon is not None else "-"),
+            ("Effective Radius", f"{s['activation_radius']:.0f}"),
             ("Active Brushes", f"{s['active_brushes']:,}"),
             ("Total Brushes", f"{s['total_brushes']:,}"),
             ("Active Entities", f"{s['active_entities']:,}"),
