@@ -75,7 +75,7 @@ MONSTER_CLASSNAMES = {
 }
 
 # Collection type mapping
-PICKUP_CLASSNAMES = {
+COLLECT_CLASSNAMES = {
     'health': 'item_health',
     'ammo': 'item_rockets',
     'gun1': 'weapon_shotgun',
@@ -416,8 +416,8 @@ def convert_fio_entity(fio_thing: Dict[str, Any]) -> Optional[MapEntity]:
         collect_type = props.get('collect_type', 'health')
         weapon = props.get('collect_weapon', collect_type)
         collect_class = weapon if collect_type == 'weapon' else collect_type
-        classname = PICKUP_CLASSNAMES.get(
-            collect_class, PICKUP_CLASSNAMES['default'])
+        classname = COLLECT_CLASSNAMES.get(
+            collect_class, COLLECT_CLASSNAMES['default'])
     
     elif entity_type == 'Light':
         classname = 'light'
