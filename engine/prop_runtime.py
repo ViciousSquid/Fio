@@ -40,6 +40,9 @@ class PropSession:
     DEFAULT_CARRY_REACH = 110.0
     DEFAULT_COLLECT_USE_REACH = 80.0
     DEFAULT_COLLECT_WALK_REACH = 32.0
+    DROP_GRAVITY = 900.0
+    DROP_TERMINAL_VELOCITY = 2400.0
+    SPRITE_CAMERA_FACING = -10000.0
 
     def __init__(self, logic):
         self.logic = logic
@@ -51,6 +54,7 @@ class PropSession:
         self._cells = CellIndex()
         self._filed = {}
         self._max_reach = self.DEFAULT_CARRY_REACH
+        self._falling = {}
 
     @staticmethod
     def is_prop(thing):
@@ -200,6 +204,7 @@ class PropSession:
         self._by_id = {}
         self.collected_ids.clear()
         self.respawn_timers.clear()
+        self._falling.clear()
         self._cells.clear()
         self._filed.clear()
         self._max_reach = self.DEFAULT_CARRY_REACH
@@ -222,6 +227,7 @@ class PropSession:
             return
 
         self._update_respawns(delta)
+        self._update_falling(delta)
 
         eye_pos = _vec(player.pos)
         eye = (
@@ -275,6 +281,14 @@ class PropSession:
 
         if best is not None:
             self.held = best
+            # Lock the billboard's facing direction at pickup. The world
+            # position still follows the player's view, but the sprite itself
+            # no longer rotates with the camera.
+            try:
+                best._carry_sprite_yaw = float(getattr(player, "angle", 0.0))
+            except (TypeError, ValueError):
+                best._carry_sprite_yaw = 0.0
+            self._falling.pop(id(best), None)
             if self.physics is not None:
                 self.physics.set_kinematic(best, True)
             self._fire(best, "OnCarried")
@@ -466,6 +480,71 @@ class PropSession:
                 self.physics.set_kinematic(prop, False)
             self._fire(prop, "OnRespawn")
 
+    def _update_falling(self, delta):
+        """Advance released non-physics Props until they rest on the floor."""
+        if not self._falling:
+            return
+
+        physics = self.physics
+        raycast_down = getattr(
+            getattr(self.logic, "_spatial_grid", None),
+            "raycast_down",
+            None,
+        )
+        if raycast_down is None and physics is not None:
+            raycast_down = getattr(physics, "raycast_down", None)
+
+        finished = []
+        for pid, state in tuple(self._falling.items()):
+            prop = state.get("entity")
+            if prop is None or id(prop) != pid or id(prop) not in self._by_id:
+                finished.append(pid)
+                continue
+
+            velocity = min(
+                self.DROP_TERMINAL_VELOCITY,
+                float(state.get("velocity", 0.0)) + self.DROP_GRAVITY * delta,
+            )
+            old_y = float(prop.pos[1])
+            new_y = old_y + velocity * delta
+            half_height = 16.0
+            try:
+                size = prop.properties.get("sprite_size", [32.0, 32.0])
+                if isinstance(size, (list, tuple)) and len(size) >= 2:
+                    half_height = max(1.0, float(size[1]) * 0.5)
+            except (TypeError, ValueError):
+                pass
+
+            floor_y = None
+            if raycast_down is not None:
+                try:
+                    floor_y = raycast_down(
+                        float(prop.pos[0]),
+                        float(prop.pos[2]),
+                        start_y=max(old_y + half_height, new_y + half_height),
+                    )
+                except TypeError:
+                    floor_y = raycast_down(
+                        float(prop.pos[0]),
+                        float(prop.pos[2]),
+                    )
+
+            if floor_y is not None and new_y <= float(floor_y) + half_height:
+                prop.pos[1] = float(floor_y) + half_height
+                self.moved(prop)
+                finished.append(pid)
+                io = getattr(self.logic, "io_manager", None)
+                if io is not None:
+                    io.fire_output(prop, "OnRest")
+                continue
+
+            prop.pos[1] = new_y
+            self.moved(prop)
+            state["velocity"] = velocity
+
+        for pid in finished:
+            self._falling.pop(pid, None)
+
     def _carry(self, eye, forward, use_pressed):
         prop = self.held
         p = prop.properties
@@ -492,10 +571,21 @@ class PropSession:
                 print(f"[PropSession] drop interceptor failed: {exc!r}")
 
         self.held = None
-        if self.physics is not None:
+        carry_yaw = getattr(prop, "_carry_sprite_yaw", None)
+        if self.physics is not None and p.get("physics_enabled", False):
             self.physics.set_kinematic(prop, False)
             self.physics.wake(
                 prop,
                 [0.0, float(p.get("drop_velocity", 0.0)), 0.0],
             )
+        else:
+            # A carryable Prop does not have to opt into authored physics.
+            # Releasing it therefore owns a tiny vertical drop state here so
+            # non-physics Props still fall to the world's floor instead of
+            # becoming permanently suspended at the carry position.
+            self._falling[id(prop)] = {
+                "entity": prop,
+                "velocity": float(p.get("drop_velocity", 0.0)),
+            }
+        prop._carry_sprite_yaw = None
         self._fire(prop, "OnDropped")
