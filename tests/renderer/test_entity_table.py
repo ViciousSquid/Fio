@@ -504,6 +504,16 @@ def test_a_portal_draws_no_sprite():
     assert _keys(table, 0) is None
 
 
+def test_monster_type_and_variant_are_constrained():
+    invalid = make_thing(Monster, 'invalid', monster_type='orc', variant='unknown')
+    assert invalid.properties['monster_type'] == 'human'
+    assert invalid.properties['variant'] == '<None>'
+
+    flying = make_thing(Monster, 'flying', monster_type='flying', variant='variant1')
+    assert flying.properties['monster_type'] == 'flying'
+    assert flying.properties['variant'] == 'variant1'
+
+
 def test_a_monsters_sprite_key_names_its_current_frame():
     grunt = make_thing(Monster, 'grunt', monster_type='human')
     table = _synced([grunt])
