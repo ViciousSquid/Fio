@@ -266,6 +266,6 @@ def test_the_control_does_not_move_when_it_is_used(panel):
     assert visible_rows_above_representation(panel) == before, (
         "changing the mode to Model moved the control down the panel")
 
-    combo.setCurrentText('Billboard Sprite')
+    combo.setCurrentText('Sprite')
     assert visible_rows_above_representation(panel) == before, (
         "changing the mode back moved the control again")
