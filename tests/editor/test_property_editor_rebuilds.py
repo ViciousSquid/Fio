@@ -27,7 +27,7 @@ from editor.property_editor import (  # noqa: E402
     PropertyEditor,
     _normalise_project_asset_path,
 )
-from editor.things import Light  # noqa: E402
+from editor.things import Light, Speaker  # noqa: E402
 from engine import brush_geometry as bg  # noqa: E402
 from engine.render_table import (  # noqa: E402
     RenderTable, CLASS_FOG, CLASS_TRIGGER,
@@ -120,6 +120,37 @@ def test_custom_gif_path_is_project_relative_and_uses_forward_slashes(monkeypatc
     assert _normalise_project_asset_path(selected) == (
         "assets/textures/effects/custom/magic.gif"
     )
+
+
+
+def test_speaker_sound_file_has_browse_button_and_normalises_selected_path(
+    panel, monkeypatch
+):
+    host, editor = panel
+    speaker = Speaker(properties={"sound_file": ""})
+    host.state.things.append(speaker)
+    editor.set_object(speaker)
+
+    from PyQt5.QtWidgets import QPushButton
+
+    browse = next(
+        button for button in editor._page.findChildren(QPushButton)
+        if button.text() == "Browse..."
+    )
+    monkeypatch.setattr(
+        "editor.property_editor.QFileDialog.getOpenFileName",
+        lambda *args, **kwargs: (
+            os.path.join(
+                os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")),
+                "assets", "sounds", "test.wav",
+            ).replace(os.sep, "\\"),
+            "Sound Files (*.wav)",
+        ),
+    )
+
+    browse.click()
+
+    assert speaker.properties["sound_file"] == "assets/sounds/test.wav"
 
 
 
