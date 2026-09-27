@@ -118,7 +118,7 @@ def test_demo_loader_respects_unsaved_changes():
     ), "demo loaded from the plugin folder")
 
 
-def test_core_prop_pickup_and_tidy_place():
+def test_core_prop_carry_and_tidy_place():
     print("[3] core PropSession handles carry/drop while Tidy intercepts placement")
     from engine.prop_runtime import PropSession
     from engine.prop_entity import Prop
@@ -214,7 +214,7 @@ def test_tidy_ignores_plain_props():
 
 def main():
     test_plugin_loads_and_registers()
-    test_core_prop_pickup_and_tidy_place()
+    test_core_prop_carry_and_tidy_place()
     test_receptacle_slots_and_filtering()
     test_tidy_ignores_plain_props()
     print("\nALL TIDY SMOKE TESTS PASSED")
