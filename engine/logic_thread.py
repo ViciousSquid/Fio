@@ -18,6 +18,7 @@ from typing import List, Dict, Any, Optional
 import glm
 import math
 import os
+import random
 
 from .threaded_game_state import ThreadedGameState, PublishedBrushes, PublishedEntities
 from .player import Player
@@ -2795,6 +2796,32 @@ class LogicThread(threading.Thread):
             if self.buddha_mode and self.player_health < 2:
                 self.player_health = 2
             became_dead = was_alive and self.player_health <= 0
+            took_damage = was_alive and damage > 0
+
+            # Queue the pain response at the instant damage is applied. Copy the
+            # player position so subsequent movement cannot move the sound
+            # source before the render thread consumes the request.
+            pain_position = None
+            if took_damage and self.player:
+                pain_position = (
+                    float(self.player.pos.x),
+                    float(self.player.pos.y),
+                    float(self.player.pos.z),
+                )
+
+        if took_damage and pain_position is not None:
+            pain_file = random.choice((
+                "assets/sounds/pain01.mp3",
+                "assets/sounds/pain02.mp3",
+                "assets/sounds/pain03.mp3",
+            ))
+            self.game_state.queue_sound({
+                "file": pain_file,
+                "volume": 1.0,
+                "position": pain_position,
+                "radius": 512.0,
+            })
+
         # Emit outside the lock so a handler can't deadlock on the damage path.
         self._plugin_emit("player_damage", damage=damage, health=self.player_health)
         if became_dead:
