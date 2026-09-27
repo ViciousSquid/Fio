@@ -741,33 +741,46 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('speaker', 'setvolume', speaker_set_volume)
     
     # ==========================================================================
-    # PICKUP INPUTS
+    # PROP INPUTS
     # ==========================================================================
-    
-    def pickup_enable(entity, param, logic):
+
+    def prop_enable(entity, param, logic):
         entity.properties['disabled'] = False
-    
-    def pickup_disable(entity, param, logic):
+
+    def prop_disable(entity, param, logic):
         entity.properties['disabled'] = True
-    
-    def pickup_respawn(entity, param, logic):
-        entity.properties['collected'] = False
-        # FIX#3: use id(entity) — matches new collected_pickups key scheme
-        logic.collected_pickups.discard(id(entity))
-        logic.io_manager.fire_output(entity, 'OnRespawn')
-    
-    def pickup_set_value(entity, param, logic):
+
+    def prop_collect(entity, param, logic):
+        session = getattr(logic, '_props', None)
+        if session is not None:
+            session.collect_prop(entity)
+
+    def prop_respawn(entity, param, logic):
+        session = getattr(logic, '_props', None)
+        if session is not None:
+            session.respawn_prop(entity)
+
+    def prop_set_value(entity, param, logic):
         try:
-            entity.properties['value'] = int(param)
-        except ValueError:
+            entity.properties['collect_value'] = int(param)
+        except (TypeError, ValueError):
             pass
-    
-    io_manager.register_input_handler('pickup', 'enable', pickup_enable)
-    io_manager.register_input_handler('pickup', 'disable', pickup_disable)
-    io_manager.register_input_handler('pickup', 'respawn', pickup_respawn)
-    io_manager.register_input_handler('pickup', 'setvalue', pickup_set_value)
-    
-    # ==========================================================================
+
+    def prop_wake(entity, param, logic):
+        entity.properties['_physics_awake'] = True
+
+    def prop_drop(entity, param, logic):
+        # The active Prop runtime observes this one-shot request on its next tick.
+        entity.properties['_drop_requested'] = True
+
+    io_manager.register_input_handler('prop', 'enable', prop_enable)
+    io_manager.register_input_handler('prop', 'disable', prop_disable)
+    io_manager.register_input_handler('prop', 'collect', prop_collect)
+    io_manager.register_input_handler('prop', 'respawn', prop_respawn)
+    io_manager.register_input_handler('prop', 'setvalue', prop_set_value)
+    io_manager.register_input_handler('prop', 'wake', prop_wake)
+    io_manager.register_input_handler('prop', 'drop', prop_drop)
+
     # PROP INPUTS
     # ==========================================================================
 
