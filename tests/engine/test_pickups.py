@@ -52,6 +52,64 @@ def test_weapon_prop_serializes_explicit_collection_data():
     assert data["properties"]["collect_weapon"] == "cig"
 
 
+def test_ammo_collectible_uses_stock_sprite_and_defaults_to_eight():
+    prop = Prop(properties={
+        "collect_enabled": True,
+        "collect_type": "ammo",
+    })
+
+    assert prop.properties["collect_value"] == 8
+    assert prop.properties["sprite_path"] == "assets/sprites/ammo.png"
+
+
+def test_collect_ammo_awards_eight():
+    prop = Prop(properties={
+        "collect_enabled": True,
+        "collect_type": "ammo",
+    })
+    logic = _logic_for(prop)
+    logic.player_ammo = 2
+    session = PropSession(logic)
+    session.start()
+
+    assert session.collect_prop(prop) is True
+    assert logic.player_ammo == 10
+
+
+def test_first_gun2_pickup_gives_eight_ammo():
+    prop = Prop(properties={
+        "collect_enabled": True,
+        "collect_type": "weapon",
+        "collect_weapon": "gun2",
+    })
+    logic = _logic_for(prop)
+    logic.player_ammo = 0
+    session = PropSession(logic)
+    session.start()
+
+    assert session.collect_prop(prop) is True
+    assert logic.active_weapon == "gun2"
+    assert logic.player_ammo == 8
+    assert logic.gun2_obtained is True
+
+
+def test_later_gun2_pickup_does_not_reset_existing_ammo():
+    prop = Prop(properties={
+        "collect_enabled": True,
+        "collect_type": "weapon",
+        "collect_weapon": "gun2",
+    })
+    logic = _logic_for(prop)
+    logic.player_ammo = 3
+    logic.gun2_obtained = True
+    session = PropSession(logic)
+    session.start()
+
+    assert session.collect_prop(prop) is True
+    assert logic.active_weapon == "gun2"
+    assert logic.player_ammo == 3
+
+
 def _logic_for(prop):
     return type(
         "CollectionLogic",
