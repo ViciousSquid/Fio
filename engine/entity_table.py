@@ -88,11 +88,11 @@ from .portal_transform import basis_from_rotation
 # the standalone player tier does not have it.  A tier without the classes
 # classifies every entity as a plain Thing, which is what it is there.
 try:
-    from editor.things import (Thing, PathNode, Portal, Pickup, Prop, Monster,
+    from editor.things import (Thing, PathNode, Portal, Prop, Monster,
                                LogicGate, LogicRelay, LogicTimer, LevelChanger,
                                Light, LogicSpawner, LogicCamera, Effect)
 except ImportError:                                   # pragma: no cover
-    Thing = PathNode = Portal = Pickup = Prop = Monster = Effect = None
+    Thing = PathNode = Portal = Prop = Monster = Effect = None
     LogicGate = LogicRelay = LogicTimer = LevelChanger = Light = None
     LogicSpawner = LogicCamera = None
 
@@ -145,7 +145,7 @@ ENT_EFFECT          = 1 << 13
 #: This row's *sprite identity* can change without an edit, so it is re-resolved
 #: every frame.  Exactly the classes ``update_instance_textures`` re-hashes per
 #: frame -- a monster's sprite follows ``dead``/``is_shooting``, a gate's its
-#: type, a pickup's its item, a prop's its representation.  Everything else
+#: type, a Prop's representation.  Everything else
 #: resolves its sprite once, at reconcile.
 ENT_SPRITE_WARM     = 1 << 12
 
@@ -165,7 +165,7 @@ BIT_NAMES = (
     (ENT_SKIP, 'SKIP'), (ENT_ALWAYS_SPRITE, 'ALWAYS_SPRITE'),
     (ENT_HAS_MODEL, 'HAS_MODEL'), (ENT_MODE_MODEL, 'MODE_MODEL'),
     (ENT_MODE_BILLBOARD, 'MODE_BILLBOARD'), (ENT_HAS_SPRITE, 'HAS_SPRITE'),
-    (ENT_PICKUP, 'PICKUP'), (ENT_ENTITY_SPRITE, 'ENTITY_SPRITE'),
+    (ENT_ENTITY_SPRITE, 'ENTITY_SPRITE'),
     (ENT_PROP, 'PROP'), (ENT_LIGHT, 'LIGHT'), (ENT_MONSTER, 'MONSTER'),
     (ENT_PORTAL, 'PORTAL'), (ENT_EFFECT, 'EFFECT'),
     (ENT_SPRITE_WARM, 'SPRITE_WARM'),
@@ -183,7 +183,7 @@ def describe(bits) -> str:
 #
 # A sprite's *position* is warm and its *size* is cold, both straightforwardly.
 # Its texture is neither: a monster's sprite is chosen from `dead` and
-# `is_shooting` every frame, and a logic gate's, a pickup's and a prop's from
+# `is_shooting` every frame, and a logic gate's and a Prop's from
 # properties the renderer already re-reads every frame to decide whether its
 # instance-texture cache is stale.  So sprite identity is resolved per frame for
 # those rows and at reconcile for everything else -- the same cold/warm split
@@ -628,7 +628,7 @@ class EntityTable:
                  'portal_slots', 'portal_target_slot', 'portal_active',
                  'portal_direction', 'portal_width_height', 'portal_basis',
                  'portal_fade', 'portal_color', 'portal_show_rim',
-                 'monster_slots', 'pickup_slots', 'effect_slots',
+                 'monster_slots', 'effect_slots',
                  'effect_type', 'effect_fire_variant', 'effect_custom_id', 'effect_custom_loop', 'effect_preview', 'effect_params', 'effect_color',
                  'effect_light_color', 'effect_light_enabled', 'effect_lifetime', 'effect_seed',
                   'effect_spawn_time', 'effect_shared_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
@@ -679,10 +679,6 @@ class EntityTable:
         #: Slots of the Monsters, whose published reference is a fresh snapshot
         #: each frame.  The entity half of ``RenderTable.dynamic_slots``.
         self.monster_slots = np.empty(0, dtype=np.int32)
-        #: Slots of the Pickups -- the only rows a collected-pickup filter has
-        #: to consider, so that filter costs pickups rather than entities.
-        self.pickup_slots = np.empty(0, dtype=np.int32)
-
         #: Dense procedural Effect state. Authored data is cold; elapsed/alive
         #: are runtime columns and the renderer never touches Effect objects.
         self.effect_slots = np.empty(0, dtype=np.int32)
@@ -1318,7 +1314,6 @@ class EntityTable:
         ).astype(np.int32)
         self.portal_slots = np.flatnonzero(bits & ENT_PORTAL).astype(np.int32)
         self.monster_slots = np.flatnonzero(bits & ENT_MONSTER).astype(np.int32)
-        self.pickup_slots = np.flatnonzero(bits & ENT_PICKUP).astype(np.int32)
         self._resolve_portal_links(things)
         self.generation += 1
 
@@ -1613,7 +1608,6 @@ def classify_slots(table, slots, hidden, is_play, show_sprites):
     mode_model = (bits & ENT_MODE_MODEL) != 0
     mode_billboard = (bits & ENT_MODE_BILLBOARD) != 0
     has_sprite = (bits & ENT_HAS_SPRITE) != 0
-    pickup = (bits & ENT_PICKUP) != 0
     entity_sprite = (bits & ENT_ENTITY_SPRITE) != 0
     prop = (bits & ENT_PROP) != 0
 
@@ -1621,7 +1615,7 @@ def classify_slots(table, slots, hidden, is_play, show_sprites):
     model = ~skip & ~always_sprite & has_model & mode_model & ~is_hidden
 
     # Step 4's `kind`, in the order _thing_render_kind tries the classes.
-    kind_sprite = ~pickup & ~entity_sprite & mode_billboard & has_sprite
+    kind_sprite = ~entity_sprite & mode_billboard & has_sprite
 
     remainder = ~skip & ~always_sprite & ~model
     # A Prop is a sprite only as a billboard with a sprite, and is never
@@ -1630,10 +1624,10 @@ def classify_slots(table, slots, hidden, is_play, show_sprites):
     others = remainder & ~prop
     sprite = (
         prop_sprite
-        | (others & (pickup | entity_sprite))
+        | (others & entity_sprite)
         # `elif model_path and render_mode == 'model'` draws nothing: that is
         # the hidden model, already excluded from `model` above.
-        | (others & ~(pickup | entity_sprite) & ~(has_model & mode_model)
+        | (others & ~entity_sprite & ~(has_model & mode_model)
            & (kind_sprite | (not is_play or show_sprites)))
     )
     return slots[model], slots[sprite | (~skip & always_sprite)]
