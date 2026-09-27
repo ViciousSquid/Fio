@@ -344,11 +344,14 @@ class Ui_MainWindow(object):
         
         view_menu.addAction(self.action_asset_browser)
 
-        system_monitor_action = QAction('System Monitor', MainWindow, checkable=True)
-        system_monitor_action.setShortcut('F3')
-        system_monitor_action.triggered.connect(MainWindow.toggle_system_monitor)
-        view_menu.addAction(system_monitor_action)
-        
+        MainWindow.surface_inspector_view_action = QAction(
+            'Surface Inspector (T)', MainWindow)
+        MainWindow.surface_inspector_view_action.setToolTip(
+            'Show or hide the Surface Inspector (T)')
+        MainWindow.surface_inspector_view_action.triggered.connect(
+            MainWindow.toggle_surface_inspector)
+        view_menu.addAction(MainWindow.surface_inspector_view_action)
+
         MainWindow.connection_links_action = QAction(
             'Connection Links', MainWindow, checkable=True)
         MainWindow.connection_links_action.setChecked(
@@ -371,6 +374,17 @@ class Ui_MainWindow(object):
         MainWindow.reset_layout_action = QAction("Reset Layout", MainWindow)
         MainWindow.reset_layout_action.triggered.connect(MainWindow.reset_layout)
         view_menu.addAction(MainWindow.reset_layout_action)
+
+        # --- Debug Menu Actions ---
+
+        MainWindow.system_monitor_action = QAction(
+            'Sysmon (F3)', MainWindow, checkable=True)
+        MainWindow.system_monitor_action.setShortcut('F3')
+        MainWindow.system_monitor_action.setChecked(
+            MainWindow.view_3d.sysmon.is_active())
+        MainWindow.system_monitor_action.triggered.connect(
+            MainWindow.toggle_system_monitor)
+        MainWindow.debug_menu.addAction(MainWindow.system_monitor_action)
 
         # --- Tools Menu Actions ---
 
