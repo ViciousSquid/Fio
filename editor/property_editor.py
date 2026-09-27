@@ -4041,6 +4041,12 @@ class PropertyEditor(QWidget):
         if shader_type != '<None>':
             self.current_object['is_trigger'] = False
 
+        # Shader selection changes dense render classification/material state
+        # (fog, water, glass, glow, trigger exclusion). Journal this exact
+        # brush so the write-side RenderTable cold row is refreshed immediately.
+        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'mark_world_changed'):
+            self.editor.state.mark_world_changed([self.current_object])
+
         # Defer refresh to avoid interrupting shader combo's own update cycle
         QTimer.singleShot(0, self._deferred_shader_refresh)
 
@@ -4070,6 +4076,11 @@ class PropertyEditor(QWidget):
             if is_trigger:
                 self.tab_widget.setCurrentIndex(self.trigger_tab_index)
         self._update_io_tab_presence()
+
+        # Trigger state changes the render classification and face textures.
+        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'mark_world_changed'):
+            self.editor.state.mark_world_changed([self.current_object])
+
         self.editor.update_views()
         self.editor.scene_hierarchy.refresh_list()
 
