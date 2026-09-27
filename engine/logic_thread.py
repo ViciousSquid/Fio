@@ -205,15 +205,15 @@ class LogicThread(threading.Thread):
         self._hud_cinematic_last_active = False
         self._hud_cinematic_fade_started = None
 
-        # The health count has its own fade state. It starts hidden at player
-        # spawn, fades to full over four seconds, then settles to 50% opacity.
-        # Any health-value change starts a four-second fade to full opacity and
-        # holds full for five seconds before fading back to the 50% idle state.
+        # Health HUD fade timing is deliberately asymmetric: a fast 1.5-second
+        # fade-in to full opacity followed immediately by a slower 4-second
+        # fade-out to the normal 50% idle state.
+        self._hud_health_fade_in_duration = 1.5
+        self._hud_health_fade_out_duration = 4.0
         self._hud_health_alpha = 0.5
         self._hud_health_last_value = None
         self._hud_health_fade_started = None
         self._hud_health_fade_from = 0.5
-        self._hud_health_hold_until = None
         self._hud_health_fade_phase = "idle"
 
         # RenderState already owns one persistent RenderTable/EntityTable pair.
@@ -1168,14 +1168,13 @@ class LogicThread(threading.Thread):
             self._hud_cinematic_last_active = False
             self._hud_cinematic_fade_started = None
 
-            # Start the health HUD hidden; it fades to full over four seconds
-            # from player spawn, then begins its normal 50% idle fade-out.
+            # Start the health HUD hidden; player spawn uses the same fast
+            # 1.5-second fade-in followed immediately by the 4-second fade-out.
             _hud_now = time.perf_counter()
             self._hud_health_alpha = 0.0
             self._hud_health_last_value = self.player_health
             self._hud_health_fade_started = _hud_now
             self._hud_health_fade_from = 0.0
-            self._hud_health_hold_until = None
             self._hud_health_fade_phase = "in"
 
             # Reset portal transit state
@@ -1269,7 +1268,6 @@ class LogicThread(threading.Thread):
             self._hud_health_last_value = None
             self._hud_health_fade_started = None
             self._hud_health_fade_from = 0.5
-            self._hud_health_hold_until = None
             self._hud_health_fade_phase = "idle"
 
             # Reset portal transit state
@@ -3871,19 +3869,18 @@ class LogicThread(threading.Thread):
     # =========================================================================
 
     def _update_hud_health_alpha(self, now: float) -> float:
-        """Advance the health HUD opacity state machine and return its alpha."""
+        """Advance the health HUD fade state machine and return its alpha."""
         health = self.player_health
         if self._hud_health_last_value is None:
             self._hud_health_last_value = health
 
-        # Any actual health-value change gets the health count back toward full
-        # opacity. The five-second quiet period starts at the value change, not
-        # after the four-second fade-in has completed.
+        # Any health-value change immediately starts the fast fade-in. If the
+        # display is already fading out, continue smoothly from its current
+        # opacity rather than jumping.
         if health != self._hud_health_last_value:
             self._hud_health_last_value = health
             self._hud_health_fade_started = now
             self._hud_health_fade_from = self._hud_health_alpha
-            self._hud_health_hold_until = now + 5.0
             self._hud_health_fade_phase = "in"
 
         phase = self._hud_health_fade_phase
@@ -3892,36 +3889,22 @@ class LogicThread(threading.Thread):
             if started is None:
                 self._hud_health_alpha = 1.0
             else:
-                t = max(0.0, min(1.0, (now - started) / 4.0))
+                t = max(
+                    0.0,
+                    min(
+                        1.0,
+                        (now - started) / self._hud_health_fade_in_duration,
+                    ),
+                )
                 self._hud_health_alpha = (
                     self._hud_health_fade_from
                     + (1.0 - self._hud_health_fade_from) * t
                 )
-
                 if t >= 1.0:
                     self._hud_health_alpha = 1.0
-                    hold_until = self._hud_health_hold_until
-                    if hold_until is None:
-                        # Spawn behaviour: once full opacity has been reached,
-                        # immediately begin the four-second fade to the 50% idle
-                        # state.
-                        self._hud_health_fade_started = now
-                        self._hud_health_fade_from = 1.0
-                        self._hud_health_fade_phase = "out"
-                    elif now < hold_until:
-                        self._hud_health_fade_phase = "hold"
-                    else:
-                        self._hud_health_fade_started = now
-                        self._hud_health_fade_from = 1.0
-                        self._hud_health_fade_phase = "out"
-
-        elif phase == "hold":
-            self._hud_health_alpha = 1.0
-            hold_until = self._hud_health_hold_until
-            if hold_until is None or now >= hold_until:
-                self._hud_health_fade_started = now
-                self._hud_health_fade_from = 1.0
-                self._hud_health_fade_phase = "out"
+                    self._hud_health_fade_started = now
+                    self._hud_health_fade_from = 1.0
+                    self._hud_health_fade_phase = "out"
 
         elif phase == "out":
             started = self._hud_health_fade_started
@@ -3929,7 +3912,13 @@ class LogicThread(threading.Thread):
                 self._hud_health_alpha = 0.5
                 self._hud_health_fade_phase = "idle"
             else:
-                t = max(0.0, min(1.0, (now - started) / 4.0))
+                t = max(
+                    0.0,
+                    min(
+                        1.0,
+                        (now - started) / self._hud_health_fade_out_duration,
+                    ),
+                )
                 self._hud_health_alpha = 1.0 - (0.5 * t)
                 if t >= 1.0:
                     self._hud_health_alpha = 0.5
