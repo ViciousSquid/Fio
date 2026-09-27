@@ -269,6 +269,106 @@ def test_the_render_projection_survives_the_play_mode_round_trip(logic):
         assert list(table.center[index]) == pytest.approx(brush["pos"])
 
 
+
+# ---------------------------------------------------------------------------
+# Health HUD opacity
+# ---------------------------------------------------------------------------
+
+def test_health_hud_fades_in_on_spawn_then_settles_at_50_percent(logic):
+    thread = logic(brushes=room())
+    thread.set_play_mode(True)
+    try:
+        start = thread._hud_health_fade_started
+        assert start is not None
+        assert thread._hud_health_fade_phase == "in"
+        assert thread._hud_health_alpha == 0.0
+
+        alpha = thread._update_hud_health_alpha(start + 2.0)
+        assert alpha == pytest.approx(0.5)
+
+        alpha = thread._update_hud_health_alpha(start + 4.0)
+        assert alpha == pytest.approx(1.0)
+        assert thread._hud_health_fade_phase == "out"
+
+        alpha = thread._update_hud_health_alpha(start + 6.0)
+        assert alpha == pytest.approx(0.75)
+
+        alpha = thread._update_hud_health_alpha(start + 8.0)
+        assert alpha == pytest.approx(0.5)
+        assert thread._hud_health_fade_phase == "idle"
+    finally:
+        thread.set_play_mode(False)
+
+
+def test_health_change_fades_to_full_holds_for_five_seconds_then_dims(logic):
+    thread = logic(brushes=room())
+    thread.set_play_mode(True)
+    try:
+        start = thread._hud_health_fade_started
+        assert start is not None
+        thread._update_hud_health_alpha(start + 8.0)
+        assert thread._hud_health_alpha == pytest.approx(0.5)
+
+        damage_time = start + 10.0
+        thread.player_health = 75
+
+        alpha = thread._update_hud_health_alpha(damage_time)
+        assert alpha == pytest.approx(0.5)
+        assert thread._hud_health_fade_phase == "in"
+
+        alpha = thread._update_hud_health_alpha(damage_time + 2.0)
+        assert alpha == pytest.approx(0.75)
+
+        alpha = thread._update_hud_health_alpha(damage_time + 4.0)
+        assert alpha == pytest.approx(1.0)
+        assert thread._hud_health_fade_phase == "hold"
+
+        # The five-second quiet period is measured from the health change.
+        alpha = thread._update_hud_health_alpha(damage_time + 4.99)
+        assert alpha == pytest.approx(1.0)
+        assert thread._hud_health_fade_phase == "hold"
+
+        alpha = thread._update_hud_health_alpha(damage_time + 5.01)
+        assert alpha == pytest.approx(1.0)
+        assert thread._hud_health_fade_phase == "out"
+
+        alpha = thread._update_hud_health_alpha(damage_time + 7.01)
+        assert alpha == pytest.approx(0.75)
+
+        alpha = thread._update_hud_health_alpha(damage_time + 9.01)
+        assert alpha == pytest.approx(0.5)
+        assert thread._hud_health_fade_phase == "idle"
+    finally:
+        thread.set_play_mode(False)
+
+
+def test_further_health_changes_restart_the_fade_from_current_opacity(logic):
+    thread = logic(brushes=room())
+    thread.set_play_mode(True)
+    try:
+        start = thread._hud_health_fade_started
+        assert start is not None
+        thread._update_hud_health_alpha(start + 10.0)
+        assert thread._hud_health_alpha == pytest.approx(0.5)
+
+        first_change = start + 12.0
+        thread.player_health = 90
+        thread._update_hud_health_alpha(first_change + 6.0)
+        assert thread._hud_health_alpha == pytest.approx(0.75)
+        assert thread._hud_health_fade_phase == "out"
+
+        second_change = first_change + 6.0
+        thread.player_health = 80
+        alpha = thread._update_hud_health_alpha(second_change)
+        assert alpha == pytest.approx(0.75)
+        assert thread._hud_health_fade_phase == "in"
+
+        alpha = thread._update_hud_health_alpha(second_change + 4.0)
+        assert alpha == pytest.approx(1.0)
+        assert thread._hud_health_fade_phase == "hold"
+    finally:
+        thread.set_play_mode(False)
+
 # ---------------------------------------------------------------------------
 # Ticking
 # ---------------------------------------------------------------------------
