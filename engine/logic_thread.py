@@ -6,7 +6,7 @@ This thread runs game logic at a fixed timestep (60 Hz), handling:
 - Entity interactions and triggers
 - I/O event dispatching
 - Mover and door animations
-- Pickup collection
+- Prop collection
 - Player death detection
 - Portal transit (Prey 2006-style world portals)
 """
@@ -283,8 +283,6 @@ class LogicThread(threading.Thread):
         # Collection state
         self.collected_keys: set = set()
         
-        # Respawn timers
-        self.respawn_timers: Dict[int, float] = {}
         
         # Speaker state
         self.active_speakers: set = set()
@@ -1187,10 +1185,8 @@ class LogicThread(threading.Thread):
             self._stop_monster_ai()
             self._reset_trigger_state()
             self.fired_once_triggers.clear()
-            self.collected_pickups.clear()
-            self.collected_keys.clear()
-            self.respawn_timers.clear()
-            self.active_speakers.clear()
+                self.collected_keys.clear()
+                self.active_speakers.clear()
             self.hurt_trigger_timers.clear()
             self._reset_movers()
             self._reset_doors()
@@ -1905,7 +1901,6 @@ class LogicThread(threading.Thread):
             if self._props is not None:
                 self._props.sync_physics_positions()
 
-        self._check_pickups()
         self._handle_triggers(use_key, delta)
 
         # Plugin tick: runs last in the gameplay sequence so the use-key edge is
