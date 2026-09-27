@@ -13,7 +13,7 @@ from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
 from engine.camera import Camera
 from editor.things import (
-    Thing, Light, PlayerStart, Monster, Pickup, Prop, Speaker,
+    Thing, Light, PlayerStart, Monster, Prop, Speaker,
     LogicGate, LogicRelay, LogicTimer, LevelChanger, Portal
 )
 from engine.player import Player
@@ -1813,7 +1813,7 @@ class QtGameView(QOpenGLWidget):
                 if not self._cached_prompt_key_loaded:
                     self._cached_prompt_key_loaded = True
                     try:
-                        pixmap = Pickup.get_key_pixmap(prompt_key)
+                        pixmap = Prop.get_key_pixmap(prompt_key)
                         if pixmap and not pixmap.isNull():
                             self._cached_prompt_key_pixmap = pixmap.scaled(
                                 prompt_size, prompt_size,
@@ -1883,7 +1883,7 @@ class QtGameView(QOpenGLWidget):
             icon_size = 100
             wx = viewport_width - hud_margin - icon_size
             wy = viewport_height - hud_margin - icon_size
-            pm = self._load_weapon_pickup_pixmap(active_weapon)
+            pm = self._load_weapon_collect_pixmap(active_weapon)
             if pm and not pm.isNull():
                 cache_key = (active_weapon, icon_size)
                 scaled = self._cached_weapon_pickup.get(cache_key)
@@ -1911,7 +1911,7 @@ class QtGameView(QOpenGLWidget):
                     painter.drawPixmap(icon_x, key_y, cached)
                     continue
                 try:
-                    pixmap = Pickup.get_key_pixmap(key_name)
+                    pixmap = Prop.get_key_pixmap(key_name)
                     if pixmap and not pixmap.isNull():
                         scaled = pixmap.scaled(key_size, key_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                         self._cached_key_pixmaps[key_name] = scaled
@@ -2122,7 +2122,7 @@ class QtGameView(QOpenGLWidget):
             'Glasses': 'glasses.png',
             'Light': 'light.png',
             'Monster': 'monster.png',
-            'Pickup': 'pickup.png',
+            'Prop': 'pickup.png',
             'Speaker': 'speaker.png',
             'LevelChanger': 'levelchanger.png',
             'Portal': 'portal.png',
@@ -2197,8 +2197,6 @@ class QtGameView(QOpenGLWidget):
                     parts.append((id(t), t.properties.get('dead', False), t.properties.get('is_shooting', False)))
                 elif isinstance(t, LogicGate):
                     parts.append((id(t), t.properties.get('logic_type', 'and')))
-                elif isinstance(t, Pickup):
-                    parts.append((id(t), t.properties.get('item_type', ''), t.properties.get('key_name', ''), t.properties.get('custom_sprite', '')))
                 elif isinstance(t, Prop):
                     parts.append((id(t), t.properties.get('render_mode', 'model'), t.properties.get('sprite_path', '')))
                 else:
@@ -2258,18 +2256,6 @@ class QtGameView(QOpenGLWidget):
                                 self.sprite_textures[tex_key] = tid
                         if tex_key in self.sprite_textures:
                             instance_textures[id(thing)] = self.sprite_textures[tex_key]
-            elif isinstance(thing, Pickup):
-                if thing.is_key():
-                    key_name = thing.get_key_name()
-                    tex_key = f'key_{key_name}'
-                    if tex_key in self.sprite_textures:
-                        instance_textures[id(thing)] = self.sprite_textures[tex_key]
-                elif thing.properties.get('custom_sprite'):
-                    sprite_path = thing.properties.get('custom_sprite')
-                    filename = os.path.basename(sprite_path.replace('\\', '/'))
-                    tex_id = self.load_texture(filename, 'sprites')
-                    if tex_id:
-                        instance_textures[id(thing)] = tex_id
             elif isinstance(thing, LevelChanger):
                 tex_key = 'LevelChanger'
                 if tex_key in self.sprite_textures:
@@ -3213,18 +3199,18 @@ class QtGameView(QOpenGLWidget):
         return None
 
     def _load_weapon_pickup_pixmap(self, item_type):
-        """The world/pickup sprite for a weapon (e.g. 'gun1' -> gun1.png).
+        """The world/collectible sprite for a weapon (e.g. 'gun1' -> gun1.png).
 
         Used by the overhead HUD, which shows the small pickup icon bottom-right
-        instead of the first-person gun sprite. Resolved via the Pickup entity's
+        instead of the first-person gun sprite. Resolved via the Prop
         GUN_SPRITES map so it matches what the weapon looks like in the world.
         """
         if item_type in self.weapon_pickup_pixmaps:
             return self.weapon_pickup_pixmaps[item_type]
         rel = None
         try:
-            from editor.things import Pickup
-            rel = Pickup.GUN_SPRITES.get(item_type)
+            from engine.prop_entity import Prop
+            rel = Prop.GUN_SPRITES.get(item_type)
         except Exception:
             rel = None
         if not rel:
