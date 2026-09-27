@@ -2580,11 +2580,16 @@ class PropertyEditor(QWidget):
     def _build_collect_ui(self, form, thing):
         """Build the compact, human-facing Prop interaction editor.
 
+        This builder owns the form used by all Prop interaction rows.
+        """
+
         The serialized schema is deliberately richer than the inspector.  A
         Prop is one world object with a handful of obvious behaviours; the
         editor should expose those behaviours and reveal the type-specific
         controls only when they matter.
         """
+        self._prop_form = form
+
         # Interaction -----------------------------------------------------
         form.addRow(self._section("Interaction"))
 
@@ -4523,15 +4528,12 @@ class PropertyEditor(QWidget):
                     self.editor.stop_mover_preview()
 
     def on_respawn_toggled(self, state):
-        # Connected via _make_checkbox -> toggled(bool), so `state` is already
-        # the boolean checked state (not a Qt.CheckState int).
         collect_respawns = bool(state)
         self.update_object_prop('collect_respawns', collect_respawns)
-        if hasattr(self, 'collect_respawn_time_label'):
-            self.collect_respawn_time_label.setVisible(collect_respawns)
-        if hasattr(self, 'collect_respawn_time_spin'):
-            self.collect_respawn_time_spin.setVisible(collect_respawns)
-
+        if hasattr(self, '_prop_respawn_label'):
+            self._prop_respawn_label.setVisible(collect_respawns)
+        if hasattr(self, '_prop_respawn_spin'):
+            self._prop_respawn_spin.setVisible(collect_respawns)
     def on_collect_key_name_changed(self, collect_key_name):
         if self.current_object is None or not isinstance(self.current_object, Prop):
             return
