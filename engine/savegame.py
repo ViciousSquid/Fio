@@ -670,17 +670,6 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     except Exception:
         pass
 
-    # Collected-pickup set is keyed by id(thing) and can't be persisted across a
-    # reload; rebuild it from the entity 'collected' flags we just overlaid.
-    try:
-        collected = set()
-        for t in getattr(logic, "things", []) or []:
-            if t.properties.get("collected"):
-                collected.add(id(t))
-        logic.collected_pickups = collected
-    except Exception:
-        pass
-
     # Door / mover animation state (keys serialize as strings → back to int).
     # _public_state drops any cached _-prefixed fields (e.g. a mover's
     # _direction_np NumPy cache) that an older save may still carry, so the
