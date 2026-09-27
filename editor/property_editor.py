@@ -2699,6 +2699,7 @@ class PropertyEditor(QWidget):
         weapon_labels = {
             'gun1': 'Gun 1',
             'gun2': 'Gun 2',
+            'sword': 'Sword',
             'cig': 'Cigarette',
         }
         weapon_combo = _make_combo(
