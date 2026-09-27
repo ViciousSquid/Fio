@@ -1841,8 +1841,10 @@ class QtGameView(QOpenGLWidget):
         painter.setPen(self._hud_health_orange)
         health_text = str(int(health))
         metrics = QFontMetrics(health_font)
-        health_x = hud_margin
-        health_y = viewport_height - hud_margin - metrics.descent()
+        # Pin health to the extreme lower-left corner of the viewport.
+        # Keep a small inset so the glyph is not clipped by the framebuffer.
+        health_x = 8
+        health_y = viewport_height - 8 - metrics.descent()
 
         # Health is the large orange count. Ammo is a smaller green count
         # touching it directly, with no layout gap.
@@ -2006,7 +2008,7 @@ class QtGameView(QOpenGLWidget):
         p2_dead = getattr(render_state, 'player2_dead', False)
         painter.save()
         painter.setClipRect(half, 0, half, h)
-        margin = 20
+        margin = 8
         health_font = QFont(self._hud_health_font)
         health_font.setPointSize(max(42, min(68, int(h * 0.085))))
         painter.setFont(health_font)
