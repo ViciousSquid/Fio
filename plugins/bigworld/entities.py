@@ -52,6 +52,11 @@ class BigWorldSettings(Thing):
     #: unselectable in the top/front/side views; the plugin ships its own icon
     #: (project-root-relative, like every other plugin entity's ``pixmap_path``).
     pixmap_path = "plugins/bigworld/assets/bigworldsettings.png"
+    # The editor icon is 2D-only. Give the entity an explicit billboard
+    # representation so the same settings marker is visible in 3D views.
+    sprite_path = pixmap_path
+    sprite_size = [64.0, 64.0]
+    render_mode = "billboard"
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -61,6 +66,9 @@ class BigWorldSettings(Thing):
         # about what this map is configured to do.
         for key, value in defaults().items():
             self.properties.setdefault(key, value)
+        self.properties.setdefault("render_mode", self.render_mode)
+        self.properties.setdefault("sprite_path", self.sprite_path)
+        self.properties.setdefault("sprite_size", list(self.sprite_size))
 
     # -- typed accessors ----------------------------------------------------
     #
