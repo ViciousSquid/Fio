@@ -6,6 +6,7 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 
 from plugins.api import FioPlugin
 
@@ -22,6 +23,7 @@ class BenchmarkPlugin(FioPlugin):
     def __init__(self):
         self._host = None
         self._process = None
+        self._process_log = None
         self._main_window = None
 
     def register(self, api):
@@ -117,14 +119,57 @@ class BenchmarkPlugin(FioPlugin):
                 | getattr(subprocess, "CREATE_NO_WINDOW", 0)
             )
 
+        log_path = os.path.join(
+            tempfile.gettempdir(), "fio_benchmark_manager.log"
+        )
+        try:
+            self._process_log = open(log_path, "a", encoding="utf-8")
+        except OSError:
+            self._process_log = None
+
         self._process = subprocess.Popen(
             command,
             cwd=main_window.root_dir,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=self._process_log if self._process_log else subprocess.DEVNULL,
+            stderr=self._process_log if self._process_log else subprocess.DEVNULL,
             creationflags=creationflags,
         )
+
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(1000, self._check_manager_startup)
+
+    def _check_manager_startup(self):
+        """Report a manager process that dies immediately instead of silently."""
+        process = self._process
+        if process is None or process.poll() is None:
+            return
+
+        returncode = process.returncode
+        log_path = os.path.join(tempfile.gettempdir(), "fio_benchmark_manager.log")
+        details = ""
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as handle:
+                details = handle.read()[-4000:].strip()
+        except OSError:
+            pass
+
+        try:
+            from editor.debug_console import debug_log
+            message = f"benchmark manager exited during startup (code {returncode})"
+            if details:
+                message += f"\n{details}"
+            debug_log("Error", message)
+        except Exception:
+            pass
+
+        self._process = None
+        if self._process_log is not None:
+            try:
+                self._process_log.close()
+            except OSError:
+                pass
+            self._process_log = None
 
     def on_enabled_changed(self, enabled):
         if not enabled:
@@ -182,3 +227,10 @@ class BenchmarkPlugin(FioPlugin):
                     process.terminate()
             except Exception:
                 pass
+
+        if self._process_log is not None:
+            try:
+                self._process_log.close()
+            except OSError:
+                pass
+            self._process_log = None

@@ -207,6 +207,7 @@ class Ui_MainWindow(object):
         select_menu = menubar.addMenu('Select')
         view_menu = menubar.addMenu('View')
         MainWindow.tools_menu = menubar.addMenu('Tools')
+        MainWindow.debug_menu = menubar.addMenu('Debug')
         help_menu = menubar.addMenu('Help')
 
         MainWindow.file_menu.addAction(QAction('New Map', MainWindow, shortcut='Ctrl+N', triggered=MainWindow.new_map))
@@ -384,12 +385,24 @@ class Ui_MainWindow(object):
         
         MainWindow.tools_menu.addAction(MainWindow.logic_graph_action)
         MainWindow.tools_menu.addAction(MainWindow.logic_wizard_action)
-        MainWindow.tools_menu.addAction(MainWindow.project_overview_action)
-        MainWindow.tools_menu.addAction(MainWindow.validate_action)
         MainWindow.tools_menu.addSeparator()
         MainWindow.tools_menu.addAction(MainWindow.terrain_action)
         MainWindow.tools_menu.addAction(MainWindow.procedural_action)
         MainWindow.tools_menu.addSeparator()
+
+        # Debug Tables is deliberately lazy: importing/constructing the
+        # numerical instrument happens only after the user asks for it.
+        MainWindow.debug_tables_action = QAction("Debug Tables", MainWindow)
+        MainWindow.debug_tables_action.setToolTip(
+            "Live RenderTable / EntityTable numerical instrument panel")
+        def _open_debug_tables():
+            from tools.debug_tables import show_debug_tables
+            show_debug_tables(MainWindow)
+        MainWindow.debug_tables_action.triggered.connect(_open_debug_tables)
+        MainWindow.debug_menu.addAction(MainWindow.project_overview_action)
+        MainWindow.debug_menu.addAction(MainWindow.validate_action)
+        MainWindow.debug_menu.addSeparator()
+        MainWindow.debug_menu.addAction(MainWindow.debug_tables_action)
 
         view_menu.addSeparator()
         toggle_triggers_action = QAction('Opaque Triggers', MainWindow, checkable=True)

@@ -87,6 +87,7 @@ class BenchmarkRunner:
         self._live_io_elapsed = None
         self._sysmon_samples = []
         self._last_sysmon_sample = 0.0
+        self._benchmark_sysmon_previous_state = None
         self._requested_duration = None
         self._requested_repetitions = 1
         self._current_phase_results = []
@@ -94,6 +95,11 @@ class BenchmarkRunner:
         self._monster_chaos_aggro_injected = False
         self._monster_chaos_fighters = []
         self._monster_chaos_aggro_count = 0
+        self._monster_chaos_ai_original_update = None
+        self._monster_chaos_ai_counting = False
+        self._monster_chaos_ai_decisions = 0
+        self._monster_chaos_ai_updates = 0
+        self._monster_chaos_ai_counting = False
         self.tests = BenchmarkTests(self)
         self.results = BenchmarkResults(self)
 
@@ -462,6 +468,43 @@ class BenchmarkRunner:
         self._begin_next()
     
 
+    def _lock_sysmon_for_benchmark(self):
+        """Force SysMon on and temporarily remove its user controls."""
+        view = getattr(self.main_window, "view_3d", None)
+        sysmon = getattr(view, "sysmon", None)
+        if sysmon is None:
+            return
+
+        if self._benchmark_sysmon_previous_state is None:
+            self._benchmark_sysmon_previous_state = (
+                bool(sysmon.is_active()),
+                bool(getattr(sysmon, "expanded", False)),
+            )
+        sysmon.set_benchmark_locked(True)
+        sysmon.set_active(True)
+        sysmon.set_expanded(True)
+        view.update()
+        QApplication.processEvents()
+
+    def _restore_sysmon_after_benchmark(self):
+        """Restore SysMon's pre-benchmark active/expanded state."""
+        previous = self._benchmark_sysmon_previous_state
+        if previous is None:
+            return
+        self._benchmark_sysmon_previous_state = None
+
+        view = getattr(self.main_window, "view_3d", None)
+        sysmon = getattr(view, "sysmon", None)
+        if sysmon is None:
+            return
+
+        was_active, was_expanded = previous
+        sysmon.set_benchmark_locked(False)
+        sysmon.set_active(was_active)
+        sysmon.set_expanded(was_expanded)
+        view.update()
+        QApplication.processEvents()
+
     def _has_current_loaded_map(self):
         """Return True when the live editor has a current map/scene to benchmark."""
         if getattr(self.main_window, "file_path", None):
@@ -499,6 +542,7 @@ class BenchmarkRunner:
         self._monster_chaos_aggro_injected = False
         self._monster_chaos_fighters = []
         self._monster_chaos_aggro_count = 0
+        self._restore_monster_chaos_ai_counter()
         self._timer.stop()
         self._measurement_active = False
         self._live_stress_active = False
@@ -799,11 +843,13 @@ class BenchmarkRunner:
         self._remove_monster_chaos_overlay()
         self._monster_chaos_aggro_injected = False
         self._monster_chaos_fighters = []
+        self._restore_monster_chaos_ai_counter()
         self._timer.stop()
         self._measurement_active = False
         self._live_stress_active = False
         self._stop_live_stress_monitor()
         self._restore_benchmark_window_mode()
+        self._restore_sysmon_after_benchmark()
     
         try:
             if self.main_window.view_3d.play_mode and not self._original_play_mode:
@@ -839,6 +885,7 @@ class BenchmarkRunner:
         self._running = False
         self.throbber.setVisible(False)
         self._set_controls_enabled(True)
+        self.status_label.setStyleSheet("font-size: 36px; font-weight: bold; color: #63d471;")
         self.status_label.setText("Benchmark complete.")
         self.export_button.setEnabled(bool(self._results))
         self.export_button.setVisible(bool(self._results))
@@ -850,12 +897,14 @@ class BenchmarkRunner:
         self._remove_monster_chaos_overlay()
         self._monster_chaos_aggro_injected = False
         self._monster_chaos_fighters = []
+        self._restore_monster_chaos_ai_counter()
         self._timer.stop()
         self._measurement_active = False
         self._worker_active = False
         self._live_stress_active = False
         self._stop_live_stress_monitor()
         self._stop_monitor()
+        self._restore_sysmon_after_benchmark()
     
         try:
             self._terminate_worker_process()
@@ -921,6 +970,7 @@ class BenchmarkRunner:
         self._remove_monster_chaos_overlay()
         self._monster_chaos_aggro_injected = False
         self._monster_chaos_fighters = []
+        self._restore_monster_chaos_ai_counter()
         label = self._live_stress_label or (
             self._current[0] if self._current else "unknown"
         )
@@ -977,10 +1027,11 @@ class BenchmarkRunner:
         self._timer.stop()
         self._stop_live_stress_monitor()
         metrics = dict(metrics)
+        if "frame_time_ms" in metrics:
+            metrics["current_frame_time_ms"] = float(metrics.get("frame_time_ms", 0.0) or 0.0)
         metrics["benchmark_live"] = True
 
         if label == "monster_chaos_witness":
-            self._remove_monster_chaos_overlay()
             chaos_info = dict(getattr(self, "_monster_chaos_info", {}) or {})
             monsters = [
                 thing for thing in self.main_window.state.things
@@ -990,72 +1041,93 @@ class BenchmarkRunner:
                 1 for monster in monsters
                 if not monster.properties.get("dead", False)
             )
-            aggro_count = int(getattr(self, "_monster_chaos_aggro_count", 0))
+            team_counts = {
+                team: sum(
+                    1 for monster in monsters
+                    if str(monster.properties.get("team", "")) == team
+                )
+                for team in ("team1", "team2")
+            }
+            human_count = sum(
+                1 for monster in monsters
+                if str(monster.properties.get("monster_type", "")) == "human"
+            )
+            flying_count = sum(
+                1 for monster in monsters
+                if str(monster.properties.get("monster_type", "")) == "flying"
+            )
+            decision_seconds = float(
+                metrics.get("measurement_duration_s", 0.0)
+            )
+            ai_decisions = int(getattr(self, "_monster_chaos_ai_decisions", 0))
+            ai_updates = int(getattr(self, "_monster_chaos_ai_updates", 0))
+            decisions_per_second = (
+                ai_decisions / decision_seconds
+                if decision_seconds > 0.0 else 0.0
+            )
+            ramp_elapsed = max(
+                0.0,
+                float(getattr(self, "_monster_chaos_measurement_started", 0.0))
+                - float(getattr(self, "_phase_started", 0.0)),
+            )
+
             metrics.update({
                 "test": label,
                 "status": "passed",
                 "description": (
-                    "15-second live monster chaos witness: seed 43, "
-                    "50 mixed human/flying monsters in two hostile teams starting on opposite sides and converging on a central PathNode, "
-                    "followed by seeded random infighting."
+                    "Live 40-monster witness in a 1024x1024x1024 room: "
+                    "5 team1 monsters at the far end, 5 team2 monsters after 0.5s, "
+                    "then one random team/type every 0.25s to 40, followed by a 5-second decision measurement."
                 ),
-                "seed": "43",
+                "seed": chaos_info.get("seed", "43"),
+                "room_size": chaos_info.get("room_size", [1024.0, 1024.0, 1024.0]),
                 "monster_count": len(monsters),
-                "human_count": int(chaos_info.get("human_count", 0)),
-                "flying_count": int(chaos_info.get("flying_count", 0)),
-                "team_counts": dict(chaos_info.get("team_counts", {})),
-                "pathnode_name": chaos_info.get(
-                    "pathnode_name", "ChaosPathNode"
-                ),
-                "aggro_count": aggro_count,
-                "aggro_delay_s": float(
-                    getattr(self, "_monster_chaos_aggro_delay", 2.0)
-                ),
-                "witness_duration_s": 15.0,
+                "team_counts": team_counts,
+                "human_count": human_count,
+                "flying_count": flying_count,
+                "spawn_ramp_duration_s": ramp_elapsed,
+                "decision_window_s": decision_seconds,
+                "ai_decisions": ai_decisions,
+                "ai_update_calls": ai_updates,
+                "monster_decisions_per_second": decisions_per_second,
                 "alive_monsters": alive,
                 "dead_monsters": max(0, len(monsters) - alive),
             })
+
             logic = getattr(view, "logic_thread", None)
+            self._restore_monster_chaos_ai_counter(logic)
             if logic is not None:
                 logic.notarget = self._original_notarget
             if view.play_mode:
                 self._bench.finish_live_monster_test(self.main_window)
+
             self._results.append(metrics)
             self.export_button.setEnabled(True)
             self.export_button.setVisible(True)
             self._append(
-                '<div style="background:#222; border:1px solid #555; padding:12px; '
-                'margin:4px 0 10px 0;">'
-                '<div style="font-size:15px; font-weight:bold; color:#eeeeee;">'
-                'Monster chaos witness</div>'
-                '<div style="color:#aaa; margin-top:4px;">'
-                'Seed 43 &nbsp; • &nbsp; 50 monsters &nbsp; • &nbsp; 30 human / 20 flying &nbsp; • &nbsp; PathNode %s'
+                '<div style="background:#222; border:1px solid #555; padding:12px; margin:4px 0 10px 0;">'
+                '<div style="font-size:15px; font-weight:bold; color:#eeeeee;">Monster chaos witness</div>'
+                '<div style="color:#aaa; padding-top:8px;">'
+                '<span style="color:#63d471; font-size:28px; font-weight:bold;">40 monsters:</span> '
+                '<span style="color:#ff9a32; font-size:34px; font-weight:bold;">%.0f monster decisions/s</span>'
                 '</div>'
-                '<table cellspacing="0" cellpadding="0" style="margin-top:10px;">'
-                '<tr><td width="24" rowspan="2" bgcolor="#63d471"></td>'
-                '<td height="2" bgcolor="#63d471" style="font-size:2px;"></td></tr>'
-                '<tr><td style="padding:6px 16px 2px 12px;">'
-                '<span style="font-size:25px; font-weight:bold; color:#63d471;">'
-                'Infighting:</span>'
-                '<span style="font-size:36px; font-weight:bold; color:#ff9a32; '
-                'margin-left:10px;">%d fighters</span>'
-                '</td></tr></table>'
-                '<div style="color:#aaa; padding:4px 0;">'
-                '%d alive &nbsp; • &nbsp; %d dead &nbsp; • &nbsp; '
-                '15.0 second witness'
-                '</div></div>'
+                '<div style="color:#aaa; padding-top:6px;">'
+                '%d AI decisions &nbsp; • &nbsp; %.2f second decision window &nbsp; • &nbsp; '
+                '%d human / %d flying &nbsp; • &nbsp; team1 %d / team2 %d &nbsp; • &nbsp; %d alive'
+                '</div>'
+                '</div>'
                 % (
-                    self._html_escape(
-                        chaos_info.get("pathnode_name", "ChaosPathNode")
-                    ),
-                    aggro_count,
+                    decisions_per_second,
+                    ai_decisions,
+                    decision_seconds,
+                    human_count,
+                    flying_count,
+                    team_counts["team1"],
+                    team_counts["team2"],
                     alive,
-                    max(0, len(monsters) - alive),
                 )
             )
             QApplication.processEvents()
-            self._monster_chaos_aggro_injected = False
-            self._monster_chaos_fighters = []
             self._append_test_end_separator()
             self._begin_next()
             return
@@ -1066,14 +1138,46 @@ class BenchmarkRunner:
                 if str(thing.properties.get("name", "")).startswith("BenchmarkRelay_")
             ])
             elapsed = float(self._live_io_elapsed or 0.0)
+            fires = int(getattr(self, "_live_io_fires", 0))
+            total_hops = int(hops * fires)
+            dispatch_s = float(metrics.get("io_dispatch_s", 0.0))
             metrics.update({
                 "io_elapsed_s": elapsed,
                 "io_elapsed_ms": elapsed * 1000.0,
                 "io_hops": hops,
-                "hops_per_second": hops / elapsed if elapsed > 0.0 else 0.0,
+                "io_bursts": fires,
+                "io_total_hops": total_hops,
+                "io_average_ms": float(
+                    getattr(self, "_live_io_samples", [])
+                    and (
+                        sum(self._live_io_samples)
+                        / len(self._live_io_samples)
+                        * 1000.0
+                    )
+                    or 0.0
+                ),
+                "hops_per_second": (
+                    total_hops / elapsed if elapsed > 0.0 else 0.0
+                ),
+                "dispatch_hops_per_second": (
+                    total_hops / dispatch_s if dispatch_s > 0.0 else 0.0
+                ),
+                "burst_hops": int(hops),
             })
-            self._append(                "  Live I/O throughput: %.0f hops/s."
-                % metrics["hops_per_second"]
+            metrics["description"] = (
+                "Live LogicRelay I/O: repeated %d-hop bursts through the "
+                "running Fio dispatcher" % hops
+            )
+            self._append(
+                "  Live I/O: %d bursts, %d total hops, %.0f hops/s "
+                "(%.3f ms average dispatch; %.0f hops/s dispatch-only)."
+                % (
+                    fires,
+                    total_hops,
+                    metrics["hops_per_second"],
+                    metrics["io_average_ms"],
+                    metrics["dispatch_hops_per_second"],
+                )
             )
     
         if label.startswith(("procedural_", "monster_")):
@@ -1096,7 +1200,7 @@ class BenchmarkRunner:
             hops = int(metrics.get("io_hops", 0))
             hops_per_second = float(metrics.get("hops_per_second", 0.0))
             metrics["test"] = label
-            metrics["description"] = "Live LogicRelay I/O"
+            metrics.setdefault("description", "Live LogicRelay I/O")
             self._results.append(metrics)
             self.export_button.setEnabled(True)
             self.export_button.setVisible(True)
@@ -1166,6 +1270,7 @@ class BenchmarkRunner:
         self.export_button.setVisible(False)
         self.status_label.setText("Preparing live Fio benchmark...")
         self._set_controls_enabled(False)
+        self._lock_sysmon_for_benchmark()
     
         stress_toggle = self.findChild(QToolButton)
         if stress_toggle is not None:
@@ -1257,7 +1362,7 @@ class BenchmarkRunner:
                     ("live_io_1000", 1000),
                     ("live_1000_brushes", 1000),
                     ("live_10000_brushes", 10000),
-                    ("monster_chaos_witness", 50),
+                    ("monster_chaos_witness", 40),
                 ))
     
             if self.io_chain_1000.isChecked():
@@ -1269,7 +1374,7 @@ class BenchmarkRunner:
             if self.brush_100000.isChecked():
                 self._queue.append(("live_100000_brushes", 100000))
             if self.monster_chaos_witness.isChecked():
-                self._queue.append(("monster_chaos_witness", 50))
+                self._queue.append(("monster_chaos_witness", 40))
     
             if self.borderless_window.isChecked():
                 self._queue.append(("borderless_window", None))
@@ -1297,155 +1402,179 @@ class BenchmarkRunner:
             self._finish_with_error(traceback.format_exc())
     
 
-    def _show_monster_chaos_overlay(self, seconds):
-        """Display the temporary bottom-right witness countdown."""
-        from PyQt5.QtWidgets import QLabel
+    def _install_monster_chaos_ai_counter(self, logic):
+        """Count real per-monster MonsterAI decisions during the 5-second witness."""
+        import types
 
-        view = self.main_window.view_3d
-        self._remove_monster_chaos_overlay()
+        monster_ai = getattr(logic, "monster_ai", None)
+        if monster_ai is None:
+            raise RuntimeError("Monster chaos witness has no MonsterAI instance")
 
-        overlay = QLabel(view)
-        overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        overlay.setAlignment(Qt.AlignCenter)
-        overlay.setStyleSheet(
-            "QLabel {"
-            "background: rgba(23,23,23,225);"
-            "border: 2px solid #63d471;"
-            "border-radius: 4px;"
-            "color: #ff9a32;"
-            "padding: 5px 10px;"
-            "}"
-        )
-        overlay.setFixedSize(154, 92)
-        overlay.show()
-        overlay.raise_()
-        self._monster_chaos_overlay = overlay
-        self._update_monster_chaos_overlay(seconds)
+        original = monster_ai.update
+        self._monster_chaos_ai_original_update = original
+        self._monster_chaos_ai_decisions = 0
+        self._monster_chaos_ai_updates = 0
+        self._monster_chaos_ai_counting = False
 
-    def _update_monster_chaos_overlay(self, seconds):
-        overlay = self._monster_chaos_overlay
-        view = self.main_window.view_3d
-        if overlay is None:
+        def counted_update(ai_self, delta):
+            if self._monster_chaos_ai_counting:
+                monsters = getattr(ai_self.lt, "_monster_things", None) or ()
+                active_count = 0
+                for monster in monsters:
+                    props = getattr(monster, "properties", {})
+                    if (
+                        not props.get("dead", False)
+                        and not props.get("hidden", False)
+                        and not props.get("disabled", False)
+                    ):
+                        active_count += 1
+                self._monster_chaos_ai_decisions += active_count
+                self._monster_chaos_ai_updates += 1
+            return original(delta)
+
+        monster_ai.update = types.MethodType(counted_update, monster_ai)
+
+    def _restore_monster_chaos_ai_counter(self, logic=None):
+        """Restore the production MonsterAI.update method."""
+        original = getattr(self, "_monster_chaos_ai_original_update", None)
+        if original is None:
             return
-
-        remaining = max(0.0, float(seconds))
-        title = (
-            "INFIGHTING"
-            if self._monster_chaos_aggro_injected
-            else "MONSTER CHAOS"
-        )
-        overlay.setText(
-            "<div style='font-size:12px; font-weight:bold; color:#63d471;'>%s</div>"
-            "<div style='font-size:40px; line-height:42px; font-weight:bold; color:#ff9a32;'>%.1f</div>"
-            "<div style='font-size:11px; color:#aaaaaa;'>seconds</div>"
-            % (title, remaining)
-        )
-        overlay.move(
-            max(0, view.width() - overlay.width() - 16),
-            max(0, view.height() - overlay.height() - 16),
-        )
-        overlay.raise_()
+        if logic is None:
+            logic = getattr(self.main_window.view_3d, "logic_thread", None)
+        monster_ai = getattr(logic, "monster_ai", None) if logic is not None else None
+        if monster_ai is not None:
+            monster_ai.update = original
+        self._monster_chaos_ai_original_update = None
 
     def _remove_monster_chaos_overlay(self):
-        overlay = self._monster_chaos_overlay
-        self._monster_chaos_overlay = None
-        if overlay is None:
-            return
-        try:
-            overlay.hide()
-            overlay.deleteLater()
-        except Exception:
-            pass
-
-    def _inject_monster_chaos_aggro(self):
-        """Give a random subset direct monster targets once the mob has converged."""
-        import random
-
-        monsters = [
-            thing for thing in self.main_window.state.things
-            if str(thing.properties.get("type", "")).lower() == "monster"
-            and not thing.properties.get("dead", False)
-        ]
-        if len(monsters) < 4:
-            return 0
-
-        rng = random.Random("43")
-        fighter_count = min(8, max(4, len(monsters) // 3))
-        fighters = rng.sample(monsters, fighter_count)
-        rng.shuffle(fighters)
-
-        # Release every monster from the PathNode target override. The
-        # production AI can then use team-based enemy targeting for the full
-        # mob, while the seeded subset gets direct deterministic aggro.
-        for monster in monsters:
-            monster.properties.pop("target_name", None)
-            monster.properties["awake"] = True
-
-        for source in fighters:
-            source.properties["_aggro_target"] = None
-
-        for index, source in enumerate(fighters):
-            target = fighters[(index + 1) % len(fighters)]
-            source.properties["_aggro_target"] = id(target)
-
-        self._monster_chaos_fighters = fighters
-        self._monster_chaos_aggro_count = len(fighters)
-        self._monster_chaos_aggro_injected = True
-        self._append(
-            "  INFIGHTING! Injected %d seeded random monster-vs-monster "
-            "aggro targets."
-            % len(fighters)
-        )
-        return len(fighters)
-
-    def _maintain_monster_chaos_aggro(self):
-        """Retarget a surviving chaos fighter when its previous opponent dies."""
-        import random
-
-        fighters = [
-            thing for thing in self._monster_chaos_fighters
-            if thing in self.main_window.state.things
-            and not thing.properties.get("dead", False)
-        ]
-        self._monster_chaos_fighters = fighters
-        if len(fighters) < 2:
-            return
-
-        rng = random.Random("43-retarget")
-        for source in fighters:
-            target = None
-            aggro_id = source.properties.get("_aggro_target")
-            if aggro_id is not None:
-                for candidate in fighters:
-                    if id(candidate) == aggro_id:
-                        target = candidate
-                        break
-            if target is None or target is source:
-                candidates = [
-                    candidate for candidate in fighters if candidate is not source
-                ]
-                if candidates:
-                    target = rng.choice(candidates)
-                    source.properties["_aggro_target"] = id(target)
+        """Compatibility no-op; the redesigned witness uses no overlay."""
+        return
 
     def _tick_monster_chaos_witness(self, now, app, view):
-        elapsed = max(0.0, now - self._phase_started)
+        """Run the staged live population ramp, then measure 40 monsters for 5 seconds."""
+        phase = getattr(self, "_monster_chaos_phase", "")
+        rng = getattr(self, "_monster_chaos_rng", None)
+        logic = getattr(view, "logic_thread", None)
+        if rng is None or logic is None:
+            raise RuntimeError("Monster chaos witness lost its live state")
 
-        if (
-            not self._monster_chaos_aggro_injected
-            and elapsed >= getattr(self, "_monster_chaos_aggro_delay", 2.0)
-        ):
-            self._inject_monster_chaos_aggro()
+        if phase == "team2_wait" and now >= self._monster_chaos_next_spawn:
+            team2_types = [rng.choice(("human", "flying")) for _ in range(5)]
+            if all(mtype == "human" for mtype in team2_types):
+                team2_types[-1] = "flying"
+            elif all(mtype == "flying" for mtype in team2_types):
+                team2_types[-1] = "human"
 
-        if self._monster_chaos_aggro_injected:
-            self._maintain_monster_chaos_aggro()
+            for monster_type in team2_types:
+                self.tests._spawn_monster_chaos_entity(
+                    logic,
+                    rng,
+                    team="team2",
+                    position=self.tests._monster_chaos_random_position(rng, monster_type),
+                    spawn_index=self._monster_chaos_spawn_index,
+                    monster_type=monster_type,
+                )
+                self._monster_chaos_spawn_index += 1
+                self._monster_chaos_total += 1
 
-        remaining = max(0.0, self._measurement_deadline - now)
-        self._update_monster_chaos_overlay(remaining)
+            self._monster_chaos_phase = "ramp"
+            self._monster_chaos_next_spawn = now + 0.25
+            self.status_label.setText("Monster witness: 10/40 — ramping at 0.25 s intervals")
+            self._append("  0.5s: spawned 5 random team2 monsters.")
+        elif phase == "ramp" and now >= self._monster_chaos_next_spawn:
+            for _ in range(2):
+                monster_type = rng.choice(("human", "flying"))
+                team = rng.choice(("team1", "team2"))
+                self.tests._spawn_monster_chaos_entity(
+                    logic,
+                    rng,
+                    team=team,
+                    position=self.tests._monster_chaos_random_position(rng, monster_type),
+                    spawn_index=self._monster_chaos_spawn_index,
+                    monster_type=monster_type,
+                )
+                self._monster_chaos_spawn_index += 1
+                self._monster_chaos_total += 1
+            self._monster_chaos_next_spawn = now + 0.25
 
-        if now - self._last_sysmon_sample >= 1.0:
+            if self._monster_chaos_total >= 40:
+                self._monster_chaos_total = 40
+                self._monster_chaos_phase = "measure"
+                self._monster_chaos_ai_decisions = 0
+                self._monster_chaos_ai_updates = 0
+                self._monster_chaos_ai_counting = True
+                self._monster_chaos_measurement_started = now
+                self._monster_chaos_measurement_deadline = now + 5.0
+                self._measurement_deadline = self._monster_chaos_measurement_deadline
+                self._sysmon_samples = []
+                self._last_sysmon_sample = 0.0
+                view.sysmon.reset_metrics()
+                self._append(
+                    "  40 monsters reached; starting 5-second MonsterAI decision witness."
+                )
+            elif self._monster_chaos_total % 10 == 0:
+                self.status_label.setText(
+                    "Monster witness: %d/40 — ramping at 0.25 s intervals"
+                    % self._monster_chaos_total
+                )
+
+        elif phase == "measure" and now >= self._monster_chaos_measurement_deadline:
+            self._monster_chaos_ai_counting = False
+            self._measurement_active = False
+            self._timer.stop()
+
+            elapsed = max(
+                0.0,
+                now - self._monster_chaos_measurement_started,
+            )
+            live_metrics = self._read_sysmon_metrics(view)
+            metrics = self._benchmark_metrics(
+                live_metrics,
+                elapsed,
+                self._sysmon_samples,
+            )
+            metrics.update({
+                "viewport_width": int(view.width()),
+                "viewport_height": int(view.height()),
+            })
+            self._finish_live_stress_result(
+                "monster_chaos_witness",
+                metrics,
+            )
+            return
+
+        if phase == "measure" and now - self._last_sysmon_sample >= 1.0:
             self._last_sysmon_sample = now
             self._sysmon_samples.append(self._read_sysmon_metrics(view))
+
+        view.update()
+        app.processEvents()
+
+    def _tick_live_io(self, now, app, view):
+        """Fire repeated real LogicRelay chains while Fio's live runtime is running."""
+        manager = getattr(self, "_live_io_manager", None)
+        source = getattr(self, "_live_io_source", None)
+        if manager is None or source is None:
+            raise RuntimeError("live I/O benchmark lost its live IOManager/source")
+
+        if now >= getattr(self, "_live_io_next_fire", 0.0):
+            import editor.io_system as io_system
+
+            old_debug = io_system.IO_DEBUG_ENABLED
+            old_limit = sys.getrecursionlimit()
+            io_system.IO_DEBUG_ENABLED = False
+            sys.setrecursionlimit(max(old_limit, 10000))
+            try:
+                started = time.perf_counter()
+                manager.fire_output(source, "OnTrigger")
+                elapsed = time.perf_counter() - started
+                self._live_io_samples.append(elapsed)
+                self._live_io_fires += 1
+            finally:
+                io_system.IO_DEBUG_ENABLED = old_debug
+                sys.setrecursionlimit(old_limit)
+
+            self._live_io_next_fire = now + 0.10
 
         view.update()
         app.processEvents()
@@ -1455,16 +1584,32 @@ class BenchmarkRunner:
 
         self._measurement_active = False
         self._timer.stop()
-        elapsed = max(0.0, now - self._phase_started)
-        live_metrics = self._read_sysmon_metrics(view)
-        metrics = self._benchmark_metrics(
-            live_metrics, elapsed, self._sysmon_samples
+        samples = list(getattr(self, "_live_io_samples", ()))
+        dispatch_elapsed = sum(samples)
+        mean_elapsed = (
+            dispatch_elapsed / len(samples)
+            if samples else 0.0
         )
-        metrics.update({
+        ordered = sorted(samples)
+        p95_elapsed = (
+            ordered[min(len(ordered) - 1, int(round(0.95 * (len(ordered) - 1))))]
+            if ordered else 0.0
+        )
+        wall_elapsed = max(0.0, now - self._phase_started)
+        self._live_io_elapsed = wall_elapsed
+
+        metrics = {
             "viewport_width": int(view.width()),
             "viewport_height": int(view.height()),
-        })
-        self._finish_live_stress_result("monster_chaos_witness", metrics)
+            "io_elapsed_s": wall_elapsed,
+            "io_elapsed_ms": wall_elapsed * 1000.0,
+            "io_dispatch_s": dispatch_elapsed,
+            "io_dispatch_ms": dispatch_elapsed * 1000.0,
+            "io_burst_count": len(samples),
+            "io_average_ms": mean_elapsed * 1000.0,
+            "io_p95_ms": p95_elapsed * 1000.0,
+        }
+        self._finish_live_stress_result("live_io_1000", metrics)
 
     def _tick(self):
         if not self._running or self._worker_active or not self._measurement_active:
@@ -1489,6 +1634,15 @@ class BenchmarkRunner:
             if self._current and self._current[0] == "monster_chaos_witness":
                 self._tick_monster_chaos_witness(now, app, view)
                 return
+
+            if self._current and self._current[0] == "live_io_1000":
+                self._tick_live_io(now, app, view)
+                return
+
+            if self._current and self._current[0] in (
+                "live_1000_brushes", "live_10000_brushes", "live_100000_brushes",
+            ):
+                self._advance_player_area_sweep()
 
             if self._current and self._current[0] in (
                 "current_world", "current_world_phase1", "current_world_phase2",
@@ -1674,6 +1828,7 @@ class BenchmarkResults:
             description = self._html_escape(result.get("description", result.get("test", "")))
             fps = result.get("average_fps")
             mean_ms = result.get("average_frame_time_ms", result.get("mean_ms"))
+            current_frame_ms = result.get("current_frame_time_ms", result.get("frame_time_ms"))
             p95_ms = result.get("p95_frame_time_ms", result.get("p95_ms"))
             resolution = self._html_escape(result.get("resolution", ""))
             brushes = result.get("brush_count", result.get("brushes"))
@@ -1683,11 +1838,11 @@ class BenchmarkResults:
             if resolution:
                 metrics.append("Resolution: %s" % resolution)
             if fps is not None:
-                metrics.append("Average FPS: %.2f (from captured frame time)" % float(fps))
-            if "wall_clock_fps" in result:
-                metrics.append("Wall-clock FPS: %.2f (captured frames / measurement duration)" % float(result["wall_clock_fps"]))
+                metrics.append("SysMon FPS: %.2f (1-second runtime rate)" % float(fps))
+            if current_frame_ms is not None:
+                metrics.append("Current frame: %.2f ms" % float(current_frame_ms))
             if mean_ms is not None:
-                metrics.append("Average frame: %.2f ms" % float(mean_ms))
+                metrics.append("60-frame average: %.2f ms" % float(mean_ms))
             if p95_ms is not None:
                 metrics.append("p95: %.2f ms" % float(p95_ms))
             if brushes is not None:
@@ -1709,11 +1864,11 @@ class BenchmarkResults:
             culled_tris = result.get("average_culled_tris", sysmon.get("average_culled_tris"))
             culling_efficiency = result.get("culling_efficiency", sysmon.get("culling_efficiency"))
             if visible_tris is not None:
-                extra.append("Average visible triangles: %.0f" % float(visible_tris))
+                extra.append("SysMon snapshot visible triangles: %.0f" % float(visible_tris))
             if total_tris is not None:
-                extra.append("Average total triangles: %.0f" % float(total_tris))
+                extra.append("SysMon snapshot total triangles: %.0f" % float(total_tris))
             if culled_tris is not None:
-                extra.append("Average culled triangles: %.0f" % float(culled_tris))
+                extra.append("SysMon snapshot culled triangles: %.0f" % float(culled_tris))
             if culling_efficiency is not None:
                 extra.append("Culling efficiency: %.1f%%" % float(culling_efficiency))
             if "one_percent_low_fps" in result:
@@ -1791,7 +1946,8 @@ class BenchmarkResults:
     Fio version: %s<br>
     Generated: %s<br>
     Execution: %s<br>
-    Average FPS definition: 1000 / mean(captured frame time)<br>
+    FPS definition: Fio runtime FPS over the latest 1-second interval<br>
+    Frame-time definition: current frame plus rolling 60-frame statistics<br>
     VSync: <strong>%s</strong> (swap interval %d)<br>
     VSync source: %s<br>
     <div style="margin:8px 0; padding:8px; color:#aaa; background:#151515; border-left:3px solid #63d471;">Live editor/window tests use this VSync setting. Isolated stress workers use independent GL test contexts, so their renderer FPS is not capped by the editor's presentation VSync.</div>
@@ -1917,47 +2073,53 @@ class BenchmarkResults:
     
 
     def _benchmark_metrics(self, metrics, duration_s, samples=None):
-        """Build results directly from the authoritative SysMon snapshot."""
+        """Build results from one authoritative SysMon snapshot.
+
+        SysMon exposes different time bases: ``fps`` is Fio's one-second
+        runtime FPS, while frame-time statistics are the current frame and
+        a rolling 60-frame window. Do not average snapshots into another
+        benchmark-only FPS value.
+        """
         metrics = dict(metrics or {})
-        samples = list(samples or [])
-        fps_values = []
-        for sample in samples:
-            try:
-                fps = float(sample.get("fps", 0.0))
-            except (TypeError, ValueError):
-                continue
-            if math.isfinite(fps) and fps > 0.0:
-                fps_values.append(fps)
         try:
-            current_fps = float(metrics.get("fps", 0.0))
+            sysmon_fps = float(metrics.get("fps", 0.0) or 0.0)
         except (TypeError, ValueError):
-            current_fps = 0.0
-        if current_fps > 0.0 and math.isfinite(current_fps):
-            fps_values.append(current_fps)
-        average_fps = sum(fps_values) / len(fps_values) if fps_values else 0.0
-        avg_frame_ms = float(metrics.get("average_frame_time_ms", 0.0) or 0.0)
-        p95_ms = float(metrics.get("p95_frame_time_ms", 0.0) or 0.0)
+            sysmon_fps = 0.0
+        try:
+            current_frame_ms = float(metrics.get("frame_time_ms", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            current_frame_ms = 0.0
+        try:
+            average_frame_ms = float(metrics.get("average_frame_time_ms", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            average_frame_ms = 0.0
+        try:
+            p95_ms = float(metrics.get("p95_frame_time_ms", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            p95_ms = 0.0
+
         visible_tris = float(metrics.get("visible_tris", 0) or 0)
         culled_tris = float(metrics.get("culled_tris", 0) or 0)
         total_tris = visible_tris + culled_tris
+
         return {
-            "average_fps": average_fps,
-            "wall_clock_fps": average_fps,
-            "average_frame_time_ms": avg_frame_ms,
+            "average_fps": sysmon_fps,
+            "frame_time_ms": current_frame_ms,
+            "average_frame_time_ms": average_frame_ms,
             "p95_frame_time_ms": p95_ms,
-            "mean_ms": avg_frame_ms,
+            "mean_ms": average_frame_ms,
             "p95_ms": p95_ms,
-            "sample_count": len(samples),
+            "sample_count": len(list(samples or ())),
             "measurement_duration_s": max(0.0, float(duration_s)),
             "average_visible_tris": visible_tris,
             "average_total_tris": total_tris,
             "average_culled_tris": culled_tris,
-            "culling_efficiency": culled_tris / total_tris * 100.0 if total_tris > 0 else 0.0,
+            "culling_efficiency": (culled_tris / total_tris * 100.0 if total_tris > 0 else 0.0),
             "sysmon": metrics,
-            "fps_source": "SysMon",
-            "frame_time_source": "SysMon",
+            "fps_source": "SysMon runtime FPS (1 s)",
+            "frame_time_source": "SysMon frame timer",
+            "frame_time_window": "current + rolling 60 frames",
         }
-
     def _format_vram(self, metrics):
         used = metrics.get("vram_used_mb")
         total = metrics.get("vram_total_mb")
@@ -2021,6 +2183,9 @@ class BenchmarkResults:
         width = int(metrics.get("viewport_width", self.main_window.view_3d.width()))
         height = int(metrics.get("viewport_height", self.main_window.view_3d.height()))
         avg_fps = float(metrics.get("average_fps", 0.0))
+        current_frame_ms = float(
+            metrics.get("current_frame_time_ms", metrics.get("frame_time_ms", 0.0))
+        )
         avg_ms = float(metrics.get("average_frame_time_ms", 0.0))
         p95_ms = float(metrics.get("p95_frame_time_ms", 0.0))
         samples = int(metrics.get("sample_count", 0))
@@ -2039,19 +2204,20 @@ class BenchmarkResults:
         self.output.append(
             '<div style="background:#222; border:1px solid #555; padding:12px; margin:4px 0 10px 0;">'
             '<div style="font-size:15px; font-weight:bold; color:#eeeeee; margin-bottom:4px;">%s</div>'
-            '<div style="color:#aaa;">%dx%d &nbsp; • &nbsp; %.2f ms average frame &nbsp; • &nbsp; %.2f ms p95</div>'
-            '<div style="color:#aaa;">%d SysMon samples &nbsp; • &nbsp; %.2f s measured &nbsp; • &nbsp; wall-clock %.2f FPS</div>'
+            '<div style="color:#aaa;">%dx%d &nbsp; • &nbsp; current frame %.2f ms &nbsp; • &nbsp; 60-frame average %.2f ms &nbsp; • &nbsp; p95 %.2f ms</div>'
+            '<div style="color:#aaa;">%d SysMon snapshots &nbsp; • &nbsp; %.2f s measured &nbsp; • &nbsp; SysMon FPS %.2f</div>'
             '<div style="color:#aaa;">VRAM %s &nbsp; • &nbsp; brushes %d visible / %d culled / %d total &nbsp; • &nbsp; entities %d</div>'
             '</div>'
             % (
                 self._html_escape(display_label),
                 width,
                 height,
+                current_frame_ms,
                 avg_ms,
                 p95_ms,
                 samples,
                 duration,
-                float(metrics.get("wall_clock_fps", 0.0)),
+                avg_fps,
                 self._format_vram(metrics),
                 int(metrics.get("visible_brushes", 0)),
                 int(metrics.get("culled_brushes", 0)),
@@ -2084,11 +2250,11 @@ class BenchmarkResults:
             self.output.append(sweep_line)
             self.output.append(
                 '<div style="padding:4px 0;">'
-                '<span style="color:#eeeeee; font-weight:bold;">Average visible triangles: </span>'
+                '<span style="color:#eeeeee; font-weight:bold;">SysMon snapshot visible triangles: </span>'
                 '<span style="color:#ff9a32; font-weight:bold;">%.0f</span>'
-                '<span style="color:#eeeeee; font-weight:bold;"> &nbsp; • &nbsp; Average total triangles: </span>'
+                '<span style="color:#eeeeee; font-weight:bold;"> &nbsp; • &nbsp; SysMon snapshot total triangles: </span>'
                 '<span style="color:#ff9a32; font-weight:bold;">%.0f</span>'
-                '<span style="color:#eeeeee; font-weight:bold;"> &nbsp; • &nbsp; Average culled triangles: </span>'
+                '<span style="color:#eeeeee; font-weight:bold;"> &nbsp; • &nbsp; SysMon snapshot culled triangles: </span>'
                 '<span style="color:#ff9a32; font-weight:bold;">%.0f</span>'
                 '<span style="color:#eeeeee; font-weight:bold;"> &nbsp; • &nbsp; Culling efficiency: </span>'
                 '<span style="color:#ff9a32; font-weight:bold;">%.1f%%</span>'
@@ -2400,7 +2566,7 @@ class BenchmarkHost:
             # entering any potentially long live preparation step.
             self._last_running = True
             self.send({"event": "run_started"})
-            self._start(command.get("config") or {})
+            self._start_benchmark(command.get("config") or {})
             return
 
         if action == "cancel":
@@ -2414,7 +2580,7 @@ class BenchmarkHost:
                     "error": traceback.format_exc(),
                 })
 
-    def _start(self, config):
+    def _start_benchmark(self, config):
         self._last_result_count = 0
         self._last_current = None
         self._last_running = False

@@ -65,8 +65,18 @@ class TerrainEditorPanel(QWidget):
         self.setObjectName("TerrainEditorPanel")
         self._building_ui = False
 
+        # MainWindow applies Display.font_size to QApplication before opening
+        # this panel. Use that configured point size rather than hard-coded
+        # pixel font sizes so the terrain editor follows Fio's global font and
+        # Qt's high-DPI text scaling.
+        app_font = QApplication.font()
+        self._base_font_size = app_font.pointSize()
+        if self._base_font_size <= 0:
+            self._base_font_size = 11
+        self.setFont(app_font)
+
         # Apply global stylesheet
-        self.setStyleSheet("""
+        terrain_style = """
             QWidget#TerrainEditorPanel {
                 background-color: #2b2b2b;
                 color: #f0f0f0;
@@ -110,7 +120,7 @@ class TerrainEditorPanel(QWidget):
                 padding: 0 8px;
                 background-color: #2d3d3b;
                 color: #F08000;
-                font-size: 14px;
+                font-size: __GROUP_TITLE_FONT__pt;
             }
             QPushButton {
                 padding: 8px 14px;
@@ -148,7 +158,11 @@ class TerrainEditorPanel(QWidget):
             QLabel {
                 color: #f0f0f0;
             }
-        """)
+        """
+        self.setStyleSheet(
+            terrain_style
+            .replace("__GROUP_TITLE_FONT__", str(self._base_font_size + 3))
+        )
         
         self.setup_ui()
         self.load_from_terrain()
@@ -1113,10 +1127,12 @@ class TerrainEditorPanel(QWidget):
         self.progress.setWindowModality(Qt.WindowModal)
         self.progress.setMinimumDuration(0)
         self.progress.setMinimumWidth(400)
-        self.progress.setStyleSheet("""
-            QProgressDialog { font-size: 14px; }
-            QLabel { padding: 20px; font-weight: bold; }
-        """)
+        self.progress.setStyleSheet(
+            f"""
+            QProgressDialog {{ font-size: {self._base_font_size + 3}pt; }}
+            QLabel {{ font-size: {self._base_font_size}pt; padding: 20px; font-weight: bold; }}
+            """
+        )
         self.progress.show()
         QApplication.processEvents()
     

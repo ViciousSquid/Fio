@@ -1045,16 +1045,22 @@ def register_default_io():
     )
 
     # === EFFECT ===
-    # Effect TYPE is a string-valued authored selector. SetType is deliberately
-    # generic so adding more Effect types only extends Effect.EFFECT_TYPES.
-    # Explode is the separate one-shot transition/playback command.
+    # Effect TYPE selects the behaviour family. FIRE and ORB each have five
+    # authored GIF variants; those variants are independent of effect_type.
     register_io('effect',
         inputs=[
-            IODef('SetType', 'Set the Effect TYPE (fire, explosion, or another registered type)', 'string'),
+            IODef('SetType', 'Set the Effect TYPE (FIRE, ORB, EXPLOSION, or CUSTOM)', 'string'),
+            IODef('SetFireTexture', 'Select FIRE variant number 1-5', 'string'),
+            IODef('SetOrbTexture', 'Select ORB variant number 1-5', 'string'),
+            IODef('SetCustomGif', 'Set the CUSTOM GIF path', 'string'),
+            IODef('SetLoop', 'Set whether a CUSTOM GIF loops', 'bool'),
+            IODef('Hide', 'Hide this Effect'),
+            IODef('Show', 'Show this Effect'),
+            IODef('ToggleVisibility', 'Toggle Effect visibility'),
             IODef('Explode', 'Switch to EXPLOSION and play its animation once'),
         ],
         outputs=[
-            IODef('OnChanged', 'Fired when the Effect TYPE changes (parameter: new type)', 'string'),
+            IODef('OnChanged', 'Fired when an authored Effect control changes (parameter: value)', 'string'),
         ]
     )
 

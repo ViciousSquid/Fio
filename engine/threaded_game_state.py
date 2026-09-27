@@ -3,6 +3,9 @@ import glm
 import numpy as np
 from collections import deque
 
+from .render_table import RenderTable
+from .entity_table import EntityTable
+
 # Shared immutable "nothing to drain" result for the per-frame consumer methods
 # (consume_sounds / consume_console_commands). Returning this singleton on the
 # common empty path avoids allocating a throwaway list on every rendered frame.
@@ -107,10 +110,10 @@ class RenderState:
         # renderer classifies entities into passes from these rather than
         # re-deriving each one's kind. Portal virtual views consume the same
         # columns; there is no portal-specific entity object walk.
-        self.entity_table = None
-        self.entity_refs = None
-        self.visible_thing_slots = None
-        self.thing_hidden = None
+        self.entity_table = EntityTable()
+        self.entity_refs = np.empty(0, dtype=object)
+        self.visible_thing_slots = np.empty(0, dtype=np.int32)
+        self.thing_hidden = np.empty(0, dtype=bool)
         self.has_portals = False
 
         # The dense render projection (engine.render_table.RenderTable) and the
@@ -120,7 +123,7 @@ class RenderState:
         # is shared by reference, not copied: its cold columns are immutable
         # between world-epoch bumps, and its warm columns are refreshed only on
         # the logic thread.
-        self.render_table = None
+        self.render_table = RenderTable()
         #: slot -> the render reference for that row: the live brush dict, or
         #: for a mover or a door the per-frame snapshot. Indexed by the slot
         #: arrays below, so a consumer converts an index to an object once, at
@@ -132,6 +135,7 @@ class RenderState:
         # HUD / Gameplay
         self.collected_keys = set()
         self.hud_message = ""
+        self.hud_prompt_key = None
         
         # Visual FX
         self.bullet_marks = [] # List of {'pos': [x,y,z], 'alpha': float}
@@ -223,12 +227,18 @@ class RenderState:
         self.all_lights = []
         self.visible_brush_position_count = 0
         self.visible_thing_position_count = 0
-        self.entity_table = None
-        self.entity_refs = None
-        self.visible_thing_slots = None
-        self.thing_hidden = None
+        # Keep the dense projection objects across buffer recycling.  Their
+        # published slot vectors below are emptied, so an interstitial frame
+        # cannot draw stale rows, while the next LogicThread publish reuses the
+        # same tables without allocating a RenderTable/EntityTable per frame.
+        if self.entity_table is None:
+            self.entity_table = EntityTable()
+        self.entity_refs = np.empty(0, dtype=object)
+        self.visible_thing_slots = np.empty(0, dtype=np.int32)
+        self.thing_hidden = np.empty(0, dtype=bool)
         self.has_portals = False
-        self.render_table = None
+        if self.render_table is None:
+            self.render_table = RenderTable()
         #: slot -> the render reference for that row: the live brush dict, or
         #: for a mover or a door the per-frame snapshot. Indexed by the slot
         #: arrays below, so a consumer converts an index to an object once, at
@@ -238,6 +248,7 @@ class RenderState:
         self.all_brush_slots = np.empty(0, dtype=np.int32)
         self.collected_keys = set()
         self.hud_message = ""
+        self.hud_prompt_key = None
         self.bullet_marks = []
         self.projectiles = []
         self.muzzle_flash_active = False

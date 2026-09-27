@@ -13,6 +13,8 @@ import glm
 import os
 import time
 
+from engine.effect_entity import EFFECT_FIRE_TEXTURES, EFFECT_ORB_TEXTURES
+
 # Import debug logger - with fallback to print if not available
 try:
     from .debug_console import debug_log
@@ -160,6 +162,41 @@ def register_all_input_handlers(io_manager: IOManager):
     # EFFECT INPUTS
     # ==========================================================================
 
+    def _effect_bool_param(param, default=True):
+        value = str(param or "").strip().lower()
+        if not value:
+            return bool(default)
+        if value in ("1", "true", "yes", "on"):
+            return True
+        if value in ("0", "false", "no", "off"):
+            return False
+        return bool(default)
+
+    def _effect_texture_path(param, textures):
+        """Resolve a FIRE/ORB variant from the public numeric value 1-5."""
+        value = str(param if param is not None else "").strip()
+        if value not in {"1", "2", "3", "4", "5"}:
+            return None
+        return textures[int(value) - 1]
+
+    def _effect_refresh_cold_preserving_runtime(entity, logic, slot):
+        """Refresh authored Effect projection without restarting playback."""
+        table = logic._entity_table
+        slot = int(slot)
+        runtime = (
+            table.effect_spawn_time[slot],
+            table.effect_elapsed[slot],
+            table.effect_active[slot],
+            table.effect_alive[slot],
+        )
+        table._resolve_entity_cold(slot, entity)
+        (
+            table.effect_spawn_time[slot],
+            table.effect_elapsed[slot],
+            table.effect_active[slot],
+            table.effect_alive[slot],
+        ) = runtime
+
     def effect_set_type(entity, param, logic):
         """Set the Effect TYPE by name and notify connected outputs."""
         effect_type = str(param or "").strip().upper()
@@ -171,7 +208,7 @@ def register_all_input_handlers(io_manager: IOManager):
             slot = table.slot_of_id.get(entity.properties.get('id'))
             if slot is not None:
                 slot = int(slot)
-                table.refresh_rows([entity], [slot])
+                table._resolve_entity_cold(slot, entity)
                 # A SetType-to-EXPLOSION switch is not a trigger. It leaves
                 # EXPLOSION dormant until Explode is received.
                 animated = table.effect_type[slot] != 1
@@ -185,6 +222,56 @@ def register_all_input_handlers(io_manager: IOManager):
 
         logic.io_manager.fire_output(
             entity, 'OnChanged', value=entity.properties['effect_type']
+        )
+
+    def effect_set_fire_texture(entity, param, logic):
+        path = _effect_texture_path(param, EFFECT_FIRE_TEXTURES)
+        if path is None:
+            return
+        entity.properties["fire_texture"] = path
+        table = getattr(logic, '_entity_table', None)
+        if table is not None:
+            slot = table.slot_of_id.get(entity.properties.get('id'))
+            if slot is not None:
+                _effect_refresh_cold_preserving_runtime(entity, logic, slot)
+        logic.io_manager.fire_output(entity, 'OnChanged', value=path)
+
+    def effect_set_orb_texture(entity, param, logic):
+        path = _effect_texture_path(param, EFFECT_ORB_TEXTURES)
+        if path is None:
+            return
+        entity.properties["orb_texture"] = path
+        table = getattr(logic, '_entity_table', None)
+        if table is not None:
+            slot = table.slot_of_id.get(entity.properties.get('id'))
+            if slot is not None:
+                _effect_refresh_cold_preserving_runtime(entity, logic, slot)
+        logic.io_manager.fire_output(entity, 'OnChanged', value=path)
+
+    def effect_set_custom_gif(entity, param, logic):
+        path = os.path.normpath(
+            str(param or "").strip().replace("\\", "/")
+        ).replace("\\", "/")
+        if not path:
+            return
+        entity.properties["custom_gif"] = path
+        table = getattr(logic, '_entity_table', None)
+        if table is not None:
+            slot = table.slot_of_id.get(entity.properties.get('id'))
+            if slot is not None:
+                _effect_refresh_cold_preserving_runtime(entity, logic, slot)
+        logic.io_manager.fire_output(entity, 'OnChanged', value=path)
+
+    def effect_set_loop(entity, param, logic):
+        loop = _effect_bool_param(param, True)
+        entity.properties["custom_loop"] = loop
+        table = getattr(logic, '_entity_table', None)
+        if table is not None:
+            slot = table.slot_of_id.get(entity.properties.get('id'))
+            if slot is not None:
+                table.effect_custom_loop[int(slot)] = loop
+        logic.io_manager.fire_output(
+            entity, 'OnChanged', value=str(loop).lower()
         )
 
     def effect_explode(entity, param, logic):
@@ -247,11 +334,15 @@ def register_all_input_handlers(io_manager: IOManager):
         table.light_enabled[slot] = bool(
             entity.properties.get('light_enabled', True)
         )
+        logic.io_manager.fire_output(entity, 'OnChanged', value='EXPLOSION')
 
     io_manager.register_input_handler('effect', 'settype', effect_set_type)
+    io_manager.register_input_handler('effect', 'setfiretexture', effect_set_fire_texture)
+    io_manager.register_input_handler('effect', 'setorbtexture', effect_set_orb_texture)
+    io_manager.register_input_handler('effect', 'setcustomgif', effect_set_custom_gif)
+    io_manager.register_input_handler('effect', 'setloop', effect_set_loop)
     io_manager.register_input_handler('effect', 'explode', effect_explode)
 
-    # ==========================================================================
     # DOOR INPUTS
     # ==========================================================================
     

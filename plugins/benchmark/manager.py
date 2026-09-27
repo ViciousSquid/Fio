@@ -8,6 +8,7 @@ running Fio process, using its actual MainWindow, QtGameView, renderer and I/O.
 from __future__ import annotations
 
 import argparse
+import configparser
 import html
 import json
 import os
@@ -18,6 +19,7 @@ import sys
 import time
 
 from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QCursor, QFont
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -37,11 +39,11 @@ from PyQt5.QtWidgets import (
 
 
 TESTS = (
-    ("live_io_1000", "I/O chain: 1,000 entities"),
-    ("live_1000_brushes", "Renderer scene: 1,000 brushes"),
-    ("live_10000_brushes", "Renderer scene: 10,000 brushes"),
-    ("live_100000_brushes", "Renderer scene: 100,000 brushes"),
-    ("monster_chaos_witness", "Monster chaos: 50 monsters / 10-second live witness"),
+    ("live_io_1000", "I/O: 1,000-entity live chain / repeated bursts"),
+    ("live_1000_brushes", "Renderer: 1,000 brushes / live camera sweep"),
+    ("live_10000_brushes", "Renderer: 10,000 brushes / live camera sweep"),
+    ("live_100000_brushes", "Renderer: 100,000 brushes / live camera sweep"),
+    ("monster_chaos_witness", "Monster AI: 40 monsters / 5-second decision-rate witness"),
     ("borderless_window", "Window mode: borderless maximized"),
     ("fullscreen_window", "Window mode: true fullscreen"),
     ("editor_windowed_1280", "Editor mode: windowed 1280×720 (3D view pane)"),
@@ -50,7 +52,7 @@ TESTS = (
 
 
 class BenchmarkManager(QDialog):
-    STARTUP_TIMEOUT = 300.0
+    STARTUP_TIMEOUT = 120.0
     INACTIVITY_TIMEOUT = 120.0
     ABSOLUTE_TIMEOUT = 900.0
 
@@ -71,12 +73,23 @@ class BenchmarkManager(QDialog):
         self.has_current_map = False
 
         self.setWindowTitle("Fio Benchmark")
-        self.resize(900, 700)
+        self.resize(640, 580)
+        benchmark_font = QFont(QApplication.font())
+        benchmark_font.setPointSize(max(6, benchmark_font.pointSize() - 2))
+        self._font_size = benchmark_font.pointSize()
+        self.setFont(benchmark_font)
         self.setStyleSheet(
             """
             QDialog {
                 background: #171717;
                 color: #eeeeee;
+            }
+            QToolTip {
+                background: #202020;
+                color: #dddddd;
+                border: 1px solid #555555;
+                font-size: %dpt;
+                padding: 2px 4px;
             }
             QLabel {
                 color: #dddddd;
@@ -200,6 +213,7 @@ class BenchmarkManager(QDialog):
                 selection-color: #111111;
             }
             """
+            % self._font_size
         )
 
         root = QVBoxLayout(self)
@@ -211,7 +225,9 @@ class BenchmarkManager(QDialog):
         )
         description.setTextFormat(Qt.RichText)
         description.setWordWrap(True)
-        description.setStyleSheet("font-size: 15px; padding: 6px 2px 10px 2px;")
+        description.setStyleSheet(
+            f"font-size: {self._font_size}pt; padding: 4px 2px 6px 2px;"
+        )
         root.addWidget(description)
 
         # Connection state and map availability are only worth screen space
@@ -262,7 +278,7 @@ class BenchmarkManager(QDialog):
             "Additional stress tests (I/O, renderer, gameplay)"
         )
         additional.setToolTip(
-            "Run the standard live I/O, renderer and monster-capacity workloads."
+            "Run the live dense renderer, repeated I/O dispatcher, and real MonsterAI workloads."
         )
         additional.toggled.connect(self._refresh_run_enabled)
         self.checkboxes["additional_tests"] = additional
@@ -271,7 +287,9 @@ class BenchmarkManager(QDialog):
         options.setVisible(False)
         options.setStyleSheet(
             "QWidget { background: #171717; color: #dddddd; }"
-            "QCheckBox { background: #171717; color: #dddddd; }"
+            "QCheckBox { background: #171717; color: #dddddd; "
+            "font-size: %dpt; padding: 1px 2px; }"
+            % max(6, self._font_size - 3)
         )
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -281,7 +299,8 @@ class BenchmarkManager(QDialog):
         )
         scroll.viewport().setStyleSheet("background: #171717;")
         scroll.setWidget(options)
-        scroll.setMaximumHeight(260)
+        scroll.setMaximumHeight(100)
+        scroll.setMinimumHeight(0)
         scroll.setVisible(False)
         root.addWidget(scroll)
 
@@ -298,8 +317,10 @@ class BenchmarkManager(QDialog):
 
         self.output = QTextBrowser()
         self.output.setOpenExternalLinks(False)
+        self.output.setMinimumHeight(200)
         self.output.setStyleSheet(
             "QTextBrowser { font-family: Consolas, monospace; "
+            f"font-size: {self._font_size}pt; "
             "background: #171717; border: 1px solid #444; }"
         )
         root.addWidget(self.output, 1)
@@ -308,18 +329,18 @@ class BenchmarkManager(QDialog):
         self.run_button.setEnabled(False)
         self.run_button.setMinimumHeight(44)
         self.run_button.setStyleSheet(
-            """
-            QPushButton {
+            f"""
+            QPushButton {{
                 background: #3aa757;
                 color: #ffffff;
                 border: none;
                 border-radius: 3px;
-                font-size: 16px;
+                font-size: {self._font_size}pt;
                 font-weight: bold;
-            }
-            QPushButton:hover   { background: #45bd66; }
-            QPushButton:pressed { background: #2f8b47; }
-            QPushButton:disabled { background: #2f4636; color: #7d8b81; }
+            }}
+            QPushButton:hover   {{ background: #45bd66; }}
+            QPushButton:pressed {{ background: #2f8b47; }}
+            QPushButton:disabled {{ background: #2f4636; color: #7d8b81; }}
             """
         )
         self.run_button.clicked.connect(self.start)
@@ -329,7 +350,7 @@ class BenchmarkManager(QDialog):
 
         # Nothing to export until a run has produced results, so it stays out
         # of the opening screen entirely rather than sitting there greyed out.
-        self.export_button = QPushButton("Export HTML Report…")
+        self.export_button = QPushButton("Export to HTML")
         self.export_button.setEnabled(False)
         self.export_button.setVisible(False)
         self.export_button.clicked.connect(self.export_html)
@@ -345,6 +366,10 @@ class BenchmarkManager(QDialog):
         actions.addWidget(self.close_button)
 
         root.addLayout(actions)
+
+        # Keep the manager out of the way of the editor: open it in the
+        # lower-right corner of the current display's usable area.
+        self._position_bottom_right()
 
         self.socket_timer = QTimer(self)
         self.socket_timer.setInterval(50)
@@ -500,15 +525,17 @@ class BenchmarkManager(QDialog):
             self._set_checks_enabled(True)
             self.run_button.setEnabled(True)
             self.export_button.setEnabled(bool(self.results))
+            self.export_button.setVisible(bool(self.results))
             self.status.setText("Benchmark complete.")
             self._append(
-                '<div style="margin-top:12px; padding:14px 16px; background:#1f241f; '
-                'border:1px solid #63d471; color:#eeeeee;">'
-                '<div style="color:#63d471; font-size:22px; font-weight:bold; '
-                'line-height:1.2; margin-bottom:6px;">Benchmark complete.</div>'
-                '<div style="color:#eeeeee; font-size:14px; font-weight:bold;">'
-                '%d result(s) recorded.</div>'
-                '</div>' % len(self.results)
+                f'<div style="margin-top:12px; padding:14px 16px; background:#1f241f; '
+                f'border:1px solid #63d471; color:#eeeeee;">'
+                f'<div style="color:#63d471; font-size:{self._font_size}pt; '
+                f'font-weight:bold; line-height:1.2; margin-bottom:6px;">'
+                f'Benchmark complete.</div>'
+                f'<div style="color:#eeeeee; font-size:{self._font_size}pt; '
+                f'font-weight:bold;">{len(self.results)} result(s) recorded.</div>'
+                f'</div>'
             )
 
         elif event == "error":
@@ -529,6 +556,16 @@ class BenchmarkManager(QDialog):
     def _set_checks_enabled(self, enabled):
         for box in self.checkboxes.values():
             box.setEnabled(enabled)
+
+    def _position_bottom_right(self):
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        self.move(
+            available.right() - self.width() + 1,
+            available.bottom() - self.height() + 1,
+        )
 
     def _selected_tests(self):
         """The stress tests ticked right now, additional_tests first."""
@@ -567,6 +604,8 @@ class BenchmarkManager(QDialog):
 
         self.output.clear()
         self.results = []
+        self.export_button.setEnabled(False)
+        self.export_button.setVisible(False)
         self.current_test = None
         self.done = False
         self.running = True
@@ -656,60 +695,104 @@ class BenchmarkManager(QDialog):
                 pass
 
     def export_html(self):
+        """Write the completed benchmark report directly into the Fio root."""
         if not self.results:
             return
 
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export Benchmark Report",
-            "fio_benchmark_report.html",
-            "HTML files (*.html)",
+        report_path = os.path.join(
+            os.path.abspath(self.args.root),
+            "BENCHMARK_REPORT.html",
         )
-        if not path:
-            return
 
         sections = []
-        for result in self.results:
-            label = html.escape(str(result.get("test", "benchmark")))
-            status = html.escape(str(result.get("status", "passed")))
-            description = html.escape(str(result.get("description", "")))
-            rows = []
+        for index, result in enumerate(self.results, 1):
+            if not isinstance(result, dict):
+                continue
 
-            for key in (
-                "average_fps", "min_fps", "max_fps",
-                "io_elapsed_ms", "io_hops", "hops_per_second",
-                "flying_count", "team_counts", "aggro_count",
-                "alive_monsters", "dead_monsters", "witness_duration_s",
-                "seed", "pathnode_name", "viewport_width", "viewport_height",
-                "visible_brushes", "culled_brushes", "total_brushes",
-            ):
-                if key in result:
-                    rows.append(
-                        "<tr><th>%s</th><td>%s</td></tr>"
-                        % (html.escape(key), html.escape(str(result[key])))
+            test_name = result.get("test") or result.get("scenario") or "benchmark"
+            label = html.escape(str(test_name))
+            description = html.escape(str(result.get("description", "")))
+            status = html.escape(str(result.get("status", "passed")))
+
+            rows = []
+            for key in sorted(result):
+                value = result[key]
+                if isinstance(value, (dict, list, tuple)):
+                    rendered = html.escape(
+                        json.dumps(value, indent=2, sort_keys=True, default=str)
                     )
+                    rendered = "<pre>%s</pre>" % rendered
+                else:
+                    rendered = html.escape(str(value))
+                rows.append(
+                    "<tr><th>%s</th><td>%s</td></tr>"
+                    % (html.escape(str(key)), rendered)
+                )
 
             sections.append(
-                "<section><h2>%s</h2><p>Status: <b>%s</b></p>"
-                "<p>%s</p><table>%s</table></section>"
-                % (label, status, description, "".join(rows))
+                "<section><h2>Result %d: %s</h2>"
+                "<p>Status: <b>%s</b></p>"
+                "%s"
+                "<table>%s</table></section>"
+                % (
+                    index,
+                    label,
+                    status,
+                    "<p>%s</p>" % description if description else "",
+                    "".join(rows),
+                )
             )
 
         report = (
             "<!doctype html><html><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1'>"
             "<title>Fio Benchmark Report</title><style>"
             "body{font-family:Segoe UI,Arial,sans-serif;background:#171717;"
-            "color:#eee;margin:32px}"
-            "section{border:1px solid #444;padding:18px;margin:0 0 20px}"
-            "table{border-collapse:collapse}th,td{padding:5px 10px;text-align:left}"
-            "th{color:#aaa}</style></head><body>"
+            "color:#eee;margin:32px;line-height:1.4}"
+            "h1{color:#63d471}"
+            "h2{margin-top:0;color:#ff9a32}"
+            "section{border:1px solid #444;padding:18px;margin:0 0 20px;"
+            "background:#1d1d1d}"
+            "table{border-collapse:collapse;width:100%}"
+            "th,td{padding:6px 10px;text-align:left;vertical-align:top;"
+            "border-bottom:1px solid #333}"
+            "th{color:#aaa;width:28%}"
+            "pre{margin:0;white-space:pre-wrap;word-break:break-word;"
+            "font-family:Consolas,monospace;color:#ddd}"
+            "</style></head><body>"
             "<h1>Fio Benchmark Report</h1>"
-            "<p>Fio PID: %s</p>%s</body></html>"
+            "<p>Fio PID: %s</p>"
+            "%s"
+            "</body></html>"
             % (html.escape(str(self.args.pid)), "".join(sections))
         )
 
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(report)
+        temporary_path = report_path + ".tmp"
+        try:
+            with open(temporary_path, "w", encoding="utf-8", newline="") as handle:
+                handle.write(report)
+            os.replace(temporary_path, report_path)
+        except OSError as exc:
+            try:
+                os.remove(temporary_path)
+            except OSError:
+                pass
+            QMessageBox.critical(
+                self,
+                "Export failed",
+                "Could not write BENCHMARK_REPORT.html to the Fio root.\n\n%s"
+                % exc,
+            )
+            return
+
+        self.export_button.setEnabled(False)
+        self.export_button.setVisible(False)
+        self.status.setText("Benchmark report exported.")
+        self._append(
+            '<div style="color:#63d471; padding:8px 0;">'
+            'Exported <b>BENCHMARK_REPORT.html</b> to the Fio root.'
+            "</div>"
+        )
 
     def close_manager(self):
         self.close()
@@ -742,8 +825,27 @@ def main():
     parser.add_argument("--auto-start", action="store_true")
     args = parser.parse_args()
 
+    # Configure this separate Qt process from the same Fio settings.ini.
+    settings_path = os.path.join(os.path.abspath(args.root), "settings.ini")
+    config = configparser.ConfigParser()
+    config.read_dict({
+        "Display": {
+            "font_size": "11",
+            "high_dpi_scaling": "True",
+        }
+    })
+    config.read(settings_path)
+    font_size = config.getint("Display", "font_size")
+    high_dpi = config.getboolean("Display", "high_dpi_scaling")
+
+    if hasattr(Qt, "AA_EnableHighDpiScaling"):
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, high_dpi)
+
     app = QApplication(sys.argv)
     app.setApplicationName("Fio Benchmark Manager")
+    font = QFont(app.font())
+    font.setPointSize(font_size)
+    app.setFont(font)
 
     dialog = BenchmarkManager(args)
     dialog.show()

@@ -12,13 +12,20 @@ It also includes tests designed to benchmark the **actual Fio runtime and editor
 The benchmark plugin can exercise Fio using real maps and the normal runtime systems, including:
 
 * World loading
-* Rendering
-* Visibility and distance culling
-* Brush and entity rendering
+* Dense `RenderTable` / `EntityTable` rendering
+* Visibility and camera-distance culling
+* Renderer key sorting, instancing and sprite/brush submission
 * PlayerStart-based camera movement
-* World traversal
+* Real `MonsterAI` sight, movement, combat and infighting
+* Production I/O dispatch through serialized `LogicRelay` graphs
 * Large and dense scenes
 * Frame-time behaviour under sustained load
+
+The standard **Additional stress tests** are deliberately live workloads:
+
+* **Renderer** — 1,000 / 10,000 / 100,000 real brushes with a deterministic PlayerStart camera sweep, so visibility masks and packed render keys change while frames are rendered.
+* **Monster AI** — 50 mixed human/flying monsters in two hostile teams, running in real Play Mode for a sustained combat witness. The benchmark uses god mode for the player, not `notarget`, so normal targeting and attack paths remain active.
+* **I/O** — a 1,000-entity real `LogicRelay` chain attached to the running Fio `IOManager`, fired repeatedly during measurement rather than timed once in isolation. Both wall-clock throughput and dispatcher-only throughput are recorded.
 
 The benchmark is intended to answer a practical question:
 

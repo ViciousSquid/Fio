@@ -30,6 +30,7 @@ def test_effect_defaults_to_fire_with_intrinsic_light():
     assert effect.properties["width"] == 32.0
     assert effect.properties["height"] == 46.0
     assert effect.properties["orb_texture"] == EFFECT_ORB_TEXTURES[0]
+    assert effect.properties["custom_loop"] is True
     assert "size" not in effect.properties
     assert "scale" not in effect.properties
     assert effect.properties["light_enabled"] is True
@@ -132,6 +133,7 @@ def test_custom_effect_uses_selected_gif_path():
     assert table.effect_type[0] == 3
     assert table.effect_custom_id[0] > 0
     assert table.effect_custom_path(table.effect_custom_id[0]) == "custom/magic.gif"
+    assert bool(table.effect_custom_loop[0])
     assert bool(table.effect_active[0])
     assert bool(table.effect_alive[0])
 
@@ -343,7 +345,11 @@ def test_effect_set_type_input_changes_type_and_fires_onchanged():
     real_io = IOManager()
     register_all_input_handlers(real_io)
 
-    assert get_input_names("effect") == ["SetType", "Explode"]
+    assert get_input_names("effect") == [
+        "SetType", "SetFireTexture", "SetOrbTexture",
+        "SetCustomGif", "SetLoop",
+        "Hide", "Show", "ToggleVisibility", "Explode",
+    ]
     assert get_output_names("effect") == ["OnChanged"]
 
     set_type = real_io._input_handlers[("effect", "settype")]
@@ -384,6 +390,78 @@ def test_effect_set_type_input_changes_type_and_fires_onchanged():
     assert bool(table.effect_active[0])
     assert bool(table.effect_alive[0])
     assert events[-1] == ("OnChanged", "CUSTOM")
+
+
+
+def test_effect_texture_and_custom_inputs_update_dense_projection():
+    effect = Effect(properties={
+        "id": "effect-input-test",
+        "effect_type": EFFECT_FIRE,
+    })
+    table = EntityTable()
+    table.begin_frame([effect], epoch=1, effect_runtime=True)
+
+    events = []
+    io_manager = SimpleNamespace(
+        fire_output=lambda entity, name, value=None: events.append((name, value))
+    )
+    logic = SimpleNamespace(
+        _entity_table=table,
+        things=[effect],
+        io_manager=io_manager,
+    )
+    real_io = IOManager()
+    register_all_input_handlers(real_io)
+
+    real_io._input_handlers[("effect", "setfiretexture")](effect, "3", logic)
+    assert effect.properties["fire_texture"] == EFFECT_FIRE_TEXTURES[2]
+    assert table.effect_fire_variant[0] == 2
+
+    real_io._input_handlers[("effect", "setfiretexture")](effect, "1", logic)
+    assert effect.properties["fire_texture"] == EFFECT_FIRE_TEXTURES[0]
+    assert table.effect_fire_variant[0] == 0
+
+    real_io._input_handlers[("effect", "setorbtexture")](effect, "5", logic)
+    assert effect.properties["orb_texture"] == EFFECT_ORB_TEXTURES[4]
+
+    real_io._input_handlers[("effect", "setorbtexture")](effect, "4", logic)
+    assert effect.properties["orb_texture"] == EFFECT_ORB_TEXTURES[3]
+
+    real_io._input_handlers[("effect", "setcustomgif")](effect, r"custom\\pulse.gif", logic)
+    assert effect.properties["custom_gif"] == "custom/pulse.gif"
+
+    real_io._input_handlers[("effect", "setloop")](effect, "false", logic)
+    assert effect.properties["custom_loop"] is False
+    assert not bool(table.effect_custom_loop[0])
+
+    real_io._input_handlers[("effect", "setloop")](effect, "true", logic)
+    assert effect.properties["custom_loop"] is True
+    assert bool(table.effect_custom_loop[0])
+
+    assert events[-1] == ("OnChanged", "true")
+
+
+def test_effect_texture_inputs_ignore_invalid_variants():
+    effect = Effect(properties={"id": "invalid-effect-input"})
+    table = EntityTable()
+    table.begin_frame([effect], epoch=1, effect_runtime=True)
+    io_manager = IOManager()
+    register_all_input_handlers(io_manager)
+    logic = SimpleNamespace(
+        _entity_table=table,
+        things=[effect],
+        io_manager=SimpleNamespace(fire_output=lambda *args, **kwargs: None),
+    )
+
+    io_manager._input_handlers[("effect", "setfiretexture")](effect, "6", logic)
+    io_manager._input_handlers[("effect", "setfiretexture")](effect, "fire01", logic)
+    io_manager._input_handlers[("effect", "setfiretexture")](effect, "FIRE 3", logic)
+    io_manager._input_handlers[("effect", "setorbtexture")](effect, "0", logic)
+    io_manager._input_handlers[("effect", "setorbtexture")](effect, "orb05", logic)
+    io_manager._input_handlers[("effect", "setorbtexture")](effect, "ORB 4", logic)
+
+    assert effect.properties["fire_texture"] == EFFECT_FIRE_TEXTURES[0]
+    assert effect.properties["orb_texture"] == EFFECT_ORB_TEXTURES[0]
 
 
 def test_explode_input_forces_fire_to_explosion_and_never_reverts():
@@ -435,7 +513,11 @@ def test_effect_explode_io_plays_once_and_can_be_retriggered():
     table = EntityTable()
     table.begin_frame([explosion], epoch=1, effect_runtime=True)
 
-    assert get_input_names("effect") == ["SetType", "Explode"]
+    assert get_input_names("effect") == [
+        "SetType", "SetFireTexture", "SetOrbTexture",
+        "SetCustomGif", "SetLoop",
+        "Hide", "Show", "ToggleVisibility", "Explode",
+    ]
 
     io_manager = IOManager()
     register_all_input_handlers(io_manager)

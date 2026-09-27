@@ -260,6 +260,42 @@ def test_lights_and_entities_reach_the_render_state(logic):
     assert len(published.visible_things) == 2
 
 
+def test_entity_refs_follow_the_dense_snapshot_when_things_are_appended_mid_frame(logic, monkeypatch):
+    """A concurrent append must wait for the next table reconciliation.
+
+    The editor/benchmark can append to the live Thing list while the logic
+    thread is publishing. The EntityTable has already established the row set
+    for this frame, so reference publication must use its stable snapshot
+    rather than enumerate a list that has just grown.
+    """
+    thread = logic(things=[])
+    table_type = type(thread._entity_table)
+    original_begin_frame = table_type.begin_frame
+    monster = make_thing(Monster, "late_monster", (0, 96, -300))
+
+    def begin_frame_then_append(table, things, *args, **kwargs):
+        hidden = original_begin_frame(table, things, *args, **kwargs)
+        if table is thread._entity_table:
+            things.append(monster)
+        return hidden
+
+    monkeypatch.setattr(table_type, "begin_frame", begin_frame_then_append)
+
+    thread._prepare_render_state()
+
+    published = thread.game_state.get_write_state()
+    assert published.entity_table.count == 0
+    assert len(published.entity_refs) == 0
+
+    # The appended entity is reconciled normally on the next publication.
+    monkeypatch.setattr(table_type, "begin_frame", original_begin_frame)
+    thread._prepare_render_state()
+
+    published = thread.game_state.get_write_state()
+    assert published.entity_table.count == 1
+    assert published.entity_refs[0] is not None
+
+
 def test_visible_things_stays_lazy_until_an_object_consumer_reads_it(logic):
     lamp = make_thing(Light, "lamp", (100, 200, -300))
     monster = make_thing(Monster, "grunt", (-50, 96, -700))
@@ -462,6 +498,22 @@ def test_the_general_path_is_used_when_the_brush_set_changes_mid_session(logic):
         thread.set_play_mode(False)
 
 
+def test_a_new_threaded_state_exposes_empty_dense_projections():
+    """The renderer may paint before the first logic frame is published."""
+    game_state = ThreadedGameState()
+    state = game_state.get_render_state()
+
+    assert state.render_table is not None
+    assert state.render_table.count == 0
+    assert state.entity_table is not None
+    assert state.entity_table.count == 0
+    assert len(state.render_refs) == 0
+    assert len(state.visible_brush_slots) == 0
+    assert len(state.all_brush_slots) == 0
+    assert len(state.visible_thing_slots) == 0
+    assert len(state.thing_hidden) == 0
+
+
 # ---------------------------------------------------------------------------
 # Double buffering
 # ---------------------------------------------------------------------------
@@ -528,6 +580,24 @@ def test_a_render_state_snapshot_is_independent_of_later_writes():
     assert snapshot.hud_message == "one", (
         "a snapshot handed to the renderer changed when the next frame was "
         "published; it now reads %r" % snapshot.hud_message)
+
+
+def test_recycled_render_state_keeps_dense_projection_objects():
+    """Resetting a published buffer must not drop the dense renderer contract."""
+    game_state = ThreadedGameState()
+    initial_read = game_state.get_render_state()
+    render_table = initial_read.render_table
+    entity_table = initial_read.entity_table
+
+    game_state.request_swap()
+    recycled = game_state.get_write_state()
+
+    assert recycled.render_table is render_table
+    assert recycled.entity_table is entity_table
+    assert len(recycled.visible_brush_slots) == 0
+    assert len(recycled.all_brush_slots) == 0
+    assert len(recycled.visible_thing_slots) == 0
+    assert len(recycled.thing_hidden) == 0
 
 
 def test_the_published_brush_lists_are_not_materialised_unless_read(logic):

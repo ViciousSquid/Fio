@@ -626,7 +626,7 @@ class EntityTable:
                  'portal_direction', 'portal_width_height', 'portal_basis',
                  'portal_fade', 'portal_color', 'portal_show_rim',
                  'monster_slots', 'pickup_slots', 'effect_slots',
-                 'effect_type', 'effect_fire_variant', 'effect_custom_id', 'effect_preview', 'effect_params', 'effect_color',
+                 'effect_type', 'effect_fire_variant', 'effect_custom_id', 'effect_custom_loop', 'effect_preview', 'effect_params', 'effect_color',
                  'effect_light_color', 'effect_light_enabled', 'effect_lifetime', 'effect_seed',
                   'effect_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
                  'sprite_size', 'sprite_key_id', '_sprite_state',
@@ -686,6 +686,7 @@ class EntityTable:
         self.effect_type = np.zeros((0,), dtype=np.uint8)
         self.effect_fire_variant = np.zeros((0,), dtype=np.uint8)
         self.effect_custom_id = np.zeros((0,), dtype=np.int32)
+        self.effect_custom_loop = np.ones((0,), dtype=bool)
         self.effect_preview = np.zeros((0,), dtype=bool)
         self.effect_params = np.zeros((0, 4), dtype=np.float32)
         self.effect_color = np.ones((0, 3), dtype=np.float32)
@@ -844,6 +845,11 @@ class EntityTable:
         if len(self.effect_custom_id):
             effect_custom_id[:len(self.effect_custom_id)] = self.effect_custom_id
         self.effect_custom_id = effect_custom_id
+
+        effect_custom_loop = np.ones((grown,), dtype=bool)
+        if len(self.effect_custom_loop):
+            effect_custom_loop[:len(self.effect_custom_loop)] = self.effect_custom_loop
+        self.effect_custom_loop = effect_custom_loop
 
         effect_preview = np.zeros((grown,), dtype=bool)
         if len(self.effect_preview):
@@ -1242,7 +1248,7 @@ class EntityTable:
                         self.model_recipe_id, self.model_base_matrix,
                         self.model_normal_matrix, self.effect_type,
                         self.effect_fire_variant, self.effect_custom_id,
-                        self.effect_params, self.effect_color,
+                        self.effect_custom_loop, self.effect_params, self.effect_color,
                         self.effect_light_color, self.effect_light_enabled, self.effect_lifetime,
                          self.effect_seed, self.effect_spawn_time,
                         self.effect_elapsed, self.effect_active,
@@ -1360,6 +1366,9 @@ class EntityTable:
                 if effect_type == 'CUSTOM'
                 else 0
             )
+            self.effect_custom_loop[slot] = _effect_bool(
+                props, 'custom_loop', True
+            )
             self.effect_preview[slot] = _effect_bool(
                 props, 'preview', False
             )
@@ -1418,6 +1427,7 @@ class EntityTable:
             self.effect_type[slot] = 0
             self.effect_fire_variant[slot] = 0
             self.effect_custom_id[slot] = 0
+            self.effect_custom_loop[slot] = True
             self.effect_preview[slot] = False
             self.effect_params[slot].fill(0.0)
             self.effect_color[slot] = 1.0

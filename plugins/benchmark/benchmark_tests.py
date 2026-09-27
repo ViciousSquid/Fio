@@ -45,11 +45,11 @@ class BenchmarkTests:
                 return float(self._requested_duration)
             return self._player_area_sweep_duration()
         return {
-            "live_io_1000": 2.0,
-            "live_1000_brushes": 3.0,
-            "live_10000_brushes": 3.0,
-            "live_100000_brushes": 2.0,
-            "monster_chaos_witness": 15.0,
+            "live_io_1000": 4.0,
+            "live_1000_brushes": 6.0,
+            "live_10000_brushes": 6.0,
+            "live_100000_brushes": 4.0,
+            "monster_chaos_witness": 35.0,
         }.get(label, 3.0)
     
     
@@ -240,6 +240,51 @@ class BenchmarkTests:
     
     
 
+    def _focus_camera_on_brush_batch(self, batch):
+        """Keep the live construction frontier inside the benchmark camera."""
+        if not batch:
+            return
+
+        first = batch[0]
+        pos = first.get("pos") or [0.0, 0.0, 0.0]
+        target_x = float(pos[0])
+        target_y = float(pos[1])
+        target_z = float(pos[2])
+
+        camera = self.main_window.view_3d.camera
+        current_yaw = float(camera.yaw)
+        yaw_rad = math.radians(current_yaw)
+
+        # Put the camera a fixed distance behind the frontier along its current
+        # horizontal facing direction, then aim directly at the first newly
+        # constructed brush. The camera therefore follows the construction
+        # frontier without depending on the batch's overall spatial extent.
+        distance = 700.0
+        forward_x = math.cos(yaw_rad)
+        forward_z = math.sin(yaw_rad)
+        camera_x = target_x - forward_x * distance
+        camera_z = target_z - forward_z * distance
+        camera_y = target_y + 350.0
+
+        horizontal = max(
+            1.0,
+            math.hypot(target_x - camera_x, target_z - camera_z),
+        )
+        look_yaw = math.degrees(
+            math.atan2(target_z - camera_z, target_x - camera_x)
+        )
+        look_pitch = math.degrees(
+            math.atan2(target_y - camera_y, horizontal)
+        )
+
+        self._set_benchmark_camera(
+            camera_x,
+            camera_z,
+            camera_y,
+            look_yaw,
+            look_pitch,
+        )
+
     def _live_cooperative_yield(self, label):
         """Yield from long live-test batches without leaving the Qt thread."""
         self._monitor_beat(label, deadline=self._preparation_deadline)
@@ -300,7 +345,96 @@ class BenchmarkTests:
         )
 
 
+    def _spawn_monster_chaos_entity(self, logic, rng, team, position, spawn_index, monster_type=None):
+        """Insert one live Monster and rebuild the same cache used by LogicSpawner."""
+        from editor.things import Monster
+
+        if monster_type is None:
+            monster_type = rng.choice(("human", "flying"))
+
+        props = {
+            "name": "MonsterChaos_%03d" % int(spawn_index),
+            "monster_id": int(spawn_index),
+            "monster_type": str(monster_type),
+            "health": 100,
+            "damage": 10,
+            "awake": True,
+            "wake_on_sight": True,
+            "dead": False,
+            "team": str(team),
+            "variant": "<None>",
+            "patrol": False,
+            "is_shooting": False,
+        }
+        if monster_type == "flying":
+            position = [float(position[0]), max(160.0, float(position[1])), float(position[2])]
+        else:
+            position = [float(position[0]), max(96.0, float(position[1])), float(position[2])]
+
+        monster = Monster(pos=position, properties=props)
+        with logic._monster_lock:
+            logic.editor_state.things.append(monster)
+            logic._build_entity_caches()
+        return monster
+
+    def _monster_chaos_random_position(self, rng, monster_type):
+        """Choose a safe point inside the 1024^3 witness room."""
+        x = rng.uniform(-400.0, 400.0)
+        z = rng.uniform(-400.0, 400.0)
+        if monster_type == "flying":
+            y = rng.uniform(160.0, 320.0)
+        else:
+            y = 128.0
+        return [x, y, z]
+
+    def _face_monster_chaos_camera(self, logic, monster):
+        """Aim the Play camera at the first witness monster."""
+        player = getattr(logic, "player", None)
+        if player is None:
+            raise RuntimeError("Monster chaos witness has no live player")
+
+        dx = float(monster.pos[0]) - float(player.pos.x)
+        dy = float(monster.pos[1]) - (float(player.pos.y) + float(player.camera_height))
+        dz = float(monster.pos[2]) - float(player.pos.z)
+        horizontal = max(1e-6, math.hypot(dx, dz))
+        player.angle = math.atan2(dx, dz)
+        player.pitch = math.atan2(dy, horizontal)
+
+        camera = getattr(self.main_window.view_3d, "camera", None)
+        if camera is not None:
+            camera.pos = getattr(camera, "pos", player.pos)
+            camera.yaw = math.degrees(player.angle)
+            camera.pitch = math.degrees(player.pitch)
+
+    def _wait_for_dense_brush_projection(self, label, expected_count):
+        """Wait until the live renderer has published the requested brush table."""
+        view = self.main_window.view_3d
+        deadline = time.perf_counter() + self._preparation_timeout_s
+        while time.perf_counter() < deadline:
+            state = view.game_state.get_render_state()
+            table = getattr(state, "render_table", None)
+            slots = getattr(state, "all_brush_slots", None)
+            entity_table = getattr(state, "entity_table", None)
+            hidden = getattr(state, "thing_hidden", None)
+            if (
+                table is not None
+                and int(getattr(table, "count", -1)) == int(expected_count)
+                and slots is not None
+                and len(slots) == int(expected_count)
+                and entity_table is not None
+                and hidden is not None
+                and len(hidden) >= int(getattr(entity_table, "count", 0))
+            ):
+                return
+            self._live_cooperative_yield(label)
+        raise TimeoutError(
+            "%s did not publish its dense RenderTable (%d brush rows) "
+            "within %.0f s."
+            % (label, int(expected_count), self._preparation_timeout_s)
+        )
+
     def _run_live_stress_test(self, label, value):
+
         """Prepare a live stress test; _tick drives the real workload."""
         bench = self._bench
         window = self.main_window
@@ -313,6 +447,12 @@ class BenchmarkTests:
         self._live_stress_label = label
         self._live_stress_value = value
         self._live_io_elapsed = None
+        self._live_io_samples = []
+        self._live_io_fires = 0
+        self._live_io_hops = 0
+        self._live_io_next_fire = 0.0
+        self._live_io_manager = None
+        self._live_io_source = None
         self._live_stress_timeout = False
         self._live_stress_timeout_reason = ""
         self._start_live_stress_monitor(label)
@@ -331,28 +471,78 @@ class BenchmarkTests:
                     "live_10000_brushes": 10000,
                     "live_100000_brushes": 100000,
                 }[label]
-                # Use Fio's NumPy-assisted scene builder and load the resulting
-                # level data into the existing EditorState.
-                data = bench._make_brush_stress_scene(
-                    brush_count,                    yield_hook=cooperative_yield,
+                # Keep the smaller workloads finely staged, but let the
+                # 100K workload move in moderately larger chunks so construction
+                # does not spend most of its time crossing the live-publish
+                # boundary. This is still small enough to keep the renderer and
+                # Qt event loop responsive between insertions.
+                batch_size = 1000 if brush_count >= 100000 else 500
+                batch_count = int(math.ceil(brush_count / float(batch_size)))
+                self._preparation_deadline = max(
+                    self._preparation_deadline,
+                    time.perf_counter() + batch_count * 3.0 + 60.0,
+                )
+
+                camera = getattr(view, "camera", None)
+                camera_position = None
+                camera_yaw = None
+                if camera is not None:
+                    camera_position = (
+                        float(camera.pos.x),
+                        float(camera.pos.y),
+                        float(camera.pos.z),
+                    )
+                    camera_yaw = float(camera.yaw)
+
+                data, brush_batches = bench._prepare_brush_stress_scene(
+                    brush_count,
+                    yield_hook=cooperative_yield,
+                    camera_position=camera_position,
+                    camera_yaw=camera_yaw,
+                    batch_size=batch_size,
                 )
                 bench.load_live_benchmark_world(
                     window,
                     data,
                     yield_hook=cooperative_yield,
                 )
+
+                created = 0
+                for batch_index, batch in enumerate(brush_batches, 1):
+                    # Follow the construction frontier so the user can actually
+                    # watch each batch appear rather than only seeing the first
+                    # camera-facing part of the generated scene.
+                    self._focus_camera_on_brush_batch(batch)
+                    window.state.brushes.extend(batch)
+                    # RenderTable reconciliation already detects the changing
+                    # row count; do not bump world_epoch for every batch.
+                    created += len(batch)
+
+                    # Give the live renderer, Qt views and editor hierarchy a
+                    # chance to consume the intermediate dense projection.
+                    QApplication.processEvents()
+                    cooperative_yield()
+
+                # The renderer consumes the published dense projection, not
+                # EditorState.brushes directly. Wait for the LogicThread to publish
+                # this exact workload before the timed phase begins; otherwise the
+                # first frames after a scene rebuild can still contain the previous
+                # empty/interstitial projection.
+                self._wait_for_dense_brush_projection(label, brush_count)
                 # Do not recenter the camera here; the scene itself must remain
                 # visible through the real 2D and 3D editor views during preparation.
                 QApplication.processEvents()
+                self._prepare_player_area_sweep()
                 self._append(
-                    "  Live brush scene: created %d real brushes with varied dimensions."
+                    "  Live brush scene: created %d real brushes with varied dimensions; "
+                    "camera sweep will exercise culling and dense RenderTable key sorting."
                     % brush_count
                 )
             elif label == "monster_chaos_witness":
                 cooperative_yield = lambda: self._live_cooperative_yield(label)
                 data, chaos_info = bench.make_monster_chaos_witness_world(
                     seed="43",
-                    monster_count=50,
+                    monster_count=40,
                     yield_hook=cooperative_yield,
                 )
                 bench.load_live_benchmark_world(
@@ -379,41 +569,54 @@ class BenchmarkTests:
                     raise RuntimeError(
                         "Monster chaos witness has no live LogicThread"
                     )
+
+                # God mode protects the benchmark player while the real MonsterAI
+                # remains fully active and is allowed to target opposing teams.
                 logic.god_mode = True
-                logic.notarget = True
+                logic.notarget = False
+                self._install_monster_chaos_ai_counter(logic)
 
-                self._monster_chaos_aggro_injected = False
-                self._monster_chaos_fighters = []
-                self._monster_chaos_aggro_delay = 2.0
+                import random
+                rng = random.Random("43")
+                self._monster_chaos_rng = rng
+                self._monster_chaos_spawn_index = 0
+                self._monster_chaos_total = 0
+                self._monster_chaos_phase = "team1"
                 self._monster_chaos_info = dict(chaos_info)
-                self._show_monster_chaos_overlay(10.0)
-                self._append(
-                    "  Monster chaos witness: seed 43, 50 mixed monsters (30 human / 20 flying) in two hostile teams, "
-                    "PathNode '%s'. All monsters are converging; infighting "
-                    "will be injected after %.1f seconds."
-                    % (
-                        self._html_escape(
-                            self._monster_chaos_info.get(
-                                "pathnode_name", "ChaosPathNode"
-                            )
-                        ),
-                        self._monster_chaos_aggro_delay,
+                self._monster_chaos_measurement_started = 0.0
+                self._monster_chaos_measurement_deadline = 0.0
+                self._monster_chaos_ai_counting = False
+
+                first_monster = None
+                team1_z = (-64.0, -32.0, 0.0, 32.0, 64.0)
+                for z in team1_z:
+                    monster_type = rng.choice(("human", "flying"))
+                    monster_y = 128.0 if monster_type == "human" else 192.0
+                    monster = self._spawn_monster_chaos_entity(
+                        logic,
+                        rng,
+                        "team1",
+                        [384.0 + rng.uniform(-8.0, 8.0), monster_y, z],
+                        self._monster_chaos_spawn_index,
+                        monster_type=monster_type,
                     )
-                )
+                    self._monster_chaos_spawn_index += 1
+                    self._monster_chaos_total += 1
+                    if first_monster is None:
+                        first_monster = monster
 
-                self._current = ("monster_chaos_witness", 10.0, None)
-                self._phase_started = time.perf_counter()
-                self._measurement_deadline = self._phase_started + 10.0
-                self._measurement_watchdog_deadline = (
-                    self._phase_started + self._live_stress_timeout_for(label)
-                )
-                self._measurement_active = True
-                self._sysmon_samples = []
-                self._last_sysmon_sample = 0.0
-                view.update()
-                QApplication.processEvents()
-                self._timer.start()
+                if first_monster is None:
+                    raise RuntimeError("Monster chaos witness failed to create its first monster")
+                self._face_monster_chaos_camera(logic, first_monster)
 
+                self._append(
+                    "  Monster witness: 1024x1024x1024 room, PlayerStart at one end, "
+                    "5 team1 monsters staged at the opposite end; god mode enabled."
+                )
+                self._append(
+                    "  Population schedule: +5 team2 monsters at 0.5s, then +2 random-team "
+                    "monsters every 0.25s until 40."
+                )
             elif label == "live_io_1000":
                 cooperative_yield = lambda: self._live_cooperative_yield(label)
                 data = bench._generate_procedural_map(
@@ -448,39 +651,21 @@ class BenchmarkTests:
                     ),
                 )
     
+                # Keep the source and live dispatcher for repeated timed fires.
+                # Each burst is a real 1,000-entity serialized LogicRelay chain
+                # owned by the running LogicThread; the measurement phase below
+                # repeatedly exercises it while Fio is otherwise running normally.
+                self._live_io_manager = io_manager
+                self._live_io_source = first
+                self._live_io_hops = max(0, len(relays) - 1)
+                self._live_io_next_fire = 0.0
+                self._live_io_samples = []
+                self._live_io_fires = 0
+
                 self._append(
-                    "  Live I/O: firing OnTrigger through %d real LogicRelay entities..."
+                    "  Live I/O: prepared %d real LogicRelay entities; "
+                    "the source chain will be fired repeatedly during measurement."
                     % len(relays)
-                )
-    
-                import editor.io_system as _io_system
-                old_debug = _io_system.IO_DEBUG_ENABLED
-                old_limit = sys.getrecursionlimit()
-
-                _io_system.IO_DEBUG_ENABLED = False
-                sys.setrecursionlimit(max(old_limit, 10000))
-                try:
-                    io_manager.reset()
-                    start = time.perf_counter()
-                    io_manager.fire_output(first, "OnTrigger")
-                    completed = True
-                    self._live_io_elapsed = time.perf_counter() - start
-                finally:
-                    _io_system.IO_DEBUG_ENABLED = old_debug
-                    sys.setrecursionlimit(old_limit)
-
-                if not completed or self._live_stress_timeout:
-                    self._abort_live_stress(
-                        self._live_stress_timeout_reason or
-                        ("%s exceeded its %.1f s live benchmark timeout. "
-                         "The benchmark was stopped without terminating Fio."
-                         % (label, self._live_stress_timeout_for(label)))
-                    )
-                    return
-    
-                self._append(
-                    "  Live I/O: completed %d LogicRelay hops in %.3f ms."
-                    % (len(relays), self._live_io_elapsed * 1000.0)
                 )
     
             else:
@@ -494,6 +679,12 @@ class BenchmarkTests:
                 self._phase_started + self._live_stress_timeout_for(label)
             )
             self._measurement_active = True
+            if label == "monster_chaos_witness":
+                self._monster_chaos_phase = "team2_wait"
+                self._monster_chaos_next_spawn = self._phase_started + 0.5
+                self._monster_chaos_measurement_started = 0.0
+                self._monster_chaos_measurement_deadline = 0.0
+                self._monster_chaos_ai_counting = False
             view.update()
             QApplication.processEvents()
             self._timer.start()

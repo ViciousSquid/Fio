@@ -39,6 +39,7 @@ EFFECT_DEFAULTS = {
     "fire_texture": EFFECT_FIRE_TEXTURES[0],
     "orb_texture": EFFECT_ORB_TEXTURES[0],
     "custom_gif": "",
+    "custom_loop": True,
     "width": 32.0,
     "height": 46.0,
     "intensity": 1.0,
@@ -116,6 +117,10 @@ class Effect(_ThingBase):
 
         custom_gif = str(self.properties.get("custom_gif", "")).strip().replace("\\", "/")
         self.properties["custom_gif"] = custom_gif
+        custom_loop = self.properties.get("custom_loop", True)
+        if isinstance(custom_loop, str):
+            custom_loop = custom_loop.strip().lower() in ("1", "true", "yes", "on")
+        self.properties["custom_loop"] = bool(custom_loop)
         self.properties["silent"] = str(self.properties.get("silent", False)).strip().lower() in ("1", "true", "yes", "on") if isinstance(self.properties.get("silent"), str) else bool(self.properties.get("silent", False))
 
         try:

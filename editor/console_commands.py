@@ -80,6 +80,8 @@ class ConsoleCommandHandler:
             'teleport': self.cmd_setpos,
             'ss': self.cmd_split_screen,
             'showglasses': self.cmd_show_glasses,
+            'message': self.cmd_message,
+            'message2': self.cmd_message2,
 
             'cam': self.cmd_cam,
             'camera': self.cmd_cam,
@@ -743,6 +745,39 @@ class ConsoleCommandHandler:
         debug_log("Info", f"Deleted portal(s): {', '.join(deleted)}")
         self.main_window.update_all_ui()
 
+    def _cmd_view_message(self, args, line):
+        """Draw a transient message in one of the two play-view message lines."""
+        text = (args or "").strip()
+        if len(text) >= 2 and text[0] in ('"', "'") and text[-1] == text[0]:
+            text = text[1:-1].strip()
+        if not text:
+            debug_log("Error", f'Usage: message{line} "text"')
+            return
+
+        view_3d = getattr(self.main_window, 'view_3d', None)
+        if view_3d is None or not getattr(view_3d, 'play_mode', False):
+            debug_log("Error", f"message{line} is only available in Play Mode.")
+            return
+
+        show_message = getattr(
+            view_3d,
+            "show_view_message2" if line == "2" else "show_view_message",
+            None,
+        )
+        if not callable(show_message):
+            debug_log("Error", "3D view message support is unavailable.")
+            return
+
+        show_message(text[:50])
+
+    def cmd_message(self, args):
+        """Draw a transient message on the first play-view message line."""
+        self._cmd_view_message(args, "")
+
+    def cmd_message2(self, args):
+        """Draw a transient message on the second play-view message line."""
+        self._cmd_view_message(args, "2")
+
     def cmd_help(self, args):
         
         sep = '<span style="color:white;"> / </span>'
@@ -753,6 +788,8 @@ class ConsoleCommandHandler:
 <b style="color:orange;">clear</b> — Clear console<br>
 <b style="color:orange;">help</b> — Show this help<br>
 <b style="color:orange;">fps</b> — Toggle FPS display<br>
+<b style="color:orange;">message</b> &quot;text&quot; — Show a timed message on the first play-view line<br>
+<b style="color:orange;">message2</b> &quot;text&quot; — Show a timed message on the second play-view line<br>
 <b style="color:orange;">map</b> &lt;name&gt; — Load a different map<br>
 <b style="color:cyan;">=== Save / Load (Play Session) ===</b><br>
 <b style="color:orange;">save</b> [name] — Save the current play session (Play Mode only)<br>

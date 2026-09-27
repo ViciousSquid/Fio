@@ -328,6 +328,7 @@ class LogicThread(threading.Thread):
         
         # Interaction State
         self.current_hud_message = ""
+        self.current_hud_key_name = None
 
         # Water sound state (enter/exit transition + wade footstep cadence)
         self._player_was_in_water = False
@@ -1082,6 +1083,7 @@ class LogicThread(threading.Thread):
             self.active_speakers.clear()
             self.hurt_trigger_timers.clear()
             self.current_hud_message = ""
+            self.current_hud_key_name = None
 
             # Reset water sound state (no spurious enter/exit on spawn)
             self._player_was_in_water = False
@@ -1196,6 +1198,7 @@ class LogicThread(threading.Thread):
             self._physics_body_brushes = []
             self._refresh_collision_brushes_cache()
             self.current_hud_message = ""
+            self.current_hud_key_name = None
             self.gate_inputs = {}
             self.timer_states = {}
             self.light_fade_states.clear()
@@ -2883,6 +2886,7 @@ class LogicThread(threading.Thread):
 
     def _handle_interactions(self, use_key_pressed: bool):
         self.current_hud_message = ""
+        self.current_hud_key_name = None
         reach_distance = 80.0
         px, py, pz = self.player.pos
         
@@ -2923,14 +2927,15 @@ class LogicThread(threading.Thread):
                         door_consumed_use = use_key_pressed
                     elif needs_key:
                         has_key = key_name in self.collected_keys
-                        pretty_key_name = key_name.replace('_', ' ').title() if key_name else "Key"
                         if has_key:
-                            self.current_hud_message = f"[E] Unlock ({pretty_key_name})"
+                            self.current_hud_message = "[E] Use"
+                            self.current_hud_key_name = key_name or None
                             if use_key_pressed:
                                 self._trigger_door_open(found_door_idx, found_door_brush)
                                 door_consumed_use = True
                         else:
-                            self.current_hud_message = f"NEED: {pretty_key_name}"
+                            self.current_hud_message = "Need"
+                            self.current_hud_key_name = key_name or None
                     else:
                         self.current_hud_message = "[E] Open"
                         if use_key_pressed:
@@ -3893,6 +3898,7 @@ class LogicThread(threading.Thread):
             write_state.player_underwater = False
         write_state.collected_keys = set(self.collected_keys)
         write_state.hud_message = self.current_hud_message
+        write_state.hud_prompt_key = self.current_hud_key_name
         write_state.active_weapon = self.active_weapon
         write_state.muzzle_flash_active = self.muzzle_flash_active
         write_state.camera_transition_active = bool(self.camera_transition)
@@ -3939,10 +3945,14 @@ class LogicThread(threading.Thread):
         # and an unannounced change to the row set.
         live_hidden = table.begin_frame(
             brushes, world_epoch, dirty_objects=render_dirty)
-        if table.generation != generation:
+        if (table.generation != generation
+                or len(self._render_refs) != table.count):
+            # RenderTable owns the stable row snapshot for this publication.
+            # The live EditorState.brushes list may grow during benchmark
+            # insertion, so never enumerate it after the table has reconciled.
             refs = np.empty(table.count, dtype=object)
-            for i, b in enumerate(brushes):
-                refs[i] = b
+            for i, brush in enumerate(table.brushes):
+                refs[i] = brush
             self._render_refs = refs
         refs = self._render_refs
         total_count = table.count
@@ -4009,23 +4019,35 @@ class LogicThread(threading.Thread):
         # What used to be one Python pass per entity per frame -- two NumPy
         # scalar stores, three isinstance tests and a list append each -- is a
         # bulk position store, a live `hidden` read, and masks over columns.
-        things = self.things
-        etable = self._entity_table
-        entity_generation = etable.generation
-        thing_hidden = etable.begin_frame(
-            things,
-            world_epoch,
-            dirty_objects=render_dirty,
-            effect_runtime=self.play_mode,
-        )
-        if etable.generation != entity_generation:
-            erefs = np.empty(etable.count, dtype=object)
-            for i, t in enumerate(things):
-                erefs[i] = t
-            self._entity_refs = erefs
-            self._entity_all_slots = np.arange(etable.count, dtype=np.int32)
-        erefs = self._entity_refs
-        thing_count = etable.count
+        # Monster benchmark/editor mutations already use this lock when they
+        # mutate EditorState.things. Hold the same lock through the table
+        # reconciliation and reference publication so the live list cannot
+        # change between those two operations. This avoids taking a full
+        # per-frame Python copy of the entity list.
+        with self._monster_lock:
+            things = self.things
+            etable = self._entity_table
+            entity_generation = etable.generation
+            thing_hidden = etable.begin_frame(
+                things,
+                world_epoch,
+                dirty_objects=render_dirty,
+                effect_runtime=self.play_mode,
+            )
+            if (etable.generation != entity_generation
+                    or len(self._entity_refs) != etable.count):
+                # EntityTable owns the stable row snapshot for this publication.
+                # Do not enumerate the live list again here: benchmark/editor
+                # code can mutate it from another thread immediately after the
+                # lock is released.
+                entity_refs = np.empty(etable.count, dtype=object)
+                for i, thing in enumerate(etable.things):
+                    entity_refs[i] = thing
+                self._entity_refs = entity_refs
+                self._entity_all_slots = np.arange(etable.count, dtype=np.int32)
+            erefs = self._entity_refs
+            entity_things = etable.things
+            thing_count = etable.count
 
         self.editor_state.clear_render_dirty(render_dirty_snapshot)
 
@@ -4034,7 +4056,7 @@ class LogicThread(threading.Thread):
         # rows are the entity table's dynamic rows, and refreshing them is the
         # only per-entity work left that is not a column operation.
         for i in etable.monster_slots:
-            snapshot = things[i].get_render_snapshot()
+            snapshot = entity_things[i].get_render_snapshot()
             erefs[i] = snapshot
             etable.update_monster_snapshot(int(i), snapshot)
 
@@ -4072,7 +4094,9 @@ class LogicThread(threading.Thread):
 
         write_state.visible_things = visible_things
         write_state.visible_thing_position_count = visible_count
-        write_state.all_things = list(things)
+        # Keep the compatibility object list aligned with the exact dense
+        # entity snapshot that produced the published slots.
+        write_state.all_things = list(entity_things)
         write_state.all_lights = all_lights
         # Portal existence is a numeric projection fact; the renderer reads
         # the published portal slot vector directly.

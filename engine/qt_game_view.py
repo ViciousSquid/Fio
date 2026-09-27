@@ -1,6 +1,7 @@
 import time
 import os
 import math
+from collections import deque
 import numpy as np
 import ctypes
 from typing import Optional
@@ -434,10 +435,22 @@ class QtGameView(QOpenGLWidget):
 
         self._cached_hud_message = None
         self._cached_hud_message_width = 0
+        self._view_message_text = ""
+        self._view_message_started_at = 0.0
+        self._view_message_width = 0
+        self._view_message_queue = deque()
+        self._view_message2_text = ""
+        self._view_message2_started_at = 0.0
+        self._view_message2_width = 0
+        self._view_message2_queue = deque()
         self._cached_gun_hud = {}
         self._cached_weapon_pickup = {}   # (item_type, size) -> scaled QPixmap
         self._cached_key_pixmaps = {}
         self._cached_key_size = 100
+        self._cached_prompt_key = None
+        self._cached_prompt_key_pixmap = None
+        self._cached_prompt_key_loaded = False
+        self._cached_prompt_key_size = 64
 
         self._key_fallback_cache = {
             'blue_key':   (QColor(50, 100, 200), QPen(QColor(40, 80, 160), 2), QBrush(QColor(50, 100, 200))),
@@ -470,6 +483,124 @@ class QtGameView(QOpenGLWidget):
 
         self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
 
+
+    def _start_view_message(self, text: str):
+        """Start displaying one transient message-1 immediately."""
+        self._view_message_text = text
+        self._view_message_started_at = time.perf_counter()
+        self._view_message_width = QFontMetrics(
+            self._hud_msg_font
+        ).horizontalAdvance(text)
+
+    def show_view_message(self, text: str):
+        """Show a message-1, queueing it behind the current message-1."""
+        text = str(text).strip()[:50]
+        if not text:
+            return
+
+        if self._view_message_text:
+            elapsed = time.perf_counter() - self._view_message_started_at
+            if elapsed < 7.0 or self._view_message_queue:
+                self._view_message_queue.append(text)
+                self.update()
+                return
+
+        self._start_view_message(text)
+        self.update()
+
+    def _start_view_message2(self, text: str):
+        """Start displaying one transient message-2 immediately."""
+        self._view_message2_text = text
+        self._view_message2_started_at = time.perf_counter()
+        self._view_message2_width = QFontMetrics(
+            self._hud_msg_font
+        ).horizontalAdvance(text)
+
+    def show_view_message2(self, text: str):
+        """Show a message-2, queueing it behind the current message-2."""
+        text = str(text).strip()[:50]
+        if not text:
+            return
+
+        if self._view_message2_text:
+            elapsed = time.perf_counter() - self._view_message2_started_at
+            if elapsed < 7.0 or self._view_message2_queue:
+                self._view_message2_queue.append(text)
+                self.update()
+                return
+
+        self._start_view_message2(text)
+        self.update()
+
+    def _draw_queued_view_message(
+        self, painter, viewport_width, viewport_height,
+        text, started_at, width, queue, start_message, lower_line=False
+    ):
+        """Draw one queued transient message and return its active state."""
+        if not text:
+            return text, started_at, width
+
+        elapsed = time.perf_counter() - started_at
+        if elapsed >= 7.0:
+            if queue:
+                text = queue.popleft()
+                start_message(text)
+                started_at = time.perf_counter()
+                elapsed = 0.0
+                width = QFontMetrics(self._hud_msg_font).horizontalAdvance(text)
+            else:
+                return "", 0.0, 0
+
+        if elapsed < 1.0:
+            opacity = elapsed
+        elif elapsed < 6.0:
+            opacity = 1.0
+        else:
+            opacity = 1.0 - (elapsed - 6.0)
+
+        cx = viewport_width // 2
+        held_item_row_top = viewport_height - 20 - 100
+        line_height = QFontMetrics(self._hud_msg_font).height() + 2
+        baseline = held_item_row_top - 12 - line_height
+        if lower_line:
+            baseline += line_height
+
+        painter.save()
+        painter.setOpacity(max(0.0, min(1.0, opacity)))
+        painter.setFont(self._hud_msg_font)
+        painter.setPen(self._hud_shadow_pen)
+        painter.drawText(cx - width // 2 + 2, baseline + 2, text)
+        painter.setPen(self._hud_grey_pen)
+        painter.drawText(cx - width // 2, baseline, text)
+        painter.restore()
+        return text, started_at, width
+
+    def _draw_view_message(self, painter, viewport_width, viewport_height):
+        """Draw message-1 one line above message-2 / held-item HUDs."""
+        self._view_message_text, self._view_message_started_at, self._view_message_width = (
+            self._draw_queued_view_message(
+                painter, viewport_width, viewport_height,
+                self._view_message_text,
+                self._view_message_started_at,
+                self._view_message_width,
+                self._view_message_queue,
+                self._start_view_message,
+            )
+        )
+
+    def _draw_view_message2(self, painter, viewport_width, viewport_height):
+        """Draw message-2 directly underneath message-1."""
+        self._view_message2_text, self._view_message2_started_at, self._view_message2_width = (
+            self._draw_queued_view_message(
+                painter, viewport_width, viewport_height,
+                self._view_message2_text,
+                self._view_message2_started_at,
+                self._view_message2_width,
+                self._view_message2_queue,
+                self._start_view_message2,
+                lower_line=True,
+            )
+        )
 
     def _clear_play_mode_hint(self):
         self._play_mode_hint = ""
@@ -1482,6 +1613,10 @@ class QtGameView(QOpenGLWidget):
             self._draw_death_screen(painter)
         if self.play_mode and getattr(self, '_cached_level_complete_ui', None):
             self._draw_level_complete_overlay(painter)
+        if self.play_mode:
+            self._draw_view_message(painter, self.width(), self.height())
+            self._draw_view_message2(painter, self.width(), self.height())
+
         if self.sysmon.is_active():
             self.sysmon.draw(
                 painter, self.fps, self.logic_thread, self.renderer,
@@ -1637,6 +1772,7 @@ class QtGameView(QOpenGLWidget):
             painter.drawLine(cx - size, cy, cx + size, cy)
             painter.drawLine(cx, cy - size, cx, cy + size)
         msg = getattr(self, '_cached_hud_message', '')
+        prompt_key = getattr(render_state, 'hud_prompt_key', None) if render_state is not None else None
         if msg:
             if self._cached_hud_message != msg:
                 self._cached_hud_message = msg
@@ -1649,6 +1785,39 @@ class QtGameView(QOpenGLWidget):
             painter.drawText(cx - tw // 2 + 2, cy + 2, msg)
             painter.setPen(self._hud_grey_pen)
             painter.drawText(cx - tw // 2, cy, msg)
+
+            if prompt_key:
+                prompt_size = self._cached_prompt_key_size
+                if self._cached_prompt_key != prompt_key:
+                    self._cached_prompt_key = prompt_key
+                    self._cached_prompt_key_pixmap = None
+                    self._cached_prompt_key_loaded = False
+                if not self._cached_prompt_key_loaded:
+                    self._cached_prompt_key_loaded = True
+                    try:
+                        pixmap = Pickup.get_key_pixmap(prompt_key)
+                        if pixmap and not pixmap.isNull():
+                            self._cached_prompt_key_pixmap = pixmap.scaled(
+                                prompt_size, prompt_size,
+                                Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    except Exception:
+                        self._cached_prompt_key_pixmap = None
+                if (self._cached_prompt_key_pixmap is not None
+                        and not self._cached_prompt_key_pixmap.isNull()):
+                    scaled = self._cached_prompt_key_pixmap
+                    painter.drawPixmap(
+                        cx - scaled.width() // 2,
+                        cy + 10,
+                        scaled,
+                    )
+                else:
+                    self._draw_key_fallback(
+                        painter,
+                        prompt_key,
+                        cx - prompt_size // 2,
+                        cy + 10,
+                        prompt_size,
+                    )
         hint = getattr(self, '_play_mode_hint', '')
         if hint and not msg:
             if self._cached_hint_text != hint:

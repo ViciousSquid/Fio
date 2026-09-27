@@ -455,22 +455,25 @@ def _make_renderer_stress_scene():
     return state.brushes, state.things
 
 
-def _make_brush_stress_scene(brush_count, yield_hook=None):
-    """Create a visible field of real Fio brushes with varied dimensions.
+def _prepare_brush_stress_scene(
+    brush_count,
+    yield_hook=None,
+    camera_position=None,
+    camera_yaw=None,
+    batch_size=500,
+):
+    """Prepare scene data and a lazy camera-aware brush batch factory.
 
-    The brushes stay spatially bounded so the generated workload remains
-    visible in the editor instead of marching hundreds of thousands of units
-    away from the camera.  The source map still supplies real Fio brush
-    dictionaries/textures, while deterministic scaling makes the generated
-    brushes visibly different sizes.
+    The live benchmark inserts fixed-size batches into EditorState so the real
+    3D view and LogicThread get time between staging steps. Tile order is biased
+    toward the camera's forward half-space, so the first published batches are
+    immediately useful to the live 3D renderer instead of beginning at an
+    arbitrary far corner of the stress grid.
     """
     import copy
     import math
     import numpy as np
 
-    # Brush stress is a brush/editor workload. Do not inject the LogicRelay
-    # graph used by the I/O benchmarks; those entities add unrelated Thing/I/O
-    # work and make the brush test misleading.
     data = _generate_procedural_map(
         monsters=0,
         relay_count=0,
@@ -483,10 +486,8 @@ def _make_brush_stress_scene(brush_count, yield_hook=None):
     brush_count = int(brush_count)
     if brush_count <= 0:
         data["brushes"] = []
-        return data
+        return data, iter(())
 
-    # Keep the authored scene and its PlayerStart together.  The generated
-    # source map is shifted so its first brush field is centred on PlayerStart.
     player_start = next(
         (
             thing for thing in data.get("things", [])
@@ -494,8 +495,9 @@ def _make_brush_stress_scene(brush_count, yield_hook=None):
         ),
         None,
     )
-    target_x = float((player_start or {}).get("pos", [0.0, 0.0, 0.0])[0])
-    target_z = float((player_start or {}).get("pos", [0.0, 0.0, 0.0])[2])
+    target_pos = (player_start or {}).get("pos", [0.0, 0.0, 0.0])
+    target_x = float(target_pos[0])
+    target_z = float(target_pos[2])
 
     min_x = min_z = float("inf")
     max_x = max_z = float("-inf")
@@ -526,16 +528,6 @@ def _make_brush_stress_scene(brush_count, yield_hook=None):
     tile_spacing_x = source_width + 256.0
     tile_spacing_z = source_depth + 256.0
 
-    indices = np.arange(brush_count, dtype=np.int64)
-    source_indices = indices % source_count
-    tile_indices = indices // source_count
-    tile_x = (tile_indices % grid_dim).astype(np.float64)
-    tile_z = (tile_indices // grid_dim).astype(np.float64)
-    tile_x -= (grid_dim - 1) * 0.5
-    tile_z -= (grid_dim - 1) * 0.5
-
-    # Deliberately vary all three dimensions.  The pattern is deterministic,
-    # avoids degenerate boxes, and is obvious in both orthographic and 3D views.
     size_patterns = np.asarray(
         (
             (0.55, 0.75, 0.85),
@@ -550,56 +542,118 @@ def _make_brush_stress_scene(brush_count, yield_hook=None):
         dtype=np.float64,
     )
 
-    brushes = []
-    for output_index, (
-        source_index, tile_offset_x, tile_offset_z
-    ) in enumerate(
-        zip(
-            source_indices.tolist(),
-            tile_x.tolist(),
-            tile_z.tolist(),
-        )
-    ):
-        if yield_hook is not None and output_index % 64 == 0:
-            yield_hook()
+    batch_size = max(1, int(batch_size))
 
-        brush = copy.deepcopy(source[int(source_index)])
-        position = list(brush.get("pos", [0.0, 0.0, 0.0]))
-        size = np.asarray(
-            brush.get("size", [64.0, 64.0, 64.0]),
-            dtype=np.float64,
-        )
-        scale = size_patterns[output_index % len(size_patterns)]
-
-        position[0] = (
-            float(position[0])
-            + scene_shift[0]
-            + float(tile_offset_x * tile_spacing_x)
-        )
-        position[2] = (
-            float(position[2])
-            + scene_shift[1]
-            + float(tile_offset_z * tile_spacing_z)
-        )
-        size = np.maximum(np.abs(size) * scale, 8.0)
-
-        brush["pos"] = [
-            float(position[0]),
-            float(position[1]),
-            float(position[2]),
-        ]
-        brush["size"] = [float(v) for v in size]
-        brush["id"] = "benchmark_generated_%d" % output_index
-        brushes.append(brush)
-
-    # Keep all non-brush entities aligned with the shifted first scene tile.
+    # Keep non-brush entities aligned with the shifted scene tile immediately;
+    # only brushes themselves are staged over time.
     for thing in data.get("things", []):
         pos = thing.get("pos")
         if pos and len(pos) >= 3:
             pos[0] = float(pos[0]) + scene_shift[0]
             pos[2] = float(pos[2]) + scene_shift[1]
 
-    data["brushes"] = brushes
+    # Order tiles by camera usefulness rather than raw grid index. The first
+    # batches are the tiles in front of the current 3D camera, nearest first.
+    # Remaining tiles follow by distance so the whole scene remains identical.
+    tile_order = list(range(tile_count))
+    if camera_position is not None and camera_yaw is not None:
+        camera_x = float(camera_position[0])
+        camera_z = float(camera_position[2])
+        yaw = math.radians(float(camera_yaw))
+        forward_x = math.sin(yaw)
+        forward_z = math.cos(yaw)
+        forward_norm = max(1e-9, math.hypot(forward_x, forward_z))
+        forward_x /= forward_norm
+        forward_z /= forward_norm
+
+        scored = []
+        for tile_index in tile_order:
+            tile_offset_x = (
+                (tile_index % grid_dim) - (grid_dim - 1) * 0.5
+            )
+            tile_offset_z = (
+                (tile_index // grid_dim) - (grid_dim - 1) * 0.5
+            )
+            tile_x = scene_shift[0] + float(tile_offset_x * tile_spacing_x)
+            tile_z = scene_shift[1] + float(tile_offset_z * tile_spacing_z)
+            dx = tile_x - camera_x
+            dz = tile_z - camera_z
+            distance_sq = dx * dx + dz * dz
+            forward_dot = dx * forward_x + dz * forward_z
+            scored.append((
+                0 if forward_dot >= 0.0 else 1,
+                distance_sq,
+                tile_index,
+            ))
+        scored.sort()
+        tile_order = [item[2] for item in scored]
+
+    def _iter_brush_batches():
+        batch = []
+        for tile_index in tile_order:
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+
+            tile_offset_x = (
+                (tile_index % grid_dim) - (grid_dim - 1) * 0.5
+            )
+            tile_offset_z = (
+                (tile_index // grid_dim) - (grid_dim - 1) * 0.5
+            )
+            tile_start = tile_index * source_count
+            tile_end = min(tile_start + source_count, brush_count)
+
+            for output_index in range(tile_start, tile_end):
+                source_index = output_index % source_count
+                brush = copy.deepcopy(source[source_index])
+                position = list(brush.get("pos", [0.0, 0.0, 0.0]))
+                size = np.asarray(
+                    brush.get("size", [64.0, 64.0, 64.0]),
+                    dtype=np.float64,
+                )
+                scale = size_patterns[output_index % len(size_patterns)]
+
+                position[0] = (
+                    float(position[0])
+                    + scene_shift[0]
+                    + float(tile_offset_x * tile_spacing_x)
+                )
+                position[2] = (
+                    float(position[2])
+                    + scene_shift[1]
+                    + float(tile_offset_z * tile_spacing_z)
+                )
+                size = np.maximum(np.abs(size) * scale, 8.0)
+
+                brush["pos"] = [
+                    float(position[0]),
+                    float(position[1]),
+                    float(position[2]),
+                ]
+                brush["size"] = [float(v) for v in size]
+                brush["id"] = "benchmark_generated_%d" % output_index
+                batch.append(brush)
+
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
+
+        if batch:
+            yield batch
+
+    data["brushes"] = []
+    return data, _iter_brush_batches()
+
+
+def _make_brush_stress_scene(brush_count, yield_hook=None):
+    """Create a complete brush stress scene for the standalone benchmark path."""
+    data, batches = _prepare_brush_stress_scene(
+        brush_count,
+        yield_hook=yield_hook,
+        batch_size=500,
+    )
+    data["brushes"] = [brush for batch in batches for brush in batch]
     return data
 
 
@@ -808,177 +862,56 @@ def run_live_renderer_sample(window, duration=1.0, warmup=0.75):
     return metrics
 
 
-def load_live_benchmark_world(window, data, yield_hook=None):
-    """Load benchmark content into the existing Fio editor/runtime state cooperatively."""
-    window.state.load_from_data(
-        data,
-        yield_hook=yield_hook,
-        save_undo=False,
-    )
-    if yield_hook is not None:
-        yield_hook()
-
-    window.update_all_ui()
-    if yield_hook is not None:
-        yield_hook()
-
-    window.update_views()
-    if yield_hook is not None:
-        yield_hook()
-
-    window.view_3d.update()
-    window.view_top.update()
-    window.view_side.update()
-    window.view_front.update()
-    if yield_hook is not None:
-        yield_hook()
 
 
+def make_monster_chaos_witness_world(seed="43", monster_count=40, yield_hook=None):
+    """Build the fixed 1024^3 room used by the live 40-monster witness.
 
-def make_monster_chaos_witness_world(seed="43", monster_count=50, yield_hook=None):
-    """Build the deterministic single-room world used by the live chaos witness."""
-    import random
+    The monsters are spawned at runtime by the benchmark in staged waves.  The
+    map itself contains only the room and PlayerStart so the measured workload
+    includes the real live-entity insertion/cache path rather than a 100-entity
+    map-load preparation phase.
+    """
+    from editor.things import PlayerStart
+    from tests.helpers.worlds import room
 
-    random.seed(seed)
     monster_count = int(monster_count)
-    if monster_count != 50:
-        raise ValueError("chaos witness requires exactly 50 monsters")
+    if monster_count != 40:
+        raise ValueError("monster chaos witness requires exactly 40 monsters")
 
-    params = {
-        "world_width": 2048,
-        "world_height": 2048,
-        "min_room": 384,
-        "max_room": 512,
-        "room_count": 1,
-        "wall_tex": "default.png",
-        "floor_tex": "default.png",
-        "enable_floors": False,
-        "floor_height": 128,
-        "floor_room_count": 0,
-        "spawn_monsters": True,
-        "monster_count": monster_count,
-        "spawn_health": False,
-    }
-    data = create_map_data(params, yield_hook=yield_hook)
+    player_x = -384.0
+    player_z = 0.0
+    monster_x = 384.0
+    spawn_y = 128.0
+    player_angle = math.pi / 2.0
 
-    player_start = next(
-        (
-            thing for thing in data.get("things", [])
-            if str(thing.get("type", "")).lower() == "playerstart"
+    player_start = make_thing(
+        PlayerStart,
+        "MonsterChaosPlayerStart",
+        (player_x, spawn_y, player_z),
+        angle=player_angle,
+    )
+
+    data = {
+        "brushes": room(
+            size=1024.0,
+            wall=32.0,
+            height=1024.0,
+            floor_y=0.0,
         ),
-        None,
-    )
-    if player_start is None:
-        raise RuntimeError("chaos witness procedural map has no PlayerStart")
-
-    px, py, pz = [float(v) for v in player_start.get("pos", [0.0, 96.0, 0.0])]
-
-    pathnode_name = "ChaosPathNode"
-    data["things"].append({
-        "type": "path_node",
-        "pos": [px, py, pz],
-        "properties": {
-            "type": "path_node",
-            "name": pathnode_name,
-            "id": "chaos_pathnode",
-            "radius": 64.0,
-            "show_radius": True,
-            "affects_type": "both",
-            "next_node": "",
-            "wait_time": 0.0,
-            "speed": 1.0,
-        },
-        "io_connections": [],
-    })
-
-    monsters = [
-        thing for thing in data.get("things", [])
-        if str(thing.get("type", "")).lower() == "monster"
-    ]
-    if len(monsters) != monster_count:
-        raise RuntimeError(
-            "chaos witness generated %d monsters, expected %d"
-            % (len(monsters), monster_count)
-        )
-
-    # Two hostile mixed teams: 15 human + 10 flying on each side.
-    monster_specs = (
-        [("benchmark_red", "human")] * 15
-        + [("benchmark_blue", "human")] * 15
-        + [("benchmark_red", "flying")] * 10
-        + [("benchmark_blue", "flying")] * 10
-    )
-    rng = random.Random(seed)
-    rng.shuffle(monster_specs)
-
-    # Randomly use the base sprite set or the available alternate skin.
-    variants = ("<None>", "variant1")
-
-    # Put the teams on opposite sides of the single room, but keep every
-    # spawn well inside the room's central open area.  The previous layout
-    # scattered the 25-monster teams close enough to the wall/collision
-    # boundary that production pathfinding could choose a route which ended
-    # up reporting the central PathNode as blocked by a wall.  Use a compact
-    # 5x5 staging grid with a clear straight corridor to the centre instead.
-    team_positions = {
-        "benchmark_red": [],
-        "benchmark_blue": [],
+        "things": [player_start.to_dict()],
     }
-    for row in range(25):
-        z_offset = ((row % 5) - 2) * 40.0 + rng.uniform(-4.0, 4.0)
-        x_offset = ((row // 5) - 2) * 6.0 + rng.uniform(-3.0, 3.0)
-        team_positions["benchmark_red"].append(
-            [px - 80.0 + x_offset, z_offset]
-        )
-        team_positions["benchmark_blue"].append(
-            [px + 80.0 - x_offset, z_offset]
-        )
-
-    team_indices = {"benchmark_red": 0, "benchmark_blue": 0}
-    for index, monster in enumerate(monsters):
-        team, monster_type = monster_specs[index]
-        position_index = team_indices[team]
-        team_indices[team] += 1
-        x_offset, z_offset = team_positions[team][position_index]
-
-        monster["pos"] = [
-            x_offset,
-            py + (32.0 if monster_type == "flying" else 0.0),
-            pz + z_offset,
-        ]
-        props = monster.setdefault("properties", {})
-        props.update({
-            "monster_type": monster_type,
-            "health": 120,
-            "damage": 12,
-            "awake": True,
-            "wake_on_sight": True,
-            "dead": False,
-            "team": team,
-            "variant": rng.choice(variants),
-            "patrol": True,
-            "patrol_target": pathnode_name,
-            "patrol_mode": "once",
-            "target_name": pathnode_name,
-        })
-
-        if yield_hook is not None and index % 8 == 0:
-            yield_hook()
 
     if yield_hook is not None:
         yield_hook()
 
     return data, {
         "seed": str(seed),
+        "room_size": [1024.0, 1024.0, 1024.0],
+        "player_start": [player_x, spawn_y, player_z],
+        "player_start_angle": player_angle,
+        "initial_monster_position": [monster_x, spawn_y, player_z],
         "monster_count": monster_count,
-        "human_count": sum(1 for _, mtype in monster_specs if mtype == "human"),
-        "flying_count": sum(1 for _, mtype in monster_specs if mtype == "flying"),
-        "team_counts": {
-            team: sum(1 for monster_team, _ in monster_specs if monster_team == team)
-            for team in ("benchmark_red", "benchmark_blue")
-        },
-        "pathnode_name": pathnode_name,
-        "pathnode_pos": [px, py, pz],
     }
 
 def prepare_live_monster_test(window, aggro_fraction=0.25, yield_hook=None):

@@ -141,11 +141,46 @@ def test_empty_trigger_prompt_does_not_clear_an_interaction_prompt():
     """A door/pickup/prop prompt survives a tick with no use trigger in range."""
     logic = _logic()
     logic._trigger_use_prompt = ""
-    logic.current_hud_message = "NEED: Red Key"
+    logic.current_hud_message = "Need"
 
     logic._handle_triggers(False, 1.0 / 60.0)
 
-    assert logic.current_hud_message == "NEED: Red Key"
+    assert logic.current_hud_message == "Need"
+
+
+@pytest.mark.parametrize(
+    "collected, expected_message",
+    [
+        (False, "Need"),
+        (True, "[E] Use"),
+    ],
+)
+def test_keyed_door_prompt_exposes_key_separately_from_text(collected, expected_message):
+    logic = _logic()
+    logic.doors = [
+        (
+            0,
+            {
+                "pos": [5, 5, 5],
+                "size": [64, 96, 16],
+                "is_door": True,
+                "door_locked": False,
+                "door_needs_key": True,
+                "door_key_name": "blue_key",
+            },
+        )
+    ]
+    logic.door_states = {0: {"state": "closed"}}
+    logic.collected_keys = {"blue_key"} if collected else set()
+    logic._pickup_things = []
+    logic._levelchanger_things = []
+    logic.current_hud_message = ""
+    logic.current_hud_key_name = None
+
+    logic._handle_interactions(False)
+
+    assert logic.current_hud_message == expected_message
+    assert logic.current_hud_key_name == "blue_key"
 
 
 def _use_trigger(logic, label="Activate", radius=96.0, **brush_overrides):
