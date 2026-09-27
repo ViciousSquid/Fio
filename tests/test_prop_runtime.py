@@ -63,7 +63,7 @@ def test_core_prop_carry_drop_rest_without_plugins():
     physics.step(1 / 60)
     carried = list(prop.pos)
     assert carried[2] > 30.0
-    assert logic.current_hud_message == '[E] Drop'
+    assert logic.current_hud_message == '[E] Carry / Drop'
 
     # Drop: physics takes over from the carried position, not the home one.
     session.tick(1 / 60, use_pressed=True)
