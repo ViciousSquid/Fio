@@ -238,6 +238,17 @@ def test_light_shadow_flag_is_normalised_in_the_projection():
     assert bool(table.light_casts_shadows[0]) is False
 
 
+def test_released_prop_with_no_carry_yaw_uses_free_billboard_sentinel():
+    prop = make_thing(Prop, 'released', render_mode='billboard',
+                     sprite_path='assets/sprites/pickup.png')
+    prop._carry_sprite_yaw = None
+
+    table = _synced([prop])
+
+    assert et.sprite_state(prop)[-1] == -10000.0
+    assert table.sprite_fixed_yaw[0] == -10000.0
+
+
 def test_positions_refresh_every_frame_without_reconciling():
     monster = make_thing(Monster, 'grunt', (0.0, 0.0, 0.0))
     table = _synced([monster])
