@@ -62,6 +62,22 @@ def _fmt(value):
     return str(value)
 
 
+def _set_text_preserve_scroll(widget, text):
+    """Replace text without throwing the user's vertical scroll position away."""
+    bar = widget.verticalScrollBar()
+    value = bar.value()
+    at_bottom = value >= bar.maximum() - 2
+    widget.setText(text)
+
+    def restore():
+        if at_bottom:
+            bar.setValue(bar.maximum())
+        else:
+            bar.setValue(min(value, bar.maximum()))
+
+    QTimer.singleShot(0, restore)
+
+
 class ArrayModel(QAbstractTableModel):
     """Read-only view over one NumPy column/row array."""
 
@@ -170,7 +186,18 @@ class RawTable(QWidget):
             # a zero-sized view.
             width = int(np.prod(shown.shape[1:], dtype=np.int64))
             names = [f"{name}[{i}]" for i in range(width)]
+        bar = self.view.verticalScrollBar()
+        value = bar.value()
+        at_bottom = value >= bar.maximum() - 2
         self.model.set_array(shown, names=names)
+
+        def restore():
+            if at_bottom:
+                bar.setValue(bar.maximum())
+            else:
+                bar.setValue(min(value, bar.maximum()))
+
+        QTimer.singleShot(0, restore)
 
 
 class BarView(QWidget):
@@ -618,7 +645,7 @@ class DebugTablesWindow(QMainWindow):
             ("batched draws", batched),
             ("visible triangles", tris),
         ])
-        self.dashboard.setText(
+        _set_text_preserve_scroll(self.dashboard, 
             "PIPELINE / PUBLISHED STATE\n\n"
             f"RenderTable   rows={int(self.render.count):,}  "
             f"capacity={render_cap:,}  dense bytes={rbytes:,}\n"
@@ -643,13 +670,13 @@ class DebugTablesWindow(QMainWindow):
         t = self.render
         slots = getattr(self.snapshot, "visible_brush_slots", None)
         if t is None or slots is None or not len(slots):
-            self.keys_text.setText("NO VISIBLE RENDERTABLE SLOTS")
+            _set_text_preserve_scroll(self.keys_text, "NO VISIBLE RENDERTABLE SLOTS")
             return
         slots = np.asarray(slots, dtype=np.int32)
         cube = (t.class_bits[slots] & rt.CLASS_HAS_GEOMETRY) == 0
         slots = slots[cube]
         if not len(slots):
-            self.keys_text.setText("NO CUBE RENDER ROWS")
+            _set_text_preserve_scroll(self.keys_text, "NO CUBE RENDER ROWS")
             return
         ids = t.tex_name_id[slots]
         drawn = (ids >= 0) & (ids != rt.TEX_ID_SKIP)
@@ -657,7 +684,7 @@ class DebugTablesWindow(QMainWindow):
             drawn &= ids != rt.TEX_ID_NODRAW
         row, face = np.nonzero(drawn)
         if not len(row):
-            self.keys_text.setText("NO DRAWABLE FACES")
+            _set_text_preserve_scroll(self.keys_text, "NO DRAWABLE FACES")
             return
         texture = ids[row, face].astype(np.int64)
         face = face.astype(np.int64)
@@ -701,7 +728,7 @@ class DebugTablesWindow(QMainWindow):
             )
         text = "\n".join(lines)
         if text != self._last_keys_text:
-            self.keys_text.setText(text)
+            _set_text_preserve_scroll(self.keys_text, text)
             self._last_keys_text = text
 
     def _update_memory(self):
@@ -726,7 +753,7 @@ class DebugTablesWindow(QMainWindow):
                 )
         text = "\n".join(lines)
         if text != self._last_memory_text:
-            self.memory_text.setText(text)
+            _set_text_preserve_scroll(self.memory_text, text)
             self._last_memory_text = text
 
     def _update_follow(self):
