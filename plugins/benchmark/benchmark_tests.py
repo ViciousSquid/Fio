@@ -426,16 +426,48 @@ class BenchmarkTests:
                     "live_10000_brushes": 10000,
                     "live_100000_brushes": 100000,
                 }[label]
-                # Use Fio's NumPy-assisted scene builder and load the resulting
-                # level data into the existing EditorState.
-                data = bench._make_brush_stress_scene(
-                    brush_count,                    yield_hook=cooperative_yield,
+                # The requested cadence is part of preparation, not measurement.
+                # Give the paced creation phase enough room without changing the
+                # hard external benchmark supervision.
+                self._preparation_deadline = max(
+                    self._preparation_deadline,
+                    time.perf_counter() + brush_count * 0.025 + 60.0,
+                )
+
+                # Prepare the scene shell, then insert the requested brushes
+                # gradually. The renderer gets a chance to publish and consume
+                # intermediate dense-table states instead of swallowing one huge
+                # 1K/10K/100K insertion burst.
+                data, brush_iter = bench._prepare_brush_stress_scene(
+                    brush_count, yield_hook=cooperative_yield,
                 )
                 bench.load_live_benchmark_world(
                     window,
                     data,
                     yield_hook=cooperative_yield,
                 )
+
+                # Keep the requested 25 ms cadence between brush creations.
+                # This is intentionally a real wall-clock delay rather than
+                # merely chunking a tight Python loop.
+                next_creation = time.perf_counter()
+                created = 0
+                for brush in brush_iter:
+                    now = time.perf_counter()
+                    if now < next_creation:
+                        while now < next_creation:
+                            cooperative_yield()
+                            time.sleep(min(0.005, next_creation - now))
+                            now = time.perf_counter()
+
+                    window.state.brushes.append(brush)
+                    window.state.mark_world_changed([brush])
+                    created += 1
+                    next_creation = time.perf_counter() + 0.025
+
+                    if created % 25 == 0:
+                        QApplication.processEvents()
+
                 # The renderer consumes the published dense projection, not
                 # EditorState.brushes directly. Wait for the LogicThread to publish
                 # this exact workload before the timed phase begins; otherwise the
