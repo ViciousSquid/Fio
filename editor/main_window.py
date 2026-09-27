@@ -4288,11 +4288,80 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not launch game:\n{e}")
             
+    def _enforce_layout_constraints(self):
+        """Keep saved/restored Qt layout state inside Fio's supported topology.
+
+        Dock widgets remain dockable/floating in any normal Qt dock area.  The
+        editor toolbar is intentionally narrower: top, bottom, or right only;
+        right-docked means vertical.  Floating widgets are also kept on-screen
+        so a saved layout cannot strand a panel outside every display.
+        """
+        allowed_toolbar_areas = (
+            Qt.TopToolBarArea | Qt.BottomToolBarArea | Qt.RightToolBarArea)
+
+        for toolbar in self.findChildren(QToolBar):
+            toolbar.setMovable(True)
+            toolbar.setFloatable(True)
+            toolbar.setAllowedAreas(allowed_toolbar_areas)
+
+            if not toolbar.isFloating():
+                area = self.toolBarArea(toolbar)
+                if area == Qt.RightToolBarArea:
+                    toolbar.setOrientation(Qt.Vertical)
+                elif area in (Qt.TopToolBarArea, Qt.BottomToolBarArea):
+                    toolbar.setOrientation(Qt.Horizontal)
+                elif area != Qt.NoToolBarArea:
+                    self.addToolBar(Qt.TopToolBarArea, toolbar)
+                    toolbar.setOrientation(Qt.Horizontal)
+
+        for dock in self.findChildren(QDockWidget):
+            dock.setAllowedAreas(Qt.AllDockWidgetAreas)
+
+        # Clamp floating editor panels to a real screen.  QMainWindow will not
+        # repair an old state that was saved with a floating window entirely
+        # off-screen after a monitor was removed.
+        for widget in [*self.findChildren(QDockWidget),
+                       *self.findChildren(QToolBar)]:
+            if not widget.isFloating():
+                continue
+            screen = QApplication.screenAt(widget.frameGeometry().center())
+            if screen is None:
+                screen = QApplication.primaryScreen()
+            if screen is None:
+                continue
+            available = screen.availableGeometry()
+            geometry = widget.frameGeometry()
+            width = min(geometry.width(), available.width())
+            height = min(geometry.height(), available.height())
+            x = min(max(geometry.x(), available.left()),
+                    available.right() - width + 1)
+            y = min(max(geometry.y(), available.top()),
+                    available.bottom() - height + 1)
+            if (geometry.x(), geometry.y()) != (x, y):
+                widget.move(x, y)
+
+    def _restore_default_layout(self):
+        """Restore the layout captured immediately after UI construction."""
+        state = getattr(self, '_default_layout_state', None)
+        if state is not None and not state.isEmpty():
+            if self.restoreState(QByteArray(state), LAYOUT_VERSION):
+                self._enforce_layout_constraints()
+                if self.menuBar():
+                    self.menuBar().setVisible(True)
+                self.statusBar().setVisible(True)
+                return True
+
+        # This should only be needed if a future Qt change makes the captured
+        # state unusable.  The normal construction path is already the default.
+        self._enforce_layout_constraints()
+        return False
+
     def save_layout(self):
+        self._enforce_layout_constraints()
         if not self.config.has_section('Layout'):
             self.config.add_section('Layout')
         self.config['Layout']['geometry'] = self.saveGeometry().toHex().data().decode()
-        self.config['Layout']['state'] = self.saveState().toHex().data().decode()
+        self.config['Layout']['state'] = self.saveState(LAYOUT_VERSION).toHex().data().decode()
         self.config['Layout']['version'] = str(LAYOUT_VERSION)
         self.save_config()
         self.statusBar().showMessage("Layout saved.", 2000)
@@ -4300,37 +4369,59 @@ class MainWindow(QMainWindow):
     def restore_layout(self):
         """Restore the previously saved layout from settings.ini without restarting."""
         if not self.config.has_section('Layout') or \
-           not (self.config.has_option('Layout', 'geometry') and self.config.has_option('Layout', 'state')):
+           not (self.config.has_option('Layout', 'geometry') and
+                self.config.has_option('Layout', 'state')):
             self.show_toast("No saved layout found. Save a layout first.", is_error=True)
             return
-        
+
         try:
-            # Restore geometry and state
+            geometry_ok = True
+            state_ok = True
+
             if self.config.has_option('Layout', 'geometry'):
-                self.restoreGeometry(QByteArray.fromHex(self.config['Layout']['geometry'].encode()))
+                geometry_ok = self.restoreGeometry(
+                    QByteArray.fromHex(self.config['Layout']['geometry'].encode()))
             if self.config.has_option('Layout', 'state'):
-                self.restoreState(QByteArray.fromHex(self.config['Layout']['state'].encode()))
-            
+                state_ok = self.restoreState(
+                    QByteArray.fromHex(self.config['Layout']['state'].encode()),
+                    LAYOUT_VERSION)
+
+            if not state_ok:
+                self._restore_default_layout()
+                self.config.remove_option('Layout', 'state')
+                self.config['Layout']['version'] = str(LAYOUT_VERSION)
+                self.save_config()
+                self.show_toast(
+                    "Saved dock layout was invalid; defaults restored.",
+                    is_error=True)
+                return
+
+            self._enforce_layout_constraints()
+
             # Restore menu bar and status bar visibility (not saved in state)
             if self.menuBar():
                 self.menuBar().setVisible(True)
             self.statusBar().setVisible(True)
-            
-            self.show_toast("Layout restored")
+
+            if geometry_ok:
+                self.show_toast("Layout restored")
+            else:
+                self.show_toast(
+                    "Layout restored, but the saved window geometry was invalid.",
+                    is_error=True)
         except Exception as e:
-            self.show_toast(f"Failed to restore layout: {e}", is_error=True)
+            self._restore_default_layout()
+            self.show_toast(
+                f"Failed to restore layout; defaults restored: {e}",
+                is_error=True)
             import traceback
             traceback.print_exc()
 
     def load_layout(self):
         """Restore the saved window layout, unless the default has moved on.
 
-        The layout is saved on every close, so restoreState() would otherwise
-        pin an install to the arrangement it first booted with and no change
-        to the default would ever be seen.  A saved layout from an older
-        LAYOUT_VERSION is dropped once; the window geometry (where it sits on
-        screen, and how big) is kept either way, being the user's own doing
-        rather than the default's.
+        The layout is saved on every close.  A saved layout from an older
+        LAYOUT_VERSION is dropped once; the window geometry is kept either way.
         """
         if not self.config.has_section('Layout'):
             return
@@ -4350,34 +4441,50 @@ class MainWindow(QMainWindow):
             return
 
         if self.config.has_option('Layout', 'state'):
-            self.restoreState(
-                QByteArray.fromHex(self.config['Layout']['state'].encode()))
+            try:
+                state_ok = self.restoreState(
+                    QByteArray.fromHex(self.config['Layout']['state'].encode()),
+                    LAYOUT_VERSION)
+            except Exception:
+                state_ok = False
+
+            if not state_ok:
+                self.config.remove_option('Layout', 'state')
+                self.config['Layout']['version'] = str(LAYOUT_VERSION)
+                self.save_config()
+                QTimer.singleShot(0, lambda: self.show_toast(
+                    "Saved dock layout was invalid; using the default.",
+                    is_error=True))
+                self._restore_default_layout()
+                return
+
+        self._enforce_layout_constraints()
 
     def reset_layout(self):
-        """Reset layout to default by deleting Layout section from settings.ini and restarting."""
+        """Reset the current dock/toolbar arrangement to the editor default."""
         reply = QMessageBox.question(
             self,
             "Reset Layout",
-            "Reset layout to default?\n\nThis will delete saved layout settings and restart the editor.",
+            "Reset dock and toolbar layout to the Fio default?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
-        
+
         if reply != QMessageBox.Yes:
             return
-        
+
         try:
             if self.config.has_section('Layout'):
                 self.config.remove_section('Layout')
                 self.save_config()
-                self._resetting_layout = True   # <-- ADD THIS LINE
-                self.show_toast("Layout reset. Restarting editor...")
-                QTimer.singleShot(500, self._restart_application)
-            else:
-                self.show_toast("No layout settings to reset.", is_error=True)
-                
+
+            self._restore_default_layout()
+            self.show_toast("Layout reset to defaults")
         except Exception as e:
-            self.show_toast(f"Failed to reset layout: {e}", is_error=True)
+            self._restore_default_layout()
+            self.show_toast(
+                f"Failed to reset layout; defaults restored: {e}",
+                is_error=True)
             import traceback
             traceback.print_exc()
 
