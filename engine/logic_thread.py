@@ -83,6 +83,7 @@ except ImportError:
 from .monster_constants import (
     WEAPON_DAMAGE,
     NON_FIRING_WEAPONS,
+    WEAPON_SHOOT_SOUND,
     MONSTER_PROJECTILE_MAX_DIST,
     MONSTER_PROJECTILE_SPRITE_SIZE,
 )
@@ -333,8 +334,11 @@ class LogicThread(threading.Thread):
         self.bullet_marks = []
         self.BULLET_FADE_TIME = 20.0
         
-        # Active weapon
+        # Active weapon / ammunition
         self.active_weapon = None
+        self.player_ammo = 0
+        self.gun2_obtained = False
+        self._last_player_shot_time = float("-inf")
 
         # Muzzle flash
         self.muzzle_flash_active = False
@@ -1096,8 +1100,11 @@ class LogicThread(threading.Thread):
             # Reset timer states
             self.timer_states = {}
             
-            # Reset active weapon
+            # Reset active weapon / ammunition
             self.active_weapon = None
+            self.player_ammo = 0
+            self.gun2_obtained = False
+            self._last_player_shot_time = float("-inf")
             
             # Reset visual fx
             self.bullet_marks = []
@@ -3417,7 +3424,30 @@ class LogicThread(threading.Thread):
         # hitscan/projectile, no damage, and no gunfire noise event.
         if self.active_weapon in NON_FIRING_WEAPONS:
             return
+
+        # Gun2 is a deliberately slow, finite-ammo weapon. Keep this check
+        # authoritative on the logic thread so a burst of UI clicks can never
+        # bypass the one-shot-per-second limit or spend ammo twice.
+        if self.active_weapon == "gun2":
+            now = time.perf_counter()
+            if now - float(getattr(
+                    self, "_last_player_shot_time", float("-inf"))) < 1.0:
+                return
+            try:
+                ammo = int(getattr(self, "player_ammo", 0))
+            except (TypeError, ValueError):
+                ammo = 0
+            if ammo <= 0:
+                return
+            self.player_ammo = ammo - 1
+            self._last_player_shot_time = now
+
         self.muzzle_flash_active = True
+        self.game_state.queue_sound({
+            "file": WEAPON_SHOOT_SOUND.get(
+                self.active_weapon, "shoot.wav"),
+            "volume": 1.0,
+        })
         self._plugin_emit("player_shoot", weapon=self.active_weapon)
         yaw_rad = self.player.angle
         if self.is_overhead():
@@ -3857,6 +3887,7 @@ class LogicThread(threading.Thread):
         write_state.player_health = self.player_health
         write_state.player_max_health = self.player_max_health
         write_state.player_dead = self.player_dead
+        write_state.player_ammo = max(0, int(getattr(self, "player_ammo", 0)))
         if self.play_mode and self.player and not self.cinematic_state:
             write_state.player_underwater = bool(getattr(self.player, 'eye_underwater', False))
             write_state.underwater_tint = list(getattr(self.player, 'water_tint', [0.0, 0.4, 0.6]))
@@ -3867,6 +3898,22 @@ class LogicThread(threading.Thread):
         write_state.hud_prompt_key = self.current_hud_key_name
         write_state.active_weapon = self.active_weapon
         write_state.muzzle_flash_active = self.muzzle_flash_active
+        if self.active_weapon == "gun1":
+            write_state.shot_ready = True
+        elif self.active_weapon == "gun2":
+            now = time.perf_counter()
+            try:
+                ammo = max(0, int(getattr(self, "player_ammo", 0)))
+            except (TypeError, ValueError):
+                ammo = 0
+            write_state.shot_ready = (
+                ammo > 0
+                and (now - float(getattr(
+                    self, "_last_player_shot_time", float("-inf")
+                ))) >= 1.0
+            )
+        else:
+            write_state.shot_ready = False
         write_state.camera_transition_active = bool(self.camera_transition)
 
         write_state.monster_debug_active = self.monster_ai.monster_debug_active
