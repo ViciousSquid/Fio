@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import (  # noqa: E402
 )
 
 from editor.main_window import MainWindow  # noqa: E402
-from editor.ui import Ui_MainWindow  # noqa: E402
+from editor.ui import LAYOUT_VERSION, Ui_MainWindow  # noqa: E402
 
 # Qt tier: PyQt5 must be importable.  No display and no GPU - the suite runs
 # against the offscreen platform plugin.
@@ -88,7 +88,7 @@ def test_the_tool_toolbar_allows_top_bottom_right_and_floating(toolbar):
 
 def test_the_tool_toolbar_round_trips_as_a_vertical_right_dock(toolbar):
     window = toolbar
-    state_version = 3
+    state_version = LAYOUT_VERSION
 
     window.addToolBar(Qt.RightToolBarArea, window.tool_toolbar)
     assert window.toolBarArea(window.tool_toolbar) == Qt.RightToolBarArea
