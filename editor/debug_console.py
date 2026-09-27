@@ -217,7 +217,6 @@ class DebugConsole(QWidget):
     _RE_NO_CONNS     = re.compile(r'(no connections|0 connections)')
     _RE_DELAYED      = re.compile(r'\[Delayed\]')
     _RE_ARROW        = re.compile(r' -> ')
-    _RE_VERSION_BANNER = re.compile(r'^\[Info\] Fio version (\d+\.\d+\.\d+\.\d+)
     _instance = None
 
     @classmethod
@@ -772,10 +771,13 @@ class DebugConsole(QWidget):
         # Render the startup version banner in one dedicated pass. Keeping its
         # source text plain prevents the generic entity highlighter from
         # rewriting its own filter anchors.
-        version_match = self._RE_VERSION_BANNER.fullmatch(message)
-        if version_match:
-            version_html = self._version_banner_html(version_match.group(1))
-            html = f'<span style="color: {color};">{version_html}</span><br>'
+        version_prefix = "[Info] Fio version "
+        if message.startswith(version_prefix):
+            version = message[len(version_prefix):].strip()
+            version_parts = version.split('.')
+            if len(version_parts) == 4 and all(part.isdigit() for part in version_parts):
+                version_html = self._version_banner_html(version)
+                html = f'<span style="color: {color};">{version_html}</span><br>'
             cursor = self.console.textCursor()
             cursor.movePosition(QTextCursor.End)
             cursor.insertHtml(html)
