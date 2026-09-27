@@ -455,22 +455,17 @@ def _make_renderer_stress_scene():
     return state.brushes, state.things
 
 
-def _make_brush_stress_scene(brush_count, yield_hook=None):
-    """Create a visible field of real Fio brushes with varied dimensions.
+def _prepare_brush_stress_scene(brush_count, yield_hook=None):
+    """Prepare the non-brush scene data and a lazy brush factory.
 
-    The brushes stay spatially bounded so the generated workload remains
-    visible in the editor instead of marching hundreds of thousands of units
-    away from the camera.  The source map still supplies real Fio brush
-    dictionaries/textures, while deterministic scaling makes the generated
-    brushes visibly different sizes.
+    The live benchmark consumes the returned iterator gradually so it never
+    inserts the entire 1K/10K/100K brush workload into EditorState in one
+    synchronous burst.
     """
     import copy
     import math
     import numpy as np
 
-    # Brush stress is a brush/editor workload. Do not inject the LogicRelay
-    # graph used by the I/O benchmarks; those entities add unrelated Thing/I/O
-    # work and make the brush test misleading.
     data = _generate_procedural_map(
         monsters=0,
         relay_count=0,
@@ -483,10 +478,8 @@ def _make_brush_stress_scene(brush_count, yield_hook=None):
     brush_count = int(brush_count)
     if brush_count <= 0:
         data["brushes"] = []
-        return data
+        return data, iter(())
 
-    # Keep the authored scene and its PlayerStart together.  The generated
-    # source map is shifted so its first brush field is centred on PlayerStart.
     player_start = next(
         (
             thing for thing in data.get("things", [])
@@ -494,8 +487,9 @@ def _make_brush_stress_scene(brush_count, yield_hook=None):
         ),
         None,
     )
-    target_x = float((player_start or {}).get("pos", [0.0, 0.0, 0.0])[0])
-    target_z = float((player_start or {}).get("pos", [0.0, 0.0, 0.0])[2])
+    target_pos = (player_start or {}).get("pos", [0.0, 0.0, 0.0])
+    target_x = float(target_pos[0])
+    target_z = float(target_pos[2])
 
     min_x = min_z = float("inf")
     max_x = max_z = float("-inf")
@@ -526,16 +520,6 @@ def _make_brush_stress_scene(brush_count, yield_hook=None):
     tile_spacing_x = source_width + 256.0
     tile_spacing_z = source_depth + 256.0
 
-    indices = np.arange(brush_count, dtype=np.int64)
-    source_indices = indices % source_count
-    tile_indices = indices // source_count
-    tile_x = (tile_indices % grid_dim).astype(np.float64)
-    tile_z = (tile_indices // grid_dim).astype(np.float64)
-    tile_x -= (grid_dim - 1) * 0.5
-    tile_z -= (grid_dim - 1) * 0.5
-
-    # Deliberately vary all three dimensions.  The pattern is deterministic,
-    # avoids degenerate boxes, and is obvious in both orthographic and 3D views.
     size_patterns = np.asarray(
         (
             (0.55, 0.75, 0.85),
@@ -550,56 +534,61 @@ def _make_brush_stress_scene(brush_count, yield_hook=None):
         dtype=np.float64,
     )
 
-    brushes = []
-    for output_index, (
-        source_index, tile_offset_x, tile_offset_z
-    ) in enumerate(
-        zip(
-            source_indices.tolist(),
-            tile_x.tolist(),
-            tile_z.tolist(),
-        )
-    ):
-        if yield_hook is not None and output_index % 64 == 0:
-            yield_hook()
-
-        brush = copy.deepcopy(source[int(source_index)])
-        position = list(brush.get("pos", [0.0, 0.0, 0.0]))
-        size = np.asarray(
-            brush.get("size", [64.0, 64.0, 64.0]),
-            dtype=np.float64,
-        )
-        scale = size_patterns[output_index % len(size_patterns)]
-
-        position[0] = (
-            float(position[0])
-            + scene_shift[0]
-            + float(tile_offset_x * tile_spacing_x)
-        )
-        position[2] = (
-            float(position[2])
-            + scene_shift[1]
-            + float(tile_offset_z * tile_spacing_z)
-        )
-        size = np.maximum(np.abs(size) * scale, 8.0)
-
-        brush["pos"] = [
-            float(position[0]),
-            float(position[1]),
-            float(position[2]),
-        ]
-        brush["size"] = [float(v) for v in size]
-        brush["id"] = "benchmark_generated_%d" % output_index
-        brushes.append(brush)
-
-    # Keep all non-brush entities aligned with the shifted first scene tile.
+    # Keep non-brush entities aligned with the shifted scene tile immediately;
+    # only brushes themselves are staged over time.
     for thing in data.get("things", []):
         pos = thing.get("pos")
         if pos and len(pos) >= 3:
             pos[0] = float(pos[0]) + scene_shift[0]
             pos[2] = float(pos[2]) + scene_shift[1]
 
-    data["brushes"] = brushes
+    def _iter_brushes():
+        for output_index in range(brush_count):
+            if yield_hook is not None:
+                yield_hook()
+
+            source_index = output_index % source_count
+            tile_index = output_index // source_count
+            tile_offset_x = (tile_index % grid_dim) - (grid_dim - 1) * 0.5
+            tile_offset_z = (tile_index // grid_dim) - (grid_dim - 1) * 0.5
+
+            brush = copy.deepcopy(source[source_index])
+            position = list(brush.get("pos", [0.0, 0.0, 0.0]))
+            size = np.asarray(
+                brush.get("size", [64.0, 64.0, 64.0]),
+                dtype=np.float64,
+            )
+            scale = size_patterns[output_index % len(size_patterns)]
+
+            position[0] = (
+                float(position[0])
+                + scene_shift[0]
+                + float(tile_offset_x * tile_spacing_x)
+            )
+            position[2] = (
+                float(position[2])
+                + scene_shift[1]
+                + float(tile_offset_z * tile_spacing_z)
+            )
+            size = np.maximum(np.abs(size) * scale, 8.0)
+
+            brush["pos"] = [
+                float(position[0]),
+                float(position[1]),
+                float(position[2]),
+            ]
+            brush["size"] = [float(v) for v in size]
+            brush["id"] = "benchmark_generated_%d" % output_index
+            yield brush
+
+    data["brushes"] = []
+    return data, _iter_brushes()
+
+
+def _make_brush_stress_scene(brush_count, yield_hook=None):
+    """Create a complete brush stress scene for the standalone benchmark path."""
+    data, brushes = _prepare_brush_stress_scene(brush_count, yield_hook=yield_hook)
+    data["brushes"] = list(brushes)
     return data
 
 
