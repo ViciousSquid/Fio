@@ -45,10 +45,10 @@ class BenchmarkTests:
                 return float(self._requested_duration)
             return self._player_area_sweep_duration()
         return {
-            "live_io_1000": 2.0,
-            "live_1000_brushes": 3.0,
-            "live_10000_brushes": 3.0,
-            "live_100000_brushes": 2.0,
+            "live_io_1000": 4.0,
+            "live_1000_brushes": 6.0,
+            "live_10000_brushes": 6.0,
+            "live_100000_brushes": 4.0,
             "monster_chaos_witness": 15.0,
         }.get(label, 3.0)
     
@@ -313,6 +313,12 @@ class BenchmarkTests:
         self._live_stress_label = label
         self._live_stress_value = value
         self._live_io_elapsed = None
+        self._live_io_samples = []
+        self._live_io_fires = 0
+        self._live_io_hops = 0
+        self._live_io_next_fire = 0.0
+        self._live_io_manager = None
+        self._live_io_source = None
         self._live_stress_timeout = False
         self._live_stress_timeout_reason = ""
         self._start_live_stress_monitor(label)
@@ -344,8 +350,10 @@ class BenchmarkTests:
                 # Do not recenter the camera here; the scene itself must remain
                 # visible through the real 2D and 3D editor views during preparation.
                 QApplication.processEvents()
+                self._prepare_player_area_sweep()
                 self._append(
-                    "  Live brush scene: created %d real brushes with varied dimensions."
+                    "  Live brush scene: created %d real brushes with varied dimensions; "
+                    "camera sweep will exercise culling and dense RenderTable key sorting."
                     % brush_count
                 )
             elif label == "monster_chaos_witness":
@@ -379,8 +387,10 @@ class BenchmarkTests:
                     raise RuntimeError(
                         "Monster chaos witness has no live LogicThread"
                     )
+                # God mode protects the benchmark player without disabling AI.
+                # MonsterAI must remain in its normal targeting/combat path.
                 logic.god_mode = True
-                logic.notarget = True
+                logic.notarget = False
 
                 self._monster_chaos_aggro_injected = False
                 self._monster_chaos_fighters = []
@@ -448,39 +458,21 @@ class BenchmarkTests:
                     ),
                 )
     
+                # Keep the source and live dispatcher for repeated timed fires.
+                # Each burst is a real 1,000-entity serialized LogicRelay chain
+                # owned by the running LogicThread; the measurement phase below
+                # repeatedly exercises it while Fio is otherwise running normally.
+                self._live_io_manager = io_manager
+                self._live_io_source = first
+                self._live_io_hops = max(0, len(relays) - 1)
+                self._live_io_next_fire = 0.0
+                self._live_io_samples = []
+                self._live_io_fires = 0
+
                 self._append(
-                    "  Live I/O: firing OnTrigger through %d real LogicRelay entities..."
+                    "  Live I/O: prepared %d real LogicRelay entities; "
+                    "the source chain will be fired repeatedly during measurement."
                     % len(relays)
-                )
-    
-                import editor.io_system as _io_system
-                old_debug = _io_system.IO_DEBUG_ENABLED
-                old_limit = sys.getrecursionlimit()
-
-                _io_system.IO_DEBUG_ENABLED = False
-                sys.setrecursionlimit(max(old_limit, 10000))
-                try:
-                    io_manager.reset()
-                    start = time.perf_counter()
-                    io_manager.fire_output(first, "OnTrigger")
-                    completed = True
-                    self._live_io_elapsed = time.perf_counter() - start
-                finally:
-                    _io_system.IO_DEBUG_ENABLED = old_debug
-                    sys.setrecursionlimit(old_limit)
-
-                if not completed or self._live_stress_timeout:
-                    self._abort_live_stress(
-                        self._live_stress_timeout_reason or
-                        ("%s exceeded its %.1f s live benchmark timeout. "
-                         "The benchmark was stopped without terminating Fio."
-                         % (label, self._live_stress_timeout_for(label)))
-                    )
-                    return
-    
-                self._append(
-                    "  Live I/O: completed %d LogicRelay hops in %.3f ms."
-                    % (len(relays), self._live_io_elapsed * 1000.0)
                 )
     
             else:
