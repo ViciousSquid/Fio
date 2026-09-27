@@ -217,7 +217,7 @@ class DebugConsole(QWidget):
     _RE_NO_CONNS     = re.compile(r'(no connections|0 connections)')
     _RE_DELAYED      = re.compile(r'\[Delayed\]')
     _RE_ARROW        = re.compile(r' -> ')
-    _RE_VERSION_BANNER = re.compile(r'^\[Info\] Fio version (\d+\.\d+\.\d+\.\d+)
+    _RE_VERSION_BANNER = re.compile(r'^\[Info\] Fio version (\d+\.\d+\.\d+\.\d+)$')
 
     _instance = None
 
