@@ -119,6 +119,38 @@ def test_silent_explosion_does_not_queue_sound():
     assert queued == []
 
 
+def test_animation_origin_is_shared_across_render_buffers():
+    """Alternating RenderState buffers must not reset an animated GIF's phase."""
+    effect = Effect()
+    first = EntityTable()
+    second = EntityTable()
+
+    first.begin_frame([effect], epoch=1, effect_runtime=True)
+    first_origin = float(first.effect_spawn_time[0])
+
+    second.begin_frame([effect], epoch=1, effect_runtime=True)
+    second_origin = float(second.effect_spawn_time[0])
+
+    assert first_origin > 0.0
+    assert second_origin == first_origin
+    assert float(effect._effect_spawn_time) == first_origin
+
+
+def test_explosion_origin_is_shared_across_render_buffers():
+    """Triggered one-shot Effects keep one timestamp in both dense tables."""
+    effect = Effect(properties={"effect_type": "EXPLOSION"})
+    effect.trigger_explosion(123.456)
+
+    first = EntityTable()
+    second = EntityTable()
+
+    first.begin_frame([effect], epoch=1, effect_runtime=True)
+    second.begin_frame([effect], epoch=1, effect_runtime=True)
+
+    assert float(first.effect_spawn_time[0]) == 123.456
+    assert float(second.effect_spawn_time[0]) == 123.456
+
+
 def test_custom_effect_uses_selected_gif_path():
     custom = Effect(properties={
         "effect_type": EFFECT_CUSTOM,
