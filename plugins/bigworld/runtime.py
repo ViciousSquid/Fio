@@ -707,6 +707,9 @@ class BigWorldSession:
 
     def stats(self) -> dict:
         s = self.manager.stats()
+        s["configured_activation_radius"] = self._authored_activation_radius
+        s["configured_deactivation_radius"] = self._authored_deactivation_radius
+        s["visual_horizon"] = self._visual_horizon
         terrain = self._terrain
         if terrain is not None:
             s["terrain_fill"] = True
