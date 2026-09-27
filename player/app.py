@@ -34,9 +34,9 @@ class FioPlayerApp:
         self.host = None
         self.map_data = None
 
-        # Plugin runtime (loads bundled plugins from the package and drives their
-        # per-tick gameplay). Inert unless the package actually needs a plugin.
-        self.plugin_host = PlayerPluginHost(self._confirm_plugin_execution)
+        # Plugin runtime loads plugins already installed with the player.
+        # A .fiopak never supplies executable plugin code.
+        self.plugin_host = PlayerPluginHost()
         self.hud_message = ""
 
         # Free-look camera state (world units). Yaw/pitch in degrees.
@@ -72,50 +72,6 @@ class FioPlayerApp:
 
         return DesktopHost(self.config, callbacks)
 
-    def _confirm_plugin_execution(self, package) -> bool:
-        """Prompt before executing Python plugins bundled inside a package."""
-        title = "Fio Player — Plugin Execution"
-        message = (
-            f"The package '{package.title}' contains bundled Python plugins.\n\n"
-            "Plugins are executable code from the package and may access files, "
-            "network resources, and other process capabilities.\n\n"
-            "Allow these plugins to run?"
-        )
-
-        try:
-            from pygame._sdl2.video import messagebox
-        except Exception as exc:
-            # A missing modal UI must never silently become permission to execute
-            # foreign code. The desktop development harness gets an explicit
-            # terminal prompt as a fallback; Android/headless builds deny.
-            print(f"[Fio Player] secure plugin prompt unavailable: {exc}")
-            if is_android():
-                return False
-            try:
-                answer = input(
-                    "\n" + message + "\nType ALLOW to execute package plugins: "
-                ).strip().upper()
-            except (EOFError, KeyboardInterrupt):
-                return False
-            return answer == "ALLOW"
-
-        try:
-            result = messagebox(
-                title,
-                message,
-                warn=True,
-                buttons=("Allow", "Deny"),
-                return_button=1,
-                escape_button=1,
-            )
-            return result == 0
-        except Exception as exc:
-            print(f"[Fio Player] plugin execution prompt failed: {exc}")
-            return False
-
-    # ------------------------------------------------------------------
-    # Host callbacks
-    # ------------------------------------------------------------------
     def _on_gl_ready(self, host) -> None:
         from .render.renderer import GLESRenderer
 
