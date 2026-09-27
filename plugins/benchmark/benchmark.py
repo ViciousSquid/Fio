@@ -1821,11 +1821,11 @@ class BenchmarkResults:
             culled_tris = result.get("average_culled_tris", sysmon.get("average_culled_tris"))
             culling_efficiency = result.get("culling_efficiency", sysmon.get("culling_efficiency"))
             if visible_tris is not None:
-                extra.append("Average visible triangles: %.0f" % float(visible_tris))
+                extra.append("SysMon snapshot visible triangles: %.0f" % float(visible_tris))
             if total_tris is not None:
-                extra.append("Average total triangles: %.0f" % float(total_tris))
+                extra.append("SysMon snapshot total triangles: %.0f" % float(total_tris))
             if culled_tris is not None:
-                extra.append("Average culled triangles: %.0f" % float(culled_tris))
+                extra.append("SysMon snapshot culled triangles: %.0f" % float(culled_tris))
             if culling_efficiency is not None:
                 extra.append("Culling efficiency: %.1f%%" % float(culling_efficiency))
             if "one_percent_low_fps" in result:
@@ -2061,7 +2061,6 @@ class BenchmarkResults:
 
         return {
             "average_fps": sysmon_fps,
-            "wall_clock_fps": sysmon_fps,
             "frame_time_ms": current_frame_ms,
             "average_frame_time_ms": average_frame_ms,
             "p95_frame_time_ms": p95_ms,
