@@ -284,7 +284,7 @@ def _entity_scene():
     """A scene whose *entities* exercise the passes the projection took over.
 
     One of each verdict the classification chain can reach: a sprite entity, a
-    billboard, a pickup, a path node (drawn by nothing), and the light.
+    billboard, a collectible Prop, a path node (drawn by nothing), and the light.
     """
     from editor.things import Light, Monster, PathNode, Prop, Thing
 
