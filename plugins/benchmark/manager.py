@@ -279,7 +279,8 @@ class BenchmarkManager(QDialog):
         options.setVisible(False)
         options.setStyleSheet(
             "QWidget { background: #171717; color: #dddddd; }"
-            "QCheckBox { background: #171717; color: #dddddd; }"
+            "QCheckBox { background: #171717; color: #dddddd; "
+            "font-size: 7pt; padding: 1px 2px; }"
         )
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
