@@ -321,14 +321,6 @@ class Thing:
                 return UnresolvedThing(original_record)
         
         io_data = copy.deepcopy(data.get('io_connections', []))
-        if isinstance(io_data, list):
-            for connection in io_data:
-                if not isinstance(connection, dict):
-                    continue
-                if connection.get('output') == 'OnPickedUp':
-                    connection['output'] = (
-                        'OnCollected' if legacy_pickup else 'OnCarried'
-                    )
         if io_data:
             try:
                 from .io_system import OutputConnection
