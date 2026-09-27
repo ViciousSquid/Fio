@@ -810,150 +810,54 @@ def run_live_renderer_sample(window, duration=1.0, warmup=0.75):
 
 
 
-def make_monster_chaos_witness_world(seed="43", monster_count=50, yield_hook=None):
-    """Build the deterministic single-room world used by the live chaos witness."""
-    import random
+def make_monster_chaos_witness_world(seed="43", monster_count=100, yield_hook=None):
+    """Build the fixed 1024^3 room used by the live 100-monster witness.
 
-    random.seed(seed)
+    The monsters are spawned at runtime by the benchmark in staged waves.  The
+    map itself contains only the room and PlayerStart so the measured workload
+    includes the real live-entity insertion/cache path rather than a 100-entity
+    map-load preparation phase.
+    """
+    from editor.things import PlayerStart
+    from tests.helpers.worlds import room
+
     monster_count = int(monster_count)
-    if monster_count != 50:
-        raise ValueError("chaos witness requires exactly 50 monsters")
+    if monster_count != 100:
+        raise ValueError("monster chaos witness requires exactly 100 monsters")
 
-    params = {
-        "world_width": 2048,
-        "world_height": 2048,
-        "min_room": 384,
-        "max_room": 512,
-        "room_count": 1,
-        "wall_tex": "default.png",
-        "floor_tex": "default.png",
-        "enable_floors": False,
-        "floor_height": 128,
-        "floor_room_count": 0,
-        "spawn_monsters": True,
-        "monster_count": monster_count,
-        "spawn_health": False,
-    }
-    data = create_map_data(params, yield_hook=yield_hook)
+    player_x = -384.0
+    player_z = 0.0
+    monster_x = 384.0
+    spawn_y = 128.0
+    player_angle = math.pi / 2.0
 
-    player_start = next(
-        (
-            thing for thing in data.get("things", [])
-            if str(thing.get("type", "")).lower() == "playerstart"
+    player_start = make_thing(
+        PlayerStart,
+        "MonsterChaosPlayerStart",
+        (player_x, spawn_y, player_z),
+        angle=player_angle,
+    )
+
+    data = {
+        "brushes": room(
+            size=1024.0,
+            wall=32.0,
+            height=1024.0,
+            floor_y=0.0,
         ),
-        None,
-    )
-    if player_start is None:
-        raise RuntimeError("chaos witness procedural map has no PlayerStart")
-
-    px, py, pz = [float(v) for v in player_start.get("pos", [0.0, 96.0, 0.0])]
-
-    pathnode_name = "ChaosPathNode"
-    data["things"].append({
-        "type": "path_node",
-        "pos": [px, py, pz],
-        "properties": {
-            "type": "path_node",
-            "name": pathnode_name,
-            "id": "chaos_pathnode",
-            "radius": 64.0,
-            "show_radius": True,
-            "affects_type": "both",
-            "next_node": "",
-            "wait_time": 0.0,
-            "speed": 1.0,
-        },
-        "io_connections": [],
-    })
-
-    monsters = [
-        thing for thing in data.get("things", [])
-        if str(thing.get("type", "")).lower() == "monster"
-    ]
-    if len(monsters) != monster_count:
-        raise RuntimeError(
-            "chaos witness generated %d monsters, expected %d"
-            % (len(monsters), monster_count)
-        )
-
-    # Two hostile mixed teams: 15 human + 10 flying on each side.
-    monster_specs = (
-        [("benchmark_red", "human")] * 15
-        + [("benchmark_blue", "human")] * 15
-        + [("benchmark_red", "flying")] * 10
-        + [("benchmark_blue", "flying")] * 10
-    )
-    rng = random.Random(seed)
-    rng.shuffle(monster_specs)
-
-    # Randomly use the base sprite set or the available alternate skin.
-    variants = ("<None>", "variant1")
-
-    # Put the teams on opposite sides of the single room, but keep every
-    # spawn well inside the room's central open area.  The previous layout
-    # scattered the 25-monster teams close enough to the wall/collision
-    # boundary that production pathfinding could choose a route which ended
-    # up reporting the central PathNode as blocked by a wall.  Use a compact
-    # 5x5 staging grid with a clear straight corridor to the centre instead.
-    team_positions = {
-        "benchmark_red": [],
-        "benchmark_blue": [],
+        "things": [player_start.to_dict()],
     }
-    for row in range(25):
-        z_offset = ((row % 5) - 2) * 40.0 + rng.uniform(-4.0, 4.0)
-        x_offset = ((row // 5) - 2) * 6.0 + rng.uniform(-3.0, 3.0)
-        team_positions["benchmark_red"].append(
-            [px - 80.0 + x_offset, z_offset]
-        )
-        team_positions["benchmark_blue"].append(
-            [px + 80.0 - x_offset, z_offset]
-        )
-
-    team_indices = {"benchmark_red": 0, "benchmark_blue": 0}
-    for index, monster in enumerate(monsters):
-        team, monster_type = monster_specs[index]
-        position_index = team_indices[team]
-        team_indices[team] += 1
-        x_offset, z_offset = team_positions[team][position_index]
-
-        monster["pos"] = [
-            x_offset,
-            py + (32.0 if monster_type == "flying" else 0.0),
-            pz + z_offset,
-        ]
-        props = monster.setdefault("properties", {})
-        props.update({
-            "monster_type": monster_type,
-            "health": 120,
-            "damage": 12,
-            "awake": True,
-            "wake_on_sight": True,
-            "dead": False,
-            "team": team,
-            "variant": rng.choice(variants),
-            "patrol": True,
-            "patrol_target": pathnode_name,
-            "patrol_mode": "once",
-            "target_name": pathnode_name,
-        })
-
-        if yield_hook is not None and index % 8 == 0:
-            yield_hook()
 
     if yield_hook is not None:
         yield_hook()
 
     return data, {
         "seed": str(seed),
+        "room_size": [1024.0, 1024.0, 1024.0],
+        "player_start": [player_x, spawn_y, player_z],
+        "player_start_angle": player_angle,
+        "initial_monster_position": [monster_x, spawn_y, player_z],
         "monster_count": monster_count,
-        "human_count": sum(1 for _, mtype in monster_specs if mtype == "human"),
-        "flying_count": sum(1 for _, mtype in monster_specs if mtype == "flying"),
-        "team_counts": {
-            team: sum(1 for monster_team, _ in monster_specs if monster_team == team)
-            for team in ("benchmark_red", "benchmark_blue")
-        },
-        "pathnode_name": pathnode_name,
-        "pathnode_pos": [px, py, pz],
     }
 
 def prepare_live_monster_test(window, aggro_fraction=0.25, yield_hook=None):
