@@ -42,6 +42,14 @@ class BigWorldSettings(Thing):
     #: Reused by the property panel / manager to key its schema.
     TYPE = "bigworldsettings"
 
+    # The property editor only asks an entity for its explicit primary
+    # properties before invoking the plugin schema renderer. BigWorldSettings
+    # has no bespoke widget group, so derive that classification directly from
+    # the same field table instead of maintaining a second list of keys.
+    EDITOR_PRIMARY_PROPERTIES = tuple(field.key for field in __import__(
+        "plugins.bigworld.config", fromlist=["FIELDS"]).FIELDS
+    )
+
     #: 2D-view sprite. Without this the entity draws nothing and is invisible /
     #: unselectable in the top/front/side views; the plugin ships its own icon
     #: (project-root-relative, like every other plugin entity's ``pixmap_path``).
