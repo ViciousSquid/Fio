@@ -73,7 +73,7 @@ class BenchmarkManager(QDialog):
         self.has_current_map = False
 
         self.setWindowTitle("Fio Benchmark")
-        self.resize(900, 700)
+        self.resize(760, 580)
         self._font_size = max(6, QApplication.font().pointSize())
         self.setFont(QApplication.font())
         self.setStyleSheet(
