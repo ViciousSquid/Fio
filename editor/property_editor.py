@@ -690,7 +690,7 @@ class PropertyEditor(QWidget):
     # Brush population
     # ────────────────────────────
     def populate_for_brush(self, brush):
-        scroll = QScrollArea()
+        scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.verticalScrollBar().setStyleSheet(_Style.SCROLL_V)
@@ -793,7 +793,7 @@ class PropertyEditor(QWidget):
         selected when a page appears.  The tab is added empty so the tab bar
         looks the same, and ``builder`` runs once, on the first switch to it.
         """
-        placeholder = QWidget()
+        placeholder = QWidget(self.tab_widget)
         QVBoxLayout(placeholder).setContentsMargins(0, 0, 0, 0)
         index = self.tab_widget.addTab(placeholder, "\u26a1 I/O")
         tabs = self.tab_widget
@@ -1657,7 +1657,7 @@ class PropertyEditor(QWidget):
     # Thing population
     # ────────────────────────────
     def populate_for_thing(self, thing):
-        scroll = QScrollArea()
+        scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.verticalScrollBar().setStyleSheet(_Style.SCROLL_V)
