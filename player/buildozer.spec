@@ -23,7 +23,7 @@ package.domain = org.vicioussquid.fio
 # plugin code + assets (e.g. the tidy object model) into the APK, so plugin
 # games run on-device; a .fiopak that carries its own plugins still works too.
 source.dir = ..
-source.include_exts = py,png,jpg,jpeg,tga,bmp,ogg,wav,json,fiopak,glsl,vert,frag,obj,glb,mtl
+source.include_exts = py,png,jpg,jpeg,tga,bmp,ogg,wav,json,fiopak,glsl,vert,frag,obj,glb,mtl,ttf,otf
 source.include_patterns = player/*,engine/*,plugins/*,assets/*,game.fiopak
 # Exclude the desktop-only editor and its heavy PyQt5 dependency. The repo-root
 # main.py IS the entry point (it detects Android and launches the player), so it

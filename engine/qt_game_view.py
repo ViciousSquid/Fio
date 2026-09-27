@@ -7,7 +7,7 @@ import ctypes
 from typing import Optional
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
 from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent
-from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient
+from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
@@ -396,6 +396,33 @@ class QtGameView(QOpenGLWidget):
        
 
 
+    def _load_health_font(self):
+        """Load the bundled Rushford Clean font for the numeric health HUD."""
+        fonts_dir = os.path.join(os.getcwd(), 'assets', 'fonts')
+        candidates = []
+        try:
+            for filename in os.listdir(fonts_dir):
+                lower = filename.lower()
+                if 'rushford' not in lower:
+                    continue
+                if lower.endswith(('.ttf', '.otf')):
+                    candidates.append(filename)
+        except OSError:
+            candidates = []
+
+        for filename in sorted(candidates):
+            path = os.path.join(fonts_dir, filename)
+            font_id = QFontDatabase.addApplicationFont(path)
+            if font_id < 0:
+                continue
+            families = QFontDatabase.applicationFontFamilies(font_id)
+            if families:
+                return QFont(families[0], 56)
+
+        # Development fallback: use an installed copy if present. Once the
+        # bundled font is placed in assets/fonts, this path is not used.
+        return QFont("Rushford Clean", 56)
+
     def _init_hud_caches(self):
         self._hud_font = QFont("Arial", 11)
         self._hud_font.setBold(True)
@@ -406,14 +433,11 @@ class QtGameView(QOpenGLWidget):
         self._sprites_font.setBold(True)
         self._death_title_font = QFont("Arial", 64, QFont.Bold)
         self._death_sub_font = QFont("Arial", 18)
+        self._hud_health_font = self._load_health_font()
         self._face_mode_font_top = QFont("Arial", 14, QFont.Bold)
         self._face_mode_font_bot = QFont("Arial", 10, QFont.Bold)
 
-        self._hud_bar_bg_pen = QPen(QColor(60, 60, 60), 2)
-        self._hud_bar_bg_brush = QBrush(QColor(40, 40, 40, 200))
-        self._hud_health_green = QColor(50, 200, 50)
-        self._hud_health_yellow = QColor(255, 200, 50)
-        self._hud_health_red = QColor(200, 50, 50)
+        self._hud_health_orange = QColor(179, 75, 0)
         self._hud_white_pen = QPen(QColor(255, 255, 255))
         self._hud_black_pen = QPen(QColor(0, 0, 0))
         self._hud_grey_pen = QPen(QColor(200, 200, 200))
@@ -1752,28 +1776,16 @@ class QtGameView(QOpenGLWidget):
         max_health = getattr(self, '_cached_max_health', 100)
         if health is None or max_health is None:
             return
-        health_ratio = health / max_health if max_health > 0 else 0
         hud_margin = 20
-        bar_width = 200
-        bar_height = 20
-        bar_x = hud_margin
-        bar_y = viewport_height - hud_margin - bar_height
-        painter.setPen(self._hud_bar_bg_pen)
-        painter.setBrush(self._hud_bar_bg_brush)
-        painter.drawRect(bar_x, bar_y, bar_width, bar_height)
-        fill_width = int(bar_width * health_ratio)
-        if fill_width > 0:
-            painter.setPen(Qt.NoPen)
-            if health_ratio > 0.6:
-                painter.setBrush(QBrush(self._hud_health_green))
-            elif health_ratio > 0.3:
-                painter.setBrush(QBrush(self._hud_health_yellow))
-            else:
-                painter.setBrush(QBrush(self._hud_health_red))
-            painter.drawRect(bar_x, bar_y, fill_width, bar_height)
-        painter.setFont(self._hud_font)
-        painter.setPen(QColor(255, 255, 255))
-        painter.drawText(bar_x, bar_y - 5, f"HEALTH: {health}/{max_health}")
+        health_font = QFont(self._hud_health_font)
+        health_font.setPointSize(max(42, min(68, int(viewport_height * 0.085))))
+        painter.setFont(health_font)
+        painter.setPen(self._hud_health_orange)
+        health_text = str(int(health))
+        metrics = QFontMetrics(health_font)
+        health_x = hud_margin
+        health_y = viewport_height - hud_margin - metrics.descent()
+        painter.drawText(health_x, health_y, health_text)
         active_weapon = getattr(self, '_cached_active_weapon', None)
         # The centre-screen crosshair is a first-person aiming reticle: it marks
         # where the camera-forward hitscan lands. In overhead (top-down) mode the
@@ -1938,30 +1950,20 @@ class QtGameView(QOpenGLWidget):
         p2_health = getattr(render_state, 'player2_health', 100)
         p2_max_health = getattr(render_state, 'player2_max_health', 100)
         p2_dead = getattr(render_state, 'player2_dead', False)
-        p2_ratio = (p2_health / p2_max_health) if p2_max_health > 0 else 0.0
         painter.save()
         painter.setClipRect(half, 0, half, h)
         margin = 20
-        bar_w = 200
-        bar_h = 20
-        bar_x = half + margin
-        bar_y = h - margin - bar_h
-        painter.setPen(self._hud_bar_bg_pen)
-        painter.setBrush(self._hud_bar_bg_brush)
-        painter.drawRect(bar_x, bar_y, bar_w, bar_h)
-        fill = int(bar_w * p2_ratio)
-        if fill > 0:
-            painter.setPen(Qt.NoPen)
-            if p2_ratio > 0.6:
-                painter.setBrush(QBrush(self._hud_health_green))
-            elif p2_ratio > 0.3:
-                painter.setBrush(QBrush(self._hud_health_yellow))
-            else:
-                painter.setBrush(QBrush(self._hud_health_red))
-            painter.drawRect(bar_x, bar_y, fill, bar_h)
-        painter.setFont(self._hud_font)
-        painter.setPen(QColor(255, 255, 255))
-        painter.drawText(bar_x, bar_y - 5, f"P2  {p2_health}/{p2_max_health}")
+        health_font = QFont(self._hud_health_font)
+        health_font.setPointSize(max(42, min(68, int(h * 0.085))))
+        painter.setFont(health_font)
+        painter.setPen(self._hud_health_orange)
+        health_text = str(int(p2_health))
+        metrics = QFontMetrics(health_font)
+        painter.drawText(
+            half + margin,
+            h - margin - metrics.descent(),
+            health_text,
+        )
         cx = half + half // 2
         cy = h // 2
         sz = 10
