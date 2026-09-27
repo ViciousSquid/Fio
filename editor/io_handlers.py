@@ -1236,7 +1236,7 @@ def register_all_input_handlers(io_manager: IOManager):
 
     # ==========================================================================
     # THING (ENTITY) HIDE / SHOW INPUTS
-    # (Things have .properties dict — covers monster, light, speaker, pickup, model)
+    # (Things have .properties dict — covers monster, light, speaker, model, prop)
     # ==========================================================================
 
     def thing_hide(entity, param, logic):
@@ -1259,7 +1259,7 @@ def register_all_input_handlers(io_manager: IOManager):
         debug_log('IO', f"Entity '{name}' toggled → {state}")
 
     # Register for every thing-based type that declares Hide/Show
-    for ttype in ('monster', 'light', 'speaker', 'pickup', 'model', 'prop'):
+    for ttype in ('monster', 'light', 'speaker', 'model', 'prop'):
         io_manager.register_input_handler(ttype, 'hide', thing_hide)
         io_manager.register_input_handler(ttype, 'show', thing_show)
         io_manager.register_input_handler(ttype, 'togglevisibility', thing_toggle_vis)
