@@ -173,7 +173,7 @@ class TidyPlugin(FioPlugin):
         )
 
         # Extend the core Prop I/O instead of replacing it. The core system
-        # already owns Enable/Disable/Drop/Wake and OnPickedUp/OnDropped/OnRest.
+        # already owns Enable/Disable/Drop/Wake and OnCarried/OnDropped/OnRest.
         api.register_io(
             "tidyreceptacle",
             inputs=[
