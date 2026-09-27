@@ -986,6 +986,8 @@ class BenchmarkRunner:
         self._timer.stop()
         self._stop_live_stress_monitor()
         metrics = dict(metrics)
+        if "frame_time_ms" in metrics:
+            metrics["current_frame_time_ms"] = float(metrics.get("frame_time_ms", 0.0) or 0.0)
         metrics["benchmark_live"] = True
 
         if label == "monster_chaos_witness":
@@ -1783,6 +1785,7 @@ class BenchmarkResults:
             description = self._html_escape(result.get("description", result.get("test", "")))
             fps = result.get("average_fps")
             mean_ms = result.get("average_frame_time_ms", result.get("mean_ms"))
+            current_frame_ms = result.get("current_frame_time_ms", result.get("frame_time_ms"))
             p95_ms = result.get("p95_frame_time_ms", result.get("p95_ms"))
             resolution = self._html_escape(result.get("resolution", ""))
             brushes = result.get("brush_count", result.get("brushes"))
@@ -1793,10 +1796,12 @@ class BenchmarkResults:
                 metrics.append("Resolution: %s" % resolution)
             if fps is not None:
                 metrics.append("Average FPS: %.2f (from captured frame time)" % float(fps))
-            if "wall_clock_fps" in result:
-                metrics.append("Wall-clock FPS: %.2f (captured frames / measurement duration)" % float(result["wall_clock_fps"]))
+            if "wall_clock_fps" in result and result.get("fps_source") == "SysMon runtime FPS (1 s)":
+                metrics.append("SysMon FPS: %.2f (1-second runtime rate)" % float(result["wall_clock_fps"]))
+            if current_frame_ms is not None:
+                metrics.append("Current frame: %.2f ms" % float(current_frame_ms))
             if mean_ms is not None:
-                metrics.append("Average frame: %.2f ms" % float(mean_ms))
+                metrics.append("60-frame average: %.2f ms" % float(mean_ms))
             if p95_ms is not None:
                 metrics.append("p95: %.2f ms" % float(p95_ms))
             if brushes is not None:
@@ -2026,47 +2031,54 @@ class BenchmarkResults:
     
 
     def _benchmark_metrics(self, metrics, duration_s, samples=None):
-        """Build results directly from the authoritative SysMon snapshot."""
+        """Build results from one authoritative SysMon snapshot.
+
+        SysMon exposes different time bases: ``fps`` is Fio's one-second
+        runtime FPS, while frame-time statistics are the current frame and
+        a rolling 60-frame window. Do not average snapshots into another
+        benchmark-only FPS value.
+        """
         metrics = dict(metrics or {})
-        samples = list(samples or [])
-        fps_values = []
-        for sample in samples:
-            try:
-                fps = float(sample.get("fps", 0.0))
-            except (TypeError, ValueError):
-                continue
-            if math.isfinite(fps) and fps > 0.0:
-                fps_values.append(fps)
         try:
-            current_fps = float(metrics.get("fps", 0.0))
+            sysmon_fps = float(metrics.get("fps", 0.0) or 0.0)
         except (TypeError, ValueError):
-            current_fps = 0.0
-        if current_fps > 0.0 and math.isfinite(current_fps):
-            fps_values.append(current_fps)
-        average_fps = sum(fps_values) / len(fps_values) if fps_values else 0.0
-        avg_frame_ms = float(metrics.get("average_frame_time_ms", 0.0) or 0.0)
-        p95_ms = float(metrics.get("p95_frame_time_ms", 0.0) or 0.0)
+            sysmon_fps = 0.0
+        try:
+            current_frame_ms = float(metrics.get("frame_time_ms", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            current_frame_ms = 0.0
+        try:
+            average_frame_ms = float(metrics.get("average_frame_time_ms", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            average_frame_ms = 0.0
+        try:
+            p95_ms = float(metrics.get("p95_frame_time_ms", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            p95_ms = 0.0
+
         visible_tris = float(metrics.get("visible_tris", 0) or 0)
         culled_tris = float(metrics.get("culled_tris", 0) or 0)
         total_tris = visible_tris + culled_tris
+
         return {
-            "average_fps": average_fps,
-            "wall_clock_fps": average_fps,
-            "average_frame_time_ms": avg_frame_ms,
+            "average_fps": sysmon_fps,
+            "wall_clock_fps": sysmon_fps,
+            "frame_time_ms": current_frame_ms,
+            "average_frame_time_ms": average_frame_ms,
             "p95_frame_time_ms": p95_ms,
-            "mean_ms": avg_frame_ms,
+            "mean_ms": average_frame_ms,
             "p95_ms": p95_ms,
-            "sample_count": len(samples),
+            "sample_count": len(list(samples or ())),
             "measurement_duration_s": max(0.0, float(duration_s)),
             "average_visible_tris": visible_tris,
             "average_total_tris": total_tris,
             "average_culled_tris": culled_tris,
-            "culling_efficiency": culled_tris / total_tris * 100.0 if total_tris > 0 else 0.0,
+            "culling_efficiency": (culled_tris / total_tris * 100.0 if total_tris > 0 else 0.0),
             "sysmon": metrics,
-            "fps_source": "SysMon",
-            "frame_time_source": "SysMon",
+            "fps_source": "SysMon runtime FPS (1 s)",
+            "frame_time_source": "SysMon frame timer",
+            "frame_time_window": "current + rolling 60 frames",
         }
-
     def _format_vram(self, metrics):
         used = metrics.get("vram_used_mb")
         total = metrics.get("vram_total_mb")
