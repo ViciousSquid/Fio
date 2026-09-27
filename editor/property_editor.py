@@ -1781,7 +1781,7 @@ class PropertyEditor(QWidget):
             self.add_vector3_widget(form, thing, 'rotation')
 
             if is_prop:
-                sprite_widget = QWidget()
+                sprite_widget = QWidget(w)
                 sprite_layout = QHBoxLayout(sprite_widget)
                 sprite_layout.setContentsMargins(0, 0, 0, 0)
                 sprite_edit = QLineEdit(
@@ -1811,7 +1811,7 @@ class PropertyEditor(QWidget):
                 sprite_layout.addWidget(sprite_btn)
                 form.addRow("Sprite Path:", sprite_widget)
 
-                sprite_size_widget = QWidget()
+                sprite_size_widget = QWidget(w)
                 sprite_size_layout = QHBoxLayout(sprite_size_widget)
                 sprite_size_layout.setContentsMargins(0, 0, 0, 0)
                 sprite_size = thing.properties.get('sprite_size', [32.0, 32.0])
