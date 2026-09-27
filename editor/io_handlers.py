@@ -189,6 +189,7 @@ def register_all_input_handlers(io_manager: IOManager):
             table.effect_spawn_time[slot],
             table.effect_elapsed[slot],
             table.effect_active[slot],
+            table.effect_phase[slot],
             table.effect_alive[slot],
         )
         table._resolve_entity_cold(slot, entity)
@@ -197,6 +198,7 @@ def register_all_input_handlers(io_manager: IOManager):
             table.effect_elapsed[slot],
             table.effect_active[slot],
             table.effect_alive[slot],
+            table.effect_phase[slot],
         ) = runtime
 
     def effect_set_type(entity, param, logic):
@@ -321,6 +323,7 @@ def register_all_input_handlers(io_manager: IOManager):
         table.effect_spawn_time[slot] = now
         table.effect_shared_spawn_time[slot] = now
         table.effect_elapsed[slot] = 0.0
+        table.effect_phase[slot] = 0.0
         table.effect_active[slot] = True
         table.effect_alive[slot] = True
 
