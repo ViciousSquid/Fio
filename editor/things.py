@@ -1945,7 +1945,6 @@ ENTITY_TYPES = {
     'Light': Light,
     'Speaker': Speaker,
     'Monster': Monster,
-    'Pickup': Pickup,
     'Model': Model,
     'LogicRelay': LogicRelay,
     'LogicGate': LogicGate,
