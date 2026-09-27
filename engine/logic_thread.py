@@ -1153,6 +1153,8 @@ class LogicThread(threading.Thread):
             # Reset cinematic state (mover_path_states already reset by _init_movers)
             self.cinematic_state = None
             self.camera_transition = None
+            self._hud_cinematic_last_active = False
+            self._hud_health_fade_started = None
 
             # Reset portal transit state
             self._portal_cooldowns.clear()
@@ -1239,6 +1241,8 @@ class LogicThread(threading.Thread):
             self.mover_path_states = {}
             self.cinematic_state = None
             self.camera_transition = None
+            self._hud_cinematic_last_active = False
+            self._hud_health_fade_started = None
 
             # Reset portal transit state
             self._portal_cooldowns.clear()
