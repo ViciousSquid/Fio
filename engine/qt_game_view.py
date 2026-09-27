@@ -626,7 +626,7 @@ class QtGameView(QOpenGLWidget):
         )
         row_height = max_stack_height + 6
         baseline = viewport_height - 20 - metrics.descent() - (row_height * stack_slot)
-        cx = viewport_width // 2 + int(viewport_width * 0.05)
+        cx = viewport_width // 2 + int(viewport_width * 0.10)
         text_x = cx - width // 2
 
         painter.save()
