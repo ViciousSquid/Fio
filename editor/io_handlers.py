@@ -1899,15 +1899,23 @@ def register_all_input_handlers(io_manager: IOManager):
         pass
 
     # Keep the version components individually filterable while retaining
-    # the bold Fio/version presentation used by the Debug Console.
+    # the bold Fio/version presentation used by the Debug Console.  Version
+    # links carry their own style so the console's entity-link highlighting
+    # cannot reinterpret or restyle their HTML.
+    version_link_style = (
+        'color: #2AA63E; font-weight: bold; text-decoration: none;'
+    )
     version_parts = version_str.split('.')
     if len(version_parts) == 4:
         version_markup = (
-            f'<a href="filter:{version_parts[0]}"><b>{version_parts[0]}</b></a>'
+            f'<a href="filter:{version_parts[0]}" '
+            f'style="{version_link_style}">{version_parts[0]}</a>'
             f'<b>.</b>'
-            f'<a href="filter:{version_parts[1]}"><b>{version_parts[1]}</b></a>'
+            f'<a href="filter:{version_parts[1]}" '
+            f'style="{version_link_style}">{version_parts[1]}</a>'
             f'<b>.</b>'
-            f'<a href="filter:{version_parts[2]}"><b>{version_parts[2]}</b></a>'
+            f'<a href="filter:{version_parts[2]}" '
+            f'style="{version_link_style}">{version_parts[2]}</a>'
             f'<b>.</b><b>{version_parts[3]}</b>'
         )
     else:
