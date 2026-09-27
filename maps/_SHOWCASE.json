@@ -2639,24 +2639,30 @@
                 680.0
             ],
             "textures": {
-                "north": "default.png",
-                "south": "default.png",
-                "east": "default.png",
-                "west": "default.png",
-                "top": "default.png",
-                "down": "default.png"
+                "north": "trigger.jpg",
+                "south": "trigger.jpg",
+                "east": "trigger.jpg",
+                "west": "trigger.jpg",
+                "top": "trigger.jpg",
+                "down": "default.png",
+                "bottom": "trigger.jpg"
             },
             "id": "de33cd67-fa6d-4eb1-b2bd-3d27ecd5804b",
             "shader": "Fog",
             "is_fog": true,
             "is_trigger": false,
-            "fog_density": 4.0,
-            "fog_color": [
-                0.1450980392156863,
-                0.17647058823529413,
-                0.20392156862745098
+            "hidden": false,
+            "trigger_type": "Once",
+            "trigger_filters": [
+                "player"
             ],
-            "hidden": false
+            "trigger_poll_interval": 1.0,
+            "fog_density": 2.0,
+            "fog_color": [
+                0.5,
+                0.6,
+                0.7
+            ]
         },
         {
             "pos": [
