@@ -80,53 +80,6 @@ PROP_DEFAULTS = {
 }
 
 
-def migrate_legacy_pickup_properties(properties):
-    """Return Prop properties converted from the old Pickup schema.
-
-    This is intentionally a load-time map migration rather than a second
-    runtime entity type. The migrated record is a normal Prop immediately.
-    """
-    props = dict(properties or {})
-
-    item_type = props.pop('item_type', 'health')
-    legacy_weapon = item_type if item_type in GUN_SPRITES else None
-    weapon = props.pop('weapon', legacy_weapon or 'gun1')
-
-    collect_type = 'weapon' if legacy_weapon else item_type
-    if collect_type not in COLLECT_TYPES:
-        collect_type = 'custom'
-
-    props['type'] = 'prop'
-    props['carry_enabled'] = False
-    props['collect_enabled'] = True
-    props['collect_type'] = collect_type
-    props['collect_value'] = props.pop(
-        'value',
-        8 if collect_type == 'ammo' else 25,
-    )
-    props['collect_activation'] = props.pop('activation', 'walk_over')
-    props['collect_collected'] = props.pop('collected', False)
-    props['collect_respawns'] = props.pop('respawns', False)
-    props['collect_respawn_time'] = props.pop('respawn_time', 20.0)
-    props['collect_key_name'] = props.pop('key_name', DEFAULT_KEY_NAME)
-    props['collect_weapon'] = weapon
-
-    custom_sprite = props.pop('custom_sprite', '')
-    if custom_sprite:
-        props['sprite_path'] = custom_sprite
-    elif collect_type == 'key':
-        props['sprite_path'] = KEY_SPRITES.get(
-            props['collect_key_name'], 'assets/sprites/pickup.png')
-    elif collect_type == 'weapon':
-        props['sprite_path'] = GUN_SPRITES.get(
-            weapon, GUN_SPRITES['gun1'])
-    elif collect_type == 'health':
-        props['sprite_path'] = 'assets/sprites/health.png'
-    elif collect_type == 'ammo':
-        props['sprite_path'] = 'assets/sprites/ammo.png'
-
-    return props
-
 
 class Prop(_ModelBase):
     """A generic world object with optional carry and collect behaviour."""
