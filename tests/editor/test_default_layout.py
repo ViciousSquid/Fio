@@ -132,6 +132,7 @@ class FakeEditorWindow(QMainWindow):
     load_layout = MainWindow.load_layout
     save_layout = MainWindow.save_layout
     reset_layout = MainWindow.reset_layout
+    _enforce_layout_constraints = MainWindow._enforce_layout_constraints
     _restore_default_layout = MainWindow._restore_default_layout
     del MainWindow
 
