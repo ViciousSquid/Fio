@@ -1912,7 +1912,7 @@ class QtGameView(QOpenGLWidget):
         # Pin health almost flush to the extreme lower-left corner.
         # Keep a one-pixel inset so the glyph is not clipped by the framebuffer.
         health_x = 1
-        health_y = viewport_height - 1 - metrics.descent()
+        health_y = viewport_height - 6 - metrics.descent()
 
         # Health is the large orange count. Ammo is a smaller green count
         # touching it directly, with no layout gap.
