@@ -417,6 +417,13 @@ def test_effect_texture_and_custom_inputs_update_dense_projection():
     assert effect.properties["fire_texture"] == EFFECT_FIRE_TEXTURES[2]
     assert table.effect_fire_variant[0] == 2
 
+    real_io._input_handlers[("effect", "setfiretexture")](effect, "fire01", logic)
+    assert effect.properties["fire_texture"] == EFFECT_FIRE_TEXTURES[0]
+    assert table.effect_fire_variant[0] == 0
+
+    real_io._input_handlers[("effect", "setorbtexture")](effect, "orb05", logic)
+    assert effect.properties["orb_texture"] == EFFECT_ORB_TEXTURES[4]
+
     real_io._input_handlers[("effect", "setorbtexture")](effect, "orb05.gif", logic)
     assert effect.properties["orb_texture"] == EFFECT_ORB_TEXTURES[4]
 
