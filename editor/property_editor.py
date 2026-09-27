@@ -1741,7 +1741,7 @@ class PropertyEditor(QWidget):
             self._capture_page_bindings(scroll)
 
     def _create_thing_properties_tab(self, thing) -> QWidget:
-        w = QWidget()
+        w = QWidget(self.tab_widget)
         tab_layout = QVBoxLayout(w)
         tab_layout.setContentsMargins(8, 8, 8, 8)
         tab_layout.setSpacing(4)
@@ -2049,7 +2049,7 @@ class PropertyEditor(QWidget):
         if adv_form.rowCount() == 0:
             return None
 
-        w = QWidget()
+        w = QWidget(self.tab_widget)
         tab_layout = QVBoxLayout(w)
         tab_layout.setContentsMargins(8, 8, 8, 8)
         tab_layout.setSpacing(4)
@@ -2068,7 +2068,7 @@ class PropertyEditor(QWidget):
 
     def _create_prop_physics_tab(self, thing):
         """Render the complete Prop physics controls on a dedicated tab."""
-        w = QWidget()
+        w = QWidget(self.tab_widget)
         layout = QVBoxLayout(w)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(4)

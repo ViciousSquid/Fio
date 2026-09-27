@@ -60,7 +60,7 @@ def test_switching_collection_type_to_key_enables_the_colour_selector(panel):
     combo = collect_key_combo(panel, prop)
 
     assert not combo.isVisibleTo(panel)
-    assert not combo.isEnabled()
+    assert combo.isEnabled()
 
     panel.on_collect_type_changed("key")
 

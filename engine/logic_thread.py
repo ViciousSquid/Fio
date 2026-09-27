@@ -3884,37 +3884,45 @@ class LogicThread(threading.Thread):
             self._hud_health_fade_phase = "in"
 
         phase = self._hud_health_fade_phase
+
         if phase == "in":
             started = self._hud_health_fade_started
             if started is None:
                 self._hud_health_alpha = 1.0
+                self._hud_health_fade_from = 1.0
+                self._hud_health_fade_started = now
+                self._hud_health_fade_phase = "out"
+                out_elapsed = 0.0
             else:
-                t = max(
-                    0.0,
-                    min(
-                        1.0,
-                        (now - started) / self._hud_health_fade_in_duration,
-                    ),
-                )
-                self._hud_health_alpha = (
-                    self._hud_health_fade_from
-                    + (1.0 - self._hud_health_fade_from) * t
-                )
-                if t >= 1.0:
-                    self._hud_health_alpha = 1.0
-                    self._hud_health_fade_from = 1.0
-                    self._hud_health_fade_phase = "out"
+                elapsed = max(0.0, now - started)
+                if elapsed < self._hud_health_fade_in_duration:
+                    t = elapsed / self._hud_health_fade_in_duration
+                    self._hud_health_alpha = (
+                        self._hud_health_fade_from
+                        + (1.0 - self._hud_health_fade_from) * t
+                    )
+                    return self._hud_health_alpha
 
-        elif phase == "out":
+                # The sample may land after the complete fade-in. Finish the
+                # fade-in and continue directly through the fade-out using the
+                # remaining elapsed time, so large time jumps are deterministic.
+                self._hud_health_alpha = 1.0
+                self._hud_health_fade_from = 1.0
+                self._hud_health_fade_phase = "out"
+                phase = "out"
+                out_elapsed = elapsed - self._hud_health_fade_in_duration
+
+        if phase == "out":
             started = self._hud_health_fade_started
             if started is None:
                 self._hud_health_alpha = 0.5
                 self._hud_health_fade_phase = "idle"
             else:
-                out_elapsed = max(
-                    0.0,
-                    now - started - self._hud_health_fade_in_duration,
-                )
+                if "out_elapsed" not in locals():
+                    out_elapsed = max(
+                        0.0,
+                        now - started - self._hud_health_fade_in_duration,
+                    )
                 t = max(
                     0.0,
                     min(

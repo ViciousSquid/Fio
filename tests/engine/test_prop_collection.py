@@ -135,6 +135,7 @@ def test_collect_prop_equips_cig_weapon():
     })
     logic = _logic_for(prop)
     session = PropSession(logic)
+    session.start()
 
     session.collect_prop(prop)
     assert logic.active_weapon == "cig"
