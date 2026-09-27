@@ -144,6 +144,18 @@ def test_values_that_survived_a_json_round_trip_still_read_correctly():
         "an unparseable value should fall back to the field's default, not raise")
 
 
+def test_effective_streaming_radius_respects_the_visual_horizon():
+    assert config.effective_streaming_radii(
+        2048.0, 2304.0, 3768.32
+    ) == pytest.approx((3768.32, 4024.32))
+
+
+def test_effective_streaming_radius_never_shrinks_an_authored_world():
+    assert config.effective_streaming_radii(
+        4096.0, 4608.0, 2048.0
+    ) == pytest.approx((4096.0, 4608.0))
+
+
 def test_the_deactivation_radius_can_never_sit_inside_the_activation_radius():
     """The hysteresis band has to be a band.
 
