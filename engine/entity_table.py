@@ -26,7 +26,7 @@ entity's lifetime.
 keep them in Python.  *Which pass draws an entity* is a resolution of its class
 and four authored properties; it is as static as a brush's shader.  What is
 genuinely dynamic -- where the entity is, whether it is hidden, whether a
-pickup has been collected -- is dynamic for brushes too, and the brush table
+Prop has been collected -- is dynamic for brushes too, and the brush table
 already has the discipline for it.  So this module applies the same one.
 
 What it is, and is not
