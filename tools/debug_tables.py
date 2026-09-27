@@ -179,15 +179,25 @@ class BarView(QWidget):
             return
         maxv = max(v for _, v in self.items) or 1
         row_h = max(18, min(28, self.height() // max(1, len(self.items))))
+        label_x = 8
+        bar_x = 150
+        value_width = 100
+        bar_width = max(40, self.width() - bar_x - value_width - 12)
         for i, (label, value) in enumerate(self.items):
             y = 4 + i * row_h
-            width = int((self.width() - 180) * value / maxv)
+            width = int(bar_width * value / maxv)
             p.setPen(Qt.NoPen)
+            p.setBrush(Qt.darkGray)
+            p.drawRect(bar_x, y + 3, bar_width, row_h - 7)
             p.setBrush(Qt.gray)
-            p.drawRect(150, y + 3, max(1, width), row_h - 7)
-            p.setPen(Qt.lightGray)
-            p.drawText(8, y + row_h - 8, str(label)[:22])
-            p.drawText(156 + width, y + row_h - 8, f"{value:,}")
+            p.drawRect(bar_x, y + 3, max(1, width), row_h - 7)
+            p.setPen(Qt.white)
+            p.drawText(label_x, y + row_h - 8, str(label)[:22])
+            p.drawText(
+                bar_x + bar_width + 8,
+                y + row_h - 8,
+                f"{value:,}",
+            )
 
 
 class DebugTablesWindow(QMainWindow):
