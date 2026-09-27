@@ -286,12 +286,12 @@ def _entity_scene():
     One of each verdict the classification chain can reach: a sprite entity, a
     billboard, a pickup, a path node (drawn by nothing), and the light.
     """
-    from editor.things import Light, Monster, PathNode, Pickup, Thing
+    from editor.things import Light, Monster, PathNode, Prop, Thing
 
     brushes = [box_brush("floor", (0, -16, 0), (1024, 32, 1024))]
     things = [
         make_thing(Monster, "grunt", (-160, 64, 0), monster_type="human"),
-        make_thing(Pickup, "medkit", (0, 48, 0), item_type="health"),
+        make_thing(Prop, "medkit", (0, 48, 0), collect_enabled=True, collect_type="health"),
         make_thing(Thing, "billboard", (160, 64, 0),
                    render_mode="billboard", sprite_path="assets/sprites/x.png"),
         make_thing(PathNode, "node", (0, 32, 200)),
@@ -408,17 +408,17 @@ def test_numeric_sprite_render_submits_instanced_quads(renderer, context):
 
     assert calls["draws"] >= 1
     assert calls["instances"] >= 3, (
-        "the entity scene contains a monster, pickup and billboard")
+        "the entity scene contains a monster, collectible Prop and billboard")
 
 
 def test_numeric_sprite_submission_is_one_draw_per_texture(renderer, context):
     """Equal sprite texture ids collapse into one instanced draw run."""
-    from editor.things import Pickup
+    from editor.things import Prop
 
     brushes = [box_brush("floor", (0, -16, 0), (1024, 32, 1024))]
     things = [
-        make_thing(Pickup, "p%d" % i, (i * 40 - 400, 48, 0),
-                   item_type="health")
+        make_thing(Prop, "p%d" % i, (i * 40 - 400, 48, 0),
+                   collect_enabled=True, collect_type="health")
         for i in range(20)
     ]
 
