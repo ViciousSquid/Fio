@@ -35,11 +35,11 @@ class FakeThing:
 class FakeLogic:
     """Stand-in for the streaming host (see ``runtime.StreamingHost``)."""
 
-    def __init__(self, brushes=None, things=None, player=None):
+    def __init__(self, brushes=None, things=None, player=None, view_distance=None):
         self.brushes = brushes or []
         self.things = things or []
         self.player = player
-        self.view_distance = ViewDistance()
+        self.view_distance = view_distance
 
 
 class FakePlayer:
@@ -65,9 +65,10 @@ def grid_world(cells_each_way=6, per_cell=4, cell_size=512.0):
 
 
 def started_session(things, brushes=None, activation=2048.0,
-                    deactivation=2304.0, near=1024.0, at=(0.0, 0.0)):
+                    deactivation=2304.0, near=1024.0, at=(0.0, 0.0),
+                    view_distance=None):
     logic = FakeLogic(brushes=brushes or [], things=things,
-                      player=FakePlayer(*at))
+                      player=FakePlayer(*at), view_distance=view_distance)
     session = BigWorldSession(logic, activation_radius=activation,
                               deactivation_radius=deactivation,
                               sim_near_radius=near)
@@ -179,8 +180,10 @@ def test_the_session_publishes_one_pair_of_radii():
 
 def test_bigworld_residency_never_ends_inside_the_visual_horizon():
     things = [FakeThing(3000.0, 0.0, uuid="far")]
+    view_distance = ViewDistance(4096.0)
     session = started_session(
-        things, activation=1024.0, deactivation=1280.0, at=(0.0, 0.0)
+        things, activation=1024.0, deactivation=1280.0,
+        at=(0.0, 0.0), view_distance=view_distance
     )
     expected_a, expected_d = effective_streaming_radii(
         1024.0, 1280.0, session.logic.view_distance.visual_horizon
