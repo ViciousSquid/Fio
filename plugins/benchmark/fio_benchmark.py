@@ -808,31 +808,6 @@ def run_live_renderer_sample(window, duration=1.0, warmup=0.75):
     return metrics
 
 
-def load_live_benchmark_world(window, data, yield_hook=None):
-    """Load benchmark content into the existing Fio editor/runtime state cooperatively."""
-    window.state.load_from_data(
-        data,
-        yield_hook=yield_hook,
-        save_undo=False,
-    )
-    if yield_hook is not None:
-        yield_hook()
-
-    window.update_all_ui()
-    if yield_hook is not None:
-        yield_hook()
-
-    window.update_views()
-    if yield_hook is not None:
-        yield_hook()
-
-    window.view_3d.update()
-    window.view_top.update()
-    window.view_side.update()
-    window.view_front.update()
-    if yield_hook is not None:
-        yield_hook()
-
 
 
 def make_monster_chaos_witness_world(seed="43", monster_count=50, yield_hook=None):
