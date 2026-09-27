@@ -26,7 +26,7 @@ from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
 from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
 from .prop_runtime import PropSession
 from .render_table import RenderTable
-from .entity_table import EntityTable
+from .entity_table import EntityTable, ENT_PROP
 from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
 from .effect_entity import Effect
 
@@ -437,7 +437,7 @@ class LogicThread(threading.Thread):
         """Build O(1) lookup dicts for I/O entity resolution.
 
         Also precomputes per-tick filtered entity lists (trigger brushes,
-        pickups, level changers) so hot-path tick handlers don't have to
+        Props, level changers) so hot-path tick handlers don't have to
         linearly rescan the full brush/thing lists every frame — these are
         rebuilt here (play-mode enter, and whenever a thing is spawned) since
         that's the only time the underlying brush/thing collections change.
@@ -4052,7 +4052,7 @@ class LogicThread(threading.Thread):
         collected = self._props.collected_ids if self._props is not None else set()
         if self.play_mode and collected:
             prop_slots = np.flatnonzero(
-                (etable.class_bits & (1 << 8)) != 0
+                (etable.class_bits & ENT_PROP) != 0
             )
             dropped = [int(i) for i in prop_slots
                        if id(entity_things[int(i)]) in collected]
