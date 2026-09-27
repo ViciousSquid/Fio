@@ -732,7 +732,10 @@ class Ui_MainWindow(object):
 
         def sync_play_button_orientation(orientation):
             vertical = orientation == Qt.Vertical
-            MainWindow.play_button.set_vertical(vertical)
+            # The real MainWindow uses RotatablePlayButton. Keep the toolbar
+            # builder tolerant of lightweight test/fake windows too.
+            if hasattr(MainWindow.play_button, "set_vertical"):
+                MainWindow.play_button.set_vertical(vertical)
             if vertical:
                 MainWindow.play_button.setFixedSize(icon_size_val + 16, 250)
             else:
