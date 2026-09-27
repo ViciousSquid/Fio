@@ -22,6 +22,7 @@ pytest.importorskip("PyQt5", reason="the logic thread pulls in editor.things")
 from editor.editor_state import EditorState             # noqa: E402
 from editor.things import Light, Monster, Pickup        # noqa: E402
 from engine.logic_thread import LogicThread             # noqa: E402
+from engine import render_table as render_table_module      # noqa: E402
 from engine.threaded_game_state import RenderState, ThreadedGameState  # noqa: E402
 from tests.helpers.worlds import box_brush, make_thing, pillar_grid  # noqa: E402
 
@@ -590,7 +591,7 @@ def test_dense_projections_are_double_buffered():
     first_write = game_state.get_write_state()
     first_write.render_table.sync([brush], epoch=1)
     first_table = first_write.render_table
-    assert not bool(first_table.class_bits[0] & first_table.CLASS_FOG)
+    assert not bool(first_table.class_bits[0] & render_table_module.CLASS_FOG)
 
     game_state.request_swap()
     published = game_state.get_render_state()
@@ -603,7 +604,7 @@ def test_dense_projections_are_double_buffered():
     brush["is_fog"] = True
     next_write.render_table.sync([brush], epoch=2)
 
-    assert bool(next_write.render_table.class_bits[0] & next_write.render_table.CLASS_FOG)
+    assert bool(next_write.render_table.class_bits[0] & render_table_module.CLASS_FOG)
     assert not bool(first_table.class_bits[0] & first_table.CLASS_FOG), (
         "editing the write-side table changed the table already published "
         "to the renderer"
