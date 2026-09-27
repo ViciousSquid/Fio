@@ -658,6 +658,7 @@ class QtGameView(QOpenGLWidget):
                 self._view_message2_queue,
                 self._start_view_message2,
                 line_offset=1,
+                align_right=True,
             )
         )
 
