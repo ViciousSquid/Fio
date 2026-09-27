@@ -189,7 +189,7 @@ class QtGameView(QOpenGLWidget):
         self.sprite_textures = {}
         self.gun_hud_pixmaps = {}
         self.gun_flash_pixmaps = {}
-        self.weapon_pickup_pixmaps = {}   # item_type -> world/pickup QPixmap
+        self.weapon_collect_pixmaps = {}   # item_type -> world/collectible QPixmap
         self.monster_debug_active = False
         self.show_spatial_grid = False
         self.renderer = None
@@ -444,7 +444,7 @@ class QtGameView(QOpenGLWidget):
         self._view_message2_width = 0
         self._view_message2_queue = deque()
         self._cached_gun_hud = {}
-        self._cached_weapon_pickup = {}   # (item_type, size) -> scaled QPixmap
+        self._cached_weapon_collect = {}   # (item_type, size) -> scaled QPixmap
         self._cached_key_pixmaps = {}
         self._cached_key_size = 100
         self._cached_prompt_key = None
@@ -1876,7 +1876,7 @@ class QtGameView(QOpenGLWidget):
                         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
                         painter.drawPixmap(x, y, scaled.width(), scaled.height(), flash_pixmap)
                         painter.restore()
-        # Overhead: held weapon shown as a bottom-right pickup icon (like keys).
+        # Overhead: held weapon shown as a bottom-right collectible icon (like keys).
         # It takes the rightmost slot; keys shift left so both fit side by side.
         key_slot_offset = 0
         if overhead and active_weapon:
@@ -1886,10 +1886,10 @@ class QtGameView(QOpenGLWidget):
             pm = self._load_weapon_collect_pixmap(active_weapon)
             if pm and not pm.isNull():
                 cache_key = (active_weapon, icon_size)
-                scaled = self._cached_weapon_pickup.get(cache_key)
+                scaled = self._cached_weapon_collect.get(cache_key)
                 if scaled is None or scaled.isNull():
                     scaled = pm.scaled(icon_size, icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                    self._cached_weapon_pickup[cache_key] = scaled
+                    self._cached_weapon_collect[cache_key] = scaled
                 painter.drawPixmap(wx + (icon_size - scaled.width()) // 2,
                                    wy + (icon_size - scaled.height()) // 2, scaled)
                 # Reserve the weapon's slot so keys don't overlap it.
@@ -3198,15 +3198,15 @@ class QtGameView(QOpenGLWidget):
             return pixmap
         return None
 
-    def _load_weapon_pickup_pixmap(self, item_type):
+    def _load_weapon_collect_pixmap(self, item_type):
         """The world/collectible sprite for a weapon (e.g. 'gun1' -> gun1.png).
 
-        Used by the overhead HUD, which shows the small pickup icon bottom-right
+        Used by the overhead HUD, which shows the small collectible icon bottom-right
         instead of the first-person gun sprite. Resolved via the Prop
         GUN_SPRITES map so it matches what the weapon looks like in the world.
         """
-        if item_type in self.weapon_pickup_pixmaps:
-            return self.weapon_pickup_pixmaps[item_type]
+        if item_type in self.weapon_collect_pixmaps:
+            return self.weapon_collect_pixmaps[item_type]
         rel = None
         try:
             from engine.prop_entity import Prop
@@ -3216,7 +3216,7 @@ class QtGameView(QOpenGLWidget):
         if not rel:
             rel = os.path.join('assets', 'sprites', f'{item_type}.png')
         pixmap = QPixmap(rel) if os.path.exists(rel) else None
-        self.weapon_pickup_pixmaps[item_type] = pixmap
+        self.weapon_collect_pixmaps[item_type] = pixmap
         return pixmap
 
     def eventFilter(self, obj, event):
