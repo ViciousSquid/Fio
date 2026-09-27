@@ -943,7 +943,7 @@ class LogicCommand(Thing):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties['type'] = 'logic_command'
-        self.properties.setdefault('command', 'cam')
+        self.properties.setdefault('command', '')
         self.properties.setdefault('disabled', False)
 
     def get_instance_pixmap(self):
