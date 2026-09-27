@@ -44,6 +44,18 @@ def test_far_plane_is_the_view_distance():
     assert vd.far_plane == vd.distance == 2500.0
 
 
+def test_visual_horizon_is_the_fog_end_when_fog_is_enabled():
+    vd = ViewDistance(4096.0)
+    assert vd.visual_horizon == pytest.approx(vd.resolve()[1])
+    assert vd.visual_horizon < vd.far_plane
+
+
+def test_visual_horizon_is_the_far_plane_when_fog_is_disabled():
+    vd = ViewDistance(4096.0)
+    vd.fog_enabled = False
+    assert vd.visual_horizon == vd.far_plane
+
+
 def test_distance_sq_is_the_squared_radius_the_cull_compares():
     vd = ViewDistance(1500.0)
     assert vd.distance_sq == 1500.0 ** 2
