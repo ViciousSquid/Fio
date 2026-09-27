@@ -794,11 +794,20 @@ class DebugConsole(QWidget):
             )
 
         # A raw startup URL is a real clickable link, not an entity filter.
+        # Protect the generated anchor too, so the normal entity pass cannot
+        # rewrite "github.com" as an entity link.
+        _external_links = []
+        def _protect_external_link(m):
+            _external_links.append(
+                get_external_link_html(
+                    m.group(0) if m.group(0).startswith('http') else
+                    'https://' + m.group(0))
+            )
+            return f"__EXTERNAL_LINK_{len(_external_links) - 1}__"
+
         _msg_temp = re.sub(
             r'(?<![\w/])https?://[^\s<]+|(?<![\w/])github\.com/[^\s<]+',
-            lambda m: get_external_link_html(
-                m.group(0) if m.group(0).startswith('http') else
-                'https://' + m.group(0)),
+            _protect_external_link,
             _msg_temp
         )
 
@@ -840,9 +849,11 @@ class DebugConsole(QWidget):
         # G. Style arrow -> as green arrow character
         _msg_temp = self._RE_ARROW.sub(' <span style="color: #66BB6A;">→</span> ', _msg_temp)
 
-        # Restore protected HTML tags
+        # Restore protected HTML tags and generated external anchors.
         for _i, _tag in enumerate(_protected_tags):
             _msg_temp = _msg_temp.replace(f"__HTML_{_i}__", _tag)
+        for _i, _tag in enumerate(_external_links):
+            _msg_temp = _msg_temp.replace(f"__EXTERNAL_LINK_{_i}__", _tag)
         message = _msg_temp
 
         # ---------------------------
