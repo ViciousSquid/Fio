@@ -13,6 +13,8 @@ The pathological shapes get their own section: A->B->A, a target deleted during
 dispatch, several sources aimed at one object, and unbounded recursion.
 """
 
+import math
+
 import pytest
 
 pytest.importorskip("PyQt5", reason="editor.things needs PyQt5")
@@ -714,3 +716,35 @@ def test_logic_camera_lookat_zero_return_time_holds_focus():
 
     assert logic.cinematic_state['lookat_target'] is target
     assert logic.cinematic_state['lookat_return_remaining'] is None
+
+
+def test_logic_camera_lookat_returns_to_path_focus_after_the_timer():
+    from editor.things import LogicCamera, PathNode
+    from engine.logic_thread import LogicThread
+
+    a = PathNode([0.0, 0.0, 0.0], {'name': 'A'})
+    b = PathNode([10.0, 0.0, 0.0], {'name': 'B', 'next_node': 'C'})
+    c = PathNode([10.0, 0.0, 10.0], {'name': 'C'})
+    focus = PathNode([0.0, 0.0, -100.0], {'name': 'Focus'})
+    camera = LogicCamera([0.0, 0.0, 0.0], {
+        'name': 'Camera',
+        'look_ahead': True,
+        'lookat_return_time': 0.1,
+    })
+    logic = _camera_logic(camera, [a, b, c])
+    logic.cinematic_state = {
+        'active': True, 'paused': False, 'entity': camera,
+        'current_node': 'B', 'lerp_t': 0.0,
+        'origin': list(a.pos), 'speed': 0.0,
+        'fov': None, 'look_ahead': True,
+        'cam_angle': 0.0, 'cam_pitch': 0.0,
+        '_look_initialized': True,
+        'lookat_target': focus,
+        'lookat_return_remaining': 0.1,
+    }
+
+    LogicThread._update_cinematic_camera(logic, 0.2)
+
+    assert logic.cinematic_state['lookat_target'] is None
+    assert logic.cinematic_state['lookat_return_remaining'] is None
+    assert 0.0 < logic.cinematic_state['cam_angle'] < (math.pi / 2.0)
