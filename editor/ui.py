@@ -657,31 +657,6 @@ class Ui_MainWindow(object):
             toggle_strip=True)
 
         tool_toolbar.addSeparator()
-
-        # Audio panic button: this is deliberately an action, not a persistent
-        # mute toggle. It stops channels immediately and cancels pending audio.
-        MainWindow.mute_button = QPushButton("Mute")
-        MainWindow.mute_button.setToolTip("Stop and cancel all currently playing sounds")
-        MainWindow.mute_button.setFixedHeight(icon_size_val + 8)
-        MainWindow.mute_button.setStyleSheet("""
-            QPushButton {
-                background-color: #3a2020;
-                color: white;
-                border: 1px solid #704040;
-                border-bottom: 3px solid #a04040;
-                padding: 0 12px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #523030;
-            }
-            QPushButton:pressed {
-                background-color: #281818;
-            }
-        """)
-        MainWindow.mute_button.clicked.connect(MainWindow.view_3d.stop_all_sounds)
-        tool_toolbar.addWidget(MainWindow.mute_button)
-
         tool_toolbar.addWidget(MainWindow.play_button)
 
     def create_status_bar(self, MainWindow):
