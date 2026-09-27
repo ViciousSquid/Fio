@@ -54,7 +54,6 @@ try:
     LIGHTMAP_AVAILABLE = True
 except ImportError:
     LIGHTMAP_AVAILABLE = False
-    print("[LIGHTMAP_AVAILABLE] False")
 
 
 class EditorState:
