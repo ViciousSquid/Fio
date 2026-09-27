@@ -385,8 +385,6 @@ class Ui_MainWindow(object):
         
         MainWindow.tools_menu.addAction(MainWindow.logic_graph_action)
         MainWindow.tools_menu.addAction(MainWindow.logic_wizard_action)
-        MainWindow.tools_menu.addAction(MainWindow.project_overview_action)
-        MainWindow.tools_menu.addAction(MainWindow.validate_action)
         MainWindow.tools_menu.addSeparator()
         MainWindow.tools_menu.addAction(MainWindow.terrain_action)
         MainWindow.tools_menu.addAction(MainWindow.procedural_action)
@@ -401,6 +399,9 @@ class Ui_MainWindow(object):
             from tools.debug_tables import show_debug_tables
             show_debug_tables(MainWindow)
         MainWindow.debug_tables_action.triggered.connect(_open_debug_tables)
+        MainWindow.debug_menu.addAction(MainWindow.project_overview_action)
+        MainWindow.debug_menu.addAction(MainWindow.validate_action)
+        MainWindow.debug_menu.addSeparator()
         MainWindow.debug_menu.addAction(MainWindow.debug_tables_action)
 
         view_menu.addSeparator()
