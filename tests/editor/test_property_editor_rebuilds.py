@@ -23,7 +23,10 @@ from PyQt5.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
 from editor import io_system  # noqa: E402
 from editor.editor_state import EditorState  # noqa: E402
 from editor.io_system import OutputConnection  # noqa: E402
-from editor.property_editor import PropertyEditor  # noqa: E402
+from editor.property_editor import (  # noqa: E402
+    PropertyEditor,
+    _normalise_project_asset_path,
+)
 from editor.things import Light  # noqa: E402
 from engine import brush_geometry as bg  # noqa: E402
 from engine.render_table import (  # noqa: E402
@@ -100,6 +103,24 @@ class FakeHost(QWidget):
 
     def show_toast(self, message, is_error=False, duration=None):
         pass
+
+
+def test_custom_gif_path_is_project_relative_and_uses_forward_slashes(monkeypatch):
+    root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..")
+    )
+    selected = os.path.join(
+        root, "assets", "textures", "effects", "custom\\" , "magic.gif"
+    )
+    # The simulated Qt path uses Windows separators even when this test runs
+    # on a POSIX CI worker.
+    selected = selected.replace(os.sep, "\\")
+    monkeypatch.chdir(os.path.dirname(root))
+
+    assert _normalise_project_asset_path(selected) == (
+        "assets/textures/effects/custom/magic.gif"
+    )
+
 
 
 def make_brush(name='wall', **extra):
