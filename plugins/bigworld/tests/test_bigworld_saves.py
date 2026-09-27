@@ -93,7 +93,6 @@ class FakeLogic:
         self.player2_max_health = 100
         self.player2_dead = False
         self.collected_keys = set()
-        self.collected_pickups = set()
         self.door_states = {}
         self.mover_states = {}
         self.monster_ai = FakeMonsterAI()
@@ -113,10 +112,10 @@ B_POS = (6000.0, 0.0, 100.0)
 def make_world():
     things = [
         FakeThing("A-mon", "monster", [110.0, 0.0, 110.0], {"health": 50}),
-        FakeThing("A-key", "pickup", [120.0, 0.0, 90.0], {"pickup_type": "gold"}),
+        FakeThing("A-key", "prop", [120.0, 0.0, 90.0], {"collect_enabled": True, "collect_type": "key", "collect_key_name": "gold"}),
         FakeThing("A-light", "light", [100.0, 60.0, 100.0], {"radius": 100.0}),
         FakeThing("B-mon", "monster", [6010.0, 0.0, 110.0], {"health": 80}),
-        FakeThing("B-key", "pickup", [6020.0, 0.0, 90.0], {"pickup_type": "silver"}),
+        FakeThing("B-key", "prop", [6020.0, 0.0, 90.0], {"collect_enabled": True, "collect_type": "key", "collect_key_name": "silver"}),
         # The Big World opt-in entity (persistent global).
         FakeThing("bw-settings", "bigworldsettings", [0.0, 0.0, 0.0],
                   {"enabled": True, "activation_radius": 600.0,
@@ -322,7 +321,7 @@ def test_wrong_world_fails_safely():
     # A different world: different UUIDs and name.
     other_things = [
         FakeThing("X-1", "monster", [0, 0, 0], {}),
-        FakeThing("X-2", "pickup", [0, 0, 0], {}),
+        FakeThing("X-2", "prop", [0, 0, 0], {"collect_enabled": True, "collect_type": "health"}),
     ]
     other = FakeLogic(other_things, [{"id": "X-b"}], A_POS)
     new_session(other).start(player_pos=A_POS)
