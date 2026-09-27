@@ -6,13 +6,17 @@ or alter the logic/render hot path.
 """
 from __future__ import annotations
 
+import io
+import json
 import time
+import zipfile
 
 import numpy as np
 from PyQt5.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer
 from PyQt5.QtGui import QFont, QPainter
 from PyQt5.QtWidgets import (
     QCheckBox, QComboBox, QHBoxLayout, QLabel, QMainWindow, QPushButton,
+    QFileDialog,
     QTabWidget, QTableView, QTextBrowser, QVBoxLayout, QWidget,
 )
 
@@ -248,6 +252,10 @@ class DebugTablesWindow(QMainWindow):
         refresh = QPushButton("REFRESH NOW")
         refresh.clicked.connect(self.refresh)
         controls.addWidget(refresh)
+        export = QPushButton("EXPORT...")
+        export.setToolTip("Export the complete numerical snapshot for later analysis")
+        export.clicked.connect(self.export_snapshot)
+        controls.addWidget(export)
         root = QWidget()
         layout = QVBoxLayout(root)
         layout.addLayout(controls)
@@ -260,6 +268,253 @@ class DebugTablesWindow(QMainWindow):
         self.timer.start()
         self.destroyed.connect(self._stop)
         self.refresh()
+
+    def _table_arrays(self, table):
+        """Return every NumPy field, including unused capacity, for export."""
+        arrays = {}
+        for name in getattr(table, "__slots__", ()):
+            value = getattr(table, name, None)
+            if isinstance(value, np.ndarray):
+                arrays[name] = np.asarray(value)
+        return arrays
+
+    def _key_snapshot(self):
+        """Build the complete logical key stream represented by KEY MICROSCOPE."""
+        t = self.render
+        slots = getattr(self.snapshot, "visible_brush_slots", None)
+        if t is None or slots is None or not len(slots):
+            return None
+        slots = np.asarray(slots, dtype=np.int32)
+        cube = (t.class_bits[slots] & rt.CLASS_HAS_GEOMETRY) == 0
+        slots = slots[cube]
+        if not len(slots):
+            return None
+        ids = t.tex_name_id[slots]
+        drawn = (ids >= 0) & (ids != rt.TEX_ID_SKIP)
+        if getattr(self.snapshot, "is_play_mode", False):
+            drawn &= ids != rt.TEX_ID_NODRAW
+        row, face = np.nonzero(drawn)
+        if not len(row):
+            return None
+        texture = ids[row, face].astype(np.int64)
+        face = face.astype(np.int64)
+        layout = KeyLayout([("texture", 32), ("face", 3)])
+        keys = layout.pack(texture=texture, face=face)
+        order, starts = sort_into_runs(keys)
+        sorted_keys = keys[order]
+        unique, counts = np.unique(sorted_keys, return_counts=True)
+        return {
+            "visible_cube_slots": slots,
+            "row": row.astype(np.int32),
+            "face": face,
+            "texture_name_id": texture,
+            "logical_keys": keys,
+            "sort_order": order.astype(np.int64),
+            "run_starts": starts.astype(np.int64),
+            "sorted_keys": sorted_keys,
+            "unique_keys": unique,
+            "key_counts": counts.astype(np.int64),
+        }
+
+    def _follow_export_text(self):
+        """Return the current FOLLOW SELECTION chain, or an explicit empty state."""
+        selected = getattr(
+            getattr(self.main_window, "state", None),
+            "selected_object", None
+        )
+        if selected is None:
+            selected = next(
+                iter(getattr(
+                    getattr(self.main_window, "state", None),
+                    "selected_objects", []
+                ) or []),
+                None
+            )
+        if selected is None:
+            return "FOLLOW SELECTION\n\nNO SELECTION"
+        props = selected if isinstance(selected, dict) else getattr(
+            selected, "properties", {}
+        )
+        ident = props.get("id") if isinstance(props, dict) else None
+        if not ident:
+            return "FOLLOW SELECTION\n\nSELECTION HAS NO ID"
+        lines = [f"FOLLOW id={ident}"]
+        rslot = self.render.slot_of_id.get(ident) if self.render is not None else None
+        eslot = self.entities.slot_of_id.get(ident) if self.entities is not None else None
+        if rslot is not None:
+            lines.append(f"render-row={int(rslot)}")
+        if eslot is not None:
+            lines.append(f"entity-row={int(eslot)}")
+            key_id = int(self.entities.sprite_key_id[int(eslot)])
+            if key_id >= 0:
+                lines.append(f"sprite-key={key_id}")
+        if rslot is None and eslot is None:
+            lines.append("ID NOT PRESENT IN RENDERTABLE OR ENTITYTABLE")
+        return "FOLLOW SELECTION\n\n" + " -> ".join(lines)
+
+    def export_snapshot(self):
+        """Export raw table storage plus every derived instrument view."""
+        if self.render is None or self.entities is None or self.snapshot is None:
+            self.status.setText("EXPORT — no attached dense numerical state")
+            return
+
+        default_name = time.strftime("fio_debug_tables_%Y%m%d_%H%M%S.zip")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Fio Debug Tables",
+            default_name,
+            "Fio debug snapshot (*.zip)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".zip"):
+            path += ".zip"
+
+        stats = getattr(
+            getattr(self.main_window.view_3d, "renderer", None),
+            "render_stats", None
+        )
+        pipeline = {
+            "format": "fio-debug-tables-v1",
+            "export_time_unix": time.time(),
+            "snapshot_timestamp": float(
+                getattr(self.snapshot, "timestamp", time.time())
+            ),
+            "frame_age_ms": max(
+                0.0,
+                (time.time() - float(
+                    getattr(self.snapshot, "timestamp", time.time())
+                )) * 1000.0,
+            ),
+            "is_play_mode": bool(getattr(self.snapshot, "is_play_mode", False)),
+            "render_rows": int(self.render.count),
+            "render_capacity": int(len(self.render.center)),
+            "entity_rows": int(self.entities.count),
+            "entity_capacity": int(len(self.entities.pos)),
+            "render_draw_calls": int(getattr(stats, "draw_calls", 0)) if stats else 0,
+            "batched_draws": int(getattr(stats, "batched_draws", 0)) if stats else 0,
+            "visible_triangles": int(getattr(stats, "visible_tris", 0)) if stats else 0,
+            "render_dense_bytes": int(_num_bytes(self.render)[0]),
+            "entity_dense_bytes": int(_num_bytes(self.entities)[0]),
+        }
+
+        key_data = self._key_snapshot()
+        key_manifest = {
+            "logical_layout": [
+                {"name": "texture", "bits": 32},
+                {"name": "face", "bits": 3},
+            ],
+            "key_meaning": (
+                "Logical brush key. The renderer's final brush key substitutes "
+                "the resolved GL texture id for texture-name-id."
+            ),
+            "arrays": sorted(key_data.keys()) if key_data else [],
+        }
+
+        memory = {"tables": {}}
+        for label, table in (
+            ("RenderTable", self.render), ("EntityTable", self.entities)
+        ):
+            count = int(table.count)
+            memory["tables"][label] = {
+                "count": count,
+                "fields": {},
+            }
+            for name, value in self._table_arrays(table).items():
+                memory["tables"][label]["fields"][name] = {
+                    "shape": [int(x) for x in value.shape],
+                    "live_shape": [int(x) for x in value[:count].shape],
+                    "dtype": str(value.dtype),
+                    "bytes": int(value.nbytes),
+                }
+
+        manifest = {
+            "format": "fio-debug-tables-v1",
+            "contents": [
+                "pipeline.json",
+                "pipeline.txt",
+                "RenderTable/*.npy",
+                "EntityTable/*.npy",
+                "visible_brush_slots.npy",
+                "KeyMicroscope/*.npy",
+                "key_microscope.json",
+                "key_microscope.txt",
+                "memory.json",
+                "memory.txt",
+                "follow_selection.txt",
+            ],
+            "note": (
+                "NumPy table arrays are exported at full allocated capacity, "
+                "not truncated to live row count. live_shape/count in memory.json "
+                "identify the populated portion."
+            ),
+        }
+
+        render_arrays = self._table_arrays(self.render)
+        entity_arrays = self._table_arrays(self.entities)
+        pipeline_text = self.dashboard.toPlainText()
+        memory_text = self.memory_text.toPlainText()
+        key_text = self.keys_text.toPlainText()
+        follow_text = self._follow_export_text()
+
+        try:
+            with zipfile.ZipFile(
+                path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6
+            ) as archive:
+                archive.writestr(
+                    "manifest.json",
+                    json.dumps(manifest, indent=2, sort_keys=True),
+                )
+                archive.writestr(
+                    "pipeline.json",
+                    json.dumps(pipeline, indent=2, sort_keys=True),
+                )
+                archive.writestr("pipeline.txt", pipeline_text)
+                archive.writestr(
+                    "memory.json",
+                    json.dumps(memory, indent=2, sort_keys=True),
+                )
+                archive.writestr("memory.txt", memory_text)
+                archive.writestr("key_microscope.json", json.dumps(
+                    key_manifest, indent=2, sort_keys=True
+                ))
+                archive.writestr("key_microscope.txt", key_text)
+                archive.writestr("follow_selection.txt", follow_text)
+
+                for label, arrays in (
+                    ("RenderTable", render_arrays),
+                    ("EntityTable", entity_arrays),
+                ):
+                    for name, value in arrays.items():
+                        buffer = io.BytesIO()
+                        np.save(buffer, value, allow_pickle=False)
+                        archive.writestr(
+                            f"{label}/{name}.npy", buffer.getvalue()
+                        )
+
+                visible = getattr(self.snapshot, "visible_brush_slots", None)
+                if visible is not None:
+                    buffer = io.BytesIO()
+                    np.save(buffer, np.asarray(visible), allow_pickle=False)
+                    archive.writestr(
+                        "visible_brush_slots.npy", buffer.getvalue()
+                    )
+
+                if key_data:
+                    for name, value in key_data.items():
+                        buffer = io.BytesIO()
+                        np.save(buffer, np.asarray(value), allow_pickle=False)
+                        archive.writestr(
+                            f"KeyMicroscope/{name}.npy", buffer.getvalue()
+                        )
+        except (OSError, ValueError, TypeError) as exc:
+            self.status.setText(f"EXPORT FAILED — {exc}")
+            return
+
+        self.status.setText(
+            self.status.text().split("  |  EXPORT")[0]
+            + f"  |  EXPORT {path}"
+        )
 
     def _set_always_on_top(self, checked):
         flags = self.windowFlags()
