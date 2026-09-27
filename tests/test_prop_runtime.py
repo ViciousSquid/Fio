@@ -151,6 +151,27 @@ def test_respawn_fades_in_over_two_seconds():
     assert id(prop) not in session.respawn_fades
 
 
+def test_respawn_fade_state_resets_when_session_restarts():
+    prop = Prop(pos=[0.0, 0.0, 0.0])
+    logic = SimpleNamespace(
+        things=[prop], io_manager=IO(),
+        _spatial_grid=None, _physics_world=None,
+        player=SimpleNamespace(
+            pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
+            camera_height=40.0,
+        ),
+        current_hud_message='',
+    )
+    session = PropSession(logic)
+    session.start()
+
+    prop._respawn_fade_alpha = 0.0
+    session.stop()
+    session.start()
+
+    assert prop._respawn_fade_alpha == 1.0
+
+
 def test_carried_billboard_keeps_its_facing_when_player_turns():
     prop = Prop(pos=[0.0, 40.0, 55.0])
     logic = SimpleNamespace(
