@@ -3359,8 +3359,11 @@ class QtGameView(QOpenGLWidget):
             self.update()
             return
         if check_key('key_sysmon', 'F3'):
-            self.sysmon.toggle()
-            self.update()
+            if hasattr(self.editor, 'toggle_system_monitor'):
+                self.editor.toggle_system_monitor()
+            else:
+                self.sysmon.toggle()
+                self.update()
             return
         if self.play_mode and event.key() == Qt.Key_F7:
             self.monster_debug_active = not self.monster_debug_active
