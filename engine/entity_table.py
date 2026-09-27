@@ -555,6 +555,16 @@ def _carry_sprite_yaw(thing):
         return -10000.0
 
 
+def _render_alpha(thing):
+    """Return the runtime render opacity for an entity."""
+    try:
+        return max(0.0, min(1.0, float(
+            getattr(thing, '_respawn_fade_alpha', 1.0)
+        )))
+    except (TypeError, ValueError):
+        return 1.0
+
+
 def sprite_state(thing):
     """Return the authored state that can change an entity's sprite recipe."""
     props = thing if isinstance(thing, dict) else _props_of(thing)
@@ -678,6 +688,8 @@ class EntityTable:
 
         #: The billboard's world size. Cold: it comes from authored properties.
         self.sprite_size = np.zeros((0, 2), dtype=np.float32)
+        #: Runtime opacity; defaults to opaque and is non-authored.
+        self.render_alpha = np.ones((0,), dtype=np.float32)
         #: Locked world-facing yaw for a carried billboard. -10000 means
         #: ordinary camera-facing billboard behaviour.
         self.sprite_fixed_yaw = np.full((0,), -10000.0, dtype=np.float32)
@@ -896,6 +908,11 @@ class EntityTable:
             size[:len(self.sprite_size)] = self.sprite_size
         self.sprite_size = size
 
+        render_alpha = np.ones((grown,), dtype=np.float32)
+        if len(self.render_alpha):
+            render_alpha[:len(self.render_alpha)] = self.render_alpha
+        self.render_alpha = render_alpha
+
         fixed_yaw = np.full((grown,), -10000.0, dtype=np.float32)
         if len(self.sprite_fixed_yaw):
             fixed_yaw[:len(self.sprite_fixed_yaw)] = self.sprite_fixed_yaw
@@ -1030,9 +1047,12 @@ class EntityTable:
             changed = []
             for slot_value in warm_slots:
                 slot = int(slot_value)
-                state = _sprite_state_fingerprint(sprite_state(things[slot]))
+                thing = things[slot]
+                state = _sprite_state_fingerprint(sprite_state(thing))
                 if state != self._sprite_state[slot]:
                     changed.append(slot)
+                if self.class_bits[slot] & ENT_PROP:
+                    self.render_alpha[slot] = _render_alpha(thing)
             if changed:
                 self.refresh_rows(things, changed)
 
@@ -1362,6 +1382,7 @@ class EntityTable:
         # switching a Prop model -> billboard changes the render class and the
         # sprite recipe without changing the entity row itself.
         self.sprite_size[slot] = sprite_size(thing)
+        self.render_alpha[slot] = _render_alpha(thing)
         carry_yaw = _carry_sprite_yaw(thing)
         self.sprite_fixed_yaw[slot] = carry_yaw
         self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(thing))
