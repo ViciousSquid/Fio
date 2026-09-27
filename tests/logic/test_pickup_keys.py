@@ -2,6 +2,8 @@
 
 import pytest
 
+pytest.importorskip("PyQt5", reason="logic pickup tests require editor.Thing definitions")
+
 from editor.io_handlers import register_all_input_handlers
 from editor.io_system import IOManager, OutputConnection
 from editor.things import Pickup

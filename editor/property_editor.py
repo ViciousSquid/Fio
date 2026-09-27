@@ -2586,7 +2586,10 @@ class PropertyEditor(QWidget):
             thing.properties.get('key_name', Pickup.DEFAULT_KEY_NAME),
             self.on_pickup_key_name_changed,
         )
-        key_combo.setEnabled(thing.properties.get('item_type') == 'key')
+        is_key = thing.properties.get('item_type') == 'key'
+        key_label.setVisible(is_key)
+        key_combo.setVisible(is_key)
+        key_combo.setEnabled(is_key)
         form.addRow(key_label, key_combo)
         self._pickup_key_widgets.append((key_label, key_combo))
 
