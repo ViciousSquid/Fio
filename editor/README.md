@@ -58,7 +58,7 @@ Guided wizard for common I/O setups, covering monster encounters, doors/movers, 
 ### `main_window.py`
 Main editor window. Hosts the 2D and 3D views, property editor, scene hierarchy, asset browser and debug console, and controls play mode, menus, toolbars and notifications.
 
-It also owns the shared `ComponentController`, component modes, Radiant-style area selection and clip/split tools, and rebinds UI references after undo/redo replaces scene objects.
+It also owns the shared `ComponentController`, component modes, Radiant-style area selection and clip/split tools, and rebinds UI references after undo/redo replaces scene objects. Developer instrumentation such as Benchmark and the live numerical Debug Tables view is layered on top of this real MainWindow/QtGameView rather than maintaining a parallel test renderer or scene model.
 
 ### `monster_customise_dialog.py`
 Dialog for assigning custom Monster sprites and billboard dimensions. Paths are stored relative to the project asset tree.
@@ -132,9 +132,11 @@ play mode / standalone player
 
 The important separation is between **authoring state** and **execution state**. The editor owns the authoritative scene model; the engine derives runtime representations from it as required.
 
-For rendering, this means editor-authored brushes and entities ultimately feed the engine's dense numerical render projection rather than requiring the editor to maintain a separate renderer-specific world.
+For rendering, this means editor-authored brushes and entities ultimately feed the engine's dense numerical render projection rather than requiring the editor to maintain a separate renderer-specific world. The editor does not treat the RenderTable or EntityTable as authoring stores; they are live derived views of the same authoritative scene.
 
-For gameplay, the editor's I/O connections are the program: entity outputs fire entity inputs, logic primitives transform and route those events, and `LogicState` supplies persistent typed state. No central quest graph or per-frame map scripting runtime is required.
+For gameplay, the editor's I/O connections are the program: entity outputs fire entity inputs, logic primitives transform and route those events, and `LogicState` supplies persistent typed state. Runtime entity creation updates the relevant execution caches as part of the same mutation path, so a live-spawned entity becomes visible to gameplay and rendering without a second source of truth.
+
+Runtime inspection follows the same boundary. The Debug Tables instrument exposes the live numerical projections and related counters so the execution representation can be inspected directly without replacing the normal editor/engine world model.
 
 ## Design principles
 
