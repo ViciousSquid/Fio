@@ -328,6 +328,7 @@ class LogicThread(threading.Thread):
         
         # Interaction State
         self.current_hud_message = ""
+        self.current_hud_key_name = None
 
         # Water sound state (enter/exit transition + wade footstep cadence)
         self._player_was_in_water = False
@@ -1082,6 +1083,7 @@ class LogicThread(threading.Thread):
             self.active_speakers.clear()
             self.hurt_trigger_timers.clear()
             self.current_hud_message = ""
+            self.current_hud_key_name = None
 
             # Reset water sound state (no spurious enter/exit on spawn)
             self._player_was_in_water = False
@@ -1196,6 +1198,7 @@ class LogicThread(threading.Thread):
             self._physics_body_brushes = []
             self._refresh_collision_brushes_cache()
             self.current_hud_message = ""
+            self.current_hud_key_name = None
             self.gate_inputs = {}
             self.timer_states = {}
             self.light_fade_states.clear()
@@ -2924,7 +2927,6 @@ class LogicThread(threading.Thread):
                         door_consumed_use = use_key_pressed
                     elif needs_key:
                         has_key = key_name in self.collected_keys
-                        pretty_key_name = key_name.replace('_', ' ').title() if key_name else "Key"
                         if has_key:
                             self.current_hud_message = "[E] Use"
                             self.current_hud_key_name = key_name or None
