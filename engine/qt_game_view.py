@@ -1802,6 +1802,16 @@ class QtGameView(QOpenGLWidget):
         hud_margin = 20
         active_weapon = getattr(self, '_cached_active_weapon', None)
 
+        # The entire HUD fades back in for two seconds after a LogicCamera
+        # gives control back to the player.
+        hud_alpha = max(
+            0.0, min(1.0, float(getattr(render_state, "hud_alpha", 1.0)))
+        )
+        # _draw_hud owns this painter opacity for everything it draws: weapon,
+        # health/ammo, crosshair, messages, prompts, overhead icons and keys.
+        painter.save()
+        painter.setOpacity(hud_alpha)
+
         # Draw the weapon before the status counts so the health indicator is
         # always visually on top of any weapon sprite, including the sword.
         if active_weapon and not overhead:
@@ -1851,16 +1861,6 @@ class QtGameView(QOpenGLWidget):
         # Keep a small inset so the glyph is not clipped by the framebuffer.
         health_x = 8
         health_y = viewport_height - 8 - metrics.descent()
-
-        # The entire HUD fades back in for two seconds after a LogicCamera
-        # gives control back to the player.
-        hud_alpha = max(
-            0.0, min(1.0, float(getattr(render_state, "hud_alpha", 1.0)))
-        )
-        # _draw_hud owns this painter opacity for everything it draws: weapon,
-        # health/ammo, crosshair, messages, prompts, overhead icons and keys.
-        painter.save()
-        painter.setOpacity(hud_alpha)
 
         # Health is the large orange count. Ammo is a smaller green count
         # touching it directly, with no layout gap.
