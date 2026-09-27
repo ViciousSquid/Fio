@@ -349,7 +349,7 @@ class DiskStreamingSession:
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
-    def start(self, player_pos=None) -> None
+    def start(self, player_pos=None) -> None:
         """Begin streaming: keep persistent globals resident, empty the rest of
         the scene, and stream in only the cells around the player."""
         persistent = list(getattr(self.source, "persistent_things", []) or [])
