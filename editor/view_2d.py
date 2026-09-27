@@ -102,7 +102,8 @@ class View2D(QWidget):
         
         # Connection line animation state
         self.connection_animations = {}
-        self.last_connections = set()
+        self.last_io_connections = set()
+        self.last_patrol_connections = set()
         
         # Animated arrow state - arrows traveling along connection lines
         self.arrow_travel_progress = {}  # {conn_key: [arrow_positions]}
