@@ -66,9 +66,11 @@ def test_version_filter_links_are_green_and_not_nested(qt_app):
     html = console.console.toHtml()
 
     assert "#2AA63E" in html or "#2aa63e" in html
+    assert "#F08000" in html or "#f08000" in html
     assert 'href="filter:2"' in html
     assert 'href="filter:5"' in html
     assert 'href="filter:8"' in html
+    assert 'style="color: #F08000; font-weight: bold;"' in html
     assert '<a href="filter:2"><b>2</b></a>' not in html
 
     console.deleteLater()
