@@ -172,27 +172,12 @@ def register_all_input_handlers(io_manager: IOManager):
             return False
         return bool(default)
 
-    def _effect_texture_path(param, textures, prefix):
-        """Accept a 1-5 variant number, filename, full path, or FIRE/ORB N."""
-        value = str(param or "").strip().replace("\\", "/")
-        if value.isdigit():
-            index = int(value) - 1
-            return textures[index] if 0 <= index < len(textures) else None
-
-        lowered = value.lower()
-        for path in textures:
-            filename = path.rsplit("/", 1)[-1].lower()
-            stem = filename[:-4] if filename.endswith(".gif") else filename
-            if lowered in (path.lower(), filename, stem):
-                return path
-
-        upper = value.upper()
-        if upper.startswith(prefix + " "):
-            suffix = upper[len(prefix):].strip()
-            if suffix.isdigit():
-                index = int(suffix) - 1
-                return textures[index] if 0 <= index < len(textures) else None
-        return None
+    def _effect_texture_path(param, textures):
+        """Resolve a FIRE/ORB variant from the public numeric value 1-5."""
+        value = str(param if param is not None else "").strip()
+        if value not in {"1", "2", "3", "4", "5"}:
+            return None
+        return textures[int(value) - 1]
 
     def _effect_refresh_cold_preserving_runtime(entity, logic, slot):
         """Refresh authored Effect projection without restarting playback."""
@@ -240,7 +225,7 @@ def register_all_input_handlers(io_manager: IOManager):
         )
 
     def effect_set_fire_texture(entity, param, logic):
-        path = _effect_texture_path(param, EFFECT_FIRE_TEXTURES, "FIRE")
+        path = _effect_texture_path(param, EFFECT_FIRE_TEXTURES)
         if path is None:
             return
         entity.properties["fire_texture"] = path
@@ -252,7 +237,7 @@ def register_all_input_handlers(io_manager: IOManager):
         logic.io_manager.fire_output(entity, 'OnChanged', value=path)
 
     def effect_set_orb_texture(entity, param, logic):
-        path = _effect_texture_path(param, EFFECT_ORB_TEXTURES, "ORB")
+        path = _effect_texture_path(param, EFFECT_ORB_TEXTURES)
         if path is None:
             return
         entity.properties["orb_texture"] = path
