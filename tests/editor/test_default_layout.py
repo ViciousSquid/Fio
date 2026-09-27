@@ -110,6 +110,17 @@ def test_the_layout_call_asks_for_forty_sixty(qt_app):
     assert '[40, 60], Qt.Horizontal' in source
 
 
+def test_the_scene_hierarchy_keeps_its_view_menu_label_without_a_title_bar():
+    import inspect
+
+    from editor.ui import Ui_MainWindow
+
+    source = inspect.getsource(Ui_MainWindow.setupUi)
+
+    assert 'QDockWidget("Scene Hierarchy", MainWindow)' in source
+    assert 'setTitleBarWidget(scene_title_bar)' in source
+
+
 # ────────────────────────────
 # The version gate
 # ────────────────────────────
@@ -256,11 +267,12 @@ def test_a_layout_saved_now_is_restored_next_time(qt_app):
 
 def test_invalid_saved_state_falls_back_to_the_captured_default(qt_app):
     host = FakeEditorWindow(_saved_layout(LAYOUT_VERSION))
+    host._default_layout_state = QByteArray(b'default')
     host.restore_results = [False, True]
 
     host.load_layout()
 
-    assert host.restored == [b'state', b'state']
+    assert host.restored == [b'state', b'default']
     assert host.restore_versions == [LAYOUT_VERSION, LAYOUT_VERSION]
     assert not host.config.has_option('Layout', 'state')
     assert any('invalid' in t.lower() for t in host.toasts)
