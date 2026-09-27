@@ -859,6 +859,23 @@ class QtGameView(QOpenGLWidget):
         angle = (pan + 1.0) * (math.pi / 4.0)
         return gain, math.cos(angle), math.sin(angle)
 
+    def stop_all_sounds(self):
+        """Immediately stop every mixer channel and cancel queued audio."""
+        try:
+            if pygame.mixer.get_init():
+                pygame.mixer.stop()
+        except (pygame.error, AttributeError):
+            pass
+
+        self.game_state.clear_sounds()
+
+        speaker_channels = getattr(self, '_speaker_channels', None)
+        if speaker_channels is not None:
+            speaker_channels.clear()
+        speaker_mix = getattr(self, '_speaker_mix', None)
+        if speaker_mix is not None:
+            speaker_mix.clear()
+
     def _process_sound_queue(self):
         """Drain queued sound requests and keep active speaker channels mixed.
 
