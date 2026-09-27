@@ -618,7 +618,7 @@ class EntityTable:
                  'monster_slots', 'effect_slots',
                  'effect_type', 'effect_fire_variant', 'effect_custom_id', 'effect_custom_loop', 'effect_preview', 'effect_params', 'effect_color',
                  'effect_light_color', 'effect_light_enabled', 'effect_lifetime', 'effect_seed',
-                  'effect_spawn_time', 'effect_shared_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
+                  'effect_spawn_time', 'effect_shared_spawn_time', 'effect_phase', 'effect_elapsed', 'effect_active', 'effect_alive',
                  'sprite_size', 'sprite_key_id', 'render_alpha', 'sprite_fixed_yaw', '_sprite_state',
                  'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
                  '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
@@ -682,6 +682,8 @@ class EntityTable:
         self.effect_seed = np.ones((0,), dtype=np.float32)
         self.effect_spawn_time = np.zeros((0,), dtype=np.float64)
         self.effect_shared_spawn_time = np.zeros((0,), dtype=np.float64)
+        # Fraction of the animation cycle at which this Effect starts.
+        self.effect_phase = np.zeros((0,), dtype=np.float32)
         self.effect_elapsed = np.zeros((0,), dtype=np.float32)
         self.effect_active = np.zeros((0,), dtype=bool)
         self.effect_alive = np.zeros((0,), dtype=bool)
@@ -888,6 +890,11 @@ class EntityTable:
             effect_shared_spawn[:len(self.effect_shared_spawn_time)] = self.effect_shared_spawn_time
         self.effect_shared_spawn_time = effect_shared_spawn
 
+        effect_phase = np.zeros((grown,), dtype=np.float32)
+        if len(self.effect_phase):
+            effect_phase[:len(self.effect_phase)] = self.effect_phase
+        self.effect_phase = effect_phase
+
         effect_elapsed = np.zeros((grown,), dtype=np.float32)
         if len(self.effect_elapsed):
             effect_elapsed[:len(self.effect_elapsed)] = self.effect_elapsed
@@ -1058,6 +1065,22 @@ class EntityTable:
 
         self._refresh_portal_live(things)
 
+        # Effect animation phase is runtime state shared by both render buffers.
+        # Copy only Effect rows: a phase is assigned once per playback and then
+        # remains stable, so the renderer can animate from a dense numeric column.
+        if len(self.effect_slots):
+            effect_phase = np.fromiter(
+                (
+                    max(0.0, min(1.0, float(
+                        getattr(things[int(slot)], "_effect_animation_phase", 0.0)
+                    )))
+                    for slot in self.effect_slots
+                ),
+                dtype=np.float32,
+                count=len(self.effect_slots),
+            )
+            self.effect_phase[self.effect_slots] = effect_phase
+
         # Light state is render state, not renderer metadata. Ordinary Lights
         # retain their existing warm object-backed state; Effect rows stay fully
         # numeric and derive animated light from the dense effect columns.
@@ -1206,7 +1229,7 @@ class EntityTable:
                     fire_slots = effect_ls[fire]
                     flicker = _effect_flicker(
                         self.effect_seed[fire_slots],
-                        elapsed[fire],
+                        elapsed[fire] + self.effect_phase[fire_slots],
                     )
                     base_light = self.effect_params[fire_slots, 2]
                     self.light_params[fire_slots, 0] = (
@@ -1291,7 +1314,7 @@ class EntityTable:
                         self.effect_custom_loop, self.effect_params, self.effect_color,
                         self.effect_light_color, self.effect_light_enabled, self.effect_lifetime,
                          self.effect_seed, self.effect_spawn_time,
-                        self.effect_elapsed, self.effect_active,
+                        self.effect_phase, self.effect_elapsed, self.effect_active,
                         self.effect_alive,
                         self.portal_target_slot,
                         self.portal_active, self.portal_direction,
@@ -1454,6 +1477,11 @@ class EntityTable:
             self.effect_lifetime[slot] = lifetime
             self.effect_seed[slot] = seed
             self.effect_spawn_time[slot] = 0.0
+            self.effect_phase[slot] = float(
+                max(0.0, min(1.0, float(
+                    getattr(thing, "_effect_animation_phase", 0.0)
+                )))
+            )
             self.effect_elapsed[slot] = 0.0
             self.effect_active[slot] = effect_type != 'EXPLOSION'
             self.effect_alive[slot] = effect_type != 'EXPLOSION'
@@ -1478,6 +1506,7 @@ class EntityTable:
             self.effect_lifetime[slot] = 0.5
             self.effect_seed[slot] = 1.0
             self.effect_spawn_time[slot] = 0.0
+            self.effect_phase[slot] = 0.0
             self.effect_elapsed[slot] = 0.0
             self.effect_active[slot] = False
             self.effect_alive[slot] = False
