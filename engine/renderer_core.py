@@ -904,7 +904,7 @@ layout (location = 10) in vec4 iPayload;
         )
         frag = frag.replace(
             'in highp vec3 FragPos;',
-            'in highp vec3 FragPos;\nin float InstanceAlpha;',
+            'in highp vec3 FragPos;\nflat in float InstanceAlpha;',
             1,
         )
         frag = frag.replace(
