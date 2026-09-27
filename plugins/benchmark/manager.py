@@ -681,6 +681,7 @@ class BenchmarkManager(QDialog):
                 "io_bursts", "io_total_hops", "io_average_ms",
                 "io_p95_ms", "hops_per_second", "dispatch_hops_per_second",
                 "flying_count", "team_counts", "aggro_count",
+                "ai_decisions", "ai_update_calls", "ai_decisions_per_second",
                 "alive_monsters", "dead_monsters", "witness_duration_s",
                 "seed", "pathnode_name", "viewport_width", "viewport_height",
                 "visible_brushes", "culled_brushes", "total_brushes",
