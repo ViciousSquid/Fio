@@ -144,3 +144,15 @@ def test_player_prompt_denies_when_modal_ui_is_unavailable(monkeypatch):
 
     package = SimpleNamespace(title="Untrusted package")
     assert player_app.FioPlayerApp()._confirm_plugin_execution(package) is False
+
+def test_stop_does_not_delete_caller_owned_extract_directory(tmp_path):
+    root = tmp_path / "caller-owned"
+    root.mkdir()
+
+    host = PlayerPluginHost()
+    host._extract_root = str(root)
+    host._extract_root_owned = False
+
+    host.stop()
+
+    assert root.exists()
