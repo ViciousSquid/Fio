@@ -1324,8 +1324,11 @@ class LogicCamera(Thing):
         # If set, overrides the player's FOV during the sequence
         self.properties.setdefault('fov_override', 0.0)
         # If True the camera looks at the *next* node; if False it
-        # follows the tangent of the spline (forward direction).
+        # follows the path's forward direction.
         self.properties.setdefault('look_ahead', True)
+        # Seconds to keep an explicit LookAt focus before returning to the path.
+        # 0 means hold the target indefinitely.
+        self.properties.setdefault('lookat_return_time', 5.0)
 
 
 class LogicSpawner(Thing):
