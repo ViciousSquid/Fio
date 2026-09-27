@@ -1034,9 +1034,9 @@ class BenchmarkRunner:
                 "test": label,
                 "status": "passed",
                 "description": (
-                    "Live 100-monster witness in a 1024x1024x1024 room: "
+                    "Live 40-monster witness in a 1024x1024x1024 room: "
                     "5 team1 monsters at the far end, 5 team2 monsters after 0.5s, "
-                    "then one random team/type every 0.25s to 100, followed by a 5-second decision measurement."
+                    "then one random team/type every 0.25s to 40, followed by a 5-second decision measurement."
                 ),
                 "seed": chaos_info.get("seed", "43"),
                 "room_size": chaos_info.get("room_size", [1024.0, 1024.0, 1024.0]),
@@ -1067,7 +1067,7 @@ class BenchmarkRunner:
                 '<div style="background:#222; border:1px solid #555; padding:12px; margin:4px 0 10px 0;">'
                 '<div style="font-size:15px; font-weight:bold; color:#eeeeee;">Monster chaos witness</div>'
                 '<div style="color:#aaa; padding-top:8px;">'
-                '<span style="color:#63d471; font-size:28px; font-weight:bold;">100 monsters:</span> '
+                '<span style="color:#63d471; font-size:28px; font-weight:bold;">40 monsters:</span> '
                 '<span style="color:#ff9a32; font-size:34px; font-weight:bold;">%.0f monster decisions/s</span>'
                 '</div>'
                 '<div style="color:#aaa; padding-top:6px;">'
@@ -1320,7 +1320,7 @@ class BenchmarkRunner:
                     ("live_io_1000", 1000),
                     ("live_1000_brushes", 1000),
                     ("live_10000_brushes", 10000),
-                    ("monster_chaos_witness", 50),
+                    ("monster_chaos_witness", 40),
                 ))
     
             if self.io_chain_1000.isChecked():
@@ -1332,7 +1332,7 @@ class BenchmarkRunner:
             if self.brush_100000.isChecked():
                 self._queue.append(("live_100000_brushes", 100000))
             if self.monster_chaos_witness.isChecked():
-                self._queue.append(("monster_chaos_witness", 50))
+                self._queue.append(("monster_chaos_witness", 40))
     
             if self.borderless_window.isChecked():
                 self._queue.append(("borderless_window", None))
@@ -1409,7 +1409,7 @@ class BenchmarkRunner:
         return
 
     def _tick_monster_chaos_witness(self, now, app, view):
-        """Run the staged live population ramp, then measure 100 monsters for 5 seconds."""
+        """Run the staged live population ramp, then measure 40 monsters for 5 seconds."""
         phase = getattr(self, "_monster_chaos_phase", "")
         rng = getattr(self, "_monster_chaos_rng", None)
         logic = getattr(view, "logic_thread", None)
@@ -1437,7 +1437,7 @@ class BenchmarkRunner:
 
             self._monster_chaos_phase = "ramp"
             self._monster_chaos_next_spawn = now + 0.25
-            self.status_label.setText("Monster witness: 10/100 — ramping at 0.25 s intervals")
+            self.status_label.setText("Monster witness: 10/40 — ramping at 0.25 s intervals")
             self._append("  0.5s: spawned 5 random team2 monsters.")
         elif phase == "ramp" and now >= self._monster_chaos_next_spawn:
             monster_type = rng.choice(("human", "flying"))
@@ -1454,8 +1454,8 @@ class BenchmarkRunner:
             self._monster_chaos_total += 1
             self._monster_chaos_next_spawn = now + 0.25
 
-            if self._monster_chaos_total >= 100:
-                self._monster_chaos_total = 100
+            if self._monster_chaos_total >= 40:
+                self._monster_chaos_total = 40
                 self._monster_chaos_phase = "measure"
                 self._monster_chaos_ai_decisions = 0
                 self._monster_chaos_ai_updates = 0
@@ -1467,11 +1467,11 @@ class BenchmarkRunner:
                 self._last_sysmon_sample = 0.0
                 view.sysmon.reset_metrics()
                 self._append(
-                    "  100 monsters reached; starting 5-second MonsterAI decision witness."
+                    "  40 monsters reached; starting 5-second MonsterAI decision witness."
                 )
             elif self._monster_chaos_total % 10 == 0:
                 self.status_label.setText(
-                    "Monster witness: %d/100 — ramping at 0.25 s intervals"
+                    "Monster witness: %d/40 — ramping at 0.25 s intervals"
                     % self._monster_chaos_total
                 )
 
