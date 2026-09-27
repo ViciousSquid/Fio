@@ -82,6 +82,7 @@ class ConsoleCommandHandler:
             'showglasses': self.cmd_show_glasses,
             'message': self.cmd_message,
             'message2': self.cmd_message2,
+            'message3': self.cmd_message3,
 
             'cam': self.cmd_cam,
             'camera': self.cmd_cam,
@@ -782,6 +783,10 @@ class ConsoleCommandHandler:
         """Draw a transient message on the second play-view message line."""
         self._cmd_view_message(args, "2")
 
+    def cmd_message3(self, args):
+        """Draw a transient Rushford-font message on the third play-view message line."""
+        self._cmd_view_message(args, "3")
+
     def cmd_help(self, args):
         
         sep = '<span style="color:white;"> / </span>'
@@ -794,6 +799,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">fps</b> — Toggle FPS display<br>
 <b style="color:orange;">message</b> &quot;text&quot; — Show a timed message on the first play-view line<br>
 <b style="color:orange;">message2</b> &quot;text&quot; — Show a timed message on the second play-view line<br>
+<b style="color:orange;">message3</b> &quot;text&quot; — Show a timed Rushford-font message on the third play-view line<br>
 <b style="color:orange;">map</b> &lt;name&gt; — Load a different map<br>
 <b style="color:cyan;">=== Save / Load (Play Session) ===</b><br>
 <b style="color:orange;">save</b> [name] — Save the current play session (Play Mode only)<br>
