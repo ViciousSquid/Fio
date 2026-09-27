@@ -1999,4 +1999,7 @@ def __getattr__(name):
     import importlib
     value = getattr(importlib.import_module(module_name), name)
     globals()[name] = value
+    registry = globals().get('ENTITY_TYPES')
+    if isinstance(registry, dict):
+        registry[name] = value
     return value
