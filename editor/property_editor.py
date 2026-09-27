@@ -1662,7 +1662,7 @@ class PropertyEditor(QWidget):
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.verticalScrollBar().setStyleSheet(_Style.SCROLL_V)
 
-        content = QWidget()
+        content = QWidget(scroll)
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
