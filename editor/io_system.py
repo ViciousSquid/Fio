@@ -831,23 +831,29 @@ def register_default_io():
         ]
     )
     
-    # === PICKUP ===
-    register_io('pickup',
+    # === PROP ===
+    register_io('prop',
         inputs=[
-            IODef('Enable', 'Enable pickup'),
-            IODef('Disable', 'Disable pickup'),
-            IODef('Respawn', 'Force respawn'),
-            IODef('SetValue', 'Set pickup value', 'int'),
-            IODef('Hide', 'Hide this pickup'),
-            IODef('Show', 'Show this pickup'),
-            IODef('ToggleVisibility', 'Toggle visibility'),
+            IODef('Enable', 'Enable this prop'),
+            IODef('Disable', 'Disable this prop'),
+            IODef('Collect', 'Collect this prop'),
+            IODef('Respawn', 'Respawn this prop'),
+            IODef('SetValue', 'Set collection value', 'int'),
+            IODef('Drop', 'Release this prop if it is being carried'),
+            IODef('Wake', 'Resume physics simulation'),
+            IODef('Hide', 'Hide this prop'),
+            IODef('Show', 'Show this prop'),
+            IODef('ToggleVisibility', 'Toggle this prop between hidden and shown'),
         ],
         outputs=[
-            IODef('OnPickedUp', 'Fired when collected'),
-            IODef('OnRespawn', 'Fired when respawned'),
+            IODef('OnCarried', 'Fired when the player carries this prop'),
+            IODef('OnDropped', 'Fired when the player drops this prop'),
+            IODef('OnRest', 'Fired when this prop comes to rest'),
+            IODef('OnCollected', 'Fired when the player collects this prop'),
+            IODef('OnRespawn', 'Fired when this prop respawns'),
         ]
     )
-    
+
     # === LOGIC_RELAY ===
     register_io('logic_relay',
         inputs=[
@@ -953,8 +959,11 @@ def register_default_io():
     # === PROP ===
     register_io('prop',
         inputs=[
-            IODef('Enable', 'Make this prop pickable'),
-            IODef('Disable', 'Make this prop unavailable'),
+            IODef('Enable', 'Enable this prop'),
+            IODef('Disable', 'Disable this prop'),
+            IODef('Collect', 'Collect this prop'),
+            IODef('Respawn', 'Respawn this prop'),
+            IODef('SetValue', 'Set collection value', 'int'),
             IODef('Drop', 'Release this prop if it is being carried'),
             IODef('Wake', 'Resume physics simulation'),
             IODef('Hide', 'Hide this prop'),
@@ -962,9 +971,11 @@ def register_default_io():
             IODef('ToggleVisibility', 'Toggle this prop between hidden and shown'),
         ],
         outputs=[
-            IODef('OnPickedUp', 'Fired when the player picks up this prop'),
+            IODef('OnCarried', 'Fired when the player carries this prop'),
             IODef('OnDropped', 'Fired when the player drops this prop'),
             IODef('OnRest', 'Fired when this prop comes to rest'),
+            IODef('OnCollected', 'Fired when the player collects this prop'),
+            IODef('OnRespawn', 'Fired when this prop respawns'),
         ]
     )
 

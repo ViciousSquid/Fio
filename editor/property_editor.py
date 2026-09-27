@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QTableWidget, QTableWidgetItem)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
-from editor.things import (Thing, Light, Effect, Pickup, Monster, Model, Prop, Speaker,
+from editor.things import (Thing, Light, Effect, Prop, Monster, Model, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
                            LogicState)
 from editor import state_values as _sv
@@ -270,7 +270,7 @@ class PropertyEditor(QWidget):
         self.current_object = None
         self._populating = False
         self._widgets: dict[str, QWidget] = {}
-        self._linked_key_pickup = None
+        self._linked_key_collect = None
         self._linked_door_brush = None
         self.tab_widget = None
 
@@ -464,6 +464,50 @@ class PropertyEditor(QWidget):
         self._page = None
         return page
 
+    def _restore_page_bindings(self, page):
+        """Rebind widget/layout handles owned by a cached property page.
+        
+        Property pages are deliberately parked and reused. The callbacks still
+        live on this PropertyEditor instance, however, so any instance-level
+        _prop_* references must follow the page being restored rather than the
+        last page that happened to be built.
+        """
+        bindings = getattr(page, '_fio_property_bindings', None)
+        if not bindings:
+            return
+        for name, value in bindings.items():
+            setattr(self, name, value)
+
+    def _capture_page_bindings(self, page):
+        """Attach this page's Prop-specific widget handles for cache restore."""
+        names = (
+            '_prop_form',
+            '_prop_collection_rows',
+            '_prop_collectible_cb',
+            '_prop_collect_type_combo',
+            '_prop_collect_type_values',
+            '_prop_weapon_combo',
+            '_prop_weapon_values',
+            '_prop_key_combo',
+            '_prop_key_values',
+            '_prop_activation_combo',
+            '_prop_value_label',
+            '_prop_value_spin',
+            '_prop_sprite_path',
+            '_prop_sprite_label',
+            '_prop_sprite_widget',
+            '_prop_respawn_cb',
+            '_prop_respawn_label',
+            '_prop_respawn_spin',
+            '_prop_render_form',
+            '_prop_model_path_row',
+            '_prop_sprite_path_row',
+            '_prop_sprite_size_row',
+        )
+        page._fio_property_bindings = {
+            name: getattr(self, name, None) for name in names
+        }
+
     def _cache_current_page(self):
         """Park the page on screen so selecting its object again is instant."""
         page = self._detach_page()
@@ -606,6 +650,10 @@ class PropertyEditor(QWidget):
                 self.main_layout.addWidget(cached_page)
                 cached_page.setVisible(True)
                 self._page = cached_page
+                # Cached pages own their widget/layout handles. Rebind the
+                # instance-level callback references to this page before any
+                # signal can reach a handler such as _refresh_prop_collection_ui.
+                self._restore_page_bindings(cached_page)
             elif obj is None:
                 self.main_layout.addWidget(QLabel("Nothing selected."))
                 self._strip_tooltips()
@@ -619,6 +667,13 @@ class PropertyEditor(QWidget):
             self.setUpdatesEnabled(True)
             if obj is None:
                 self._populating = False
+
+        # Cached Prop pages can outlive changes to their type-specific
+        # collection controls. Re-apply visibility from the live Prop state
+        # whenever a Prop page becomes active, regardless of whether the page
+        # was rebuilt or restored from the cache.
+        if isinstance(obj, Prop):
+            self._refresh_prop_collection_ui(obj)
 
         if saved_tab_index is not None and self.tab_widget is not None:
             if saved_tab_index < self.tab_widget.count():
@@ -635,7 +690,7 @@ class PropertyEditor(QWidget):
     # Brush population
     # ────────────────────────────
     def populate_for_brush(self, brush):
-        scroll = QScrollArea()
+        scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.verticalScrollBar().setStyleSheet(_Style.SCROLL_V)
@@ -738,7 +793,7 @@ class PropertyEditor(QWidget):
         selected when a page appears.  The tab is added empty so the tab bar
         looks the same, and ``builder`` runs once, on the first switch to it.
         """
-        placeholder = QWidget()
+        placeholder = QWidget(self.tab_widget)
         QVBoxLayout(placeholder).setContentsMargins(0, 0, 0, 0)
         index = self.tab_widget.addTab(placeholder, "\u26a1 I/O")
         tabs = self.tab_widget
@@ -972,16 +1027,16 @@ class PropertyEditor(QWidget):
         self._widgets['trigger_type_combo'] = type_combo
 
         # Activation mode: touch fires on entry; use requires E press.
-        activation_combo = _make_combo(
+        collect_activation_combo = _make_combo(
             ['touch', 'use'],
-            brush.get('trigger_activation', 'touch'),
+            brush.get('trigger_collect_activation', 'touch'),
             tooltip=(
                 "touch — fires when player walks inside\n"
                 "use — fires when player presses E while inside"
             )
         )
-        form.addRow("Activation:", activation_combo)
-        self._widgets['trigger_activation_combo'] = activation_combo
+        form.addRow("Activation:", collect_activation_combo)
+        self._widgets['trigger_collect_activation_combo'] = collect_activation_combo
 
         poll_interval_values = {
             '1.0 s': 1.0,
@@ -1004,12 +1059,12 @@ class PropertyEditor(QWidget):
             ),
         )
         poll_interval_combo.setToolTip(
-            'How often this trigger checks for activation'
+            'How often this trigger checks for collect_activation'
         )
         form.addRow("Poll interval:", poll_interval_combo)
         self._widgets['trigger_poll_interval_combo'] = poll_interval_combo
 
-        # Use Label: custom HUD prompt shown when activation == 'use'
+        # Use Label: custom HUD prompt shown when collect_activation == 'use'
         use_label_lbl = QLabel("Use Label:")
         use_label_input = QLineEdit(brush.get('use_label', ''))
         use_label_input.setPlaceholderText("Activate")
@@ -1020,7 +1075,7 @@ class PropertyEditor(QWidget):
             )
         )
 
-        is_use_mode = brush.get('trigger_activation', 'touch') == 'use'
+        is_use_mode = brush.get('trigger_collect_activation', 'touch') == 'use'
         use_label_lbl.setVisible(is_use_mode)
         use_label_input.setVisible(is_use_mode)
 
@@ -1028,14 +1083,14 @@ class PropertyEditor(QWidget):
         self._widgets['trigger_use_label_lbl'] = use_label_lbl
         self._widgets['trigger_use_label_input'] = use_label_input
 
-        def _on_activation_changed(val):
-            self.update_object_prop('trigger_activation', val)
+        def _on_collect_activation_changed(val):
+            self.update_object_prop('trigger_collect_activation', val)
             show = (val == 'use')
             use_label_lbl.setVisible(show)
             use_label_input.setVisible(show)
 
-        activation_combo.currentTextChanged.connect(
-            _on_activation_changed
+        collect_activation_combo.currentTextChanged.connect(
+            _on_collect_activation_changed
         )
 
         # Detection filters are independent of the trigger action. Any selected
@@ -1322,8 +1377,8 @@ class PropertyEditor(QWidget):
 
         # Key dropdown
         key_lbl = QLabel("Key Name:")
-        key_combo = _make_combo(list(Pickup.KEY_NAMES) + ['custom'],
-                                brush.get('door_key_name', Pickup.DEFAULT_KEY_NAME),
+        key_combo = _make_combo(list(Prop.KEY_NAMES) + ['custom'],
+                                brush.get('door_key_name', Prop.DEFAULT_KEY_NAME),
                                 lambda t: self.update_object_prop('door_key_name', t))
         key_lbl.setVisible(brush.get('door_needs_key', False))
         key_combo.setVisible(brush.get('door_needs_key', False))
@@ -1338,14 +1393,14 @@ class PropertyEditor(QWidget):
         opt_layout.addWidget(link_lbl)
         self._widgets['door_key_link_label'] = link_lbl
 
-        sel_btn = QPushButton("Select Key Pickup ▸")
+        sel_btn = QPushButton("Select Key Prop ▸")
         sel_btn.setStyleSheet("""
             QPushButton { background-color: #2a5a2a; color: #88FF88; border: 1px solid #44AA44;
                           border-radius: 3px; padding: 4px 8px; font-size: 11px; }
             QPushButton:hover { background-color: #3a6a3a; }
         """)
         sel_btn.setVisible(False)
-        sel_btn.clicked.connect(self._select_linked_key_pickup)
+        sel_btn.clicked.connect(self._select_linked_key_collect)
         opt_layout.addWidget(sel_btn)
         self._widgets['door_key_select_btn'] = sel_btn
 
@@ -1602,7 +1657,7 @@ class PropertyEditor(QWidget):
     # Thing population
     # ────────────────────────────
     def populate_for_thing(self, thing):
-        scroll = QScrollArea()
+        scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.verticalScrollBar().setStyleSheet(_Style.SCROLL_V)
@@ -1679,6 +1734,11 @@ class PropertyEditor(QWidget):
         scroll.setWidget(content)
         self.main_layout.addWidget(scroll)
         self._page = scroll
+        # The page may later be parked in the cache. Keep the Prop-specific
+        # widget/layout handles with it so restoring the page cannot leave
+        # callbacks pointing at a deleted QFormLayout.
+        if isinstance(thing, Prop):
+            self._capture_page_bindings(scroll)
 
     def _create_thing_properties_tab(self, thing) -> QWidget:
         w = QWidget()
@@ -1697,11 +1757,11 @@ class PropertyEditor(QWidget):
                     thing.properties.get('render_mode', 'model')
                 ).lower()
                 mode_combo = _make_combo(
-                    ['Model', 'Billboard Sprite'],
-                    'Billboard Sprite' if render_mode == 'billboard' else 'Model',
+                    ['Model', 'Sprite'],
+                    'Sprite' if render_mode == 'billboard' else 'Model',
                     None,
                     tooltip=(
-                        "Model renders the Prop as its 3D model. Billboard Sprite "
+                        "Model renders the Prop as its 3D model. Sprite "
                         "renders it as a camera-facing 2D sprite."
                     ),
                 )
@@ -1782,15 +1842,10 @@ class PropertyEditor(QWidget):
                 rotation_row = rotation_before
                 sprite_path_row = form.getWidgetPosition(sprite_widget)[0]
                 sprite_size_row = form.getWidgetPosition(sprite_size_widget)[0]
-
-                def set_form_row_visible(row, visible):
-                    for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
-                        item = form.itemAt(row, role)
-                        if item is None:
-                            continue
-                        widget = item.widget()
-                        if widget is not None:
-                            widget.setVisible(visible)
+                self._prop_render_form = form
+                self._prop_model_path_row = model_path_row
+                self._prop_sprite_path_row = sprite_path_row
+                self._prop_sprite_size_row = sprite_size_row
 
                 def set_representation(label):
                     is_model = label == 'Model'
@@ -1801,20 +1856,28 @@ class PropertyEditor(QWidget):
                     # with nothing to draw, so give it the default one. Only
                     # when the field is empty: an authored model is never
                     # replaced, and nothing is added to a billboard Prop.
-                    if is_model and not thing.properties.get('model_path'):
+                    if is_model:
+                        # A Prop model representation always has a concrete mesh.
+                        # Set the path before switching the render mode so the
+                        # dense projection never observes a model row with no recipe.
                         default_model = getattr(
                             type(thing), 'DEFAULT_MODEL_PATH', '')
-                        if default_model:
+                        if not thing.properties.get('model_path') and default_model:
                             self.update_object_prop('model_path', default_model)
                             model_path_edit = model_path_widget.findChild(QLineEdit)
                             if model_path_edit is not None:
                                 model_path_edit.setText(default_model)
-                    elif not is_model:
-                        # Billboard is the Prop's default visual representation.
-                        # Switching away from a model deliberately restores the
-                        # stock appearance rather than leaving stale model-era
-                        # asset state to decide what the editor shows.
-                        default_sprite = 'assets/sprites/pickup.png'
+                    else:
+                        # Restore the Prop's resolved visual asset rather than a
+                        # generic placeholder: weapon -> gun1, key -> its key,
+                        # health -> health.png, custom -> custom sprite.
+                        if thing.properties.get('collect_enabled'):
+                            default_sprite = thing.get_collect_sprite_path()
+                        else:
+                            default_sprite = thing.properties.get(
+                                'sprite_path',
+                                'assets/sprites/pickup.png',
+                            )
                         self.update_object_prop('sprite_path', default_sprite)
                         self.update_object_prop('sprite_size', [32.0, 32.0])
                         sprite_edit.setText(default_sprite)
@@ -1823,15 +1886,19 @@ class PropertyEditor(QWidget):
                             spin.setValue(value)
                             spin.blockSignals(False)
                     for row in (model_path_row, scale_row, rotation_row):
-                        set_form_row_visible(row, is_model)
+                        self._set_form_row_visible(form, row, is_model)
                     for row in (sprite_path_row, sprite_size_row):
-                        set_form_row_visible(row, not is_model)
+                        self._set_form_row_visible(form, row, not is_model)
 
                 mode_combo.currentTextChanged.connect(set_representation)
                 for row in (model_path_row, scale_row, rotation_row):
-                    set_form_row_visible(row, model_mode)
+                    self._set_form_row_visible(form, row, model_mode)
                 for row in (sprite_path_row, sprite_size_row):
-                    set_form_row_visible(row, not model_mode)
+                    self._set_form_row_visible(form, row, not model_mode)
+
+                # Collection type can own the sprite path, so the appearance row
+                # is further narrowed by _refresh_prop_collection_appearance().
+                self._refresh_prop_collection_appearance(thing)
 
             # Prop owns its physical state on its dedicated Physics tab.
             # Ordinary Model entities retain their collision controls.
@@ -1915,23 +1982,21 @@ class PropertyEditor(QWidget):
             form.addRow(QLabel(""))  # spacer
             self._build_portal_target(form, thing)
 
-        # Pickup
-        if isinstance(thing, Pickup):
-            self._build_pickup_ui(form, thing)
+        # Prop interaction/collection controls use human-facing concepts
+        # rather than exposing the serialized collect_* / carry_* schema.
+        if isinstance(thing, Prop):
+            self._prop_form = form
+            self._build_collect_ui(form, thing)
 
-        # Explicit primary properties.
-        #
-        # Specialised widgets above handle properties such as model_path,
-        # scale, rotation, colour, etc. The generic iterator handles the
-        # explicitly classified primary properties that do not have a
-        # specialised editor.
+        # Explicit primary properties. Props have a dedicated editor above:
+        # do not expose their serialized implementation fields as a flat list.
         primary_properties = getattr(
             thing,
             'EDITOR_PRIMARY_PROPERTIES',
             (),
         )
 
-        if primary_properties:
+        if primary_properties and not isinstance(thing, Prop):
             self._iterate_thing_properties(
                 form,
                 thing,
@@ -2572,26 +2637,405 @@ class PropertyEditor(QWidget):
         sel_btn.clicked.connect(on_select)
         form.addRow("Portal Target:", _hbox(combo, sel_btn, stretch=False))
 
-    def _build_pickup_ui(self, form, thing):
-        self._pickup_value_widgets = []
-        self._pickup_key_widgets = []
-        self._pickup_sprite_widgets = []
+    def _build_collect_ui(self, form, thing):
+        """Build the compact, human-facing Prop interaction editor.
 
-        # A key pickup's colour is gameplay data, not a sprite-only choice.
-        # Build the selector here because key_name is intentionally excluded
-        # from the generic property editor.
-        key_label = QLabel("Key:")
-        key_combo = _make_combo(
-            list(Pickup.KEY_NAMES),
-            thing.properties.get('key_name', Pickup.DEFAULT_KEY_NAME),
-            self.on_pickup_key_name_changed,
+        The serialized schema is deliberately richer than the inspector. A
+        Prop is one world object with a handful of obvious behaviours; the
+        editor should expose those behaviours and reveal the type-specific
+        controls only when they matter.
+        """
+        self._prop_form = form
+
+        # Interaction -----------------------------------------------------
+        form.addRow(self._section("Interaction"))
+
+        carry_cb = _make_checkbox(
+            "Carryable",
+            bool(thing.properties.get('carry_enabled', True)),
+            lambda checked: self.update_object_prop('carry_enabled', bool(checked)),
+            _Style.CHECKBOX,
         )
-        is_key = thing.properties.get('item_type') == 'key'
-        key_label.setVisible(is_key)
-        key_combo.setVisible(is_key)
-        key_combo.setEnabled(is_key)
-        form.addRow(key_label, key_combo)
-        self._pickup_key_widgets.append((key_label, key_combo))
+        carry_cb.setToolTip(
+            "Allow the player to carry and drop this Prop."
+        )
+        collectible_cb = _make_checkbox(
+            "Collectible",
+            bool(thing.properties.get('collect_enabled', False)),
+            self.on_prop_collectible_toggled,
+            _Style.CHECKBOX,
+        )
+        collectible_cb.setToolTip(
+            "Let the player collect this Prop as a gameplay item."
+        )
+
+        # Carryable and Collectible are the two primary Prop interaction
+        # switches; keep them together so the inspector reads as one compact
+        # interaction row rather than two unrelated properties.
+        form.addRow("", _hbox(carry_cb, collectible_cb, stretch=True, spacing=18))
+
+        # Collection ------------------------------------------------------
+        form.addRow(self._section("Collection"))
+
+        collect_type = str(
+            thing.properties.get('collect_type', 'health') or 'health'
+        ).lower()
+        if collect_type not in Prop.COLLECT_TYPES:
+            collect_type = 'custom'
+
+        type_values = (
+            ('Health', 'health'),
+            ('Ammo', 'ammo'),
+            ('Weapon', 'weapon'),
+            ('Key', 'key'),
+            ('Custom', 'custom'),
+        )
+        type_labels = [label for label, _ in type_values]
+        value_for_label = {label: value for label, value in type_values}
+
+        type_combo = _make_combo(
+            type_labels,
+            next(
+                (label for label, value in type_values if value == collect_type),
+                'Health',
+            ),
+            self._on_prop_collect_kind_changed,
+        )
+        type_row = form.rowCount()
+        form.addRow("Collect as:", type_combo)
+
+        weapon_values = tuple(Prop.GUN_NAMES)
+        weapon_labels = {
+            'gun1': 'Gun 1',
+            'gun2': 'Gun 2',
+            'sword': 'Sword',
+            'cig': 'Cigarette',
+        }
+        weapon_combo = _make_combo(
+            [weapon_labels.get(v, v.title()) for v in weapon_values],
+            weapon_labels.get(
+                thing.properties.get('collect_weapon', 'gun1'),
+                'Gun 1',
+            ),
+            self._on_prop_weapon_changed,
+        )
+        weapon_row = form.rowCount()
+        form.addRow("Weapon:", weapon_combo)
+
+        key_values = tuple(Prop.KEY_NAMES)
+        key_labels = {
+            'blue_key': 'Blue Key',
+            'red_key': 'Red Key',
+            'yellow_key': 'Yellow Key',
+        }
+        key_combo = _make_combo(
+            [key_labels.get(v, v.replace('_', ' ').title()) for v in key_values],
+            key_labels.get(
+                thing.properties.get('collect_key_name', Prop.DEFAULT_KEY_NAME),
+                'Blue Key',
+            ),
+            self._on_prop_key_changed,
+        )
+        key_row = form.rowCount()
+        form.addRow("Key:", key_combo)
+
+        activation = str(
+            thing.properties.get('collect_activation', 'walk_over') or 'walk_over'
+        )
+        activation_combo = _make_combo(
+            ['Walk over', 'Use'],
+            'Walk over' if activation == 'walk_over' else 'Use',
+            self._on_prop_collect_activation_changed,
+        )
+        activation_row = form.rowCount()
+        form.addRow("Collect on:", activation_combo)
+
+        value_label = QLabel("Amount:")
+        value_spin = _make_spin(
+            thing.properties.get('collect_value', 25),
+            -99999,
+            99999,
+        )
+        value_spin.editingFinished.connect(
+            lambda w=value_spin: self.update_object_prop(
+                'collect_value',
+                w.value(),
+            )
+        )
+        value_row = form.rowCount()
+        form.addRow(value_label, value_spin)
+
+        # The visual asset is normally a consequence of the collection type.
+        # Only expose a picker when the user is actually authoring a custom/
+        # generic sprite.
+        sprite_label = QLabel("Sprite:")
+        sprite_widget = QWidget()
+        sprite_layout = QHBoxLayout(sprite_widget)
+        sprite_layout.setContentsMargins(0, 0, 0, 0)
+        sprite_path = QLineEdit(
+            str(thing.properties.get('collect_custom_sprite', '')
+                or thing.properties.get('sprite_path', ''))
+        )
+        sprite_path.setReadOnly(True)
+        sprite_path.setPlaceholderText("Choose a custom sprite")
+        sprite_button = QPushButton("Choose…")
+        sprite_button.setFixedWidth(80)
+        sprite_button.clicked.connect(self.on_collect_sprite_select)
+        sprite_clear = QPushButton("Clear")
+        sprite_clear.setFixedWidth(60)
+        sprite_clear.clicked.connect(self.on_collect_sprite_clear)
+        sprite_layout.addWidget(sprite_path)
+        sprite_layout.addWidget(sprite_button)
+        sprite_layout.addWidget(sprite_clear)
+        sprite_row = form.rowCount()
+        form.addRow(sprite_label, sprite_widget)
+
+        respawn = bool(thing.properties.get('collect_respawns', False))
+        respawn_widget = QWidget()
+        respawn_layout = QHBoxLayout(respawn_widget)
+        respawn_layout.setContentsMargins(0, 0, 0, 0)
+        respawn_cb = _make_checkbox(
+            "Respawn",
+            respawn,
+            self.on_respawn_toggled,
+            _Style.CHECKBOX,
+        )
+        respawn_label = QLabel("after")
+        respawn_spin = _make_spin(
+            thing.properties.get('collect_respawn_time', 20.0),
+            0.1,
+            9999.0,
+            suffix=" sec",
+            decimals=1,
+        )
+        respawn_spin.editingFinished.connect(
+            lambda: self.update_object_prop(
+                'collect_respawn_time',
+                respawn_spin.value(),
+            )
+        )
+        respawn_layout.addWidget(respawn_cb)
+        respawn_layout.addWidget(respawn_label)
+        respawn_layout.addWidget(respawn_spin)
+        respawn_layout.addStretch()
+        respawn_row = form.rowCount()
+        form.addRow("", respawn_widget)
+
+        self._prop_collectible_cb = collectible_cb
+        self._prop_collect_type_combo = type_combo
+        self._prop_collect_type_values = value_for_label
+        self._prop_weapon_combo = weapon_combo
+        self._prop_weapon_values = {
+            label: value for value, label in weapon_labels.items()
+        }
+        self._prop_key_combo = key_combo
+        self._prop_key_values = {
+            label: value for value, label in key_labels.items()
+        }
+        self._prop_activation_combo = activation_combo
+        self._prop_value_label = value_label
+        self._prop_value_spin = value_spin
+        self._prop_sprite_path = sprite_path
+        self._prop_sprite_label = sprite_label
+        self._prop_sprite_widget = sprite_widget
+        self._prop_respawn_cb = respawn_cb
+        self._prop_respawn_label = respawn_label
+        self._prop_respawn_spin = respawn_spin
+        self._prop_collection_rows = {
+            'type': type_row,
+            'weapon': weapon_row,
+            'key': key_row,
+            'activation': activation_row,
+            'value': value_row,
+            'sprite': sprite_row,
+            'respawn': respawn_row,
+        }
+
+        self._refresh_prop_collection_ui(thing)
+
+    def _set_form_row_visible(self, form, row, visible):
+        """Show/hide a QFormLayout row without rebuilding the page."""
+        for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
+            item = form.itemAt(row, role)
+            if item is None:
+                continue
+            widget = item.widget()
+            if widget is not None:
+                widget.setVisible(bool(visible))
+
+    def _refresh_prop_collection_ui(self, thing):
+        """Reconcile collection controls with the current Prop kind."""
+        if not isinstance(thing, Prop):
+            return
+
+        enabled = bool(thing.properties.get('collect_enabled', False))
+        kind = str(thing.properties.get('collect_type', 'health') or 'health').lower()
+        if kind not in Prop.COLLECT_TYPES:
+            kind = 'custom'
+
+        rows = getattr(self, '_prop_collection_rows', {})
+        form = getattr(self, '_prop_collection_form', None)
+        if form is None:
+            # The collection controls are on the form owned by the current page.
+            # Recover it once from any labelled row widget.
+            form = self._find_prop_collection_form()
+            if form is not None:
+                self._prop_collection_form = form
+
+        if form is None:
+            return
+
+        for row in rows.values():
+            self._set_form_row_visible(form, row, enabled)
+
+        # The Collect as row is useful whenever collection is enabled. Type
+        # specific controls then narrow down from there.
+        self._set_form_row_visible(form, rows['type'], enabled)
+        self._set_form_row_visible(form, rows['weapon'], enabled and kind == 'weapon')
+        self._set_form_row_visible(form, rows['key'], enabled and kind == 'key')
+        self._set_form_row_visible(
+            form,
+            rows['activation'],
+            enabled and kind not in ('health', 'ammo', 'weapon'),
+        )
+        self._set_form_row_visible(
+            form,
+            rows['value'],
+            enabled and kind in ('health', 'custom'),
+        )
+        self._set_form_row_visible(
+            form,
+            rows['sprite'],
+            enabled and kind == 'custom',
+        )
+        self._set_form_row_visible(form, rows['respawn'], enabled)
+
+        if kind == 'custom':
+            self._prop_value_label.setText("Value:")
+        else:
+            self._prop_value_label.setText("Amount:")
+
+        self._prop_activation_combo.setCurrentText(
+            'Walk over'
+            if str(thing.properties.get('collect_activation', 'walk_over')).lower() == 'walk_over'
+            else 'Use'
+        )
+
+        self._prop_respawn_cb.blockSignals(True)
+        self._prop_respawn_cb.setChecked(
+            bool(thing.properties.get('collect_respawns', False))
+        )
+        self._prop_respawn_cb.blockSignals(False)
+
+        weapon = thing.properties.get('collect_weapon', 'gun1')
+        weapon_label = {
+            'gun1': 'Gun 1',
+            'gun2': 'Gun 2',
+            'sword': 'Sword',
+            'cig': 'Cigarette',
+        }.get(weapon, 'Gun 1')
+        self._prop_weapon_combo.blockSignals(True)
+        self._prop_weapon_combo.setCurrentText(weapon_label)
+        self._prop_weapon_combo.blockSignals(False)
+
+        key = thing.properties.get('collect_key_name', Prop.DEFAULT_KEY_NAME)
+        key_label = {
+            'blue_key': 'Blue Key',
+            'red_key': 'Red Key',
+            'yellow_key': 'Yellow Key',
+        }.get(key, 'Blue Key')
+        self._prop_key_combo.blockSignals(True)
+        self._prop_key_combo.setCurrentText(key_label)
+        self._prop_key_combo.blockSignals(False)
+
+        # Automatic collection sprites should not look like manually editable
+        # settings. Show their resolved asset in the read-only field only when
+        # a sprite picker is actually relevant.
+        custom_sprite = thing.properties.get('collect_custom_sprite', '')
+        display_sprite = custom_sprite or thing.properties.get('sprite_path', '')
+        self._prop_sprite_path.setText(display_sprite)
+
+    def _find_prop_collection_form(self):
+        """Find the QFormLayout owning the current Prop collection controls."""
+        # QFormLayout is the same object passed to _build_collect_ui; retain it
+        # explicitly on new pages. This fallback keeps cached/older pages safe.
+        return getattr(self, '_prop_form', None)
+
+    def _refresh_prop_collection_appearance(self, thing):
+        """Hide derived sprite-path controls when collection chooses the asset."""
+        if not isinstance(thing, Prop):
+            return
+        form = getattr(self, '_prop_render_form', None)
+        row = getattr(self, '_prop_sprite_path_row', None)
+        if form is None or row is None:
+            return
+        render_mode = str(thing.properties.get('render_mode', 'billboard')).lower()
+        kind = str(thing.properties.get('collect_type', 'health')).lower()
+        derived = (
+            bool(thing.properties.get('collect_enabled'))
+            and kind in ('health', 'ammo', 'weapon', 'key')
+        )
+        self._set_form_row_visible(
+            form,
+            row,
+            render_mode != 'model' and not derived,
+        )
+
+    def on_prop_collectible_toggled(self, checked):
+        if self.current_object is None or not isinstance(self.current_object, Prop):
+            return
+        checked = bool(checked)
+        self.update_object_prop('collect_enabled', checked)
+        if checked:
+            kind = str(
+                self.current_object.properties.get('collect_type', 'health') or 'health'
+            ).lower()
+            if kind == 'weapon':
+                self._set_prop_weapon_sprite(
+                    self.current_object.properties.get('collect_weapon', 'gun1')
+                )
+            elif kind == 'key':
+                self._set_prop_key_sprite(
+                    self.current_object.properties.get(
+                        'collect_key_name',
+                        Prop.DEFAULT_KEY_NAME,
+                    )
+                )
+            elif kind == 'health':
+                self.update_object_prop('collect_custom_sprite', '')
+                self.update_object_prop('sprite_path', 'assets/sprites/health.png')
+            elif kind == 'ammo':
+                self.update_object_prop('collect_custom_sprite', '')
+                self.update_object_prop('collect_activation', 'walk_over')
+                self.update_object_prop('collect_value', 8)
+                self.update_object_prop('sprite_path', 'assets/sprites/ammo.png')
+            self._refresh_prop_collection_ui(self.current_object)
+        else:
+            self._refresh_prop_collection_ui(self.current_object)
+
+    def _on_prop_collect_kind_changed(self, label):
+        value = getattr(self, '_prop_collect_type_values', {}).get(
+            label,
+            'health',
+        )
+        self.on_collect_type_changed(value)
+
+    def _on_prop_collect_activation_changed(self, label):
+        self.update_object_prop(
+            'collect_activation',
+            'walk_over' if str(label) == 'Walk over' else 'use',
+        )
+
+    def _on_prop_weapon_changed(self, label):
+        weapon = getattr(self, '_prop_weapon_values', {}).get(label, 'gun1')
+        self.on_collect_weapon_changed(weapon)
+
+    def _on_prop_key_changed(self, label):
+        key = getattr(self, '_prop_key_values', {}).get(
+            label,
+            Prop.DEFAULT_KEY_NAME,
+        )
+        self.on_collect_key_name_changed(key)
 
     def _iterate_thing_properties(self, form, thing, property_keys=None):
         """Add generic Thing properties to a form.
@@ -2601,12 +3045,6 @@ class PropertyEditor(QWidget):
         preserved for entities that have not yet been migrated to explicit
         editor property classification.
         """
-        is_pickup = isinstance(thing, Pickup)
-        current_item = (
-            thing.properties.get('item_type', 'health')
-            if is_pickup else None
-        )
-
         _MONSTER_ONLY = {
             'awake',
             'damage',
@@ -2740,16 +3178,7 @@ class PropertyEditor(QWidget):
             ):
                 continue
 
-            # Pickup properties handled by the dedicated Pickup UI.
-            if is_pickup and key in (
-                'key_name',
-                'custom_sprite',
-                'respawns',
-                'respawn_time',
-            ):
-                continue
-
-            # Angle gets the normal angle editor rather than a generic field.
+                # Angle gets the normal angle editor rather than a generic field.
             if key == 'angle':
                 angle = float(value or 0.0)
 
@@ -2841,51 +3270,6 @@ class PropertyEditor(QWidget):
                 )
 
                 form.addRow(QLabel("Logic Type:"), combo)
-                continue
-
-            # Pickup item type + explicit weapon selection.
-            if is_pickup and key == 'item_type':
-                current = str(value or 'health')
-                # Older maps encoded gun1/gun2/cig directly in item_type.
-                legacy_weapon = current if current in ('gun1', 'gun2', 'cig') else None
-                if legacy_weapon:
-                    current = 'weapon'
-                    self.update_object_prop('item_type', 'weapon')
-                    if 'weapon' not in thing.properties:
-                        self.update_object_prop('weapon', legacy_weapon)
-
-                combo = QComboBox()
-                combo.addItems([
-                    'health',
-                    'ammo',
-                    'weapon',
-                    'key',
-                    'custom',
-                ])
-                index = combo.findText(current)
-                if index >= 0:
-                    combo.setCurrentIndex(index)
-
-                combo.currentTextChanged.connect(self.on_pickup_item_type_changed)
-                form.addRow(QLabel("Item Type:"), combo)
-
-                weapon_lbl = QLabel("Weapon:")
-                weapon_combo = QComboBox()
-                weapon_combo.addItems(['gun1', 'gun2', 'cig'])
-                weapon_combo.setCurrentText(
-                    thing.properties.get('weapon', legacy_weapon or 'gun1')
-                )
-                weapon_combo.currentTextChanged.connect(self.on_pickup_weapon_changed)
-                form.addRow(weapon_lbl, weapon_combo)
-
-                visible = current == 'weapon'
-                weapon_lbl.setVisible(visible)
-                weapon_combo.setVisible(visible)
-                self._pickup_weapon_widgets = [(weapon_lbl, weapon_combo)]
-                continue
-
-            # The weapon is edited by the Item Type row above.
-            if is_pickup and key == 'weapon':
                 continue
 
             # Legacy maps store show_radius as "True"/"False"; normalise so it
@@ -3010,131 +3394,6 @@ class PropertyEditor(QWidget):
         variant_combo.currentTextChanged.connect(on_variant)
         form.addRow("Variant:", variant_combo)
 
-    def _build_pickup_item_type_row(self, form, thing):
-        item_type = thing.properties.get('item_type', 'health')
-        # Older maps stored gun1/gun2/cig directly in item_type. Present those
-        # maps through the new explicit Weapon field without breaking them.
-        legacy_weapon = item_type if item_type in ('gun1', 'gun2', 'cig') else None
-        if legacy_weapon:
-            item_type = 'weapon'
-            thing.properties['item_type'] = 'weapon'
-            thing.properties.setdefault('weapon', legacy_weapon)
-
-        combo = _make_combo(['health', 'key', 'weapon', 'custom'],
-                            item_type,
-                            self.on_pickup_item_type_changed)
-        form.addRow("Item Type:", combo)
-
-        weapon_lbl = QLabel("Weapon:")
-        weapon_combo = _make_combo(
-            ['gun1', 'gun2', 'cig'],
-            thing.properties.get('weapon', legacy_weapon or 'gun1'),
-            self.on_pickup_weapon_changed,
-        )
-        form.addRow(weapon_lbl, weapon_combo)
-        self._pickup_weapon_widgets = [(weapon_lbl, weapon_combo)]
-        weapon_visible = item_type == 'weapon'
-        weapon_lbl.setVisible(weapon_visible)
-        weapon_combo.setVisible(weapon_visible)
-
-        lbl = QLabel("Key Name:")
-        key_combo = _make_combo(list(Pickup.KEY_NAMES),
-                                thing.properties.get('key_name', Pickup.DEFAULT_KEY_NAME),
-                                self.on_pickup_key_name_changed)
-        key_combo.setEditable(True)
-        form.addRow(lbl, key_combo)
-        self._pickup_key_widgets.append((lbl, key_combo))
-
-        is_key = thing.properties.get('item_type') == 'key'
-        lbl.setVisible(is_key)
-        key_combo.setVisible(is_key)
-
-        # Door link
-        door_lbl = QLabel("")
-        door_lbl.setWordWrap(True)
-        door_lbl.setVisible(False)
-        form.addRow("", door_lbl)
-        self._widgets['pickup_door_link_label'] = door_lbl
-        self._pickup_key_widgets.append((QLabel(""), door_lbl))
-
-        door_btn = QPushButton("Select Door ▸")
-        door_btn.setVisible(False)
-        door_btn.clicked.connect(self._select_linked_door)
-        form.addRow("", door_btn)
-        self._widgets['pickup_door_select_btn'] = door_btn
-        self._pickup_key_widgets.append((QLabel(""), door_btn))
-
-        if is_key:
-            self._update_pickup_door_link(thing)
-        key_combo.currentTextChanged.connect(lambda _: self._update_pickup_door_link(self.current_object))
-
-    def _build_pickup_activation_row(self, form, thing, value):
-        combo = _make_combo(['walk_over', 'use'], value, lambda t: self.update_object_prop('activation', t))
-        form.addRow("Activation:", combo)
-        self._pickup_activation_widget = combo
-        if thing.properties.get('item_type') == 'health':
-            combo.setCurrentText('walk_over')
-            combo.setEnabled(False)
-            self.update_object_prop('activation', 'walk_over')
-
-    def _build_pickup_value_row(self, form, thing, value):
-        lbl = QLabel("Value:")
-        spin = _make_spin(value, -99999, 99999)
-        spin.editingFinished.connect(lambda w=spin: self.update_object_prop('value', w.value()))
-        form.addRow(lbl, spin)
-        self._pickup_value_widgets.append((lbl, spin))
-        if thing.properties.get('item_type') == 'key':
-            lbl.setVisible(False)
-            spin.setVisible(False)
-
-    def _build_pickup_sprite_row(self, form, thing):
-        lbl = QLabel("Sprite:")
-        widget = QWidget()
-        h = QHBoxLayout(widget)
-        h.setContentsMargins(0, 0, 0, 0)
-        path = QLineEdit(thing.properties.get('custom_sprite', ''))
-        path.setReadOnly(True)
-        path.setPlaceholderText("Default sprite")
-        btn = QPushButton("Sprite...")
-        btn.setFixedWidth(80)
-        btn.clicked.connect(self.on_pickup_sprite_select)
-        clear = QPushButton("Clear")
-        clear.setFixedWidth(60)
-        clear.setToolTip("Clear custom sprite")
-        clear.clicked.connect(self.on_pickup_sprite_clear)
-        h.addWidget(path)
-        h.addWidget(btn)
-        h.addWidget(clear)
-        form.addRow(lbl, widget)
-        self._pickup_sprite_widgets.append((lbl, widget))
-        self.pickup_sprite_path = path
-
-        is_key = thing.properties.get('item_type') == 'key'
-        lbl.setVisible(not is_key)
-        widget.setVisible(not is_key)
-
-    def _build_pickup_respawn_row(self, form, thing):
-        form.addRow(self._section("Respawn"))
-        respawns = thing.properties.get('respawns', False)
-        rtime = thing.properties.get('respawn_time', 20.0)
-
-        rw = QWidget()
-        rl = QHBoxLayout(rw)
-        rl.setContentsMargins(0, 0, 0, 0)
-        cb = _make_checkbox("Respawns", respawns, self.on_respawn_toggled, _Style.CHECKBOX)
-        lbl = QLabel("after")
-        spin = _make_spin(rtime, 0.1, 9999.0, suffix=" sec", decimals=1)
-        spin.editingFinished.connect(lambda: self.update_object_prop('respawn_time', spin.value()))
-        lbl.setVisible(respawns)
-        spin.setVisible(respawns)
-        rl.addWidget(cb)
-        rl.addWidget(lbl)
-        rl.addWidget(spin)
-        rl.addStretch()
-        form.addRow("", rw)
-        self.respawn_checkbox = cb
-        self.respawn_time_label = lbl
-        self.respawn_time_spin = spin
 
     def _build_pathnode_group(self, tab_layout, thing):
         for k, v in (('radius', 256.0), ('show_radius', False), ('affects_type', 'both'),
@@ -4208,7 +4467,7 @@ class PropertyEditor(QWidget):
             return
         self.current_object['door_needs_key'] = needs_key
         if needs_key and not self.current_object.get('door_key_name'):
-            self.current_object['door_key_name'] = Pickup.DEFAULT_KEY_NAME
+            self.current_object['door_key_name'] = Prop.DEFAULT_KEY_NAME
         for k in ('door_key_input', 'door_key_label'):
             if k in self._widgets:
                 self._widgets[k].setVisible(needs_key)
@@ -4227,8 +4486,8 @@ class PropertyEditor(QWidget):
                 sel_btn.setVisible(False)
             return
 
-        key_name = brush.get('door_key_name', '')
-        if not key_name:
+        collect_key_name = brush.get('door_key_name', '')
+        if not collect_key_name:
             link_lbl.setText("⚠ No key name set")
             link_lbl.setStyleSheet("QLabel { color: #FF8800; padding: 4px; }")
             link_lbl.setVisible(True)
@@ -4236,16 +4495,16 @@ class PropertyEditor(QWidget):
                 sel_btn.setVisible(False)
             return
 
-        self._linked_key_pickup = None
+        self._linked_key_collect = None
         for thing in self.editor.state.things:
-            if isinstance(thing, Pickup):
-                if thing.properties.get('item_type') == 'key' and thing.properties.get('key_name') == key_name:
-                    self._linked_key_pickup = thing
+            if isinstance(thing, Prop):
+                if thing.properties.get('collect_type') == 'key' and thing.properties.get('collect_key_name') == collect_key_name:
+                    self._linked_key_collect = thing
                     break
 
-        if self._linked_key_pickup:
-            name = self._linked_key_pickup.properties.get('name', 'unnamed')
-            pos = self._linked_key_pickup.pos
+        if self._linked_key_collect:
+            name = self._linked_key_collect.properties.get('name', 'unnamed')
+            pos = self._linked_key_collect.pos
             pos_str = f"({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f})" if pos else ""
             link_lbl.setText(f"🔑 Linked to: {name} {pos_str}")
             link_lbl.setStyleSheet("QLabel { color: #88FF88; padding: 4px; }")
@@ -4253,28 +4512,28 @@ class PropertyEditor(QWidget):
             if sel_btn:
                 sel_btn.setVisible(True)
         else:
-            link_lbl.setText(f"⚠ No key pickup named '{key_name}' found in map")
+            link_lbl.setText(f"⚠ No key collection named '{collect_key_name}' found in map")
             link_lbl.setStyleSheet("QLabel { color: #FF4444; padding: 4px; }")
             link_lbl.setVisible(True)
             if sel_btn:
                 sel_btn.setVisible(False)
 
-    def _select_linked_key_pickup(self):
-        pickup = getattr(self, '_linked_key_pickup', None)
-        if pickup:
-            self.editor.select_object(pickup)
+    def _select_linked_key_collect(self):
+        collect = getattr(self, '_linked_key_collect', None)
+        if collect:
+            self.editor.select_object(collect)
 
-    def _update_pickup_door_link(self, thing):
-        link_lbl = self._widgets.get('pickup_door_link_label')
-        sel_btn = self._widgets.get('pickup_door_select_btn')
-        if not link_lbl or not isinstance(thing, Pickup) or thing.properties.get('item_type') != 'key':
+    def _update_collect_door_link(self, thing):
+        link_lbl = self._widgets.get('collect_door_link_label')
+        sel_btn = self._widgets.get('collect_door_select_btn')
+        if not link_lbl or not isinstance(thing, Prop) or thing.properties.get('collect_type') != 'key':
             link_lbl.setVisible(False) if link_lbl else None
             if sel_btn:
                 sel_btn.setVisible(False)
             return
 
-        key_name = thing.properties.get('key_name', '')
-        if not key_name:
+        collect_key_name = thing.properties.get('collect_key_name', '')
+        if not collect_key_name:
             link_lbl.setText("⚠ No key name set")
             link_lbl.setStyleSheet("QLabel { color: #FF8800; padding: 4px; }")
             link_lbl.setVisible(True)
@@ -4283,7 +4542,7 @@ class PropertyEditor(QWidget):
             return
 
         matching = [b for b in self.editor.state.brushes
-                    if b.get('is_door') and b.get('door_needs_key') and b.get('door_key_name') == key_name]
+                    if b.get('is_door') and b.get('door_needs_key') and b.get('door_key_name') == collect_key_name]
         if matching:
             self._linked_door_brush = matching[0]
             door_name = matching[0].get('name', 'unnamed door')
@@ -4296,7 +4555,7 @@ class PropertyEditor(QWidget):
             if sel_btn:
                 sel_btn.setVisible(True)
         else:
-            link_lbl.setText(f"⚠ No door requires key '{key_name}'")
+            link_lbl.setText(f"⚠ No door requires key '{collect_key_name}'")
             link_lbl.setStyleSheet("QLabel { color: #FF4444; padding: 4px; }")
             link_lbl.setVisible(True)
             self._linked_door_brush = None
@@ -4335,135 +4594,161 @@ class PropertyEditor(QWidget):
                     self.editor.stop_mover_preview()
 
     def on_respawn_toggled(self, state):
-        # Connected via _make_checkbox -> toggled(bool), so `state` is already
-        # the boolean checked state (not a Qt.CheckState int).
-        respawns = bool(state)
-        self.update_object_prop('respawns', respawns)
-        if hasattr(self, 'respawn_time_label'):
-            self.respawn_time_label.setVisible(respawns)
-        if hasattr(self, 'respawn_time_spin'):
-            self.respawn_time_spin.setVisible(respawns)
-
-    def on_pickup_key_name_changed(self, key_name):
-        if self.current_object is None:
+        collect_respawns = bool(state)
+        self.update_object_prop('collect_respawns', collect_respawns)
+        if hasattr(self, '_prop_respawn_label'):
+            self._prop_respawn_label.setVisible(collect_respawns)
+        if hasattr(self, '_prop_respawn_spin'):
+            self._prop_respawn_spin.setVisible(collect_respawns)
+    def on_collect_key_name_changed(self, collect_key_name):
+        if self.current_object is None or not isinstance(self.current_object, Prop):
             return
-        self.update_object_prop('key_name', key_name)
-        if hasattr(self, '_pickup_sprite_widgets'):
-            for lbl, widget in self._pickup_sprite_widgets:
-                lbl.setVisible(False)
-                widget.setVisible(False)
-        self._update_pickup_door_link(self.current_object)
-        if hasattr(self.editor, 'view_3d'):
-            self.editor.view_3d.update()
-
-    def on_pickup_sprite_select(self):
-        if self.current_object is None or not isinstance(self.current_object, Pickup):
-            return
-        start = os.path.join(os.getcwd(), 'assets', 'sprites')
-        os.makedirs(start, exist_ok=True)
-        fp, _ = QFileDialog.getOpenFileName(self, "Select Sprite Image", start,
-                                            "Image Files (*.png *.jpg *.jpeg *.bmp *.tga)")
-        if fp:
-            rel = os.path.relpath(fp, os.getcwd()).replace('\\', '/')
-            self.update_object_prop('custom_sprite', rel)
-            if hasattr(self, 'pickup_sprite_path'):
-                self.pickup_sprite_path.setText(rel)
-            if hasattr(Pickup, 'clear_sprite_cache'):
-                Pickup.clear_sprite_cache()
-            self.editor.update_all_ui()
-
-    def on_pickup_sprite_clear(self):
-        if self.current_object is None or not isinstance(self.current_object, Pickup):
-            return
-        self.update_object_prop('custom_sprite', '')
-        if hasattr(self, 'pickup_sprite_path'):
-            self.pickup_sprite_path.setText('')
-        if hasattr(Pickup, 'clear_sprite_cache'):
-            Pickup.clear_sprite_cache()
-        self.editor.update_all_ui()
-
-    def on_pickup_weapon_changed(self, weapon):
-        if self.current_object is None:
-            return
-        self.update_object_prop('weapon', weapon)
-        if self.current_object.properties.get('item_type') == 'weapon':
-            sprite = f'assets/sprites/{weapon}.png'
-            self.update_object_prop('custom_sprite', sprite)
-            if hasattr(self, 'pickup_sprite_path'):
-                self.pickup_sprite_path.setText(sprite)
-        if hasattr(Pickup, 'clear_sprite_cache'):
-            Pickup.clear_sprite_cache()
-        # update_object_prop() already invalidates the projections, repaints
-        # the viewports, and marks the map dirty. Rebuilding the entire
-        # inspector here would destroy the widgets that emitted the signal.
+        self.update_object_prop('collect_enabled', True)
+        self.update_object_prop('collect_key_name', collect_key_name)
+        self.update_object_prop('collect_custom_sprite', '')
+        self._set_prop_key_sprite(collect_key_name)
+        self._refresh_prop_collection_ui(self.current_object)
+        self._refresh_prop_collection_appearance(self.current_object)
         if hasattr(self.editor, 'view_3d'):
             self.editor.view_3d.update()
         if hasattr(self.editor, 'mark_dirty'):
             self.editor.mark_dirty()
 
-    def on_pickup_item_type_changed(self, item_type):
-        if self.current_object is None:
+    def _set_prop_key_sprite(self, collect_key_name):
+        self.update_object_prop(
+            'sprite_path',
+            Prop.get_key_sprite_path(collect_key_name),
+        )
+
+    def on_collect_sprite_select(self):
+        if self.current_object is None or not isinstance(self.current_object, Prop):
             return
-        self.update_object_prop('item_type', item_type)
-        is_key = item_type == 'key'
-        is_health = item_type == 'health'
-        is_weapon = item_type == 'weapon'
+        start = os.path.join(_project_root(), 'assets', 'sprites')
+        os.makedirs(start, exist_ok=True)
+        fp, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Sprite Image",
+            start,
+            "Image Files (*.png *.jpg *.jpeg *.bmp *.tga)",
+        )
+        if fp:
+            rel = _normalise_project_asset_path(fp)
+            if not rel:
+                return
+            self.update_object_prop('collect_enabled', True)
+            self.update_object_prop('collect_type', 'custom')
+            self.update_object_prop('collect_custom_sprite', rel)
+            self.update_object_prop('sprite_path', rel)
+            if hasattr(self, '_prop_sprite_path'):
+                self._prop_sprite_path.setText(rel)
+            if hasattr(Prop, 'clear_sprite_cache'):
+                Prop.clear_sprite_cache()
+            self._refresh_prop_collection_ui(self.current_object)
+            self._refresh_prop_collection_appearance(self.current_object)
+            if hasattr(self.editor, 'view_3d'):
+                self.editor.view_3d.update()
+            if hasattr(self.editor, 'mark_dirty'):
+                self.editor.mark_dirty()
 
-        if hasattr(self, '_pickup_weapon_widgets'):
-            for lbl, widget in self._pickup_weapon_widgets:
-                lbl.setVisible(is_weapon)
-                widget.setVisible(is_weapon)
-
-        current_key = self.current_object.properties.get('key_name', Pickup.DEFAULT_KEY_NAME)
-
-        if hasattr(self, '_pickup_key_widgets'):
-            for lbl, widget in self._pickup_key_widgets:
-                lbl.setVisible(is_key)
-                widget.setVisible(is_key)
-                widget.setEnabled(is_key)
-
-        if is_key:
-            self._update_pickup_door_link(self.current_object)
-
-        if hasattr(self, '_pickup_value_widgets'):
-            for lbl, widget in self._pickup_value_widgets:
-                lbl.setVisible(not is_key)
-                widget.setVisible(not is_key)
-
-        show_sprite = (not is_key) or (is_key and current_key == 'custom')
-        if hasattr(self, '_pickup_sprite_widgets'):
-            for lbl, widget in self._pickup_sprite_widgets:
-                lbl.setVisible(show_sprite)
-                widget.setVisible(show_sprite)
-
-        if is_health:
-            self.update_object_prop('custom_sprite', 'assets/sprites/health.png')
-            if hasattr(self, 'pickup_sprite_path'):
-                self.pickup_sprite_path.setText('assets/sprites/health.png')
-            self.update_object_prop('activation', 'walk_over')
-            if hasattr(self, '_pickup_activation_widget'):
-                self._pickup_activation_widget.setCurrentText('walk_over')
-                self._pickup_activation_widget.setEnabled(False)
-        elif is_weapon:
-            weapon = self.current_object.properties.get('weapon', 'gun1')
-            sprite = f'assets/sprites/{weapon}.png'
-            self.update_object_prop('custom_sprite', sprite)
-            if hasattr(self, 'pickup_sprite_path'):
-                self.pickup_sprite_path.setText(sprite)
-            self.update_object_prop('activation', 'walk_over')
-            if hasattr(self, '_pickup_activation_widget'):
-                self._pickup_activation_widget.setCurrentText('walk_over')
-                self._pickup_activation_widget.setEnabled(False)
+    def on_collect_sprite_clear(self):
+        if self.current_object is None or not isinstance(self.current_object, Prop):
+            return
+        thing = self.current_object
+        self.update_object_prop('collect_custom_sprite', '')
+        kind = str(thing.properties.get('collect_type', 'custom')).lower()
+        if kind == 'weapon':
+            self._set_prop_weapon_sprite(
+                thing.properties.get('collect_weapon', 'gun1')
+            )
+        elif kind == 'key':
+            self._set_prop_key_sprite(
+                thing.properties.get(
+                    'collect_key_name',
+                    Prop.DEFAULT_KEY_NAME,
+                )
+            )
+        elif kind == 'health':
+            self.update_object_prop('sprite_path', 'assets/sprites/health.png')
+        elif kind == 'ammo':
+            self.update_object_prop('sprite_path', 'assets/sprites/ammo.png')
         else:
-            if hasattr(self, '_pickup_activation_widget'):
-                self._pickup_activation_widget.setEnabled(True)
+            # There is no stock sprite for arbitrary Custom Props; leave
+            # the authored path empty and let the renderer fall back normally.
+            self.update_object_prop('sprite_path', '')
+        if hasattr(self, '_prop_sprite_path'):
+            self._prop_sprite_path.setText(
+                thing.properties.get('sprite_path', '')
+            )
+        if hasattr(Prop, 'clear_sprite_cache'):
+            Prop.clear_sprite_cache()
+        self._refresh_prop_collection_ui(thing)
+        self._refresh_prop_collection_appearance(thing)
+        if hasattr(self.editor, 'view_3d'):
+            self.editor.view_3d.update()
+        if hasattr(self.editor, 'mark_dirty'):
+            self.editor.mark_dirty()
 
-        if hasattr(Pickup, 'clear_sprite_cache'):
-            Pickup.clear_sprite_cache()
-        # update_object_prop() already invalidates the projections, repaints
-        # the viewports, and marks the map dirty. Do not rebuild the inspector
-        # from inside its own combo-box signal; that destroys the emitting
-        # widget and can re-enter Qt's deferred widget deletion path.
+    def on_collect_weapon_changed(self, weapon):
+        if self.current_object is None or not isinstance(self.current_object, Prop):
+            return
+        self.update_object_prop('collect_weapon', weapon)
+        self.update_object_prop('collect_custom_sprite', '')
+        self._set_prop_weapon_sprite(weapon)
+        self._refresh_prop_collection_ui(self.current_object)
+        self._refresh_prop_collection_appearance(self.current_object)
+        if hasattr(Prop, 'clear_sprite_cache'):
+            Prop.clear_sprite_cache()
+        if hasattr(self.editor, 'view_3d'):
+            self.editor.view_3d.update()
+        if hasattr(self.editor, 'mark_dirty'):
+            self.editor.mark_dirty()
+
+    def _set_prop_weapon_sprite(self, weapon):
+        sprite = Prop.GUN_SPRITES.get(
+            weapon,
+            Prop.GUN_SPRITES['gun1'],
+        )
+        self.update_object_prop('sprite_path', sprite)
+
+    def on_collect_type_changed(self, collect_type):
+        if self.current_object is None or not isinstance(self.current_object, Prop):
+            return
+
+        collect_type = str(collect_type or 'health').lower()
+        if collect_type not in Prop.COLLECT_TYPES:
+            collect_type = 'custom'
+
+        self.update_object_prop('collect_enabled', True)
+        self.update_object_prop('collect_type', collect_type)
+
+        if collect_type == 'health':
+            self.update_object_prop('collect_custom_sprite', '')
+            self.update_object_prop('collect_activation', 'walk_over')
+            self.update_object_prop('sprite_path', 'assets/sprites/health.png')
+        elif collect_type == 'weapon':
+            self.update_object_prop('collect_custom_sprite', '')
+            self.update_object_prop('collect_activation', 'walk_over')
+            self._set_prop_weapon_sprite(
+                self.current_object.properties.get('collect_weapon', 'gun1')
+            )
+        elif collect_type == 'key':
+            self.update_object_prop('collect_custom_sprite', '')
+            self._set_prop_key_sprite(
+                self.current_object.properties.get(
+                    'collect_key_name',
+                    Prop.DEFAULT_KEY_NAME,
+                )
+            )
+        elif collect_type == 'ammo':
+            self.update_object_prop('collect_custom_sprite', '')
+            self.update_object_prop('collect_activation', 'walk_over')
+            self.update_object_prop('collect_value', 8)
+            self.update_object_prop('sprite_path', 'assets/sprites/ammo.png')
+
+        self._refresh_prop_collection_ui(self.current_object)
+        self._refresh_prop_collection_appearance(self.current_object)
+        if hasattr(Prop, 'clear_sprite_cache'):
+            Prop.clear_sprite_cache()
         if hasattr(self.editor, 'view_3d'):
             self.editor.view_3d.update()
         if hasattr(self.editor, 'mark_dirty'):
@@ -4648,7 +4933,7 @@ class PropertyEditor(QWidget):
             # the 2D paint path only re-applies an existing fill, never creates
             # GL state. Runs before the repaint below so the new terrain shows.
             if key in ('terrain_fill', 'terrain_infinite', 'enabled',
-                       'terrain_stream_radius', 'activation_radius') \
+                       'terrain_stream_radius', 'collect_activation_radius') \
                     and getattr(self.current_object, 'TYPE', None) == 'bigworldsettings' \
                     and hasattr(self.editor, 'sync_bigworld_terrain'):
                 self.editor.sync_bigworld_terrain(allow_create=True)

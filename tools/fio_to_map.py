@@ -10,7 +10,7 @@ Usage:
 Supports:
     - Standard Quake .map format (mapversion 220 for Valve 220 UVs)
     - Axis-aligned brushes with per-face texturing
-    - Entity conversion (PlayerStart, Light, Monster, Pickup, etc.)
+    - Entity conversion (PlayerStart, Light, Monster, Prop, etc.)
     - I/O connections → target/targetname links
     - Subtractive brushes (CSG)
     - Custom properties preservation
@@ -39,7 +39,7 @@ ENTITY_CLASSNAMES = {
     'PlayerStart': 'info_player_start',
     'Light': 'light',
     'Monster': 'monster_army',  # Generic; subtype determines specific class
-    'Pickup': 'item_health',    # Determined by item_type
+    'Prop': 'info_null',       # Collectible Props are resolved below
     'Model': 'misc_model',
     'Portal': 'misc_teleporter',
     'PathNode': 'path_corner',
@@ -74,8 +74,8 @@ MONSTER_CLASSNAMES = {
     'default': 'monster_army',
 }
 
-# Pickup type mapping
-PICKUP_CLASSNAMES = {
+# Collection type mapping
+COLLECT_CLASSNAMES = {
     'health': 'item_health',
     'ammo': 'item_rockets',
     'gun1': 'weapon_shotgun',
@@ -412,13 +412,12 @@ def convert_fio_entity(fio_thing: Dict[str, Any]) -> Optional[MapEntity]:
         monster_type = props.get('monster_type', 'human')
         classname = MONSTER_CLASSNAMES.get(monster_type, MONSTER_CLASSNAMES['default'])
     
-    elif entity_type == 'Pickup':
-        item_type = props.get('item_type', 'health')
-        weapon = props.get('weapon', item_type)
-        # Preserve compatibility with older maps that encoded the weapon in
-        # item_type, while new maps use item_type="weapon" + weapon="gun1|gun2|cig".
-        pickup_class = weapon if item_type == 'weapon' else item_type
-        classname = PICKUP_CLASSNAMES.get(pickup_class, PICKUP_CLASSNAMES['default'])
+    elif str(entity_type).lower() == 'prop' and props.get('collect_enabled', False):
+        collect_type = props.get('collect_type', 'health')
+        weapon = props.get('collect_weapon', collect_type)
+        collect_class = weapon if collect_type == 'weapon' else collect_type
+        classname = COLLECT_CLASSNAMES.get(
+            collect_class, COLLECT_CLASSNAMES['default'])
     
     elif entity_type == 'Light':
         classname = 'light'

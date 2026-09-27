@@ -456,7 +456,7 @@ Passed to `FioPlugin.on_tick` once per play-mode tick.
 | `delta` | `float` | Seconds since the previous tick. |
 | `use_pressed` | `bool` | The edge-triggered "use/interact" key for this tick (already consumed by the logic thread). Treat `True` as a single press. |
 | `keys` | `frozenset` | The raw held-key set (Qt key codes on the engine host). Prefer `key_down`. |
-| `interaction_consumed` | `bool` | `True` if the core already set a HUD prompt / consumed the use press this tick (door, pickup, level-changer). Avoid clobbering unless you own a crosshair target. |
+| `interaction_consumed` | `bool` | `True` if the core already set a HUD prompt / consumed the use press this tick (door, collectible Prop, level-changer). Avoid clobbering unless you own a crosshair target. |
 | `logic` | `Any` | The play session's logic object (set by the manager). |
 
 ### Input
@@ -606,7 +606,7 @@ def clear(self) -> None
 single int compare.
 
 Common event names include `play_start`, `tick`, `player_damage`,
-`portal_transit`, `pickup_collected`, `entity_spawned`, and the render hooks
+`portal_transit`, `prop_collected`, `entity_spawned`, and the render hooks
 `render.overlay` / `render.*`. Prefer subscribing through `host.on(...)` (which
 gates on `enabled`) over the raw bus.
 

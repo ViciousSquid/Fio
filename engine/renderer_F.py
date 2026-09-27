@@ -1156,15 +1156,33 @@ class Renderer_F(BaseRenderer):
                     (entity_table.class_bits[thing_slots] & entity_projection.ENT_EFFECT) != 0
                 ]
                 if len(model_slots):
-                    self.draw_models_instanced(
-                        projection,
-                        reflection_view,
-                        reflection_pos,
-                        entity_table,
-                        model_slots,
-                        lights,
-                        capture_config,
-                    )
+                    fading_model_mask = entity_table.render_alpha[model_slots] < 1.0
+                    opaque_model_slots = model_slots[~fading_model_mask]
+                    fading_model_slots = model_slots[fading_model_mask]
+                    if len(opaque_model_slots):
+                        self.draw_models_instanced(
+                            projection,
+                            reflection_view,
+                            reflection_pos,
+                            entity_table,
+                            opaque_model_slots,
+                            lights,
+                            capture_config,
+                        )
+                    if len(fading_model_slots):
+                        gl.glEnable(gl.GL_BLEND)
+                        gl.glDepthMask(gl.GL_FALSE)
+                        self.draw_models_instanced(
+                            projection,
+                            reflection_view,
+                            reflection_pos,
+                            entity_table,
+                            fading_model_slots,
+                            lights,
+                            capture_config,
+                        )
+                        gl.glDepthMask(gl.GL_TRUE)
+                        gl.glDisable(gl.GL_BLEND)
 
                 if len(effect_slots):
                     gl.glEnable(gl.GL_BLEND)
@@ -1429,11 +1447,28 @@ class Renderer_F(BaseRenderer):
                             # projection as the main camera.  No erefs[...] and no
                             # Thing list are materialised for the portal scene.
                             if len(portal_model_slots):
-                                self.draw_models_instanced(
-                                    proj, vw, cam,
-                                    cfg.get('entity_table'),
-                                    portal_model_slots,
-                                    portal_lights, cfg)
+                                portal_table_entities = cfg.get('entity_table')
+                                portal_fading_mask = (
+                                    portal_table_entities.render_alpha[portal_model_slots] < 1.0
+                                )
+                                portal_opaque_model_slots = portal_model_slots[~portal_fading_mask]
+                                portal_fading_model_slots = portal_model_slots[portal_fading_mask]
+                                if len(portal_opaque_model_slots):
+                                    self.draw_models_instanced(
+                                        proj, vw, cam,
+                                        portal_table_entities,
+                                        portal_opaque_model_slots,
+                                        portal_lights, cfg)
+                                if len(portal_fading_model_slots):
+                                    gl.glEnable(gl.GL_BLEND)
+                                    gl.glDepthMask(gl.GL_FALSE)
+                                    self.draw_models_instanced(
+                                        proj, vw, cam,
+                                        portal_table_entities,
+                                        portal_fading_model_slots,
+                                        portal_lights, cfg)
+                                    gl.glDepthMask(gl.GL_TRUE)
+                                    gl.glDisable(gl.GL_BLEND)
 
                             # Match the remaining dense material passes.
                             if len(portal_groups['glow']):
@@ -1549,14 +1584,19 @@ class Renderer_F(BaseRenderer):
             self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl)
         if len(glow_brushes):
             self.draw_glow_brushes(projection, view, camera_pos, glow_brushes, lights, config, table=_tbl)
+        fading_model_slots = np.empty(0, dtype=np.int32)
         if len(numeric_model_slots):
             if not (self.shaders.get('lit_instanced')
                     or self.shaders.get('textured_instanced')):
                 raise RuntimeError(
                     "Fio 2.5 requires instanced model shaders for dense entity rendering")
-            self.draw_models_instanced(
-                projection, view, camera_pos, etable, numeric_model_slots,
-                lights, config)
+            fading_model_mask = etable.render_alpha[numeric_model_slots] < 1.0
+            opaque_model_slots = numeric_model_slots[~fading_model_mask]
+            fading_model_slots = numeric_model_slots[fading_model_mask]
+            if len(opaque_model_slots):
+                self.draw_models_instanced(
+                    projection, view, camera_pos, etable, opaque_model_slots,
+                    lights, config)
         if not config.get('play_mode', False):
             self.draw_path_node_cubes(projection, view, things)
         if etable is not None:
@@ -1568,6 +1608,10 @@ class Renderer_F(BaseRenderer):
         # The sprite renderer has one path: dense EntityTable columns -> GL
         # instanced draws. Missing projection data is a caller error, not a
         # reason to resurrect the object renderer.
+        if len(fading_model_slots):
+            self.draw_models_instanced(
+                projection, view, camera_pos, etable, fading_model_slots,
+                lights, config)
         if effect_slots is not None and len(effect_slots):
             self.draw_effects_instanced(
                 projection, view, etable, effect_slots,

@@ -7,13 +7,13 @@ import ctypes
 from typing import Optional
 from PyQt5.QtWidgets import QOpenGLWidget, QApplication, QLineEdit
 from PyQt5.QtCore import Qt, QTimer, QPoint, QRect, QEvent
-from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient
+from PyQt5.QtGui import QPainter, QColor, QFont, QCursor, QPen, QBrush, QKeySequence, QPixmap, QSurfaceFormat, QFontMetrics, QImage, QLinearGradient, QFontDatabase
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glm
 from engine.camera import Camera
 from editor.things import (
-    Thing, Light, PlayerStart, Monster, Pickup, Prop, Speaker,
+    Thing, Light, PlayerStart, Monster, Prop, Speaker,
     LogicGate, LogicRelay, LogicTimer, LevelChanger, Portal
 )
 from engine.player import Player
@@ -189,7 +189,7 @@ class QtGameView(QOpenGLWidget):
         self.sprite_textures = {}
         self.gun_hud_pixmaps = {}
         self.gun_flash_pixmaps = {}
-        self.weapon_pickup_pixmaps = {}   # item_type -> world/pickup QPixmap
+        self.weapon_collect_pixmaps = {}   # item_type -> world/collectible QPixmap
         self.monster_debug_active = False
         self.show_spatial_grid = False
         self.renderer = None
@@ -396,6 +396,33 @@ class QtGameView(QOpenGLWidget):
        
 
 
+    def _load_health_font(self):
+        """Load the bundled Rushford Clean font for the numeric health HUD."""
+        fonts_dir = os.path.join(os.getcwd(), 'assets', 'fonts')
+        candidates = []
+        try:
+            for filename in os.listdir(fonts_dir):
+                lower = filename.lower()
+                if 'rushford' not in lower:
+                    continue
+                if lower.endswith(('.ttf', '.otf')):
+                    candidates.append(filename)
+        except OSError:
+            candidates = []
+
+        for filename in sorted(candidates):
+            path = os.path.join(fonts_dir, filename)
+            font_id = QFontDatabase.addApplicationFont(path)
+            if font_id < 0:
+                continue
+            families = QFontDatabase.applicationFontFamilies(font_id)
+            if families:
+                return QFont(families[0], 56)
+
+        # Development fallback: use an installed copy if present. Once the
+        # bundled font is placed in assets/fonts, this path is not used.
+        return QFont("Rushford Clean", 56)
+
     def _init_hud_caches(self):
         self._hud_font = QFont("Arial", 11)
         self._hud_font.setBold(True)
@@ -406,14 +433,13 @@ class QtGameView(QOpenGLWidget):
         self._sprites_font.setBold(True)
         self._death_title_font = QFont("Arial", 64, QFont.Bold)
         self._death_sub_font = QFont("Arial", 18)
+        self._hud_health_font = self._load_health_font()
         self._face_mode_font_top = QFont("Arial", 14, QFont.Bold)
         self._face_mode_font_bot = QFont("Arial", 10, QFont.Bold)
 
-        self._hud_bar_bg_pen = QPen(QColor(60, 60, 60), 2)
-        self._hud_bar_bg_brush = QBrush(QColor(40, 40, 40, 200))
-        self._hud_health_green = QColor(50, 200, 50)
-        self._hud_health_yellow = QColor(255, 200, 50)
-        self._hud_health_red = QColor(200, 50, 50)
+        self._hud_health_orange = QColor(179, 75, 0)
+        self._hud_ammo_green = QColor("#0b4519")
+        self._hud_count_shadow_pen = QPen(QColor(0, 0, 0, 85))
         self._hud_white_pen = QPen(QColor(255, 255, 255))
         self._hud_black_pen = QPen(QColor(0, 0, 0))
         self._hud_grey_pen = QPen(QColor(200, 200, 200))
@@ -443,8 +469,12 @@ class QtGameView(QOpenGLWidget):
         self._view_message2_started_at = 0.0
         self._view_message2_width = 0
         self._view_message2_queue = deque()
+        self._view_message3_text = ""
+        self._view_message3_started_at = 0.0
+        self._view_message3_width = 0
+        self._view_message3_queue = deque()
         self._cached_gun_hud = {}
-        self._cached_weapon_pickup = {}   # (item_type, size) -> scaled QPixmap
+        self._cached_weapon_collect = {}   # (item_type, size) -> scaled QPixmap
         self._cached_key_pixmaps = {}
         self._cached_key_size = 100
         self._cached_prompt_key = None
@@ -516,6 +546,14 @@ class QtGameView(QOpenGLWidget):
             self._hud_msg_font
         ).horizontalAdvance(text)
 
+    def _start_view_message3(self, text: str):
+        """Start displaying one transient Rushford-font message-3 immediately."""
+        self._view_message3_text = text
+        self._view_message3_started_at = time.perf_counter()
+        self._view_message3_width = QFontMetrics(
+            self._hud_health_font
+        ).horizontalAdvance(text)
+
     def show_view_message2(self, text: str):
         """Show a message-2, queueing it behind the current message-2."""
         text = str(text).strip()[:50]
@@ -532,51 +570,77 @@ class QtGameView(QOpenGLWidget):
         self._start_view_message2(text)
         self.update()
 
+    def show_view_message3(self, text):
+        """Show a Rushford-font message-3, queueing it behind the current message-3."""
+        text = str(text).strip()[:50]
+        if not text:
+            return
+
+        if self._view_message3_text:
+            elapsed = time.perf_counter() - self._view_message3_started_at
+            if elapsed < 7.0 or self._view_message3_queue:
+                self._view_message3_queue.append(text)
+                self.update()
+                return
+
+        self._start_view_message3(text)
+        self.update()
+
     def _draw_queued_view_message(
         self, painter, viewport_width, viewport_height,
-        text, started_at, width, queue, start_message, lower_line=False
+        text, started_at, width, queue, start_message,
+        stack_slot=0, message_font=None, fade_duration=1.0,
     ):
-        """Draw one queued transient message and return its active state."""
+        """Draw one queued transient message in the shared near-bottom stack."""
         if not text:
             return text, started_at, width
 
         elapsed = time.perf_counter() - started_at
+        font = message_font or self._hud_msg_font
         if elapsed >= 7.0:
             if queue:
                 text = queue.popleft()
                 start_message(text)
                 started_at = time.perf_counter()
                 elapsed = 0.0
-                width = QFontMetrics(self._hud_msg_font).horizontalAdvance(text)
+                width = QFontMetrics(font).horizontalAdvance(text)
             else:
                 return "", 0.0, 0
 
-        if elapsed < 1.0:
-            opacity = elapsed
-        elif elapsed < 6.0:
+        fade_duration = max(0.0, min(float(fade_duration), 3.5))
+        fade_out_start = 7.0 - fade_duration
+        if elapsed < fade_duration:
+            opacity = elapsed / fade_duration if fade_duration else 1.0
+        elif elapsed < fade_out_start:
             opacity = 1.0
         else:
-            opacity = 1.0 - (elapsed - 6.0)
+            opacity = (7.0 - elapsed) / fade_duration if fade_duration else 0.0
 
-        cx = viewport_width // 2
-        held_item_row_top = viewport_height - 20 - 100
-        line_height = QFontMetrics(self._hud_msg_font).height() + 2
-        baseline = held_item_row_top - 12 - line_height
-        if lower_line:
-            baseline += line_height
+        # All three transient messages share one horizontal anchor slightly
+        # right of centre.  Use the largest message font height for row spacing
+        # so the three lines cannot overlap even when message-3 uses Rushford.
+        metrics = QFontMetrics(font)
+        max_stack_height = max(
+            QFontMetrics(self._hud_msg_font).height(),
+            QFontMetrics(self._hud_health_font).height(),
+        )
+        row_height = max_stack_height + 6
+        baseline = viewport_height - 20 - metrics.descent() - (row_height * stack_slot)
+        cx = viewport_width // 2 + int(viewport_width * 0.10)
+        text_x = cx - width // 2
 
         painter.save()
         painter.setOpacity(max(0.0, min(1.0, opacity)))
-        painter.setFont(self._hud_msg_font)
+        painter.setFont(font)
         painter.setPen(self._hud_shadow_pen)
-        painter.drawText(cx - width // 2 + 2, baseline + 2, text)
+        painter.drawText(text_x + 2, baseline + 2, text)
         painter.setPen(self._hud_grey_pen)
-        painter.drawText(cx - width // 2, baseline, text)
+        painter.drawText(text_x, baseline, text)
         painter.restore()
         return text, started_at, width
 
     def _draw_view_message(self, painter, viewport_width, viewport_height):
-        """Draw message-1 one line above message-2 / held-item HUDs."""
+        """Draw message-1 at the top of the shared near-bottom message stack."""
         self._view_message_text, self._view_message_started_at, self._view_message_width = (
             self._draw_queued_view_message(
                 painter, viewport_width, viewport_height,
@@ -585,11 +649,12 @@ class QtGameView(QOpenGLWidget):
                 self._view_message_width,
                 self._view_message_queue,
                 self._start_view_message,
+                stack_slot=2,
             )
         )
 
     def _draw_view_message2(self, painter, viewport_width, viewport_height):
-        """Draw message-2 directly underneath message-1."""
+        """Draw message-2 in the middle of the shared near-bottom stack."""
         self._view_message2_text, self._view_message2_started_at, self._view_message2_width = (
             self._draw_queued_view_message(
                 painter, viewport_width, viewport_height,
@@ -598,7 +663,23 @@ class QtGameView(QOpenGLWidget):
                 self._view_message2_width,
                 self._view_message2_queue,
                 self._start_view_message2,
-                lower_line=True,
+                stack_slot=1,
+            )
+        )
+
+    def _draw_view_message3(self, painter, viewport_width, viewport_height):
+        """Draw message-3 in Rushford at the bottom of the shared message stack."""
+        self._view_message3_text, self._view_message3_started_at, self._view_message3_width = (
+            self._draw_queued_view_message(
+                painter, viewport_width, viewport_height,
+                self._view_message3_text,
+                self._view_message3_started_at,
+                self._view_message3_width,
+                self._view_message3_queue,
+                self._start_view_message3,
+                message_font=self._hud_health_font,
+                stack_slot=0,
+                fade_duration=1.25,
             )
         )
 
@@ -1230,6 +1311,8 @@ class QtGameView(QOpenGLWidget):
             if render_state:
                 self._cached_health = render_state.player_health
                 self._cached_max_health = render_state.player_max_health
+                self._cached_player_ammo = getattr(render_state, 'player_ammo', 0)
+                self._cached_shot_ready = getattr(render_state, 'shot_ready', False)
                 self._cached_active_weapon = getattr(render_state, 'active_weapon', None)
                 self._cached_hud_message = getattr(render_state, 'hud_message', '')
                 self._cached_collected_keys = getattr(render_state, 'collected_keys', set())
@@ -1634,6 +1717,7 @@ class QtGameView(QOpenGLWidget):
         if self.play_mode:
             self._draw_view_message(painter, self.width(), self.height())
             self._draw_view_message2(painter, self.width(), self.height())
+            self._draw_view_message3(painter, self.width(), self.height())
 
         if self.sysmon.is_active():
             self.sysmon.draw(
@@ -1688,6 +1772,19 @@ class QtGameView(QOpenGLWidget):
                        play_mode=self.play_mode)
 
         painter.end()
+
+        # The render state is a borrowed snapshot. Release it as soon as this
+        # synchronous paint is complete so its persistent buffer can be recycled
+        # on the next logic publication. weakref.finalize remains as a safety
+        # net for exceptional exits.
+        if (
+            render_state is not None
+            and self.use_threading
+            and self.logic_thread is not None
+        ):
+            self.game_state.release_render_state(render_state)
+            render_state = None
+
         if self._muzzle_flash_counter > 0:
             self._muzzle_flash_counter -= 1
 
@@ -1740,6 +1837,12 @@ class QtGameView(QOpenGLWidget):
         painter.drawText(10, 20, "Sprites")
 
     def _draw_hud(self, painter, render_state, viewport_width=None, viewport_height=None):
+        # A LogicCamera owns the player's view completely: no HUD is shown
+        # while the cinematic is running.
+        if render_state is not None and getattr(
+            render_state, "cinematic_camera_active", False
+        ):
+            return
         if viewport_width is None:
             viewport_width = self.width()
         if viewport_height is None:
@@ -1752,29 +1855,89 @@ class QtGameView(QOpenGLWidget):
         max_health = getattr(self, '_cached_max_health', 100)
         if health is None or max_health is None:
             return
-        health_ratio = health / max_health if max_health > 0 else 0
         hud_margin = 20
-        bar_width = 200
-        bar_height = 20
-        bar_x = hud_margin
-        bar_y = viewport_height - hud_margin - bar_height
-        painter.setPen(self._hud_bar_bg_pen)
-        painter.setBrush(self._hud_bar_bg_brush)
-        painter.drawRect(bar_x, bar_y, bar_width, bar_height)
-        fill_width = int(bar_width * health_ratio)
-        if fill_width > 0:
-            painter.setPen(Qt.NoPen)
-            if health_ratio > 0.6:
-                painter.setBrush(QBrush(self._hud_health_green))
-            elif health_ratio > 0.3:
-                painter.setBrush(QBrush(self._hud_health_yellow))
-            else:
-                painter.setBrush(QBrush(self._hud_health_red))
-            painter.drawRect(bar_x, bar_y, fill_width, bar_height)
-        painter.setFont(self._hud_font)
-        painter.setPen(QColor(255, 255, 255))
-        painter.drawText(bar_x, bar_y - 5, f"HEALTH: {health}/{max_health}")
         active_weapon = getattr(self, '_cached_active_weapon', None)
+
+        # The entire HUD fades back in for four seconds after a LogicCamera
+        # gives control back to the player.
+        hud_alpha = max(
+            0.0, min(1.0, float(getattr(render_state, "hud_alpha", 1.0)))
+        )
+        # _draw_hud owns this painter opacity for everything it draws: weapon,
+        # health/ammo, crosshair, messages, prompts, overhead icons and keys.
+        painter.save()
+        painter.setOpacity(hud_alpha)
+
+        # Draw the weapon before the status counts so the health indicator is
+        # always visually on top of any weapon sprite.
+        if active_weapon and not overhead:
+            hud_pixmap = self._load_gun_hud_pixmap(active_weapon)
+            if hud_pixmap and not hud_pixmap.isNull():
+                target_h = int(200 * viewport_height / 600.0)
+                cache_key = (active_weapon, target_h)
+                scaled = self._cached_gun_hud.get(cache_key)
+                if scaled is None or scaled.isNull():
+                    if hud_pixmap.height() > 0:
+                        target_w = int(hud_pixmap.width() * (target_h / hud_pixmap.height()))
+                    else:
+                        target_w = target_h
+                    img = hud_pixmap.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
+                    scaled = QPixmap.fromImage(img).scaled(
+                        target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    self._cached_gun_hud[cache_key] = scaled
+                if active_weapon == 'gun2':
+                    x = (viewport_width - scaled.width()) // 2
+                    y = viewport_height - scaled.height()
+                else:
+                    x = viewport_width - scaled.width() - 20
+                    y = viewport_height - scaled.height()
+                painter.save()
+                painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+                painter.drawPixmap(x, y, scaled)
+                painter.restore()
+                if getattr(self, '_cached_muzzle_flash', False):
+                    flash_pixmap = self._load_gun_flash_pixmap(active_weapon)
+                    if flash_pixmap and not flash_pixmap.isNull():
+                        painter.save()
+                        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+                        painter.drawPixmap(x, y, scaled.width(), scaled.height(), flash_pixmap)
+                        painter.restore()
+
+        health_font = QFont(self._hud_health_font)
+        health_font.setPointSize(max(42, min(68, int(viewport_height * 0.085))))
+        painter.setFont(health_font)
+        painter.setPen(self._hud_health_orange)
+        health_text = str(int(health))
+        metrics = QFontMetrics(health_font)
+        # Pin health almost flush to the extreme lower-left corner.
+        # Keep a one-pixel inset so the glyph is not clipped by the framebuffer.
+        health_x = 1
+        health_y = viewport_height - 11 - metrics.descent()
+
+        # Health is the large orange count. Ammo is a smaller green count
+        # touching it directly, with no layout gap.
+        painter.setPen(self._hud_count_shadow_pen)
+        painter.drawText(health_x + 2, health_y + 2, health_text)
+        painter.setPen(self._hud_health_orange)
+        painter.drawText(health_x, health_y, health_text)
+
+        if active_weapon in ('gun1', 'gun2'):
+            ammo_font = QFont(self._hud_health_font)
+            ammo_font.setPointSize(max(
+                22, min(36, int(viewport_height * 0.045))))
+            ammo_text = (
+                "∞"
+                if active_weapon == 'gun1'
+                else str(max(0, int(getattr(
+                    self, '_cached_player_ammo', 0))))
+            )
+            ammo_x = health_x + metrics.horizontalAdvance(health_text)
+            painter.setFont(ammo_font)
+            painter.setPen(self._hud_count_shadow_pen)
+            painter.drawText(ammo_x + 2, health_y + 2, ammo_text)
+            painter.setPen(self._hud_ammo_green)
+            painter.drawText(ammo_x, health_y, ammo_text)
+
         # The centre-screen crosshair is a first-person aiming reticle: it marks
         # where the camera-forward hitscan lands. In overhead (top-down) mode the
         # shot travels along the player's ground heading, not through screen
@@ -1813,7 +1976,7 @@ class QtGameView(QOpenGLWidget):
                 if not self._cached_prompt_key_loaded:
                     self._cached_prompt_key_loaded = True
                     try:
-                        pixmap = Pickup.get_key_pixmap(prompt_key)
+                        pixmap = Prop.get_key_pixmap(prompt_key)
                         if pixmap and not pixmap.isNull():
                             self._cached_prompt_key_pixmap = pixmap.scaled(
                                 prompt_size, prompt_size,
@@ -1849,47 +2012,20 @@ class QtGameView(QOpenGLWidget):
             painter.drawText(cx - tw // 2 + 2, cy + 2, hint)
             painter.setPen(self._hud_grey_pen)
             painter.drawText(cx - tw // 2, cy, hint)
-        if active_weapon and not overhead:
-            hud_pixmap = self._load_gun_hud_pixmap(active_weapon)
-            if hud_pixmap and not hud_pixmap.isNull():
-                target_h = int(200 * viewport_height / 600.0)
-                cache_key = (active_weapon, target_h)
-                scaled = self._cached_gun_hud.get(cache_key)
-                if scaled is None or scaled.isNull():
-                    if hud_pixmap.height() > 0:
-                        target_w = int(hud_pixmap.width() * (target_h / hud_pixmap.height()))
-                    else:
-                        target_w = target_h
-                    img = hud_pixmap.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
-                    scaled = QPixmap.fromImage(img).scaled(target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                    self._cached_gun_hud[cache_key] = scaled
-                x = viewport_width - scaled.width() - 20
-                y = viewport_height - scaled.height()
-                painter.save()
-                painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-                painter.drawPixmap(x, y, scaled)
-                painter.restore()
-                if getattr(self, '_cached_muzzle_flash', False):
-                    flash_pixmap = self._load_gun_flash_pixmap(active_weapon)
-                    if flash_pixmap and not flash_pixmap.isNull():
-                        painter.save()
-                        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-                        painter.drawPixmap(x, y, scaled.width(), scaled.height(), flash_pixmap)
-                        painter.restore()
-        # Overhead: held weapon shown as a bottom-right pickup icon (like keys).
+        # Overhead: held weapon shown as a bottom-right collectible icon (like keys).
         # It takes the rightmost slot; keys shift left so both fit side by side.
         key_slot_offset = 0
         if overhead and active_weapon:
             icon_size = 100
             wx = viewport_width - hud_margin - icon_size
             wy = viewport_height - hud_margin - icon_size
-            pm = self._load_weapon_pickup_pixmap(active_weapon)
+            pm = self._load_weapon_collect_pixmap(active_weapon)
             if pm and not pm.isNull():
                 cache_key = (active_weapon, icon_size)
-                scaled = self._cached_weapon_pickup.get(cache_key)
+                scaled = self._cached_weapon_collect.get(cache_key)
                 if scaled is None or scaled.isNull():
                     scaled = pm.scaled(icon_size, icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                    self._cached_weapon_pickup[cache_key] = scaled
+                    self._cached_weapon_collect[cache_key] = scaled
                 painter.drawPixmap(wx + (icon_size - scaled.width()) // 2,
                                    wy + (icon_size - scaled.height()) // 2, scaled)
                 # Reserve the weapon's slot so keys don't overlap it.
@@ -1911,7 +2047,7 @@ class QtGameView(QOpenGLWidget):
                     painter.drawPixmap(icon_x, key_y, cached)
                     continue
                 try:
-                    pixmap = Pickup.get_key_pixmap(key_name)
+                    pixmap = Prop.get_key_pixmap(key_name)
                     if pixmap and not pixmap.isNull():
                         scaled = pixmap.scaled(key_size, key_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                         self._cached_key_pixmaps[key_name] = scaled
@@ -1921,7 +2057,13 @@ class QtGameView(QOpenGLWidget):
                 except Exception:
                     self._draw_key_fallback(painter, key_name, icon_x, key_y, key_size)
 
+        painter.restore()
+
     def _draw_hud_splitscreen(self, painter, render_state):
+        if render_state is not None and getattr(
+            render_state, "cinematic_camera_active", False
+        ):
+            return
         w, h = self.width(), self.height()
         half = w // 2
         painter.setPen(QPen(QColor(0, 0, 0), 4))
@@ -1932,36 +2074,35 @@ class QtGameView(QOpenGLWidget):
         painter.setClipRect(0, 0, half, h)
         self._draw_hud(painter, render_state, viewport_width=half, viewport_height=h)
         painter.restore()
+        hud_alpha = max(
+            0.0, min(1.0, float(getattr(render_state, "hud_alpha", 1.0)))
+        )
+        painter.save()
+        painter.setOpacity(hud_alpha)
         painter.setPen(QColor(255, 200, 50))
         painter.setFont(self._hud_font)
         painter.drawText(8, 22, "P1")
+        painter.restore()
         p2_health = getattr(render_state, 'player2_health', 100)
         p2_max_health = getattr(render_state, 'player2_max_health', 100)
         p2_dead = getattr(render_state, 'player2_dead', False)
-        p2_ratio = (p2_health / p2_max_health) if p2_max_health > 0 else 0.0
         painter.save()
         painter.setClipRect(half, 0, half, h)
-        margin = 20
-        bar_w = 200
-        bar_h = 20
-        bar_x = half + margin
-        bar_y = h - margin - bar_h
-        painter.setPen(self._hud_bar_bg_pen)
-        painter.setBrush(self._hud_bar_bg_brush)
-        painter.drawRect(bar_x, bar_y, bar_w, bar_h)
-        fill = int(bar_w * p2_ratio)
-        if fill > 0:
-            painter.setPen(Qt.NoPen)
-            if p2_ratio > 0.6:
-                painter.setBrush(QBrush(self._hud_health_green))
-            elif p2_ratio > 0.3:
-                painter.setBrush(QBrush(self._hud_health_yellow))
-            else:
-                painter.setBrush(QBrush(self._hud_health_red))
-            painter.drawRect(bar_x, bar_y, fill, bar_h)
-        painter.setFont(self._hud_font)
-        painter.setPen(QColor(255, 255, 255))
-        painter.drawText(bar_x, bar_y - 5, f"P2  {p2_health}/{p2_max_health}")
+        margin = 1
+        health_font = QFont(self._hud_health_font)
+        health_font.setPointSize(max(42, min(68, int(h * 0.085))))
+        painter.save()
+        painter.setOpacity(hud_alpha)
+        painter.setFont(health_font)
+        painter.setPen(self._hud_health_orange)
+        health_text = str(int(p2_health))
+        metrics = QFontMetrics(health_font)
+        painter.drawText(
+            half + margin,
+            h - margin - metrics.descent(),
+            health_text,
+        )
+        painter.restore()
         cx = half + half // 2
         cy = h // 2
         sz = 10
@@ -1971,9 +2112,12 @@ class QtGameView(QOpenGLWidget):
         painter.setPen(QPen(QColor(0, 200, 255), 2))
         painter.drawLine(cx - sz, cy, cx + sz, cy)
         painter.drawLine(cx, cy - sz, cx, cy + sz)
+        painter.save()
+        painter.setOpacity(hud_alpha)
         painter.setFont(self._hud_font)
         painter.setPen(QColor(0, 200, 255))
         painter.drawText(half + 8, 22, "P2")
+        painter.restore()
         if p2_dead:
             painter.setPen(Qt.NoPen)
             painter.setBrush(QBrush(QColor(120, 0, 0, 140)))
@@ -2122,7 +2266,7 @@ class QtGameView(QOpenGLWidget):
             'Glasses': 'glasses.png',
             'Light': 'light.png',
             'Monster': 'monster.png',
-            'Pickup': 'pickup.png',
+            'Prop': 'pickup.png',
             'Speaker': 'speaker.png',
             'LevelChanger': 'levelchanger.png',
             'Portal': 'portal.png',
@@ -2197,8 +2341,6 @@ class QtGameView(QOpenGLWidget):
                     parts.append((id(t), t.properties.get('dead', False), t.properties.get('is_shooting', False)))
                 elif isinstance(t, LogicGate):
                     parts.append((id(t), t.properties.get('logic_type', 'and')))
-                elif isinstance(t, Pickup):
-                    parts.append((id(t), t.properties.get('item_type', ''), t.properties.get('key_name', ''), t.properties.get('custom_sprite', '')))
                 elif isinstance(t, Prop):
                     parts.append((id(t), t.properties.get('render_mode', 'model'), t.properties.get('sprite_path', '')))
                 else:
@@ -2258,18 +2400,6 @@ class QtGameView(QOpenGLWidget):
                                 self.sprite_textures[tex_key] = tid
                         if tex_key in self.sprite_textures:
                             instance_textures[id(thing)] = self.sprite_textures[tex_key]
-            elif isinstance(thing, Pickup):
-                if thing.is_key():
-                    key_name = thing.get_key_name()
-                    tex_key = f'key_{key_name}'
-                    if tex_key in self.sprite_textures:
-                        instance_textures[id(thing)] = self.sprite_textures[tex_key]
-                elif thing.properties.get('custom_sprite'):
-                    sprite_path = thing.properties.get('custom_sprite')
-                    filename = os.path.basename(sprite_path.replace('\\', '/'))
-                    tex_id = self.load_texture(filename, 'sprites')
-                    if tex_id:
-                        instance_textures[id(thing)] = tex_id
             elif isinstance(thing, LevelChanger):
                 tex_key = 'LevelChanger'
                 if tex_key in self.sprite_textures:
@@ -3012,15 +3142,15 @@ class QtGameView(QOpenGLWidget):
                 return
             active_weapon = getattr(render_state, 'active_weapon', None)
             if active_weapon:
-                from engine.monster_constants import WEAPON_SHOOT_SOUND, NON_FIRING_WEAPONS
-                # Non-firing weapons (e.g. cig) are display-only: clicking
-                # equips nothing to shoot — no shot, no muzzle flash, no sound.
-                if active_weapon not in NON_FIRING_WEAPONS:
+                from engine.monster_constants import NON_FIRING_WEAPONS
+                # Non-firing weapons (e.g. cig) are display-only. For firing
+                # weapons, the published shot_ready flag prevents clicks from
+                # piling up while gun2 is cooling down or out of ammo.
+                if (
+                    active_weapon not in NON_FIRING_WEAPONS
+                    and getattr(render_state, 'shot_ready', False)
+                ):
                     self.game_state.queue_shot()
-                    sound_file = WEAPON_SHOOT_SOUND.get(active_weapon, 'shoot.wav')
-                    sound = self._get_sound_instance(sound_file)
-                    if sound:
-                        sound.play()
                 return
         _shift_select = (Qt.ShiftModifier, Qt.ShiftModifier | Qt.AltModifier)
         if (event.button() == Qt.LeftButton and not self.play_mode and
@@ -3212,25 +3342,25 @@ class QtGameView(QOpenGLWidget):
             return pixmap
         return None
 
-    def _load_weapon_pickup_pixmap(self, item_type):
-        """The world/pickup sprite for a weapon (e.g. 'gun1' -> gun1.png).
+    def _load_weapon_collect_pixmap(self, item_type):
+        """The world/collectible sprite for a weapon (e.g. 'gun1' -> gun1.png).
 
-        Used by the overhead HUD, which shows the small pickup icon bottom-right
-        instead of the first-person gun sprite. Resolved via the Pickup entity's
+        Used by the overhead HUD, which shows the small collectible icon bottom-right
+        instead of the first-person gun sprite. Resolved via the Prop
         GUN_SPRITES map so it matches what the weapon looks like in the world.
         """
-        if item_type in self.weapon_pickup_pixmaps:
-            return self.weapon_pickup_pixmaps[item_type]
+        if item_type in self.weapon_collect_pixmaps:
+            return self.weapon_collect_pixmaps[item_type]
         rel = None
         try:
-            from editor.things import Pickup
-            rel = Pickup.GUN_SPRITES.get(item_type)
+            from engine.prop_entity import Prop
+            rel = Prop.GUN_SPRITES.get(item_type)
         except Exception:
             rel = None
         if not rel:
             rel = os.path.join('assets', 'sprites', f'{item_type}.png')
         pixmap = QPixmap(rel) if os.path.exists(rel) else None
-        self.weapon_pickup_pixmaps[item_type] = pixmap
+        self.weapon_collect_pixmaps[item_type] = pixmap
         return pixmap
 
     def eventFilter(self, obj, event):

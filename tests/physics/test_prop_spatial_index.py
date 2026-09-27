@@ -10,7 +10,7 @@ Keeping even that from happening is the synchronisation contract — every
 subsystem that moves a Prop outside PropSession either calls ``moved(prop)`` or
 exposes the moved set through a batch interface. There is one test here per
 subsystem that does so, because a missing notification is invisible until a
-player walks up to a Prop and cannot pick it up.
+player walks up to a Prop and cannot carry it.
 """
 
 import math
@@ -38,16 +38,16 @@ def prop_at(x, y, z, **props):
     return Prop(pos=[float(x), float(y), float(z)], properties=dict(props))
 
 
-def brute_force_pick(session, eye, forward):
+def brute_force_carry(session, eye, forward):
     """The linear scan the index replaced, kept as the reference answer."""
     best, best_d = None, None
     for prop in session.props:
         p = prop.properties
-        if p.get("disabled") or not p.get("pickup_enabled", True):
+        if p.get("disabled") or not p.get("carry_enabled", True):
             continue
         d = [float(prop.pos[i]) - eye[i] for i in range(3)]
         distance = math.sqrt(sum(v * v for v in d))
-        if distance < 0.001 or distance > float(p.get("pickup_reach", 110.0)):
+        if distance < 0.001 or distance > float(p.get("carry_reach", 110.0)):
             continue
         if sum(forward[i] * (d[i] / distance) for i in range(3)) < 0.86:
             continue
@@ -61,7 +61,7 @@ def brute_force_pick(session, eye, forward):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
-def test_the_indexed_pick_agrees_with_a_full_scan(seed):
+def test_the_indexed_carry_agrees_with_a_full_scan(seed):
     """Randomised equivalence — the index may narrow, never decide."""
     rng = random.Random(seed)
     props = [prop_at(rng.uniform(-2000, 2000), rng.uniform(-100, 100),
@@ -77,15 +77,15 @@ def test_the_indexed_pick_agrees_with_a_full_scan(seed):
         angle = rng.uniform(0, 2 * math.pi)
         forward = (math.sin(angle), 0.0, math.cos(angle))
         session.held = None
-        session._pick_in_view(eye, forward)
-        assert session.held is brute_force_pick(session, eye, forward)
+        session._carry_in_view(eye, forward)
+        assert session.held is brute_force_carry(session, eye, forward)
 
 
 def test_a_prop_with_a_long_authored_reach_is_still_found():
     """The query radius covers the furthest-reaching Prop, not the default one."""
-    far = prop_at(0, 0, 900, pickup_reach=1200.0)
+    far = prop_at(0, 0, 900, carry_reach=1200.0)
     session = make_session([far])
-    session._pick_in_view((0.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+    session._carry_in_view((0.0, 0.0, 0.0), (0.0, 0.0, 1.0))
     assert session.held is far, (
         "a Prop reaching further than the default was filtered out by a radius "
         "derived from the default")
@@ -139,7 +139,7 @@ def test_a_stale_cell_can_only_lose_a_prop_never_invent_one():
     session = make_session([prop])
     prop.pos = [CELL_SIZE * 5, 0.0, CELL_SIZE * 5]      # moved, nobody told us
 
-    session._pick_in_view((0.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+    session._carry_in_view((0.0, 0.0, 0.0), (0.0, 0.0, 1.0))
     assert session.held is None, (
         "the index answered from its own stale copy instead of prop.pos")
 
@@ -151,7 +151,7 @@ def test_moved_brings_a_stale_cell_back_into_line():
     session.moved(prop)
 
     assert session._filed[id(prop)] == cell_of_point(prop.pos[0], prop.pos[2])
-    session._pick_in_view((CELL_SIZE * 5, 0.0, CELL_SIZE * 5), (0.0, 0.0, 1.0))
+    session._carry_in_view((CELL_SIZE * 5, 0.0, CELL_SIZE * 5), (0.0, 0.0, 1.0))
     assert session.held is prop
 
 
@@ -164,7 +164,7 @@ def test_moved_ignores_a_thing_that_is_not_a_registered_prop():
 def test_carrying_refiles_the_held_prop():
     prop = prop_at(0, 0, 60)
     session = make_session([prop])
-    session._pick_in_view((0.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+    session._carry_in_view((0.0, 0.0, 0.0), (0.0, 0.0, 1.0))
     assert session.held is prop
 
     far_eye = (CELL_SIZE * 4, 0.0, CELL_SIZE * 4)
@@ -281,7 +281,7 @@ def test_a_savegame_restore_refiles_the_props_it_teleports():
     assert list(prop.pos) == destination
     assert session._filed[id(prop)] == cell_of_point(destination[0], destination[2]), (
         "a restore moved a Prop without telling the Prop domain")
-    session._pick_in_view((destination[0], 0.0, destination[2] - 60.0), (0.0, 0.0, 1.0))
+    session._carry_in_view((destination[0], 0.0, destination[2] - 60.0), (0.0, 0.0, 1.0))
     assert session.held is prop
 
 
@@ -336,5 +336,5 @@ def test_tidy_reset_refiles_the_prop_it_moves():
     assert list(prop.pos) == [0.0, 0.0, 60.0], "Reset did not restore the home position"
     assert session._filed[id(prop)] == cell_of_point(prop.pos[0], prop.pos[2]), (
         "Tidy reset a Prop without telling the Prop domain")
-    session._pick_in_view((0.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+    session._carry_in_view((0.0, 0.0, 0.0), (0.0, 0.0, 1.0))
     assert session.held is prop

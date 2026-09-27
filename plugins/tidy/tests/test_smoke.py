@@ -2,7 +2,7 @@
 Headless smoke tests for the refactored Tidy plugin.
 
 Tidyable objects are core Props. Tidy owns only its metadata, receptacles,
-placement, progress and goals; pickup/carry/drop are exercised through the
+placement, progress and goals; carry/collect/drop are exercised through the
 engine PropSession.
 """
 
@@ -118,8 +118,8 @@ def test_demo_loader_respects_unsaved_changes():
     ), "demo loaded from the plugin folder")
 
 
-def test_core_prop_pickup_and_tidy_place():
-    print("[3] core PropSession handles pickup/drop while Tidy intercepts placement")
+def test_core_prop_carry_and_tidy_place():
+    print("[3] core PropSession handles carry/drop while Tidy intercepts placement")
     from engine.prop_runtime import PropSession
     from engine.prop_entity import Prop
     from plugins.tidy.entities import TidyReceptacle, TidyGoal
@@ -130,7 +130,7 @@ def test_core_prop_pickup_and_tidy_place():
         properties={
             "name": "book1",
             "tidy_category": "book",
-            "pickup_enabled": True,
+            "carry_enabled": True,
             "physics_enabled": False,
         },
     )
@@ -152,9 +152,9 @@ def test_core_prop_pickup_and_tidy_place():
     logic._prop_drop_interceptor = tidy.consume_drop
 
     core.tick(0.016, use_pressed=True)
-    _check(core.held is prop, "core PropSession picked up the tidyable Prop")
-    _check(("book1", "OnPickedUp", None) in logic.io_manager.fired,
-           "core OnPickedUp fired")
+    _check(core.held is prop, "core PropSession carried the tidyable Prop")
+    _check(("book1", "OnCarried", None) in logic.io_manager.fired,
+           "core OnCarried fired")
 
     logic.player.angle = 3.141592653589793
     core.tick(0.016, use_pressed=True)
@@ -174,8 +174,8 @@ def test_core_prop_pickup_and_tidy_place():
     tidy.reset_object(prop)
     _check(tidy.tidied == 0, "Reset removes Tidy progress")
     _check(prop.pos == [0, 40, 60], "Reset returns Prop to core authored position")
-    _check(prop.properties["pickup_enabled"] is True,
-           "Reset restores the Prop pickup setting")
+    _check(prop.properties["carry_enabled"] is True,
+           "Reset restores the Prop carry setting")
 
     core.stop()
     tidy.stop()
@@ -214,7 +214,7 @@ def test_tidy_ignores_plain_props():
 
 def main():
     test_plugin_loads_and_registers()
-    test_core_prop_pickup_and_tidy_place()
+    test_core_prop_carry_and_tidy_place()
     test_receptacle_slots_and_filtering()
     test_tidy_ignores_plain_props()
     print("\nALL TIDY SMOKE TESTS PASSED")

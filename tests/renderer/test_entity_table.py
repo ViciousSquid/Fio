@@ -15,7 +15,7 @@ import pytest
 pytest.importorskip("PyQt5", reason="the entity classes live in editor.things")
 
 from editor.things import (Effect, Light, LevelChanger, LogicGate,  # noqa: E402
-                           LogicRelay, LogicTimer, Monster, PathNode, Pickup,
+                           LogicRelay, LogicTimer, Monster, PathNode,
                            Portal, Thing)
 from plugins.bigworld.entities import BigWorldSettings  # noqa: E402
 from engine import entity_table as et                        # noqa: E402
@@ -39,7 +39,6 @@ def _synced(things, epoch=1):
 @pytest.mark.parametrize('cls,bit', [
     (PathNode, et.ENT_SKIP),
     (Portal, et.ENT_PORTAL),
-    (Pickup, et.ENT_PICKUP),
     (Monster, et.ENT_MONSTER),
     (LogicGate, et.ENT_ENTITY_SPRITE),
     (LogicRelay, et.ENT_ENTITY_SPRITE),
@@ -239,6 +238,27 @@ def test_light_shadow_flag_is_normalised_in_the_projection():
     assert bool(table.light_casts_shadows[0]) is False
 
 
+def test_released_prop_with_no_carry_yaw_uses_free_billboard_sentinel():
+    prop = make_thing(Prop, 'released', render_mode='billboard',
+                     sprite_path='assets/sprites/pickup.png')
+    prop._carry_sprite_yaw = None
+
+    table = _synced([prop])
+
+    assert et.sprite_state(prop)[-1] == -10000.0
+    assert table.sprite_fixed_yaw[0] == -10000.0
+
+
+def test_prop_respawn_alpha_is_a_dense_render_column():
+    prop = make_thing(Prop, 'fading', render_mode='billboard',
+                     sprite_path='assets/sprites/pickup.png')
+    prop._respawn_fade_alpha = 0.25
+
+    table = _synced([prop])
+
+    assert table.render_alpha[0] == 0.25
+
+
 def test_positions_refresh_every_frame_without_reconciling():
     monster = make_thing(Monster, 'grunt', (0.0, 0.0, 0.0))
     table = _synced([monster])
@@ -309,10 +329,34 @@ def test_monster_snapshot_updates_sprite_key_without_reconciling():
     assert int(table.sprite_key_id[0]) != before
 
 
+def test_prop_model_representation_has_a_model_recipe_even_when_collection_is_weapon():
+    prop = make_thing(
+        Prop, 'weapon-prop',
+        collect_enabled=True,
+        collect_type='weapon',
+        collect_weapon='gun1',
+        render_mode='model',
+        model_path=Prop.DEFAULT_MODEL_PATH,
+    )
+    table = _synced([prop])
+    hidden = table.begin_frame([prop], epoch=1)
+    slots = np.arange(table.count, dtype=np.int32)
+
+    model_slots, sprite_slots = et.classify_slots(
+        table, slots, hidden, is_play=True, show_sprites=False
+    )
+
+    assert model_slots.tolist() == [0]
+    assert sprite_slots.tolist() == []
+    recipe_id = int(table.model_recipe_id[0])
+    assert recipe_id >= 0
+    assert table.model_recipes()[recipe_id][0] == Prop.DEFAULT_MODEL_PATH
+
+
 def test_model_prop_enters_the_dense_model_pass_with_its_recipe():
     prop = make_thing(
         Prop, 'oil-drum',
-        model_path='assets/models/oil_drum.obj',
+        model_path='assets/models/Oil_Drum.obj',
         render_mode='model',
         rotation=[0.0, 45.0, 0.0],
         scale=1.5,
@@ -328,14 +372,14 @@ def test_model_prop_enters_the_dense_model_pass_with_its_recipe():
     assert sprite_slots.tolist() == []
     recipe_id = int(table.model_recipe_id[0])
     assert recipe_id >= 0
-    assert table.model_recipes()[recipe_id][0] == 'assets/models/oil_drum.obj'
+    assert table.model_recipes()[recipe_id][0] == 'assets/models/Oil_Drum.obj'
     assert not np.allclose(table.model_base_matrix[0], 0.0)
 
 
 def test_prop_switching_model_to_billboard_refreshes_dense_sprite_columns():
     prop = make_thing(
         Prop, 'oil-drum',
-        model_path='assets/models/oil_drum.obj',
+        model_path='assets/models/Oil_Drum.obj',
         render_mode='model',
         sprite_path='assets/sprites/pickup.png',
     )
@@ -389,7 +433,7 @@ def _every_representation():
     fall-through branches and an ordering between them, and a mask that gets
     one of them wrong draws an entity in the wrong pass -- or not at all.
     """
-    classes = [Thing, PathNode, Portal, Pickup, Monster, LogicGate, LogicRelay,
+    classes = [Thing, PathNode, Portal, Monster, LogicGate, LogicRelay,
                LogicTimer, LevelChanger, Light, Prop]
     things = []
     for cls, model_path, render_mode, sprite_path, hidden in itertools.product(
@@ -673,7 +717,7 @@ def test_a_steady_frame_re_resolves_no_sprite_at_all(monkeypatch):
     """
     calls = _count_resolves(monkeypatch)
     things = [make_thing(Light, 'l'), make_thing(Monster, 'm'),
-              make_thing(LogicRelay, 'r'), make_thing(Pickup, 'p'),
+              make_thing(LogicRelay, 'r'), make_thing(Prop, 'p'),
               make_thing(Prop, 'prop', render_mode='billboard',
                          sprite_path='s.png')]
     table = EntityTable()
@@ -724,9 +768,6 @@ def test_a_cold_row_is_never_re_resolved_by_a_frame(monkeypatch):
     (Monster, 'monster_type', 'alien'),
     (Monster, 'variant', 'red'),
     (Monster, 'custom_idle', 'assets/sprites/x.png'),
-    (Pickup, 'item_type', 'gun1'),
-    (Pickup, 'key_name', 'blue_key'),
-    (Pickup, 'custom_sprite', 'assets/sprites/x.png'),
     (LogicGate, 'logic_type', 'or'),
     (Prop, 'render_mode', 'billboard'),
     (Prop, 'sprite_path', 'assets/sprites/x.png'),
@@ -755,16 +796,16 @@ def test_every_field_the_identity_reads_is_in_the_state_check(cls, field, value)
 
 
 def test_identical_recipes_intern_to_one_id():
-    """Two pickups of the same kind share a run, so they share an id."""
-    table = _synced([make_thing(Pickup, 'a', item_type='health'),
-                     make_thing(Pickup, 'b', item_type='health')])
+    """Two identical collectible Props share a run, so they share an id."""
+    table = _synced([make_thing(Prop, 'a', sprite_path='assets/sprites/health.png'),
+                     make_thing(Prop, 'b', sprite_path='assets/sprites/health.png')])
     assert table.sprite_key_id[0] == table.sprite_key_id[1]
     assert len(table.sprite_recipes()) == 1
 
 
 def test_sprite_columns_are_a_pure_projection():
     things = [make_thing(Monster, 'm'), make_thing(Light, 'l'),
-              make_thing(Pickup, 'p'), make_thing(Portal, 'pt')]
+              make_thing(Prop, 'p'), make_thing(Portal, 'pt')]
     first, second = _synced(things), _synced(things)
     assert np.array_equal(first.sprite_size[:first.count],
                           second.sprite_size[:second.count])

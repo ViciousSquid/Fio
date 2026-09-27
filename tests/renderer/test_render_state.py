@@ -20,7 +20,7 @@ import pytest
 pytest.importorskip("PyQt5", reason="the logic thread pulls in editor.things")
 
 from editor.editor_state import EditorState             # noqa: E402
-from editor.things import Light, Monster, Pickup        # noqa: E402
+from editor.things import Light, Monster, Prop        # noqa: E402
 from engine.logic_thread import LogicThread             # noqa: E402
 from engine import render_table as render_table_module      # noqa: E402
 from engine.threaded_game_state import RenderState, ThreadedGameState  # noqa: E402
@@ -612,12 +612,15 @@ def test_dense_projections_are_double_buffered():
 
 
 def test_recycled_render_state_keeps_dense_projection_objects():
-    """Resetting a published buffer must not drop the dense renderer contract."""
+    """Resetting a free buffer must not drop the dense renderer contract."""
     game_state = ThreadedGameState()
     initial_read = game_state.get_render_state()
     render_table = initial_read.render_table
     entity_table = initial_read.entity_table
 
+    # The initial read is borrowed by the caller, so explicitly release it
+    # before asking the logic side to recycle that buffer.
+    game_state.release_render_state(initial_read)
     game_state.request_swap()
     recycled = game_state.get_write_state()
 
@@ -627,6 +630,84 @@ def test_recycled_render_state_keeps_dense_projection_objects():
     assert len(recycled.all_brush_slots) == 0
     assert len(recycled.visible_thing_slots) == 0
     assert len(recycled.thing_hidden) == 0
+
+
+def test_a_borrowed_render_state_survives_multiple_publication_cycles():
+    """A held snapshot keeps tables and published slot buffers immutable."""
+    game_state = ThreadedGameState()
+    brush = box_brush("wall")
+    second_brush = box_brush("wall2", (128, 0, 0))
+    lamp = make_thing(Light, "lamp", (0, 100, 0))
+    second_thing = make_thing(Monster, "grunt", (0, 96, -300))
+
+    write = game_state.get_write_state()
+
+    # Build an actually published frame, including the three pieces whose
+    # lifetime matters at the render boundary: dense tables plus slot vectors.
+    write.render_table.sync([brush], epoch=1)
+    write.all_brush_slots = np.array([0], dtype=np.int32)
+    write.visible_brush_slots = np.array([0], dtype=np.int32)
+
+    write.entity_table.begin_frame([lamp], epoch=1)
+    write.visible_thing_slots = np.array([0], dtype=np.int32)
+
+    assert game_state.request_swap() is True
+
+    snapshot = game_state.get_render_state()
+    first_render_table = snapshot.render_table
+    first_entity_table = snapshot.entity_table
+    first_all_brush_slots = snapshot.all_brush_slots
+    first_visible_brush_slots = snapshot.visible_brush_slots
+    first_visible_thing_slots = snapshot.visible_thing_slots
+
+    assert first_render_table.count == 1
+    assert first_entity_table.count == 1
+    assert first_all_brush_slots.tolist() == [0]
+    assert first_visible_brush_slots.tolist() == [0]
+    assert first_visible_thing_slots.tolist() == [0]
+
+    # Publish two newer frames while the first frame is still borrowed. The
+    # spare RenderState absorbs the extra publication, and each write buffer
+    # gets materially different projection/slot data. Any accidental alias
+    # with the borrowed snapshot will therefore be visible here.
+    for epoch in (2, 3):
+        write = game_state.get_write_state()
+
+        brush["shader"] = "Fog"
+        brush["is_fog"] = True
+        write.render_table.sync([brush, second_brush], epoch=epoch)
+        write.all_brush_slots = np.array([0, 1], dtype=np.int32)
+        write.visible_brush_slots = np.array([1], dtype=np.int32)
+
+        write.entity_table.begin_frame([lamp, second_thing], epoch=epoch)
+        write.visible_thing_slots = np.array([1], dtype=np.int32)
+
+        assert game_state.request_swap() is True
+
+        # The originally published frame must still be byte-for-byte
+        # equivalent in the critical state that the renderer owns.
+        assert snapshot.render_table is first_render_table
+        assert snapshot.entity_table is first_entity_table
+        assert first_render_table.count == 1
+        assert first_entity_table.count == 1
+        assert bool(
+            first_render_table.class_bits[0]
+            & render_table_module.CLASS_FOG
+        ) is False
+        assert first_all_brush_slots.tolist() == [0]
+        assert first_visible_brush_slots.tolist() == [0]
+        assert first_visible_thing_slots.tolist() == [0]
+
+    # Once the renderer releases the old frame, that retired buffer becomes
+    # reusable and publication continues without allocating a fourth state.
+    game_state.release_render_state(snapshot)
+    write = game_state.get_write_state()
+    write.render_table.sync([brush], epoch=4)
+    write.all_brush_slots = np.array([0], dtype=np.int32)
+    write.visible_brush_slots = np.array([0], dtype=np.int32)
+    write.entity_table.begin_frame([lamp], epoch=4)
+    write.visible_thing_slots = np.array([0], dtype=np.int32)
+    assert game_state.request_swap() is True
 
 
 def test_the_published_brush_lists_are_not_materialised_unless_read(logic):
@@ -723,13 +804,13 @@ def test_a_monster_row_is_republished_as_a_snapshot_every_frame(logic):
         "the previous frame's snapshot was mutated under the renderer")
 
 
-def test_a_collected_pickup_is_not_published(logic):
+def test_a_collected_prop_is_not_published(logic):
     keep = make_thing(Light, "lamp", (0, 100, 0))
-    taken = make_thing(Pickup, "medkit", (200, 0, 0))
+    taken = make_thing(Prop, "medkit", (200, 0, 0), collect_enabled=True, collect_collected=True)
     thread = logic(things=[keep, taken])
     thread.set_play_mode(True)
     try:
-        thread.collected_pickups.add(id(taken))
+        thread._props.collected_ids.add(id(taken))
         thread._prepare_render_state()
         state = thread.game_state.get_write_state()
 

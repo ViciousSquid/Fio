@@ -675,19 +675,23 @@ def create_map_data(params, yield_hook=None):
             "io_connections": []
         },
         {
-            "type": "pickup",
+            "type": "prop",
             "pos": [gun_x, gun_y, gun_z],
             "properties": {
-                "type": "pickup",
-                "name": f"Pickup_{starting_gun.capitalize()}",
-                "respawns": False,
-                "respawn_time": 20.0,
-                "item_type": starting_gun,
-                "value": 25,
-                "activation": "walk_over",
-                "collected": False,
-                "key_name": "",
-                "custom_sprite": f"assets/sprites/{starting_gun}.png",
+                "type": "prop",
+                "name": f"Prop_{starting_gun.capitalize()}",
+                "collect_respawns": False,
+                "collect_respawn_time": 20.0,
+                "collect_type": "weapon",
+                "collect_weapon": starting_gun,
+                "collect_enabled": True,
+                "carry_enabled": False,
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": False,
+                "collect_key_name": "",
+                "collect_custom_sprite": f"assets/sprites/{starting_gun}.png",
+                "sprite_path": f"assets/sprites/{starting_gun}.png",
                 "id": "gun_start"
             },
             "io_connections": []
@@ -784,7 +788,7 @@ def create_map_data(params, yield_hook=None):
             monster_positions.append((wx, wz))
             monster_rooms.add(grid.rooms.index(room))
 
-    # ------------------- HEALTH PICKUP SPAWNING -------------------
+    # ------------------- HEALTH COLLECTIBLE SPAWNING -------------------
     if params.get('spawn_health', False):
         health_count = params.get('health_count', 4)
         # Rooms that are allowed for health: no monster in them
@@ -797,7 +801,7 @@ def create_map_data(params, yield_hook=None):
         if allowed_rooms:
             # Minimum distance from any monster (world units)
             MIN_DIST_TO_MONSTER = 128.0
-            # How many attempts to place each health pickup
+            # How many attempts to place each collectible Prop
             MAX_ATTEMPTS = 50
 
             for i in range(health_count):
@@ -816,50 +820,56 @@ def create_map_data(params, yield_hook=None):
                     if not too_close:
                         wy = FLOOR_SURFACE + ENTITY_Y_OFFSET
                         things.append({
-                            "type": "pickup",
+                            "type": "prop",
                             "pos": [wx, wy, wz],
                             "properties": {
-                                "type": "pickup",
-                                "name": f"HealthPickup_{i}",
-                                "item_type": "health",
-                                "value": 25,
-                                "activation": "walk_over",
-                                "respawns": False,
-                                "respawn_time": 20.0,
-                                "collected": False,
-                                "key_name": "",
-                                "custom_sprite": "assets/sprites/health.png",
-                                "id": f"health_pickup_{i}"
+                                "type": "prop",
+                                "name": f"HealthProp_{i}",
+                                "collect_enabled": True,
+                                "carry_enabled": False,
+                                "collect_type": "health",
+                                "collect_value": 25,
+                                "collect_activation": "walk_over",
+                                "collect_respawns": False,
+                                "collect_respawn_time": 20.0,
+                                "collect_collected": False,
+                                "collect_key_name": "",
+                                "collect_custom_sprite": "assets/sprites/health.png",
+                                "sprite_path": "assets/sprites/health.png",
+                                "id": f"health_prop_{i}"
                             },
                             "io_connections": []
                         })
                         placed = True
                         break
-                # If we couldn't place after MAX_ATTEMPTS, just skip this pickup
+                # If we couldn't place after MAX_ATTEMPTS, just skip this collectible
                 if not placed:
-                    print(f"Warning: Could not place health pickup #{i} after {MAX_ATTEMPTS} attempts. Skipping.")
+                    print(f"Warning: Could not place collectible Prop #{i} after {MAX_ATTEMPTS} attempts. Skipping.")
 
     # ------------------- UPPER FLOOR REWARDS -------------------
-    # Reward the climb: drop a health pickup on top of each generated upper floor.
+    # Reward the climb: drop a collectible Prop on top of each generated upper floor.
     if params.get('spawn_health', False):
         for j, info in enumerate(upper_floor_infos):
             things.append({
-                "type": "pickup",
+                "type": "prop",
                 "pos": [info["center_x"],
                         info["top_y"] + ENTITY_Y_OFFSET,
                         info["center_z"]],
                 "properties": {
-                    "type": "pickup",
+                    "type": "prop",
                     "name": f"UpperFloorHealth_{j}",
-                    "item_type": "health",
-                    "value": 25,
-                    "activation": "walk_over",
-                    "respawns": False,
-                    "respawn_time": 20.0,
-                    "collected": False,
-                    "key_name": "",
-                    "custom_sprite": "assets/sprites/health.png",
-                    "id": f"upper_floor_pickup_{j}"
+                    "collect_enabled": True,
+                                "carry_enabled": False,
+                                "collect_type": "health",
+                    "collect_value": 25,
+                    "collect_activation": "walk_over",
+                    "collect_respawns": False,
+                    "collect_respawn_time": 20.0,
+                    "collect_collected": False,
+                    "collect_key_name": "",
+                    "collect_custom_sprite": "assets/sprites/health.png",
+                                "sprite_path": "assets/sprites/health.png",
+                    "id": f"upper_floor_prop_{j}"
                 },
                 "io_connections": []
             })

@@ -17,7 +17,7 @@ except ImportError:
     # debug_log("Warning", "I/O system not fully loaded in console")
 
 # For spawn command
-from editor.things import Pickup, Light, LevelChanger
+from editor.things import Prop, Light, LevelChanger
 
 
 class ConsoleCommandHandler:
@@ -82,6 +82,7 @@ class ConsoleCommandHandler:
             'showglasses': self.cmd_show_glasses,
             'message': self.cmd_message,
             'message2': self.cmd_message2,
+            'message3': self.cmd_message3,
 
             'cam': self.cmd_cam,
             'camera': self.cmd_cam,
@@ -750,7 +751,7 @@ class ConsoleCommandHandler:
         self.main_window.update_all_ui()
 
     def _cmd_view_message(self, args, line):
-        """Draw a transient message in one of the two play-view message lines."""
+        """Draw a transient message in one of the play-view message lines."""
         text = (args or "").strip()
         if len(text) >= 2 and text[0] in ('"', "'") and text[-1] == text[0]:
             text = text[1:-1].strip()
@@ -765,7 +766,10 @@ class ConsoleCommandHandler:
 
         show_message = getattr(
             view_3d,
-            "show_view_message2" if line == "2" else "show_view_message",
+            {
+                "2": "show_view_message2",
+                "3": "show_view_message3",
+            }.get(line, "show_view_message"),
             None,
         )
         if not callable(show_message):
@@ -782,6 +786,10 @@ class ConsoleCommandHandler:
         """Draw a transient message on the second play-view message line."""
         self._cmd_view_message(args, "2")
 
+    def cmd_message3(self, args):
+        """Draw a transient Rushford-font message on the third play-view message line."""
+        self._cmd_view_message(args, "3")
+
     def cmd_help(self, args):
         
         sep = '<span style="color:white;"> / </span>'
@@ -794,6 +802,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">fps</b> — Toggle FPS display<br>
 <b style="color:orange;">message</b> &quot;text&quot; — Show a timed message on the first play-view line<br>
 <b style="color:orange;">message2</b> &quot;text&quot; — Show a timed message on the second play-view line<br>
+<b style="color:orange;">message3</b> &quot;text&quot; — Show a timed Rushford-font message on the third play-view line<br>
 <b style="color:orange;">map</b> &lt;name&gt; — Load a different map<br>
 <b style="color:cyan;">=== Save / Load (Play Session) ===</b><br>
 <b style="color:orange;">save</b> [name] — Save the current play session (Play Mode only)<br>
@@ -1649,7 +1658,7 @@ entity to drive them from the I/O system.</i><br>
 
     def cmd_spawn(self, args):
         if not args:
-            debug_log("Error", "Usage: spawn pickup health 25   or   spawn light")
+            debug_log("Error", "Usage: spawn prop health 25   or   spawn light")
             return
         parts = args.split()
         spawn_type = parts[0].lower()
@@ -1659,20 +1668,30 @@ entity to drive them from the I/O system.</i><br>
             self._spawn_counter = 0
         self._spawn_counter += 1
 
-        if spawn_type == "pickup":
+        if spawn_type == "prop":
             if len(parts) < 2:
-                debug_log("Error", "Usage: spawn pickup <health|ammo|gun1|key> [value]")
+                debug_log("Error", "Usage: spawn prop <health|ammo|gun1|key> [value]")
                 return
             item = parts[1]
             value = parts[2] if len(parts) > 2 else "25"
+            collect_type = "weapon" if item in ("gun1", "gun2", "cig") else item
 
-            new_pickup = Pickup(pos=[0, 0, 0])         # name=None if constructor supports it
-            new_pickup.properties['item_type'] = item
-            new_pickup.properties['value'] = value
-            # Unique name: includes item type AND counter
-            new_pickup.properties['name'] = f"Pickup_{item}_{self._spawn_counter}"
-            self.editor_state.things.append(new_pickup)
-            debug_log("Info", f"Spawned pickup: {item} (value={value}) named '{new_pickup.properties['name']}'")
+            new_prop = Prop(pos=[0, 0, 0])
+            new_prop.properties['carry_enabled'] = False
+            new_prop.properties['collect_enabled'] = True
+            new_prop.properties['collect_type'] = collect_type
+            new_prop.properties['collect_value'] = value
+            new_prop.properties['name'] = f"Prop_{item}_{self._spawn_counter}"
+            if collect_type == "weapon":
+                new_prop.properties['collect_weapon'] = item
+                new_prop.properties['sprite_path'] = f"assets/sprites/{item}.png"
+            elif collect_type == "health":
+                new_prop.properties['sprite_path'] = "assets/sprites/health.png"
+            elif collect_type == "key":
+                new_prop.properties['sprite_path'] = new_prop.get_key_sprite_path(
+                    new_prop.properties.get('collect_key_name', new_prop.DEFAULT_KEY_NAME))
+            self.editor_state.things.append(new_prop)
+            debug_log("Info", f"Spawned Prop collection: {item} (value={value}) named '{new_prop.properties['name']}'")
             self.editor_state.save_state()
             self.main_window.update_all_ui()
 
@@ -1694,7 +1713,7 @@ entity to drive them from the I/O system.</i><br>
             self.main_window.update_all_ui()
 
         else:
-            debug_log("Error", f"Unknown spawn type '{spawn_type}'. Try: pickup, light, or levelchanger")
+            debug_log("Error", f"Unknown spawn type '{spawn_type}'. Try: prop, light, or levelchanger")
 
     def cmd_delete(self, args):
         if not args:

@@ -21,7 +21,7 @@ LogicTimer                temporal events
 LogicSpawner              entity creation
 LogicCommand              controlled console bridge
 Trigger / TriggerBrush    world event sources
-Monster / Door / Pickup   actual world behaviour
+Monster / Door / Prop   actual world behaviour
 ```
 
 Every one of those answers exactly one question. Complexity comes from wiring

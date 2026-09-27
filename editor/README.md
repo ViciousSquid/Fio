@@ -37,7 +37,7 @@ Unified face-texture mapping access for box sides and angled brush planes. Reads
 Hammer-style Output Connections panel for creating and editing entity I/O connections: target, input, parameter, delay and fire-once behaviour.
 
 ### `io_handlers.py`
-Registers the runtime input handlers used by the I/O system. Covers gameplay entities, movers, lights, monsters, triggers, pickups, speakers and logic entities.
+Registers the runtime input handlers used by the I/O system. Covers gameplay entities, movers, lights, monsters, triggers, Props, speakers and logic entities.
 
 `LogicState` operations are parameterised (for example, `Increment killed,1`) rather than requiring a separate input for every possible state mutation. This keeps the I/O vocabulary small while allowing maps to express new combinations of behaviour.
 
@@ -99,7 +99,7 @@ Radiant-style Surface Inspector for per-face texture mapping. Edits shift, scale
 Terrain parameter editor for noise seed, scale, amplitude and texturing/chunk settings.
 
 ### `things.py`
-Definitions for placeable entities including `PlayerStart`, `Light`, `Model`, `Speaker`, `Pickup`, `Monster`, `PathNode`, `Portal`, `LevelChanger`, `LogicGate`, `LogicRelay`, `LogicTimer`, `LogicCommand`, `LogicSpawner`, `LogicCamera`, `LogicState` and `TriggerBrush`.
+Definitions for placeable entities including `PlayerStart`, `Light`, `Model`, `Speaker`, `Prop`, `Monster`, `PathNode`, `Portal`, `LevelChanger`, `LogicGate`, `LogicRelay`, `LogicTimer`, `LogicCommand`, `LogicSpawner`, `LogicCamera`, `LogicState` and `TriggerBrush`.
 
 Entity classes provide defaults and I/O registration. `LogicState` is the persistent typed-state primitive shared by maps and plugins. `LogicCommand` provides a deliberate bridge from declarative I/O into an explicitly requested debug/play command rather than becoming a general-purpose scripting runtime.
 

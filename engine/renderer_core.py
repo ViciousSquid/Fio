@@ -53,7 +53,7 @@ from engine.portal_transform import (
     contains_point as _portal_contains_point,
 )
 from editor.things import (
-    Thing, PathNode, Pickup, Prop, Monster, LogicGate, LogicRelay,
+    Thing, PathNode, Prop, Monster, LogicGate, LogicRelay,
     LogicTimer, LevelChanger, Light, LogicSpawner, LogicCamera,
 )
 
@@ -406,7 +406,7 @@ class BaseRenderer:
         self._brush_nmat_buf = np.empty((0, 9), dtype=np.float32)
         self._model_instance_vbo = None
         self._model_instance_capacity = 0
-        self._model_instance_data = np.empty((0, 28), dtype=np.float32)
+        self._model_instance_data = np.empty((0, 29), dtype=np.float32)
         self._model_instanced_vaos = set()
         self._model_recipe_scratch = np.empty(0, dtype=np.int32)
         self._model_sorted_slots_scratch = np.empty(0, dtype=np.int32)
@@ -843,10 +843,10 @@ layout (location = 10) in vec4 iPayload;
                 extra_uniforms=['lightSpaceMatrix', 'lightPos', 'far_plane']):
             print(f'{_BASE_RENDERER_PREFIX} Shadow depth instancing shader compiled successfully.')
 
-    #: Per-instance attributes the sprite pass carries: the billboard's centre
-    #: and its world size.  Five floats, against the two uniform uploads and
+    #: Per-instance attributes: centre, world size, optional locked yaw, opacity.
+    #: Seven floats.
     #: the draw call each sprite used to cost.
-    SPRITE_INSTANCE_FLOATS = 5
+    SPRITE_INSTANCE_FLOATS = 7
 
     def _compile_instanced_sprite_shader(self):
         """Compile the billboard shader with its centre and size per instance.
@@ -872,21 +872,50 @@ layout (location = 10) in vec4 iPayload;
         source = '\n'.join(kept)
         if 'out vec2 TexCoords;' not in source:
             return
-        source = source.replace(
-            'out vec2 TexCoords;',
+        # sprite.vert already declares the fixed-facing input for the
+        # non-instanced path. Keep that declaration and only inject the
+        # position/size instance inputs that the instanced rewrite needs.
+        instance_decls = (
             'layout (location = 1) in vec3 iSpritePos;\n'
             'layout (location = 2) in vec2 iSpriteSize;\n'
-            'out vec2 TexCoords;', 1)
+            'layout (location = 4) in float iSpriteAlpha;\n'
+        )
+        if 'iSpritePos' not in source:
+            source = source.replace(
+                'out vec2 TexCoords;',
+                instance_decls + 'out vec2 TexCoords;', 1)
         source = source.replace('sprite_pos_world', 'iSpritePos')
         source = source.replace('sprite_size.x', 'iSpriteSize.x')
         source = source.replace('sprite_size.y', 'iSpriteSize.y')
+        source = source.replace('sprite_fixed_yaw', 'iSpriteFixedYaw')
         if 'iSpritePos' not in source or 'iSpriteSize.x' not in source:
             # The shader did not look the way this rewrite assumes; leaving the
             # program absent keeps the per-sprite path, which every caller has.
             return
+        source = source.replace(
+            'out vec2 TexCoords;',
+            'out vec2 TexCoords;\nflat out float InstanceAlpha;',
+            1,
+        )
+        source = source.replace(
+            'void main() {',
+            'void main() {\n    InstanceAlpha = iSpriteAlpha;',
+            1,
+        )
+        frag = frag.replace(
+            'in highp vec3 FragPos;',
+            'in highp vec3 FragPos;\nflat in float InstanceAlpha;',
+            1,
+        )
+        frag = frag.replace(
+            'FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a);',
+            'FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a * InstanceAlpha);',
+            1,
+        )
         if self._register_instanced_shader('sprite_instanced', source, frag,
                                            extra_uniforms=['projection', 'view',
-                                                           'sprite_texture']):
+                                                           'sprite_texture',
+                                                           'use_fixed_facing']):
             print(f'{_BASE_RENDERER_PREFIX} Sprite instancing shader compiled successfully.')
 
     # One Effect row expands into deterministic virtual flame cards.
@@ -1023,7 +1052,9 @@ layout (location = 10) in vec4 iPayload;
                     continue
 
                 local_elapsed = np.mod(
-                    kind_elapsed[mask], cumulative[-1]
+                    kind_elapsed[mask]
+                    + table.effect_phase[slots][kind_mask][mask] * cumulative[-1],
+                    cumulative[-1]
                 )
                 frame_indices = np.searchsorted(
                     cumulative, local_elapsed, side='right'
@@ -1065,10 +1096,11 @@ layout (location = 10) in vec4 iPayload;
                 raw_elapsed = custom_elapsed[mask]
                 # CUSTOM follows its authored Loop flag. When looping is off,
                 # hold the final GIF frame instead of wrapping to frame 1.
+                phase_values = table.effect_phase[slots][custom_mask][mask]
                 local_elapsed = np.where(
                     loop_values,
-                    np.mod(raw_elapsed, cumulative[-1]),
-                    np.minimum(raw_elapsed, cumulative[-1]),
+                    np.mod(raw_elapsed + phase_values * cumulative[-1], cumulative[-1]),
+                    np.minimum(raw_elapsed + phase_values * cumulative[-1], cumulative[-1]),
                 )
                 frame_indices = np.searchsorted(
                     cumulative, local_elapsed, side='right'
@@ -1126,6 +1158,7 @@ layout (location = 10) in vec4 iPayload;
         gl.glUseProgram(shader)
         self._current_shader = shader
         self._upload_env_uniforms('sprite_instanced')
+        gl.glUniform1i(uniforms['use_fixed_facing'], 0)
         gl.glUniformMatrix4fv(
             uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection)
         )
@@ -1343,7 +1376,9 @@ layout (location = 10) in vec4 iPayload;
         gl.glEnableVertexAttribArray(0)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
         stride = self.SPRITE_INSTANCE_FLOATS * 4
-        for location, size, offset in ((1, 3, 0), (2, 2, 12)):
+        for location, size, offset in (
+            (1, 3, 0), (2, 2, 12), (3, 1, 20), (4, 1, 24)
+        ):
             gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
                                      stride, ctypes.c_void_p(offset))
             gl.glEnableVertexAttribArray(location)
@@ -1365,7 +1400,9 @@ layout (location = 10) in vec4 iPayload;
         #: submission tests to recover what a run actually drew.
         self._sprite_instance_base = base
         origin = base * stride
-        for location, size, offset in ((1, 3, 0), (2, 2, 12)):
+        for location, size, offset in (
+            (1, 3, 0), (2, 2, 12), (3, 1, 20), (4, 1, 24)
+        ):
             gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
                                      stride, ctypes.c_void_p(origin + offset))
 
@@ -1575,6 +1612,7 @@ layout (location = 6) in vec4 iModel3;
 layout (location = 7) in vec4 iNormal0;
 layout (location = 8) in vec4 iNormal1;
 layout (location = 9) in vec4 iNormal2;
+layout (location = 10) in float iInstanceAlpha;
 
 """
 
@@ -1585,25 +1623,52 @@ layout (location = 9) in vec4 iNormal2;
             source = source.replace('uniform mat3 normalMatrix;\n', '')
             if 'out vec3 FragPos;' not in source:
                 raise ValueError('unexpected model vertex shader interface')
-            source = source.replace('out vec3 FragPos;', instance_attrs + 'out vec3 FragPos;', 1)
+            source = source.replace(
+                'out vec3 FragPos;',
+                instance_attrs + 'flat out float InstanceAlpha;\nout vec3 FragPos;',
+                1,
+            )
             source = source.replace(
                 'void main() {',
                 'void main() {\n'
                 '    mat4 instanceModel = mat4(iModel0, iModel1, iModel2, iModel3);\n'
-                '    mat3 instanceNormal = mat3(iNormal0.xyz, iNormal1.xyz, iNormal2.xyz);\n',
+                '    mat3 instanceNormal = mat3(iNormal0.xyz, iNormal1.xyz, iNormal2.xyz);\n'
+                '    InstanceAlpha = iInstanceAlpha;\n',
                 1,
             )
             source = source.replace('model * vec4(aPos, 1.0)', 'instanceModel * vec4(aPos, 1.0)')
             source = source.replace('normalMatrix * aNormal', 'instanceNormal * aNormal')
             return source
+        lit_instance_frag = lit_frag.replace(
+            'out vec4 FragColor;',
+            'out vec4 FragColor;\nflat in float InstanceAlpha;',
+            1,
+        ).replace(
+            'FragColor = vec4(applyFog(result, FragPos), alpha);',
+            'FragColor = vec4(applyFog(result, FragPos), alpha * InstanceAlpha);',
+            1,
+        )
+        textured_instance_frag = tex_frag.replace(
+            'out vec4 FragColor;',
+            'out vec4 FragColor;\nflat in float InstanceAlpha;',
+            1,
+        ).replace(
+            'uniform sampler2D texture_diffuse;',
+            'uniform sampler2D texture_diffuse;\nuniform float alpha;',
+            1,
+        ).replace(
+            'FragColor = vec4(applyFog(result, FragPos), texColor.a);',
+            'FragColor = vec4(applyFog(result, FragPos), texColor.a * alpha * InstanceAlpha);',
+            1,
+        )
         try:
             self.shaders['lit_instanced'] = self.shader_loader.compile_from_source(
-                make_vertex(lit_vert), lit_frag)
+                make_vertex(lit_vert), lit_instance_frag)
             self.uniforms['lit_instanced'] = UniformCache(self.shaders['lit_instanced'])
             self._preload_lit_uniforms('lit_instanced')
 
             self.shaders['textured_instanced'] = self.shader_loader.compile_from_source(
-                make_vertex(tex_vert), tex_frag)
+                make_vertex(tex_vert), textured_instance_frag)
             self.uniforms['textured_instanced'] = UniformCache(self.shaders['textured_instanced'])
             self._preload_lit_uniforms('textured_instanced')
             self.uniforms['textured_instanced'].preload(
@@ -2191,7 +2256,7 @@ layout (location = 9) in vec4 iNormal2;
             while capacity < count:
                 capacity *= 2
             self._model_instance_capacity = capacity
-            self._model_instance_data = np.empty((capacity, 28), dtype=np.float32)
+            self._model_instance_data = np.empty((capacity, 29), dtype=np.float32)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._model_instance_vbo)
             gl.glBufferData(
                 gl.GL_ARRAY_BUFFER,
@@ -2208,13 +2273,17 @@ layout (location = 9) in vec4 iNormal2;
             self._ensure_model_instance_buffer(1)
         gl.glBindVertexArray(vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._model_instance_vbo)
-        stride = 28 * 4
+        stride = 29 * 4
         offsets = (0, 16, 32, 48, 64, 80, 96)
         for location, offset in zip(range(3, 10), offsets):
             gl.glVertexAttribPointer(
                 location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(offset))
             gl.glEnableVertexAttribArray(location)
             gl.glVertexAttribDivisor(location, 1)
+        gl.glVertexAttribPointer(
+            10, 1, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(112))
+        gl.glEnableVertexAttribArray(10)
+        gl.glVertexAttribDivisor(10, 1)
         gl.glBindVertexArray(0)
         self._model_instanced_vaos.add(key)
 
@@ -2225,6 +2294,7 @@ layout (location = 9) in vec4 iNormal2;
         out = self._model_instance_data[:count]
         np.take(table.model_base_matrix, slots, axis=0, out=out[:, :16])
         np.take(table.model_normal_matrix, slots, axis=0, out=out[:, 16:28])
+        np.take(table.render_alpha, slots, out=out[:, 28])
         np.take(table.pos[:, 0], slots, out=out[:, 12])
         np.take(table.pos[:, 1], slots, out=out[:, 13])
         np.take(table.pos[:, 2], slots, out=out[:, 14])
@@ -2365,10 +2435,9 @@ layout (location = 9) in vec4 iNormal2;
         gl.glDisable(gl.GL_CULL_FACE)
 
         count = len(slots)
-        if count == 1:
-            # Keep the singleton path numeric but use the already-proven uniform
-            # model submission instead of depending on instanced vertex
-            # attributes for a draw that gains nothing from instancing.
+        if count == 1 and float(table.render_alpha[int(slots[0])]) >= 1.0:
+            # Opaque singletons do not benefit from instancing. A fading row must
+            # stay on the instanced path because opacity is per-instance data.
             drawn = 1 if self._draw_dense_model_single(
                 projection, view, table, slots[0], lights) else 0
             if cull_was_enabled:
@@ -2422,10 +2491,10 @@ layout (location = 9) in vec4 iNormal2;
                 gl.glBindTexture(
                     gl.GL_TEXTURE_2D,
                     self._model_texture_id(manual_texture, manual=True))
+                gl.glUniform1f(u['alpha'], 1.0)
                 if shader_kind != 'textured':
                     colour = override_color or (0.8, 0.8, 0.8)
                     gl.glUniform3fv(u['object_color'], 1, colour)
-                    gl.glUniform1f(u['alpha'], 1.0)
                 gl.glDrawArraysInstanced(
                     gl.GL_TRIANGLES, 0, obj.vertex_count, len(run_slots))
                 self.render_stats.draw_calls += 1
@@ -2474,7 +2543,7 @@ layout (location = 9) in vec4 iNormal2;
                 else:
                     colour = tuple(material.get('color', [0.8, 0.8, 0.8]))
                     gl.glUniform3fv(u['object_color'], 1, colour)
-                    gl.glUniform1f(u['alpha'], 1.0)
+                gl.glUniform1f(u['alpha'], 1.0)
                 if group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
                     gl.glDrawElementsInstanced(
                         gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
@@ -2749,10 +2818,12 @@ layout (location = 9) in vec4 iNormal2;
         data = self._sprite_instance_data[:count]
         sorted_slots = self._sprite_sorted_slots_scratch[:count]
         np.take(slots, order, out=sorted_slots)
-        # Gather directly into the reusable GPU staging buffer.  The explicit
+        # Gather directly into the reusable GPU staging buffer. The explicit
         # out= avoids a temporary (N,3)/(N,2) array on every sprite frame.
         np.take(table.pos, sorted_slots, axis=0, out=data[:, 0:3])
         np.take(table.sprite_size, sorted_slots, axis=0, out=data[:, 3:5])
+        np.take(table.sprite_fixed_yaw, sorted_slots, out=data[:, 5])
+        np.take(table.render_alpha, sorted_slots, out=data[:, 6])
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
 
@@ -2769,6 +2840,7 @@ layout (location = 9) in vec4 iNormal2;
                               glm.value_ptr(view))
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniforms['sprite_texture'], 0)
+        gl.glUniform1i(uniforms['use_fixed_facing'], 1)
         gl.glBindVertexArray(self._ensure_sprite_instance_vao())
 
         current_tex = None

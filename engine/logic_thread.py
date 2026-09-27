@@ -6,7 +6,7 @@ This thread runs game logic at a fixed timestep (60 Hz), handling:
 - Entity interactions and triggers
 - I/O event dispatching
 - Mover and door animations
-- Pickup collection
+- Prop collection
 - Player death detection
 - Portal transit (Prey 2006-style world portals)
 """
@@ -18,6 +18,7 @@ from typing import List, Dict, Any, Optional
 import glm
 import math
 import os
+import random
 
 from .threaded_game_state import ThreadedGameState, PublishedBrushes, PublishedEntities
 from .player import Player
@@ -26,18 +27,17 @@ from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
 from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
 from .prop_runtime import PropSession
 from .render_table import RenderTable
-from .entity_table import EntityTable
+from .entity_table import EntityTable, ENT_PROP
 from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
 from .effect_entity import Effect
 
 # Import Thing subclasses for type checking
 try:
-    from editor.things import (Speaker, Pickup, Prop as PropThing, Light,
+    from editor.things import (Speaker, Prop as PropThing, Light,
                                Monster as MonsterThing, PathNode, LogicTimer,
                                PlayerStart, Portal, LevelChanger)
 except ImportError:
     Speaker = None
-    Pickup = None
     PropThing = None
     Light = None
     MonsterThing = None
@@ -84,6 +84,7 @@ except ImportError:
 from .monster_constants import (
     WEAPON_DAMAGE,
     NON_FIRING_WEAPONS,
+    WEAPON_SHOOT_SOUND,
     MONSTER_PROJECTILE_MAX_DIST,
     MONSTER_PROJECTILE_SPRITE_SIZE,
 )
@@ -199,6 +200,10 @@ class LogicThread(threading.Thread):
         # Set by start_camera_transition, advanced by _update_camera_transition,
         # and consumed in _prepare_render_state to blend the view matrix.
         self.camera_transition = None
+        # HUD visibility follows LogicCamera control. When a cinematic ends,
+        # the entire HUD fades back in over four seconds.
+        self._hud_cinematic_last_active = False
+        self._hud_health_fade_started = None
 
         # RenderState already owns one persistent RenderTable/EntityTable pair.
         # Keep these aliases only for diagnostics and older tests/code that inspect
@@ -281,12 +286,9 @@ class LogicThread(threading.Thread):
         self.hurt_trigger_timers: Dict[int, float] = {}
         self.HURT_INTERVAL = 0.5
         
-        # Pickup state
-        self.collected_pickups: set = set()
+        # Collection state
         self.collected_keys: set = set()
         
-        # Respawn timers
-        self.respawn_timers: Dict[int, float] = {}
         
         # Speaker state
         self.active_speakers: set = set()
@@ -337,8 +339,11 @@ class LogicThread(threading.Thread):
         self.bullet_marks = []
         self.BULLET_FADE_TIME = 20.0
         
-        # Active weapon
+        # Active weapon / ammunition
         self.active_weapon = None
+        self.player_ammo = 0
+        self.gun2_obtained = False
+        self._last_player_shot_time = float("-inf")
 
         # Muzzle flash
         self.muzzle_flash_active = False
@@ -361,7 +366,6 @@ class LogicThread(threading.Thread):
         self._trigger_brushes = []
         self._trigger_brush_by_bid = {}
         self._use_trigger_entries = []
-        self._pickup_things = []
         # The Prop registry (engine.prop_runtime.PropSession).  Created on
         # play-mode enter and None in the editor, where nothing simulates.
         self._props = None
@@ -442,7 +446,7 @@ class LogicThread(threading.Thread):
         """Build O(1) lookup dicts for I/O entity resolution.
 
         Also precomputes per-tick filtered entity lists (trigger brushes,
-        pickups, level changers) so hot-path tick handlers don't have to
+        Props, level changers) so hot-path tick handlers don't have to
         linearly rescan the full brush/thing lists every frame — these are
         rebuilt here (play-mode enter, and whenever a thing is spawned) since
         that's the only time the underlying brush/thing collections change.
@@ -471,9 +475,7 @@ class LogicThread(threading.Thread):
         self._trigger_brush_by_bid = dict(self._trigger_brushes)
         self._refresh_use_triggers()
 
-        # PERF: precomputed thing lists for _handle_interactions / _handle_pickups
-        self._pickup_things = [t for t in self.things if Pickup and isinstance(t, Pickup)]
-        # Props are not cached here.  PropSession is the registry for the Prop
+        # Props are not cached here. PropSession is the registry for the Prop
         # domain and a second list would be a competing copy of it; this is the
         # point at which it re-derives itself from the thing list, alongside
         # every other entity cache, and the engine reads Props back off it.
@@ -1077,14 +1079,15 @@ class LogicThread(threading.Thread):
             self.buddha_mode = False
             self.notarget = False
             
-            # Reset pickup state
+            # Reset collection state
             self._reset_trigger_state()
-            self.collected_pickups.clear()
             self.collected_keys.clear()
-            self.respawn_timers.clear()
             for thing in self.things:
-                if Pickup and isinstance(thing, Pickup):
-                    thing.properties['collected'] = False
+                if PropThing and isinstance(thing, PropThing):
+                    thing.properties['collect_collected'] = False
+                    thing.properties['carry_enabled'] = True
+            if self._props is not None:
+                self._props.start()
             
             # Reset speaker state
             self.active_speakers.clear()
@@ -1102,8 +1105,11 @@ class LogicThread(threading.Thread):
             # Reset timer states
             self.timer_states = {}
             
-            # Reset active weapon
+            # Reset active weapon / ammunition
             self.active_weapon = None
+            self.player_ammo = 0
+            self.gun2_obtained = False
+            self._last_player_shot_time = float("-inf")
             
             # Reset visual fx
             self.bullet_marks = []
@@ -1148,6 +1154,8 @@ class LogicThread(threading.Thread):
             # Reset cinematic state (mover_path_states already reset by _init_movers)
             self.cinematic_state = None
             self.camera_transition = None
+            self._hud_cinematic_last_active = False
+            self._hud_health_fade_started = None
 
             # Reset portal transit state
             self._portal_cooldowns.clear()
@@ -1191,9 +1199,7 @@ class LogicThread(threading.Thread):
             self._stop_monster_ai()
             self._reset_trigger_state()
             self.fired_once_triggers.clear()
-            self.collected_pickups.clear()
             self.collected_keys.clear()
-            self.respawn_timers.clear()
             self.active_speakers.clear()
             self.hurt_trigger_timers.clear()
             self._reset_movers()
@@ -1236,6 +1242,8 @@ class LogicThread(threading.Thread):
             self.mover_path_states = {}
             self.cinematic_state = None
             self.camera_transition = None
+            self._hud_cinematic_last_active = False
+            self._hud_health_fade_started = None
 
             # Reset portal transit state
             self._portal_cooldowns.clear()
@@ -1822,7 +1830,6 @@ class LogicThread(threading.Thread):
             return
         
         # Update movers & doors first (for platform carrying)
-        self._update_respawns(delta)
         self._update_movers(delta)
         self._update_doors(delta)
         self._update_parented_lights()
@@ -1910,7 +1917,6 @@ class LogicThread(threading.Thread):
             if self._props is not None:
                 self._props.sync_physics_positions()
 
-        self._check_pickups()
         self._handle_triggers(use_key, delta)
 
         # Plugin tick: runs last in the gameplay sequence so the use-key edge is
@@ -2790,6 +2796,32 @@ class LogicThread(threading.Thread):
             if self.buddha_mode and self.player_health < 2:
                 self.player_health = 2
             became_dead = was_alive and self.player_health <= 0
+            took_damage = was_alive and damage > 0
+
+            # Queue the pain response at the instant damage is applied. Copy the
+            # player position so subsequent movement cannot move the sound
+            # source before the render thread consumes the request.
+            pain_position = None
+            if took_damage and self.player:
+                pain_position = (
+                    float(self.player.pos.x),
+                    float(self.player.pos.y),
+                    float(self.player.pos.z),
+                )
+
+        if took_damage and pain_position is not None:
+            pain_file = random.choice((
+                "assets/sounds/pain01.mp3",
+                "assets/sounds/pain02.mp3",
+                "assets/sounds/pain03.mp3",
+            ))
+            self.game_state.queue_sound({
+                "file": pain_file,
+                "volume": 1.0,
+                "position": pain_position,
+                "radius": 512.0,
+            })
+
         # Emit outside the lock so a handler can't deadlock on the damage path.
         self._plugin_emit("player_damage", damage=damage, health=self.player_health)
         if became_dead:
@@ -2950,30 +2982,6 @@ class LogicThread(threading.Thread):
                             door_consumed_use = True
 
 
-        if Pickup and not door_consumed_use:
-            p_pos = glm.vec3(px, py, pz)
-            p_forward = glm.vec3(math.sin(self.player.angle), 0, math.cos(self.player.angle))
-            for thing in self._pickup_things:
-                if thing.properties.get('collected', False):
-                    continue
-                if thing.properties.get('activation') != 'use':
-                    continue
-                if thing.properties.get('disabled', False):
-                    continue
-                if id(thing) in self.collected_pickups:
-                    continue
-                t_pos = glm.vec3(thing.pos)
-                dist = glm.distance(p_pos, t_pos)
-                if dist < 80.0:
-                    to_thing = glm.normalize(t_pos - p_pos)
-                    if glm.dot(p_forward, to_thing) > 0.8:
-                        item_name = thing.properties.get('item_type', 'Item').replace('_', ' ').title()
-                        self.current_hud_message = f"[E] Pick up {item_name}"
-                        if use_key_pressed:
-                            self._collect_pickup(thing)
-                        return
-
-
         if not door_consumed_use:
             p_pos = glm.vec3(px, py, pz)
             p_forward = glm.vec3(math.sin(self.player.angle), 0, math.cos(self.player.angle))
@@ -3002,78 +3010,6 @@ class LogicThread(threading.Thread):
                                 self.io_manager.fire_output(thing, 'OnUse')
                         return
 
-    # =========================================================================
-    # PICKUPS
-    # =========================================================================
-
-    def _check_pickups(self):
-        self._handle_pickups(False)
-
-    def _handle_pickups(self, use_key_pressed: bool):
-        if not self.player or not Pickup:
-            return
-        player_pos = self.player.pos
-        pickup_radius = 32.0
-
-        for thing in self._pickup_things:
-            if thing.properties.get('collected', False):
-                continue
-            if id(thing) in self.collected_pickups:
-                continue
-            if thing.properties.get('disabled', False):
-                continue
-            thing_pos = glm.vec3(thing.pos)
-            distance = glm.distance(player_pos, thing_pos)
-            if thing.properties.get('activation') == 'walk_over' and distance <= pickup_radius:
-                self._collect_pickup(thing)
-    
-    def _collect_pickup(self, pickup):
-        item_type = pickup.properties.get('item_type', 'health')
-        value = pickup.properties.get('value', 25)
-        if item_type == 'health':
-            self.player_health = min(self.player_max_health, self.player_health + value)
-        elif item_type == 'key':
-            key_name = pickup.properties.get('key_name', '')
-            if key_name:
-                self.collected_keys.add(key_name)
-        elif item_type == 'weapon' or item_type in ['gun1', 'gun2', 'cig']:
-            weapon = pickup.properties.get(
-                'weapon',
-                item_type if item_type in ['gun1', 'gun2', 'cig'] else 'gun1',
-            )
-            self.active_weapon = weapon
-            self.current_hud_message = f"Picked up {weapon.upper()}"
-        pickup.properties['collected'] = True
-        pid = id(pickup)
-        self.collected_pickups.add(pid)
-        if self.io_manager:
-            self.io_manager.fire_output(pickup, 'OnPickedUp')
-        self._plugin_emit("pickup_collected", pickup=pickup,
-                          item_type=item_type, value=value)
-        if pickup.properties.get('respawns', False):
-            respawn_time = pickup.properties.get('respawn_time', 20.0)
-            self.respawn_timers[pid] = {
-                'remaining': respawn_time,
-                'entity': pickup,
-            }
-    
-    def _update_respawns(self, delta: float):
-        if not Pickup:
-            return
-        to_respawn = []
-        for pid, timer_data in list(self.respawn_timers.items()):
-            timer_data['remaining'] -= delta
-            if timer_data['remaining'] <= 0:
-                to_respawn.append(pid)
-        for pid in to_respawn:
-            timer_data = self.respawn_timers.pop(pid)
-            entity = timer_data.get('entity')
-            if entity is not None and isinstance(entity, Pickup):
-                entity.properties['collected'] = False
-                self.collected_pickups.discard(pid)
-                if self.io_manager:
-                    self.io_manager.fire_output(entity, 'OnRespawn')
-    
     # =========================================================================
     # MOVER/DOOR UPDATES
     # =========================================================================
@@ -3523,7 +3459,30 @@ class LogicThread(threading.Thread):
         # hitscan/projectile, no damage, and no gunfire noise event.
         if self.active_weapon in NON_FIRING_WEAPONS:
             return
+
+        # Gun2 is a deliberately slow, finite-ammo weapon. Keep this check
+        # authoritative on the logic thread so a burst of UI clicks can never
+        # bypass the one-shot-per-second limit or spend ammo twice.
+        if self.active_weapon == "gun2":
+            now = time.perf_counter()
+            if now - float(getattr(
+                    self, "_last_player_shot_time", float("-inf"))) < 1.0:
+                return
+            try:
+                ammo = int(getattr(self, "player_ammo", 0))
+            except (TypeError, ValueError):
+                ammo = 0
+            if ammo <= 0:
+                return
+            self.player_ammo = ammo - 1
+            self._last_player_shot_time = now
+
         self.muzzle_flash_active = True
+        self.game_state.queue_sound({
+            "file": WEAPON_SHOOT_SOUND.get(
+                self.active_weapon, "shoot.wav"),
+            "volume": 1.0,
+        })
         self._plugin_emit("player_shoot", weapon=self.active_weapon)
         yaw_rad = self.player.angle
         if self.is_overhead():
@@ -3960,9 +3919,35 @@ class LogicThread(threading.Thread):
             fov = self.editor_camera.fov
 
         write_state.camera_view_matrix = view_matrix
+
+        # LogicCamera owns the view while cinematic_state exists, including
+        # paused cinematics. Publish HUD state so the render thread never needs
+        # to inspect LogicThread directly.
+        cinematic_active = bool(self.cinematic_state)
+        now = time.perf_counter()
+        if cinematic_active:
+            self._hud_cinematic_last_active = True
+            self._hud_health_fade_started = None
+            hud_health_alpha = 0.0
+        elif self._hud_cinematic_last_active:
+            self._hud_cinematic_last_active = False
+            self._hud_health_fade_started = now
+            hud_health_alpha = 0.0
+        elif self._hud_health_fade_started is not None:
+            hud_health_alpha = min(
+                1.0, max(0.0, (now - self._hud_health_fade_started) / 4.0)
+            )
+            if hud_health_alpha >= 1.0:
+                self._hud_health_fade_started = None
+        else:
+            hud_health_alpha = 1.0
+
+        write_state.cinematic_camera_active = cinematic_active
+        write_state.hud_alpha = hud_health_alpha
         write_state.player_health = self.player_health
         write_state.player_max_health = self.player_max_health
         write_state.player_dead = self.player_dead
+        write_state.player_ammo = max(0, int(getattr(self, "player_ammo", 0)))
         if self.play_mode and self.player and not self.cinematic_state:
             write_state.player_underwater = bool(getattr(self.player, 'eye_underwater', False))
             write_state.underwater_tint = list(getattr(self.player, 'water_tint', [0.0, 0.4, 0.6]))
@@ -3973,6 +3958,22 @@ class LogicThread(threading.Thread):
         write_state.hud_prompt_key = self.current_hud_key_name
         write_state.active_weapon = self.active_weapon
         write_state.muzzle_flash_active = self.muzzle_flash_active
+        if self.active_weapon == "gun1":
+            write_state.shot_ready = True
+        elif self.active_weapon == "gun2":
+            now = time.perf_counter()
+            try:
+                ammo = max(0, int(getattr(self, "player_ammo", 0)))
+            except (TypeError, ValueError):
+                ammo = 0
+            write_state.shot_ready = (
+                ammo > 0
+                and (now - float(getattr(
+                    self, "_last_player_shot_time", float("-inf")
+                ))) >= 1.0
+            )
+        else:
+            write_state.shot_ready = False
         write_state.camera_transition_active = bool(self.camera_transition)
 
         write_state.monster_debug_active = self.monster_ai.monster_debug_active
@@ -4151,15 +4152,20 @@ class LogicThread(threading.Thread):
             erefs[i] = snapshot
             etable.update_monster_snapshot(int(i), snapshot)
 
-        # A collected pickup is not published.  Only pickup rows can be
-        # collected, so the filter costs pickups rather than entities -- on a
-        # map with no pickups it costs nothing at all.
+        # A collected Prop is not published. The dense Prop registry owns
+        # collection state, so the renderer filters only Prop rows rather than
+        # walking the whole Thing list.
         visible_thing_slots = self._entity_all_slots
-        if (self.play_mode and self.collected_pickups
-                and len(etable.pickup_slots)):
-            collected = self.collected_pickups
-            dropped = [int(i) for i in etable.pickup_slots
-                       if id(things[int(i)]) in collected]
+        collected = self._props.collected_ids if self._props is not None else set()
+        if self.play_mode and collected:
+            # class_bits is a capacity-sized array, while etable.things
+            # contains only the live dense rows.  Never let stale bits in the
+            # spare capacity turn into entity slots.
+            prop_slots = np.flatnonzero(
+                (etable.class_bits[:thing_count] & ENT_PROP) != 0
+            )
+            dropped = [int(i) for i in prop_slots
+                       if id(entity_things[int(i)]) in collected]
             if dropped:
                 keep_things = np.ones(thing_count, dtype=bool)
                 keep_things[dropped] = False

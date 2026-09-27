@@ -189,6 +189,7 @@ def register_all_input_handlers(io_manager: IOManager):
             table.effect_spawn_time[slot],
             table.effect_elapsed[slot],
             table.effect_active[slot],
+            table.effect_phase[slot],
             table.effect_alive[slot],
         )
         table._resolve_entity_cold(slot, entity)
@@ -197,6 +198,7 @@ def register_all_input_handlers(io_manager: IOManager):
             table.effect_elapsed[slot],
             table.effect_active[slot],
             table.effect_alive[slot],
+            table.effect_phase[slot],
         ) = runtime
 
     def effect_set_type(entity, param, logic):
@@ -321,6 +323,7 @@ def register_all_input_handlers(io_manager: IOManager):
         table.effect_spawn_time[slot] = now
         table.effect_shared_spawn_time[slot] = now
         table.effect_elapsed[slot] = 0.0
+        table.effect_phase[slot] = 0.0
         table.effect_active[slot] = True
         table.effect_alive[slot] = True
 
@@ -741,33 +744,6 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('speaker', 'setvolume', speaker_set_volume)
     
     # ==========================================================================
-    # PICKUP INPUTS
-    # ==========================================================================
-    
-    def pickup_enable(entity, param, logic):
-        entity.properties['disabled'] = False
-    
-    def pickup_disable(entity, param, logic):
-        entity.properties['disabled'] = True
-    
-    def pickup_respawn(entity, param, logic):
-        entity.properties['collected'] = False
-        # FIX#3: use id(entity) — matches new collected_pickups key scheme
-        logic.collected_pickups.discard(id(entity))
-        logic.io_manager.fire_output(entity, 'OnRespawn')
-    
-    def pickup_set_value(entity, param, logic):
-        try:
-            entity.properties['value'] = int(param)
-        except ValueError:
-            pass
-    
-    io_manager.register_input_handler('pickup', 'enable', pickup_enable)
-    io_manager.register_input_handler('pickup', 'disable', pickup_disable)
-    io_manager.register_input_handler('pickup', 'respawn', pickup_respawn)
-    io_manager.register_input_handler('pickup', 'setvalue', pickup_set_value)
-    
-    # ==========================================================================
     # PROP INPUTS
     # ==========================================================================
 
@@ -777,15 +753,34 @@ def register_all_input_handlers(io_manager: IOManager):
     def prop_disable(entity, param, logic):
         entity.properties['disabled'] = True
 
+    def prop_collect(entity, param, logic):
+        session = getattr(logic, '_props', None)
+        if session is not None:
+            session.collect_prop(entity)
+
+    def prop_respawn(entity, param, logic):
+        session = getattr(logic, '_props', None)
+        if session is not None:
+            session.respawn_prop(entity)
+
+    def prop_set_value(entity, param, logic):
+        try:
+            entity.properties['collect_value'] = int(param)
+        except (TypeError, ValueError):
+            pass
+
     def prop_wake(entity, param, logic):
         entity.properties['_physics_awake'] = True
 
     def prop_drop(entity, param, logic):
-        # The active prop runtime observes this one-shot request on its next tick.
+        # The active Prop runtime observes this one-shot request on its next tick.
         entity.properties['_drop_requested'] = True
 
     io_manager.register_input_handler('prop', 'enable', prop_enable)
     io_manager.register_input_handler('prop', 'disable', prop_disable)
+    io_manager.register_input_handler('prop', 'collect', prop_collect)
+    io_manager.register_input_handler('prop', 'respawn', prop_respawn)
+    io_manager.register_input_handler('prop', 'setvalue', prop_set_value)
     io_manager.register_input_handler('prop', 'wake', prop_wake)
     io_manager.register_input_handler('prop', 'drop', prop_drop)
 
@@ -1223,7 +1218,7 @@ def register_all_input_handlers(io_manager: IOManager):
 
     # ==========================================================================
     # THING (ENTITY) HIDE / SHOW INPUTS
-    # (Things have .properties dict — covers monster, light, speaker, pickup, model)
+    # (Things have .properties dict — covers monster, light, speaker, model, prop)
     # ==========================================================================
 
     def thing_hide(entity, param, logic):
@@ -1246,7 +1241,7 @@ def register_all_input_handlers(io_manager: IOManager):
         debug_log('IO', f"Entity '{name}' toggled → {state}")
 
     # Register for every thing-based type that declares Hide/Show
-    for ttype in ('monster', 'light', 'speaker', 'pickup', 'model', 'prop'):
+    for ttype in ('monster', 'light', 'speaker', 'model', 'prop'):
         io_manager.register_input_handler(ttype, 'hide', thing_hide)
         io_manager.register_input_handler(ttype, 'show', thing_show)
         io_manager.register_input_handler(ttype, 'togglevisibility', thing_toggle_vis)

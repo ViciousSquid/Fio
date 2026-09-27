@@ -26,7 +26,7 @@ entity's lifetime.
 keep them in Python.  *Which pass draws an entity* is a resolution of its class
 and four authored properties; it is as static as a brush's shader.  What is
 genuinely dynamic -- where the entity is, whether it is hidden, whether a
-pickup has been collected -- is dynamic for brushes too, and the brush table
+Prop has been collected -- is dynamic for brushes too, and the brush table
 already has the discipline for it.  So this module applies the same one.
 
 What it is, and is not
@@ -88,11 +88,11 @@ from .portal_transform import basis_from_rotation
 # the standalone player tier does not have it.  A tier without the classes
 # classifies every entity as a plain Thing, which is what it is there.
 try:
-    from editor.things import (Thing, PathNode, Portal, Pickup, Prop, Monster,
+    from editor.things import (Thing, PathNode, Portal, Prop, Monster,
                                LogicGate, LogicRelay, LogicTimer, LevelChanger,
                                Light, LogicSpawner, LogicCamera, Effect)
 except ImportError:                                   # pragma: no cover
-    Thing = PathNode = Portal = Pickup = Prop = Monster = Effect = None
+    Thing = PathNode = Portal = Prop = Monster = Effect = None
     LogicGate = LogicRelay = LogicTimer = LevelChanger = Light = None
     LogicSpawner = LogicCamera = None
 
@@ -122,9 +122,6 @@ ENT_MODE_MODEL      = 1 << 3
 ENT_MODE_BILLBOARD  = 1 << 4
 #: Carries a ``sprite_path``.
 ENT_HAS_SPRITE      = 1 << 5
-#: A Pickup.  Tested first by ``_thing_render_kind``, so it wins over the bits
-#: below even for an entity that would otherwise classify as a sprite.
-ENT_PICKUP          = 1 << 6
 #: Monster / LogicGate / LogicRelay / LogicTimer / LevelChanger -- the classes
 #: ``_thing_render_kind`` calls ``entity_sprite``.
 ENT_ENTITY_SPRITE   = 1 << 7
@@ -145,7 +142,7 @@ ENT_EFFECT          = 1 << 13
 #: This row's *sprite identity* can change without an edit, so it is re-resolved
 #: every frame.  Exactly the classes ``update_instance_textures`` re-hashes per
 #: frame -- a monster's sprite follows ``dead``/``is_shooting``, a gate's its
-#: type, a pickup's its item, a prop's its representation.  Everything else
+#: type, a Prop's representation.  Everything else
 #: resolves its sprite once, at reconcile.
 ENT_SPRITE_WARM     = 1 << 12
 
@@ -165,7 +162,7 @@ BIT_NAMES = (
     (ENT_SKIP, 'SKIP'), (ENT_ALWAYS_SPRITE, 'ALWAYS_SPRITE'),
     (ENT_HAS_MODEL, 'HAS_MODEL'), (ENT_MODE_MODEL, 'MODE_MODEL'),
     (ENT_MODE_BILLBOARD, 'MODE_BILLBOARD'), (ENT_HAS_SPRITE, 'HAS_SPRITE'),
-    (ENT_PICKUP, 'PICKUP'), (ENT_ENTITY_SPRITE, 'ENTITY_SPRITE'),
+    (ENT_ENTITY_SPRITE, 'ENTITY_SPRITE'),
     (ENT_PROP, 'PROP'), (ENT_LIGHT, 'LIGHT'), (ENT_MONSTER, 'MONSTER'),
     (ENT_PORTAL, 'PORTAL'), (ENT_EFFECT, 'EFFECT'),
     (ENT_SPRITE_WARM, 'SPRITE_WARM'),
@@ -183,7 +180,7 @@ def describe(bits) -> str:
 #
 # A sprite's *position* is warm and its *size* is cold, both straightforwardly.
 # Its texture is neither: a monster's sprite is chosen from `dead` and
-# `is_shooting` every frame, and a logic gate's, a pickup's and a prop's from
+# `is_shooting` every frame, and a logic gate's and a Prop's from
 # properties the renderer already re-reads every frame to decide whether its
 # instance-texture cache is stale.  So sprite identity is resolved per frame for
 # those rows and at reconcile for everything else -- the same cold/warm split
@@ -294,19 +291,6 @@ def sprite_candidates(thing):
                 key = 'propsprite__%s' % path.replace('/', '__').replace('.', '_')
                 filename, subfolder = _split_asset_path(path)
                 out.append((key, filename, subfolder, True))
-    elif Pickup is not None and isinstance(thing, Pickup):
-        if thing.is_key():
-            # Lookup only: update_instance_textures never loads this one, so a
-            # key sprite that was never registered falls through to the class
-            # texture rather than being loaded here.
-            out.append(('key_%s' % thing.get_key_name(),) + _LOOKUP_ONLY[:2]
-                       + (False,))
-        elif props.get('custom_sprite'):
-            custom = str(props.get('custom_sprite'))
-            filename = os.path.basename(custom.replace('\\', '/'))
-            # Loaded but not cached under a key of its own, as the object path
-            # does -- load_texture has its own cache, so this is not a re-read.
-            out.append(('', filename, 'sprites', False))
     elif LevelChanger is not None and isinstance(thing, LevelChanger):
         return (('LevelChanger', 'levelchanger.png', 'sprites', True),)
     elif LogicRelay is not None and isinstance(thing, LogicRelay):
@@ -320,13 +304,6 @@ def sprite_candidates(thing):
         out.append(('LogicSpawner', 'logic_spawner.png', 'sprites', True))
     elif LogicCamera is not None and isinstance(thing, LogicCamera):
         out.append(('LogicCamera', 'logic_camera.png', 'sprites', True))
-    elif Pickup is not None and isinstance(thing, Pickup):
-        path = thing.get_sprite_path()
-        if path:
-            filename, subfolder = _split_asset_path(path)
-            out.append((class_name, filename, subfolder, True))
-        else:
-            out.append((class_name,) + _LOOKUP_ONLY[:2] + (False,))
     elif props.get('sprite_path'):
         filename, subfolder = _split_asset_path(props.get('sprite_path'))
         out.append((class_name, filename, subfolder, True))
@@ -393,8 +370,6 @@ def _entity_class_bits(thing) -> int:
     elif render_mode == 'billboard':
         bits |= ENT_MODE_BILLBOARD
 
-    if Pickup is not None and isinstance(thing, Pickup):
-        bits |= ENT_PICKUP
     entity_sprite_types = tuple(
         c for c in (Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger)
         if c is not None)
@@ -406,7 +381,7 @@ def _entity_class_bits(thing) -> int:
         bits |= ENT_LIGHT
     if Effect is not None and isinstance(thing, Effect):
         bits |= ENT_EFFECT
-    warm_types = tuple(c for c in (Monster, LogicGate, Pickup, Prop)
+    warm_types = tuple(c for c in (Monster, LogicGate, Prop)
                        if c is not None)
     if warm_types and isinstance(thing, warm_types):
         bits |= ENT_SPRITE_WARM
@@ -571,6 +546,25 @@ def _effect_flicker(seed, elapsed):
     return a * (1.0 - smooth) + b * smooth
 
 
+def _carry_sprite_yaw(thing):
+    """Return the numeric carry yaw, or the sentinel for a free billboard."""
+    value = getattr(thing, '_carry_sprite_yaw', -10000.0)
+    try:
+        return -10000.0 if value is None else float(value)
+    except (TypeError, ValueError):
+        return -10000.0
+
+
+def _render_alpha(thing):
+    """Return the runtime render opacity for an entity."""
+    try:
+        return max(0.0, min(1.0, float(
+            getattr(thing, '_respawn_fade_alpha', 1.0)
+        )))
+    except (TypeError, ValueError):
+        return 1.0
+
+
 def sprite_state(thing):
     """Return the authored state that can change an entity's sprite recipe."""
     props = thing if isinstance(thing, dict) else _props_of(thing)
@@ -587,14 +581,6 @@ def sprite_state(thing):
         )
     if LogicGate is not None and isinstance(thing, LogicGate):
         return ('LogicGate', str(props.get('logic_type', 'and')).lower())
-    if Pickup is not None and isinstance(thing, Pickup):
-        return (
-            'Pickup',
-            str(props.get('item_type', 'health')),
-            str(props.get('weapon', 'gun1')),
-            str(props.get('key_name', 'blue_key')),
-            str(props.get('custom_sprite', '')),
-        )
     if Prop is not None and isinstance(thing, Prop):
         return (
             'Prop',
@@ -606,6 +592,7 @@ def sprite_state(thing):
             repr(props.get('rotation', [0.0, 0.0, 0.0])),
             repr(props.get('scale', 1.0)),
             repr(props.get('sprite_size', [32.0, 32.0])),
+            _carry_sprite_yaw(thing),
         )
     return None
 
@@ -628,11 +615,11 @@ class EntityTable:
                  'portal_slots', 'portal_target_slot', 'portal_active',
                  'portal_direction', 'portal_width_height', 'portal_basis',
                  'portal_fade', 'portal_color', 'portal_show_rim',
-                 'monster_slots', 'pickup_slots', 'effect_slots',
+                 'monster_slots', 'effect_slots',
                  'effect_type', 'effect_fire_variant', 'effect_custom_id', 'effect_custom_loop', 'effect_preview', 'effect_params', 'effect_color',
                  'effect_light_color', 'effect_light_enabled', 'effect_lifetime', 'effect_seed',
-                  'effect_spawn_time', 'effect_shared_spawn_time', 'effect_elapsed', 'effect_active', 'effect_alive',
-                 'sprite_size', 'sprite_key_id', '_sprite_state',
+                  'effect_spawn_time', 'effect_shared_spawn_time', 'effect_phase', 'effect_elapsed', 'effect_active', 'effect_alive',
+                 'sprite_size', 'sprite_key_id', 'render_alpha', 'sprite_fixed_yaw', '_sprite_state',
                  'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
                  '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
                  '_effect_custom_ids', '_effect_custom_paths',
@@ -679,10 +666,6 @@ class EntityTable:
         #: Slots of the Monsters, whose published reference is a fresh snapshot
         #: each frame.  The entity half of ``RenderTable.dynamic_slots``.
         self.monster_slots = np.empty(0, dtype=np.int32)
-        #: Slots of the Pickups -- the only rows a collected-pickup filter has
-        #: to consider, so that filter costs pickups rather than entities.
-        self.pickup_slots = np.empty(0, dtype=np.int32)
-
         #: Dense procedural Effect state. Authored data is cold; elapsed/alive
         #: are runtime columns and the renderer never touches Effect objects.
         self.effect_slots = np.empty(0, dtype=np.int32)
@@ -699,12 +682,19 @@ class EntityTable:
         self.effect_seed = np.ones((0,), dtype=np.float32)
         self.effect_spawn_time = np.zeros((0,), dtype=np.float64)
         self.effect_shared_spawn_time = np.zeros((0,), dtype=np.float64)
+        # Fraction of the animation cycle at which this Effect starts.
+        self.effect_phase = np.zeros((0,), dtype=np.float32)
         self.effect_elapsed = np.zeros((0,), dtype=np.float32)
         self.effect_active = np.zeros((0,), dtype=bool)
         self.effect_alive = np.zeros((0,), dtype=bool)
 
         #: The billboard's world size. Cold: it comes from authored properties.
         self.sprite_size = np.zeros((0, 2), dtype=np.float32)
+        #: Runtime opacity; defaults to opaque and is non-authored.
+        self.render_alpha = np.ones((0,), dtype=np.float32)
+        #: Locked world-facing yaw for a carried billboard. -10000 means
+        #: ordinary camera-facing billboard behaviour.
+        self.sprite_fixed_yaw = np.full((0,), -10000.0, dtype=np.float32)
         #: Dense sprite recipe id per entity slot.  -1 means no sprite.
         self.sprite_key_id = np.full((0,), SPRITE_NONE, dtype=np.int32)
         self._sprite_state = np.zeros((0,), dtype=np.uint64)
@@ -900,6 +890,11 @@ class EntityTable:
             effect_shared_spawn[:len(self.effect_shared_spawn_time)] = self.effect_shared_spawn_time
         self.effect_shared_spawn_time = effect_shared_spawn
 
+        effect_phase = np.zeros((grown,), dtype=np.float32)
+        if len(self.effect_phase):
+            effect_phase[:len(self.effect_phase)] = self.effect_phase
+        self.effect_phase = effect_phase
+
         effect_elapsed = np.zeros((grown,), dtype=np.float32)
         if len(self.effect_elapsed):
             effect_elapsed[:len(self.effect_elapsed)] = self.effect_elapsed
@@ -919,6 +914,16 @@ class EntityTable:
         if len(self.sprite_size):
             size[:len(self.sprite_size)] = self.sprite_size
         self.sprite_size = size
+
+        render_alpha = np.ones((grown,), dtype=np.float32)
+        if len(self.render_alpha):
+            render_alpha[:len(self.render_alpha)] = self.render_alpha
+        self.render_alpha = render_alpha
+
+        fixed_yaw = np.full((grown,), -10000.0, dtype=np.float32)
+        if len(self.sprite_fixed_yaw):
+            fixed_yaw[:len(self.sprite_fixed_yaw)] = self.sprite_fixed_yaw
+        self.sprite_fixed_yaw = fixed_yaw
 
         keys = np.full((grown,), SPRITE_NONE, dtype=np.int32)
         if len(self.sprite_key_id):
@@ -1049,13 +1054,32 @@ class EntityTable:
             changed = []
             for slot_value in warm_slots:
                 slot = int(slot_value)
-                state = _sprite_state_fingerprint(sprite_state(things[slot]))
+                thing = things[slot]
+                state = _sprite_state_fingerprint(sprite_state(thing))
                 if state != self._sprite_state[slot]:
                     changed.append(slot)
+                if self.class_bits[slot] & ENT_PROP:
+                    self.render_alpha[slot] = _render_alpha(thing)
             if changed:
                 self.refresh_rows(things, changed)
 
         self._refresh_portal_live(things)
+
+        # Effect animation phase is runtime state shared by both render buffers.
+        # Copy only Effect rows: a phase is assigned once per playback and then
+        # remains stable, so the renderer can animate from a dense numeric column.
+        if len(self.effect_slots):
+            effect_phase = np.fromiter(
+                (
+                    max(0.0, min(1.0, float(
+                        getattr(things[int(slot)], "_effect_animation_phase", 0.0)
+                    )))
+                    for slot in self.effect_slots
+                ),
+                dtype=np.float32,
+                count=len(self.effect_slots),
+            )
+            self.effect_phase[self.effect_slots] = effect_phase
 
         # Light state is render state, not renderer metadata. Ordinary Lights
         # retain their existing warm object-backed state; Effect rows stay fully
@@ -1205,7 +1229,7 @@ class EntityTable:
                     fire_slots = effect_ls[fire]
                     flicker = _effect_flicker(
                         self.effect_seed[fire_slots],
-                        elapsed[fire],
+                        elapsed[fire] + self.effect_phase[fire_slots],
                     )
                     base_light = self.effect_params[fire_slots, 2]
                     self.light_params[fire_slots, 0] = (
@@ -1283,14 +1307,14 @@ class EntityTable:
             dst = np.asarray(move_dst, dtype=np.intp)
             for arr in (self.class_bits, self.light_color, self.light_params,
                         self.light_enabled, self.light_casts_shadows,
-                        self.sprite_size, self.sprite_key_id, self._sprite_state,
-                        self.model_recipe_id, self.model_base_matrix,
+                        self.sprite_size, self.render_alpha, self.sprite_key_id,
+                        self.sprite_fixed_yaw, self._sprite_state, self.model_recipe_id, self.model_base_matrix,
                         self.model_normal_matrix, self.effect_type,
                         self.effect_fire_variant, self.effect_custom_id,
                         self.effect_custom_loop, self.effect_params, self.effect_color,
                         self.effect_light_color, self.effect_light_enabled, self.effect_lifetime,
                          self.effect_seed, self.effect_spawn_time,
-                        self.effect_elapsed, self.effect_active,
+                        self.effect_phase, self.effect_elapsed, self.effect_active,
                         self.effect_alive,
                         self.portal_target_slot,
                         self.portal_active, self.portal_direction,
@@ -1318,7 +1342,6 @@ class EntityTable:
         ).astype(np.int32)
         self.portal_slots = np.flatnonzero(bits & ENT_PORTAL).astype(np.int32)
         self.monster_slots = np.flatnonzero(bits & ENT_MONSTER).astype(np.int32)
-        self.pickup_slots = np.flatnonzero(bits & ENT_PICKUP).astype(np.int32)
         self._resolve_portal_links(things)
         self.generation += 1
 
@@ -1382,6 +1405,9 @@ class EntityTable:
         # switching a Prop model -> billboard changes the render class and the
         # sprite recipe without changing the entity row itself.
         self.sprite_size[slot] = sprite_size(thing)
+        self.render_alpha[slot] = _render_alpha(thing)
+        carry_yaw = _carry_sprite_yaw(thing)
+        self.sprite_fixed_yaw[slot] = carry_yaw
         self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(thing))
 
         if self.class_bits[slot] & ENT_EFFECT:
@@ -1451,6 +1477,11 @@ class EntityTable:
             self.effect_lifetime[slot] = lifetime
             self.effect_seed[slot] = seed
             self.effect_spawn_time[slot] = 0.0
+            self.effect_phase[slot] = float(
+                max(0.0, min(1.0, float(
+                    getattr(thing, "_effect_animation_phase", 0.0)
+                )))
+            )
             self.effect_elapsed[slot] = 0.0
             self.effect_active[slot] = effect_type != 'EXPLOSION'
             self.effect_alive[slot] = effect_type != 'EXPLOSION'
@@ -1475,6 +1506,7 @@ class EntityTable:
             self.effect_lifetime[slot] = 0.5
             self.effect_seed[slot] = 1.0
             self.effect_spawn_time[slot] = 0.0
+            self.effect_phase[slot] = 0.0
             self.effect_elapsed[slot] = 0.0
             self.effect_active[slot] = False
             self.effect_alive[slot] = False
@@ -1589,7 +1621,7 @@ def classify_slots(table, slots, hidden, is_play, show_sprites):
     2. a Portal, or a monster snapshot, is a sprite;
     3. a visible model (``model_path``, ``render_mode == 'model'``, not hidden)
        goes to the model pass;
-    4. otherwise the entity's *kind* decides -- Pickup first, then the
+    4. otherwise the entity's *kind* decides -- the
        entity-sprite classes, then billboard-with-a-sprite, then ordinary --
        with a Prop drawn only as a billboard, a model-but-hidden entity drawn
        nowhere, and an ordinary entity drawn only while editing or with
@@ -1613,7 +1645,6 @@ def classify_slots(table, slots, hidden, is_play, show_sprites):
     mode_model = (bits & ENT_MODE_MODEL) != 0
     mode_billboard = (bits & ENT_MODE_BILLBOARD) != 0
     has_sprite = (bits & ENT_HAS_SPRITE) != 0
-    pickup = (bits & ENT_PICKUP) != 0
     entity_sprite = (bits & ENT_ENTITY_SPRITE) != 0
     prop = (bits & ENT_PROP) != 0
 
@@ -1621,7 +1652,7 @@ def classify_slots(table, slots, hidden, is_play, show_sprites):
     model = ~skip & ~always_sprite & has_model & mode_model & ~is_hidden
 
     # Step 4's `kind`, in the order _thing_render_kind tries the classes.
-    kind_sprite = ~pickup & ~entity_sprite & mode_billboard & has_sprite
+    kind_sprite = ~entity_sprite & mode_billboard & has_sprite
 
     remainder = ~skip & ~always_sprite & ~model
     # A Prop is a sprite only as a billboard with a sprite, and is never
@@ -1630,10 +1661,10 @@ def classify_slots(table, slots, hidden, is_play, show_sprites):
     others = remainder & ~prop
     sprite = (
         prop_sprite
-        | (others & (pickup | entity_sprite))
+        | (others & entity_sprite)
         # `elif model_path and render_mode == 'model'` draws nothing: that is
         # the hidden model, already excluded from `model` above.
-        | (others & ~(pickup | entity_sprite) & ~(has_model & mode_model)
+        | (others & ~entity_sprite & ~(has_model & mode_model)
            & (kind_sprite | (not is_play or show_sprites)))
     )
     return slots[model], slots[sprite | (~skip & always_sprite)]

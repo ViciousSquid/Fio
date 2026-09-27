@@ -37,7 +37,7 @@ Snapshot shape::
       "runtime": {
         "god_mode", "buddha_mode", "notarget",
         "camera_mode", "overhead_height", "overhead_tilt", "overhead_orientation",
-        "active_weapon", "current_hud_message",
+        "active_weapon", "gun2_obtained", "player_ammo", "current_hud_message",
         "player_health", "player_max_health", "player_dead",
         "player2_health", "player2_max_health", "player2_dead",
         "collected_keys": [ ... ],
@@ -339,6 +339,8 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "overhead_tilt": float(getattr(logic, "overhead_tilt", 0.0)),
         "overhead_orientation": getattr(logic, "overhead_orientation", "north"),
         "active_weapon": getattr(logic, "active_weapon", None),
+        "gun2_obtained": bool(getattr(logic, "gun2_obtained", False)),
+        "player_ammo": max(0, int(getattr(logic, "player_ammo", 0))),
         "current_hud_message": getattr(logic, "current_hud_message", ""),
         "player_health": getattr(logic, "player_health", 100),
         "player_max_health": getattr(logic, "player_max_health", 100),
@@ -657,7 +659,7 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     for attr in (
         "god_mode", "buddha_mode", "notarget",
         "camera_mode", "overhead_height", "overhead_tilt", "overhead_orientation",
-        "active_weapon", "current_hud_message",
+        "active_weapon", "gun2_obtained", "player_ammo", "current_hud_message",
         "player_health", "player_max_health", "player_dead",
         "player2_health", "player2_max_health", "player2_dead",
     ):
@@ -667,17 +669,6 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     # Collected keys — rebuild the set from the saved list.
     try:
         logic.collected_keys = set(runtime.get("collected_keys", []) or [])
-    except Exception:
-        pass
-
-    # Collected-pickup set is keyed by id(thing) and can't be persisted across a
-    # reload; rebuild it from the entity 'collected' flags we just overlaid.
-    try:
-        collected = set()
-        for t in getattr(logic, "things", []) or []:
-            if t.properties.get("collected"):
-                collected.add(id(t))
-        logic.collected_pickups = collected
     except Exception:
         pass
 

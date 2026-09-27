@@ -177,7 +177,6 @@ def test_keyed_door_prompt_exposes_key_separately_from_text(
     ]
     logic.door_states = {0: {"state": "closed"}}
     logic.collected_keys = {key_name} if collected else set()
-    logic._pickup_things = []
     logic._levelchanger_things = []
     logic.current_hud_message = ""
     logic.current_hud_key_name = None

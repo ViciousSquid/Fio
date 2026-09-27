@@ -3,7 +3,7 @@ The Tidy plugin.
 
 Tidy extends the core Prop primitive with one piece of metadata,
 tidy_category, and adds receptacle/goal gameplay. Core Prop remains the sole
-owner of pickup, carry, drop and physics behaviour.
+owner of carry, collect, drop and physics behaviour.
 """
 
 from __future__ import annotations
@@ -173,7 +173,7 @@ class TidyPlugin(FioPlugin):
         )
 
         # Extend the core Prop I/O instead of replacing it. The core system
-        # already owns Enable/Disable/Drop/Wake and OnPickedUp/OnDropped/OnRest.
+        # already owns Enable/Disable/Drop/Wake and OnCarried/OnDropped/OnRest.
         api.register_io(
             "tidyreceptacle",
             inputs=[

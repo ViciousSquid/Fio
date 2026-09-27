@@ -5,7 +5,7 @@ import os
 from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog, QApplication
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
-from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Prop, Monster,
+from editor.things import (Thing, Light, PlayerStart, Speaker, Model, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
                           LogicCamera, LogicSpawner, Portal, LogicState, Effect)
 from engine import brush_geometry as bg  # convex/angled-brush geometry
@@ -3954,7 +3954,6 @@ class View2D(QWidget):
         add_light_action = menu.addAction("Light")
         add_effect_action = menu.addAction("Effect")
         add_player_start_action = menu.addAction("PlayerStart")
-        add_pickup_action = menu.addAction("Pickup")
         add_prop_action = menu.addAction("Prop")
         add_monster_action = menu.addAction("Monster")
         add_speaker_action = menu.addAction("Speaker")
@@ -4021,8 +4020,6 @@ class View2D(QWidget):
             new_thing = Effect(pos=pos_3d)
         elif action == add_player_start_action: 
             new_thing = PlayerStart(pos=pos_3d)
-        elif action == add_pickup_action: 
-            new_thing = Pickup(pos=pos_3d)
         elif action == add_prop_action:
             new_thing = Prop(pos=pos_3d)
         elif action == add_speaker_action: 

@@ -25,7 +25,7 @@ Reusable Qt floating-window infrastructure used by `QtGameView` overlays such as
 GLB/glTF 2.0 binary model loader. Extracts mesh geometry, normals, UVs, indices, PBR materials, embedded textures and node hierarchies and exposes an OpenGL-ready model interface.
 
 ### `logic_thread.py`
-Fixed-timestep game simulation thread. Handles player movement and physics, entity interaction, trigger evaluation, I/O dispatch, movers, pickups, death, portals and monster AI.
+Fixed-timestep game simulation thread. Handles player movement and physics, entity interaction, trigger evaluation, I/O dispatch, movers, Props, death, portals and monster AI.
 
 Runtime entity creation is treated as a world mutation, not as a separate renderer-side operation: the relevant derived caches are rebuilt at the mutation boundary, including the prefiltered monster list used by MonsterAI. This keeps the authored `things` collection authoritative while allowing live-spawn workloads to enter the execution representation immediately.
 
@@ -53,13 +53,13 @@ Player movement and collision controller: first-person movement, noclip, gravity
 Qt `QOpenGLWidget` that owns the GL viewport and frame/update orchestration. Handles input dispatch, play-mode switching, HUD drawing, split-screen layout and renderer selection.
 
 ### `entity_table.py`
-Dense numerical projection of the entity list — the entity half of `render_table.py`. One row per `Thing`, addressed by an integer slot and named by the entity's existing UUID, with a `uint16` class column resolving what the renderer used to re-derive per entity per frame (PathNode / Portal / Pickup / Light / Prop / the entity-sprite classes, plus `model_path`, `render_mode` and `sprite_path`) and a position column refreshed in bulk.
+Dense numerical projection of the entity list — the entity half of `render_table.py`. One row per `Thing`, addressed by an integer slot and named by the entity's existing UUID, with a `uint16` class column resolving what the renderer used to re-derive per entity per frame (PathNode / Portal / Light / Prop / the entity-sprite classes, plus `model_path`, `render_mode` and `sprite_path`) and a position column refreshed in bulk.
 
 Split by change frequency, exactly as the brush table is: the class column moves only when the world epoch does, positions are re-read every frame, and `hidden` is never cached — Big World parks entities by writing it with no notification, so every per-frame consumer has to see it live.
 
 `classify_slots` is the array form of `_sort_objects`' Thing half: the model and sprite passes come out as slot arrays, from masks over the class column and the live hidden mask, with no entity touched.
 
-Sprites add three more columns, and are where the cold/warm split is made explicit rather than assumed. Position is warm and size is cold, both straightforwardly; a sprite's *texture* is neither, because a monster's frame follows `dead`/`is_shooting` and a gate's, a pickup's and a prop's follow properties that change without an edit. Those rows — and only those — re-resolve their sprite identity every frame; everything else resolves once. The identity is a *name*, interned to a dense integer exactly as `render_table` interns face textures, and the renderer turns it into a GL texture id on the thread that has a context.
+Sprites add three more columns, and are where the cold/warm split is made explicit rather than assumed. Position is warm and size is cold, both straightforwardly; a sprite's *texture* is neither, because a monster's frame follows `dead`/`is_shooting` and a gate's, a Prop's follow properties that change without an edit. Those rows — and only those — re-resolve their sprite identity every frame; everything else resolves once. The identity is a *name*, interned to a dense integer exactly as `render_table` interns face textures, and the renderer turns it into a GL texture id on the thread that has a context.
 
 This is deliberately not pushed into `render_table.py`, whose texture column is wholly cold. Two projections with two refresh disciplines is the honest shape; one projection that had to explain when its texture column could be trusted would not be.
 
@@ -93,7 +93,7 @@ Fio's production forward renderer. Implements the frame passes and brush batchin
 The renderer consumes the dense numerical render representation and turns equal-key runs into GPU submissions. Optional water reflections use a 256×256 2D planar render texture per reflected water surface; the mirrored camera and projective matrix are renderer state, not authored RenderTable columns. Billboards go the same way: `draw_sprites_instanced` reads position, size and texture from the entity projection's columns, packs one instance row per sprite and submits one `glDrawArraysInstanced` per texture run. The object-level sprite renderer has been removed; editor, portal and split-screen views all consume the same dense EntityTable sprite representation.
 
 ### `savegame.py`
-Native play-session save/load. Serialises player state, entity/mover state, trigger/pickup progress and I/O state to `.fiosave` files and restores it on a freshly loaded map.
+Native play-session save/load. Serialises player state, entity/mover state, trigger/collection progress and I/O state to `.fiosave` files and restores it on a freshly loaded map.
 
 ### `resource_manager.py`
 Singleton asset provider for ordinary filesystem projects and mounted `.fiopak` archives. Handles path resolution, byte/text loading, streams, caching and package manifests.
