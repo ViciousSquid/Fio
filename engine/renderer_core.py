@@ -1638,7 +1638,7 @@ layout (location = 10) in float iInstanceAlpha;
             return source
         lit_instance_frag = lit_frag.replace(
             'out vec4 FragColor;',
-            'out vec4 FragColor;\nin float InstanceAlpha;',
+            'out vec4 FragColor;\nflat in float InstanceAlpha;',
             1,
         ).replace(
             'FragColor = vec4(applyFog(result, FragPos), alpha);',
