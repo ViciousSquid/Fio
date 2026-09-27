@@ -4542,7 +4542,6 @@ class PropertyEditor(QWidget):
         h.addWidget(button)
 
         form_layout.addRow(QLabel("Sound File:"), widget)
-        form_layout.addRow(key.replace('_', ' ').title() + ":", widget)
 
     def add_color_picker_widget(
             self, form_layout, thing, key,
