@@ -534,7 +534,7 @@ class QtGameView(QOpenGLWidget):
 
     def _draw_queued_view_message(
         self, painter, viewport_width, viewport_height,
-        text, started_at, width, queue, start_message
+        text, started_at, width, queue, start_message, lower_line=False
     ):
         """Draw one queued transient message and return its active state."""
         if not text:
@@ -562,7 +562,7 @@ class QtGameView(QOpenGLWidget):
         held_item_row_top = viewport_height - 20 - 100
         line_height = QFontMetrics(self._hud_msg_font).height() + 2
         baseline = held_item_row_top - 12 - line_height
-        if start_message is self._start_view_message2:
+        if lower_line:
             baseline += line_height
 
         painter.save()
@@ -598,6 +598,7 @@ class QtGameView(QOpenGLWidget):
                 self._view_message2_width,
                 self._view_message2_queue,
                 self._start_view_message2,
+                lower_line=True,
             )
         )
 
