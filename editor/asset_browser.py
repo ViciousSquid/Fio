@@ -361,8 +361,8 @@ class AssetBrowserTab(QWidget):
 
             button_layout.addStretch()
 
-            self.tint_btn = QPushButton(QIcon("assets/tint.png"), "Tint brush")
-            self.tint_btn.setFixedHeight(32)
+            self.tint_btn = QPushButton(QIcon("assets/tint.png"), "")
+            self.tint_btn.setFixedHeight(36)
             self.tint_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             self.tint_btn.setToolTip("Tint the selected brush")
             self.tint_btn.clicked.connect(self.on_tint_clicked)
