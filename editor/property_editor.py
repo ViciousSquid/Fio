@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QTableWidget, QTableWidgetItem)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
-from editor.things import (Thing, Light, Effect, Prop, Monster, Model, Prop, Speaker,
+from editor.things import (Thing, Light, Effect, Prop, Monster, Model, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
                            LogicState)
 from editor import state_values as _sv
@@ -2577,7 +2577,7 @@ class PropertyEditor(QWidget):
         self._collect_key_widgets = []
         self._collect_sprite_widgets = []
 
-        # A key collectionion's colour is gameplay data, not a sprite-only choice.
+        # A key collection's colour is gameplay data, not a sprite-only choice.
         # Build the selector here because collect_key_name is intentionally excluded
         # from the generic property editor.
         key_label = QLabel("Key:")
