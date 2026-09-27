@@ -1052,7 +1052,9 @@ layout (location = 10) in vec4 iPayload;
                     continue
 
                 local_elapsed = np.mod(
-                    kind_elapsed[mask], cumulative[-1]
+                    kind_elapsed[mask]
+                    + table.effect_phase[slots][kind_mask][mask] * cumulative[-1],
+                    cumulative[-1]
                 )
                 frame_indices = np.searchsorted(
                     cumulative, local_elapsed, side='right'
@@ -1094,10 +1096,11 @@ layout (location = 10) in vec4 iPayload;
                 raw_elapsed = custom_elapsed[mask]
                 # CUSTOM follows its authored Loop flag. When looping is off,
                 # hold the final GIF frame instead of wrapping to frame 1.
+                phase_values = table.effect_phase[slots][custom_mask][mask]
                 local_elapsed = np.where(
                     loop_values,
-                    np.mod(raw_elapsed, cumulative[-1]),
-                    np.minimum(raw_elapsed, cumulative[-1]),
+                    np.mod(raw_elapsed + phase_values * cumulative[-1], cumulative[-1]),
+                    np.minimum(raw_elapsed + phase_values * cumulative[-1], cumulative[-1]),
                 )
                 frame_indices = np.searchsorted(
                     cumulative, local_elapsed, side='right'
