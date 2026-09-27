@@ -4098,8 +4098,11 @@ class LogicThread(threading.Thread):
         visible_thing_slots = self._entity_all_slots
         collected = self._props.collected_ids if self._props is not None else set()
         if self.play_mode and collected:
+            # class_bits is a capacity-sized array, while etable.things
+            # contains only the live dense rows.  Never let stale bits in the
+            # spare capacity turn into entity slots.
             prop_slots = np.flatnonzero(
-                (etable.class_bits & ENT_PROP) != 0
+                (etable.class_bits[:thing_count] & ENT_PROP) != 0
             )
             dropped = [int(i) for i in prop_slots
                        if id(entity_things[int(i)]) in collected]
