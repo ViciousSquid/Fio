@@ -42,6 +42,7 @@ from .manager import (BigWorldManager, DEFAULT_ACTIVATION_RADIUS,
                       DEFAULT_DEACTIVATION_RADIUS)
 from .persistence import (build_cell_delta_registry, flatten_cell_delta_registry,
                           normalize_streaming_state)
+from .config import effective_streaming_radii
 
 # Marker keys the session writes onto objects it parks, so it can restore the
 # exact prior value and never clobber a user's own hidden/disabled state.
@@ -112,9 +113,13 @@ class BigWorldSession:
                  terrain_stream_radius: float = 0.0,
                  sim_near_radius: float = DEFAULT_NEAR_RADIUS):
         self.logic = logic
+        self._authored_activation_radius = max(0.0, float(activation_radius))
+        self._authored_deactivation_radius = max(
+            self._authored_activation_radius, float(deactivation_radius)
+        )
         self.manager = BigWorldManager(
-            activation_radius=activation_radius,
-            deactivation_radius=deactivation_radius,
+            activation_radius=self._authored_activation_radius,
+            deactivation_radius=self._authored_deactivation_radius,
         )
         #: Assigns NEAR/ACTIVE/DISTANT/DORMANT to the resident set. Its active
         #: boundary is the manager's activation radius, so "how far out is the
@@ -141,6 +146,8 @@ class BigWorldSession:
         #: from the activation radius when the session starts.
         self.terrain_stream_radius = float(terrain_stream_radius)
         self._started = False
+        #: Last camera horizon applied to residency.
+        self._visual_horizon = None
         # Prior terrain config captured on start(), restored verbatim on stop()
         # so the editor/authored terrain is returned exactly as it was.
         self._terrain = None
@@ -164,6 +171,35 @@ class BigWorldSession:
         self._base_level: Optional[dict] = None
 
     # ------------------------------------------------------------------
+    # Residency / camera cooperation
+    # ------------------------------------------------------------------
+
+    def _current_visual_horizon(self):
+        """Return the renderer's useful horizon when the host exposes one."""
+        view_distance = getattr(self.logic, "view_distance", None)
+        return getattr(view_distance, "visual_horizon", None)
+
+    def _sync_visual_horizon(self) -> bool:
+        """Keep residency outside the camera's visible/fogged region."""
+        horizon = self._current_visual_horizon()
+        activation, deactivation = effective_streaming_radii(
+            self._authored_activation_radius,
+            self._authored_deactivation_radius,
+            horizon,
+        )
+        changed = (
+            activation != self.manager.activation_radius
+            or deactivation != self.manager.deactivation_radius
+        )
+        self.manager.activation_radius = activation
+        self.manager.deactivation_radius = max(deactivation, activation)
+        self._visual_horizon = horizon
+        if changed:
+            self.tiers.set_radii(self.sim_near_radius, activation)
+            self._publish_relevance_radii()
+        return changed
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
@@ -174,6 +210,7 @@ class BigWorldSession:
         not in the per-frame path. After this, everything is inactive except the
         cells inside the activation radius of ``player_pos``.
         """
+        self._sync_visual_horizon()
         brushes = list(getattr(self.logic, "brushes", None) or [])
         things = list(getattr(self.logic, "things", None) or [])
         self.manager.index_world(brushes, things)
@@ -298,12 +335,27 @@ class BigWorldSession:
         if pos is None:
             return False
         px, pz = _xz(pos)
+        radius_changed = self._sync_visual_horizon()
+
         crossed = (cell_of_point(px, pz, self.manager.cell_size)
                    != self.manager._last_player_cell)
-        if not crossed:
-            # The hot path: a single cell-of-point compare, so a stationary or
-            # slow-moving player pays almost nothing.
+        if not crossed and not radius_changed:
+            # The common path remains a cheap cell comparison plus a shared
+            # camera-horizon read. A render-distance change is the deliberate
+            # exception: residency must follow the new visual boundary.
             return False
+
+        radius_delta = None
+        if radius_changed:
+            radius_delta = self.manager.update(pos, force=True)
+            if radius_delta.changed:
+                for coord in radius_delta.leaving_cells:
+                    self.commit_cell(coord)
+                self._apply_delta(radius_delta)
+
+        if not crossed:
+            self.tiers.update(self.manager, px, pz)
+            return bool(radius_delta and radius_delta.changed)
 
         # Entities walk, and the cell one was authored in stops describing
         # where it is. Re-file the resident movers *before* residency is
