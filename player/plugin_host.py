@@ -94,6 +94,7 @@ class PlayerPluginHost:
         self.active = False
         self.hud_message = ""
         self._extract_root: Optional[str] = None
+        self._extract_root_owned = False
         self._plugin_permission_callback = plugin_permission_callback
 
     # ------------------------------------------------------------------
@@ -119,12 +120,14 @@ class PlayerPluginHost:
                       "plugin code will be extracted or imported.")
             else:
                 try:
+                    owns_root = extract_dir is None
                     root = extract_dir or tempfile.mkdtemp(prefix="fio_plugins_")
                     if self._extract_plugins(package, root):
                         self._extract_root = root
+                        self._extract_root_owned = owns_root
                         if root not in sys.path:
                             sys.path.insert(0, root)
-                    elif extract_dir is None:
+                    elif owns_root:
                         self._cleanup_extract_root(root)
                 except Exception as exc:
                     print(f"[Fio Player] plugin extract failed: {exc}")
@@ -407,7 +410,10 @@ class PlayerPluginHost:
 
         if self._extract_root is not None:
             root = self._extract_root
+            owned = self._extract_root_owned
             self._extract_root = None
+            self._extract_root_owned = False
             while root in sys.path:
                 sys.path.remove(root)
-            self._cleanup_extract_root(root)
+            if owned:
+                self._cleanup_extract_root(root)
