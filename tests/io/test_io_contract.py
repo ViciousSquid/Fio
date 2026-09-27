@@ -76,9 +76,7 @@ class HostStub:
         self.light_fade_states = {}
         self.cinematic_state = {}
         self.active_speakers = set()
-        self.collected_pickups = set()
         self.collected_keys = set()
-        self.respawn_timers = {}
         self.player = None
         self.terrain = None
         self._timer_things = []
