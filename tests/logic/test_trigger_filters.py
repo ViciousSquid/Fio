@@ -149,13 +149,18 @@ def test_empty_trigger_prompt_does_not_clear_an_interaction_prompt():
 
 
 @pytest.mark.parametrize(
+    "key_name",
+    ["blue_key", "red_key", "yellow_key"],
+)
+@pytest.mark.parametrize(
     "collected, expected_message",
     [
         (False, "Need"),
         (True, "[E] Use"),
     ],
 )
-def test_keyed_door_prompt_exposes_key_separately_from_text(collected, expected_message):
+def test_keyed_door_prompt_exposes_key_separately_from_text(
+        key_name, collected, expected_message):
     logic = _logic()
     logic.doors = [
         (
@@ -166,12 +171,12 @@ def test_keyed_door_prompt_exposes_key_separately_from_text(collected, expected_
                 "is_door": True,
                 "door_locked": False,
                 "door_needs_key": True,
-                "door_key_name": "blue_key",
+                "door_key_name": key_name,
             },
         )
     ]
     logic.door_states = {0: {"state": "closed"}}
-    logic.collected_keys = {"blue_key"} if collected else set()
+    logic.collected_keys = {key_name} if collected else set()
     logic._pickup_things = []
     logic._levelchanger_things = []
     logic.current_hud_message = ""
@@ -180,7 +185,7 @@ def test_keyed_door_prompt_exposes_key_separately_from_text(collected, expected_
     logic._handle_interactions(False)
 
     assert logic.current_hud_message == expected_message
-    assert logic.current_hud_key_name == "blue_key"
+    assert logic.current_hud_key_name == key_name
 
 
 def _use_trigger(logic, label="Activate", radius=96.0, **brush_overrides):
