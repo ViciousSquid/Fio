@@ -1904,9 +1904,10 @@ class QtGameView(QOpenGLWidget):
                     self._cached_gun_hud[cache_key] = scaled
                 if active_weapon == 'gun2':
                     x = (viewport_width - scaled.width()) // 2
+                    y = (viewport_height - scaled.height()) // 2
                 else:
                     x = viewport_width - scaled.width() - 20
-                y = viewport_height - scaled.height()
+                    y = viewport_height - scaled.height()
                 painter.save()
                 painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
                 painter.drawPixmap(x, y, scaled)
