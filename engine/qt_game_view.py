@@ -1803,7 +1803,7 @@ class QtGameView(QOpenGLWidget):
                     self._cached_gun_hud[cache_key] = scaled
                 if active_weapon == 'gun2':
                     x = (viewport_width - scaled.width()) // 2
-                    y = (viewport_height - scaled.height()) // 2
+                    y = viewport_height - scaled.height()
                 elif active_weapon == 'sword':
                     x = 20
                     y = viewport_height - scaled.height()
