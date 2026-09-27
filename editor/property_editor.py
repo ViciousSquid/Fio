@@ -2659,8 +2659,6 @@ class PropertyEditor(QWidget):
         carry_cb.setToolTip(
             "Allow the player to carry and drop this Prop."
         )
-        form.addRow("", carry_cb)
-
         collectible_cb = _make_checkbox(
             "Collectible",
             bool(thing.properties.get('collect_enabled', False)),
@@ -2670,7 +2668,11 @@ class PropertyEditor(QWidget):
         collectible_cb.setToolTip(
             "Let the player collect this Prop as a gameplay item."
         )
-        form.addRow("", collectible_cb)
+
+        # Carryable and Collectible are the two primary Prop interaction
+        # switches; keep them together so the inspector reads as one compact
+        # interaction row rather than two unrelated properties.
+        form.addRow("", _hbox(carry_cb, collectible_cb, stretch=True, spacing=18))
 
         # Collection ------------------------------------------------------
         form.addRow(self._section("Collection"))
