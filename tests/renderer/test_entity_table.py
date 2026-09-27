@@ -102,14 +102,20 @@ def test_portal_and_light_are_the_cull_exempt_pair():
 
 def test_bigworld_settings_is_a_3d_billboard_entity():
     settings = BigWorldSettings(pos=[0.0, 0.0, 0.0])
-    table = _synced([settings])
+    table = EntityTable()
+    hidden = table.begin_frame([settings], epoch=1)
     bits = int(table.class_bits[0])
+    model_slots, sprite_slots = et.classify_slots(
+        table, np.arange(1, dtype=np.int32), hidden, False, False
+    )
 
     assert settings.properties["render_mode"] == "billboard"
     assert settings.properties["sprite_path"] == settings.pixmap_path
     assert settings.properties["sprite_size"] == [64.0, 64.0]
     assert bits & et.ENT_HAS_SPRITE
     assert bits & et.ENT_MODE_BILLBOARD
+    assert model_slots.tolist() == []
+    assert sprite_slots.tolist() == [0]
     assert et.sprite_candidates(settings)[0][1] == "bigworldsettings.png"
 
 
