@@ -2400,7 +2400,7 @@ class BenchmarkHost:
             # entering any potentially long live preparation step.
             self._last_running = True
             self.send({"event": "run_started"})
-            self._start(command.get("config") or {})
+            self._start_benchmark(command.get("config") or {})
             return
 
         if action == "cancel":
@@ -2414,7 +2414,7 @@ class BenchmarkHost:
                     "error": traceback.format_exc(),
                 })
 
-    def _start(self, config):
+    def _start_benchmark(self, config):
         self._last_result_count = 0
         self._last_current = None
         self._last_running = False
