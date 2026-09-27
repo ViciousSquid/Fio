@@ -1745,7 +1745,7 @@ class PropertyEditor(QWidget):
         tab_layout = QVBoxLayout(w)
         tab_layout.setContentsMargins(8, 8, 8, 8)
         tab_layout.setSpacing(4)
-        form = QFormLayout()
+        form = QFormLayout(w)
 
         if isinstance(thing, Model):
             model_mode = True
