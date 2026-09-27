@@ -28,6 +28,7 @@ from .prop_runtime import PropSession
 from .render_table import RenderTable
 from .entity_table import EntityTable
 from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
+from .effect_entity import Effect
 
 # Import Thing subclasses for type checking
 try:
@@ -1060,6 +1061,14 @@ class LogicThread(threading.Thread):
                 if b.get('_physics_body')
             ]
             self._refresh_collision_brushes_cache()
+
+            # Reset transient Effect playback so every Play Mode session
+            # starts its animations from a fresh runtime origin. The origin itself
+            # is stored on Effect objects and then projected into both render
+            # buffers, preventing A/B buffer phase jumps.
+            for thing in self.things:
+                if isinstance(thing, Effect):
+                    thing.reset_runtime()
 
             # Reset player stats
             self.player_health = 100
