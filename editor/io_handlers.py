@@ -202,7 +202,10 @@ def register_all_input_handlers(io_manager: IOManager):
             table.effect_active[slot],
             table.effect_alive[slot],
         )
-        table.refresh_rows([entity], [slot])
+        things = getattr(logic, 'things', None)
+        if things is None:
+            things = [entity]
+        table._resolve_entity_cold(slot, entity)
         (
             table.effect_spawn_time[slot],
             table.effect_elapsed[slot],
@@ -221,7 +224,10 @@ def register_all_input_handlers(io_manager: IOManager):
             slot = table.slot_of_id.get(entity.properties.get('id'))
             if slot is not None:
                 slot = int(slot)
-                table.refresh_rows([entity], [slot])
+                things = getattr(logic, 'things', None)
+                if things is None:
+                    things = table.things
+                table._resolve_entity_cold(slot, entity)
                 # A SetType-to-EXPLOSION switch is not a trigger. It leaves
                 # EXPLOSION dormant until Explode is received.
                 animated = table.effect_type[slot] != 1
