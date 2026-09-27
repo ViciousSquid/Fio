@@ -2267,6 +2267,17 @@ class PropertyEditor(QWidget):
         custom_label = QLabel("GIF:")
         form.addRow(custom_label, custom_widget)
 
+        loop_check = QCheckBox("Loop")
+        loop_check.setToolTip(
+            "Loop the CUSTOM GIF. Enabled by default, like FIRE and ORB."
+        )
+        loop_check.setChecked(bool(props.get("custom_loop", True)))
+        loop_check.toggled.connect(
+            lambda value: self.update_object_prop("custom_loop", bool(value))
+        )
+        loop_label = QLabel("Loop:")
+        form.addRow(loop_label, loop_check)
+
         def refresh_fire_texture():
             effect_type = str(
                 thing.properties.get("effect_type", "FIRE")
@@ -2280,6 +2291,9 @@ class PropertyEditor(QWidget):
             orb_combo.setVisible(show_orb)
             custom_label.setVisible(show_custom)
             custom_widget.setVisible(show_custom)
+            loop_label.setVisible(show_custom)
+            loop_check.setVisible(show_custom)
+            loop_check.setEnabled(show_custom)
             show_silent = effect_type == "EXPLOSION"
             silent_label.setVisible(show_silent)
             silent_check.setVisible(show_silent)
