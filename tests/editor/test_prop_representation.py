@@ -73,7 +73,7 @@ def test_the_default_model_is_not_applied_to_every_prop():
 def test_choosing_model_gives_the_prop_the_default_mesh(panel):
     prop = Prop(pos=[0, 0, 0])
     combo = representation_combo(panel, prop)
-    assert combo.currentText() == 'Billboard Sprite'
+    assert combo.currentText() == 'Sprite'
 
     combo.setCurrentText('Model')
 
@@ -97,7 +97,7 @@ def test_switching_back_to_billboard_restores_the_default_sprite(panel):
     prop = Prop(pos=[0, 0, 0])
     combo = representation_combo(panel, prop)
     combo.setCurrentText('Model')
-    combo.setCurrentText('Billboard Sprite')
+    combo.setCurrentText('Sprite')
 
     assert prop.properties['render_mode'] == 'billboard'
     assert prop.properties['sprite_path'] == 'assets/sprites/pickup.png'
