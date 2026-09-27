@@ -143,8 +143,11 @@ class BigWorldSession:
         #: rather than stopping at the world's content bounds — no map edge.
         self.terrain_infinite = bool(terrain_infinite)
         #: World units of terrain kept resident around the player. 0 ⇒ derive it
-        #: from the activation radius when the session starts.
-        self.terrain_stream_radius = float(terrain_stream_radius)
+        #: from the effective activation radius. Keep the authored value
+        #: separately so a derived radius can continue following visibility
+        #: changes without treating a runtime-derived value as explicit config.
+        self._terrain_stream_radius_authored = max(0.0, float(terrain_stream_radius))
+        self.terrain_stream_radius = self._terrain_stream_radius_authored
         self._started = False
         #: Last camera horizon applied to residency.
         self._visual_horizon = None
@@ -193,6 +196,17 @@ class BigWorldSession:
         )
         self.manager.activation_radius = activation
         self.manager.deactivation_radius = max(deactivation, activation)
+        # A zero terrain stream radius is the authored "derive from activation"
+        # sentinel. Keep that mode live as the camera horizon changes; an
+        # explicit terrain_stream_radius remains authoritative.
+        if self._terrain_stream_radius_authored <= 0.0:
+            self.terrain_stream_radius = activation
+            terrain = self._terrain
+            if terrain is not None:
+                try:
+                    terrain.set_streaming(True, self.terrain_stream_radius)
+                except Exception:
+                    pass
         self._visual_horizon = horizon
         if changed:
             self.tiers.set_radii(self.sim_near_radius, activation)
@@ -345,6 +359,16 @@ class BigWorldSession:
             # exception: residency must follow the new visual boundary.
             return False
 
+        # When both the player crosses a cell and the effective residency
+        # radius changes, re-file movers before the forced residency recompute.
+        # That forced update can drop their old cell from _active_thing_ids; once
+        # that happens the later refile pass cannot see them.
+        moved = None
+        if crossed:
+            moved = self.manager.refile_moved_things(pos)
+            if moved.changed:
+                self._apply_delta(moved)
+
         radius_delta = None
         if radius_changed:
             radius_delta = self.manager.update(pos, force=True)
@@ -356,16 +380,6 @@ class BigWorldSession:
         if not crossed:
             self.tiers.update(self.manager, px, pz)
             return bool(radius_delta and radius_delta.changed)
-
-        # Entities walk, and the cell one was authored in stops describing
-        # where it is. Re-file the resident movers *before* residency is
-        # recomputed, so an entity that travelled with the player is measured
-        # from where it now stands rather than parked with the cell it left.
-        # Bounded by the active set — a parked entity carries ``disabled``, so
-        # it cannot have moved.
-        moved = self.manager.refile_moved_things(pos)
-        if moved.changed:
-            self._apply_delta(moved)
 
         delta = self.manager.update(pos)
         if delta.changed:
@@ -382,7 +396,7 @@ class BigWorldSession:
         # restamping the entities of the ring whose distance band changed — and
         # on a crossing that changed no cell's residency, it is all that runs.
         self.tiers.update(self.manager, *_xz(pos))
-        return delta.changed or moved.changed
+        return delta.changed or bool(moved and moved.changed)
 
     def _apply_delta(self, delta) -> None:
         """Switch the world on/off for one activation delta.
