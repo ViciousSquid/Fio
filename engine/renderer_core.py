@@ -876,8 +876,8 @@ layout (location = 10) in vec4 iPayload;
         # non-instanced path. Keep that declaration and only inject the
         # position/size instance inputs that the instanced rewrite needs.
         instance_decls = (
-            'layout (location = 1) in vec3 iSpritePos;\\n'
-            'layout (location = 2) in vec2 iSpriteSize;\\n'
+            'layout (location = 1) in vec3 iSpritePos;\n'
+            'layout (location = 2) in vec2 iSpriteSize;\n'
         )
         if 'iSpritePos' not in source:
             source = source.replace(
