@@ -152,19 +152,6 @@ class PackageExporter:
                     if not found:
                         self.errors.append(f"Missing asset: {asset_name}")
 
-            # ---- 4.5 Bundle plugins the maps depend on ----
-            # A .fiopak must carry the plugins its maps use, or it will only load
-            # on the machine that built it. This is a first-class step of the
-            # export: inject the required plugin code and assets into the archive
-            # (see plugins.packaging.augment_fiopak), then drop the cosmetic
-            # "Missing asset" warnings for files the plugin bundle actually
-            # supplied — plugin assets live outside the assets/ tree scanned above.
-            bundled = self._bundle_plugins(output_path)
-            if bundled:
-                norm = {a.lower().lstrip("/") for a in bundled}
-                self.errors = [e for e in self.errors
-                               if not self._is_bundled_missing(e, norm)]
-
             # ---- 5. Report results ----
             if self.errors:
                 return True, self.errors   # package created but with warnings
@@ -176,56 +163,6 @@ class PackageExporter:
             if parent_widget:
                 QMessageBox.critical(parent_widget, "Export Error", error_msg)
             return False, self.errors
-
-    @staticmethod
-    def _log(message: str):
-        """Route an export message to the editor debug console, else stdout."""
-        try:
-            from editor.debug_console import debug_log
-            debug_log("Plugins", message)
-        except Exception:
-            print(f"[Plugins] {message}")
-
-    def _bundle_plugins(self, output_path) -> Set[str]:
-        """Inject the plugins the exported maps depend on into the .fiopak.
-
-        First-class, native step of the export: it makes the package
-        self-contained and portable. Guarded so a build without the optional
-        plugin system (or a headless/tool context where it can't import) simply
-        skips bundling rather than failing the export.
-
-        Returns the set of archive paths the plugin bundle added — empty when the
-        maps use no plugin entities or the plugin system is unavailable.
-        """
-        try:
-            from plugins.packaging import augment_fiopak
-        except Exception:
-            return set()  # plugin system not present in this build
-
-        try:
-            summary = augment_fiopak(output_path, log=self._log)
-        except Exception as exc:
-            self.errors.append(f"Plugin packaging failed: {exc}")
-            return set()
-
-        plugins = summary.get("plugins") or []
-        if plugins:
-            self._log("bundled plugin(s): " + ", ".join(plugins))
-        return set(summary.get("added_paths", set()))
-
-    @staticmethod
-    def _is_bundled_missing(error_text, bundled_norm) -> bool:
-        """True if *error_text* is a 'Missing asset: <p>' now supplied by a plugin."""
-        marker = "Missing asset:"
-        if marker not in str(error_text):
-            return False
-        asset = (str(error_text).split(marker, 1)[1].strip()
-                 .replace("\\", "/").lower().lstrip("/"))
-        if asset in bundled_norm:
-            return True
-        # Also match by basename in case the reference used a bare filename.
-        base = asset.rsplit("/", 1)[-1]
-        return any(b.rsplit("/", 1)[-1] == base for b in bundled_norm)
 
     def _crawl_campaign(self, start_map_path: str) -> None:
         """

@@ -695,7 +695,7 @@ class PropertyEditor(QWidget):
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.verticalScrollBar().setStyleSheet(_Style.SCROLL_V)
 
-        content = QWidget()
+        content = QWidget(scroll)
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
@@ -745,7 +745,7 @@ class PropertyEditor(QWidget):
         layout.addLayout(form)
 
         # Tabs
-        self.tab_widget = QTabWidget()
+        self.tab_widget = QTabWidget(content)
         self.tab_widget.setStyleSheet(_Style.TAB_BAR)
 
         is_trigger = brush.get('is_trigger', False)
@@ -1662,7 +1662,7 @@ class PropertyEditor(QWidget):
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.verticalScrollBar().setStyleSheet(_Style.SCROLL_V)
 
-        content = QWidget()
+        content = QWidget(scroll)
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
@@ -1710,7 +1710,7 @@ class PropertyEditor(QWidget):
 
         layout.addLayout(name_layout)
 
-        self.tab_widget = QTabWidget()
+        self.tab_widget = QTabWidget(content)
         self.tab_widget.setStyleSheet(_Style.TAB_BAR)
 
         props_tab = self._create_thing_properties_tab(thing)
@@ -1741,11 +1741,12 @@ class PropertyEditor(QWidget):
             self._capture_page_bindings(scroll)
 
     def _create_thing_properties_tab(self, thing) -> QWidget:
-        w = QWidget()
+        w = QWidget(self.tab_widget)
         tab_layout = QVBoxLayout(w)
         tab_layout.setContentsMargins(8, 8, 8, 8)
         tab_layout.setSpacing(4)
         form = QFormLayout()
+        tab_layout.addLayout(form)
 
         if isinstance(thing, Model):
             model_mode = True
@@ -2003,9 +2004,6 @@ class PropertyEditor(QWidget):
                 property_keys=primary_properties,
             )
 
-        if form.rowCount() > 0:
-            tab_layout.addLayout(form)
-
         # Type-specific grouped editors (already visually grouped).
         if isinstance(thing, PathNode):
             self._build_pathnode_group(tab_layout, thing)
@@ -2049,7 +2047,7 @@ class PropertyEditor(QWidget):
         if adv_form.rowCount() == 0:
             return None
 
-        w = QWidget()
+        w = QWidget(self.tab_widget)
         tab_layout = QVBoxLayout(w)
         tab_layout.setContentsMargins(8, 8, 8, 8)
         tab_layout.setSpacing(4)
@@ -2068,7 +2066,7 @@ class PropertyEditor(QWidget):
 
     def _create_prop_physics_tab(self, thing):
         """Render the complete Prop physics controls on a dedicated tab."""
-        w = QWidget()
+        w = QWidget(self.tab_widget)
         layout = QVBoxLayout(w)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(4)
@@ -2708,7 +2706,6 @@ class PropertyEditor(QWidget):
         weapon_labels = {
             'gun1': 'Gun 1',
             'gun2': 'Gun 2',
-            'sword': 'Sword',
             'cig': 'Cigarette',
         }
         weapon_combo = _make_combo(
@@ -2931,7 +2928,6 @@ class PropertyEditor(QWidget):
         weapon_label = {
             'gun1': 'Gun 1',
             'gun2': 'Gun 2',
-            'sword': 'Sword',
             'cig': 'Cigarette',
         }.get(weapon, 'Gun 1')
         self._prop_weapon_combo.blockSignals(True)

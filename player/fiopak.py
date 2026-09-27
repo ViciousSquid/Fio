@@ -63,6 +63,11 @@ class FioPackage:
         self._zf = zf
         self._source = source
         self._names = set(zf.namelist())
+        if any(_normalize(n).startswith("plugins/") for n in self._names):
+            raise PackageError(
+                "Bundled plugins are not permitted in .fiopak archives; "
+                "install required plugins separately."
+            )
         # Index entries by basename so a map that references an asset by bare
         # filename ("floor.png") resolves to wherever the exporter filed it
         # ("assets/textures/floor.png"). First match wins deterministically.
@@ -103,7 +108,11 @@ class FioPackage:
             zf = zipfile.ZipFile(io.BytesIO(data), "r")
         except zipfile.BadZipFile as exc:
             raise PackageError("Not a valid .fiopak (bad zip)") from exc
-        return cls(zf, source=source)
+        try:
+            return cls(zf, source=source)
+        except Exception:
+            zf.close()
+            raise
 
     # ------------------------------------------------------------------
     # Context manager / lifecycle
@@ -155,17 +164,8 @@ class FioPackage:
 
     @property
     def required_plugins(self) -> List[str]:
-        """Names of plugins this package depends on (from the manifest).
-
-        Populated by the exporter when a map uses plugin-provided entities; the
-        plugins' code/assets are bundled under ``plugins/`` in the archive. Use
-        :func:`plugins.packaging.load_package_plugins` on the extracted package
-        root to make them available.
-        """
+        """Names of separately-installed plugins this package depends on."""
         return list(self._manifest.get("plugins", []) or [])
-
-    def has_bundled_plugins(self) -> bool:
-        return any(n.startswith("plugins/") for n in self._names)
 
     # ------------------------------------------------------------------
     # Map discovery
@@ -181,7 +181,6 @@ class FioPackage:
             for n in self._names
             if n.lower().endswith(".json")
             and _basename(n) not in _MANIFEST_NAMES
-            and not _normalize(n).startswith("plugins/")
         ]
         return sorted(maps)
 

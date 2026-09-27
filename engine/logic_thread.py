@@ -3870,65 +3870,80 @@ class LogicThread(threading.Thread):
 
     def _update_hud_health_alpha(self, now: float) -> float:
         """Advance the health HUD fade state machine and return its alpha."""
-        health = self.player_health
-        if self._hud_health_last_value is None:
-            self._hud_health_last_value = health
 
-        # Any health-value change immediately starts the fast fade-in. If the
-        # display is already fading out, continue smoothly from its current
-        # opacity rather than jumping.
-        if health != self._hud_health_last_value:
+        def _sample(at):
+            phase = self._hud_health_fade_phase
+            if phase == "in":
+                started = self._hud_health_fade_started
+                if started is None:
+                    self._hud_health_alpha = 1.0
+                    self._hud_health_fade_from = 1.0
+                    self._hud_health_fade_started = at
+                    self._hud_health_fade_phase = "out"
+                    return self._hud_health_alpha
+
+                elapsed = max(0.0, at - started)
+                if elapsed < self._hud_health_fade_in_duration:
+                    t = elapsed / self._hud_health_fade_in_duration
+                    self._hud_health_alpha = (
+                        self._hud_health_fade_from
+                        + (1.0 - self._hud_health_fade_from) * t
+                    )
+                    return self._hud_health_alpha
+
+                self._hud_health_alpha = 1.0
+                self._hud_health_fade_from = 1.0
+                self._hud_health_fade_phase = "out"
+                out_elapsed = elapsed - self._hud_health_fade_in_duration
+            elif phase == "out":
+                started = self._hud_health_fade_started
+                if started is None:
+                    self._hud_health_alpha = 0.5
+                    self._hud_health_fade_phase = "idle"
+                    return self._hud_health_alpha
+                out_elapsed = max(
+                    0.0,
+                    at - started - self._hud_health_fade_in_duration,
+                )
+            else:
+                self._hud_health_alpha = 0.5
+                return self._hud_health_alpha
+
+            t = max(
+                0.0,
+                min(
+                    1.0,
+                    out_elapsed / self._hud_health_fade_out_duration,
+                ),
+            )
+            self._hud_health_alpha = 1.0 - (0.5 * t)
+            if t >= 1.0:
+                self._hud_health_alpha = 0.5
+                self._hud_health_fade_started = None
+                self._hud_health_fade_phase = "idle"
+            return self._hud_health_alpha
+
+        health = self.player_health
+        health_changed = (
+            self._hud_health_last_value is not None
+            and health != self._hud_health_last_value
+        )
+
+        # A health change restarts the fast fade from the opacity that was
+        # actually visible at the moment of the change. Sample the old phase
+        # first; otherwise a second change during fade-out would incorrectly
+        # restart from the stale alpha left by the previous call.
+        if health_changed:
+            _sample(now)
             self._hud_health_last_value = health
             self._hud_health_fade_started = now
             self._hud_health_fade_from = self._hud_health_alpha
             self._hud_health_fade_phase = "in"
 
-        phase = self._hud_health_fade_phase
-        if phase == "in":
-            started = self._hud_health_fade_started
-            if started is None:
-                self._hud_health_alpha = 1.0
-            else:
-                t = max(
-                    0.0,
-                    min(
-                        1.0,
-                        (now - started) / self._hud_health_fade_in_duration,
-                    ),
-                )
-                self._hud_health_alpha = (
-                    self._hud_health_fade_from
-                    + (1.0 - self._hud_health_fade_from) * t
-                )
-                if t >= 1.0:
-                    self._hud_health_alpha = 1.0
-                    self._hud_health_fade_started = now
-                    self._hud_health_fade_from = 1.0
-                    self._hud_health_fade_phase = "out"
+        elif self._hud_health_last_value is None:
+            self._hud_health_last_value = health
 
-        elif phase == "out":
-            started = self._hud_health_fade_started
-            if started is None:
-                self._hud_health_alpha = 0.5
-                self._hud_health_fade_phase = "idle"
-            else:
-                t = max(
-                    0.0,
-                    min(
-                        1.0,
-                        (now - started) / self._hud_health_fade_out_duration,
-                    ),
-                )
-                self._hud_health_alpha = 1.0 - (0.5 * t)
-                if t >= 1.0:
-                    self._hud_health_alpha = 0.5
-                    self._hud_health_fade_started = None
-                    self._hud_health_fade_phase = "idle"
-
-        else:
-            self._hud_health_alpha = 0.5
-
-        return self._hud_health_alpha
+        return _sample(now)
 
     def _prepare_render_state(self):
         write_state = self.game_state.get_write_state()

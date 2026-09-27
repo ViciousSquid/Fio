@@ -34,8 +34,8 @@ class FioPlayerApp:
         self.host = None
         self.map_data = None
 
-        # Plugin runtime (loads bundled plugins from the package and drives their
-        # per-tick gameplay). Inert unless the package actually needs a plugin.
+        # Plugin runtime loads plugins already installed with the player.
+        # A .fiopak never supplies executable plugin code.
         self.plugin_host = PlayerPluginHost()
         self.hud_message = ""
 
@@ -72,9 +72,6 @@ class FioPlayerApp:
 
         return DesktopHost(self.config, callbacks)
 
-    # ------------------------------------------------------------------
-    # Host callbacks
-    # ------------------------------------------------------------------
     def _on_gl_ready(self, host) -> None:
         from .render.renderer import GLESRenderer
 
@@ -90,7 +87,7 @@ class FioPlayerApp:
             self.map_data = self.package.load_start_map()
             self._place_camera_at_spawn()
             self.renderer.load_scene(self.map_data, self.package)
-            # Load and start any plugins this package's map depends on.
+            # Load and start plugins already installed with this player build.
             try:
                 if self.plugin_host.load(self.package):
                     self.plugin_host.build_and_start(self.map_data)

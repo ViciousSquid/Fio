@@ -210,3 +210,14 @@ python -m unittest discover -s player/tests -p "test_*.py" -v
 The suite is stdlib-only (no pygame/numpy/GPU needed) and builds `.fiopak`
 fixtures in memory, including one packaged from a real repository map when
 `maps/` is present.
+
+## `.fiopak` plugin boundary
+
+A `.fiopak` is a portable **world container only**. It cannot contain
+plugins or executable Python code.
+
+The player rejects any archive containing a top-level `plugins/` entry before
+the manifest is loaded. Plugin dependencies may be named in `metadata.json`,
+but the corresponding plugin must already be installed with the player runtime.
+There is no extraction, permission prompt, or import path for plugin code from
+a `.fiopak`.

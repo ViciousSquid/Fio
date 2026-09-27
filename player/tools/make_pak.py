@@ -102,28 +102,6 @@ def main(argv=None) -> int:
     written, warnings = build_pak(args.map, args.output, args.root, title)
     print(f"[make_pak] wrote {args.output}: 1 map + {written} asset(s)")
 
-    # If the map uses plugin entities, bundle those plugins (code + assets) into
-    # the package so it is self-contained. Guarded: if the plugin system isn't
-    # importable this is simply skipped. Bundling supplies the plugin's own
-    # assets, so drop any "missing asset" warnings the base scan raised for them.
-    try:
-        import sys as _sys
-        if os.path.abspath(args.root) not in _sys.path:
-            _sys.path.insert(0, os.path.abspath(args.root))
-        from plugins.manager import load_plugins
-        from plugins.packaging import augment_fiopak
-        load_plugins()
-        summary = augment_fiopak(args.output)
-        added = {a.lower() for a in summary.get("added_paths", set())}
-        if summary.get("plugins"):
-            print(f"[make_pak] bundled plugin(s): {', '.join(summary['plugins'])}")
-            warnings = [w for w in warnings
-                        if not any(w.lower().endswith(a) or a.endswith(
-                            w.split('missing asset:')[-1].strip().lower())
-                            for a in added)]
-    except Exception:
-        pass  # plugin system unavailable — plain package, no bundling.
-
     for w in warnings:
         print(f"[make_pak] warning: {w}")
     return 0

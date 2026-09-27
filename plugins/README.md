@@ -125,8 +125,7 @@ tiny bootstrap in `editor/__init__.py`.
 | `engine/logic_thread.py` | **Native** plugin hooks: `attach_runtime` (`__init__`), play-start/stop (`set_play_mode`), per-tick dispatch (`_tick_play_mode`). All guarded and optional. |
 | `editor/__init__.py` | Bootstrap: `load_plugins()` + `integration.apply()`, run once when the editor package is first imported (before any map loads). |
 | [`integration.py`](integration.py) | Installs the editor hooks: auto-enable/disable of disabled-by-default plugins onto `EditorState` (`load_from_data` enables for a level's entities, `clear_scene` reverts on File ▸ New); a **Plugins ▸ &lt;plugin&gt;** submenu onto `View2D`'s right-click menu; and a top-level **Plugins** menu onto `Ui_MainWindow`. |
-| `editor/package_exporter.py` | **Native** plugin bundling: `PackageExporter.export` calls `plugins.packaging.augment_fiopak` as a first-class final step once the base `.fiopak` is written. Guarded, so a build without the plugin system just skips it. |
-| [`packaging.py`](packaging.py) | Bundles the plugins a `.fiopak`'s maps depend on (code + assets + manifest) so exported packages are self-contained. |
+| `editor/package_exporter.py` | Exports world/maps/assets only; plugin code is never added to the archive. |
 
 > The right-click **Plugins ▸ &lt;plugin&gt;** submenu is injected by temporarily
 > swapping `QMenu.exec_` on the class while the 2D view builds its menu. That
@@ -284,13 +283,15 @@ are always shown).
 
 ---
 
-## Packaging plugins into a [`.fiopak`](https://github.com/ViciousSquid/Fio/wiki/.fiopak-archive)
+## Plugins and `.fiopak`
 
-`.fiopak` exports are **plugin-aware**. When you export a package (File →
-Export…), the exporter scans the maps it bundles, works out which plugins their
-entities come from, and injects those plugins — **code and assets** — plus the
-plugin-system core into the archive, recording them in `metadata.json` under
-`"plugins"`. The package is then self-contained and loads on another machine.
+A `.fiopak` is a portable **world container**, not a code distribution.
+Plugin code is never copied into a `.fiopak`.
+
+A package may record plugin dependency names in `metadata.json`, but the named
+plugins must already be installed in the player/editor environment. The player
+rejects any archive containing a top-level `plugins/` payload before loading its
+manifest. This removes executable-code loading from world containers entirely.
 
 - Plugin assets keep their repo-relative paths (e.g.
   `plugins/tidy/assets/tidy_object.obj`), so a map's `model_path` resolves
@@ -308,14 +309,6 @@ plugin-system core into the archive, recording them in `metadata.json` under
 - The player side exposes the dependency: `FioPackage.required_plugins` reads the
   manifest list, and `plugins.packaging.load_package_plugins(root)` loads the
   bundled plugins from an extracted package.
-
-The mechanics live in [`packaging.py`](packaging.py) (`augment_fiopak`,
-`load_package_plugins`). Bundling is a native step of
-[`editor/package_exporter.py`](../editor/package_exporter.py) —
-`PackageExporter.export` calls `augment_fiopak` itself once the base archive is
-written; it is **not** monkey-patched on by `integration.py`.
-
----
 
 ## Running plugins outside the editor
 
