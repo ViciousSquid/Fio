@@ -28,8 +28,8 @@ def panel(qt_app):
 def collect_key_combo(panel, prop):
     panel.current_object = prop
     panel.populate_for_thing(prop)
-    assert panel._collect_key_widgets, "the Prop inspector has no key control"
-    return panel._collect_key_widgets[0][1]
+    assert panel._prop_key_combo is not None, "the Prop inspector has no key control"
+    return panel._prop_key_combo
 
 
 def test_key_prop_exposes_a_selectable_colour(panel):
@@ -41,10 +41,12 @@ def test_key_prop_exposes_a_selectable_colour(panel):
 
     assert combo.isVisibleTo(panel)
     assert combo.isEnabled()
-    assert [combo.itemText(i) for i in range(combo.count())] == list(Prop.KEY_NAMES)
-    assert combo.currentText() == Prop.DEFAULT_KEY_NAME
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "Blue Key", "Red Key", "Yellow Key"
+    ]
+    assert combo.currentText() == "Blue Key"
 
-    combo.setCurrentText("red_key")
+    combo.setCurrentText("Red Key")
 
     assert prop.properties["collect_key_name"] == "red_key"
     assert prop.properties["sprite_path"] == "assets/sprites/redkey.png"
@@ -66,5 +68,5 @@ def test_switching_collection_type_to_key_enables_the_colour_selector(panel):
     assert combo.isVisibleTo(panel)
     assert combo.isEnabled()
 
-    combo.setCurrentText("yellow_key")
+    combo.setCurrentText("Yellow Key")
     assert prop.properties["collect_key_name"] == "yellow_key"

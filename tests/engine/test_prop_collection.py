@@ -99,6 +99,7 @@ def _logic_for(prop):
             "player_health": 100,
             "player_max_health": 100,
             "player_ammo": 0,
+            "active_weapon": "gun1",
             "gun2_obtained": False,
             "collected_keys": set(),
             "current_hud_message": "",
@@ -139,22 +140,8 @@ def test_collect_prop_equips_cig_weapon():
     assert logic.active_weapon == "cig"
 
 
-def test_weapon_prop_sword_uses_sword_sprite_and_equips_sword():
-    prop = Prop(properties={
-        "collect_enabled": True,
-        "collect_type": "weapon",
-        "collect_weapon": "sword",
-    })
-    assert prop.get_collect_sprite_path() == "assets/sprites/sword.png"
-
-    logic = _logic_for(prop)
-    session = PropSession(logic)
-
-    assert session.collect_prop(prop) is True
-    assert logic.active_weapon == "sword"
-
-
-def test_sword_is_a_non_firing_weapon():
+def test_cigarette_is_a_non_firing_weapon():
     from engine.monster_constants import NON_FIRING_WEAPONS
 
-    assert "sword" in NON_FIRING_WEAPONS
+    assert "cig" in NON_FIRING_WEAPONS
+    assert "sword" not in NON_FIRING_WEAPONS

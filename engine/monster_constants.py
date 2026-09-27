@@ -124,7 +124,7 @@ WEAPON_SHOOT_SOUND = {
 # firing them does nothing — no hitscan or projectile, no muzzle-flash
 # animation, and no sound.  These weapons have no HUD_flash sprite and are
 # intentionally absent from WEAPON_DAMAGE and WEAPON_SHOOT_SOUND above.
-NON_FIRING_WEAPONS = {'cig', 'sword'}
+NON_FIRING_WEAPONS = {'cig'}
 
 
 # ---------------------------------------------------------------------------

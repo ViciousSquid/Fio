@@ -695,7 +695,7 @@ class PropertyEditor(QWidget):
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.verticalScrollBar().setStyleSheet(_Style.SCROLL_V)
 
-        content = QWidget()
+        content = QWidget(scroll)
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
@@ -745,7 +745,7 @@ class PropertyEditor(QWidget):
         layout.addLayout(form)
 
         # Tabs
-        self.tab_widget = QTabWidget()
+        self.tab_widget = QTabWidget(content)
         self.tab_widget.setStyleSheet(_Style.TAB_BAR)
 
         is_trigger = brush.get('is_trigger', False)
@@ -2708,7 +2708,6 @@ class PropertyEditor(QWidget):
         weapon_labels = {
             'gun1': 'Gun 1',
             'gun2': 'Gun 2',
-            'sword': 'Sword',
             'cig': 'Cigarette',
         }
         weapon_combo = _make_combo(
@@ -2931,7 +2930,6 @@ class PropertyEditor(QWidget):
         weapon_label = {
             'gun1': 'Gun 1',
             'gun2': 'Gun 2',
-            'sword': 'Sword',
             'cig': 'Cigarette',
         }.get(weapon, 'Gun 1')
         self._prop_weapon_combo.blockSignals(True)

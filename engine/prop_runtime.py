@@ -548,7 +548,7 @@ class PropSession:
                 float(state.get("velocity", 0.0)) + self.DROP_GRAVITY * delta,
             )
             old_y = float(prop.pos[1])
-            new_y = old_y + velocity * delta
+            new_y = old_y - velocity * delta
             half_height = 16.0
             try:
                 size = prop.properties.get("sprite_size", [32.0, 32.0])

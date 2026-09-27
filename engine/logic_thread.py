@@ -3902,7 +3902,6 @@ class LogicThread(threading.Thread):
                 )
                 if t >= 1.0:
                     self._hud_health_alpha = 1.0
-                    self._hud_health_fade_started = now
                     self._hud_health_fade_from = 1.0
                     self._hud_health_fade_phase = "out"
 
@@ -3912,11 +3911,15 @@ class LogicThread(threading.Thread):
                 self._hud_health_alpha = 0.5
                 self._hud_health_fade_phase = "idle"
             else:
+                out_elapsed = max(
+                    0.0,
+                    now - started - self._hud_health_fade_in_duration,
+                )
                 t = max(
                     0.0,
                     min(
                         1.0,
-                        (now - started) / self._hud_health_fade_out_duration,
+                        out_elapsed / self._hud_health_fade_out_duration,
                     ),
                 )
                 self._hud_health_alpha = 1.0 - (0.5 * t)
