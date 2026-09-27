@@ -5,7 +5,7 @@ Demonstrates how to attach a light entity to a moving brush to create a moving l
 
 ### `Key_Test.json`
 
-The player must pick up the blue key to open the blue door - _demonstrates the **pickup entity** and **door brush**_
+The player must pick up the blue key to open the blue door - _demonstrates a collectible **Prop** and a **door brush**_
 
 ### `Office_Corridor.json`
 
