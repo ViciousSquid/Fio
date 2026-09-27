@@ -989,7 +989,6 @@ class BenchmarkRunner:
         metrics["benchmark_live"] = True
 
         if label == "monster_chaos_witness":
-            self._remove_monster_chaos_overlay()
             chaos_info = dict(getattr(self, "_monster_chaos_info", {}) or {})
             monsters = [
                 thing for thing in self.main_window.state.things
@@ -999,87 +998,93 @@ class BenchmarkRunner:
                 1 for monster in monsters
                 if not monster.properties.get("dead", False)
             )
-            aggro_count = int(getattr(self, "_monster_chaos_aggro_count", 0))
+            team_counts = {
+                team: sum(
+                    1 for monster in monsters
+                    if str(monster.properties.get("team", "")) == team
+                )
+                for team in ("team1", "team2")
+            }
+            human_count = sum(
+                1 for monster in monsters
+                if str(monster.properties.get("monster_type", "")) == "human"
+            )
+            flying_count = sum(
+                1 for monster in monsters
+                if str(monster.properties.get("monster_type", "")) == "flying"
+            )
+            decision_seconds = float(
+                metrics.get("measurement_duration_s", 0.0)
+            )
             ai_decisions = int(getattr(self, "_monster_chaos_ai_decisions", 0))
             ai_updates = int(getattr(self, "_monster_chaos_ai_updates", 0))
-            witness_elapsed_s = float(metrics.get("measurement_duration_s", 15.0))
-            ai_decisions_per_second = (
-                ai_decisions / witness_elapsed_s
-                if witness_elapsed_s > 0.0 else 0.0
+            decisions_per_second = (
+                ai_decisions / decision_seconds
+                if decision_seconds > 0.0 else 0.0
             )
+            ramp_elapsed = max(
+                0.0,
+                float(getattr(self, "_monster_chaos_measurement_started", 0.0))
+                - float(getattr(self, "_phase_started", 0.0)),
+            )
+
             metrics.update({
                 "test": label,
                 "status": "passed",
                 "description": (
-                    "15-second live monster chaos witness: seed 43, "
-                    "50 mixed human/flying monsters in two hostile teams starting on opposite sides and converging on a central PathNode, "
-                    "followed by seeded random infighting."
+                    "Live 100-monster witness in a 1024x1024x1024 room: "
+                    "5 team1 monsters at the far end, 5 team2 monsters after 0.5s, "
+                    "then one random team/type every 0.25s to 100, followed by a 5-second decision measurement."
                 ),
-                "seed": "43",
+                "seed": chaos_info.get("seed", "43"),
+                "room_size": chaos_info.get("room_size", [1024.0, 1024.0, 1024.0]),
                 "monster_count": len(monsters),
-                "human_count": int(chaos_info.get("human_count", 0)),
-                "flying_count": int(chaos_info.get("flying_count", 0)),
-                "team_counts": dict(chaos_info.get("team_counts", {})),
-                "pathnode_name": chaos_info.get(
-                    "pathnode_name", "ChaosPathNode"
-                ),
-                "aggro_count": aggro_count,
-                "aggro_delay_s": float(
-                    getattr(self, "_monster_chaos_aggro_delay", 2.0)
-                ),
+                "team_counts": team_counts,
+                "human_count": human_count,
+                "flying_count": flying_count,
+                "spawn_ramp_duration_s": ramp_elapsed,
+                "decision_window_s": decision_seconds,
                 "ai_decisions": ai_decisions,
                 "ai_update_calls": ai_updates,
-                "ai_decisions_per_second": ai_decisions_per_second,
-                "witness_duration_s": witness_elapsed_s,
+                "monster_decisions_per_second": decisions_per_second,
                 "alive_monsters": alive,
                 "dead_monsters": max(0, len(monsters) - alive),
             })
+
             logic = getattr(view, "logic_thread", None)
             self._restore_monster_chaos_ai_counter(logic)
             if logic is not None:
                 logic.notarget = self._original_notarget
             if view.play_mode:
                 self._bench.finish_live_monster_test(self.main_window)
+
             self._results.append(metrics)
             self.export_button.setEnabled(True)
             self.export_button.setVisible(True)
             self._append(
-                '<div style="background:#222; border:1px solid #555; padding:12px; '
-                'margin:4px 0 10px 0;">'
-                '<div style="font-size:15px; font-weight:bold; color:#eeeeee;">'
-                'Monster chaos witness</div>'
-                '<div style="color:#aaa; margin-top:4px;">'
-                'Seed 43 &nbsp; • &nbsp; 50 monsters &nbsp; • &nbsp; 30 human / 20 flying &nbsp; • &nbsp; PathNode %s'
+                '<div style="background:#222; border:1px solid #555; padding:12px; margin:4px 0 10px 0;">'
+                '<div style="font-size:15px; font-weight:bold; color:#eeeeee;">Monster chaos witness</div>'
+                '<div style="color:#aaa; padding-top:8px;">'
+                '<span style="color:#63d471; font-size:28px; font-weight:bold;">100 monsters:</span> '
+                '<span style="color:#ff9a32; font-size:34px; font-weight:bold;">%.0f monster decisions/s</span>'
                 '</div>'
-                '<table cellspacing="0" cellpadding="0" style="margin-top:10px;">'
-                '<tr><td width="24" rowspan="2" bgcolor="#63d471"></td>'
-                '<td height="2" bgcolor="#63d471" style="font-size:2px;"></td></tr>'
-                '<tr><td style="padding:6px 16px 2px 12px;">'
-                '<span style="font-size:25px; font-weight:bold; color:#63d471;">'
-                'Infighting:</span>'
-                '<span style="font-size:36px; font-weight:bold; color:#ff9a32; '
-                'margin-left:10px;">%d fighters</span>'
-                '</td></tr></table>'
-                '<div style="color:#aaa; padding:4px 0;">'
-                '%d alive &nbsp; • &nbsp; %d dead &nbsp; • &nbsp; '
-                '%.1f second witness &nbsp; • &nbsp; %d AI decisions &nbsp; • &nbsp; '
-                '%.0f decisions/s'
-                '</div></div>'
+                '<div style="color:#aaa; padding-top:6px;">'
+                '%d AI decisions &nbsp; • &nbsp; %.2f second decision window &nbsp; • &nbsp; '
+                '%d human / %d flying &nbsp; • &nbsp; team1 %d / team2 %d &nbsp; • &nbsp; %d alive'
+                '</div>'
+                '</div>'
                 % (
-                    self._html_escape(
-                        chaos_info.get("pathnode_name", "ChaosPathNode")
-                    ),
-                    aggro_count,
-                    alive,
-                    max(0, len(monsters) - alive),
-                    witness_elapsed_s,
+                    decisions_per_second,
                     ai_decisions,
-                    ai_decisions_per_second,
+                    decision_seconds,
+                    human_count,
+                    flying_count,
+                    team_counts["team1"],
+                    team_counts["team2"],
+                    alive,
                 )
             )
             QApplication.processEvents()
-            self._monster_chaos_aggro_injected = False
-            self._monster_chaos_fighters = []
             self._append_test_end_separator()
             self._begin_next()
             return
@@ -1354,7 +1359,7 @@ class BenchmarkRunner:
     
 
     def _install_monster_chaos_ai_counter(self, logic):
-        """Count actual per-monster AI-loop decisions without editing engine code."""
+        """Count real per-monster MonsterAI decisions during the 5-second witness."""
         import types
 
         monster_ai = getattr(logic, "monster_ai", None)
@@ -1368,22 +1373,18 @@ class BenchmarkRunner:
         self._monster_chaos_ai_counting = False
 
         def counted_update(ai_self, delta):
-            player = getattr(ai_self.lt, "player", None)
-            if (
-                self._monster_chaos_ai_counting
-                and player is not None
-                and not getattr(ai_self.lt, "player_dead", False)
-            ):
-                monsters = getattr(ai_self.lt, "_monster_things", None)
-                if monsters is None:
-                    from editor.things import Monster
-                    monsters = [
-                        thing for thing in getattr(ai_self.lt, "things", ())
-                        if isinstance(thing, Monster)
-                    ]
-                # The chaos witness keeps all 50 monsters active; one AI
-                # update therefore represents one decision per Monster row.
-                self._monster_chaos_ai_decisions += len(monsters)
+            if self._monster_chaos_ai_counting:
+                monsters = getattr(ai_self.lt, "_monster_things", None) or ()
+                active_count = 0
+                for monster in monsters:
+                    props = getattr(monster, "properties", {})
+                    if (
+                        not props.get("dead", False)
+                        and not props.get("hidden", False)
+                        and not props.get("disabled", False)
+                    ):
+                        active_count += 1
+                self._monster_chaos_ai_decisions += active_count
                 self._monster_chaos_ai_updates += 1
             return original(delta)
 
@@ -1401,176 +1402,103 @@ class BenchmarkRunner:
             monster_ai.update = original
         self._monster_chaos_ai_original_update = None
 
-    def _show_monster_chaos_overlay(self, seconds):
-        """Display the temporary bottom-right witness countdown."""
-        from PyQt5.QtWidgets import QLabel
-
-        view = self.main_window.view_3d
-        self._remove_monster_chaos_overlay()
-
-        overlay = QLabel(view)
-        overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        overlay.setAlignment(Qt.AlignCenter)
-        overlay.setStyleSheet(
-            "QLabel {"
-            "background: rgba(23,23,23,225);"
-            "border: 2px solid #63d471;"
-            "border-radius: 4px;"
-            "color: #ff9a32;"
-            "padding: 5px 10px;"
-            "}"
-        )
-        overlay.setFixedSize(154, 92)
-        overlay.show()
-        overlay.raise_()
-        self._monster_chaos_overlay = overlay
-        self._update_monster_chaos_overlay(seconds)
-
-    def _update_monster_chaos_overlay(self, seconds):
-        overlay = self._monster_chaos_overlay
-        view = self.main_window.view_3d
-        if overlay is None:
-            return
-
-        remaining = max(0.0, float(seconds))
-        title = (
-            "INFIGHTING"
-            if self._monster_chaos_aggro_injected
-            else "MONSTER CHAOS"
-        )
-        overlay.setText(
-            "<div style='font-size:12px; font-weight:bold; color:#63d471;'>%s</div>"
-            "<div style='font-size:40px; line-height:42px; font-weight:bold; color:#ff9a32;'>%.1f</div>"
-            "<div style='font-size:11px; color:#aaaaaa;'>seconds</div>"
-            % (title, remaining)
-        )
-        overlay.move(
-            max(0, view.width() - overlay.width() - 16),
-            max(0, view.height() - overlay.height() - 16),
-        )
-        overlay.raise_()
-
-    def _remove_monster_chaos_overlay(self):
-        overlay = self._monster_chaos_overlay
-        self._monster_chaos_overlay = None
-        if overlay is None:
-            return
-        try:
-            overlay.hide()
-            overlay.deleteLater()
-        except Exception:
-            pass
-
-    def _inject_monster_chaos_aggro(self):
-        """Give a random subset direct monster targets once the mob has converged."""
-        import random
-
-        monsters = [
-            thing for thing in self.main_window.state.things
-            if str(thing.properties.get("type", "")).lower() == "monster"
-            and not thing.properties.get("dead", False)
-        ]
-        if len(monsters) < 4:
-            return 0
-
-        rng = random.Random("43")
-        fighter_count = min(8, max(4, len(monsters) // 3))
-        fighters = rng.sample(monsters, fighter_count)
-        rng.shuffle(fighters)
-
-        # Release every monster from the PathNode target override. The
-        # production AI can then use team-based enemy targeting for the full
-        # mob, while the seeded subset gets direct deterministic aggro.
-        for monster in monsters:
-            monster.properties.pop("target_name", None)
-            monster.properties["awake"] = True
-
-        for source in fighters:
-            source.properties["_aggro_target"] = None
-
-        for index, source in enumerate(fighters):
-            target = fighters[(index + 1) % len(fighters)]
-            source.properties["_aggro_target"] = id(target)
-
-        self._monster_chaos_fighters = fighters
-        self._monster_chaos_aggro_count = len(fighters)
-        self._monster_chaos_aggro_injected = True
-        self._append(
-            "  INFIGHTING! Injected %d seeded random monster-vs-monster "
-            "aggro targets."
-            % len(fighters)
-        )
-        return len(fighters)
-
-    def _maintain_monster_chaos_aggro(self):
-        """Retarget a surviving chaos fighter when its previous opponent dies."""
-        import random
-
-        fighters = [
-            thing for thing in self._monster_chaos_fighters
-            if thing in self.main_window.state.things
-            and not thing.properties.get("dead", False)
-        ]
-        self._monster_chaos_fighters = fighters
-        if len(fighters) < 2:
-            return
-
-        rng = random.Random("43-retarget")
-        for source in fighters:
-            target = None
-            aggro_id = source.properties.get("_aggro_target")
-            if aggro_id is not None:
-                for candidate in fighters:
-                    if id(candidate) == aggro_id:
-                        target = candidate
-                        break
-            if target is None or target is source:
-                candidates = [
-                    candidate for candidate in fighters if candidate is not source
-                ]
-                if candidates:
-                    target = rng.choice(candidates)
-                    source.properties["_aggro_target"] = id(target)
-
     def _tick_monster_chaos_witness(self, now, app, view):
-        elapsed = max(0.0, now - self._phase_started)
+        """Run the staged live population ramp, then measure 100 monsters for 5 seconds."""
+        phase = getattr(self, "_monster_chaos_phase", "")
+        rng = getattr(self, "_monster_chaos_rng", None)
+        logic = getattr(view, "logic_thread", None)
+        if rng is None or logic is None:
+            raise RuntimeError("Monster chaos witness lost its live state")
 
-        if (
-            not self._monster_chaos_aggro_injected
-            and elapsed >= getattr(self, "_monster_chaos_aggro_delay", 2.0)
-        ):
-            self._inject_monster_chaos_aggro()
+        if phase == "team2_wait" and now >= self._monster_chaos_next_spawn:
+            for _ in range(5):
+                monster_type = rng.choice(("human", "flying"))
+                monster = self._bench_spawn_monster_chaos(
+                    logic,
+                    rng,
+                    team="team2",
+                    position=self.tests._monster_chaos_random_position(rng, monster_type),
+                    spawn_index=self._monster_chaos_spawn_index,
+                    monster_type=monster_type,
+                ) if hasattr(self, "_bench_spawn_monster_chaos") else None
+                if monster is None:
+                    raise RuntimeError("Monster chaos witness spawn helper unavailable")
+                self._monster_chaos_spawn_index += 1
+                self._monster_chaos_total += 1
 
-        if self._monster_chaos_aggro_injected:
-            self._maintain_monster_chaos_aggro()
+            self._monster_chaos_phase = "ramp"
+            self._monster_chaos_next_spawn = now + 0.25
+            self.status_label.setText("Monster witness: 10/100 — ramping at 0.25 s intervals")
+            self._append("  0.5s: spawned 5 random team2 monsters.")
+        elif phase == "ramp" and now >= self._monster_chaos_next_spawn:
+            monster_type = rng.choice(("human", "flying"))
+            team = rng.choice(("team1", "team2"))
+            self._bench_spawn_monster_chaos(
+                logic,
+                rng,
+                team=team,
+                position=self.tests._monster_chaos_random_position(rng, monster_type),
+                spawn_index=self._monster_chaos_spawn_index,
+                monster_type=monster_type,
+            )
+            self._monster_chaos_spawn_index += 1
+            self._monster_chaos_total += 1
+            self._monster_chaos_next_spawn = now + 0.25
 
-        remaining = max(0.0, self._measurement_deadline - now)
-        self._update_monster_chaos_overlay(remaining)
+            if self._monster_chaos_total >= 100:
+                self._monster_chaos_total = 100
+                self._monster_chaos_phase = "measure"
+                self._monster_chaos_ai_decisions = 0
+                self._monster_chaos_ai_updates = 0
+                self._monster_chaos_ai_counting = True
+                self._monster_chaos_measurement_started = now
+                self._monster_chaos_measurement_deadline = now + 5.0
+                self._measurement_deadline = self._monster_chaos_measurement_deadline
+                self._sysmon_samples = []
+                self._last_sysmon_sample = 0.0
+                view.sysmon.reset_metrics()
+                self._append(
+                    "  100 monsters reached; starting 5-second MonsterAI decision witness."
+                )
+            elif self._monster_chaos_total % 10 == 0:
+                self.status_label.setText(
+                    "Monster witness: %d/100 — ramping at 0.25 s intervals"
+                    % self._monster_chaos_total
+                )
 
-        if now - self._last_sysmon_sample >= 1.0:
+        elif phase == "measure" and now >= self._monster_chaos_measurement_deadline:
+            self._monster_chaos_ai_counting = False
+            self._measurement_active = False
+            self._timer.stop()
+
+            elapsed = max(
+                0.0,
+                now - self._monster_chaos_measurement_started,
+            )
+            live_metrics = self._read_sysmon_metrics(view)
+            metrics = self._benchmark_metrics(
+                live_metrics,
+                elapsed,
+                self._sysmon_samples,
+            )
+            metrics.update({
+                "viewport_width": int(view.width()),
+                "viewport_height": int(view.height()),
+            })
+            self._finish_live_stress_result(
+                "monster_chaos_witness",
+                metrics,
+            )
+            return
+
+        if phase == "measure" and now - self._last_sysmon_sample >= 1.0:
             self._last_sysmon_sample = now
             self._sysmon_samples.append(self._read_sysmon_metrics(view))
 
         view.update()
         app.processEvents()
 
-        if now < self._measurement_deadline:
-            return
-
-        self._measurement_active = False
-        self._timer.stop()
-        elapsed = max(0.0, now - self._phase_started)
-        live_metrics = self._read_sysmon_metrics(view)
-        metrics = self._benchmark_metrics(
-            live_metrics, elapsed, self._sysmon_samples
-        )
-        metrics.update({
-            "viewport_width": int(view.width()),
-            "viewport_height": int(view.height()),
-        })
-        self._finish_live_stress_result("monster_chaos_witness", metrics)
-
-    def _tick_live_io(self, now, app, view):
+def _tick_live_io(self, now, app, view):
         """Fire repeated real LogicRelay chains while Fio's live runtime is running."""
         manager = getattr(self, "_live_io_manager", None)
         source = getattr(self, "_live_io_source", None)
