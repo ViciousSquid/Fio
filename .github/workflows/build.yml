@@ -1,4 +1,3 @@
-```yaml
 name: Nuitka Build and Validate
 
 on:
@@ -467,4 +466,3 @@ jobs:
           echo
           echo "Assets:"
           ls -lh release/assets
-```
