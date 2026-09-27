@@ -1710,7 +1710,7 @@ class PropertyEditor(QWidget):
 
         layout.addLayout(name_layout)
 
-        self.tab_widget = QTabWidget()
+        self.tab_widget = QTabWidget(content)
         self.tab_widget.setStyleSheet(_Style.TAB_BAR)
 
         props_tab = self._create_thing_properties_tab(thing)
@@ -1745,7 +1745,8 @@ class PropertyEditor(QWidget):
         tab_layout = QVBoxLayout(w)
         tab_layout.setContentsMargins(8, 8, 8, 8)
         tab_layout.setSpacing(4)
-        form = QFormLayout(w)
+        form = QFormLayout()
+        tab_layout.addLayout(form)
 
         if isinstance(thing, Model):
             model_mode = True
@@ -2002,9 +2003,6 @@ class PropertyEditor(QWidget):
                 thing,
                 property_keys=primary_properties,
             )
-
-        if form.rowCount() > 0:
-            tab_layout.addLayout(form)
 
         # Type-specific grouped editors (already visually grouped).
         if isinstance(thing, PathNode):
