@@ -8,6 +8,9 @@ from editor.things import Pickup
 from engine.logic_thread import LogicThread
 
 
+pytestmark = pytest.mark.qt
+
+
 @pytest.mark.parametrize(
     ("key_name", "sprite"),
     [
