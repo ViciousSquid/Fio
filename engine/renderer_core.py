@@ -2765,7 +2765,7 @@ layout (location = 9) in vec4 iNormal2;
         # Gather directly into the reusable GPU staging buffer. The explicit
         # out= avoids a temporary (N,3)/(N,2) array on every sprite frame.
         np.take(table.pos, sorted_slots, axis=0, out=data[:, 0:3])
-        np.take(table.sprite_size, sorted_slots, out=data[:, 3:5])
+        np.take(table.sprite_size, sorted_slots, axis=0, out=data[:, 3:5])
         np.take(table.sprite_fixed_yaw, sorted_slots, out=data[:, 5])
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
