@@ -17,6 +17,7 @@ pytest.importorskip("PyQt5", reason="the entity classes live in editor.things")
 from editor.things import (Effect, Light, LevelChanger, LogicGate,  # noqa: E402
                            LogicRelay, LogicTimer, Monster, PathNode, Pickup,
                            Portal, Thing)
+from plugins.bigworld.entities import BigWorldSettings  # noqa: E402
 from engine import entity_table as et                        # noqa: E402
 from engine.entity_table import EntityTable                  # noqa: E402
 from engine.prop_entity import Prop                          # noqa: E402
@@ -97,6 +98,19 @@ def test_portal_and_light_are_the_cull_exempt_pair():
     assert not monster.class_bits[0] & et.ENT_CULL_EXEMPT, (
         "a monster exempt from the distance cull would be simulated and drawn "
         "at any range")
+
+
+def test_bigworld_settings_is_a_3d_billboard_entity():
+    settings = BigWorldSettings(pos=[0.0, 0.0, 0.0])
+    table = _synced([settings])
+    bits = int(table.class_bits[0])
+
+    assert settings.properties["render_mode"] == "billboard"
+    assert settings.properties["sprite_path"] == settings.pixmap_path
+    assert settings.properties["sprite_size"] == [64.0, 64.0]
+    assert bits & et.ENT_HAS_SPRITE
+    assert bits & et.ENT_MODE_BILLBOARD
+    assert et.sprite_candidates(settings)[0][1] == "bigworldsettings.png"
 
 
 def test_render_mode_resolves_the_same_way_the_loop_read_it():
