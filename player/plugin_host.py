@@ -32,7 +32,8 @@ import math
 import os
 import sys
 import tempfile
-from typing import List, Optional
+from pathlib import PurePosixPath, PureWindowsPath
+from typing import Callable, List, Optional
 
 
 from engine.prop_runtime import PropSession
@@ -81,12 +82,19 @@ class _BridgeLogic:
 
 
 class PlayerPluginHost:
-    def __init__(self):
+    def __init__(self, plugin_permission_callback: Optional[Callable[[object], bool]] = None):
+        """Host package plugins, subject to an explicit execution permission gate.
+
+        ``plugin_permission_callback`` is called before any bundled plugin bytes
+        are extracted or made importable. A missing callback is intentionally
+        secure-by-default: foreign package plugins are not executed.
+        """
         self.manager = None
         self.bridge: Optional[_BridgeLogic] = None
         self.active = False
         self.hud_message = ""
         self._extract_root: Optional[str] = None
+        self._plugin_permission_callback = plugin_permission_callback
 
     # ------------------------------------------------------------------
     @property
