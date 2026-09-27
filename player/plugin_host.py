@@ -96,22 +96,30 @@ class PlayerPluginHost:
 
     # ------------------------------------------------------------------
     def load(self, package, extract_dir: Optional[str] = None) -> bool:
-        """Make the package's plugins importable and load them.
+        '''Make the package's plugins importable and load them.
 
-        Returns True if at least one plugin loaded. Safe to call with a package
-        that bundles no plugins (returns False, stays inert).
-        """
-        try:
-            bundled = package is not None and getattr(
-                package, "has_bundled_plugins", lambda: False)()
-            if bundled:
-                root = extract_dir or tempfile.mkdtemp(prefix="fio_plugins_")
-                if self._extract_plugins(package, root):
-                    self._extract_root = root
-                    if root not in sys.path:
-                        sys.path.insert(0, root)
-        except Exception as exc:
-            print(f"[Fio Player] plugin extract failed: {exc}")
+        Bundled package plugins are executable Python code and therefore require
+        an explicit user decision before they are extracted or imported.
+        Returns True if at least one plugin is active.
+        '''
+        bundled = package is not None and getattr(
+            package, "has_bundled_plugins", lambda: False)()
+
+        if bundled:
+            if not self._allow_bundled_plugins(package):
+                print("[Fio Player] bundled package plugins denied; no foreign "
+                      "plugin code will be extracted or imported.")
+            else:
+                try:
+                    root = extract_dir or tempfile.mkdtemp(prefix="fio_plugins_")
+                    if self._extract_plugins(package, root):
+                        self._extract_root = root
+                        if root not in sys.path:
+                            sys.path.insert(0, root)
+                    elif extract_dir is None:
+                        self._cleanup_extract_root(root)
+                except Exception as exc:
+                    print(f"[Fio Player] plugin extract failed: {exc}")
 
         try:
             from plugins.manager import get_manager, load_plugins
@@ -128,24 +136,94 @@ class PlayerPluginHost:
         self.active = bool(self.manager and self.manager.plugins)
         return self.active
 
+    def _allow_bundled_plugins(self, package) -> bool:
+        '''Ask the embedding player whether foreign plugin code may execute.'''
+        callback = self._plugin_permission_callback
+        if callback is None:
+            return False
+        try:
+            return bool(callback(package))
+        except Exception as exc:
+            print(f"[Fio Player] plugin permission prompt failed: {exc}")
+            return False
+
+    @staticmethod
+    def _safe_plugin_entry(name: str) -> Optional[str]:
+        '''Return a safe canonical plugin path, or None for unsafe input.
+
+        ZIP entry names are slash-separated, but packages can contain Windows
+        backslashes as ordinary bytes. Reject traversal and absolute paths in
+        both POSIX and Windows path grammars before the name reaches
+        os.path.join().
+        '''
+        raw = str(name)
+        normalised = raw.replace("\\", "/")
+        if not normalised.startswith("plugins/") or normalised.endswith("/"):
+            return None
+        if (
+            normalised.startswith("/")
+            or PurePosixPath(normalised).is_absolute()
+            or PureWindowsPath(normalised).is_absolute()
+            or bool(PureWindowsPath(normalised).drive)
+        ):
+            return None
+        parts = PurePosixPath(normalised).parts
+        if not parts or parts[0] != "plugins":
+            return None
+        if any(part in ("..", ".") for part in parts[1:]):
+            return None
+        return "/".join(parts)
+
     def _extract_plugins(self, package, dest: str) -> bool:
-        """Write every ``plugins/**`` entry from the package under *dest*."""
-        wrote = False
+        '''Safely write every plugins/** file from the package under dest.
+
+        Any unsafe plugin entry causes the complete extraction to abort before
+        a single foreign file is written.
+        '''
+        safe_entries = []
         for name in package.namelist():
-            if not name.startswith("plugins/") or name.endswith("/"):
+            if not str(name).replace("\\", "/").startswith("plugins/"):
                 continue
-            raw = package.read_asset(name)
+            safe = self._safe_plugin_entry(name)
+            if safe is None:
+                raise ValueError(f"unsafe bundled plugin path: {name!r}")
+            safe_entries.append((name, safe))
+
+        if not safe_entries:
+            return False
+
+        dest_root = os.path.abspath(dest)
+        os.makedirs(dest_root, exist_ok=True)
+        root_with_sep = dest_root + os.sep
+
+        for original_name, safe_name in safe_entries:
+            raw = package.read_asset(original_name)
             if raw is None:
-                # read_asset normalises to asset roots; fall back to raw read.
-                raw = getattr(package, "_read_raw", lambda _n: None)(name)
+                raw = getattr(package, "_read_raw", lambda _n: None)(original_name)
             if raw is None:
                 continue
-            out = os.path.join(dest, name)
+
+            out = os.path.abspath(os.path.join(
+                dest_root, *safe_name.split("/")
+            ))
+            if out != dest_root and not out.startswith(root_with_sep):
+                raise ValueError(
+                    f"unsafe bundled plugin destination: {original_name!r}"
+                )
+
             os.makedirs(os.path.dirname(out), exist_ok=True)
             with open(out, "wb") as f:
                 f.write(raw)
-            wrote = True
-        return wrote
+
+        return True
+
+    @staticmethod
+    def _cleanup_extract_root(root: str) -> None:
+        try:
+            import shutil
+            shutil.rmtree(root)
+        except (FileNotFoundError, OSError):
+            pass
 
     # ------------------------------------------------------------------
     def _activate_required_plugins(self, map_data: dict) -> List:
@@ -318,3 +396,10 @@ class PlayerPluginHost:
                     emit("play_stop", logic=self.bridge)
             except Exception:
                 pass
+
+        if self._extract_root is not None:
+            root = self._extract_root
+            self._extract_root = None
+            while root in sys.path:
+                sys.path.remove(root)
+            self._cleanup_extract_root(root)
