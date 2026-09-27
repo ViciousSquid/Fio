@@ -2261,7 +2261,7 @@
                 220.0,
                 -472.0
             ],
-            "hidden": true,
+            "hidden": false,
             "io_connections": [
                 {
                     "output": "OnFullyOpen",
@@ -2305,7 +2305,7 @@
                 220.0,
                 -472.0
             ],
-            "hidden": true,
+            "hidden": false,
             "io_connections": [
                 {
                     "output": "OnFullyOpen",
@@ -2630,13 +2630,13 @@
         {
             "pos": [
                 320.0,
-                256.0,
-                -80.0
+                312.0,
+                -160.0
             ],
             "size": [
-                384.0,
-                544.0,
-                680.0
+                368.0,
+                432.0,
+                576.0
             ],
             "textures": {
                 "north": "trigger.jpg",
@@ -3131,6 +3131,44 @@
             },
             "water_plane": true,
             "hidden": false
+        },
+        {
+            "pos": [
+                8.0,
+                312.0,
+                352.0
+            ],
+            "size": [
+                8,
+                432.0,
+                192.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "curtains.png",
+                "west": "curtains.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "657d1911-4cfe-46d3-aefd-4afafd8318d3",
+            "uv_shift": {
+                "east": [
+                    0.0,
+                    0.0
+                ]
+            },
+            "uv_scale": {
+                "east": [
+                    1.0,
+                    1.0
+                ]
+            },
+            "uv_angle": {
+                "east": 90.0,
+                "west": 90.0
+            },
+            "name": "curtain"
         }
     ],
     "things": [
@@ -3761,7 +3799,17 @@
                 "hidden": false,
                 "disabled": false
             },
-            "io_connections": []
+            "io_connections": [
+                {
+                    "output": "OnCameraArrived",
+                    "target": "intromessage1",
+                    "input": "RunCommand",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false,
+                    "target_id": "1afce153-1528-45ae-8e24-cd584967fb5b"
+                }
+            ]
         },
         {
             "type": "path_node",
@@ -3918,7 +3966,8 @@
                 "look_ahead": true,
                 "io_enabled": true,
                 "hidden": false,
-                "disabled": false
+                "disabled": false,
+                "lookat_return_time": 5.0
             },
             "io_connections": []
         },
@@ -3966,7 +4015,17 @@
                 "hidden": false,
                 "disabled": false
             },
-            "io_connections": []
+            "io_connections": [
+                {
+                    "output": "OnCameraArrived",
+                    "target": "intromessage2",
+                    "input": "RunCommand",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false,
+                    "target_id": "368c92bd-c9e0-4cd4-9efe-3d529226fa28"
+                }
+            ]
         },
         {
             "type": "path_node",
@@ -4574,9 +4633,9 @@
         {
             "type": "logic_command",
             "pos": [
-                -336.0,
+                -1944.0,
                 0,
-                192.0
+                896.0
             ],
             "properties": {
                 "type": "logic_command",
@@ -4592,9 +4651,9 @@
         {
             "type": "logic_command",
             "pos": [
-                -264.0,
+                -1760.0,
                 0.0,
-                192.0
+                520.0
             ],
             "properties": {
                 "type": "logic_command",
@@ -4610,9 +4669,9 @@
         {
             "type": "logic_command",
             "pos": [
-                -192.0,
+                -1768.0,
                 0.0,
-                192.0
+                416.0
             ],
             "properties": {
                 "type": "logic_command",
@@ -4700,51 +4759,6 @@
                     "delay": 0.0,
                     "fire_once": false,
                     "target_id": "8da0f179-afb0-4dc0-b04a-c72204469b16"
-                }
-            ]
-        },
-        {
-            "type": "logic_relay",
-            "pos": [
-                -272.0,
-                24,
-                104.0
-            ],
-            "properties": {
-                "type": "logic_relay",
-                "io_enabled": true,
-                "name": "intro_messages",
-                "id": "2a7d4c35-0543-4c0d-92e9-4edbb1e3484f",
-                "disabled": false,
-                "fire_once": false
-            },
-            "io_connections": [
-                {
-                    "output": "OnTrigger",
-                    "target": "intromessage1",
-                    "input": "RunCommand",
-                    "parameter": "",
-                    "delay": 3.0,
-                    "fire_once": false,
-                    "target_id": "1afce153-1528-45ae-8e24-cd584967fb5b"
-                },
-                {
-                    "output": "OnTrigger",
-                    "target": "intromessage2",
-                    "input": "RunCommand",
-                    "parameter": "",
-                    "delay": 10.0,
-                    "fire_once": false,
-                    "target_id": "368c92bd-c9e0-4cd4-9efe-3d529226fa28"
-                },
-                {
-                    "output": "OnTrigger",
-                    "target": "intromessage3",
-                    "input": "RunCommand",
-                    "parameter": "",
-                    "delay": 12.0,
-                    "fire_once": false,
-                    "target_id": "7f2acc02-a76f-4a77-a6fd-8b8d59c19828"
                 }
             ]
         },
