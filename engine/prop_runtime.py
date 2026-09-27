@@ -43,6 +43,7 @@ class PropSession:
     DROP_GRAVITY = 900.0
     DROP_TERMINAL_VELOCITY = 2400.0
     SPRITE_CAMERA_FACING = -10000.0
+    RESPAWN_FADE_DURATION = 2.0
 
     def __init__(self, logic):
         self.logic = logic
@@ -50,6 +51,7 @@ class PropSession:
         self.held = None
         self.collected_ids = set()
         self.respawn_timers = {}
+        self.respawn_fades = {}
         self._by_id = {}
         self._cells = CellIndex()
         self._filed = {}
@@ -204,6 +206,7 @@ class PropSession:
         self._by_id = {}
         self.collected_ids.clear()
         self.respawn_timers.clear()
+        self.respawn_fades.clear()
         self._falling.clear()
         self._cells.clear()
         self._filed.clear()
@@ -227,6 +230,7 @@ class PropSession:
             return
 
         self._update_respawns(delta)
+        self._update_respawn_fades(delta)
         self._update_falling(delta)
 
         eye_pos = _vec(player.pos)
@@ -448,6 +452,7 @@ class PropSession:
         pid = id(prop)
         self.respawn_timers.pop(pid, None)
         prop.properties["collect_collected"] = False
+        self._start_respawn_fade(prop)
         self.collected_ids.discard(pid)
         if self.held is prop:
             self.held = None
@@ -476,9 +481,42 @@ class PropSession:
 
             prop.properties["collect_collected"] = False
             self.collected_ids.discard(pid)
+            self._start_respawn_fade(prop)
             if self.physics is not None:
                 self.physics.set_kinematic(prop, False)
             self._fire(prop, "OnRespawn")
+
+    def _start_respawn_fade(self, prop):
+        """Make a newly respawned Prop fully transparent for a 2-second fade."""
+        pid = id(prop)
+        prop._respawn_fade_alpha = 0.0
+        self.respawn_fades[pid] = {
+            "remaining": self.RESPAWN_FADE_DURATION,
+            "entity": prop,
+        }
+
+    def _update_respawn_fades(self, delta):
+        if not self.respawn_fades:
+            return
+
+        finished = []
+        for pid, state in list(self.respawn_fades.items()):
+            prop = state.get("entity")
+            if prop is None or id(prop) != pid or id(prop) not in self._by_id:
+                finished.append(pid)
+                continue
+
+            state["remaining"] -= max(0.0, float(delta))
+            remaining = max(0.0, state["remaining"])
+            prop._respawn_fade_alpha = (
+                1.0 - remaining / self.RESPAWN_FADE_DURATION
+            )
+            if remaining <= 0.0:
+                prop._respawn_fade_alpha = 1.0
+                finished.append(pid)
+
+        for pid in finished:
+            self.respawn_fades.pop(pid, None)
 
     def _update_falling(self, delta):
         """Advance released non-physics Props until they rest on the floor."""
