@@ -34,7 +34,7 @@ class PropSession:
 
     PropSession owns the Prop domain. The authoritative world data remains
     the Thing list; this registry and its spatial index are derived from it.
-    No separate Pickup system exists.
+    No separate collection entity system exists.
     """
 
     DEFAULT_CARRY_REACH = 110.0
@@ -340,10 +340,10 @@ class PropSession:
         if best is None:
             return False
 
-        item_type = str(
+        collect_label = str(
             best.properties.get("collect_type", "custom")
         ).replace("_", " ").title()
-        self.logic.current_hud_message = f"[E] Collect {item_type}"
+        self.logic.current_hud_message = f"[E] Collect {collect_label}"
         self._collect(best)
         return True
 
