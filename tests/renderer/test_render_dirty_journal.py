@@ -20,6 +20,7 @@ def _state():
     state._render_dirty_all = False
     state._render_dirty_all_epoch = -1
     state._render_dirty_lock = threading.RLock()
+    state._render_dirty_history = deque(maxlen=32)
     return state
 
 
