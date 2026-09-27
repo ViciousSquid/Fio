@@ -308,11 +308,11 @@ def sprite_candidates(thing):
             # does -- load_texture has its own cache, so this is not a re-read.
             out.append(('', filename, 'sprites', False))
     elif LevelChanger is not None and isinstance(thing, LevelChanger):
-        out.append(('LevelChanger', 'levelchanger.png', 'sprites', True))
+        return (('LevelChanger', 'levelchanger.png', 'sprites', True),)
     elif LogicRelay is not None and isinstance(thing, LogicRelay):
-        out.append(('LogicRelay', 'logic_relay.png', 'sprites', True))
+        return (('LogicRelay', 'logic_relay.png', 'sprites', True),)
     elif LogicTimer is not None and isinstance(thing, LogicTimer):
-        out.append(('LogicTimer', 'logic_timer.png', 'sprites', True))
+        return (('LogicTimer', 'logic_timer.png', 'sprites', True),)
 
     # -- and then the class's shared sprite, which draw_sprites falls back to -
     class_name = type(thing).__name__
