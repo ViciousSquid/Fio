@@ -200,18 +200,17 @@ class LogicThread(threading.Thread):
         # and consumed in _prepare_render_state to blend the view matrix.
         self.camera_transition = None
 
-        # The dense render projection (T3) and the per-slot render references
-        # published alongside it.  The table owns the numbers; `_render_refs`
-        # is the object-reference escape hatch used only where a renderer path
-        # still needs authored object data (for example, convex brush planes).
-        self._render_table = RenderTable()
-        # The entity half of the same projection.  Entities move every
-        # tick and their classification does not, so the table splits
-        # those two costs the way the brush one does.
-        self._entity_table = EntityTable()
-        self._entity_refs = np.empty(0, dtype=object)
+        # RenderState already owns one persistent RenderTable/EntityTable pair.
+        # Keep these aliases only for diagnostics and older tests/code that inspect
+        # the logic thread; the authoritative tables now belong to the write buffer
+        # and therefore cannot be mutated while the renderer is reading the other
+        # buffer.
+        write_state = self.game_state.get_write_state()
+        self._render_table = write_state.render_table
+        self._entity_table = write_state.entity_table
+        self._entity_refs = write_state.entity_refs
         self._entity_all_slots = np.empty(0, dtype=np.int32)
-        self._render_refs = np.empty(0, dtype=object)
+        self._render_refs = write_state.render_refs
 
         # Editor camera
         self.editor_camera = Camera()
@@ -3922,13 +3921,14 @@ class LogicThread(threading.Thread):
         brushes = self.brushes
 
         # ---- T3: the dense render projection ----------------------------
-        # Fio already paid to describe the world numerically for culling; this
-        # keeps the other half -- what each brush *is* -- numerical too, so the
-        # renderer never has to go back to the dicts to rediscover it.  The
-        # table is a projection, not a second world: it is rebuilt from
-        # `brushes` whenever the editor's coarse world epoch moves, and holds
-        # nothing that is not already in them.
-        table = self._render_table
+        # Each RenderState owns its own dense projections.  The active write
+        # buffer is the only table the logic thread may mutate; the renderer can
+        # therefore continue consuming the previously published read buffer
+        # without observing torn material/transform/classification columns.
+        table = write_state.render_table
+        etable = write_state.entity_table
+        self._render_table = table
+        self._entity_table = etable
         render_dirty_snapshot = self.editor_state.render_dirty_snapshot()
         world_epoch, render_dirty = render_dirty_snapshot
         # Rows are named by the brush's UUID, so ids have to exist before the
@@ -3945,16 +3945,18 @@ class LogicThread(threading.Thread):
         # and an unannounced change to the row set.
         live_hidden = table.begin_frame(
             brushes, world_epoch, dirty_objects=render_dirty)
-        if (table.generation != generation
-                or len(self._render_refs) != table.count):
-            # RenderTable owns the stable row snapshot for this publication.
-            # The live EditorState.brushes list may grow during benchmark
-            # insertion, so never enumerate it after the table has reconciled.
+        refs = write_state.render_refs
+        if (table.generation != generation or len(refs) != table.count):
+            # RenderState owns the reference array for this buffer as well.  Never
+            # reuse the other buffer's object array: the renderer may still be
+            # holding its previous frame while this one is being prepared.
             refs = np.empty(table.count, dtype=object)
             for i, brush in enumerate(table.brushes):
                 refs[i] = brush
+            write_state.render_refs = refs
             self._render_refs = refs
-        refs = self._render_refs
+        else:
+            self._render_refs = refs
         total_count = table.count
 
         # ---- warm columns ------------------------------------------------
@@ -4026,7 +4028,10 @@ class LogicThread(threading.Thread):
         # per-frame Python copy of the entity list.
         with self._monster_lock:
             things = self.things
-            etable = self._entity_table
+            # etable is the table owned by the current write buffer.  It is the
+            # only EntityTable touched until request_swap publishes this frame.
+            etable = write_state.entity_table
+            self._entity_table = etable
             entity_generation = etable.generation
             thing_hidden = etable.begin_frame(
                 things,
@@ -4034,18 +4039,23 @@ class LogicThread(threading.Thread):
                 dirty_objects=render_dirty,
                 effect_runtime=self.play_mode,
             )
+            entity_refs = write_state.entity_refs
             if (etable.generation != entity_generation
-                    or len(self._entity_refs) != etable.count):
+                    or len(entity_refs) != etable.count):
                 # EntityTable owns the stable row snapshot for this publication.
                 # Do not enumerate the live list again here: benchmark/editor
                 # code can mutate it from another thread immediately after the
-                # lock is released.
+                # lock is released.  Keep the reference array with the same
+                # RenderState as the dense table it indexes.
                 entity_refs = np.empty(etable.count, dtype=object)
                 for i, thing in enumerate(etable.things):
                     entity_refs[i] = thing
+                write_state.entity_refs = entity_refs
                 self._entity_refs = entity_refs
                 self._entity_all_slots = np.arange(etable.count, dtype=np.int32)
-            erefs = self._entity_refs
+            else:
+                self._entity_refs = entity_refs
+            erefs = entity_refs
             entity_things = etable.things
             thing_count = etable.count
 
