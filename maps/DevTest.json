@@ -267,8 +267,8 @@
                 "friction": 0.55,
                 "linear_damping": 0.08,
                 "angular_damping": 0.12,
-                "pickup_enabled": true,
-                "pickup_reach": 110.0,
+                "carry_enabled": true,
+                "carry_reach": 110.0,
                 "carry_distance": 55.0,
                 "carry_offset": [
                     0.0,
