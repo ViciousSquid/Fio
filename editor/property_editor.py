@@ -1322,8 +1322,8 @@ class PropertyEditor(QWidget):
 
         # Key dropdown
         key_lbl = QLabel("Key Name:")
-        key_combo = _make_combo(['red_key', 'blue_key', 'yellow_key', 'custom'],
-                                brush.get('door_key_name', 'red_key'),
+        key_combo = _make_combo(list(Pickup.KEY_NAMES) + ['custom'],
+                                brush.get('door_key_name', Pickup.DEFAULT_KEY_NAME),
                                 lambda t: self.update_object_prop('door_key_name', t))
         key_lbl.setVisible(brush.get('door_needs_key', False))
         key_combo.setVisible(brush.get('door_needs_key', False))
@@ -2577,6 +2577,22 @@ class PropertyEditor(QWidget):
         self._pickup_key_widgets = []
         self._pickup_sprite_widgets = []
 
+        # A key pickup's colour is gameplay data, not a sprite-only choice.
+        # Build the selector here because key_name is intentionally excluded
+        # from the generic property editor.
+        key_label = QLabel("Key:")
+        key_combo = _make_combo(
+            list(Pickup.KEY_NAMES),
+            thing.properties.get('key_name', Pickup.DEFAULT_KEY_NAME),
+            self.on_pickup_key_name_changed,
+        )
+        is_key = thing.properties.get('item_type') == 'key'
+        key_label.setVisible(is_key)
+        key_combo.setVisible(is_key)
+        key_combo.setEnabled(is_key)
+        form.addRow(key_label, key_combo)
+        self._pickup_key_widgets.append((key_label, key_combo))
+
     def _iterate_thing_properties(self, form, thing, property_keys=None):
         """Add generic Thing properties to a form.
 
@@ -3022,8 +3038,8 @@ class PropertyEditor(QWidget):
         weapon_combo.setVisible(weapon_visible)
 
         lbl = QLabel("Key Name:")
-        key_combo = _make_combo(['blue_key', 'red_key', 'yellow_key', 'green_key'],
-                                thing.properties.get('key_name', 'blue_key'),
+        key_combo = _make_combo(list(Pickup.KEY_NAMES),
+                                thing.properties.get('key_name', Pickup.DEFAULT_KEY_NAME),
                                 self.on_pickup_key_name_changed)
         key_combo.setEditable(True)
         form.addRow(lbl, key_combo)
@@ -4191,8 +4207,8 @@ class PropertyEditor(QWidget):
         if self.current_object is None:
             return
         self.current_object['door_needs_key'] = needs_key
-        if needs_key and 'door_key_name' not in self.current_object:
-            self.current_object['door_key_name'] = ''
+        if needs_key and not self.current_object.get('door_key_name'):
+            self.current_object['door_key_name'] = Pickup.DEFAULT_KEY_NAME
         for k in ('door_key_input', 'door_key_label'):
             if k in self._widgets:
                 self._widgets[k].setVisible(needs_key)
@@ -4329,12 +4345,16 @@ class PropertyEditor(QWidget):
             self.respawn_time_spin.setVisible(respawns)
 
     def on_pickup_key_name_changed(self, key_name):
+        if self.current_object is None:
+            return
         self.update_object_prop('key_name', key_name)
-        is_custom = key_name == 'custom'
         if hasattr(self, '_pickup_sprite_widgets'):
             for lbl, widget in self._pickup_sprite_widgets:
-                lbl.setVisible(is_custom)
-                widget.setVisible(is_custom)
+                lbl.setVisible(False)
+                widget.setVisible(False)
+        self._update_pickup_door_link(self.current_object)
+        if hasattr(self.editor, 'view_3d'):
+            self.editor.view_3d.update()
 
     def on_pickup_sprite_select(self):
         if self.current_object is None or not isinstance(self.current_object, Pickup):
@@ -4394,12 +4414,13 @@ class PropertyEditor(QWidget):
                 lbl.setVisible(is_weapon)
                 widget.setVisible(is_weapon)
 
-        current_key = self.current_object.properties.get('key_name', 'red_key')
+        current_key = self.current_object.properties.get('key_name', Pickup.DEFAULT_KEY_NAME)
 
         if hasattr(self, '_pickup_key_widgets'):
             for lbl, widget in self._pickup_key_widgets:
                 lbl.setVisible(is_key)
                 widget.setVisible(is_key)
+                widget.setEnabled(is_key)
 
         if is_key:
             self._update_pickup_door_link(self.current_object)

@@ -803,8 +803,9 @@ class Pickup(Thing):
         'blue_key': 'assets/sprites/bluekey.png',
         'red_key': 'assets/sprites/redkey.png',
         'yellow_key': 'assets/sprites/yellowkey.png',
-        'green_key': 'assets/sprites/greenkey.png',
     }
+    KEY_NAMES = tuple(KEY_SPRITES)
+    DEFAULT_KEY_NAME = 'blue_key'
     
     GUN_SPRITES = {
         'gun1': 'assets/sprites/gun1.png',
@@ -833,7 +834,7 @@ class Pickup(Thing):
         self.properties.setdefault('collected', False)
         self.properties.setdefault('respawns', False)
         self.properties.setdefault('respawn_time', 20.0)
-        self.properties.setdefault('key_name', 'blue_key')
+        self.properties.setdefault('key_name', self.DEFAULT_KEY_NAME)
         self.properties.setdefault('custom_sprite', '')
 
     def get_weapon(self):
@@ -850,7 +851,7 @@ class Pickup(Thing):
         return self.properties.get('item_type') == 'key'
     
     def get_key_name(self):
-        return self.properties.get('key_name', 'blue_key')
+        return self.properties.get('key_name', self.DEFAULT_KEY_NAME)
     
     def get_sprite_path(self):
         custom = self.properties.get('custom_sprite', '')

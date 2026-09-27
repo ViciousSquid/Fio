@@ -899,21 +899,22 @@ class DebugConsole(QWidget):
         if len(parts) != 4:
             return f'<b>Fio version</b> <b>{version}</b>'
 
-        # Version numbers remain the familiar Fio orange; only the anchor
-        # itself uses the lighter green requested for hyperlinks.
-        link_style = 'color: #66BB6A; text-decoration: none;'
-        number_style = 'color: #F08000; font-weight: bold;'
+        # Keep the linked major/minor/patch numbers visibly green.  Qt's
+        # rich-text serializer does not reliably preserve CSS colour on the
+        # <a> element itself, so the colour belongs on a child span inside
+        # the anchor.  The build suffix remains the familiar Fio orange.
+        link_style = 'color: #66BB6A; font-weight: bold; text-decoration: none;'
+        label_style = 'color: #F08000; font-weight: bold;'
 
-        rendered = []
+        rendered = [f'<span style="{label_style}">Fio version</span> ']
         for part in parts[:3]:
             rendered.append(
-                f'<a href="filter:{part}" style="{link_style}">'
-                f'<span style="{number_style}">{part}</span></a>'
+                f'<a href="filter:{part}">'
+                f'<span style="{link_style}">{part}</span></a>'
+                f'<b style="color: #F08000;">.</b>'
             )
-            rendered.append('<b>.</b>')
-        rendered.append(f'<b>{parts[3]}</b>')
-        return '<b>Fio version</b> ' + ''.join(rendered)
-
+        rendered.append(f'<b style="{label_style}">{parts[3]}</b>')
+        return ''.join(rendered)
     def _plugin_message_color(self, message: str) -> str:
         """Pick a colour for a 'Plugins' message based on its content.
 
