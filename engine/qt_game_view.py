@@ -1781,6 +1781,47 @@ class QtGameView(QOpenGLWidget):
         if health is None or max_health is None:
             return
         hud_margin = 20
+        active_weapon = getattr(self, '_cached_active_weapon', None)
+
+        # Draw the weapon before the status counts so the health indicator is
+        # always visually on top of any weapon sprite, including the sword.
+        if active_weapon and not overhead:
+            hud_pixmap = self._load_gun_hud_pixmap(active_weapon)
+            if hud_pixmap and not hud_pixmap.isNull():
+                target_scale = 2 if active_weapon == 'sword' else 1
+                target_h = int(200 * target_scale * viewport_height / 600.0)
+                cache_key = (active_weapon, target_h)
+                scaled = self._cached_gun_hud.get(cache_key)
+                if scaled is None or scaled.isNull():
+                    if hud_pixmap.height() > 0:
+                        target_w = int(hud_pixmap.width() * (target_h / hud_pixmap.height()))
+                    else:
+                        target_w = target_h
+                    img = hud_pixmap.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
+                    scaled = QPixmap.fromImage(img).scaled(
+                        target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    self._cached_gun_hud[cache_key] = scaled
+                if active_weapon == 'gun2':
+                    x = (viewport_width - scaled.width()) // 2
+                    y = (viewport_height - scaled.height()) // 2
+                elif active_weapon == 'sword':
+                    x = 20
+                    y = viewport_height - scaled.height()
+                else:
+                    x = viewport_width - scaled.width() - 20
+                    y = viewport_height - scaled.height()
+                painter.save()
+                painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+                painter.drawPixmap(x, y, scaled)
+                painter.restore()
+                if getattr(self, '_cached_muzzle_flash', False):
+                    flash_pixmap = self._load_gun_flash_pixmap(active_weapon)
+                    if flash_pixmap and not flash_pixmap.isNull():
+                        painter.save()
+                        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+                        painter.drawPixmap(x, y, scaled.width(), scaled.height(), flash_pixmap)
+                        painter.restore()
+
         health_font = QFont(self._hud_health_font)
         health_font.setPointSize(max(42, min(68, int(viewport_height * 0.085))))
         painter.setFont(health_font)
@@ -1797,7 +1838,6 @@ class QtGameView(QOpenGLWidget):
         painter.setPen(self._hud_health_orange)
         painter.drawText(health_x, health_y, health_text)
 
-        active_weapon = getattr(self, '_cached_active_weapon', None)
         if active_weapon in ('gun1', 'gun2'):
             ammo_font = QFont(self._hud_health_font)
             ammo_font.setPointSize(max(
@@ -1814,6 +1854,7 @@ class QtGameView(QOpenGLWidget):
             painter.drawText(ammo_x + 2, health_y + 2, ammo_text)
             painter.setPen(self._hud_ammo_green)
             painter.drawText(ammo_x, health_y, ammo_text)
+
         # The centre-screen crosshair is a first-person aiming reticle: it marks
         # where the camera-forward hitscan lands. In overhead (top-down) mode the
         # shot travels along the player's ground heading, not through screen
@@ -1888,40 +1929,6 @@ class QtGameView(QOpenGLWidget):
             painter.drawText(cx - tw // 2 + 2, cy + 2, hint)
             painter.setPen(self._hud_grey_pen)
             painter.drawText(cx - tw // 2, cy, hint)
-        if active_weapon and not overhead:
-            hud_pixmap = self._load_gun_hud_pixmap(active_weapon)
-            if hud_pixmap and not hud_pixmap.isNull():
-                target_h = int(200 * viewport_height / 600.0)
-                cache_key = (active_weapon, target_h)
-                scaled = self._cached_gun_hud.get(cache_key)
-                if scaled is None or scaled.isNull():
-                    if hud_pixmap.height() > 0:
-                        target_w = int(hud_pixmap.width() * (target_h / hud_pixmap.height()))
-                    else:
-                        target_w = target_h
-                    img = hud_pixmap.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
-                    scaled = QPixmap.fromImage(img).scaled(target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                    self._cached_gun_hud[cache_key] = scaled
-                if active_weapon == 'gun2':
-                    x = (viewport_width - scaled.width()) // 2
-                    y = (viewport_height - scaled.height()) // 2
-                elif active_weapon == 'sword':
-                    x = 20
-                    y = viewport_height - scaled.height()
-                else:
-                    x = viewport_width - scaled.width() - 20
-                    y = viewport_height - scaled.height()
-                painter.save()
-                painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-                painter.drawPixmap(x, y, scaled)
-                painter.restore()
-                if getattr(self, '_cached_muzzle_flash', False):
-                    flash_pixmap = self._load_gun_flash_pixmap(active_weapon)
-                    if flash_pixmap and not flash_pixmap.isNull():
-                        painter.save()
-                        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-                        painter.drawPixmap(x, y, scaled.width(), scaled.height(), flash_pixmap)
-                        painter.restore()
         # Overhead: held weapon shown as a bottom-right collectible icon (like keys).
         # It takes the rightmost slot; keys shift left so both fit side by side.
         key_slot_offset = 0
