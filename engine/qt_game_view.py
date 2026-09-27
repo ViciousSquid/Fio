@@ -469,6 +469,10 @@ class QtGameView(QOpenGLWidget):
         self._view_message2_started_at = 0.0
         self._view_message2_width = 0
         self._view_message2_queue = deque()
+        self._view_message3_text = ""
+        self._view_message3_started_at = 0.0
+        self._view_message3_width = 0
+        self._view_message3_queue = deque()
         self._cached_gun_hud = {}
         self._cached_weapon_collect = {}   # (item_type, size) -> scaled QPixmap
         self._cached_key_pixmaps = {}
@@ -542,6 +546,14 @@ class QtGameView(QOpenGLWidget):
             self._hud_msg_font
         ).horizontalAdvance(text)
 
+    def _start_view_message3(self, text: str):
+        """Start displaying one transient Rushford-font message-3 immediately."""
+        self._view_message3_text = text
+        self._view_message3_started_at = time.perf_counter()
+        self._view_message3_width = QFontMetrics(
+            self._hud_health_font
+        ).horizontalAdvance(text)
+
     def show_view_message2(self, text: str):
         """Show a message-2, queueing it behind the current message-2."""
         text = str(text).strip()[:50]
@@ -558,22 +570,40 @@ class QtGameView(QOpenGLWidget):
         self._start_view_message2(text)
         self.update()
 
+    def show_view_message3(self, text):
+        """Show a Rushford-font message-3, queueing it behind the current message-3."""
+        text = str(text).strip()[:50]
+        if not text:
+            return
+
+        if self._view_message3_text:
+            elapsed = time.perf_counter() - self._view_message3_started_at
+            if elapsed < 7.0 or self._view_message3_queue:
+                self._view_message3_queue.append(text)
+                self.update()
+                return
+
+        self._start_view_message3(text)
+        self.update()
+
     def _draw_queued_view_message(
         self, painter, viewport_width, viewport_height,
-        text, started_at, width, queue, start_message, lower_line=False
+        text, started_at, width, queue, start_message,
+        line_offset=0, message_font=None
     ):
         """Draw one queued transient message and return its active state."""
         if not text:
             return text, started_at, width
 
         elapsed = time.perf_counter() - started_at
+        font = message_font or self._hud_msg_font
         if elapsed >= 7.0:
             if queue:
                 text = queue.popleft()
                 start_message(text)
                 started_at = time.perf_counter()
                 elapsed = 0.0
-                width = QFontMetrics(self._hud_msg_font).horizontalAdvance(text)
+                width = QFontMetrics(font).horizontalAdvance(text)
             else:
                 return "", 0.0, 0
 
@@ -586,14 +616,12 @@ class QtGameView(QOpenGLWidget):
 
         cx = viewport_width // 2
         held_item_row_top = viewport_height - 20 - 100
-        line_height = QFontMetrics(self._hud_msg_font).height() + 2
-        baseline = held_item_row_top - 12 - line_height
-        if lower_line:
-            baseline += line_height
+        line_height = QFontMetrics(font).height() + 2
+        baseline = held_item_row_top - 12 - line_height + (line_height * line_offset)
 
         painter.save()
         painter.setOpacity(max(0.0, min(1.0, opacity)))
-        painter.setFont(self._hud_msg_font)
+        painter.setFont(font)
         painter.setPen(self._hud_shadow_pen)
         painter.drawText(cx - width // 2 + 2, baseline + 2, text)
         painter.setPen(self._hud_grey_pen)
@@ -624,7 +652,22 @@ class QtGameView(QOpenGLWidget):
                 self._view_message2_width,
                 self._view_message2_queue,
                 self._start_view_message2,
-                lower_line=True,
+                line_offset=1,
+            )
+        )
+
+    def _draw_view_message3(self, painter, viewport_width, viewport_height):
+        """Draw message-3 directly underneath message-2 in Rushford."""
+        self._view_message3_text, self._view_message3_started_at, self._view_message3_width = (
+            self._draw_queued_view_message(
+                painter, viewport_width, viewport_height,
+                self._view_message3_text,
+                self._view_message3_started_at,
+                self._view_message3_width,
+                self._view_message3_queue,
+                self._start_view_message3,
+                line_offset=2,
+                message_font=self._hud_health_font,
             )
         )
 
@@ -1662,6 +1705,7 @@ class QtGameView(QOpenGLWidget):
         if self.play_mode:
             self._draw_view_message(painter, self.width(), self.height())
             self._draw_view_message2(painter, self.width(), self.height())
+            self._draw_view_message3(painter, self.width(), self.height())
 
         if self.sysmon.is_active():
             self.sysmon.draw(
