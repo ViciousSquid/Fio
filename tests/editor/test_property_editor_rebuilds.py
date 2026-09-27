@@ -110,7 +110,7 @@ def test_custom_gif_path_is_project_relative_and_uses_forward_slashes(monkeypatc
         os.path.join(os.path.dirname(__file__), "..", "..")
     )
     selected = os.path.join(
-        root, "assets", "textures", "effects", "custom\\" , "magic.gif"
+        root, "assets", "textures", "effects", "custom", "magic.gif"
     )
     # The simulated Qt path uses Windows separators even when this test runs
     # on a POSIX CI worker.
