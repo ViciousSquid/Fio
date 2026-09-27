@@ -227,12 +227,18 @@ class RenderState:
         self.all_lights = []
         self.visible_brush_position_count = 0
         self.visible_thing_position_count = 0
-        self.entity_table = None
+        # Keep the dense projection objects across buffer recycling.  Their
+        # published slot vectors below are emptied, so an interstitial frame
+        # cannot draw stale rows, while the next LogicThread publish reuses the
+        # same tables without allocating a RenderTable/EntityTable per frame.
+        if self.entity_table is None:
+            self.entity_table = EntityTable()
         self.entity_refs = np.empty(0, dtype=object)
         self.visible_thing_slots = np.empty(0, dtype=np.int32)
         self.thing_hidden = np.empty(0, dtype=bool)
         self.has_portals = False
-        self.render_table = None
+        if self.render_table is None:
+            self.render_table = RenderTable()
         #: slot -> the render reference for that row: the live brush dict, or
         #: for a mover or a door the per-frame snapshot. Indexed by the slot
         #: arrays below, so a consumer converts an index to an object once, at
