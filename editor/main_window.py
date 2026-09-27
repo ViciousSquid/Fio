@@ -55,7 +55,10 @@ class Toast(QLabel):
         self.setGraphicsEffect(self.opacity_effect)
         
         self.anim = QPropertyAnimation(self.opacity_effect, b"opacity")
-        self.anim.setDuration(600)
+        # Toasts fade in and out over exactly 0.5 seconds.  The opacity effect
+        # covers the complete QLabel, so the coloured background fades with
+        # the text rather than popping in/out separately.
+        self.anim.setDuration(500)
         self.anim.setEasingCurve(QEasingCurve.OutCubic)
         
         self.timer = QTimer(self)
