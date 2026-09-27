@@ -947,6 +947,26 @@ def test_re_binding_can_leave_the_focus_alone(inspector):
     assert panel.isVisible()
 
 
+def test_the_surface_inspector_action_uses_window_shortcut_scope(qt_app):
+    from PyQt5.QtCore import Qt as _Qt
+    from editor.ui import Ui_MainWindow
+
+    class ActionHost(QWidget):
+        pass
+
+    # The action's configured scope is the regression that matters: it must
+    # remain active when focus is on any child editor widget, not only a
+    # particular child subtree.
+    host = ActionHost()
+    action_host = type('ActionHost', (), {})()
+    # Avoid constructing the full OpenGL UI here; inspect the source contract
+    # that Ui_MainWindow applies to the real QAction.
+    import inspect
+    source = inspect.getsource(Ui_MainWindow.create_menu_bar)
+    assert 'setShortcutContext(\n            Qt.WindowShortcut)' in source
+
+
+
 # ────────────────────────────
 # The editor opening and re-binding it
 # ────────────────────────────
