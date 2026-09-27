@@ -605,7 +605,7 @@ def test_dense_projections_are_double_buffered():
     next_write.render_table.sync([brush], epoch=2)
 
     assert bool(next_write.render_table.class_bits[0] & render_table_module.CLASS_FOG)
-    assert not bool(first_table.class_bits[0] & first_table.CLASS_FOG), (
+    assert not bool(first_table.class_bits[0] & render_table_module.CLASS_FOG), (
         "editing the write-side table changed the table already published "
         "to the renderer"
     )
