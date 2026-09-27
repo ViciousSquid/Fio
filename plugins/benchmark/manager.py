@@ -79,7 +79,7 @@ class BenchmarkManager(QDialog):
         self._font_size = benchmark_font.pointSize()
         self.setFont(benchmark_font)
         self.setStyleSheet(
-            f"""
+            """
             QDialog {
                 background: #171717;
                 color: #eeeeee;
@@ -213,6 +213,7 @@ class BenchmarkManager(QDialog):
                 selection-color: #111111;
             }
             """
+            % self._font_size
         )
 
         root = QVBoxLayout(self)
