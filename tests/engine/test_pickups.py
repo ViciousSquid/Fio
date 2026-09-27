@@ -11,7 +11,7 @@ from engine.prop_runtime import PropSession
 pytestmark = pytest.mark.qt
 
 
-@pytest.mark.parametrize("legacy_weapon", ["gun1", "gun2", "cig"])
+@pytest.mark.parametrize("legacy_weapon", ["gun1", "gun2", "sword", "cig"])
 def test_legacy_pickup_map_migrates_to_collectible_prop(legacy_weapon):
     loaded = Thing.from_dict({
         "type": "pickup",
@@ -159,14 +159,19 @@ def test_collect_prop_equips_legacy_cig_weapon():
     assert logic.active_weapon == "cig"
 
 
-def test_weapon_pickup_sword_uses_sword_sprite_and_sets_active_weapon():
-    pickup = Pickup(properties={
-        "item_type": "weapon",
-        "weapon": "sword",
+def test_weapon_pickup_sword_uses_sword_sprite_and_equips_sword():
+    prop = Prop(properties={
+        "collect_enabled": True,
+        "collect_type": "weapon",
+        "collect_weapon": "sword",
     })
+    assert prop.get_collect_sprite_path() == "assets/sprites/sword.png"
 
-    assert pickup.properties["weapon"] == "sword"
-    assert pickup.get_collect_sprite_path() == "assets/sprites/sword.png"
+    logic = _logic_for(prop)
+    session = PropSession(logic)
+
+    assert session.collect_prop(prop) is True
+    assert logic.active_weapon == "sword"
 
 
 def test_sword_is_a_non_firing_weapon():
