@@ -120,6 +120,8 @@ class FakeEditorWindow(QMainWindow):
     from editor.main_window import MainWindow
     load_layout = MainWindow.load_layout
     save_layout = MainWindow.save_layout
+    reset_layout = MainWindow.reset_layout
+    _restore_default_layout = MainWindow._restore_default_layout
     del MainWindow
 
     def __init__(self, config=None):
@@ -128,6 +130,9 @@ class FakeEditorWindow(QMainWindow):
         self.toasts = []
         self.saved_config = 0
         self.restored = []
+        self.restore_versions = []
+        self.restore_results = []
+        self.saved_versions = []
 
     def show_toast(self, message, is_error=False, duration=None):
         self.toasts.append(message)
@@ -135,8 +140,15 @@ class FakeEditorWindow(QMainWindow):
     def save_config(self):
         self.saved_config += 1
 
-    def restoreState(self, data):
+    def saveState(self, version=0):
+        self.saved_versions.append(version)
+        return QByteArray(b'state')
+
+    def restoreState(self, data, version=0):
         self.restored.append(bytes(data))
+        self.restore_versions.append(version)
+        if self.restore_results:
+            return self.restore_results.pop(0)
         return True
 
 
@@ -156,6 +168,7 @@ def test_a_current_layout_is_restored(qt_app):
     host.load_layout()
 
     assert host.restored == [b'state']
+    assert host.restore_versions == [LAYOUT_VERSION]
     assert host.toasts == []
 
 
@@ -226,6 +239,7 @@ def test_saving_stamps_the_version(qt_app):
     host.save_layout()
 
     assert host.config.getint('Layout', 'version') == LAYOUT_VERSION
+    assert host.saved_versions == [LAYOUT_VERSION]
 
 
 def test_a_layout_saved_now_is_restored_next_time(qt_app):
@@ -238,6 +252,36 @@ def test_a_layout_saved_now_is_restored_next_time(qt_app):
 
     assert reopened.restored
     assert reopened.toasts == []
+
+
+def test_invalid_saved_state_falls_back_to_the_captured_default(qt_app):
+    host = FakeEditorWindow(_saved_layout(LAYOUT_VERSION))
+    host.restore_results = [False, True]
+
+    host.load_layout()
+
+    assert host.restored == [b'state', b'state']
+    assert host.restore_versions == [LAYOUT_VERSION, LAYOUT_VERSION]
+    assert not host.config.has_option('Layout', 'state')
+    assert any('invalid' in t.lower() for t in host.toasts)
+
+
+def test_reset_layout_restores_defaults_without_restarting(qt_app, monkeypatch):
+    from editor import main_window as mw
+
+    host = FakeEditorWindow(_saved_layout(LAYOUT_VERSION))
+    host._default_layout_state = QByteArray(b'default')
+    host.restore_results = [True]
+
+    monkeypatch.setattr(
+        mw.QMessageBox, 'question',
+        lambda *args, **kwargs: mw.QMessageBox.Yes)
+
+    host.reset_layout()
+
+    assert not host.config.has_section('Layout')
+    assert host.restored == [b'default']
+    assert any('reset to defaults' in t.lower() for t in host.toasts)
 
 
 # ────────────────────────────
