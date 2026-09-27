@@ -94,6 +94,9 @@ class BenchmarkRunner:
         self._monster_chaos_aggro_injected = False
         self._monster_chaos_fighters = []
         self._monster_chaos_aggro_count = 0
+        self._monster_chaos_ai_original_update = None
+        self._monster_chaos_ai_decisions = 0
+        self._monster_chaos_ai_updates = 0
         self.tests = BenchmarkTests(self)
         self.results = BenchmarkResults(self)
 
@@ -991,6 +994,13 @@ class BenchmarkRunner:
                 if not monster.properties.get("dead", False)
             )
             aggro_count = int(getattr(self, "_monster_chaos_aggro_count", 0))
+            ai_decisions = int(getattr(self, "_monster_chaos_ai_decisions", 0))
+            ai_updates = int(getattr(self, "_monster_chaos_ai_updates", 0))
+            witness_elapsed_s = float(metrics.get("measurement_duration_s", 15.0))
+            ai_decisions_per_second = (
+                ai_decisions / witness_elapsed_s
+                if witness_elapsed_s > 0.0 else 0.0
+            )
             metrics.update({
                 "test": label,
                 "status": "passed",
@@ -1011,11 +1021,15 @@ class BenchmarkRunner:
                 "aggro_delay_s": float(
                     getattr(self, "_monster_chaos_aggro_delay", 2.0)
                 ),
-                "witness_duration_s": 15.0,
+                "ai_decisions": ai_decisions,
+                "ai_update_calls": ai_updates,
+                "ai_decisions_per_second": ai_decisions_per_second,
+                "witness_duration_s": witness_elapsed_s,
                 "alive_monsters": alive,
                 "dead_monsters": max(0, len(monsters) - alive),
             })
             logic = getattr(view, "logic_thread", None)
+            self._restore_monster_chaos_ai_counter(logic)
             if logic is not None:
                 logic.notarget = self._original_notarget
             if view.play_mode:
@@ -1042,7 +1056,8 @@ class BenchmarkRunner:
                 '</td></tr></table>'
                 '<div style="color:#aaa; padding:4px 0;">'
                 '%d alive &nbsp; • &nbsp; %d dead &nbsp; • &nbsp; '
-                '15.0 second witness'
+                '%.1f second witness &nbsp; • &nbsp; %d AI decisions &nbsp; • &nbsp; '
+                '%.0f decisions/s'
                 '</div></div>'
                 % (
                     self._html_escape(
@@ -1051,6 +1066,9 @@ class BenchmarkRunner:
                     aggro_count,
                     alive,
                     max(0, len(monsters) - alive),
+                    witness_elapsed_s,
+                    ai_decisions,
+                    ai_decisions_per_second,
                 )
             )
             QApplication.processEvents()
@@ -1328,6 +1346,52 @@ class BenchmarkRunner:
         except Exception:
             self._finish_with_error(traceback.format_exc())
     
+
+    def _install_monster_chaos_ai_counter(self, logic):
+        """Count actual per-monster AI-loop decisions without editing engine code."""
+        import types
+
+        monster_ai = getattr(logic, "monster_ai", None)
+        if monster_ai is None:
+            raise RuntimeError("Monster chaos witness has no MonsterAI instance")
+
+        original = monster_ai.update
+        self._monster_chaos_ai_original_update = original
+        self._monster_chaos_ai_decisions = 0
+        self._monster_chaos_ai_updates = 0
+
+        def counted_update(ai_self, delta):
+            player = getattr(ai_self.lt, "player", None)
+            if player is not None and not getattr(ai_self.lt, "player_dead", False):
+                monsters = getattr(ai_self.lt, "_monster_things", None)
+                if monsters is None:
+                    from editor.things import Monster
+                    monsters = [
+                        thing for thing in getattr(ai_self.lt, "things", ())
+                        if isinstance(thing, Monster)
+                    ]
+                self._monster_chaos_ai_decisions += sum(
+                    1
+                    for thing in monsters
+                    if not thing.properties.get("hidden", False)
+                    and not thing.properties.get("disabled", False)
+                )
+                self._monster_chaos_ai_updates += 1
+            return original(delta)
+
+        monster_ai.update = types.MethodType(counted_update, monster_ai)
+
+    def _restore_monster_chaos_ai_counter(self, logic=None):
+        """Restore the production MonsterAI.update method."""
+        original = getattr(self, "_monster_chaos_ai_original_update", None)
+        if original is None:
+            return
+        if logic is None:
+            logic = getattr(self.main_window.view_3d, "logic_thread", None)
+        monster_ai = getattr(logic, "monster_ai", None) if logic is not None else None
+        if monster_ai is not None:
+            monster_ai.update = original
+        self._monster_chaos_ai_original_update = None
 
     def _show_monster_chaos_overlay(self, seconds):
         """Display the temporary bottom-right witness countdown."""
