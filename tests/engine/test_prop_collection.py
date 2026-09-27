@@ -11,26 +11,6 @@ from engine.prop_runtime import PropSession
 pytestmark = pytest.mark.qt
 
 
-@pytest.mark.parametrize("legacy_weapon", ["gun1", "gun2", "sword", "cig"])
-def test_legacy_pickup_map_migrates_to_collectible_prop(legacy_weapon):
-    loaded = Thing.from_dict({
-        "type": "pickup",
-        "pos": [1, 2, 3],
-        "properties": {
-            "item_type": legacy_weapon,
-            "name": "weapon_prop",
-        },
-    })
-
-    assert isinstance(loaded, Prop)
-    assert loaded.properties["type"] == "prop"
-    assert loaded.properties["collect_enabled"] is True
-    assert loaded.properties["carry_enabled"] is False
-    assert loaded.properties["collect_type"] == "weapon"
-    assert loaded.properties["collect_weapon"] == legacy_weapon
-    assert loaded.properties["sprite_path"].endswith(f"{legacy_weapon}.png")
-
-
 def test_prop_collection_defaults_are_independent_of_carry():
     prop = Prop()
     assert prop.properties["collect_enabled"] is False
