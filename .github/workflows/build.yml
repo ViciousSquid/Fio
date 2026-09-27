@@ -455,6 +455,7 @@ jobs:
             "release/assets/Fio_${VERSION}_Windows.zip" \
             "release/assets/Fio_${VERSION}_macOS.zip" \
             "release/assets/Fio_${VERSION}_linux.zip" \
+            --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Fio $VERSION" \
             --generate-notes
