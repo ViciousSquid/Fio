@@ -2577,22 +2577,7 @@ class PropertyEditor(QWidget):
         self._collect_key_widgets = []
         self._collect_sprite_widgets = []
 
-        # A key collection's colour is gameplay data, not a sprite-only choice.
-        # Build the selector here because collect_key_name is intentionally excluded
-        # from the generic property editor.
-        key_label = QLabel("Key:")
-        key_combo = _make_combo(
-            list(Prop.KEY_NAMES),
-            thing.properties.get('collect_key_name', Prop.DEFAULT_KEY_NAME),
-            self.on_collect_key_name_changed,
-        )
-        is_key = thing.properties.get('collect_type') == 'key'
-        key_label.setVisible(is_key)
-        key_combo.setVisible(is_key)
-        key_combo.setEnabled(is_key)
-        form.addRow(key_label, key_combo)
-        self._collect_key_widgets.append((key_label, key_combo))
-        self._build_collect_activation_row(form, thing, thing.properties.get('collect_activation', 'walk_over'))
+                self._build_collect_activation_row(form, thing, thing.properties.get('collect_activation', 'walk_over'))
         self._build_collect_value_row(form, thing, thing.properties.get('collect_value', 25))
         self._build_collect_sprite_row(form, thing)
         self._build_collect_respawn_row(form, thing)
@@ -3016,63 +3001,6 @@ class PropertyEditor(QWidget):
         variant_combo.currentTextChanged.connect(on_variant)
         form.addRow("Variant:", variant_combo)
 
-    def _build_collect_type_row(self, form, thing):
-        collect_type = thing.properties.get('collect_type', 'health')
-        # Older maps stored gun1/gun2/cig directly in collect_type. Present those
-        # maps through the new explicit Weapon field without breaking them.
-        legacy_weapon = collect_type if collect_type in ('gun1', 'gun2', 'cig') else None
-        if legacy_weapon:
-            collect_type = 'weapon'
-            thing.properties['collect_type'] = 'weapon'
-            thing.properties.setdefault('collect_weapon', legacy_weapon)
-
-        combo = _make_combo(['health', 'key', 'weapon', 'custom'],
-                            collect_type,
-                            self.on_collect_type_changed)
-        form.addRow("Collect Type:", combo)
-
-        weapon_lbl = QLabel("Weapon:")
-        weapon_combo = _make_combo(
-            ['gun1', 'gun2', 'cig'],
-            thing.properties.get('collect_weapon', legacy_weapon or 'gun1'),
-            self.on_collect_weapon_changed,
-        )
-        form.addRow(weapon_lbl, weapon_combo)
-        self._collect_weapon_widgets = [(weapon_lbl, weapon_combo)]
-        weapon_visible = collect_type == 'weapon'
-        weapon_lbl.setVisible(weapon_visible)
-        weapon_combo.setVisible(weapon_visible)
-
-        lbl = QLabel("Key Name:")
-        key_combo = _make_combo(list(Prop.KEY_NAMES),
-                                thing.properties.get('collect_key_name', Prop.DEFAULT_KEY_NAME),
-                                self.on_collect_key_name_changed)
-        key_combo.setEditable(True)
-        form.addRow(lbl, key_combo)
-        self._collect_key_widgets.append((lbl, key_combo))
-
-        is_key = thing.properties.get('collect_type') == 'key'
-        lbl.setVisible(is_key)
-        key_combo.setVisible(is_key)
-
-        # Door link
-        door_lbl = QLabel("")
-        door_lbl.setWordWrap(True)
-        door_lbl.setVisible(False)
-        form.addRow("", door_lbl)
-        self._widgets['collect_door_link_label'] = door_lbl
-        self._collect_key_widgets.append((QLabel(""), door_lbl))
-
-        door_btn = QPushButton("Select Door ▸")
-        door_btn.setVisible(False)
-        door_btn.clicked.connect(self._select_linked_door)
-        form.addRow("", door_btn)
-        self._widgets['collect_door_select_btn'] = door_btn
-        self._collect_key_widgets.append((QLabel(""), door_btn))
-
-        if is_key:
-            self._update_collect_door_link(thing)
-        key_combo.currentTextChanged.connect(lambda _: self._update_collect_door_link(self.current_object))
 
     def _build_collect_activation_row(self, form, thing, value):
         combo = _make_combo(['walk_over', 'use'], value, lambda t: self.update_object_prop('collect_activation', t))
@@ -4449,7 +4377,7 @@ class PropertyEditor(QWidget):
                 widget.setVisible(show_sprite)
 
         if is_health:
-            self.update_object_prop('collect_custom_sprite', 'assets/sprites/health.png')
+            self.update_object_prop('collect_custom_sprite', '')
             if hasattr(self, 'collect_sprite_path'):
                 self.collect_sprite_path.setText('assets/sprites/health.png')
             self.update_object_prop('collect_activation', 'walk_over')
@@ -4459,7 +4387,8 @@ class PropertyEditor(QWidget):
         elif is_weapon:
             weapon = self.current_object.properties.get('weapon', 'gun1')
             sprite = f'assets/sprites/{weapon}.png'
-            self.update_object_prop('collect_custom_sprite', sprite)
+            self.update_object_prop('collect_custom_sprite', '')
+            self.update_object_prop('sprite_path', sprite)
             if hasattr(self, 'collect_sprite_path'):
                 self.collect_sprite_path.setText(sprite)
             self.update_object_prop('collect_activation', 'walk_over')
