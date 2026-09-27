@@ -2592,6 +2592,10 @@ class PropertyEditor(QWidget):
         key_combo.setEnabled(is_key)
         form.addRow(key_label, key_combo)
         self._collect_key_widgets.append((key_label, key_combo))
+        self._build_collect_activation_row(form, thing, thing.properties.get('collect_activation', 'walk_over'))
+        self._build_collect_value_row(form, thing, thing.properties.get('collect_value', 25))
+        self._build_collect_sprite_row(form, thing)
+        self._build_collect_respawn_row(form, thing)
 
     def _iterate_thing_properties(self, form, thing, property_keys=None):
         """Add generic Thing properties to a form.
@@ -2740,12 +2744,14 @@ class PropertyEditor(QWidget):
             ):
                 continue
 
-            # Prop properties handled by the dedicated Prop UI.
+            # Prop collection properties handled by the dedicated collection UI.
             if is_collect and key in (
                 'collect_key_name',
                 'collect_custom_sprite',
                 'collect_respawns',
                 'collect_respawn_time',
+                'collect_activation',
+                'collect_value',
             ):
                 continue
 
@@ -2885,7 +2891,7 @@ class PropertyEditor(QWidget):
                 continue
 
             # The weapon is edited by the Item Type row above.
-            if is_collect and key == 'weapon':
+            if is_collect and key == 'collect_weapon':
                 continue
 
             # Legacy maps store show_radius as "True"/"False"; normalise so it
@@ -4348,6 +4354,8 @@ class PropertyEditor(QWidget):
         if self.current_object is None:
             return
         self.update_object_prop('collect_key_name', collect_key_name)
+        sprite = Prop.get_key_sprite_path(collect_key_name)
+        self.update_object_prop('sprite_path', sprite)
         if hasattr(self, '_collect_sprite_widgets'):
             for lbl, widget in self._collect_sprite_widgets:
                 lbl.setVisible(False)
@@ -4366,6 +4374,7 @@ class PropertyEditor(QWidget):
         if fp:
             rel = os.path.relpath(fp, os.getcwd()).replace('\\', '/')
             self.update_object_prop('collect_custom_sprite', rel)
+            self.update_object_prop('sprite_path', rel)
             if hasattr(self, 'collect_sprite_path'):
                 self.collect_sprite_path.setText(rel)
             if hasattr(Prop, 'clear_sprite_cache'):
@@ -4376,6 +4385,8 @@ class PropertyEditor(QWidget):
         if self.current_object is None or not isinstance(self.current_object, Prop):
             return
         self.update_object_prop('collect_custom_sprite', '')
+        if self.current_object.properties.get('collect_type') in ('key', 'weapon', 'health'):
+            self.update_object_prop('sprite_path', self.current_object.get_collect_sprite_path())
         if hasattr(self, 'collect_sprite_path'):
             self.collect_sprite_path.setText('')
         if hasattr(Prop, 'clear_sprite_cache'):
@@ -4387,8 +4398,9 @@ class PropertyEditor(QWidget):
             return
         self.update_object_prop('collect_weapon', weapon)
         if self.current_object.properties.get('collect_type') == 'weapon':
-            sprite = f'assets/sprites/{weapon}.png'
+            sprite = Prop.GUN_SPRITES.get(weapon, Prop.GUN_SPRITES['gun1'])
             self.update_object_prop('collect_custom_sprite', sprite)
+            self.update_object_prop('sprite_path', sprite)
             if hasattr(self, 'collect_sprite_path'):
                 self.collect_sprite_path.setText(sprite)
         if hasattr(Prop, 'clear_sprite_cache'):
