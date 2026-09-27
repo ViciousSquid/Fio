@@ -8,7 +8,7 @@ from editor.things import Thing, Prop
 def test_prop_has_serializable_carry_and_physics_defaults():
     prop = Prop(pos=[1, 2, 3])
     assert prop.properties['type'] == 'prop'
-    assert prop.properties['pickup_enabled'] is True
+    assert prop.properties['carry_enabled'] is True
     # A bare Prop has no model_path, so its representation follows the one
     # asset it does have. See test_a_bare_prop_is_drawable.
     assert prop.properties['render_mode'] == 'billboard'
