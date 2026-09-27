@@ -89,7 +89,9 @@ def test_core_prop_carry_drop_rest_without_plugins():
 
 
 def test_non_physics_prop_still_falls_to_ground_on_drop():
-    prop = Prop(pos=[0.0, 120.0, 30.0])
+    prop = Prop(pos=[0.0, 40.0, 55.0], properties={
+        'carry_offset': [0.0, 70.0, 0.0],
+    })
     io = IO()
     grid = _floor_grid()
     logic = SimpleNamespace(
