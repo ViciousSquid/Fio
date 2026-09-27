@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QUrl
 from PyQt5 import sip
-from PyQt5.QtGui import QFont, QTextCursor, QPainter, QPixmap
+from PyQt5.QtGui import QFont, QTextCursor, QPainter, QPixmap, QDesktopServices
 from collections import deque
 import re
 
@@ -49,6 +49,14 @@ class DebugLogger(QObject):
         self._buffer.append((category, full_msg))
         self.message_logged.emit(category, full_msg)
 
+    def log_raw(self, message: str):
+        """Log a console line without adding a category prefix."""
+        if not self._enabled:
+            return
+
+        self._buffer.append(('', message))
+        self.message_logged.emit('', message)
+
     def set_enabled(self, enabled: bool):
         self._enabled = enabled
 
@@ -78,6 +86,11 @@ def get_debug_logger() -> DebugLogger:
 def debug_log(category: str, message: str):
     """Convenience function to log a debug message."""
     get_debug_logger().log(category, message)
+
+
+def debug_log_raw(message: str):
+    """Convenience function for an unprefixed console line."""
+    get_debug_logger().log_raw(message)
 
 
 class CommandInput(QLineEdit):
@@ -644,11 +657,13 @@ class DebugConsole(QWidget):
         self.command_issued.emit(cmd)
 
     def _on_anchor_clicked(self, url: QUrl):
-        """Handle clicking on an entity name."""
+        """Handle clicking on an entity filter or an external URL."""
         link = url.toString()
         if link.startswith("filter:"):
             entity_name = link.split(":", 1)[1]
             self._apply_entity_filter(entity_name)
+        elif link.startswith(("http://", "https://")):
+            QDesktopServices.openUrl(url)
 
     def _apply_entity_filter(self, entity_name):
         """Updates the dropdown to filter by this entity."""
@@ -703,8 +718,12 @@ class DebugConsole(QWidget):
             if self.active_entity_filter not in message:
                 return
         # If we are in standard Category mode (and not "All")
-        elif current_combo_text != "All" and category != current_combo_text:
+        elif current_combo_text != "All" and filter_category != current_combo_text:
             return
+
+        # Raw console lines still behave as Info for category filtering,
+        # but deliberately retain their unprefixed display form.
+        filter_category = category or 'Info'
 
         # 2. Filter specific entity types (Movers, Triggers, Doors)
         if self.hide_movers_cb.isChecked() or self.hide_triggers_cb.isChecked() or self.hide_doors_cb.isChecked():
@@ -742,11 +761,11 @@ class DebugConsole(QWidget):
                 return
 
         # Get color for category
-        color = self.CATEGORY_COLORS.get(category, '#FFFFFF')
+        color = self.CATEGORY_COLORS.get(filter_category, '#FFFFFF')
 
         # Plugin messages all share one category; recolour by content so
         # loads read green, errors red, and debug/init stay blue.
-        if category == 'Plugins':
+        if filter_category == 'Plugins':
             color = self._plugin_message_color(message)
 
         # --- HIGHLIGHTING LOGIC ---
@@ -766,6 +785,22 @@ class DebugConsole(QWidget):
 
         def get_link_html(name):
             return f'<a href="filter:{name}" style="{ENT_STYLE}" title="Click to filter by {name}">{name}</a>'
+
+        def get_external_link_html(url):
+            return (
+                f'<a href="{url}" '
+                f'style="color: #2b6132; text-decoration: underline;" '
+                f'title="Open Fio on GitHub">{url}</a>'
+            )
+
+        # A raw startup URL is a real clickable link, not an entity filter.
+        _msg_temp = re.sub(
+            r'(?<![\w/])https?://[^\s<]+|(?<![\w/])github\.com/[^\s<]+',
+            lambda m: get_external_link_html(
+                m.group(0) if m.group(0).startswith('http') else
+                'https://' + m.group(0)),
+            _msg_temp
+        )
 
         # Apply Regex substitutions to _msg_temp (protected string)
 
