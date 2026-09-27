@@ -135,8 +135,8 @@ def _make_entity(entity_type):
 #:
 #: Keyed by ``(entity_type, input)`` and not by input name alone, because the
 #: same name means different things on different entities: ``SetValue`` takes
-#: ``"key=value"`` on a LogicState and a plain integer on a Pickup, and a table
-#: keyed on the name fed the state-shaped parameter to the pickup — which threw
+#: ``"key=value"`` on a LogicState and a plain integer on a Prop, and a table
+#: keyed on the name fed the state-shaped parameter to the Prop — which threw
 #: it out as unparseable, so that input was probed without ever being exercised.
 PROBE_PARAMS = {
     ("logic_state", "setvalue"): "k=1",
