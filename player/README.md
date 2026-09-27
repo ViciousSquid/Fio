@@ -210,3 +210,7 @@ python -m unittest discover -s player/tests -p "test_*.py" -v
 The suite is stdlib-only (no pygame/numpy/GPU needed) and builds `.fiopak`
 fixtures in memory, including one packaged from a real repository map when
 `maps/` is present.
+
+## Bundled plugin security
+
+A `.fiopak` can carry Python plugins under `plugins/`. Because those files are executable code, the player asks for explicit permission before extracting or importing bundled plugins. Packages with unsafe plugin paths (including traversal or absolute paths) are rejected for plugin execution, and denying the prompt leaves foreign package code unopened.
