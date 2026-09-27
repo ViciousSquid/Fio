@@ -2432,10 +2432,9 @@ layout (location = 10) in float iInstanceAlpha;
         gl.glDisable(gl.GL_CULL_FACE)
 
         count = len(slots)
-        if count == 1:
-            # Keep the singleton path numeric but use the already-proven uniform
-            # model submission instead of depending on instanced vertex
-            # attributes for a draw that gains nothing from instancing.
+        if count == 1 and float(table.render_alpha[int(slots[0])]) >= 1.0:
+            # Opaque singletons do not benefit from instancing. A fading row must
+            # stay on the instanced path because opacity is per-instance data.
             drawn = 1 if self._draw_dense_model_single(
                 projection, view, table, slots[0], lights) else 0
             if cull_was_enabled:
