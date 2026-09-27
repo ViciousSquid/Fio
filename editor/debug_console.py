@@ -710,6 +710,9 @@ class DebugConsole(QWidget):
 
         # 1. Check Category Filter vs Entity Filter
         current_combo_text = self.filter_combo.currentText()
+        # Raw console lines still behave as Info for category filtering,
+        # but deliberately retain their unprefixed display form.
+        filter_category = category or 'Info'
 
         # If we are in "Entity: X" mode
         if self.active_entity_filter:
@@ -720,10 +723,6 @@ class DebugConsole(QWidget):
         # If we are in standard Category mode (and not "All")
         elif current_combo_text != "All" and filter_category != current_combo_text:
             return
-
-        # Raw console lines still behave as Info for category filtering,
-        # but deliberately retain their unprefixed display form.
-        filter_category = category or 'Info'
 
         # 2. Filter specific entity types (Movers, Triggers, Doors)
         if self.hide_movers_cb.isChecked() or self.hide_triggers_cb.isChecked() or self.hide_doors_cb.isChecked():
