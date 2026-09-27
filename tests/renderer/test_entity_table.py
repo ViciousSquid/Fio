@@ -249,6 +249,16 @@ def test_released_prop_with_no_carry_yaw_uses_free_billboard_sentinel():
     assert table.sprite_fixed_yaw[0] == -10000.0
 
 
+def test_prop_respawn_alpha_is_a_dense_render_column():
+    prop = make_thing(Prop, 'fading', render_mode='billboard',
+                     sprite_path='assets/sprites/pickup.png')
+    prop._respawn_fade_alpha = 0.25
+
+    table = _synced([prop])
+
+    assert table.render_alpha[0] == 0.25
+
+
 def test_positions_refresh_every_frame_without_reconciling():
     monster = make_thing(Monster, 'grunt', (0.0, 0.0, 0.0))
     table = _synced([monster])
