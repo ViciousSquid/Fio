@@ -406,7 +406,7 @@ class BaseRenderer:
         self._brush_nmat_buf = np.empty((0, 9), dtype=np.float32)
         self._model_instance_vbo = None
         self._model_instance_capacity = 0
-        self._model_instance_data = np.empty((0, 28), dtype=np.float32)
+        self._model_instance_data = np.empty((0, 29), dtype=np.float32)
         self._model_instanced_vaos = set()
         self._model_recipe_scratch = np.empty(0, dtype=np.int32)
         self._model_sorted_slots_scratch = np.empty(0, dtype=np.int32)
@@ -843,10 +843,10 @@ layout (location = 10) in vec4 iPayload;
                 extra_uniforms=['lightSpaceMatrix', 'lightPos', 'far_plane']):
             print(f'{_BASE_RENDERER_PREFIX} Shadow depth instancing shader compiled successfully.')
 
-    #: Per-instance attributes the sprite pass carries: the billboard's centre,
-    #: world size, and optional locked world-facing yaw.  Six floats.
+    #: Per-instance attributes: centre, world size, optional locked yaw, opacity.
+    #: Seven floats.
     #: the draw call each sprite used to cost.
-    SPRITE_INSTANCE_FLOATS = 6
+    SPRITE_INSTANCE_FLOATS = 7
 
     def _compile_instanced_sprite_shader(self):
         """Compile the billboard shader with its centre and size per instance.
@@ -878,6 +878,7 @@ layout (location = 10) in vec4 iPayload;
         instance_decls = (
             'layout (location = 1) in vec3 iSpritePos;\n'
             'layout (location = 2) in vec2 iSpriteSize;\n'
+            'layout (location = 4) in float iSpriteAlpha;\n'
         )
         if 'iSpritePos' not in source:
             source = source.replace(
@@ -891,6 +892,26 @@ layout (location = 10) in vec4 iPayload;
             # The shader did not look the way this rewrite assumes; leaving the
             # program absent keeps the per-sprite path, which every caller has.
             return
+        source = source.replace(
+            'out vec2 TexCoords;',
+            'out vec2 TexCoords;\nflat out float InstanceAlpha;',
+            1,
+        )
+        source = source.replace(
+            'void main() {',
+            'void main() {\n    InstanceAlpha = iSpriteAlpha;',
+            1,
+        )
+        frag = frag.replace(
+            'in highp vec3 FragPos;',
+            'in highp vec3 FragPos;\nin float InstanceAlpha;',
+            1,
+        )
+        frag = frag.replace(
+            'FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a);',
+            'FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a * InstanceAlpha);',
+            1,
+        )
         if self._register_instanced_shader('sprite_instanced', source, frag,
                                            extra_uniforms=['projection', 'view',
                                                            'sprite_texture',
@@ -1353,7 +1374,7 @@ layout (location = 10) in vec4 iPayload;
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
         stride = self.SPRITE_INSTANCE_FLOATS * 4
         for location, size, offset in (
-            (1, 3, 0), (2, 2, 12), (3, 1, 20)
+            (1, 3, 0), (2, 2, 12), (3, 1, 20), (4, 1, 24)
         ):
             gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
                                      stride, ctypes.c_void_p(offset))
@@ -1377,7 +1398,7 @@ layout (location = 10) in vec4 iPayload;
         self._sprite_instance_base = base
         origin = base * stride
         for location, size, offset in (
-            (1, 3, 0), (2, 2, 12), (3, 1, 20)
+            (1, 3, 0), (2, 2, 12), (3, 1, 20), (4, 1, 24)
         ):
             gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
                                      stride, ctypes.c_void_p(origin + offset))
@@ -1588,6 +1609,7 @@ layout (location = 6) in vec4 iModel3;
 layout (location = 7) in vec4 iNormal0;
 layout (location = 8) in vec4 iNormal1;
 layout (location = 9) in vec4 iNormal2;
+layout (location = 10) in float iInstanceAlpha;
 
 """
 
@@ -1598,25 +1620,52 @@ layout (location = 9) in vec4 iNormal2;
             source = source.replace('uniform mat3 normalMatrix;\n', '')
             if 'out vec3 FragPos;' not in source:
                 raise ValueError('unexpected model vertex shader interface')
-            source = source.replace('out vec3 FragPos;', instance_attrs + 'out vec3 FragPos;', 1)
+            source = source.replace(
+                'out vec3 FragPos;',
+                instance_attrs + 'flat out float InstanceAlpha;\nout vec3 FragPos;',
+                1,
+            )
             source = source.replace(
                 'void main() {',
                 'void main() {\n'
                 '    mat4 instanceModel = mat4(iModel0, iModel1, iModel2, iModel3);\n'
-                '    mat3 instanceNormal = mat3(iNormal0.xyz, iNormal1.xyz, iNormal2.xyz);\n',
+                '    mat3 instanceNormal = mat3(iNormal0.xyz, iNormal1.xyz, iNormal2.xyz);\n'
+                '    InstanceAlpha = iInstanceAlpha;\n',
                 1,
             )
             source = source.replace('model * vec4(aPos, 1.0)', 'instanceModel * vec4(aPos, 1.0)')
             source = source.replace('normalMatrix * aNormal', 'instanceNormal * aNormal')
             return source
+        lit_instance_frag = lit_frag.replace(
+            'out vec4 FragColor;',
+            'out vec4 FragColor;\nin float InstanceAlpha;',
+            1,
+        ).replace(
+            'FragColor = vec4(applyFog(result, FragPos), alpha);',
+            'FragColor = vec4(applyFog(result, FragPos), alpha * InstanceAlpha);',
+            1,
+        )
+        textured_instance_frag = tex_frag.replace(
+            'out vec4 FragColor;',
+            'out vec4 FragColor;\nin float InstanceAlpha;',
+            1,
+        ).replace(
+            'uniform sampler2D texture_diffuse;',
+            'uniform sampler2D texture_diffuse;\nuniform float alpha;',
+            1,
+        ).replace(
+            'FragColor = vec4(applyFog(result, FragPos), texColor.a);',
+            'FragColor = vec4(applyFog(result, FragPos), texColor.a * alpha * InstanceAlpha);',
+            1,
+        )
         try:
             self.shaders['lit_instanced'] = self.shader_loader.compile_from_source(
-                make_vertex(lit_vert), lit_frag)
+                make_vertex(lit_vert), lit_instance_frag)
             self.uniforms['lit_instanced'] = UniformCache(self.shaders['lit_instanced'])
             self._preload_lit_uniforms('lit_instanced')
 
             self.shaders['textured_instanced'] = self.shader_loader.compile_from_source(
-                make_vertex(tex_vert), tex_frag)
+                make_vertex(tex_vert), textured_instance_frag)
             self.uniforms['textured_instanced'] = UniformCache(self.shaders['textured_instanced'])
             self._preload_lit_uniforms('textured_instanced')
             self.uniforms['textured_instanced'].preload(
@@ -2204,7 +2253,7 @@ layout (location = 9) in vec4 iNormal2;
             while capacity < count:
                 capacity *= 2
             self._model_instance_capacity = capacity
-            self._model_instance_data = np.empty((capacity, 28), dtype=np.float32)
+            self._model_instance_data = np.empty((capacity, 29), dtype=np.float32)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._model_instance_vbo)
             gl.glBufferData(
                 gl.GL_ARRAY_BUFFER,
@@ -2221,13 +2270,17 @@ layout (location = 9) in vec4 iNormal2;
             self._ensure_model_instance_buffer(1)
         gl.glBindVertexArray(vao)
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._model_instance_vbo)
-        stride = 28 * 4
+        stride = 29 * 4
         offsets = (0, 16, 32, 48, 64, 80, 96)
         for location, offset in zip(range(3, 10), offsets):
             gl.glVertexAttribPointer(
                 location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(offset))
             gl.glEnableVertexAttribArray(location)
             gl.glVertexAttribDivisor(location, 1)
+        gl.glVertexAttribPointer(
+            10, 1, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(112))
+        gl.glEnableVertexAttribArray(10)
+        gl.glVertexAttribDivisor(10, 1)
         gl.glBindVertexArray(0)
         self._model_instanced_vaos.add(key)
 
@@ -2238,6 +2291,7 @@ layout (location = 9) in vec4 iNormal2;
         out = self._model_instance_data[:count]
         np.take(table.model_base_matrix, slots, axis=0, out=out[:, :16])
         np.take(table.model_normal_matrix, slots, axis=0, out=out[:, 16:28])
+        np.take(table.render_alpha, slots, out=out[:, 28])
         np.take(table.pos[:, 0], slots, out=out[:, 12])
         np.take(table.pos[:, 1], slots, out=out[:, 13])
         np.take(table.pos[:, 2], slots, out=out[:, 14])
@@ -2767,6 +2821,7 @@ layout (location = 9) in vec4 iNormal2;
         np.take(table.pos, sorted_slots, axis=0, out=data[:, 0:3])
         np.take(table.sprite_size, sorted_slots, axis=0, out=data[:, 3:5])
         np.take(table.sprite_fixed_yaw, sorted_slots, out=data[:, 5])
+        np.take(table.render_alpha, sorted_slots, out=data[:, 6])
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
         gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
 
