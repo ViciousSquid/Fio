@@ -53,7 +53,7 @@ from engine.portal_transform import (
     contains_point as _portal_contains_point,
 )
 from editor.things import (
-    Thing, PathNode, Pickup, Prop, Monster, LogicGate, LogicRelay,
+    Thing, PathNode, Prop, Monster, LogicGate, LogicRelay,
     LogicTimer, LevelChanger, Light, LogicSpawner, LogicCamera,
 )
 
