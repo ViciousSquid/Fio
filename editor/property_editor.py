@@ -464,6 +464,50 @@ class PropertyEditor(QWidget):
         self._page = None
         return page
 
+    def _restore_page_bindings(self, page):
+        """Rebind widget/layout handles owned by a cached property page.
+        
+        Property pages are deliberately parked and reused. The callbacks still
+        live on this PropertyEditor instance, however, so any instance-level
+        _prop_* references must follow the page being restored rather than the
+        last page that happened to be built.
+        """
+        bindings = getattr(page, '_fio_property_bindings', None)
+        if not bindings:
+            return
+        for name, value in bindings.items():
+            setattr(self, name, value)
+
+    def _capture_page_bindings(self, page):
+        """Attach this page's Prop-specific widget handles for cache restore."""
+        names = (
+            '_prop_form',
+            '_prop_collection_rows',
+            '_prop_collectible_cb',
+            '_prop_collect_type_combo',
+            '_prop_collect_type_values',
+            '_prop_weapon_combo',
+            '_prop_weapon_values',
+            '_prop_key_combo',
+            '_prop_key_values',
+            '_prop_activation_combo',
+            '_prop_value_label',
+            '_prop_value_spin',
+            '_prop_sprite_path',
+            '_prop_sprite_label',
+            '_prop_sprite_widget',
+            '_prop_respawn_cb',
+            '_prop_respawn_label',
+            '_prop_respawn_spin',
+            '_prop_render_form',
+            '_prop_model_path_row',
+            '_prop_sprite_path_row',
+            '_prop_sprite_size_row',
+        )
+        page._fio_property_bindings = {
+            name: getattr(self, name, None) for name in names
+        }
+
     def _cache_current_page(self):
         """Park the page on screen so selecting its object again is instant."""
         page = self._detach_page()
@@ -606,6 +650,10 @@ class PropertyEditor(QWidget):
                 self.main_layout.addWidget(cached_page)
                 cached_page.setVisible(True)
                 self._page = cached_page
+                # Cached pages own their widget/layout handles. Rebind the
+                # instance-level callback references to this page before any
+                # signal can reach a handler such as _refresh_prop_collection_ui.
+                self._restore_page_bindings(cached_page)
             elif obj is None:
                 self.main_layout.addWidget(QLabel("Nothing selected."))
                 self._strip_tooltips()
@@ -1679,6 +1727,11 @@ class PropertyEditor(QWidget):
         scroll.setWidget(content)
         self.main_layout.addWidget(scroll)
         self._page = scroll
+        # The page may later be parked in the cache. Keep the Prop-specific
+        # widget/layout handles with it so restoring the page cannot leave
+        # callbacks pointing at a deleted QFormLayout.
+        if isinstance(thing, Prop):
+            self._capture_page_bindings(scroll)
 
     def _create_thing_properties_tab(self, thing) -> QWidget:
         w = QWidget()
