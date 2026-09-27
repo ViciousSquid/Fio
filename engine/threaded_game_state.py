@@ -1,4 +1,5 @@
 import threading
+import weakref
 import glm
 import numpy as np
 from collections import deque
@@ -274,6 +275,13 @@ class ThreadedGameState:
         # Double Buffering: One state for reading (Render), one for writing (Logic)
         self._read_state = RenderState()
         self._write_state = RenderState()
+        # Number of live renderer-side snapshots borrowing each published
+        # RenderState. A published buffer must never be recycled while one of
+        # these snapshots can still reach its dense tables/arrays.
+        self._render_leases = {
+            self._read_state: 0,
+            self._write_state: 0,
+        }
         self._has_new_frame = False
         
         # Input state
@@ -310,12 +318,51 @@ class ThreadedGameState:
         self._console_cmd_lock = threading.Lock()
         self.console_command_queue = deque()
 
+    @staticmethod
+    def _release_render_state_lease(owner_ref, state) -> None:
+        """Release one borrowed published-state reference."""
+        owner = owner_ref()
+        if owner is None:
+            return
+        with owner._render_state_lock:
+            leases = owner._render_leases.get(state, 0)
+            if leases > 0:
+                owner._render_leases[state] = leases - 1
+
     def get_render_state(self) -> RenderState:
-        """Called by RenderThread (Qt) to get the latest frame data."""
+        """Borrow the latest published frame for the renderer/UI.
+
+        The returned object is a shallow snapshot for API compatibility, but
+        its arrays/tables still belong to the published RenderState. A lease
+        therefore pins that source buffer until ``release_render_state()`` is
+        called or the snapshot is garbage-collected. This lets the dense
+        RenderTable/EntityTable remain persistent without allowing the logic
+        thread to recycle them underneath the renderer.
+        """
         with self._render_state_lock:
+            source = self._read_state
+            self._render_leases[source] = self._render_leases.get(source, 0) + 1
             snap = object.__new__(RenderState)
-            snap.__dict__ = self._read_state.__dict__.copy()
+            snap.__dict__ = source.__dict__.copy()
+            owner_ref = weakref.ref(self)
+            snap._render_lease_state = source
+            snap._render_lease_finalizer = weakref.finalize(
+                snap,
+                ThreadedGameState._release_render_state_lease,
+                owner_ref,
+                source,
+            )
             return snap
+
+    def release_render_state(self, snapshot: RenderState) -> None:
+        """Release a borrowed render-state snapshot early.
+
+        The finalizer is also attached as a safety net, so existing short-lived
+        callers remain safe even if they do not explicitly release the snapshot.
+        """
+        finalizer = getattr(snapshot, "_render_lease_finalizer", None)
+        if finalizer is not None:
+            finalizer()
 
     def get_write_state(self) -> RenderState:
         """Called by LogicThread to get the object to write to."""
@@ -327,15 +374,23 @@ class ThreadedGameState:
             return self._has_new_frame
 
     def request_swap(self):
-        """Called by LogicThread when a frame is completely written."""
+        """Publish the completed write buffer when the old read buffer is free.
+
+        If the renderer is still borrowing the current read buffer, do not
+        recycle it and do not publish a newer buffer yet. The logic thread keeps
+        ownership of the existing write buffer and may overwrite it with an even
+        newer frame on the next tick. This is safe and avoids per-frame table
+        allocation or blocking the logic thread behind a slow renderer.
+        """
         with self._render_state_lock:
-            # Swap: write becomes read, old read becomes next write buffer
             old_read = self._read_state
+            if self._render_leases.get(old_read, 0) > 0:
+                return False
             self._read_state = self._write_state
-            # Reuse the old read state instead of allocating a new RenderState
             old_read.reset()
             self._write_state = old_read
             self._has_new_frame = True
+            return True
 
     def try_swap(self) -> bool:
         """Called by QtGameView to check if a new frame is available."""
