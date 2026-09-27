@@ -44,6 +44,7 @@ from .cell import (CELL_SIZE, CellCoord, cell_distance_sq, cell_of_point,
                    cells_for_aabb)
 from .manager import (DEFAULT_ACTIVATION_RADIUS, DEFAULT_DEACTIVATION_RADIUS,
                       DEFAULT_PERSISTENT_TYPES, _normalise_type)
+from .config import effective_streaming_radii
 from .persistence import cell_key_for_pos, normalize_streaming_state
 
 _BRUSH = "brush"
@@ -272,8 +273,12 @@ class DiskStreamingSession:
         self.logic = logic
         self.source = source
         self.cell_size = float(getattr(source, "cell_size", CELL_SIZE))
-        self.load_radius = float(load_radius)
-        self.evict_radius = max(float(evict_radius), self.load_radius)
+        self._authored_load_radius = max(0.0, float(load_radius))
+        self._authored_evict_radius = max(
+            self._authored_load_radius, float(evict_radius)
+        )
+        self.load_radius = self._authored_load_radius
+        self.evict_radius = self._authored_evict_radius
         self.streaming = True
         self._started = False
 
@@ -322,9 +327,29 @@ class DiskStreamingSession:
         return rec.get("pos", (0.0, 0.0, 0.0))
 
     # ------------------------------------------------------------------
+    # Residency / camera cooperation
+    # ------------------------------------------------------------------
+
+    def _sync_visual_horizon(self) -> bool:
+        view_distance = getattr(self.logic, "view_distance", None)
+        horizon = getattr(view_distance, "visual_horizon", None)
+        load_radius, evict_radius = effective_streaming_radii(
+            self._authored_load_radius,
+            self._authored_evict_radius,
+            horizon,
+        )
+        changed = (
+            load_radius != self.load_radius
+            or evict_radius != self.evict_radius
+        )
+        self.load_radius = load_radius
+        self.evict_radius = max(evict_radius, load_radius)
+        return changed
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
-    def start(self, player_pos=None) -> None:
+    def start(self, player_pos=None) -> None
         """Begin streaming: keep persistent globals resident, empty the rest of
         the scene, and stream in only the cells around the player."""
         persistent = list(getattr(self.source, "persistent_things", []) or [])
@@ -335,6 +360,7 @@ class DiskStreamingSession:
         except Exception:
             self.logic.things = list(persistent)
             self.logic.brushes = []
+        self._sync_visual_horizon()
         pos = player_pos if player_pos is not None else self._player_pos()
         if pos is not None:
             self._restream(pos, force=True)
@@ -372,7 +398,8 @@ class DiskStreamingSession:
         pos = player_pos if player_pos is not None else self._player_pos()
         if pos is None:
             return False
-        return self._restream(pos, force=False)
+        radius_changed = self._sync_visual_horizon()
+        return self._restream(pos, force=radius_changed)
 
     def _restream(self, pos, force: bool) -> bool:
         px, pz = float(pos[0]), float(pos[2])
