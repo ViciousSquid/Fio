@@ -177,7 +177,6 @@ class FioPackage:
             for n in self._names
             if n.lower().endswith(".json")
             and _basename(n) not in _MANIFEST_NAMES
-            and not _normalize(n).startswith("plugins/")
         ]
         return sorted(maps)
 

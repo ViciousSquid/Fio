@@ -77,13 +77,8 @@ class _BridgeLogic:
 
 
 class PlayerPluginHost:
-    def __init__(self, plugin_permission_callback: Optional[Callable[[object], bool]] = None):
-        """Host package plugins, subject to an explicit execution permission gate.
-
-        ``plugin_permission_callback`` is called before any bundled plugin bytes
-        are extracted or made importable. A missing callback is intentionally
-        secure-by-default: foreign package plugins are not executed.
-        """
+    def __init__(self):
+        """Host plugins installed with the player runtime."""
         self.manager = None
         self.bridge: Optional[_BridgeLogic] = None
         self.active = False
