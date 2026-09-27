@@ -243,7 +243,7 @@ class CollapsibleSection(QWidget):
         self.toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
         self.toggle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.content = QWidget()
+        self.content = QWidget(self)
         self.content_layout = QVBoxLayout(self.content)
         self.content_layout.setContentsMargins(8, 6, 4, 4)
         self.content_layout.setSpacing(4)
@@ -1781,7 +1781,7 @@ class PropertyEditor(QWidget):
             self.add_vector3_widget(form, thing, 'rotation')
 
             if is_prop:
-                sprite_widget = QWidget()
+                sprite_widget = QWidget(w)
                 sprite_layout = QHBoxLayout(sprite_widget)
                 sprite_layout.setContentsMargins(0, 0, 0, 0)
                 sprite_edit = QLineEdit(
@@ -1811,7 +1811,7 @@ class PropertyEditor(QWidget):
                 sprite_layout.addWidget(sprite_btn)
                 form.addRow("Sprite Path:", sprite_widget)
 
-                sprite_size_widget = QWidget()
+                sprite_size_widget = QWidget(w)
                 sprite_size_layout = QHBoxLayout(sprite_size_widget)
                 sprite_size_layout.setContentsMargins(0, 0, 0, 0)
                 sprite_size = thing.properties.get('sprite_size', [32.0, 32.0])
@@ -2766,7 +2766,7 @@ class PropertyEditor(QWidget):
         # Only expose a picker when the user is actually authoring a custom/
         # generic sprite.
         sprite_label = QLabel("Sprite:")
-        sprite_widget = QWidget()
+        sprite_widget = QWidget(self.tab_widget)
         sprite_layout = QHBoxLayout(sprite_widget)
         sprite_layout.setContentsMargins(0, 0, 0, 0)
         sprite_path = QLineEdit(
@@ -2788,7 +2788,7 @@ class PropertyEditor(QWidget):
         form.addRow(sprite_label, sprite_widget)
 
         respawn = bool(thing.properties.get('collect_respawns', False))
-        respawn_widget = QWidget()
+        respawn_widget = QWidget(self.tab_widget)
         respawn_layout = QHBoxLayout(respawn_widget)
         respawn_layout.setContentsMargins(0, 0, 0, 0)
         respawn_cb = _make_checkbox(
