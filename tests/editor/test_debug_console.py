@@ -43,7 +43,7 @@ def test_github_startup_link_is_dark_green_and_clickable(qt_app):
     console._append_message("", "github.com/vicioussquid/Fio")
     html = console.console.toHtml()
 
-    assert "https://github.com/ViciousSquid/Fio" in html
+    assert "https://github.com/vicioussquid/Fio" in html
     assert "#2b6132" in html
 
     console.deleteLater()
