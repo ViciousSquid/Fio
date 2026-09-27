@@ -1802,7 +1802,7 @@ class QtGameView(QOpenGLWidget):
         hud_margin = 20
         active_weapon = getattr(self, '_cached_active_weapon', None)
 
-        # The entire HUD fades back in for two seconds after a LogicCamera
+        # The entire HUD fades back in for four seconds after a LogicCamera
         # gives control back to the player.
         hud_alpha = max(
             0.0, min(1.0, float(getattr(render_state, "hud_alpha", 1.0)))
@@ -1853,10 +1853,10 @@ class QtGameView(QOpenGLWidget):
         painter.setPen(self._hud_health_orange)
         health_text = str(int(health))
         metrics = QFontMetrics(health_font)
-        # Pin health to the extreme lower-left corner of the viewport.
-        # Keep a small inset so the glyph is not clipped by the framebuffer.
-        health_x = 2
-        health_y = viewport_height - 2 - metrics.descent()
+        # Pin health almost flush to the extreme lower-left corner.
+        # Keep a one-pixel inset so the glyph is not clipped by the framebuffer.
+        health_x = 1
+        health_y = viewport_height - 1 - metrics.descent()
 
         # Health is the large orange count. Ammo is a smaller green count
         # touching it directly, with no layout gap.
@@ -2032,7 +2032,7 @@ class QtGameView(QOpenGLWidget):
         p2_dead = getattr(render_state, 'player2_dead', False)
         painter.save()
         painter.setClipRect(half, 0, half, h)
-        margin = 8
+        margin = 1
         health_font = QFont(self._hud_health_font)
         health_font.setPointSize(max(42, min(68, int(h * 0.085))))
         painter.save()
