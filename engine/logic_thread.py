@@ -32,12 +32,11 @@ from .effect_entity import Effect
 
 # Import Thing subclasses for type checking
 try:
-    from editor.things import (Speaker, Pickup, Prop as PropThing, Light,
+    from editor.things import (Speaker, Prop as PropThing, Light,
                                Monster as MonsterThing, PathNode, LogicTimer,
                                PlayerStart, Portal, LevelChanger)
 except ImportError:
     Speaker = None
-    Pickup = None
     PropThing = None
     Light = None
     MonsterThing = None
@@ -281,8 +280,7 @@ class LogicThread(threading.Thread):
         self.hurt_trigger_timers: Dict[int, float] = {}
         self.HURT_INTERVAL = 0.5
         
-        # Pickup state
-        self.collected_pickups: set = set()
+        # Collection state
         self.collected_keys: set = set()
         
         # Respawn timers
@@ -361,7 +359,6 @@ class LogicThread(threading.Thread):
         self._trigger_brushes = []
         self._trigger_brush_by_bid = {}
         self._use_trigger_entries = []
-        self._pickup_things = []
         # The Prop registry (engine.prop_runtime.PropSession).  Created on
         # play-mode enter and None in the editor, where nothing simulates.
         self._props = None
@@ -471,9 +468,7 @@ class LogicThread(threading.Thread):
         self._trigger_brush_by_bid = dict(self._trigger_brushes)
         self._refresh_use_triggers()
 
-        # PERF: precomputed thing lists for _handle_interactions / _handle_pickups
-        self._pickup_things = [t for t in self.things if Pickup and isinstance(t, Pickup)]
-        # Props are not cached here.  PropSession is the registry for the Prop
+        # Props are not cached here. PropSession is the registry for the Prop
         # domain and a second list would be a competing copy of it; this is the
         # point at which it re-derives itself from the thing list, alongside
         # every other entity cache, and the engine reads Props back off it.
@@ -1077,14 +1072,15 @@ class LogicThread(threading.Thread):
             self.buddha_mode = False
             self.notarget = False
             
-            # Reset pickup state
+            # Reset collection state
             self._reset_trigger_state()
-            self.collected_pickups.clear()
             self.collected_keys.clear()
-            self.respawn_timers.clear()
             for thing in self.things:
-                if Pickup and isinstance(thing, Pickup):
-                    thing.properties['collected'] = False
+                if PropThing and isinstance(thing, PropThing):
+                    thing.properties['collect_collected'] = False
+                    thing.properties['carry_enabled'] = True
+            if self._props is not None:
+                self._props.start()
             
             # Reset speaker state
             self.active_speakers.clear()
@@ -1822,7 +1818,6 @@ class LogicThread(threading.Thread):
             return
         
         # Update movers & doors first (for platform carrying)
-        self._update_respawns(delta)
         self._update_movers(delta)
         self._update_doors(delta)
         self._update_parented_lights()
@@ -2950,30 +2945,6 @@ class LogicThread(threading.Thread):
                             door_consumed_use = True
 
 
-        if Pickup and not door_consumed_use:
-            p_pos = glm.vec3(px, py, pz)
-            p_forward = glm.vec3(math.sin(self.player.angle), 0, math.cos(self.player.angle))
-            for thing in self._pickup_things:
-                if thing.properties.get('collected', False):
-                    continue
-                if thing.properties.get('activation') != 'use':
-                    continue
-                if thing.properties.get('disabled', False):
-                    continue
-                if id(thing) in self.collected_pickups:
-                    continue
-                t_pos = glm.vec3(thing.pos)
-                dist = glm.distance(p_pos, t_pos)
-                if dist < 80.0:
-                    to_thing = glm.normalize(t_pos - p_pos)
-                    if glm.dot(p_forward, to_thing) > 0.8:
-                        item_name = thing.properties.get('item_type', 'Item').replace('_', ' ').title()
-                        self.current_hud_message = f"[E] Pick up {item_name}"
-                        if use_key_pressed:
-                            self._collect_pickup(thing)
-                        return
-
-
         if not door_consumed_use:
             p_pos = glm.vec3(px, py, pz)
             p_forward = glm.vec3(math.sin(self.player.angle), 0, math.cos(self.player.angle))
@@ -3002,78 +2973,6 @@ class LogicThread(threading.Thread):
                                 self.io_manager.fire_output(thing, 'OnUse')
                         return
 
-    # =========================================================================
-    # PICKUPS
-    # =========================================================================
-
-    def _check_pickups(self):
-        self._handle_pickups(False)
-
-    def _handle_pickups(self, use_key_pressed: bool):
-        if not self.player or not Pickup:
-            return
-        player_pos = self.player.pos
-        pickup_radius = 32.0
-
-        for thing in self._pickup_things:
-            if thing.properties.get('collected', False):
-                continue
-            if id(thing) in self.collected_pickups:
-                continue
-            if thing.properties.get('disabled', False):
-                continue
-            thing_pos = glm.vec3(thing.pos)
-            distance = glm.distance(player_pos, thing_pos)
-            if thing.properties.get('activation') == 'walk_over' and distance <= pickup_radius:
-                self._collect_pickup(thing)
-    
-    def _collect_pickup(self, pickup):
-        item_type = pickup.properties.get('item_type', 'health')
-        value = pickup.properties.get('value', 25)
-        if item_type == 'health':
-            self.player_health = min(self.player_max_health, self.player_health + value)
-        elif item_type == 'key':
-            key_name = pickup.properties.get('key_name', '')
-            if key_name:
-                self.collected_keys.add(key_name)
-        elif item_type == 'weapon' or item_type in ['gun1', 'gun2', 'cig']:
-            weapon = pickup.properties.get(
-                'weapon',
-                item_type if item_type in ['gun1', 'gun2', 'cig'] else 'gun1',
-            )
-            self.active_weapon = weapon
-            self.current_hud_message = f"Picked up {weapon.upper()}"
-        pickup.properties['collected'] = True
-        pid = id(pickup)
-        self.collected_pickups.add(pid)
-        if self.io_manager:
-            self.io_manager.fire_output(pickup, 'OnPickedUp')
-        self._plugin_emit("pickup_collected", pickup=pickup,
-                          item_type=item_type, value=value)
-        if pickup.properties.get('respawns', False):
-            respawn_time = pickup.properties.get('respawn_time', 20.0)
-            self.respawn_timers[pid] = {
-                'remaining': respawn_time,
-                'entity': pickup,
-            }
-    
-    def _update_respawns(self, delta: float):
-        if not Pickup:
-            return
-        to_respawn = []
-        for pid, timer_data in list(self.respawn_timers.items()):
-            timer_data['remaining'] -= delta
-            if timer_data['remaining'] <= 0:
-                to_respawn.append(pid)
-        for pid in to_respawn:
-            timer_data = self.respawn_timers.pop(pid)
-            entity = timer_data.get('entity')
-            if entity is not None and isinstance(entity, Pickup):
-                entity.properties['collected'] = False
-                self.collected_pickups.discard(pid)
-                if self.io_manager:
-                    self.io_manager.fire_output(entity, 'OnRespawn')
-    
     # =========================================================================
     # MOVER/DOOR UPDATES
     # =========================================================================
@@ -4151,15 +4050,17 @@ class LogicThread(threading.Thread):
             erefs[i] = snapshot
             etable.update_monster_snapshot(int(i), snapshot)
 
-        # A collected pickup is not published.  Only pickup rows can be
-        # collected, so the filter costs pickups rather than entities -- on a
-        # map with no pickups it costs nothing at all.
+        # A collected Prop is not published. The dense Prop registry owns
+        # collection state, so the renderer filters only Prop rows rather than
+        # walking the whole Thing list.
         visible_thing_slots = self._entity_all_slots
-        if (self.play_mode and self.collected_pickups
-                and len(etable.pickup_slots)):
-            collected = self.collected_pickups
-            dropped = [int(i) for i in etable.pickup_slots
-                       if id(things[int(i)]) in collected]
+        collected = self._props.collected_ids if self._props is not None else set()
+        if self.play_mode and collected:
+            prop_slots = np.flatnonzero(
+                (etable.class_bits & (1 << 8)) != 0
+            )
+            dropped = [int(i) for i in prop_slots
+                       if id(entity_things[int(i)]) in collected]
             if dropped:
                 keep_things = np.ones(thing_count, dtype=bool)
                 keep_things[dropped] = False
