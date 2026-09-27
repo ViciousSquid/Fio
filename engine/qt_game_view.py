@@ -972,6 +972,7 @@ class QtGameView(QOpenGLWidget):
         COLOR_LOGIC   = (1.0, 1.0, 0.0)
         COLOR_IO      = (0.0, 1.0, 1.0)
         COLOR_PATROL  = (0.15, 0.65, 0.60)
+        COLOR_PATHNODE = (128.0 / 255.0, 128.0 / 255.0, 0.0)
         try:
             from editor.io_system import get_connections
             io_available = True
@@ -1021,7 +1022,7 @@ class QtGameView(QOpenGLWidget):
                 next_node = node_lookup.get(next_name)
                 if next_node is None:
                     continue
-                lines.append({'src': node.pos, 'dst': next_node.pos, 'color': COLOR_PATROL})
+                lines.append({'src': node.pos, 'dst': next_node.pos, 'color': COLOR_PATHNODE})
         if Monster is not None and PathNode is not None:
             for t in self.editor.state.things:
                 if not isinstance(t, Monster):
