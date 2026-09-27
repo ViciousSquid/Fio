@@ -87,6 +87,7 @@ class BenchmarkRunner:
         self._live_io_elapsed = None
         self._sysmon_samples = []
         self._last_sysmon_sample = 0.0
+        self._benchmark_sysmon_previous_state = None
         self._requested_duration = None
         self._requested_repetitions = 1
         self._current_phase_results = []
@@ -467,6 +468,43 @@ class BenchmarkRunner:
         self._begin_next()
     
 
+    def _lock_sysmon_for_benchmark(self):
+        """Force SysMon on and temporarily remove its user controls."""
+        view = getattr(self.main_window, "view_3d", None)
+        sysmon = getattr(view, "sysmon", None)
+        if sysmon is None:
+            return
+
+        if self._benchmark_sysmon_previous_state is None:
+            self._benchmark_sysmon_previous_state = (
+                bool(sysmon.is_active()),
+                bool(getattr(sysmon, "expanded", False)),
+            )
+        sysmon.set_benchmark_locked(True)
+        sysmon.set_active(True)
+        sysmon.set_expanded(True)
+        view.update()
+        QApplication.processEvents()
+
+    def _restore_sysmon_after_benchmark(self):
+        """Restore SysMon's pre-benchmark active/expanded state."""
+        previous = self._benchmark_sysmon_previous_state
+        if previous is None:
+            return
+        self._benchmark_sysmon_previous_state = None
+
+        view = getattr(self.main_window, "view_3d", None)
+        sysmon = getattr(view, "sysmon", None)
+        if sysmon is None:
+            return
+
+        was_active, was_expanded = previous
+        sysmon.set_benchmark_locked(False)
+        sysmon.set_active(was_active)
+        sysmon.set_expanded(was_expanded)
+        view.update()
+        QApplication.processEvents()
+
     def _has_current_loaded_map(self):
         """Return True when the live editor has a current map/scene to benchmark."""
         if getattr(self.main_window, "file_path", None):
@@ -509,6 +547,7 @@ class BenchmarkRunner:
         self._measurement_active = False
         self._live_stress_active = False
         self._restore_benchmark_window_mode()
+        self._restore_sysmon_after_benchmark()
         if self.main_window.view_3d.play_mode:
             self.main_window._exit_play_mode()
             QApplication.processEvents()
@@ -811,9 +850,9 @@ class BenchmarkRunner:
         self._live_stress_active = False
         self._stop_live_stress_monitor()
         self._restore_benchmark_window_mode()
+        self._restore_sysmon_after_benchmark()
     
-        try:
-            if self.main_window.view_3d.play_mode and not self._original_play_mode:
+        try:            if self.main_window.view_3d.play_mode and not self._original_play_mode:
                 self.main_window._exit_play_mode()
                 QApplication.processEvents()
         except Exception:
@@ -864,6 +903,7 @@ class BenchmarkRunner:
         self._live_stress_active = False
         self._stop_live_stress_monitor()
         self._stop_monitor()
+        self._restore_sysmon_after_benchmark()
     
         try:
             self._terminate_worker_process()
@@ -1229,6 +1269,7 @@ class BenchmarkRunner:
         self.export_button.setVisible(False)
         self.status_label.setText("Preparing live Fio benchmark...")
         self._set_controls_enabled(False)
+        self._lock_sysmon_for_benchmark()
     
         stress_toggle = self.findChild(QToolButton)
         if stress_toggle is not None:
