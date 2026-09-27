@@ -17,9 +17,13 @@ class _View:
     def __init__(self, play_mode=True):
         self.play_mode = play_mode
         self.messages = []
+        self.messages2 = []
 
     def show_view_message(self, text):
         self.messages.append(text)
+
+    def show_view_message2(self, text):
+        self.messages2.append(text)
 
 
 class _MainWindow:
@@ -50,3 +54,13 @@ def test_message_command_is_play_mode_only():
     handler.handle_command('message "Hello"')
 
     assert window.view_3d.messages == []
+
+def test_message2_command_uses_the_second_independent_line():
+    window = _MainWindow()
+    handler = ConsoleCommandHandler(window)
+
+    handler.handle_command('message "First"')
+    handler.handle_command('message2 "Second"')
+
+    assert window.view_3d.messages == ["First"]
+    assert window.view_3d.messages2 == ["Second"]
