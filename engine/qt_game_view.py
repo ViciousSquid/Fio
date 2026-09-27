@@ -434,6 +434,9 @@ class QtGameView(QOpenGLWidget):
 
         self._cached_hud_message = None
         self._cached_hud_message_width = 0
+        self._view_message_text = ""
+        self._view_message_started_at = 0.0
+        self._view_message_width = 0
         self._cached_gun_hud = {}
         self._cached_weapon_pickup = {}   # (item_type, size) -> scaled QPixmap
         self._cached_key_pixmaps = {}
@@ -474,6 +477,58 @@ class QtGameView(QOpenGLWidget):
 
         self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
 
+
+    def show_view_message(self, text: str):
+        """Show a transient console message directly in the 3D play view.
+
+        The message is independent from the normal interaction HUD prompt.
+        It fades in for one second, remains fully visible for five seconds,
+        then fades out for one second.
+        """
+        text = str(text).strip()[:50]
+        if not text:
+            return
+
+        self._view_message_text = text
+        self._view_message_started_at = time.perf_counter()
+        self._view_message_width = QFontMetrics(
+            self._hud_msg_font
+        ).horizontalAdvance(text)
+        self.update()
+
+    def _draw_view_message(self, painter, viewport_width, viewport_height):
+        """Draw the transient console message one line above held-item HUDs."""
+        text = getattr(self, "_view_message_text", "")
+        if not text:
+            return
+
+        elapsed = time.perf_counter() - self._view_message_started_at
+        if elapsed >= 7.0:
+            self._view_message_text = ""
+            self._view_message_started_at = 0.0
+            self._view_message_width = 0
+            return
+
+        if elapsed < 1.0:
+            opacity = elapsed
+        elif elapsed < 6.0:
+            opacity = 1.0
+        else:
+            opacity = 1.0 - (elapsed - 6.0)
+
+        cx = viewport_width // 2
+        held_item_row_top = viewport_height - 20 - 100
+        baseline = held_item_row_top - 12
+        width = self._view_message_width
+
+        painter.save()
+        painter.setOpacity(max(0.0, min(1.0, opacity)))
+        painter.setFont(self._hud_msg_font)
+        painter.setPen(self._hud_shadow_pen)
+        painter.drawText(cx - width // 2 + 2, baseline + 2, text)
+        painter.setPen(self._hud_grey_pen)
+        painter.drawText(cx - width // 2, baseline, text)
+        painter.restore()
 
     def _clear_play_mode_hint(self):
         self._play_mode_hint = ""
@@ -1486,6 +1541,9 @@ class QtGameView(QOpenGLWidget):
             self._draw_death_screen(painter)
         if self.play_mode and getattr(self, '_cached_level_complete_ui', None):
             self._draw_level_complete_overlay(painter)
+        if self.play_mode:
+            self._draw_view_message(painter, self.width(), self.height())
+
         if self.sysmon.is_active():
             self.sysmon.draw(
                 painter, self.fps, self.logic_thread, self.renderer,
