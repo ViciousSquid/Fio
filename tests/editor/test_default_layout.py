@@ -276,6 +276,7 @@ def test_invalid_saved_state_falls_back_to_the_captured_default(qt_app):
     assert host.restored == [b'state', b'default']
     assert host.restore_versions == [LAYOUT_VERSION, LAYOUT_VERSION]
     assert not host.config.has_option('Layout', 'state')
+    QApplication.instance().processEvents()      # the invalid-state toast is queued
     assert any('invalid' in t.lower() for t in host.toasts)
 
 

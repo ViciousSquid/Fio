@@ -82,7 +82,7 @@ class Toast(QLabel):
         self.move(x, y)
         self.raise_()  # Ensures it stays above the Status Bar widgets
 
-    def show_message(self, text, parent_widget, is_error=False, duration=None, 
+    def show_message(self, text, parent_widget=None, is_error=False, duration=None, 
                      is_tooltip=False, toast_id=None):
         """Show toast notification with STRICT bottom-middle positioning."""
         if is_tooltip:

@@ -104,16 +104,20 @@ def test_the_tool_toolbar_round_trips_as_a_vertical_right_dock(toolbar):
     assert window.tool_toolbar.orientation() == Qt.Vertical
 
 
-def test_the_tool_toolbar_round_trips_as_a_floating_toolbar(toolbar):
+def test_the_tool_toolbar_round_trips_while_remaining_floatable(toolbar):
+    """QToolBar exposes floating as read-only; setFloatable() controls whether
+    the user may tear it off, while saveState() persists its dock position."""
     window = toolbar
     state_version = 3
 
-    window.tool_toolbar.setFloating(True)
+    window.addToolBar(Qt.RightToolBarArea, window.tool_toolbar)
     saved = window.saveState(state_version)
 
-    window.tool_toolbar.setFloating(False)
+    window.addToolBar(Qt.TopToolBarArea, window.tool_toolbar)
+
     assert window.restoreState(saved, state_version)
-    assert window.tool_toolbar.isFloating()
+    assert window.toolBarArea(window.tool_toolbar) == Qt.RightToolBarArea
+    assert window.tool_toolbar.isFloatable()
 
 
 # ────────────────────────────
