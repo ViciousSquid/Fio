@@ -2327,6 +2327,10 @@ class QtGameView(QOpenGLWidget):
                     if self.logic_thread:
                         self.logic_thread.set_frustum_aspect(self._cached_aspect_ratio)
         else:
+            # Leaving Play Mode is an audio lifecycle boundary: stop both
+            # looping speaker channels and one-shot mixer channels, and discard
+            # any sound requests queued by the logic thread during teardown.
+            self.stop_all_sounds()
             if self.console_overlay_active:
                 self._console_input.hide()
                 self.console_overlay_active = False
