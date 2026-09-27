@@ -644,7 +644,7 @@ def test_logic_camera_arrival_fires_the_individual_path_node_output():
         '_look_initialized': True,
     }
 
-    LogicThread._update_cinematic_camera(logic, 0.2)
+    LogicThread._update_cinematic_camera(logic, 0.4)
 
     assert [(e, n) for e, n, _ in recorder.calls if n == 'OnCameraArrived'] == [(b, 'OnCameraArrived')]
     assert [(e, n) for e, n, _ in recorder.calls if n == 'OnReachNode'] == [(camera, 'OnReachNode')]

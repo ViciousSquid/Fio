@@ -947,6 +947,15 @@ def test_re_binding_can_leave_the_focus_alone(inspector):
     assert panel.isVisible()
 
 
+def test_the_surface_inspector_action_uses_window_shortcut_scope(qt_app):
+    from pathlib import Path
+    import editor.ui as ui_module
+
+    source = Path(ui_module.__file__).read_text(encoding='utf-8')
+    assert "MainWindow.surface_inspector_action.setShortcutContext(" in source
+    assert "Qt.WindowShortcut" in source
+
+
 # ────────────────────────────
 # The editor opening and re-binding it
 # ────────────────────────────

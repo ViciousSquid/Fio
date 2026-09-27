@@ -102,7 +102,8 @@ class View2D(QWidget):
         
         # Connection line animation state
         self.connection_animations = {}
-        self.last_connections = set()
+        self.last_io_connections = set()
+        self.last_patrol_connections = set()
         
         # Animated arrow state - arrows traveling along connection lines
         self.arrow_travel_progress = {}  # {conn_key: [arrow_positions]}
@@ -1121,17 +1122,13 @@ class View2D(QWidget):
 
         # F1 Synchronization ---
         if event.key() == Qt.Key_F1:
-            # Toggle the global flag on the editor state
+            # Keep the View-menu action and the 2D/3D shortcut in sync.
             current_state = getattr(self.editor, 'show_logic_links', False)
-            self.editor.show_logic_links = not current_state
-
-            # Force redraw of both views (2D and 3D)
-            self.editor.update_views()
-
-            # Show toast
-            if hasattr(self.main_window, 'show_toast'):
-                status = "ON" if self.editor.show_logic_links else "OFF"
-                self.main_window.show_toast(f"Logic Links: {status}")
+            if hasattr(self.main_window, 'set_connection_links_enabled'):
+                self.main_window.set_connection_links_enabled(not current_state)
+            else:
+                self.editor.show_logic_links = not current_state
+                self.editor.update_views()
             return
 
         # --- Arrow Key Nudging ---
@@ -1527,6 +1524,47 @@ class View2D(QWidget):
         if self.is_connecting and self.connection_source:
             self.draw_connection_drag(painter)
 
+    @staticmethod
+    def _segment_intersects_rect(p1, p2, rect):
+        """Return True when a 2D line segment touches ``rect``.
+
+        Endpoint-only culling drops long I/O links when both entities are
+        outside the current view even though the link itself crosses the view.
+        Liang-Barsky keeps the test constant-time and avoids constructing Qt
+        paths for every connection.
+        """
+        rect = rect.normalized()
+        x1, y1 = float(p1.x()), float(p1.y())
+        x2, y2 = float(p2.x()), float(p2.y())
+        dx = x2 - x1
+        dy = y2 - y1
+
+        if dx == 0.0 and dy == 0.0:
+            return rect.contains(QPointF(x1, y1))
+
+        t0, t1 = 0.0, 1.0
+        for p, q in (
+            (-dx, x1 - rect.left()),
+            (dx, rect.right() - x1),
+            (-dy, y1 - rect.top()),
+            (dy, rect.bottom() - y1),
+        ):
+            if p == 0.0:
+                if q < 0.0:
+                    return False
+                continue
+            t = q / p
+            if p < 0.0:
+                if t > t1:
+                    return False
+                t0 = max(t0, t)
+            else:
+                if t < t0:
+                    return False
+                t1 = min(t1, t)
+
+        return t0 <= t1
+
     def draw_logic_connections(self, painter, visible_bounds):
         """
         Draws I/O connections between entities.
@@ -1539,20 +1577,39 @@ class View2D(QWidget):
         axis1_idx = ax_map[ax1]
         axis2_idx = ax_map[ax2]
         
-        # Precompute a name -> position lookup once (was an O(N) linear scan
-        # over every brush and thing per connection, i.e. O(N*M) per repaint).
+        # Resolve targets by stable id first. Names remain the fallback for
+        # older maps that predate target_id.
+        pos_by_id = {}
         pos_by_name = {}
         for b in self.editor.state.brushes:
+            b_id = b.get('id')
             b_name = b.get('name')
+            if b_id:
+                pos_by_id[b_id] = b['pos']
             if b_name and b_name not in pos_by_name:
                 pos_by_name[b_name] = b['pos']
         for t in self.editor.state.things:
-            t_name = getattr(t, 'name', t.properties.get('name'))
+            props = getattr(t, 'properties', {})
+            t_id = props.get('id')
+            t_name = props.get('name', '')
+            if t_id:
+                pos_by_id[t_id] = t.pos
             if t_name and t_name not in pos_by_name:
                 pos_by_name[t_name] = t.pos
 
-        def get_pos_by_name(name):
-            return pos_by_name.get(name)
+        def get_target_pos(conn):
+            target_id = getattr(conn, 'target_id', '') or ''
+            if target_id:
+                target = pos_by_id.get(target_id)
+                if target is not None:
+                    return target
+            return pos_by_name.get(getattr(conn, 'target_name', ''))
+
+        def entity_id(entity):
+            if isinstance(entity, dict):
+                return entity.get('id') or ('obj:%x' % id(entity))
+            props = getattr(entity, 'properties', {})
+            return props.get('id') or ('obj:%x' % id(entity))
 
         # Check Animation Setting
         should_animate = self.main_window.config.getboolean('Display', 'animate_connections', fallback=False)
@@ -1566,12 +1623,12 @@ class View2D(QWidget):
             for brush in self.editor.state.brushes:
                 io_conns = get_connections(brush)
                 for conn in io_conns:
-                    target_pos = get_pos_by_name(conn.target_name)
+                    target_pos = get_target_pos(conn)
                     if target_pos:
                         # Determine if this is a logic entity
                         is_logic = brush.get('is_trigger', False) or brush.get('is_mover', False) or brush.get('is_door', False)
                         connections_to_draw.append({
-                            'id': f"io_brush_{id(brush)}_{conn.output_name}",
+                            'id': f"io_{entity_id(brush)}_{conn.output_name}_{getattr(conn, 'target_id', '') or conn.target_name}_{conn.input_name}",
                             'target': conn.target_name,
                             'src': brush['pos'],
                             'dst': target_pos,
@@ -1582,11 +1639,11 @@ class View2D(QWidget):
             for thing in self.editor.state.things:
                 io_conns = get_connections(thing)
                 for conn in io_conns:
-                    target_pos = get_pos_by_name(conn.target_name)
+                    target_pos = get_target_pos(conn)
                     if target_pos:
                         is_logic = thing.properties.get('type') == 'logic_gate'
                         connections_to_draw.append({
-                            'id': f"io_thing_{id(thing)}_{conn.output_name}",
+                            'id': f"io_{entity_id(thing)}_{conn.output_name}_{getattr(conn, 'target_id', '') or conn.target_name}_{conn.input_name}",
                             'target': conn.target_name,
                             'src': thing.pos,
                             'dst': target_pos,
@@ -1598,11 +1655,12 @@ class View2D(QWidget):
             source_2d = QPointF(conn['src'][axis1_idx], conn['src'][axis2_idx])
             target_2d = QPointF(conn['dst'][axis1_idx], conn['dst'][axis2_idx])
             
-            # Culling
-            margin = 100.0 
-            s_rect = QRectF(source_2d.x()-margin, source_2d.y()-margin, margin*2, margin*2)
-            t_rect = QRectF(target_2d.x()-margin, target_2d.y()-margin, margin*2, margin*2)
-            if not (visible_bounds.intersects(s_rect) or visible_bounds.intersects(t_rect)):
+            # Cull against the whole line segment, not just its endpoints.
+            # This keeps long-distance links visible when both entities are
+            # outside the current view but the connection crosses the view.
+            margin = 100.0
+            link_bounds = visible_bounds.adjusted(-margin, -margin, margin, margin)
+            if not self._segment_intersects_rect(source_2d, target_2d, link_bounds):
                 continue
 
             conn_key = (conn['id'], conn['target'])
@@ -1633,7 +1691,7 @@ class View2D(QWidget):
                 # Draw a single static arrow head at the target end
                 self._draw_connection_arrow(painter, p1, p2, color)
         
-        self.last_connections = current_connections
+        self.last_io_connections = current_connections
 
     def draw_patrol_paths(self, painter, visible_bounds):
         """
@@ -3147,15 +3205,15 @@ class View2D(QWidget):
             })
         
         # Animation tracking (only for visible connections)
-        for conn_key in current_connections - self.last_connections:
+        for conn_key in current_connections - self.last_patrol_connections:
             self.connection_animations[conn_key] = {'progress': 0.0, 'growing': True}
             # Initialize traveling arrows for this connection
             self.arrow_travel_progress[conn_key] = [0.0]  # Start with one arrow at 0
-        for conn_key in self.last_connections - current_connections:
+        for conn_key in self.last_patrol_connections - current_connections:
             if conn_key in self.connection_animations:
                 self.connection_animations[conn_key]['growing'] = False
         
-        self.last_connections = current_connections
+        self.last_patrol_connections = current_connections
         
         # Draw visible connections
         for conn in connections_to_draw:

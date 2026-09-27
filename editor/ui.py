@@ -3,10 +3,11 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStatusBar, QToolBar,
     QLabel, QSpinBox, QCheckBox, QComboBox, QAction, QMessageBox, QFrame,
     QDockWidget, QTabWidget, QPushButton, QActionGroup, QDialog,
-    QDialogButtonBox, QApplication, QSizePolicy, QInputDialog, QMenu
+    QDialogButtonBox, QApplication, QSizePolicy, QInputDialog, QMenu,
+    QStyle, QStyleOptionButton
 )
-from PyQt5.QtCore import Qt, QSize
-from PyQt5.QtGui import QIcon, QKeySequence
+from PyQt5.QtCore import Qt, QSize, QByteArray, QRect
+from PyQt5.QtGui import QIcon, QKeySequence, QPainter
 
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
@@ -46,6 +47,40 @@ class PowerOfTwoSpinBox(QSpinBox):
             return 1
         return int(2 ** round(math.log2(n)))
 
+class RotatablePlayButton(QPushButton):
+    """Play button that rotates its complete presentation for a vertical toolbar."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._vertical = False
+
+    def set_vertical(self, vertical):
+        vertical = bool(vertical)
+        if self._vertical != vertical:
+            self._vertical = vertical
+            self.setProperty("_vertical", vertical)
+            self.update()
+
+    def paintEvent(self, event):
+        if not self._vertical:
+            super().paintEvent(event)
+            return
+
+        # Draw the normal QPushButton in a transposed coordinate system.
+        # This rotates both icon and label instead of forcing a 250px-wide
+        # horizontal button into a narrow right-hand toolbar.
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        painter.translate(self.width(), 0)
+        painter.rotate(90)
+
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        option.rect = QRect(0, 0, self.height(), self.width())
+        self.style().drawControl(QStyle.CE_PushButton, option, painter, self)
+        painter.end()
+
+
 class GenerateTilemapDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -66,7 +101,7 @@ class GenerateTilemapDialog(QDialog):
 #: an older version is dropped once, so a new default actually reaches an
 #: install that has been opened before -- settings.ini stores the layout on
 #: every close, and restoreState() would otherwise win forever.
-LAYOUT_VERSION = 2
+LAYOUT_VERSION = 3
 
 
 class Ui_MainWindow(object):
@@ -90,9 +125,18 @@ class Ui_MainWindow(object):
         MainWindow.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
 
         # Scene Hierarchy Dock (Left)
-        MainWindow.scene_hierarchy_dock = QDockWidget("Scene", MainWindow)
+        #
+        # Keep a useful windowTitle for toggleViewAction() in View, but replace
+        # the visible dock title bar with a zero-height widget.  The hierarchy
+        # itself should start at the top instead of wasting a row on "Scene".
+        MainWindow.scene_hierarchy_dock = QDockWidget("Scene Hierarchy", MainWindow)
         MainWindow.scene_hierarchy_dock.setObjectName("SceneDock")
         MainWindow.scene_hierarchy_dock.setWidget(MainWindow.scene_hierarchy)
+        scene_title_bar = QWidget()
+        scene_title_bar.setFixedHeight(0)
+        scene_title_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        MainWindow.scene_hierarchy_dock.setTitleBarWidget(scene_title_bar)
+        MainWindow.scene_hierarchy_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         MainWindow.addDockWidget(Qt.LeftDockWidgetArea, MainWindow.scene_hierarchy_dock)
         
         screen_width = QApplication.primaryScreen().geometry().width()
@@ -102,6 +146,7 @@ class Ui_MainWindow(object):
         MainWindow.view_3d_dock = QDockWidget("3D View", MainWindow)
         MainWindow.view_3d_dock.setObjectName("View3DDock")
         MainWindow.view_3d_dock.setWidget(MainWindow.view_3d)
+        MainWindow.view_3d_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.view_3d_dock)
 
         # 2D Views Dock (Right, Tabbed)
@@ -113,6 +158,7 @@ class Ui_MainWindow(object):
         MainWindow.right_tabs.addTab(MainWindow.view_side, "Side (YZ)")
         MainWindow.right_tabs.addTab(MainWindow.view_front, "Front (XY)")
         MainWindow.right_dock.setWidget(MainWindow.right_tabs)
+        MainWindow.right_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.right_dock)
         
         # Properties Dock (Right, Bottom) — tabbed with Debug Console
@@ -130,6 +176,7 @@ class Ui_MainWindow(object):
         MainWindow.properties_dock = QDockWidget(" ", MainWindow)
         MainWindow.properties_dock.setObjectName("PropertiesDock")
         MainWindow.properties_dock.setWidget(MainWindow.properties_tab_widget)
+        MainWindow.properties_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         toggle_action = MainWindow.properties_dock.toggleViewAction()
         toggle_action.setText("Properties/Console")
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.properties_dock)
@@ -283,11 +330,12 @@ class Ui_MainWindow(object):
         # T is the primary key; Shift+S is kept as Radiant's own binding.
         MainWindow.surface_inspector_action.setShortcuts(
             [QKeySequence('T'), QKeySequence('Shift+S')])
-        # T is an editor shortcut, not an application-wide action.  Keeping it
-        # on the MainWindow's child widget tree prevents unrelated shortcut
-        # delivery (notably during Ctrl+Z history actions) from invoking it.
+        # T must work from every editor child, including OpenGL views and
+        # docked/floating panels.  WindowShortcut is the correct scope for a
+        # MainWindow action; WidgetWithChildrenShortcut is too narrow once
+        # focus moves through Qt's dock/toolbar hierarchy.
         MainWindow.surface_inspector_action.setShortcutContext(
-            Qt.WidgetWithChildrenShortcut)
+            Qt.WindowShortcut)
         MainWindow.surface_inspector_action.setToolTip(
             'Texture the hovered face, or the selected brush (T)')
         MainWindow.surface_inspector_action.triggered.connect(
@@ -331,11 +379,24 @@ class Ui_MainWindow(object):
         
         view_menu.addAction(self.action_asset_browser)
 
-        system_monitor_action = QAction('System Monitor', MainWindow, checkable=True)
-        system_monitor_action.setShortcut('F3')
-        system_monitor_action.triggered.connect(MainWindow.toggle_system_monitor)
-        view_menu.addAction(system_monitor_action)
-        
+        MainWindow.surface_inspector_view_action = QAction(
+            'Surface Inspector (T)', MainWindow)
+        MainWindow.surface_inspector_view_action.setToolTip(
+            'Show or hide the Surface Inspector (T)')
+        MainWindow.surface_inspector_view_action.triggered.connect(
+            MainWindow.toggle_surface_inspector)
+        view_menu.addAction(MainWindow.surface_inspector_view_action)
+
+        MainWindow.connection_links_action = QAction(
+            'Connection Links', MainWindow, checkable=True)
+        MainWindow.connection_links_action.setChecked(
+            getattr(MainWindow, 'show_logic_links', True))
+        MainWindow.connection_links_action.setToolTip(
+            'Show I/O connection links in the editor views (F1)')
+        MainWindow.connection_links_action.triggered.connect(
+            MainWindow.set_connection_links_enabled)
+        view_menu.addAction(MainWindow.connection_links_action)
+
         view_menu.addSeparator()
         MainWindow.save_layout_action = QAction("Save Layout", MainWindow)
         MainWindow.save_layout_action.triggered.connect(MainWindow.save_layout)
@@ -348,6 +409,17 @@ class Ui_MainWindow(object):
         MainWindow.reset_layout_action = QAction("Reset Layout", MainWindow)
         MainWindow.reset_layout_action.triggered.connect(MainWindow.reset_layout)
         view_menu.addAction(MainWindow.reset_layout_action)
+
+        # --- Debug Menu Actions ---
+
+        MainWindow.system_monitor_action = QAction(
+            'Sysmon (F3)', MainWindow, checkable=True)
+        MainWindow.system_monitor_action.setShortcut('F3')
+        MainWindow.system_monitor_action.setChecked(
+            MainWindow.view_3d.sysmon.is_active())
+        MainWindow.system_monitor_action.triggered.connect(
+            MainWindow.toggle_system_monitor)
+        MainWindow.debug_menu.addAction(MainWindow.system_monitor_action)
 
         # --- Tools Menu Actions ---
 
@@ -429,9 +501,9 @@ class Ui_MainWindow(object):
         big_toolbar_buttons = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
         icon_size_val = 45 if big_toolbar_buttons else 35
 
-        MainWindow.play_button = QPushButton(QIcon("assets/b_test.png"), "Play", MainWindow)
+        MainWindow.play_button = RotatablePlayButton(
+            QIcon("assets/b_test.png"), "Play", MainWindow)
         MainWindow.play_button.setIconSize(QSize(icon_size_val, icon_size_val))
-        # Remove setFixedSize here — we drive width via stylesheet instead
         MainWindow.play_button.setToolTip("Drop in and play (F5)")
         MainWindow.play_button.setShortcut("f5")
         MainWindow.play_button.clicked.connect(MainWindow.enter_play_mode)
@@ -447,8 +519,6 @@ class Ui_MainWindow(object):
                 border: 1px solid #1a8f3d;
                 border-radius: 4px;
                 padding: 5px 15px;
-                min-width: 250px;
-                max-width: 250px;
             }
             QPushButton:hover {
                 background-color: #28d157;
@@ -463,7 +533,10 @@ class Ui_MainWindow(object):
         tool_toolbar = QToolBar("Tools")
         tool_toolbar.setObjectName("ToolToolbar")
         tool_toolbar.setMovable(True)
-        tool_toolbar.setAllowedAreas(Qt.TopToolBarArea | Qt.BottomToolBarArea)
+        tool_toolbar.setFloatable(True)
+        tool_toolbar.setAllowedAreas(
+            Qt.TopToolBarArea | Qt.BottomToolBarArea | Qt.RightToolBarArea)
+        tool_toolbar.setOrientation(Qt.Horizontal)
         MainWindow.addToolBar(Qt.TopToolBarArea, tool_toolbar)
         # Kept so Settings > Editor > Tooltips can reach its buttons.
         MainWindow.tool_toolbar = tool_toolbar
@@ -638,8 +711,6 @@ class Ui_MainWindow(object):
 
         # --- Procedural / View actions (Blue Strip) ---
         group_3_color = "#00A2E8"
-        make_btn("assets/tint.png", "Tint brush",
-                 on_click=MainWindow.tint_selected_brush, bottom_color=group_2_color)
 
         tool_toolbar.addSeparator()
 
@@ -658,6 +729,23 @@ class Ui_MainWindow(object):
 
         tool_toolbar.addSeparator()
         tool_toolbar.addWidget(MainWindow.play_button)
+
+        def sync_play_button_orientation(orientation):
+            vertical = orientation == Qt.Vertical
+            MainWindow.play_button.set_vertical(vertical)
+            if vertical:
+                MainWindow.play_button.setFixedSize(icon_size_val + 16, 250)
+            else:
+                MainWindow.play_button.setFixedSize(250, icon_size_val + 16)
+
+        tool_toolbar.orientationChanged.connect(sync_play_button_orientation)
+        sync_play_button_orientation(tool_toolbar.orientation())
+
+        # Capture this exact arrangement once.  View > Reset Layout restores
+        # this Qt state instead of trying to reconstruct a nested dock tree
+        # after the user has moved/floated panels around.
+        MainWindow._default_layout_state = QByteArray(
+            MainWindow.saveState(LAYOUT_VERSION))
 
     def create_status_bar(self, MainWindow):
         status_bar = QStatusBar()

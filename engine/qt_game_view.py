@@ -3342,11 +3342,11 @@ class QtGameView(QOpenGLWidget):
             return
         if check_key('key_show_connections', 'F1'):
             current_state = getattr(self.editor, 'show_logic_links', False)
-            self.editor.show_logic_links = not current_state
-            self.editor.update_views()
-            if hasattr(self.editor, 'show_toast'):
-                status = "ON" if self.editor.show_logic_links else "OFF"
-                self.editor.show_toast(f"Logic Links: {status}")
+            if hasattr(self.editor, 'set_connection_links_enabled'):
+                self.editor.set_connection_links_enabled(not current_state)
+            else:
+                self.editor.show_logic_links = not current_state
+                self.editor.update_views()
             return
         if check_key('key_toggle_wireframe', 'F2'):
             if self.current_render_mode == RENDER_MODE_WIREFRAME:
@@ -3359,8 +3359,11 @@ class QtGameView(QOpenGLWidget):
             self.update()
             return
         if check_key('key_sysmon', 'F3'):
-            self.sysmon.toggle()
-            self.update()
+            if hasattr(self.editor, 'toggle_system_monitor'):
+                self.editor.toggle_system_monitor()
+            else:
+                self.sysmon.toggle()
+                self.update()
             return
         if self.play_mode and event.key() == Qt.Key_F7:
             self.monster_debug_active = not self.monster_debug_active
