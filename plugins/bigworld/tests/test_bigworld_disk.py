@@ -77,7 +77,6 @@ class FakeLogic:
         self.player2_max_health = 100
         self.player2_dead = False
         self.collected_keys = set()
-        self.collected_pickups = set()
         self.door_states = {}
         self.mover_states = {}
         self.monster_ai = FakeMonsterAI()
@@ -98,7 +97,7 @@ def make_source():
     persistent global. Returned as a MemoryCellSource."""
     things = [
         FakeThing("A-mon", "monster", [110.0, 0.0, 110.0], {"health": 50}),
-        FakeThing("A-key", "pickup", [120.0, 0.0, 90.0], {"pickup_type": "gold"}),
+        FakeThing("A-key", "prop", [120.0, 0.0, 90.0], {"collect_enabled": True, "collect_type": "key", "collect_key_name": "gold"}),
         FakeThing("B-mon", "monster", [10010.0, 0.0, 110.0], {"health": 80}),
         FakeThing("gs", "gamestate", [0.0, 0.0, 0.0], {"score": 0}),  # persistent global
     ]
