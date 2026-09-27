@@ -4097,6 +4097,8 @@ class PropertyEditor(QWidget):
             if hasattr(self, 'door_tab_index'):
                 self.tab_widget.setTabVisible(self.door_tab_index, False)
         self.current_object['is_mover'] = is_mover
+        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'mark_world_changed'):
+            self.editor.state.mark_world_changed([self.current_object])
         if is_mover:
             self.current_object.setdefault('speed', 64.0)
             self.current_object.setdefault('distance', 128.0)
@@ -4122,6 +4124,8 @@ class PropertyEditor(QWidget):
             if hasattr(self, 'mover_tab_index'):
                 self.tab_widget.setTabVisible(self.mover_tab_index, False)
         self.current_object['is_door'] = is_door
+        if hasattr(self.editor, 'state') and hasattr(self.editor.state, 'mark_world_changed'):
+            self.editor.state.mark_world_changed([self.current_object])
         if is_door:
             self.current_object.setdefault('door_direction', 'up')
             self.current_object.setdefault('door_distance', 128.0)
