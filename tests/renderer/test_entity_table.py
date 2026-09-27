@@ -145,6 +145,34 @@ def test_same_epoch_and_same_rows_is_a_no_op():
     assert table.generation == generation
 
 
+def test_begin_frame_freezes_a_live_entity_list_before_projection():
+    """A concurrent list mutation must not split one frame across two row sets."""
+    things = [make_thing(Light, 'lamp')]
+    late = make_thing(Monster, 'late')
+
+    class MutatingProperties(dict):
+        def __init__(self, values, owner):
+            super().__init__(values)
+            self.owner = owner
+            self.did_mutate = False
+
+        def get(self, key, default=None):
+            if key == 'hidden' and not self.did_mutate:
+                self.did_mutate = True
+                self.owner.append(late)
+            return super().get(key, default)
+
+    things[0].properties = MutatingProperties(things[0].properties, things)
+    table = EntityTable()
+
+    hidden = table.begin_frame(things, epoch=1)
+
+    assert len(things) == 2, "the mutation happened during the frame"
+    assert table.count == 1, "the published table must stay on the frame snapshot"
+    assert table.ids == [things[0].properties['id']]
+    assert hidden.tolist() == [False]
+
+
 def test_an_added_entity_reconciles_without_an_epoch_bump():
     things = [make_thing(Light, 'a')]
     table = _synced(things)

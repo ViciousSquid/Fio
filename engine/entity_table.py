@@ -1013,6 +1013,14 @@ class EntityTable:
         ``hidden`` is the one field that cannot be cached, for the reason the
         brush table gives: Big World parks through it with no notification.
         """
+        # The logic thread normally hands us EditorState.things, which is a
+        # live list also reachable from the editor/main thread. Freeze the
+        # sequence at the frame boundary before deriving any dense column.
+        # Otherwise a concurrent append/remove can make n describe one list
+        # while a later comprehension sees another length, producing mismatched
+        # table columns (and, worse, silently truncated position data in
+        # np.fromiter(..., count=...) ).
+        things = tuple(things)
         n = len(things)
         if self.needs_reconcile(things, epoch):
             self._reconcile(things, dirty_objects=dirty_objects)

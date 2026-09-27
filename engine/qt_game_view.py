@@ -1859,9 +1859,13 @@ class QtGameView(QOpenGLWidget):
         active_weapon = getattr(self, '_cached_active_weapon', None)
 
         # The entire HUD fades back in for four seconds after a LogicCamera
-        # gives control back to the player.
+        # gives control back to the player. The health count has its own
+        # independent opacity state, normally resting at 50% when idle.
         hud_alpha = max(
             0.0, min(1.0, float(getattr(render_state, "hud_alpha", 1.0)))
+        )
+        health_hud_alpha = max(
+            0.0, min(1.0, float(getattr(render_state, "hud_health_alpha", 0.5)))
         )
         # _draw_hud owns this painter opacity for everything it draws: weapon,
         # health/ammo, crosshair, messages, prompts, overhead icons and keys.
@@ -1906,20 +1910,39 @@ class QtGameView(QOpenGLWidget):
         health_font = QFont(self._hud_health_font)
         health_font.setPointSize(max(42, min(68, int(viewport_height * 0.085))))
         painter.setFont(health_font)
-        painter.setPen(self._hud_health_orange)
+        health_ratio = max(
+            0.0,
+            min(
+                1.0,
+                float(health) / float(max_health)
+                if float(max_health) > 0.0 else 0.0,
+            ),
+        )
+        # Full health keeps the established orange; as health falls, blend
+        # continuously toward a much darker red.
+        full_r, full_g, full_b = self._hud_health_orange.red(), self._hud_health_orange.green(), self._hud_health_orange.blue()
+        low_r, low_g, low_b = 100, 0, 0
+        health_color = QColor(
+            int(low_r + (full_r - low_r) * health_ratio),
+            int(low_g + (full_g - low_g) * health_ratio),
+            int(low_b + (full_b - low_b) * health_ratio),
+        )
+        painter.setPen(health_color)
         health_text = str(int(health))
         metrics = QFontMetrics(health_font)
-        # Pin health almost flush to the extreme lower-left corner.
-        # Keep a one-pixel inset so the glyph is not clipped by the framebuffer.
-        health_x = 1
-        health_y = viewport_height - 11 - metrics.descent()
+        # Pin health against the absolute bottom-left edge of the viewport.
+        health_x = 0
+        health_y = viewport_height - metrics.descent()
 
-        # Health is the large orange count. Ammo is a smaller green count
-        # touching it directly, with no layout gap.
+        # Health is the large orange count. Only the health count gets the
+        # independent dim/alert fade; ammo follows the normal whole-HUD opacity.
+        painter.save()
+        painter.setOpacity(hud_alpha * health_hud_alpha)
         painter.setPen(self._hud_count_shadow_pen)
         painter.drawText(health_x + 2, health_y + 2, health_text)
         painter.setPen(self._hud_health_orange)
         painter.drawText(health_x, health_y, health_text)
+        painter.restore()
 
         if active_weapon in ('gun1', 'gun2'):
             ammo_font = QFont(self._hud_health_font)
