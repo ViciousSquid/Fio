@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 pytest.importorskip("PyQt5", reason="Qt is not available in this environment")
 
+from PyQt5.QtCore import Qt  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
     QAction, QApplication, QMainWindow, QPushButton,
 )
@@ -69,6 +70,50 @@ def toolbar(qt_app):
     window = FakeEditorWindow()
     Ui_MainWindow().create_tool_toolbar(window)
     return window
+
+# ────────────────────────────
+# Toolbar docking topology
+# ────────────────────────────
+
+def test_the_tool_toolbar_allows_top_bottom_right_and_floating(toolbar):
+    allowed = toolbar.tool_toolbar.allowedAreas()
+
+    assert allowed & Qt.TopToolBarArea
+    assert allowed & Qt.BottomToolBarArea
+    assert allowed & Qt.RightToolBarArea
+    assert not (allowed & Qt.LeftToolBarArea)
+    assert toolbar.tool_toolbar.isMovable()
+    assert toolbar.tool_toolbar.isFloatable()
+
+
+def test_the_tool_toolbar_round_trips_as_a_vertical_right_dock(toolbar):
+    window = toolbar
+    state_version = 3
+
+    window.addToolBar(Qt.RightToolBarArea, window.tool_toolbar)
+    assert window.toolBarArea(window.tool_toolbar) == Qt.RightToolBarArea
+    assert window.tool_toolbar.orientation() == Qt.Vertical
+
+    saved = window.saveState(state_version)
+
+    window.addToolBar(Qt.TopToolBarArea, window.tool_toolbar)
+    assert window.toolBarArea(window.tool_toolbar) == Qt.TopToolBarArea
+
+    assert window.restoreState(saved, state_version)
+    assert window.toolBarArea(window.tool_toolbar) == Qt.RightToolBarArea
+    assert window.tool_toolbar.orientation() == Qt.Vertical
+
+
+def test_the_tool_toolbar_round_trips_as_a_floating_toolbar(toolbar):
+    window = toolbar
+    state_version = 3
+
+    window.tool_toolbar.setFloating(True)
+    saved = window.saveState(state_version)
+
+    window.tool_toolbar.setFloating(False)
+    assert window.restoreState(saved, state_version)
+    assert window.tool_toolbar.isFloating()
 
 
 # ────────────────────────────
