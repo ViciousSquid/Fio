@@ -2673,6 +2673,7 @@ class PropertyEditor(QWidget):
                 'speed',
                 'fov_override',
                 'look_ahead',
+                'lookat_return_time',
             ):
                 continue
 
@@ -3226,9 +3227,22 @@ class PropertyEditor(QWidget):
 
         # Look ahead
         look = _make_checkbox("Look at next node", thing.properties.get('look_ahead', True),
-                              lambda c: thing.properties.update({'look_ahead': bool(c)}), _Style.CHECKBOX)
-        look.setToolTip("Camera faces the next PathNode instead of forward")
+                              lambda c: self.update_object_prop('look_ahead', bool(c)),
+                              _Style.CHECKBOX)
+        look.setToolTip("Camera smoothly faces the next PathNode")
+
+        return_time = _make_spin(
+            thing.properties.get('lookat_return_time', 5.0),
+            0.0, 3600.0,
+            suffix=" sec", decimals=1, step=0.5,
+            tooltip="LookAt focus duration. 0 = remain focused forever."
+        )
+        return_time.valueChanged.connect(
+            lambda v: self.update_object_prop('lookat_return_time', float(v))
+        )
+
         form.addRow("", look)
+        form.addRow("LookAt Return:", return_time)
 
         tab_layout.addWidget(group)
 
