@@ -1795,9 +1795,7 @@ class BenchmarkResults:
             if resolution:
                 metrics.append("Resolution: %s" % resolution)
             if fps is not None:
-                metrics.append("Average FPS: %.2f (from captured frame time)" % float(fps))
-            if "wall_clock_fps" in result and result.get("fps_source") == "SysMon runtime FPS (1 s)":
-                metrics.append("SysMon FPS: %.2f (1-second runtime rate)" % float(result["wall_clock_fps"]))
+                metrics.append("SysMon FPS: %.2f (1-second runtime rate)" % float(fps))
             if current_frame_ms is not None:
                 metrics.append("Current frame: %.2f ms" % float(current_frame_ms))
             if mean_ms is not None:
@@ -1905,7 +1903,8 @@ class BenchmarkResults:
     Fio version: %s<br>
     Generated: %s<br>
     Execution: %s<br>
-    Average FPS definition: 1000 / mean(captured frame time)<br>
+    FPS definition: Fio runtime FPS over the latest 1-second interval<br>
+    Frame-time definition: current frame plus rolling 60-frame statistics<br>
     VSync: <strong>%s</strong> (swap interval %d)<br>
     VSync source: %s<br>
     <div style="margin:8px 0; padding:8px; color:#aaa; background:#151515; border-left:3px solid #63d471;">Live editor/window tests use this VSync setting. Isolated stress workers use independent GL test contexts, so their renderer FPS is not capped by the editor's presentation VSync.</div>
