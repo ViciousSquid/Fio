@@ -2974,12 +2974,6 @@ class PropertyEditor(QWidget):
         preserved for entities that have not yet been migrated to explicit
         editor property classification.
         """
-        is_collect = isinstance(thing, Prop)
-        current_item = (
-            thing.properties.get('collect_type', 'health')
-            if is_collect else None
-        )
-
         _MONSTER_ONLY = {
             'awake',
             'damage',
@@ -3113,18 +3107,7 @@ class PropertyEditor(QWidget):
             ):
                 continue
 
-            # Prop collection properties handled by the dedicated collection UI.
-            if is_collect and key in (
-                'collect_key_name',
-                'collect_custom_sprite',
-                'collect_respawns',
-                'collect_respawn_time',
-                'collect_activation',
-                'collect_value',
-            ):
-                continue
-
-            # Angle gets the normal angle editor rather than a generic field.
+                # Angle gets the normal angle editor rather than a generic field.
             if key == 'angle':
                 angle = float(value or 0.0)
 
@@ -3216,51 +3199,6 @@ class PropertyEditor(QWidget):
                 )
 
                 form.addRow(QLabel("Logic Type:"), combo)
-                continue
-
-            # Prop item type + explicit weapon selection.
-            if is_collect and key == 'collect_type':
-                current = str(value or 'health')
-                # Older maps encoded gun1/gun2/cig directly in collect_type.
-                legacy_weapon = current if current in ('gun1', 'gun2', 'cig') else None
-                if legacy_weapon:
-                    current = 'weapon'
-                    self.update_object_prop('collect_type', 'weapon')
-                    if 'collect_weapon' not in thing.properties:
-                        self.update_object_prop('collect_weapon', legacy_weapon)
-
-                combo = QComboBox()
-                combo.addItems([
-                    'health',
-                    'ammo',
-                    'weapon',
-                    'key',
-                    'custom',
-                ])
-                index = combo.findText(current)
-                if index >= 0:
-                    combo.setCurrentIndex(index)
-
-                combo.currentTextChanged.connect(self.on_collect_type_changed)
-                form.addRow(QLabel("Collect Type:"), combo)
-
-                weapon_lbl = QLabel("Weapon:")
-                weapon_combo = QComboBox()
-                weapon_combo.addItems(['gun1', 'gun2', 'cig'])
-                weapon_combo.setCurrentText(
-                    thing.properties.get('collect_weapon', legacy_weapon or 'gun1')
-                )
-                weapon_combo.currentTextChanged.connect(self.on_collect_weapon_changed)
-                form.addRow(weapon_lbl, weapon_combo)
-
-                visible = current == 'weapon'
-                weapon_lbl.setVisible(visible)
-                weapon_combo.setVisible(visible)
-                self._collect_weapon_widgets = [(weapon_lbl, weapon_combo)]
-                continue
-
-            # The weapon is edited by the Item Type row above.
-            if is_collect and key == 'collect_weapon':
                 continue
 
             # Legacy maps store show_radius as "True"/"False"; normalise so it
