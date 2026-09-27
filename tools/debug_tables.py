@@ -456,11 +456,55 @@ class DebugTablesWindow(QMainWindow):
         eslot = self.entities.slot_of_id.get(ident) if self.entities is not None else None
         if rslot is None and eslot is None:
             return
+        chain = [f"FOLLOW id={ident}"]
+        if rslot is not None:
+            chain.append(f"render-row={int(rslot)}")
+            slots = np.asarray(
+                getattr(self.snapshot, "visible_brush_slots", []),
+                dtype=np.int32,
+            )
+            if len(slots) and int(rslot) in set(int(x) for x in slots):
+                tex = self.render.tex_name_id[int(rslot)]
+                drawable = (tex >= 0) & (tex != rt.TEX_ID_SKIP)
+                if getattr(self.snapshot, "is_play_mode", False):
+                    drawable &= tex != rt.TEX_ID_NODRAW
+                faces = np.flatnonzero(drawable)
+                if len(faces):
+                    face = int(faces[0])
+                    key_layout = KeyLayout([("texture", 32), ("face", 3)])
+                    logical_key = int(key_layout.pack(
+                        texture=np.asarray([int(tex[face])], dtype=np.int64),
+                        face=np.asarray([face], dtype=np.int64),
+                    )[0])
+                    vis = self.render.tex_name_id[slots]
+                    mask = (vis >= 0) & (vis != rt.TEX_ID_SKIP)
+                    if getattr(self.snapshot, "is_play_mode", False):
+                        mask &= vis != rt.TEX_ID_NODRAW
+                    rr, ff = np.nonzero(mask)
+                    run = -1
+                    if len(rr):
+                        logical_keys = key_layout.pack(
+                            texture=vis[rr, ff].astype(np.int64),
+                            face=ff.astype(np.int64),
+                        )
+                        order, starts = sort_into_runs(logical_keys)
+                        sorted_keys = logical_keys[order]
+                        positions = np.flatnonzero(sorted_keys == logical_key)
+                        if len(positions):
+                            pos = int(positions[0])
+                            run = int(np.searchsorted(
+                                starts, pos, side="right") - 1)
+                    chain.append(f"key=0x{logical_key:09X}")
+                    if run >= 0:
+                        chain.append(f"run={run}")
+        if eslot is not None:
+            chain.append(f"entity-row={int(eslot)}")
+            key_id = int(self.entities.sprite_key_id[int(eslot)])
+            if key_id >= 0:
+                chain.append(f"sprite-key={key_id}")
         self.status.setText(
             self.status.text().split("  |  FOLLOW")[0]
-            + f"  |  FOLLOW id={ident}"
-            + (f" render-row={int(rslot)}" if rslot is not None else "")
-            + (f" entity-row={int(eslot)}" if eslot is not None else "")
+            + "  |  " + " -> ".join(chain)
         )
 
 
