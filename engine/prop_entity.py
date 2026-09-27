@@ -99,7 +99,10 @@ def migrate_legacy_pickup_properties(properties):
     props['carry_enabled'] = False
     props['collect_enabled'] = True
     props['collect_type'] = collect_type
-    props['collect_value'] = props.pop('value', 25)
+    props['collect_value'] = props.pop(
+        'value',
+        8 if collect_type == 'ammo' else 25,
+    )
     props['collect_activation'] = props.pop('activation', 'walk_over')
     props['collect_collected'] = props.pop('collected', False)
     props['collect_respawns'] = props.pop('respawns', False)
@@ -118,6 +121,8 @@ def migrate_legacy_pickup_properties(properties):
             weapon, GUN_SPRITES['gun1'])
     elif collect_type == 'health':
         props['sprite_path'] = 'assets/sprites/health.png'
+    elif collect_type == 'ammo':
+        props['sprite_path'] = 'assets/sprites/ammo.png'
 
     return props
 
@@ -154,6 +159,7 @@ class Prop(_ModelBase):
 
         authored_render_mode = 'render_mode' in self.properties
         authored_sprite_path = 'sprite_path' in self.properties
+        authored_collect_value = 'collect_value' in self.properties
         for key, value in PROP_DEFAULTS.items():
             self.properties.setdefault(
                 key, list(value) if isinstance(value, list) else value)
@@ -170,6 +176,12 @@ class Prop(_ModelBase):
             and not self.properties.get('model_path')
         ):
             self.properties['model_path'] = self.DEFAULT_MODEL_PATH
+
+        # Ammo boxes have a stock amount just like the stock health/weapon/key
+        # pickups have a stock appearance. An explicitly authored amount wins.
+        if (self.properties.get('collect_type') == 'ammo'
+                and not authored_collect_value):
+            self.properties['collect_value'] = 8
 
         # A collectible Prop with no explicit appearance follows its collection
         # payload. An authored sprite_path always wins.
@@ -204,6 +216,8 @@ class Prop(_ModelBase):
             return self.GUN_SPRITES.get(
                 self.properties.get('collect_weapon', 'gun1'),
                 self.GUN_SPRITES['gun1'])
+        if collect_type == 'ammo':
+            return 'assets/sprites/ammo.png'
         if collect_type == 'health':
             return self.properties.get(
                 'collect_custom_sprite') or 'assets/sprites/health.png'
