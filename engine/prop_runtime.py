@@ -285,7 +285,7 @@ class PropSession:
             # position still follows the player's view, but the sprite itself
             # no longer rotates with the camera.
             try:
-                best._carry_sprite_yaw = float(getattr(player, "angle", 0.0))
+                best._carry_sprite_yaw = float(getattr(getattr(self.logic, "player", None), "angle", 0.0))
             except (TypeError, ValueError):
                 best._carry_sprite_yaw = 0.0
             self._falling.pop(id(best), None)
