@@ -361,6 +361,33 @@ class BenchmarkTests:
             camera.yaw = math.degrees(player.angle)
             camera.pitch = math.degrees(player.pitch)
 
+    def _wait_for_dense_brush_projection(self, label, expected_count):
+        """Wait until the live renderer has published the requested brush table."""
+        view = self.main_window.view_3d
+        deadline = time.perf_counter() + self._preparation_timeout_s
+        while time.perf_counter() < deadline:
+            state = view.game_state.get_render_state()
+            table = getattr(state, "render_table", None)
+            slots = getattr(state, "all_brush_slots", None)
+            entity_table = getattr(state, "entity_table", None)
+            hidden = getattr(state, "thing_hidden", None)
+            if (
+                table is not None
+                and int(getattr(table, "count", -1)) == int(expected_count)
+                and slots is not None
+                and len(slots) == int(expected_count)
+                and entity_table is not None
+                and hidden is not None
+                and len(hidden) >= int(getattr(entity_table, "count", 0))
+            ):
+                return
+            self._live_cooperative_yield(label)
+        raise TimeoutError(
+            "%s did not publish its dense RenderTable (%d brush rows) "
+            "within %.0f s."
+            % (label, int(expected_count), self._preparation_timeout_s)
+        )
+
     def _run_live_stress_test(self, label, value):
 
         """Prepare a live stress test; _tick drives the real workload."""
@@ -409,6 +436,12 @@ class BenchmarkTests:
                     data,
                     yield_hook=cooperative_yield,
                 )
+                # The renderer consumes the published dense projection, not
+                # EditorState.brushes directly. Wait for the LogicThread to publish
+                # this exact workload before the timed phase begins; otherwise the
+                # first frames after a scene rebuild can still contain the previous
+                # empty/interstitial projection.
+                self._wait_for_dense_brush_projection(label, brush_count)
                 # Do not recenter the camera here; the scene itself must remain
                 # visible through the real 2D and 3D editor views during preparation.
                 QApplication.processEvents()
