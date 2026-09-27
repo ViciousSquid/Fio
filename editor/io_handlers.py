@@ -1903,19 +1903,25 @@ def register_all_input_handlers(io_manager: IOManager):
     # links carry their own style so the console's entity-link highlighting
     # cannot reinterpret or restyle their HTML.
     version_link_style = (
-        'color: #2AA63E; font-weight: bold; text-decoration: none;'
+        'color: #2AA63E; text-decoration: none;'
+    )
+    version_number_style = (
+        'color: #F08000; font-weight: bold;'
     )
     version_parts = version_str.split('.')
     if len(version_parts) == 4:
         version_markup = (
             f'<a href="filter:{version_parts[0]}" '
-            f'style="{version_link_style}">{version_parts[0]}</a>'
+            f'style="{version_link_style}"><span '
+            f'style="{version_number_style}">{version_parts[0]}</span></a>'
             f'<b>.</b>'
             f'<a href="filter:{version_parts[1]}" '
-            f'style="{version_link_style}">{version_parts[1]}</a>'
+            f'style="{version_link_style}"><span '
+            f'style="{version_number_style}">{version_parts[1]}</span></a>'
             f'<b>.</b>'
             f'<a href="filter:{version_parts[2]}" '
-            f'style="{version_link_style}">{version_parts[2]}</a>'
+            f'style="{version_link_style}"><span '
+            f'style="{version_number_style}">{version_parts[2]}</span></a>'
             f'<b>.</b><b>{version_parts[3]}</b>'
         )
     else:
