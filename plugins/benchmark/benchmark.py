@@ -1402,6 +1402,10 @@ class BenchmarkRunner:
             monster_ai.update = original
         self._monster_chaos_ai_original_update = None
 
+    def _remove_monster_chaos_overlay(self):
+        """Compatibility no-op; the redesigned witness uses no overlay."""
+        return
+
     def _tick_monster_chaos_witness(self, now, app, view):
         """Run the staged live population ramp, then measure 100 monsters for 5 seconds."""
         phase = getattr(self, "_monster_chaos_phase", "")
@@ -1413,7 +1417,7 @@ class BenchmarkRunner:
         if phase == "team2_wait" and now >= self._monster_chaos_next_spawn:
             for _ in range(5):
                 monster_type = rng.choice(("human", "flying"))
-                monster = self._bench_spawn_monster_chaos(
+                monster = self.tests._spawn_monster_chaos_entity(
                     logic,
                     rng,
                     team="team2",
@@ -1433,7 +1437,7 @@ class BenchmarkRunner:
         elif phase == "ramp" and now >= self._monster_chaos_next_spawn:
             monster_type = rng.choice(("human", "flying"))
             team = rng.choice(("team1", "team2"))
-            self._bench_spawn_monster_chaos(
+            self.tests._spawn_monster_chaos_entity(
                 logic,
                 rng,
                 team=team,
