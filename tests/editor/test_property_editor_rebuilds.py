@@ -26,7 +26,9 @@ from editor.io_system import OutputConnection  # noqa: E402
 from editor.property_editor import PropertyEditor  # noqa: E402
 from editor.things import Light  # noqa: E402
 from engine import brush_geometry as bg  # noqa: E402
-from engine.render_table import RenderTable  # noqa: E402
+from engine.render_table import (  # noqa: E402
+    RenderTable, CLASS_FOG, CLASS_TRIGGER,
+)
 
 # Qt tier: PyQt5 must be importable.  No display and no GPU - the suite runs
 # against the offscreen platform plugin.
@@ -227,7 +229,7 @@ def test_shader_change_immediately_invalidates_dense_brush_classification(panel)
 
     assert id(brush) in dirty
     assert brush['shader'] == 'Fog'
-    assert table.class_bits[0] & 2  # CLASS_FOG
+    assert table.class_bits[0] & CLASS_FOG
 
     host.state.clear_render_dirty((epoch, dirty))
     editor.on_shader_changed('<None>')
@@ -253,7 +255,7 @@ def test_trigger_change_immediately_invalidates_dense_brush_classification(panel
 
     assert id(brush) in dirty
     assert brush['is_trigger'] is True
-    assert table.class_bits[0] & 128  # CLASS_TRIGGER
+    assert table.class_bits[0] & CLASS_TRIGGER
 
 
 def test_toggling_a_behaviour_rebuilds_for_the_new_tabs(panel):
