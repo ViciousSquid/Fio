@@ -1913,10 +1913,9 @@ class QtGameView(QOpenGLWidget):
         painter.setPen(self._hud_health_orange)
         health_text = str(int(health))
         metrics = QFontMetrics(health_font)
-        # Pin health against the extreme lower-left corner.
-        # Keep a one-pixel inset from the edges so the glyph is not clipped.
-        health_x = 1
-        health_y = viewport_height - 1 - metrics.descent()
+        # Pin health against the absolute bottom-left edge of the viewport.
+        health_x = 0
+        health_y = viewport_height - metrics.descent()
 
         # Health is the large orange count. Only the health count gets the
         # independent dim/alert fade; ammo follows the normal whole-HUD opacity.
