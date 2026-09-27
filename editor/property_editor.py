@@ -668,6 +668,13 @@ class PropertyEditor(QWidget):
             if obj is None:
                 self._populating = False
 
+        # Cached Prop pages can outlive changes to their type-specific
+        # collection controls. Re-apply visibility from the live Prop state
+        # whenever a Prop page becomes active, regardless of whether the page
+        # was rebuilt or restored from the cache.
+        if isinstance(obj, Prop):
+            self._refresh_prop_collection_ui(obj)
+
         if saved_tab_index is not None and self.tab_widget is not None:
             if saved_tab_index < self.tab_widget.count():
                 self.tab_widget.setCurrentIndex(saved_tab_index)
@@ -2922,6 +2929,7 @@ class PropertyEditor(QWidget):
         weapon_label = {
             'gun1': 'Gun 1',
             'gun2': 'Gun 2',
+            'sword': 'Sword',
             'cig': 'Cigarette',
         }.get(weapon, 'Gun 1')
         self._prop_weapon_combo.blockSignals(True)
