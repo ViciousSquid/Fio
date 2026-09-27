@@ -3,10 +3,11 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStatusBar, QToolBar,
     QLabel, QSpinBox, QCheckBox, QComboBox, QAction, QMessageBox, QFrame,
     QDockWidget, QTabWidget, QPushButton, QActionGroup, QDialog,
-    QDialogButtonBox, QApplication, QSizePolicy, QInputDialog, QMenu
+    QDialogButtonBox, QApplication, QSizePolicy, QInputDialog, QMenu,
+    QStyle, QStyleOptionButton
 )
-from PyQt5.QtCore import Qt, QSize, QByteArray
-from PyQt5.QtGui import QIcon, QKeySequence
+from PyQt5.QtCore import Qt, QSize, QByteArray, QRect
+from PyQt5.QtGui import QIcon, QKeySequence, QPainter
 
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
@@ -45,6 +46,40 @@ class PowerOfTwoSpinBox(QSpinBox):
         if n <= 0:
             return 1
         return int(2 ** round(math.log2(n)))
+
+class RotatablePlayButton(QPushButton):
+    """Play button that rotates its complete presentation for a vertical toolbar."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._vertical = False
+
+    def set_vertical(self, vertical):
+        vertical = bool(vertical)
+        if self._vertical != vertical:
+            self._vertical = vertical
+            self.setProperty("_vertical", vertical)
+            self.update()
+
+    def paintEvent(self, event):
+        if not self._vertical:
+            super().paintEvent(event)
+            return
+
+        # Draw the normal QPushButton in a transposed coordinate system.
+        # This rotates both icon and label instead of forcing a 250px-wide
+        # horizontal button into a narrow right-hand toolbar.
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        painter.translate(self.width(), 0)
+        painter.rotate(90)
+
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        option.rect = QRect(0, 0, self.height(), self.width())
+        self.style().drawControl(QStyle.CE_PushButton, option, painter, self)
+        painter.end()
+
 
 class GenerateTilemapDialog(QDialog):
     def __init__(self, parent=None):
@@ -466,9 +501,9 @@ class Ui_MainWindow(object):
         big_toolbar_buttons = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
         icon_size_val = 45 if big_toolbar_buttons else 35
 
-        MainWindow.play_button = QPushButton(QIcon("assets/b_test.png"), "Play", MainWindow)
+        MainWindow.play_button = RotatablePlayButton(
+            QIcon("assets/b_test.png"), "Play", MainWindow)
         MainWindow.play_button.setIconSize(QSize(icon_size_val, icon_size_val))
-        # Remove setFixedSize here — we drive width via stylesheet instead
         MainWindow.play_button.setToolTip("Drop in and play (F5)")
         MainWindow.play_button.setShortcut("f5")
         MainWindow.play_button.clicked.connect(MainWindow.enter_play_mode)
@@ -484,8 +519,6 @@ class Ui_MainWindow(object):
                 border: 1px solid #1a8f3d;
                 border-radius: 4px;
                 padding: 5px 15px;
-                min-width: 250px;
-                max-width: 250px;
             }
             QPushButton:hover {
                 background-color: #28d157;
@@ -698,6 +731,17 @@ class Ui_MainWindow(object):
 
         tool_toolbar.addSeparator()
         tool_toolbar.addWidget(MainWindow.play_button)
+
+        def sync_play_button_orientation(orientation):
+            vertical = orientation == Qt.Vertical
+            MainWindow.play_button.set_vertical(vertical)
+            if vertical:
+                MainWindow.play_button.setFixedSize(icon_size_val + 16, 250)
+            else:
+                MainWindow.play_button.setFixedSize(250, icon_size_val + 16)
+
+        tool_toolbar.orientationChanged.connect(sync_play_button_orientation)
+        sync_play_button_orientation(tool_toolbar.orientation())
 
         # Capture this exact arrangement once.  View > Reset Layout restores
         # this Qt state instead of trying to reconstruct a nested dock tree
