@@ -10,7 +10,7 @@ Keeping even that from happening is the synchronisation contract — every
 subsystem that moves a Prop outside PropSession either calls ``moved(prop)`` or
 exposes the moved set through a batch interface. There is one test here per
 subsystem that does so, because a missing notification is invisible until a
-player walks up to a Prop and cannot carry it up.
+player walks up to a Prop and cannot carry it.
 """
 
 import math
@@ -43,11 +43,11 @@ def brute_force_carry(session, eye, forward):
     best, best_d = None, None
     for prop in session.props:
         p = prop.properties
-        if p.get("disabled") or not p.get("carryup_enabled", True):
+        if p.get("disabled") or not p.get("carry_enabled", True):
             continue
         d = [float(prop.pos[i]) - eye[i] for i in range(3)]
         distance = math.sqrt(sum(v * v for v in d))
-        if distance < 0.001 or distance > float(p.get("carryup_reach", 110.0)):
+        if distance < 0.001 or distance > float(p.get("carry_reach", 110.0)):
             continue
         if sum(forward[i] * (d[i] / distance) for i in range(3)) < 0.86:
             continue
@@ -83,7 +83,7 @@ def test_the_indexed_carry_agrees_with_a_full_scan(seed):
 
 def test_a_prop_with_a_long_authored_reach_is_still_found():
     """The query radius covers the furthest-reaching Prop, not the default one."""
-    far = prop_at(0, 0, 900, carryup_reach=1200.0)
+    far = prop_at(0, 0, 900, carry_reach=1200.0)
     session = make_session([far])
     session._carry_in_view((0.0, 0.0, 0.0), (0.0, 0.0, 1.0))
     assert session.held is far, (
