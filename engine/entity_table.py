@@ -304,13 +304,6 @@ def sprite_candidates(thing):
         out.append(('LogicSpawner', 'logic_spawner.png', 'sprites', True))
     elif LogicCamera is not None and isinstance(thing, LogicCamera):
         out.append(('LogicCamera', 'logic_camera.png', 'sprites', True))
-    elif Pickup is not None and isinstance(thing, Pickup):
-        path = thing.get_sprite_path()
-        if path:
-            filename, subfolder = _split_asset_path(path)
-            out.append((class_name, filename, subfolder, True))
-        else:
-            out.append((class_name,) + _LOOKUP_ONLY[:2] + (False,))
     elif props.get('sprite_path'):
         filename, subfolder = _split_asset_path(props.get('sprite_path'))
         out.append((class_name, filename, subfolder, True))
