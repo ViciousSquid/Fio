@@ -181,7 +181,9 @@ def register_all_input_handlers(io_manager: IOManager):
 
         lowered = value.lower()
         for path in textures:
-            if lowered in (path.lower(), path.rsplit("/", 1)[-1].lower()):
+            filename = path.rsplit("/", 1)[-1].lower()
+            stem = filename[:-4] if filename.endswith(".gif") else filename
+            if lowered in (path.lower(), filename, stem):
                 return path
 
         upper = value.upper()
