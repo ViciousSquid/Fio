@@ -3,7 +3,7 @@ The Tidy plugin.
 
 Tidy extends the core Prop primitive with one piece of metadata,
 tidy_category, and adds receptacle/goal gameplay. Core Prop remains the sole
-owner of pickup, carry, drop and physics behaviour.
+owner of carry, collect, drop and physics behaviour.
 """
 
 from __future__ import annotations
