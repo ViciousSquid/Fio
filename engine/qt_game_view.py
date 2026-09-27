@@ -589,10 +589,9 @@ class QtGameView(QOpenGLWidget):
     def _draw_queued_view_message(
         self, painter, viewport_width, viewport_height,
         text, started_at, width, queue, start_message,
-        line_offset=0, message_font=None, align_right=False, bottom_right=False,
-        fade_duration=1.0,
+        stack_slot=0, message_font=None, fade_duration=1.0,
     ):
-        """Draw one queued transient message and return its active state."""
+        """Draw one queued transient message in the shared near-bottom stack."""
         if not text:
             return text, started_at, width
 
@@ -617,16 +616,19 @@ class QtGameView(QOpenGLWidget):
         else:
             opacity = (7.0 - elapsed) / fade_duration if fade_duration else 0.0
 
-        cx = viewport_width // 2
+        # All three transient messages share one horizontal anchor slightly
+        # right of centre.  Use the largest message font height for row spacing
+        # so the three lines cannot overlap even when message-3 uses Rushford.
         metrics = QFontMetrics(font)
-        if bottom_right:
-            baseline = viewport_height - 10 - metrics.descent()
-        else:
-            held_item_row_top = viewport_height - 20 - 100
-            line_height = metrics.height() + 2
-            baseline = held_item_row_top - 12 - line_height + (line_height * line_offset)
+        max_stack_height = max(
+            QFontMetrics(self._hud_msg_font).height(),
+            QFontMetrics(self._hud_health_font).height(),
+        )
+        row_height = max_stack_height + 6
+        baseline = viewport_height - 20 - metrics.descent() - (row_height * stack_slot)
+        cx = viewport_width // 2 + int(viewport_width * 0.05)
+        text_x = cx - width // 2
 
-        text_x = viewport_width - 10 - width if align_right else cx - width // 2
         painter.save()
         painter.setOpacity(max(0.0, min(1.0, opacity)))
         painter.setFont(font)
@@ -660,8 +662,7 @@ class QtGameView(QOpenGLWidget):
                 self._view_message2_width,
                 self._view_message2_queue,
                 self._start_view_message2,
-                line_offset=1,
-                align_right=True,
+                stack_slot=1,
             )
         )
 
@@ -676,8 +677,7 @@ class QtGameView(QOpenGLWidget):
                 self._view_message3_queue,
                 self._start_view_message3,
                 message_font=self._hud_health_font,
-                align_right=True,
-                bottom_right=True,
+                stack_slot=0,
                 fade_duration=1.25,
             )
         )
