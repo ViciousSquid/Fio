@@ -711,8 +711,6 @@ class Ui_MainWindow(object):
 
         # --- Procedural / View actions (Blue Strip) ---
         group_3_color = "#00A2E8"
-        make_btn("assets/tint.png", "Tint brush",
-                 on_click=MainWindow.tint_selected_brush, bottom_color=group_2_color)
 
         tool_toolbar.addSeparator()
 
