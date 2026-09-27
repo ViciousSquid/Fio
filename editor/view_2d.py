@@ -1524,6 +1524,47 @@ class View2D(QWidget):
         if self.is_connecting and self.connection_source:
             self.draw_connection_drag(painter)
 
+    @staticmethod
+    def _segment_intersects_rect(p1, p2, rect):
+        """Return True when a 2D line segment touches ``rect``.
+
+        Endpoint-only culling drops long I/O links when both entities are
+        outside the current view even though the link itself crosses the view.
+        Liang-Barsky keeps the test constant-time and avoids constructing Qt
+        paths for every connection.
+        """
+        rect = rect.normalized()
+        x1, y1 = float(p1.x()), float(p1.y())
+        x2, y2 = float(p2.x()), float(p2.y())
+        dx = x2 - x1
+        dy = y2 - y1
+
+        if dx == 0.0 and dy == 0.0:
+            return rect.contains(QPointF(x1, y1))
+
+        t0, t1 = 0.0, 1.0
+        for p, q in (
+            (-dx, x1 - rect.left()),
+            (dx, rect.right() - x1),
+            (-dy, y1 - rect.top()),
+            (dy, rect.bottom() - y1),
+        ):
+            if p == 0.0:
+                if q < 0.0:
+                    return False
+                continue
+            t = q / p
+            if p < 0.0:
+                if t > t1:
+                    return False
+                t0 = max(t0, t)
+            else:
+                if t < t0:
+                    return False
+                t1 = min(t1, t)
+
+        return t0 <= t1
+
     def draw_logic_connections(self, painter, visible_bounds):
         """
         Draws I/O connections between entities.
