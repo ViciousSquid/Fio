@@ -2866,7 +2866,7 @@ class PropertyEditor(QWidget):
                 if index >= 0:
                     combo.setCurrentIndex(index)
 
-                combo.currentTextChanged.connect(self.on_collect_collect_type_changed)
+                combo.currentTextChanged.connect(self.on_collect_type_changed)
                 form.addRow(QLabel("Collect Type:"), combo)
 
                 weapon_lbl = QLabel("Weapon:")
@@ -3010,7 +3010,7 @@ class PropertyEditor(QWidget):
         variant_combo.currentTextChanged.connect(on_variant)
         form.addRow("Variant:", variant_combo)
 
-    def _build_collect_collect_type_row(self, form, thing):
+    def _build_collect_type_row(self, form, thing):
         collect_type = thing.properties.get('collect_type', 'health')
         # Older maps stored gun1/gun2/cig directly in collect_type. Present those
         # maps through the new explicit Weapon field without breaking them.
@@ -3018,11 +3018,11 @@ class PropertyEditor(QWidget):
         if legacy_weapon:
             collect_type = 'weapon'
             thing.properties['collect_type'] = 'weapon'
-            thing.properties.setdefault('weapon', legacy_weapon)
+            thing.properties.setdefault('collect_weapon', legacy_weapon)
 
         combo = _make_combo(['health', 'key', 'weapon', 'custom'],
                             collect_type,
-                            self.on_collect_collect_type_changed)
+                            self.on_collect_type_changed)
         form.addRow("Collect Type:", combo)
 
         weapon_lbl = QLabel("Weapon:")
@@ -3068,10 +3068,10 @@ class PropertyEditor(QWidget):
             self._update_collect_door_link(thing)
         key_combo.currentTextChanged.connect(lambda _: self._update_collect_door_link(self.current_object))
 
-    def _build_collect_collect_activation_row(self, form, thing, value):
+    def _build_collect_activation_row(self, form, thing, value):
         combo = _make_combo(['walk_over', 'use'], value, lambda t: self.update_object_prop('collect_activation', t))
         form.addRow("Activation:", combo)
-        self._collect_collect_activation_widget = combo
+        self._collect_activation_widget = combo
         if thing.properties.get('collect_type') == 'health':
             combo.setCurrentText('walk_over')
             combo.setEnabled(False)
@@ -4401,7 +4401,7 @@ class PropertyEditor(QWidget):
         if hasattr(self.editor, 'mark_dirty'):
             self.editor.mark_dirty()
 
-    def on_collect_collect_type_changed(self, collect_type):
+    def on_collect_type_changed(self, collect_type):
         if self.current_object is None:
             return
         self.update_object_prop('collect_type', collect_type)
@@ -4441,9 +4441,9 @@ class PropertyEditor(QWidget):
             if hasattr(self, 'collect_sprite_path'):
                 self.collect_sprite_path.setText('assets/sprites/health.png')
             self.update_object_prop('collect_activation', 'walk_over')
-            if hasattr(self, '_collect_collect_activation_widget'):
-                self._collect_collect_activation_widget.setCurrentText('walk_over')
-                self._collect_collect_activation_widget.setEnabled(False)
+            if hasattr(self, '_collect_activation_widget'):
+                self._collect_activation_widget.setCurrentText('walk_over')
+                self._collect_activation_widget.setEnabled(False)
         elif is_weapon:
             weapon = self.current_object.properties.get('weapon', 'gun1')
             sprite = f'assets/sprites/{weapon}.png'
@@ -4451,12 +4451,12 @@ class PropertyEditor(QWidget):
             if hasattr(self, 'collect_sprite_path'):
                 self.collect_sprite_path.setText(sprite)
             self.update_object_prop('collect_activation', 'walk_over')
-            if hasattr(self, '_collect_collect_activation_widget'):
-                self._collect_collect_activation_widget.setCurrentText('walk_over')
-                self._collect_collect_activation_widget.setEnabled(False)
+            if hasattr(self, '_collect_activation_widget'):
+                self._collect_activation_widget.setCurrentText('walk_over')
+                self._collect_activation_widget.setEnabled(False)
         else:
-            if hasattr(self, '_collect_collect_activation_widget'):
-                self._collect_collect_activation_widget.setEnabled(True)
+            if hasattr(self, '_collect_activation_widget'):
+                self._collect_activation_widget.setEnabled(True)
 
         if hasattr(Prop, 'clear_sprite_cache'):
             Prop.clear_sprite_cache()
