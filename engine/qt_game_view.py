@@ -439,6 +439,10 @@ class QtGameView(QOpenGLWidget):
         self._view_message_started_at = 0.0
         self._view_message_width = 0
         self._view_message_queue = deque()
+        self._view_message2_text = ""
+        self._view_message2_started_at = 0.0
+        self._view_message2_width = 0
+        self._view_message2_queue = deque()
         self._cached_gun_hud = {}
         self._cached_weapon_pickup = {}   # (item_type, size) -> scaled QPixmap
         self._cached_key_pixmaps = {}
@@ -481,7 +485,7 @@ class QtGameView(QOpenGLWidget):
 
 
     def _start_view_message(self, text: str):
-        """Start displaying one transient view message immediately."""
+        """Start displaying one transient message-1 immediately."""
         self._view_message_text = text
         self._view_message_started_at = time.perf_counter()
         self._view_message_width = QFontMetrics(
@@ -489,7 +493,7 @@ class QtGameView(QOpenGLWidget):
         ).horizontalAdvance(text)
 
     def show_view_message(self, text: str):
-        """Show a transient console message, queueing it behind the current one."""
+        """Show a message-1, queueing it behind the current message-1."""
         text = str(text).strip()[:50]
         if not text:
             return
@@ -504,23 +508,48 @@ class QtGameView(QOpenGLWidget):
         self._start_view_message(text)
         self.update()
 
-    def _draw_view_message(self, painter, viewport_width, viewport_height):
-        """Draw the transient console message one line above held-item HUDs."""
-        text = getattr(self, "_view_message_text", "")
+    def _start_view_message2(self, text: str):
+        """Start displaying one transient message-2 immediately."""
+        self._view_message2_text = text
+        self._view_message2_started_at = time.perf_counter()
+        self._view_message2_width = QFontMetrics(
+            self._hud_msg_font
+        ).horizontalAdvance(text)
+
+    def show_view_message2(self, text: str):
+        """Show a message-2, queueing it behind the current message-2."""
+        text = str(text).strip()[:50]
         if not text:
             return
 
-        elapsed = time.perf_counter() - self._view_message_started_at
-        if elapsed >= 7.0:
-            if self._view_message_queue:
-                self._start_view_message(self._view_message_queue.popleft())
-                text = self._view_message_text
-                elapsed = 0.0
-            else:
-                self._view_message_text = ""
-                self._view_message_started_at = 0.0
-                self._view_message_width = 0
+        if self._view_message2_text:
+            elapsed = time.perf_counter() - self._view_message2_started_at
+            if elapsed < 7.0:
+                self._view_message2_queue.append(text)
+                self.update()
                 return
+
+        self._start_view_message2(text)
+        self.update()
+
+    def _draw_queued_view_message(
+        self, painter, viewport_width, viewport_height,
+        text, started_at, width, queue, start_message
+    ):
+        """Draw one queued transient message and return its active state."""
+        if not text:
+            return text, started_at, width
+
+        elapsed = time.perf_counter() - started_at
+        if elapsed >= 7.0:
+            if queue:
+                text = queue.popleft()
+                start_message(text)
+                started_at = time.perf_counter()
+                elapsed = 0.0
+                width = QFontMetrics(self._hud_msg_font).horizontalAdvance(text)
+            else:
+                return "", 0.0, 0
 
         if elapsed < 1.0:
             opacity = elapsed
@@ -531,8 +560,10 @@ class QtGameView(QOpenGLWidget):
 
         cx = viewport_width // 2
         held_item_row_top = viewport_height - 20 - 100
-        baseline = held_item_row_top - 12
-        width = self._view_message_width
+        line_height = QFontMetrics(self._hud_msg_font).height() + 2
+        baseline = held_item_row_top - 12 - line_height
+        if start_message is self._start_view_message2:
+            baseline += line_height
 
         painter.save()
         painter.setOpacity(max(0.0, min(1.0, opacity)))
@@ -542,6 +573,33 @@ class QtGameView(QOpenGLWidget):
         painter.setPen(self._hud_grey_pen)
         painter.drawText(cx - width // 2, baseline, text)
         painter.restore()
+        return text, started_at, width
+
+    def _draw_view_message(self, painter, viewport_width, viewport_height):
+        """Draw message-1 one line above message-2 / held-item HUDs."""
+        self._view_message_text, self._view_message_started_at, self._view_message_width = (
+            self._draw_queued_view_message(
+                painter, viewport_width, viewport_height,
+                self._view_message_text,
+                self._view_message_started_at,
+                self._view_message_width,
+                self._view_message_queue,
+                self._start_view_message,
+            )
+        )
+
+    def _draw_view_message2(self, painter, viewport_width, viewport_height):
+        """Draw message-2 directly underneath message-1."""
+        self._view_message2_text, self._view_message2_started_at, self._view_message2_width = (
+            self._draw_queued_view_message(
+                painter, viewport_width, viewport_height,
+                self._view_message2_text,
+                self._view_message2_started_at,
+                self._view_message2_width,
+                self._view_message2_queue,
+                self._start_view_message2,
+            )
+        )
 
     def _clear_play_mode_hint(self):
         self._play_mode_hint = ""
@@ -1556,6 +1614,7 @@ class QtGameView(QOpenGLWidget):
             self._draw_level_complete_overlay(painter)
         if self.play_mode:
             self._draw_view_message(painter, self.width(), self.height())
+            self._draw_view_message2(painter, self.width(), self.height())
 
         if self.sysmon.is_active():
             self.sysmon.draw(
