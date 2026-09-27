@@ -546,7 +546,13 @@ class Monster(Thing):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'monster')
-        self.properties.setdefault('monster_type', 'human')  # 'human' or 'flying'
+
+        from engine.monster_constants import MONSTER_TYPES, MONSTER_VARIANTS
+        monster_type = self.properties.get('monster_type', 'human')
+        if monster_type not in MONSTER_TYPES:
+            monster_type = 'human'
+        self.properties['monster_type'] = monster_type
+
         self.properties.setdefault('monster_id', 0)
         self.properties.setdefault('health', 100)
         self.properties.setdefault('damage', 10)
@@ -571,11 +577,15 @@ class Monster(Thing):
         # --- Sprite variant (alternate skin) ---
         # '<None>' = base sprites in assets/sprites/monsters/<type>/
         # 'variant1' etc = assets/sprites/monsters/<type>/variant1/
-        self.properties.setdefault('variant', '<None>')
+        variant = self.properties.get('variant', '<None>')
+        valid_variants = ('<None>', *MONSTER_VARIANTS.get(monster_type, ()))
+        if variant not in valid_variants:
+            variant = '<None>'
+        self.properties['variant'] = variant
 
         # --- Set default sprite dimensions based on monster_type ---
         from engine.monster_constants import MONSTER_SPRITE_SIZES, MONSTER_SPRITE_SIZE_DEFAULT
-        mtype = self.properties.get('monster_type', 'human')
+        mtype = monster_type
         default_w, default_h = MONSTER_SPRITE_SIZES.get(mtype, MONSTER_SPRITE_SIZE_DEFAULT)
         self.properties.setdefault('sprite_width', default_w)
         self.properties.setdefault('sprite_height', default_h)
