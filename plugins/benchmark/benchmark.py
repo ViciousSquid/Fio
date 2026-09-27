@@ -1066,14 +1066,42 @@ class BenchmarkRunner:
                 if str(thing.properties.get("name", "")).startswith("BenchmarkRelay_")
             ])
             elapsed = float(self._live_io_elapsed or 0.0)
+            fires = int(getattr(self, "_live_io_fires", 0))
+            total_hops = int(hops * fires)
+            elapsed_per_hop = elapsed / max(fires, 1)
             metrics.update({
                 "io_elapsed_s": elapsed,
                 "io_elapsed_ms": elapsed * 1000.0,
                 "io_hops": hops,
-                "hops_per_second": hops / elapsed if elapsed > 0.0 else 0.0,
+                "io_bursts": fires,
+                "io_total_hops": total_hops,
+                "io_average_ms": float(
+                    getattr(self, "_live_io_samples", [])
+                    and (
+                        sum(self._live_io_samples)
+                        / len(self._live_io_samples)
+                        * 1000.0
+                    )
+                    or 0.0
+                ),
+                "hops_per_second": (
+                    total_hops / elapsed if elapsed > 0.0 else 0.0
+                ),
+                "burst_hops": int(hops),
             })
-            self._append(                "  Live I/O throughput: %.0f hops/s."
-                % metrics["hops_per_second"]
+            metrics["description"] = (
+                "Live LogicRelay I/O: repeated %d-hop bursts through the "
+                "running Fio dispatcher" % hops
+            )
+            self._append(
+                "  Live I/O: %d bursts, %d total hops, %.0f hops/s "
+                "(%.3f ms average burst)."
+                % (
+                    fires,
+                    total_hops,
+                    metrics["hops_per_second"],
+                    metrics["io_average_ms"],
+                )
             )
     
         if label.startswith(("procedural_", "monster_")):
@@ -1466,6 +1494,65 @@ class BenchmarkRunner:
         })
         self._finish_live_stress_result("monster_chaos_witness", metrics)
 
+    def _tick_live_io(self, now, app, view):
+        """Fire repeated real LogicRelay chains while Fio's live runtime is running."""
+        manager = getattr(self, "_live_io_manager", None)
+        source = getattr(self, "_live_io_source", None)
+        if manager is None or source is None:
+            raise RuntimeError("live I/O benchmark lost its live IOManager/source")
+
+        if now >= getattr(self, "_live_io_next_fire", 0.0):
+            import editor.io_system as io_system
+
+            old_debug = io_system.IO_DEBUG_ENABLED
+            old_limit = sys.getrecursionlimit()
+            io_system.IO_DEBUG_ENABLED = False
+            sys.setrecursionlimit(max(old_limit, 10000))
+            try:
+                manager.reset()
+                started = time.perf_counter()
+                manager.fire_output(source, "OnTrigger")
+                elapsed = time.perf_counter() - started
+                self._live_io_samples.append(elapsed)
+                self._live_io_fires += 1
+            finally:
+                io_system.IO_DEBUG_ENABLED = old_debug
+                sys.setrecursionlimit(old_limit)
+
+            self._live_io_next_fire = now + 0.10
+
+        view.update()
+        app.processEvents()
+
+        if now < self._measurement_deadline:
+            return
+
+        self._measurement_active = False
+        self._timer.stop()
+        samples = list(getattr(self, "_live_io_samples", ()))
+        total_elapsed = sum(samples)
+        mean_elapsed = (
+            statistics.fmean(samples)
+            if samples else 0.0
+        )
+        ordered = sorted(samples)
+        p95_elapsed = (
+            ordered[min(len(ordered) - 1, int(round(0.95 * (len(ordered) - 1))))]
+            if ordered else 0.0
+        )
+        self._live_io_elapsed = total_elapsed
+
+        metrics = {
+            "viewport_width": int(view.width()),
+            "viewport_height": int(view.height()),
+            "io_elapsed_s": total_elapsed,
+            "io_elapsed_ms": total_elapsed * 1000.0,
+            "io_burst_count": len(samples),
+            "io_average_ms": mean_elapsed * 1000.0,
+            "io_p95_ms": p95_elapsed * 1000.0,
+        }
+        self._finish_live_stress_result("live_io_1000", metrics)
+
     def _tick(self):
         if not self._running or self._worker_active or not self._measurement_active:
             return
@@ -1489,6 +1576,15 @@ class BenchmarkRunner:
             if self._current and self._current[0] == "monster_chaos_witness":
                 self._tick_monster_chaos_witness(now, app, view)
                 return
+
+            if self._current and self._current[0] == "live_io_1000":
+                self._tick_live_io(now, app, view)
+                return
+
+            if self._current and self._current[0] in (
+                "live_1000_brushes", "live_10000_brushes", "live_100000_brushes",
+            ):
+                self._advance_player_area_sweep()
 
             if self._current and self._current[0] in (
                 "current_world", "current_world_phase1", "current_world_phase2",
