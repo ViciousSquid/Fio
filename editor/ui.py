@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
     QDockWidget, QTabWidget, QPushButton, QActionGroup, QDialog,
     QDialogButtonBox, QApplication, QSizePolicy, QInputDialog, QMenu
 )
-from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtCore import Qt, QSize, QByteArray
 from PyQt5.QtGui import QIcon, QKeySequence
 
 from editor.view_2d import View2D
