@@ -216,7 +216,7 @@ class BenchmarkManager(QDialog):
         description.setTextFormat(Qt.RichText)
         description.setWordWrap(True)
         description.setStyleSheet(
-            f"font-size: {self._font_size + 2}pt; padding: 6px 2px 10px 2px;"
+            f"font-size: {self._font_size}pt; padding: 4px 2px 6px 2px;"
         )
         root.addWidget(description)
 
@@ -321,7 +321,7 @@ class BenchmarkManager(QDialog):
                 color: #ffffff;
                 border: none;
                 border-radius: 3px;
-                font-size: {self._font_size + 5}pt;
+                font-size: {self._font_size}pt;
                 font-weight: bold;
             }}
             QPushButton:hover   {{ background: #45bd66; }}
@@ -511,7 +511,7 @@ class BenchmarkManager(QDialog):
             self._append(
                 f'<div style="margin-top:12px; padding:14px 16px; background:#1f241f; '
                 f'border:1px solid #63d471; color:#eeeeee;">'
-                f'<div style="color:#63d471; font-size:{self._font_size + 5}pt; '
+                f'<div style="color:#63d471; font-size:{self._font_size}pt; '
                 f'font-weight:bold; line-height:1.2; margin-bottom:6px;">'
                 f'Benchmark complete.</div>'
                 f'<div style="color:#eeeeee; font-size:{self._font_size}pt; '
