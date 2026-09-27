@@ -1813,12 +1813,11 @@ class QtGameView(QOpenGLWidget):
         painter.setOpacity(hud_alpha)
 
         # Draw the weapon before the status counts so the health indicator is
-        # always visually on top of any weapon sprite, including the sword.
+        # always visually on top of any weapon sprite.
         if active_weapon and not overhead:
             hud_pixmap = self._load_gun_hud_pixmap(active_weapon)
             if hud_pixmap and not hud_pixmap.isNull():
-                target_scale = 2 if active_weapon == 'sword' else 1
-                target_h = int(200 * target_scale * viewport_height / 600.0)
+                target_h = int(200 * viewport_height / 600.0)
                 cache_key = (active_weapon, target_h)
                 scaled = self._cached_gun_hud.get(cache_key)
                 if scaled is None or scaled.isNull():
@@ -1832,9 +1831,6 @@ class QtGameView(QOpenGLWidget):
                     self._cached_gun_hud[cache_key] = scaled
                 if active_weapon == 'gun2':
                     x = (viewport_width - scaled.width()) // 2
-                    y = viewport_height - scaled.height()
-                elif active_weapon == 'sword':
-                    x = 20
                     y = viewport_height - scaled.height()
                 else:
                     x = viewport_width - scaled.width() - 20
@@ -2220,7 +2216,7 @@ class QtGameView(QOpenGLWidget):
             'Portal': 'portal.png',
             'LogicCommand': 'logic_command.png',
         }
-        for weapon in ['gun1', 'gun2', 'sword', 'cig']:
+        for weapon in ['gun1', 'gun2', 'cig']:
             tid = self.load_texture(f'{weapon}HUD.png', 'sprites')
             if tid:
                 self.sprite_textures[f'{weapon}_hud'] = tid
