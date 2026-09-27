@@ -132,6 +132,7 @@ class RenderState:
         # HUD / Gameplay
         self.collected_keys = set()
         self.hud_message = ""
+        self.hud_prompt_key = None
         
         # Visual FX
         self.bullet_marks = [] # List of {'pos': [x,y,z], 'alpha': float}
@@ -238,6 +239,7 @@ class RenderState:
         self.all_brush_slots = np.empty(0, dtype=np.int32)
         self.collected_keys = set()
         self.hud_message = ""
+        self.hud_prompt_key = None
         self.bullet_marks = []
         self.projectiles = []
         self.muzzle_flash_active = False
