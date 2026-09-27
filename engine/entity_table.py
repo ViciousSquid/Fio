@@ -1075,6 +1075,21 @@ class EntityTable:
                     dtype=bool)
 
             if len(effect_ls):
+                # Animation origin is runtime state owned by the Effect itself,
+                # not by this particular render buffer. Two RenderState buffers
+                # alternate ownership; keeping the clock only in EntityTable
+                # makes A/B swap phases differ by a logic tick. Read the shared
+                # object state into the dense column before any timing decision.
+                runtime_spawns = np.fromiter(
+                    (
+                        float(getattr(things[int(slot)], "_effect_spawn_time", 0.0))
+                        for slot in effect_ls
+                    ),
+                    dtype=np.float64,
+                    count=len(effect_ls),
+                )
+                self.effect_spawn_time[effect_ls] = runtime_spawns
+
                 now = float(time.perf_counter())
                 explosion = self.effect_type[effect_ls] == 1
                 fire = ~explosion
@@ -1085,7 +1100,16 @@ class EntityTable:
                     fire_slots = effect_ls[fire]
                     unset_fire = self.effect_spawn_time[fire_slots] <= 0.0
                     if np.any(unset_fire):
-                        self.effect_spawn_time[fire_slots[unset_fire]] = now
+                        start_slots = fire_slots[unset_fire]
+                        self.effect_spawn_time[start_slots] = now
+                        # Persist the same origin on the authored Effect runtime
+                        # object so the other render buffer sees it on its next
+                        # publication instead of inventing a second origin.
+                        for slot in start_slots:
+                            try:
+                                things[int(slot)]._effect_spawn_time = now
+                            except AttributeError:
+                                pass
                     self.effect_active[fire_slots] = True
 
                 active = self.effect_active[effect_ls]
