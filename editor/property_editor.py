@@ -4417,6 +4417,7 @@ class PropertyEditor(QWidget):
             for lbl, widget in self._pickup_key_widgets:
                 lbl.setVisible(is_key)
                 widget.setVisible(is_key)
+                widget.setEnabled(is_key)
 
         if is_key:
             self._update_pickup_door_link(self.current_object)
