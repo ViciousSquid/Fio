@@ -494,8 +494,8 @@ class BenchmarkTests:
                     "5 team1 monsters staged at the opposite end; god mode enabled."
                 )
                 self._append(
-                    "  Population schedule: +5 team2 monsters at 0.5s, then +1 random-team "
-                    "monster every 0.25s until 40."
+                    "  Population schedule: +5 team2 monsters at 0.5s, then +2 random-team "
+                    "monsters every 0.25s until 40."
                 )
             elif label == "live_io_1000":
                 cooperative_yield = lambda: self._live_cooperative_yield(label)
