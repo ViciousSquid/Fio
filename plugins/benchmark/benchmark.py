@@ -547,7 +547,6 @@ class BenchmarkRunner:
         self._measurement_active = False
         self._live_stress_active = False
         self._restore_benchmark_window_mode()
-        self._restore_sysmon_after_benchmark()
         if self.main_window.view_3d.play_mode:
             self.main_window._exit_play_mode()
             QApplication.processEvents()
@@ -852,7 +851,8 @@ class BenchmarkRunner:
         self._restore_benchmark_window_mode()
         self._restore_sysmon_after_benchmark()
     
-        try:            if self.main_window.view_3d.play_mode and not self._original_play_mode:
+        try:
+            if self.main_window.view_3d.play_mode and not self._original_play_mode:
                 self.main_window._exit_play_mode()
                 QApplication.processEvents()
         except Exception:
