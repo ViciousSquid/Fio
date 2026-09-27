@@ -2883,6 +2883,7 @@ class LogicThread(threading.Thread):
 
     def _handle_interactions(self, use_key_pressed: bool):
         self.current_hud_message = ""
+        self.current_hud_key_name = None
         reach_distance = 80.0
         px, py, pz = self.player.pos
         
@@ -2925,12 +2926,14 @@ class LogicThread(threading.Thread):
                         has_key = key_name in self.collected_keys
                         pretty_key_name = key_name.replace('_', ' ').title() if key_name else "Key"
                         if has_key:
-                            self.current_hud_message = f"[E] Unlock ({pretty_key_name})"
+                            self.current_hud_message = "[E] Use"
+                            self.current_hud_key_name = key_name or None
                             if use_key_pressed:
                                 self._trigger_door_open(found_door_idx, found_door_brush)
                                 door_consumed_use = True
                         else:
-                            self.current_hud_message = f"NEED: {pretty_key_name}"
+                            self.current_hud_message = "Need"
+                            self.current_hud_key_name = key_name or None
                     else:
                         self.current_hud_message = "[E] Open"
                         if use_key_pressed:
@@ -3893,6 +3896,7 @@ class LogicThread(threading.Thread):
             write_state.player_underwater = False
         write_state.collected_keys = set(self.collected_keys)
         write_state.hud_message = self.current_hud_message
+        write_state.hud_prompt_key = self.current_hud_key_name
         write_state.active_weapon = self.active_weapon
         write_state.muzzle_flash_active = self.muzzle_flash_active
         write_state.camera_transition_active = bool(self.camera_transition)
