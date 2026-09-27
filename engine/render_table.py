@@ -540,8 +540,10 @@ class RenderTable:
         cold_dirty = epoch is None or epoch != self._epoch
         structural = cold_dirty or len(brushes) != self.count
         if not structural:
-            for i, b in enumerate(brushes):
-                if self.brushes[i] is not b:
+            # The row count was already validated above. Index only the
+            # observed rows so a concurrent append cannot extend this scan.
+            for i in range(self.count):
+                if self.brushes[i] is not brushes[i]:
                     structural = True
                     break
         if structural:
@@ -673,8 +675,8 @@ class RenderTable:
         if len(self._hidden_buf) < n:
             self._hidden_buf = np.empty(max(n, 16), dtype=bool)
         out = self._hidden_buf[:n]
-        for i, b in enumerate(brushes):
-            out[i] = b.get('hidden', False)
+        for i in range(n):
+            out[i] = brushes[i].get('hidden', False)
         return out
 
 
