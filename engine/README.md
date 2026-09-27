@@ -93,7 +93,7 @@ Fio's production forward renderer. Implements the frame passes and brush batchin
 The renderer consumes the dense numerical render representation and turns equal-key runs into GPU submissions. Optional water reflections use a 256×256 2D planar render texture per reflected water surface; the mirrored camera and projective matrix are renderer state, not authored RenderTable columns. Billboards go the same way: `draw_sprites_instanced` reads position, size and texture from the entity projection's columns, packs one instance row per sprite and submits one `glDrawArraysInstanced` per texture run. The object-level sprite renderer has been removed; editor, portal and split-screen views all consume the same dense EntityTable sprite representation.
 
 ### `savegame.py`
-Native play-session save/load. Serialises player state, entity/mover state, trigger/pickup progress and I/O state to `.fiosave` files and restores it on a freshly loaded map.
+Native play-session save/load. Serialises player state, entity/mover state, trigger/collection progress and I/O state to `.fiosave` files and restores it on a freshly loaded map.
 
 ### `resource_manager.py`
 Singleton asset provider for ordinary filesystem projects and mounted `.fiopak` archives. Handles path resolution, byte/text loading, streams, caching and package manifests.
