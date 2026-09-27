@@ -1720,12 +1720,12 @@
                 304
             ],
             "textures": {
-                "north": "nodraw.jpg",
-                "south": "nodraw.jpg",
-                "east": "nodraw.jpg",
-                "west": "nodraw.jpg",
-                "top": "nodraw.jpg",
-                "down": "nodraw.jpg"
+                "north": "track.jpg",
+                "south": "track.jpg",
+                "east": "track.jpg",
+                "west": "sci_fi_metal_wall_panel.jpg",
+                "top": "sci_fi_metal_wall_panel.jpg",
+                "down": "sci_fi_metal_wall_panel.jpg"
             },
             "colour": [
                 0.8,
@@ -1752,73 +1752,66 @@
             "is_fog": false,
             "is_trigger": false,
             "uv_angle": {
-                "north": 90,
-                "south": 270,
-                "west": 0,
-                "east": 0,
-                "top": 0,
-                "down": 0
+                "north": 90.0,
+                "south": 270.0,
+                "west": 0.0,
+                "east": 0.0,
+                "top": 0.0,
+                "down": 0.0
             },
             "uv_shift": {
                 "east": [
-                    0,
-                    0
+                    0.0,
+                    0.0
                 ],
                 "west": [
-                    0,
-                    0
+                    0.0,
+                    0.0
                 ],
                 "top": [
-                    0,
-                    0
+                    0.0,
+                    0.0
                 ],
                 "down": [
-                    0,
-                    0
+                    0.0,
+                    0.0
                 ],
                 "north": [
-                    0,
-                    0
+                    0.0,
+                    0.0
                 ],
                 "south": [
-                    0,
-                    0
+                    0.0,
+                    0.0
                 ]
             },
             "uv_scale": {
                 "east": [
-                    2.375,
-                    0.375
+                    1.0,
+                    1.0
                 ],
                 "west": [
-                    2.375,
-                    0.375
+                    1.0,
+                    1.0
                 ],
                 "top": [
-                    2.375,
-                    2.375
+                    1.0,
+                    1.0
                 ],
                 "down": [
-                    2.375,
-                    2.375
+                    1.0,
+                    1.0
                 ],
                 "north": [
-                    2.375,
-                    0.375
+                    1.0,
+                    1.0
                 ],
                 "south": [
-                    2.375,
-                    0.375
+                    1.0,
+                    1.0
                 ]
             },
-            "uv_natural": {
-                "east": true,
-                "west": true,
-                "top": true,
-                "down": true,
-                "north": true,
-                "south": true
-            },
+            "uv_natural": {},
             "hidden": false
         },
         {
@@ -2268,7 +2261,7 @@
                     "target": "door01b",
                     "input": "Hide",
                     "parameter": "",
-                    "delay": 0,
+                    "delay": 0.0,
                     "fire_once": false,
                     "target_id": "8da0f179-afb0-4dc0-b04a-c72204469b16"
                 }
@@ -2312,7 +2305,7 @@
                     "target": "door01a",
                     "input": "Hide",
                     "parameter": "",
-                    "delay": 0,
+                    "delay": 0.0,
                     "fire_once": false,
                     "target_id": "df26f7fa-72d0-4a68-9dfd-abaf4cc31c71"
                 }
@@ -2612,7 +2605,7 @@
                     "target": "plat_message1",
                     "input": "RunCommand",
                     "parameter": "",
-                    "delay": 0,
+                    "delay": 0.0,
                     "fire_once": false,
                     "target_id": "e0caeab1-c106-4eeb-aee8-b29064d9ebe6"
                 },
@@ -2621,7 +2614,7 @@
                     "target": "plat_message2",
                     "input": "RunCommand",
                     "parameter": "",
-                    "delay": 2,
+                    "delay": 2.0,
                     "fire_once": false,
                     "target_id": "65f7b732-4baf-4349-b32e-65b1609cd0a2"
                 }
@@ -3482,7 +3475,7 @@
                     "target": "LogicCamera_1",
                     "input": "Start",
                     "parameter": "",
-                    "delay": 0,
+                    "delay": 0.0,
                     "fire_once": true
                 },
                 {
@@ -3499,7 +3492,7 @@
                     "target": "intro_messages",
                     "input": "Trigger",
                     "parameter": "",
-                    "delay": 0,
+                    "delay": 0.0,
                     "fire_once": false,
                     "target_id": "2a7d4c35-0543-4c0d-92e9-4edbb1e3484f"
                 },
@@ -3508,7 +3501,7 @@
                     "target": "door01a",
                     "input": "Show",
                     "parameter": "",
-                    "delay": 0,
+                    "delay": 0.0,
                     "fire_once": false,
                     "target_id": "df26f7fa-72d0-4a68-9dfd-abaf4cc31c71"
                 },
@@ -3517,7 +3510,7 @@
                     "target": "door01b",
                     "input": "Show",
                     "parameter": "",
-                    "delay": 0,
+                    "delay": 0.0,
                     "fire_once": false,
                     "target_id": "8da0f179-afb0-4dc0-b04a-c72204469b16"
                 }
@@ -3734,7 +3727,7 @@
                 "io_enabled": true,
                 "hidden": false,
                 "disabled": false,
-                "carry_enabled": false,
+                "carry_enabled": true,
                 "collect_enabled": true,
                 "collect_type": "custom",
                 "collect_value": 25,
@@ -3744,7 +3737,50 @@
                 "collect_respawn_time": 20,
                 "collect_key_name": "blue_key",
                 "collect_weapon": "gun2",
-                "sprite_path": "assets/sprites/gun2.png"
+                "sprite_path": "assets/sprites/gun2.png",
+                "model_path": "",
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ],
+                "collision_shape": "auto",
+                "render_mode": "billboard",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12
             },
             "io_connections": []
         },
@@ -3807,7 +3843,7 @@
                     "target": "intromessage1",
                     "input": "RunCommand",
                     "parameter": "",
-                    "delay": 0,
+                    "delay": 0.0,
                     "fire_once": false,
                     "target_id": "1afce153-1528-45ae-8e24-cd584967fb5b"
                 }
@@ -4020,12 +4056,12 @@
             "io_connections": [
                 {
                     "output": "OnCameraArrived",
-                    "target": "intromessage2",
-                    "input": "RunCommand",
+                    "target": "IntroRelay",
+                    "input": "Trigger",
                     "parameter": "",
-                    "delay": 0,
+                    "delay": 0.0,
                     "fire_once": false,
-                    "target_id": "368c92bd-c9e0-4cd4-9efe-3d529226fa28"
+                    "target_id": "97fb8d92-818b-4b8d-81cb-aeacbc166a6b"
                 }
             ]
         },
@@ -4506,7 +4542,17 @@
                 "disabled": false,
                 "hidden": false,
                 "carry_enabled": true,
-                "carry_reach": 110
+                "carry_reach": 110,
+                "collect_enabled": false,
+                "collect_type": "health",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "gun1",
+                "collect_custom_sprite": ""
             },
             "io_connections": []
         },
@@ -4567,7 +4613,17 @@
                 "disabled": false,
                 "hidden": false,
                 "carry_enabled": true,
-                "carry_reach": 110
+                "carry_reach": 110,
+                "collect_enabled": false,
+                "collect_type": "health",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "gun1",
+                "collect_custom_sprite": ""
             },
             "io_connections": []
         },
@@ -4628,7 +4684,17 @@
                 "disabled": false,
                 "hidden": false,
                 "carry_enabled": true,
-                "carry_reach": 110
+                "carry_reach": 110,
+                "collect_enabled": false,
+                "collect_type": "health",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "gun1",
+                "collect_custom_sprite": ""
             },
             "io_connections": []
         },
@@ -4653,37 +4719,27 @@
         {
             "type": "logic_command",
             "pos": [
-                -1760,
+                -1856.0,
                 0,
-                520
+                464.0
             ],
             "properties": {
                 "type": "logic_command",
                 "io_enabled": true,
                 "name": "intromessage2",
                 "id": "368c92bd-c9e0-4cd4-9efe-3d529226fa28",
-                "command": "message \"Fio\"",
+                "command": "message3 \"Fio\"",
                 "disabled": false,
                 "hidden": false
             },
-            "io_connections": [
-                {
-                    "output": "OnCommand",
-                    "target": "intromessage3",
-                    "input": "RunCommand",
-                    "parameter": "",
-                    "delay": 4,
-                    "fire_once": false,
-                    "target_id": "7f2acc02-a76f-4a77-a6fd-8b8d59c19828"
-                }
-            ]
+            "io_connections": []
         },
         {
             "type": "logic_command",
             "pos": [
-                -1768,
+                -1760.0,
                 0,
-                416
+                384.0
             ],
             "properties": {
                 "type": "logic_command",
@@ -4759,7 +4815,7 @@
                     "target": "door01a",
                     "input": "Open",
                     "parameter": "",
-                    "delay": 0,
+                    "delay": 0.0,
                     "fire_once": false,
                     "target_id": "df26f7fa-72d0-4a68-9dfd-abaf4cc31c71"
                 },
@@ -4768,7 +4824,7 @@
                     "target": "door01b",
                     "input": "Open",
                     "parameter": "",
-                    "delay": 0,
+                    "delay": 0.0,
                     "fire_once": false,
                     "target_id": "8da0f179-afb0-4dc0-b04a-c72204469b16"
                 }
@@ -4984,6 +5040,42 @@
                 "disabled": false
             },
             "io_connections": []
+        },
+        {
+            "type": "logic_relay",
+            "pos": [
+                -1696.0,
+                40,
+                464.0
+            ],
+            "properties": {
+                "type": "logic_relay",
+                "io_enabled": true,
+                "name": "IntroRelay",
+                "id": "97fb8d92-818b-4b8d-81cb-aeacbc166a6b",
+                "disabled": false,
+                "fire_once": false
+            },
+            "io_connections": [
+                {
+                    "output": "OnTrigger",
+                    "target": "intromessage2",
+                    "input": "RunCommand",
+                    "parameter": "",
+                    "delay": 3.0,
+                    "fire_once": false,
+                    "target_id": "368c92bd-c9e0-4cd4-9efe-3d529226fa28"
+                },
+                {
+                    "output": "OnTrigger",
+                    "target": "intromessage3",
+                    "input": "RunCommand",
+                    "parameter": "",
+                    "delay": 5.0,
+                    "fire_once": false,
+                    "target_id": "7f2acc02-a76f-4a77-a6fd-8b8d59c19828"
+                }
+            ]
         }
     ],
     "created": "2026-09-27T09:24:54"
