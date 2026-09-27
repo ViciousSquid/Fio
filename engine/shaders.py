@@ -458,12 +458,19 @@ uniform mat4 projection;
 uniform mat4 view;
 uniform vec3 sprite_pos_world;
 uniform vec2 sprite_size;
+uniform bool use_fixed_facing;
+layout (location = 3) in float sprite_fixed_yaw;
 void main() {
     TexCoords = aPos + 0.5;
     vec3 cameraRight = vec3(view[0][0], view[1][0], view[2][0]);
     vec3 cameraUp = vec3(view[0][1], view[1][1], view[2][1]);
-    vec3 worldPos = sprite_pos_world 
-                  + cameraRight * aPos.x * sprite_size.x 
+    if (use_fixed_facing && sprite_fixed_yaw > -9999.0) {
+        float yaw = sprite_fixed_yaw;
+        cameraRight = vec3(cos(yaw), 0.0, -sin(yaw));
+        cameraUp = vec3(0.0, 1.0, 0.0);
+    }
+    vec3 worldPos = sprite_pos_world
+                  + cameraRight * aPos.x * sprite_size.x
                   + cameraUp * aPos.y * sprite_size.y;
     FragPos = worldPos;
     gl_Position = projection * view * vec4(worldPos, 1.0);
