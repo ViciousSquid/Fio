@@ -755,7 +755,7 @@ class PropertyEditor(QWidget):
         return index
 
     def _set_trigger_filter(self, filter_name, checked):
-        """Update one trigger collect_activation filter while preserving filter order."""
+        """Update one trigger activation filter while preserving filter order."""
         brush = self.current_object
         if not isinstance(brush, dict):
             return
@@ -1323,8 +1323,8 @@ class PropertyEditor(QWidget):
         # Key dropdown
         key_lbl = QLabel("Key Name:")
         key_combo = _make_combo(list(Prop.KEY_NAMES) + ['custom'],
-                                brush.get('door_collect_key_name', Prop.DEFAULT_KEY_NAME),
-                                lambda t: self.update_object_prop('door_collect_key_name', t))
+                                brush.get('door_key_name', Prop.DEFAULT_KEY_NAME),
+                                lambda t: self.update_object_prop('door_key_name', t))
         key_lbl.setVisible(brush.get('door_needs_key', False))
         key_combo.setVisible(brush.get('door_needs_key', False))
         opt_layout.addLayout(_hbox(key_lbl, key_combo, stretch=False))
@@ -2584,7 +2584,7 @@ class PropertyEditor(QWidget):
         key_combo = _make_combo(
             list(Prop.KEY_NAMES),
             thing.properties.get('collect_key_name', Prop.DEFAULT_KEY_NAME),
-            self.on_collect_collect_key_name_changed,
+            self.on_collect_key_name_changed,
         )
         is_key = thing.properties.get('collect_type') == 'key'
         key_label.setVisible(is_key)
@@ -3040,7 +3040,7 @@ class PropertyEditor(QWidget):
         lbl = QLabel("Key Name:")
         key_combo = _make_combo(list(Prop.KEY_NAMES),
                                 thing.properties.get('collect_key_name', Prop.DEFAULT_KEY_NAME),
-                                self.on_collect_collect_key_name_changed)
+                                self.on_collect_key_name_changed)
         key_combo.setEditable(True)
         form.addRow(lbl, key_combo)
         self._collect_key_widgets.append((lbl, key_combo))
@@ -3080,7 +3080,7 @@ class PropertyEditor(QWidget):
     def _build_collect_value_row(self, form, thing, value):
         lbl = QLabel("Value:")
         spin = _make_spin(value, -99999, 99999)
-        spin.editingFinished.connect(lambda w=spin: self.update_object_prop('value', w.value()))
+        spin.editingFinished.connect(lambda w=spin: self.update_object_prop('collect_value', w.value()))
         form.addRow(lbl, spin)
         self._collect_value_widgets.append((lbl, spin))
         if thing.properties.get('collect_type') == 'key':
@@ -4207,8 +4207,8 @@ class PropertyEditor(QWidget):
         if self.current_object is None:
             return
         self.current_object['door_needs_key'] = needs_key
-        if needs_key and not self.current_object.get('door_collect_key_name'):
-            self.current_object['door_collect_key_name'] = Prop.DEFAULT_KEY_NAME
+        if needs_key and not self.current_object.get('door_key_name'):
+            self.current_object['door_key_name'] = Prop.DEFAULT_KEY_NAME
         for k in ('door_key_input', 'door_key_label'):
             if k in self._widgets:
                 self._widgets[k].setVisible(needs_key)
@@ -4227,7 +4227,7 @@ class PropertyEditor(QWidget):
                 sel_btn.setVisible(False)
             return
 
-        collect_key_name = brush.get('door_collect_key_name', '')
+        collect_key_name = brush.get('door_key_name', '')
         if not collect_key_name:
             link_lbl.setText("⚠ No key name set")
             link_lbl.setStyleSheet("QLabel { color: #FF8800; padding: 4px; }")
@@ -4283,7 +4283,7 @@ class PropertyEditor(QWidget):
             return
 
         matching = [b for b in self.editor.state.brushes
-                    if b.get('is_door') and b.get('door_needs_key') and b.get('door_collect_key_name') == collect_key_name]
+                    if b.get('is_door') and b.get('door_needs_key') and b.get('door_key_name') == collect_key_name]
         if matching:
             self._linked_door_brush = matching[0]
             door_name = matching[0].get('name', 'unnamed door')
@@ -4344,7 +4344,7 @@ class PropertyEditor(QWidget):
         if hasattr(self, 'collect_respawn_time_spin'):
             self.collect_respawn_time_spin.setVisible(collect_respawns)
 
-    def on_collect_collect_key_name_changed(self, collect_key_name):
+    def on_collect_key_name_changed(self, collect_key_name):
         if self.current_object is None:
             return
         self.update_object_prop('collect_key_name', collect_key_name)
