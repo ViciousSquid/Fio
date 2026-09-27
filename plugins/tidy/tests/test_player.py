@@ -2,7 +2,7 @@
 Player-host test for Tidy using core Props.
 
 The player host now instantiates core Props and runs the shared PropSession, so
-Tidy does not need its own pickup/carry/drop implementation.
+Tidy does not need its own carry/collect/drop implementation.
 """
 
 import contextlib
@@ -89,7 +89,7 @@ def test_plugin_loads_without_editor_or_pyqt():
 
 
 def test_player_host_runs_core_prop_and_tidy():
-    print("[2] player host runs core Prop pickup + Tidy placement")
+    print("[2] player host runs core Prop carry + Tidy placement")
     from plugins.manager import get_manager, load_plugins
     from player.plugin_host import PlayerPluginHost
 
