@@ -249,7 +249,9 @@ def register_all_input_handlers(io_manager: IOManager):
         logic.io_manager.fire_output(entity, 'OnChanged', value=path)
 
     def effect_set_custom_gif(entity, param, logic):
-        path = str(param or "").strip().replace("\\", "/")
+        path = os.path.normpath(
+            str(param or "").strip().replace("\\", "/")
+        ).replace("\\", "/")
         if not path:
             return
         entity.properties["custom_gif"] = path
