@@ -2886,17 +2886,17 @@ class PropertyEditor(QWidget):
         self._set_form_row_visible(
             form,
             rows['activation'],
-            enabled and kind not in ('health', 'weapon'),
+            enabled and kind not in ('health', 'ammo', 'weapon'),
         )
         self._set_form_row_visible(
             form,
             rows['value'],
-            enabled and kind in ('health', 'ammo', 'custom'),
+            enabled and kind in ('health', 'custom'),
         )
         self._set_form_row_visible(
             form,
             rows['sprite'],
-            enabled and kind in ('ammo', 'custom'),
+            enabled and kind == 'custom',
         )
         self._set_form_row_visible(form, rows['respawn'], enabled)
 
@@ -2962,7 +2962,7 @@ class PropertyEditor(QWidget):
         kind = str(thing.properties.get('collect_type', 'health')).lower()
         derived = (
             bool(thing.properties.get('collect_enabled'))
-            and kind in ('health', 'weapon', 'key')
+            and kind in ('health', 'ammo', 'weapon', 'key')
         )
         self._set_form_row_visible(
             form,
@@ -2993,6 +2993,11 @@ class PropertyEditor(QWidget):
             elif kind == 'health':
                 self.update_object_prop('collect_custom_sprite', '')
                 self.update_object_prop('sprite_path', 'assets/sprites/health.png')
+            elif kind == 'ammo':
+                self.update_object_prop('collect_custom_sprite', '')
+                self.update_object_prop('collect_activation', 'walk_over')
+                self.update_object_prop('collect_value', 8)
+                self.update_object_prop('sprite_path', 'assets/sprites/ammo.png')
             self._refresh_prop_collection_ui(self.current_object)
         else:
             self._refresh_prop_collection_ui(self.current_object)
@@ -4653,8 +4658,10 @@ class PropertyEditor(QWidget):
             )
         elif kind == 'health':
             self.update_object_prop('sprite_path', 'assets/sprites/health.png')
+        elif kind == 'ammo':
+            self.update_object_prop('sprite_path', 'assets/sprites/ammo.png')
         else:
-            # There is no stock sprite for arbitrary Custom/Ammo Props; leave
+            # There is no stock sprite for arbitrary Custom Props; leave
             # the authored path empty and let the renderer fall back normally.
             self.update_object_prop('sprite_path', '')
         if hasattr(self, '_prop_sprite_path'):
@@ -4721,11 +4728,11 @@ class PropertyEditor(QWidget):
                     Prop.DEFAULT_KEY_NAME,
                 )
             )
-        else:
-            # Ammo and Custom are authored by their normal sprite/value controls.
-            # Preserve the existing sprite rather than inventing an asset.
-            if collect_type == 'ammo':
-                self.update_object_prop('collect_custom_sprite', '')
+        elif collect_type == 'ammo':
+            self.update_object_prop('collect_custom_sprite', '')
+            self.update_object_prop('collect_activation', 'walk_over')
+            self.update_object_prop('collect_value', 8)
+            self.update_object_prop('sprite_path', 'assets/sprites/ammo.png')
 
         self._refresh_prop_collection_ui(self.current_object)
         self._refresh_prop_collection_appearance(self.current_object)
