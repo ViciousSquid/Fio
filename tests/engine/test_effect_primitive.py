@@ -347,7 +347,8 @@ def test_effect_set_type_input_changes_type_and_fires_onchanged():
 
     assert get_input_names("effect") == [
         "SetType", "SetFireTexture", "SetOrbTexture",
-        "SetCustomGif", "SetLoop", "Explode",
+        "SetCustomGif", "SetLoop",
+        "Hide", "Show", "ToggleVisibility", "Explode",
     ]
     assert get_output_names("effect") == ["OnChanged"]
 
