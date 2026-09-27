@@ -1054,6 +1054,9 @@ def register_default_io():
             IODef('SetOrbTexture', 'Select ORB variant 1-5 (or orb01.gif..orb05.gif)', 'string'),
             IODef('SetCustomGif', 'Set the CUSTOM GIF path', 'string'),
             IODef('SetLoop', 'Set whether a CUSTOM GIF loops', 'bool'),
+            IODef('Hide', 'Hide this Effect'),
+            IODef('Show', 'Show this Effect'),
+            IODef('ToggleVisibility', 'Toggle Effect visibility'),
             IODef('Explode', 'Switch to EXPLOSION and play its animation once'),
         ],
         outputs=[
