@@ -20,7 +20,7 @@ import time
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
-from PyQt5.QtWidgets (
+from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QDialog,
