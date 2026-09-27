@@ -780,7 +780,7 @@ class BenchmarkManager(QDialog):
             QMessageBox.critical(
                 self,
                 "Export failed",
-                "Could not write BENCHMARK_REPORT.html to the Fio root.\\n\\n%s"
+                "Could not write BENCHMARK_REPORT.html to the Fio root.\n\n%s"
                 % exc,
             )
             return
