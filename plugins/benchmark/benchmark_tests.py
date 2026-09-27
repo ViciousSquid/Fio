@@ -461,7 +461,8 @@ class BenchmarkTests:
                             now = time.perf_counter()
 
                     window.state.brushes.append(brush)
-                    window.state.mark_world_changed([brush])
+                    # RenderTable reconciliation already detects the changing
+                    # row count; do not bump world_epoch for every insertion.
                     created += 1
                     next_creation = time.perf_counter() + 0.025
 
