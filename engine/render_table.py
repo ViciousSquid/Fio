@@ -523,7 +523,10 @@ class RenderTable:
         # One list comprehension and one bulk store. Assigning a NumPy array
         # element by element from Python costs several times as much, and this
         # runs over every brush in the level every frame.
-        hidden[:] = [b.get('hidden', False) for b in brushes]
+        # Freeze the row count observed at the start of this call. The live
+        # editor/benchmark list may grow concurrently; never let an append
+        # change the number of rows written into this fixed-size buffer.
+        hidden[:] = [brushes[i].get('hidden', False) for i in range(n)]
         return hidden
 
     def sync(self, brushes, epoch=None, dirty_objects=None):
@@ -572,7 +575,8 @@ class RenderTable:
         survivors = set()          # slots whose cold columns are already right
         move_src, move_dst = [], []
 
-        for slot, brush in enumerate(brushes):
+        for slot in range(n):
+            brush = brushes[slot]
             bid = brush.get('id')
             new_ids[slot] = bid
             if bid is None:
@@ -614,7 +618,8 @@ class RenderTable:
                 new_geometry_records[slot] = old_geometry_by_slot[old]
         self.geometry_records = new_geometry_records
 
-        for slot, brush in enumerate(brushes):
+        for slot in range(n):
+            brush = brushes[slot]
             self._resolve_warm(slot, brush)
             if slot not in survivors:
                 self._resolve_cold(slot, brush)
@@ -637,7 +642,10 @@ class RenderTable:
         self.ids = new_ids
         self.slot_of_id = {bid: slot for slot, bid in enumerate(new_ids)
                            if bid is not None}
-        self.brushes = list(brushes)
+        # Publish exactly the row set reconciled above. The live list may grow
+        # concurrently during benchmark/editor stress insertion; the next
+        # frame will reconcile any newly appended rows.
+        self.brushes = [brushes[i] for i in range(n)]
         self.count = n
         self.dynamic_slots = np.flatnonzero(
             self.class_bits[:n] & CLASS_DYNAMIC).astype(np.int32)
