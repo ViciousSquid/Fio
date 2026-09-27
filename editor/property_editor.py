@@ -2577,7 +2577,7 @@ class PropertyEditor(QWidget):
         self._collect_key_widgets = []
         self._collect_sprite_widgets = []
 
-                self._build_collect_activation_row(form, thing, thing.properties.get('collect_activation', 'walk_over'))
+        self._build_collect_activation_row(form, thing, thing.properties.get('collect_activation', 'walk_over'))
         self._build_collect_value_row(form, thing, thing.properties.get('collect_value', 25))
         self._build_collect_sprite_row(form, thing)
         self._build_collect_respawn_row(form, thing)
