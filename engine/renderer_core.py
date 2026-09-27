@@ -989,6 +989,7 @@ layout (location = 10) in vec4 iPayload;
 
         variants = table.effect_fire_variant[slots]
         custom_ids = table.effect_custom_id[slots]
+        custom_loops = table.effect_custom_loop[slots]
         elapsed = table.effect_elapsed[slots]
 
         # There are only five authored variants per animated Effect family.
@@ -1052,8 +1053,14 @@ layout (location = 10) in vec4 iPayload;
                     continue
 
                 mask = custom_values == custom_id
-                local_elapsed = np.mod(
-                    custom_elapsed[mask], cumulative[-1]
+                loop_values = custom_loops[mask]
+                raw_elapsed = custom_elapsed[mask]
+                # CUSTOM follows its authored Loop flag. When looping is off,
+                # hold the final GIF frame instead of wrapping to frame 1.
+                local_elapsed = np.where(
+                    loop_values,
+                    np.mod(raw_elapsed, cumulative[-1]),
+                    np.minimum(raw_elapsed, cumulative[-1]),
                 )
                 frame_indices = np.searchsorted(
                     cumulative, local_elapsed, side='right'
