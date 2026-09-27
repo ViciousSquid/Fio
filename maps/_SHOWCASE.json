@@ -2261,7 +2261,7 @@
                 220.0,
                 -472.0
             ],
-            "hidden": false,
+            "hidden": true,
             "io_connections": [
                 {
                     "output": "OnFullyOpen",
@@ -2305,7 +2305,7 @@
                 220.0,
                 -472.0
             ],
-            "hidden": false,
+            "hidden": true,
             "io_connections": [
                 {
                     "output": "OnFullyOpen",
@@ -4664,7 +4664,17 @@
                 "disabled": false,
                 "hidden": false
             },
-            "io_connections": []
+            "io_connections": [
+                {
+                    "output": "OnCommand",
+                    "target": "intromessage3",
+                    "input": "RunCommand",
+                    "parameter": "",
+                    "delay": 4.0,
+                    "fire_once": false,
+                    "target_id": "7f2acc02-a76f-4a77-a6fd-8b8d59c19828"
+                }
+            ]
         },
         {
             "type": "logic_command",
