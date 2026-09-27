@@ -291,14 +291,7 @@ class Thing:
             # crashing_the_load pins.
             return None
 
-        legacy_pickup = str(thing_type).replace('_', '').lower() == 'pickup'
-        if legacy_pickup:
-            _load_core_entity_types()
-            from engine.prop_entity import migrate_legacy_pickup_properties
-            properties = migrate_legacy_pickup_properties(data.get('properties', {}))
-            thing_type = 'prop'
-        else:
-            properties = data.get('properties', {})
+        properties = data.get('properties', {})
         for key, value in properties.items():
             if isinstance(value, str):
                 try:
