@@ -119,6 +119,38 @@ def test_non_physics_prop_still_falls_to_ground_on_drop():
     assert 'OnRest' in io.names()
 
 
+def test_respawn_fades_in_over_two_seconds():
+    prop = Prop(pos=[0.0, 0.0, 0.0], properties={
+        'collect_enabled': True,
+        'collect_respawns': True,
+    })
+    logic = SimpleNamespace(
+        things=[prop], io_manager=IO(),
+        _spatial_grid=None, _physics_world=None,
+        player=SimpleNamespace(
+            pos=[0.0, 0.0, 0.0], angle=0.0, pitch=0.0,
+            camera_height=40.0,
+        ),
+        current_hud_message='',
+    )
+    session = PropSession(logic)
+    session.start()
+
+    assert prop._respawn_fade_alpha == 1.0
+    assert session.collect_prop(prop) is True
+    assert prop.properties['collect_collected'] is True
+
+    assert session.respawn_prop(prop) is True
+    assert prop._respawn_fade_alpha == 0.0
+
+    session._update_respawn_fades(1.0)
+    assert prop._respawn_fade_alpha == 0.5
+
+    session._update_respawn_fades(1.0)
+    assert prop._respawn_fade_alpha == 1.0
+    assert id(prop) not in session.respawn_fades
+
+
 def test_carried_billboard_keeps_its_facing_when_player_turns():
     prop = Prop(pos=[0.0, 40.0, 55.0])
     logic = SimpleNamespace(
