@@ -1639,7 +1639,7 @@ class View2D(QWidget):
             for thing in self.editor.state.things:
                 io_conns = get_connections(thing)
                 for conn in io_conns:
-                    target_pos = get_pos_by_name(conn.target_name)
+                    target_pos = get_target_pos(conn)
                     if target_pos:
                         is_logic = thing.properties.get('type') == 'logic_gate'
                         connections_to_draw.append({
