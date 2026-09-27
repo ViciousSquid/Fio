@@ -108,7 +108,11 @@ class FioPackage:
             zf = zipfile.ZipFile(io.BytesIO(data), "r")
         except zipfile.BadZipFile as exc:
             raise PackageError("Not a valid .fiopak (bad zip)") from exc
-        return cls(zf, source=source)
+        try:
+            return cls(zf, source=source)
+        except Exception:
+            zf.close()
+            raise
 
     # ------------------------------------------------------------------
     # Context manager / lifecycle

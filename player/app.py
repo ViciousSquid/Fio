@@ -87,8 +87,7 @@ class FioPlayerApp:
             self.map_data = self.package.load_start_map()
             self._place_camera_at_spawn()
             self.renderer.load_scene(self.map_data, self.package)
-            # Load and start any plugins this package's map depends on. Bundled
-            # Python plugins are gated by an explicit user permission prompt.
+            # Load and start plugins already installed with this player build.
             try:
                 if self.plugin_host.load(self.package):
                     self.plugin_host.build_and_start(self.map_data)
