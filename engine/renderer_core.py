@@ -23,6 +23,7 @@ import re
 import math
 import os
 import io
+import time
 from dataclasses import dataclass
 
 from PyQt5.QtCore import QByteArray, QBuffer, QIODevice
@@ -990,7 +991,14 @@ layout (location = 10) in vec4 iPayload;
         variants = table.effect_fire_variant[slots]
         custom_ids = table.effect_custom_id[slots]
         custom_loops = table.effect_custom_loop[slots]
-        elapsed = table.effect_elapsed[slots]
+        # Animated GIFs are visual-time data. Sample the clock on the render
+        # thread rather than consuming the logic thread's per-frame elapsed
+        # snapshot. That removes visible frame quantisation when render and
+        # logic rates differ, while keeping the dense EntityTable as the source
+        # of the animation's spawn timestamps.
+        elapsed = np.maximum(
+            time.perf_counter() - table.effect_spawn_time[slots], 0.0
+        ).astype(np.float32, copy=False)
 
         # There are only five authored variants per animated Effect family.
         # This bounded 10-way loop replaces an entity-by-entity Python loop
