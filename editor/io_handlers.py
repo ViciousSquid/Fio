@@ -1898,36 +1898,10 @@ def register_all_input_handlers(io_manager: IOManager):
     except (OSError, IOError):
         pass
 
-    # Keep the version components individually filterable while retaining
-    # the bold Fio/version presentation used by the Debug Console.  Version
-    # links carry their own style so the console's entity-link highlighting
-    # cannot reinterpret or restyle their HTML.
-    version_link_style = (
-        'color: #2AA63E; text-decoration: none;'
-    )
-    version_number_style = (
-        'color: #F08000; font-weight: bold;'
-    )
-    version_parts = version_str.split('.')
-    if len(version_parts) == 4:
-        version_markup = (
-            f'<a href="filter:{version_parts[0]}" '
-            f'style="{version_link_style}"><span '
-            f'style="{version_number_style}">{version_parts[0]}</span></a>'
-            f'<b>.</b>'
-            f'<a href="filter:{version_parts[1]}" '
-            f'style="{version_link_style}"><span '
-            f'style="{version_number_style}">{version_parts[1]}</span></a>'
-            f'<b>.</b>'
-            f'<a href="filter:{version_parts[2]}" '
-            f'style="{version_link_style}"><span '
-            f'style="{version_number_style}">{version_parts[2]}</span></a>'
-            f'<b>.</b><b>{version_parts[3]}</b>'
-        )
-    else:
-        version_markup = f'<b>{version_str}</b>'
-
-    debug_log('Info', f'<b>Fio version</b> {version_markup}')
+    # Keep the startup banner as plain text. DebugConsole renders the
+    # version numbers as filter links in one dedicated pass; embedding HTML
+    # here would send that markup back through the console's generic highlighter.
+    debug_log('Info', f'Fio version {version_str}')
     debug_log_raw("github.com/vicioussquid/Fio")
     debug_log('Info', f"Registered {len(io_manager._input_handlers)} input handlers")
     debug_log('Info', f"Type 'help' to see all available commands")
