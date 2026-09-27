@@ -422,7 +422,7 @@
             ],
             "properties": {
                 "type": "prop",
-                "name": "Pickup_1",
+                "name": "Prop_1",
                 "id": "5cf93f3a-a699-4c62-8579-0bb6758efe7a",
                 "carry_enabled": false,
                 "collect_enabled": true,
