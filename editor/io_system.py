@@ -1050,8 +1050,8 @@ def register_default_io():
     register_io('effect',
         inputs=[
             IODef('SetType', 'Set the Effect TYPE (FIRE, ORB, EXPLOSION, or CUSTOM)', 'string'),
-            IODef('SetFireTexture', 'Select FIRE variant 1-5 (fire01..fire05)', 'string'),
-            IODef('SetOrbTexture', 'Select ORB variant 1-5 (orb01..orb05)', 'string'),
+            IODef('SetFireTexture', 'Select FIRE variant number 1-5', 'string'),
+            IODef('SetOrbTexture', 'Select ORB variant number 1-5', 'string'),
             IODef('SetCustomGif', 'Set the CUSTOM GIF path', 'string'),
             IODef('SetLoop', 'Set whether a CUSTOM GIF loops', 'bool'),
             IODef('Hide', 'Hide this Effect'),
