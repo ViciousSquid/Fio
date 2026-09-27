@@ -1697,11 +1697,11 @@ class PropertyEditor(QWidget):
                     thing.properties.get('render_mode', 'model')
                 ).lower()
                 mode_combo = _make_combo(
-                    ['Model', 'Billboard Sprite'],
-                    'Billboard Sprite' if render_mode == 'billboard' else 'Model',
+                    ['Model', 'Sprite'],
+                    'Sprite' if render_mode == 'billboard' else 'Model',
                     None,
                     tooltip=(
-                        "Model renders the Prop as its 3D model. Billboard Sprite "
+                        "Model renders the Prop as its 3D model. Sprite "
                         "renders it as a camera-facing 2D sprite."
                     ),
                 )
@@ -1782,15 +1782,10 @@ class PropertyEditor(QWidget):
                 rotation_row = rotation_before
                 sprite_path_row = form.getWidgetPosition(sprite_widget)[0]
                 sprite_size_row = form.getWidgetPosition(sprite_size_widget)[0]
-
-                def set_form_row_visible(row, visible):
-                    for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
-                        item = form.itemAt(row, role)
-                        if item is None:
-                            continue
-                        widget = item.widget()
-                        if widget is not None:
-                            widget.setVisible(visible)
+                self._prop_render_form = form
+                self._prop_model_path_row = model_path_row
+                self._prop_sprite_path_row = sprite_path_row
+                self._prop_sprite_size_row = sprite_size_row
 
                 def set_representation(label):
                     is_model = label == 'Model'
@@ -1801,20 +1796,28 @@ class PropertyEditor(QWidget):
                     # with nothing to draw, so give it the default one. Only
                     # when the field is empty: an authored model is never
                     # replaced, and nothing is added to a billboard Prop.
-                    if is_model and not thing.properties.get('model_path'):
+                    if is_model:
+                        # A Prop model representation always has a concrete mesh.
+                        # Set the path before switching the render mode so the
+                        # dense projection never observes a model row with no recipe.
                         default_model = getattr(
                             type(thing), 'DEFAULT_MODEL_PATH', '')
-                        if default_model:
+                        if not thing.properties.get('model_path') and default_model:
                             self.update_object_prop('model_path', default_model)
                             model_path_edit = model_path_widget.findChild(QLineEdit)
                             if model_path_edit is not None:
                                 model_path_edit.setText(default_model)
-                    elif not is_model:
-                        # Billboard is the Prop's default visual representation.
-                        # Switching away from a model deliberately restores the
-                        # stock appearance rather than leaving stale model-era
-                        # asset state to decide what the editor shows.
-                        default_sprite = 'assets/sprites/collect.png'
+                    else:
+                        # Restore the Prop's resolved visual asset rather than a
+                        # generic placeholder: weapon -> gun1, key -> its key,
+                        # health -> health.png, custom -> custom sprite.
+                        if thing.properties.get('collect_enabled'):
+                            default_sprite = thing.get_collect_sprite_path()
+                        else:
+                            default_sprite = thing.properties.get(
+                                'sprite_path',
+                                'assets/sprites/pickup.png',
+                            )
                         self.update_object_prop('sprite_path', default_sprite)
                         self.update_object_prop('sprite_size', [32.0, 32.0])
                         sprite_edit.setText(default_sprite)
@@ -1823,15 +1826,19 @@ class PropertyEditor(QWidget):
                             spin.setValue(value)
                             spin.blockSignals(False)
                     for row in (model_path_row, scale_row, rotation_row):
-                        set_form_row_visible(row, is_model)
+                        self._set_form_row_visible(form, row, is_model)
                     for row in (sprite_path_row, sprite_size_row):
-                        set_form_row_visible(row, not is_model)
+                        self._set_form_row_visible(form, row, not is_model)
 
                 mode_combo.currentTextChanged.connect(set_representation)
                 for row in (model_path_row, scale_row, rotation_row):
-                    set_form_row_visible(row, model_mode)
+                    self._set_form_row_visible(form, row, model_mode)
                 for row in (sprite_path_row, sprite_size_row):
-                    set_form_row_visible(row, not model_mode)
+                    self._set_form_row_visible(form, row, not model_mode)
+
+                # Collection type can own the sprite path, so the appearance row
+                # is further narrowed by _refresh_prop_collection_appearance().
+                self._refresh_prop_collection_appearance(thing)
 
             # Prop owns its physical state on its dedicated Physics tab.
             # Ordinary Model entities retain their collision controls.
@@ -1915,23 +1922,21 @@ class PropertyEditor(QWidget):
             form.addRow(QLabel(""))  # spacer
             self._build_portal_target(form, thing)
 
-        # Prop
+        # Prop interaction/collection controls use human-facing concepts
+        # rather than exposing the serialized collect_* / carry_* schema.
         if isinstance(thing, Prop):
+            self._prop_form = form
             self._build_collect_ui(form, thing)
 
-        # Explicit primary properties.
-        #
-        # Specialised widgets above handle properties such as model_path,
-        # scale, rotation, colour, etc. The generic iterator handles the
-        # explicitly classified primary properties that do not have a
-        # specialised editor.
+        # Explicit primary properties. Props have a dedicated editor above:
+        # do not expose their serialized implementation fields as a flat list.
         primary_properties = getattr(
             thing,
             'EDITOR_PRIMARY_PROPERTIES',
             (),
         )
 
-        if primary_properties:
+        if primary_properties and not isinstance(thing, Prop):
             self._iterate_thing_properties(
                 form,
                 thing,
@@ -2573,14 +2578,393 @@ class PropertyEditor(QWidget):
         form.addRow("Portal Target:", _hbox(combo, sel_btn, stretch=False))
 
     def _build_collect_ui(self, form, thing):
-        self._collect_value_widgets = []
-        self._collect_key_widgets = []
-        self._collect_sprite_widgets = []
+        """Build the compact, human-facing Prop interaction editor.
 
-        self._build_collect_activation_row(form, thing, thing.properties.get('collect_activation', 'walk_over'))
-        self._build_collect_value_row(form, thing, thing.properties.get('collect_value', 25))
-        self._build_collect_sprite_row(form, thing)
-        self._build_collect_respawn_row(form, thing)
+        The serialized schema is deliberately richer than the inspector.  A
+        Prop is one world object with a handful of obvious behaviours; the
+        editor should expose those behaviours and reveal the type-specific
+        controls only when they matter.
+        """
+        # Interaction -----------------------------------------------------
+        form.addRow(self._section("Interaction"))
+
+        carry_cb = _make_checkbox(
+            "Can carry",
+            bool(thing.properties.get('carry_enabled', True)),
+            lambda checked: self.update_object_prop('carry_enabled', bool(checked)),
+            _Style.CHECKBOX,
+        )
+        carry_cb.setToolTip(
+            "Allow the player to carry and drop this Prop."
+        )
+        form.addRow("", carry_cb)
+
+        collectible_cb = _make_checkbox(
+            "Collectible",
+            bool(thing.properties.get('collect_enabled', False)),
+            self.on_prop_collectible_toggled,
+            _Style.CHECKBOX,
+        )
+        collectible_cb.setToolTip(
+            "Let the player collect this Prop as a gameplay item."
+        )
+        form.addRow("", collectible_cb)
+
+        # Collection ------------------------------------------------------
+        form.addRow(self._section("Collection"))
+
+        collect_type = str(
+            thing.properties.get('collect_type', 'health') or 'health'
+        ).lower()
+        if collect_type not in Prop.COLLECT_TYPES:
+            collect_type = 'custom'
+
+        type_values = (
+            ('Health', 'health'),
+            ('Ammo', 'ammo'),
+            ('Weapon', 'weapon'),
+            ('Key', 'key'),
+            ('Custom', 'custom'),
+        )
+        type_labels = [label for label, _ in type_values]
+        value_for_label = {label: value for label, value in type_values}
+
+        type_combo = _make_combo(
+            type_labels,
+            next(
+                (label for label, value in type_values if value == collect_type),
+                'Health',
+            ),
+            self._on_prop_collect_kind_changed,
+        )
+        type_row = form.rowCount()
+        form.addRow("Collect as:", type_combo)
+
+        weapon_values = tuple(Prop.GUN_NAMES)
+        weapon_labels = {
+            'gun1': 'Gun 1',
+            'gun2': 'Gun 2',
+            'cig': 'Cigarette',
+        }
+        weapon_combo = _make_combo(
+            [weapon_labels.get(v, v.title()) for v in weapon_values],
+            weapon_labels.get(
+                thing.properties.get('collect_weapon', 'gun1'),
+                'Gun 1',
+            ),
+            self._on_prop_weapon_changed,
+        )
+        weapon_row = form.rowCount()
+        form.addRow("Weapon:", weapon_combo)
+
+        key_values = tuple(Prop.KEY_NAMES)
+        key_labels = {
+            'blue_key': 'Blue Key',
+            'red_key': 'Red Key',
+            'yellow_key': 'Yellow Key',
+        }
+        key_combo = _make_combo(
+            [key_labels.get(v, v.replace('_', ' ').title()) for v in key_values],
+            key_labels.get(
+                thing.properties.get('collect_key_name', Prop.DEFAULT_KEY_NAME),
+                'Blue Key',
+            ),
+            self._on_prop_key_changed,
+        )
+        key_row = form.rowCount()
+        form.addRow("Key:", key_combo)
+
+        activation = str(
+            thing.properties.get('collect_activation', 'walk_over') or 'walk_over'
+        )
+        activation_combo = _make_combo(
+            ['Walk over', 'Use'],
+            'Walk over' if activation == 'walk_over' else 'Use',
+            self._on_prop_collect_activation_changed,
+        )
+        activation_row = form.rowCount()
+        form.addRow("Collect on:", activation_combo)
+
+        value_label = QLabel("Amount:")
+        value_spin = _make_spin(
+            thing.properties.get('collect_value', 25),
+            -99999,
+            99999,
+        )
+        value_spin.editingFinished.connect(
+            lambda w=value_spin: self.update_object_prop(
+                'collect_value',
+                w.value(),
+            )
+        )
+        value_row = form.rowCount()
+        form.addRow(value_label, value_spin)
+
+        # The visual asset is normally a consequence of the collection type.
+        # Only expose a picker when the user is actually authoring a custom/
+        # generic sprite.
+        sprite_label = QLabel("Sprite:")
+        sprite_widget = QWidget()
+        sprite_layout = QHBoxLayout(sprite_widget)
+        sprite_layout.setContentsMargins(0, 0, 0, 0)
+        sprite_path = QLineEdit(
+            str(thing.properties.get('collect_custom_sprite', '')
+                or thing.properties.get('sprite_path', ''))
+        )
+        sprite_path.setReadOnly(True)
+        sprite_path.setPlaceholderText("Choose a custom sprite")
+        sprite_button = QPushButton("Choose…")
+        sprite_button.setFixedWidth(80)
+        sprite_button.clicked.connect(self.on_collect_sprite_select)
+        sprite_clear = QPushButton("Clear")
+        sprite_clear.setFixedWidth(60)
+        sprite_clear.clicked.connect(self.on_collect_sprite_clear)
+        sprite_layout.addWidget(sprite_path)
+        sprite_layout.addWidget(sprite_button)
+        sprite_layout.addWidget(sprite_clear)
+        sprite_row = form.rowCount()
+        form.addRow(sprite_label, sprite_widget)
+
+        respawn = bool(thing.properties.get('collect_respawns', False))
+        respawn_widget = QWidget()
+        respawn_layout = QHBoxLayout(respawn_widget)
+        respawn_layout.setContentsMargins(0, 0, 0, 0)
+        respawn_cb = _make_checkbox(
+            "Respawn",
+            respawn,
+            self.on_respawn_toggled,
+            _Style.CHECKBOX,
+        )
+        respawn_label = QLabel("after")
+        respawn_spin = _make_spin(
+            thing.properties.get('collect_respawn_time', 20.0),
+            0.1,
+            9999.0,
+            suffix=" sec",
+            decimals=1,
+        )
+        respawn_spin.editingFinished.connect(
+            lambda: self.update_object_prop(
+                'collect_respawn_time',
+                respawn_spin.value(),
+            )
+        )
+        respawn_layout.addWidget(respawn_cb)
+        respawn_layout.addWidget(respawn_label)
+        respawn_layout.addWidget(respawn_spin)
+        respawn_layout.addStretch()
+        respawn_row = form.rowCount()
+        form.addRow("", respawn_widget)
+
+        self._prop_collectible_cb = collectible_cb
+        self._prop_collect_type_combo = type_combo
+        self._prop_collect_type_values = value_for_label
+        self._prop_weapon_combo = weapon_combo
+        self._prop_weapon_values = {
+            label: value for value, label in weapon_labels.items()
+        }
+        self._prop_key_combo = key_combo
+        self._prop_key_values = {
+            label: value for value, label in key_labels.items()
+        }
+        self._prop_activation_combo = activation_combo
+        self._prop_value_label = value_label
+        self._prop_value_spin = value_spin
+        self._prop_sprite_path = sprite_path
+        self._prop_sprite_label = sprite_label
+        self._prop_sprite_widget = sprite_widget
+        self._prop_respawn_cb = respawn_cb
+        self._prop_respawn_label = respawn_label
+        self._prop_respawn_spin = respawn_spin
+        self._prop_collection_rows = {
+            'type': type_row,
+            'weapon': weapon_row,
+            'key': key_row,
+            'activation': activation_row,
+            'value': value_row,
+            'sprite': sprite_row,
+            'respawn': respawn_row,
+        }
+
+        self._refresh_prop_collection_ui(thing)
+
+    def _set_form_row_visible(self, form, row, visible):
+        """Show/hide a QFormLayout row without rebuilding the page."""
+        for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
+            item = form.itemAt(row, role)
+            if item is None:
+                continue
+            widget = item.widget()
+            if widget is not None:
+                widget.setVisible(bool(visible))
+
+    def _refresh_prop_collection_ui(self, thing):
+        """Reconcile collection controls with the current Prop kind."""
+        if not isinstance(thing, Prop):
+            return
+
+        enabled = bool(thing.properties.get('collect_enabled', False))
+        kind = str(thing.properties.get('collect_type', 'health') or 'health').lower()
+        if kind not in Prop.COLLECT_TYPES:
+            kind = 'custom'
+
+        rows = getattr(self, '_prop_collection_rows', {})
+        form = getattr(self, '_prop_collection_form', None)
+        if form is None:
+            # The collection controls are on the form owned by the current page.
+            # Recover it once from any labelled row widget.
+            form = self._find_prop_collection_form()
+            if form is not None:
+                self._prop_collection_form = form
+
+        if form is None:
+            return
+
+        for row in rows.values():
+            self._set_form_row_visible(form, row, enabled)
+
+        # The Collect as row is useful whenever collection is enabled. Type
+        # specific controls then narrow down from there.
+        self._set_form_row_visible(form, rows['type'], enabled)
+        self._set_form_row_visible(form, rows['weapon'], enabled and kind == 'weapon')
+        self._set_form_row_visible(form, rows['key'], enabled and kind == 'key')
+        self._set_form_row_visible(
+            form,
+            rows['activation'],
+            enabled and kind not in ('health', 'weapon'),
+        )
+        self._set_form_row_visible(
+            form,
+            rows['value'],
+            enabled and kind in ('health', 'ammo', 'custom'),
+        )
+        self._set_form_row_visible(
+            form,
+            rows['sprite'],
+            enabled and kind in ('ammo', 'custom'),
+        )
+        self._set_form_row_visible(form, rows['respawn'], enabled)
+
+        if kind == 'custom':
+            self._prop_value_label.setText("Value:")
+        else:
+            self._prop_value_label.setText("Amount:")
+
+        self._prop_activation_combo.setCurrentText(
+            'Walk over'
+            if str(thing.properties.get('collect_activation', 'walk_over')).lower() == 'walk_over'
+            else 'Use'
+        )
+
+        self._prop_respawn_cb.blockSignals(True)
+        self._prop_respawn_cb.setChecked(
+            bool(thing.properties.get('collect_respawns', False))
+        )
+        self._prop_respawn_cb.blockSignals(False)
+
+        weapon = thing.properties.get('collect_weapon', 'gun1')
+        weapon_label = {
+            'gun1': 'Gun 1',
+            'gun2': 'Gun 2',
+            'cig': 'Cigarette',
+        }.get(weapon, 'Gun 1')
+        self._prop_weapon_combo.blockSignals(True)
+        self._prop_weapon_combo.setCurrentText(weapon_label)
+        self._prop_weapon_combo.blockSignals(False)
+
+        key = thing.properties.get('collect_key_name', Prop.DEFAULT_KEY_NAME)
+        key_label = {
+            'blue_key': 'Blue Key',
+            'red_key': 'Red Key',
+            'yellow_key': 'Yellow Key',
+        }.get(key, 'Blue Key')
+        self._prop_key_combo.blockSignals(True)
+        self._prop_key_combo.setCurrentText(key_label)
+        self._prop_key_combo.blockSignals(False)
+
+        # Automatic collection sprites should not look like manually editable
+        # settings. Show their resolved asset in the read-only field only when
+        # a sprite picker is actually relevant.
+        custom_sprite = thing.properties.get('collect_custom_sprite', '')
+        display_sprite = custom_sprite or thing.properties.get('sprite_path', '')
+        self._prop_sprite_path.setText(display_sprite)
+
+    def _find_prop_collection_form(self):
+        """Find the QFormLayout owning the current Prop collection controls."""
+        # QFormLayout is the same object passed to _build_collect_ui; retain it
+        # explicitly on new pages. This fallback keeps cached/older pages safe.
+        return getattr(self, '_prop_form', None)
+
+    def _refresh_prop_collection_appearance(self, thing):
+        """Hide derived sprite-path controls when collection chooses the asset."""
+        if not isinstance(thing, Prop):
+            return
+        form = getattr(self, '_prop_render_form', None)
+        row = getattr(self, '_prop_sprite_path_row', None)
+        if form is None or row is None:
+            return
+        render_mode = str(thing.properties.get('render_mode', 'billboard')).lower()
+        kind = str(thing.properties.get('collect_type', 'health')).lower()
+        derived = (
+            bool(thing.properties.get('collect_enabled'))
+            and kind in ('health', 'weapon', 'key')
+        )
+        self._set_form_row_visible(
+            form,
+            row,
+            render_mode != 'model' and not derived,
+        )
+
+    def on_prop_collectible_toggled(self, checked):
+        if self.current_object is None or not isinstance(self.current_object, Prop):
+            return
+        checked = bool(checked)
+        self.update_object_prop('collect_enabled', checked)
+        if checked:
+            kind = str(
+                self.current_object.properties.get('collect_type', 'health') or 'health'
+            ).lower()
+            if kind == 'weapon':
+                self._set_prop_weapon_sprite(
+                    self.current_object.properties.get('collect_weapon', 'gun1')
+                )
+            elif kind == 'key':
+                self._set_prop_key_sprite(
+                    self.current_object.properties.get(
+                        'collect_key_name',
+                        Prop.DEFAULT_KEY_NAME,
+                    )
+                )
+            elif kind == 'health':
+                self.update_object_prop('collect_custom_sprite', '')
+                self.update_object_prop('sprite_path', 'assets/sprites/health.png')
+            self._refresh_prop_collection_ui(self.current_object)
+        else:
+            self._refresh_prop_collection_ui(self.current_object)
+
+    def _on_prop_collect_kind_changed(self, label):
+        value = getattr(self, '_prop_collect_type_values', {}).get(
+            label,
+            'health',
+        )
+        self.on_collect_type_changed(value)
+
+    def _on_prop_collect_activation_changed(self, label):
+        self.update_object_prop(
+            'collect_activation',
+            'walk_over' if str(label) == 'Walk over' else 'use',
+        )
+
+    def _on_prop_weapon_changed(self, label):
+        weapon = getattr(self, '_prop_weapon_values', {}).get(label, 'gun1')
+        self.on_collect_weapon_changed(weapon)
+
+    def _on_prop_key_changed(self, label):
+        key = getattr(self, '_prop_key_values', {}).get(
+            label,
+            Prop.DEFAULT_KEY_NAME,
+        )
+        self.on_collect_key_name_changed(key)
 
     def _iterate_thing_properties(self, form, thing, property_keys=None):
         """Add generic Thing properties to a form.
@@ -3001,74 +3385,6 @@ class PropertyEditor(QWidget):
         variant_combo.currentTextChanged.connect(on_variant)
         form.addRow("Variant:", variant_combo)
 
-
-    def _build_collect_activation_row(self, form, thing, value):
-        combo = _make_combo(['walk_over', 'use'], value, lambda t: self.update_object_prop('collect_activation', t))
-        form.addRow("Activation:", combo)
-        self._collect_activation_widget = combo
-        if thing.properties.get('collect_type') == 'health':
-            combo.setCurrentText('walk_over')
-            combo.setEnabled(False)
-            self.update_object_prop('collect_activation', 'walk_over')
-
-    def _build_collect_value_row(self, form, thing, value):
-        lbl = QLabel("Value:")
-        spin = _make_spin(value, -99999, 99999)
-        spin.editingFinished.connect(lambda w=spin: self.update_object_prop('collect_value', w.value()))
-        form.addRow(lbl, spin)
-        self._collect_value_widgets.append((lbl, spin))
-        if thing.properties.get('collect_type') == 'key':
-            lbl.setVisible(False)
-            spin.setVisible(False)
-
-    def _build_collect_sprite_row(self, form, thing):
-        lbl = QLabel("Sprite:")
-        widget = QWidget()
-        h = QHBoxLayout(widget)
-        h.setContentsMargins(0, 0, 0, 0)
-        path = QLineEdit(thing.properties.get('collect_custom_sprite', ''))
-        path.setReadOnly(True)
-        path.setPlaceholderText("Default sprite")
-        btn = QPushButton("Sprite...")
-        btn.setFixedWidth(80)
-        btn.clicked.connect(self.on_collect_sprite_select)
-        clear = QPushButton("Clear")
-        clear.setFixedWidth(60)
-        clear.setToolTip("Clear custom sprite")
-        clear.clicked.connect(self.on_collect_sprite_clear)
-        h.addWidget(path)
-        h.addWidget(btn)
-        h.addWidget(clear)
-        form.addRow(lbl, widget)
-        self._collect_sprite_widgets.append((lbl, widget))
-        self.collect_sprite_path = path
-
-        is_key = thing.properties.get('collect_type') == 'key'
-        lbl.setVisible(not is_key)
-        widget.setVisible(not is_key)
-
-    def _build_collect_respawn_row(self, form, thing):
-        form.addRow(self._section("Respawn"))
-        collect_respawns = thing.properties.get('collect_respawns', False)
-        rtime = thing.properties.get('collect_respawn_time', 20.0)
-
-        rw = QWidget()
-        rl = QHBoxLayout(rw)
-        rl.setContentsMargins(0, 0, 0, 0)
-        cb = _make_checkbox("Respawns", collect_respawns, self.on_respawn_toggled, _Style.CHECKBOX)
-        lbl = QLabel("after")
-        spin = _make_spin(rtime, 0.1, 9999.0, suffix=" sec", decimals=1)
-        spin.editingFinished.connect(lambda: self.update_object_prop('collect_respawn_time', spin.value()))
-        lbl.setVisible(collect_respawns)
-        spin.setVisible(collect_respawns)
-        rl.addWidget(cb)
-        rl.addWidget(lbl)
-        rl.addWidget(spin)
-        rl.addStretch()
-        form.addRow("", rw)
-        self.respawn_checkbox = cb
-        self.collect_respawn_time_label = lbl
-        self.collect_respawn_time_spin = spin
 
     def _build_pathnode_group(self, tab_layout, thing):
         for k, v in (('radius', 256.0), ('show_radius', False), ('affects_type', 'both'),
@@ -4279,132 +4595,152 @@ class PropertyEditor(QWidget):
             self.collect_respawn_time_spin.setVisible(collect_respawns)
 
     def on_collect_key_name_changed(self, collect_key_name):
-        if self.current_object is None:
+        if self.current_object is None or not isinstance(self.current_object, Prop):
             return
+        self.update_object_prop('collect_enabled', True)
         self.update_object_prop('collect_key_name', collect_key_name)
-        sprite = Prop.get_key_sprite_path(collect_key_name)
-        self.update_object_prop('sprite_path', sprite)
-        if hasattr(self, '_collect_sprite_widgets'):
-            for lbl, widget in self._collect_sprite_widgets:
-                lbl.setVisible(False)
-                widget.setVisible(False)
-        self._update_collect_door_link(self.current_object)
-        if hasattr(self.editor, 'view_3d'):
-            self.editor.view_3d.update()
-
-    def on_collect_sprite_select(self):
-        if self.current_object is None or not isinstance(self.current_object, Prop):
-            return
-        start = os.path.join(os.getcwd(), 'assets', 'sprites')
-        os.makedirs(start, exist_ok=True)
-        fp, _ = QFileDialog.getOpenFileName(self, "Select Sprite Image", start,
-                                            "Image Files (*.png *.jpg *.jpeg *.bmp *.tga)")
-        if fp:
-            rel = os.path.relpath(fp, os.getcwd()).replace('\\', '/')
-            self.update_object_prop('collect_custom_sprite', rel)
-            self.update_object_prop('sprite_path', rel)
-            if hasattr(self, 'collect_sprite_path'):
-                self.collect_sprite_path.setText(rel)
-            if hasattr(Prop, 'clear_sprite_cache'):
-                Prop.clear_sprite_cache()
-            self.editor.update_all_ui()
-
-    def on_collect_sprite_clear(self):
-        if self.current_object is None or not isinstance(self.current_object, Prop):
-            return
         self.update_object_prop('collect_custom_sprite', '')
-        if self.current_object.properties.get('collect_type') in ('key', 'weapon', 'health'):
-            self.update_object_prop('sprite_path', self.current_object.get_collect_sprite_path())
-        if hasattr(self, 'collect_sprite_path'):
-            self.collect_sprite_path.setText('')
-        if hasattr(Prop, 'clear_sprite_cache'):
-            Prop.clear_sprite_cache()
-        self.editor.update_all_ui()
-
-    def on_collect_weapon_changed(self, weapon):
-        if self.current_object is None:
-            return
-        self.update_object_prop('collect_weapon', weapon)
-        if self.current_object.properties.get('collect_type') == 'weapon':
-            sprite = Prop.GUN_SPRITES.get(weapon, Prop.GUN_SPRITES['gun1'])
-            self.update_object_prop('collect_custom_sprite', sprite)
-            self.update_object_prop('sprite_path', sprite)
-            if hasattr(self, 'collect_sprite_path'):
-                self.collect_sprite_path.setText(sprite)
-        if hasattr(Prop, 'clear_sprite_cache'):
-            Prop.clear_sprite_cache()
-        # update_object_prop() already invalidates the projections, repaints
-        # the viewports, and marks the map dirty. Rebuilding the entire
-        # inspector here would destroy the widgets that emitted the signal.
+        self._set_prop_key_sprite(collect_key_name)
+        self._refresh_prop_collection_ui(self.current_object)
+        self._refresh_prop_collection_appearance(self.current_object)
         if hasattr(self.editor, 'view_3d'):
             self.editor.view_3d.update()
         if hasattr(self.editor, 'mark_dirty'):
             self.editor.mark_dirty()
 
-    def on_collect_type_changed(self, collect_type):
-        if self.current_object is None:
+    def _set_prop_key_sprite(self, collect_key_name):
+        self.update_object_prop(
+            'sprite_path',
+            Prop.get_key_sprite_path(collect_key_name),
+        )
+
+    def on_collect_sprite_select(self):
+        if self.current_object is None or not isinstance(self.current_object, Prop):
             return
-        self.update_object_prop('collect_type', collect_type)
-        is_key = collect_type == 'key'
-        is_health = collect_type == 'health'
-        is_weapon = collect_type == 'weapon'
+        start = os.path.join(_project_root(), 'assets', 'sprites')
+        os.makedirs(start, exist_ok=True)
+        fp, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Sprite Image",
+            start,
+            "Image Files (*.png *.jpg *.jpeg *.bmp *.tga)",
+        )
+        if fp:
+            rel = _normalise_project_asset_path(fp)
+            if not rel:
+                return
+            self.update_object_prop('collect_enabled', True)
+            self.update_object_prop('collect_type', 'custom')
+            self.update_object_prop('collect_custom_sprite', rel)
+            self.update_object_prop('sprite_path', rel)
+            if hasattr(self, '_prop_sprite_path'):
+                self._prop_sprite_path.setText(rel)
+            if hasattr(Prop, 'clear_sprite_cache'):
+                Prop.clear_sprite_cache()
+            self._refresh_prop_collection_ui(self.current_object)
+            self._refresh_prop_collection_appearance(self.current_object)
+            if hasattr(self.editor, 'view_3d'):
+                self.editor.view_3d.update()
+            if hasattr(self.editor, 'mark_dirty'):
+                self.editor.mark_dirty()
 
-        if hasattr(self, '_collect_weapon_widgets'):
-            for lbl, widget in self._collect_weapon_widgets:
-                lbl.setVisible(is_weapon)
-                widget.setVisible(is_weapon)
-
-        current_key = self.current_object.properties.get('collect_key_name', Prop.DEFAULT_KEY_NAME)
-
-        if hasattr(self, '_collect_key_widgets'):
-            for lbl, widget in self._collect_key_widgets:
-                lbl.setVisible(is_key)
-                widget.setVisible(is_key)
-                widget.setEnabled(is_key)
-
-        if is_key:
-            self._update_collect_door_link(self.current_object)
-
-        if hasattr(self, '_collect_value_widgets'):
-            for lbl, widget in self._collect_value_widgets:
-                lbl.setVisible(not is_key)
-                widget.setVisible(not is_key)
-
-        show_sprite = (not is_key) or (is_key and current_key == 'custom')
-        if hasattr(self, '_collect_sprite_widgets'):
-            for lbl, widget in self._collect_sprite_widgets:
-                lbl.setVisible(show_sprite)
-                widget.setVisible(show_sprite)
-
-        if is_health:
-            self.update_object_prop('collect_custom_sprite', '')
-            if hasattr(self, 'collect_sprite_path'):
-                self.collect_sprite_path.setText('assets/sprites/health.png')
-            self.update_object_prop('collect_activation', 'walk_over')
-            if hasattr(self, '_collect_activation_widget'):
-                self._collect_activation_widget.setCurrentText('walk_over')
-                self._collect_activation_widget.setEnabled(False)
-        elif is_weapon:
-            weapon = self.current_object.properties.get('weapon', 'gun1')
-            sprite = f'assets/sprites/{weapon}.png'
-            self.update_object_prop('collect_custom_sprite', '')
-            self.update_object_prop('sprite_path', sprite)
-            if hasattr(self, 'collect_sprite_path'):
-                self.collect_sprite_path.setText(sprite)
-            self.update_object_prop('collect_activation', 'walk_over')
-            if hasattr(self, '_collect_activation_widget'):
-                self._collect_activation_widget.setCurrentText('walk_over')
-                self._collect_activation_widget.setEnabled(False)
+    def on_collect_sprite_clear(self):
+        if self.current_object is None or not isinstance(self.current_object, Prop):
+            return
+        thing = self.current_object
+        self.update_object_prop('collect_custom_sprite', '')
+        kind = str(thing.properties.get('collect_type', 'custom')).lower()
+        if kind == 'weapon':
+            self._set_prop_weapon_sprite(
+                thing.properties.get('collect_weapon', 'gun1')
+            )
+        elif kind == 'key':
+            self._set_prop_key_sprite(
+                thing.properties.get(
+                    'collect_key_name',
+                    Prop.DEFAULT_KEY_NAME,
+                )
+            )
+        elif kind == 'health':
+            self.update_object_prop('sprite_path', 'assets/sprites/health.png')
         else:
-            if hasattr(self, '_collect_activation_widget'):
-                self._collect_activation_widget.setEnabled(True)
-
+            # There is no stock sprite for arbitrary Custom/Ammo Props; leave
+            # the authored path empty and let the renderer fall back normally.
+            self.update_object_prop('sprite_path', '')
+        if hasattr(self, '_prop_sprite_path'):
+            self._prop_sprite_path.setText(
+                thing.properties.get('sprite_path', '')
+            )
         if hasattr(Prop, 'clear_sprite_cache'):
             Prop.clear_sprite_cache()
-        # update_object_prop() already invalidates the projections, repaints
-        # the viewports, and marks the map dirty. Do not rebuild the inspector
-        # from inside its own combo-box signal; that destroys the emitting
-        # widget and can re-enter Qt's deferred widget deletion path.
+        self._refresh_prop_collection_ui(thing)
+        self._refresh_prop_collection_appearance(thing)
+        if hasattr(self.editor, 'view_3d'):
+            self.editor.view_3d.update()
+        if hasattr(self.editor, 'mark_dirty'):
+            self.editor.mark_dirty()
+
+    def on_collect_weapon_changed(self, weapon):
+        if self.current_object is None or not isinstance(self.current_object, Prop):
+            return
+        self.update_object_prop('collect_weapon', weapon)
+        self.update_object_prop('collect_custom_sprite', '')
+        self._set_prop_weapon_sprite(weapon)
+        self._refresh_prop_collection_ui(self.current_object)
+        self._refresh_prop_collection_appearance(self.current_object)
+        if hasattr(Prop, 'clear_sprite_cache'):
+            Prop.clear_sprite_cache()
+        if hasattr(self.editor, 'view_3d'):
+            self.editor.view_3d.update()
+        if hasattr(self.editor, 'mark_dirty'):
+            self.editor.mark_dirty()
+
+    def _set_prop_weapon_sprite(self, weapon):
+        sprite = Prop.GUN_SPRITES.get(
+            weapon,
+            Prop.GUN_SPRITES['gun1'],
+        )
+        self.update_object_prop('sprite_path', sprite)
+
+    def on_collect_type_changed(self, collect_type):
+        if self.current_object is None or not isinstance(self.current_object, Prop):
+            return
+
+        collect_type = str(collect_type or 'health').lower()
+        if collect_type not in Prop.COLLECT_TYPES:
+            collect_type = 'custom'
+
+        self.update_object_prop('collect_enabled', True)
+        self.update_object_prop('collect_type', collect_type)
+
+        if collect_type == 'health':
+            self.update_object_prop('collect_custom_sprite', '')
+            self.update_object_prop('collect_activation', 'walk_over')
+            self.update_object_prop('sprite_path', 'assets/sprites/health.png')
+        elif collect_type == 'weapon':
+            self.update_object_prop('collect_custom_sprite', '')
+            self.update_object_prop('collect_activation', 'walk_over')
+            self._set_prop_weapon_sprite(
+                self.current_object.properties.get('collect_weapon', 'gun1')
+            )
+        elif collect_type == 'key':
+            self.update_object_prop('collect_custom_sprite', '')
+            self._set_prop_key_sprite(
+                self.current_object.properties.get(
+                    'collect_key_name',
+                    Prop.DEFAULT_KEY_NAME,
+                )
+            )
+        else:
+            # Ammo and Custom are authored by their normal sprite/value controls.
+            # Preserve the existing sprite rather than inventing an asset.
+            if collect_type == 'ammo':
+                self.update_object_prop('collect_custom_sprite', '')
+
+        self._refresh_prop_collection_ui(self.current_object)
+        self._refresh_prop_collection_appearance(self.current_object)
+        if hasattr(Prop, 'clear_sprite_cache'):
+            Prop.clear_sprite_cache()
         if hasattr(self.editor, 'view_3d'):
             self.editor.view_3d.update()
         if hasattr(self.editor, 'mark_dirty'):
