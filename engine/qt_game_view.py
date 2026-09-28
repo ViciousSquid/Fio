@@ -350,16 +350,33 @@ class QtGameView(QOpenGLWidget):
                 count += 1
         print(f"[Audio] Preloaded {count} sound files.")
 
+    #: Seconds between attempts to open the audio device after one failed.
+    MIXER_RETRY_SECONDS = 10.0
+
     def _ensure_pygame_mixer(self) -> bool:
-        """Initialize pygame mixer if it isn't already active."""
+        """Initialize pygame mixer if it isn't already active.
+
+        A failed attempt probes the audio stack for ~100 ms on the UI thread,
+        and every sound request asks, so on a machine with no working device
+        each gunshot used to stall a frame. The failure is remembered and the
+        device retried at most every :data:`MIXER_RETRY_SECONDS`, so one
+        plugged in later is still picked up.
+        """
         if pygame.mixer.get_init():
             return True
+        now = time.perf_counter()
+        failed_at = getattr(self, '_mixer_failed_at', None)
+        if failed_at is not None and now - failed_at < self.MIXER_RETRY_SECONDS:
+            return False
         try:
             pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
             print("[Audio] pygame.mixer late-initialized")
+            self._mixer_failed_at = None
             return True
         except pygame.error as e:
-            print(f"[Audio] pygame.mixer init failed: {e}")
+            if failed_at is None:
+                print(f"[Audio] pygame.mixer init failed: {e}")
+            self._mixer_failed_at = now
             return False
 
     def _load_sound_to_cache(self, name, path):

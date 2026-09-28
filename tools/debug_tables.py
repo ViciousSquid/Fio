@@ -693,12 +693,17 @@ class DebugTablesWindow(QMainWindow):
         now = time.perf_counter()
         published = int(getattr(game_state, "published_frames", 0))
         declined = int(getattr(game_state, "declined_swaps", 0))
+        # Rates over at least half a second: two samples moments apart (a
+        # manual Refresh right after the timer's) would otherwise read zero.
         last = getattr(self, "_last_counters", None)
-        rates = (0.0, 0.0)
-        if last is not None and now > last[0]:
+        rates = getattr(self, "_last_rates", (0.0, 0.0))
+        if last is None:
+            self._last_counters = (now, published, declined)
+        elif now - last[0] >= 0.5:
             span = now - last[0]
             rates = ((published - last[1]) / span, (declined - last[2]) / span)
-        self._last_counters = (now, published, declined)
+            self._last_counters = (now, published, declined)
+            self._last_rates = rates
         logic = getattr(view, "logic_thread", None)
         ai = getattr(logic, "monster_ai_thread", None)
         return {
