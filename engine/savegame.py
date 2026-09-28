@@ -854,10 +854,7 @@ def classify_base_map(data: dict, current_level: dict,
         for t in (current_level or {}).get("things", [])
     }
     live_ids.discard(None)
-    if not base_ids:
-        overlap = 0.0
-    else:
-        overlap = len(base_ids & live_ids) / float(len(base_ids))
+    overlap = len(base_ids & live_ids) / float(len(base_ids))
 
     if same_name or overlap >= 0.5:
         return BASE_RELATED
@@ -1043,6 +1040,8 @@ def read(path: str) -> dict:
     if not isinstance(data, dict) or not data.get(_MAGIC):
         raise ValueError(f"'{path}' is not a Fio save file")
     ver = data.get("save_version", 0)
+    if isinstance(ver, bool) or not isinstance(ver, (int, float)):
+        raise ValueError(f"'{path}' has an invalid save_version: {ver!r}")
     if ver > SAVE_VERSION:
         raise ValueError(
             f"save '{path}' is version {ver}, newer than this build supports "

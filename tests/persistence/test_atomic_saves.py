@@ -85,3 +85,19 @@ def test_a_failed_level_save_keeps_the_map(tmp_path):
     assert level.read_bytes() == before, "a failed save emptied the map"
     assert window.unsaved_changes, "a failed save was reported as saved"
     assert toasts and toasts[-1][1]
+
+
+@pytest.mark.parametrize("version", ["2", None, [2], True])
+def test_a_save_with_a_malformed_version_is_refused_clearly(tmp_path, version):
+    path = tmp_path / "odd.fiosave"
+    path.write_text(json.dumps({"fio_savegame": True, "save_version": version}))
+    with pytest.raises(ValueError, match="invalid save_version"):
+        savegame.read(str(path))
+
+
+def test_a_save_from_a_newer_build_is_refused(tmp_path):
+    path = tmp_path / "future.fiosave"
+    path.write_text(json.dumps({"fio_savegame": True,
+                                "save_version": savegame.SAVE_VERSION + 1}))
+    with pytest.raises(ValueError, match="newer than this build"):
+        savegame.read(str(path))
