@@ -1,9 +1,17 @@
-"""The brush frustum cull on a 24 000-brush world, full against grid-assisted.
+"""The brush frustum cull on a 24 000-brush world, per camera pose.
 
-Prints, per camera pose, how many rows are visible, how many the grid made
-candidates, and what each path costs end to end (``_cull_brush_slots``: the
-shown mask, the broad phase if any, the narrow phase). Both paths must return
-identical slots; the timings are reported, not asserted.
+Prints how many rows are visible and what the cull costs end to end: the
+shown mask, the frustum test over every row, and the slots that pass, exactly
+as ``LogicThread._prepare_render_state`` runs it. Reported, not asserted.
+
+For the record, a grid-assisted broad phase (occupied 512-unit cells ->
+slots, cell boxes through the same test) was built and measured against this.
+It returned identical slots. Against the box-major test (0.85-0.97 ms here)
+it paid: 0.21-0.74 ms. Against the plane-major test (0.24-0.30 ms) it cost
+more in wide views (0.35-0.48 ms) and saved at most 0.15 ms in narrow ones.
+Gathering a candidate row costs about as much as testing it, so the grid
+cannot beat a full pass by much. It was removed; see the history of this
+file.
 
     python -m pytest tests/performance/test_brush_cull_benchmark.py \
         -s --run-benchmarks
@@ -69,7 +77,7 @@ def _best_ms(fn):
     return float(np.median(samples)) * 1000.0
 
 
-def test_report_full_against_grid_assisted_culling():
+def test_report_the_brush_cull_cost():
     table = RenderTable()
     table.begin_frame(_rooms(), 1)
     keep, _ = table.shown()
@@ -77,23 +85,14 @@ def test_report_full_against_grid_assisted_culling():
     projection = glm.perspective(glm.radians(75.0), 16.0 / 9.0, 1.0, 10000.0)
 
     print("\n  %d rows, median of %d\n" % (table.count, REPEATS))
-    print("  %-24s %8s %8s %9s %9s %6s"
-          % ("pose", "visible", "cands", "full ms", "grid ms", "ratio"))
+    print("  %-24s %8s %9s" % ("pose", "visible", "cull ms"))
     for name, (eye, look) in POSES.items():
         eye = glm.vec3(*eye)
         planes = thread._extract_frustum_planes(projection * glm.lookAt(
             eye, eye + glm.normalize(glm.vec3(*look)), glm.vec3(0, 1, 0)))
 
-        def cull(grid):
-            thread.brush_cell_culling = grid
-            return thread._cull_brush_slots(planes, table, keep)
+        def cull():
+            return np.flatnonzero(keep & thread._aabb_in_frustum_bounds(
+                planes, table.bounds[:table.count]))
 
-        full, grid = cull(False), cull(True)
-        assert np.array_equal(full, grid), name
-        candidates = int(table.cells.candidate_mask(
-            lambda boxes: thread._aabb_in_frustum_bounds(planes, boxes),
-            table.bounds, table.count, table.dynamic_slots).sum())
-        full_ms = _best_ms(lambda: cull(False))
-        grid_ms = _best_ms(lambda: cull(True))
-        print("  %-24s %8d %8d %9.3f %9.3f %6.2f"
-              % (name, len(full), candidates, full_ms, grid_ms, full_ms / grid_ms))
+        print("  %-24s %8d %9.3f" % (name, len(cull()), _best_ms(cull)))

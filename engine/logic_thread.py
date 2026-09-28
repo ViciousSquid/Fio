@@ -181,9 +181,6 @@ class LogicThread(threading.Thread):
         
         # Frustum culling settings
         self.culling_enabled = True
-        # Narrow the brush frustum test to the rows in cells that pass it
-        # (engine.render_cells). Same answer either way; off is the full test.
-        self.brush_cell_culling = True
         self.frustum_aspect = 16.0 / 9.0
         # Shared with the viewport and the renderer (set_view_distance). Held
         # as None until the viewport hands one over, so a LogicThread built in
@@ -3935,28 +3932,6 @@ class LogicThread(threading.Thread):
         weights = np.concatenate((normals, np.abs(normals)), axis=1)   # (6, 6)
         return (weights @ bounds.T >= -p[:, 3:]).all(axis=0)
 
-    def _cull_brush_slots(self, planes, table, keep):
-        """The shown rows of *table* whose AABBs pass the frustum *planes*.
-
-        With :attr:`brush_cell_culling` the table's cell index picks the rows
-        worth testing: the rows filed under cells whose box passes the same
-        test, plus the movers and any row that moved since it was filed. Only
-        those go through the per-row test. Without it, every row does. The two
-        agree exactly (see :mod:`engine.render_cells`); the switch exists so
-        tests and benchmarks can hold one against the other.
-        """
-        count = table.count
-        bounds = table.bounds
-        if not self.brush_cell_culling:
-            return np.flatnonzero(
-                keep & self._aabb_in_frustum_bounds(planes, bounds[:count]))
-        planes = np.asarray(planes, dtype=np.float64)
-        candidates = np.flatnonzero(keep & table.cells.candidate_mask(
-            lambda boxes: self._aabb_in_frustum_bounds(planes, boxes),
-            bounds, count, table.dynamic_slots))
-        return candidates[self._aabb_in_frustum_bounds(
-            planes, bounds.take(candidates, axis=0))]
-
     # =========================================================================
     # RENDER STATE PREPARATION
     # =========================================================================
@@ -4237,7 +4212,8 @@ class LogicThread(threading.Thread):
         # ---- T4: visibility, as masks over the table ---------------------
         keep, all_slots = table.shown()
         if self.culling_enabled and total_count:
-            visible_slots = self._cull_brush_slots(frustum_planes, table, keep)
+            visible_slots = np.flatnonzero(keep & self._aabb_in_frustum_bounds(
+                frustum_planes, table.bounds[:total_count]))
         else:
             visible_slots = all_slots
         # Published as views over the slots, not as lists: the conversion back
