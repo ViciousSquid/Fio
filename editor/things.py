@@ -84,6 +84,54 @@ def update_all_counters_from_entities(entities):
             cls._counters[class_name] = 0
 
 
+#: Entity class -> its default properties, learned once from a probe instance.
+_CLASS_DEFAULTS = {}
+
+
+def _class_defaults(cls):
+    """The properties a fresh *cls* declares, keyed by name.
+
+    Learned from one probe instance per class.  The probe is given a name and
+    id so that constructing it neither advances the naming counters nor
+    generates a UUID.
+    """
+    defaults = _CLASS_DEFAULTS.get(cls)
+    if defaults is None:
+        try:
+            probe = cls(pos=[0.0, 0.0, 0.0],
+                        properties={'name': '\x00probe', 'id': '\x00probe'})
+            defaults = dict(probe.properties)
+        except Exception:
+            defaults = {}
+        _CLASS_DEFAULTS[cls] = defaults
+    return defaults
+
+
+def _heal_legacy_strings(cls, properties):
+    """*properties* with legacy string-encoded values restored to their type.
+
+    Old maps stored numbers, booleans and lists as their text (``"0.5"``,
+    ``"True"``).  Such a string is parsed back only where *cls* declares a
+    non-string default for that property: a property that is text by
+    declaration (a name, a message, a map path) or that the class does not
+    declare at all keeps exactly what was authored.  Parsing every string
+    turned an entity named ``"2"`` into the integer 2 on save, and the next
+    load of that map crashed.
+    """
+    defaults = _class_defaults(cls)
+    healed = {}
+    for key, value in properties.items():
+        default = defaults.get(key)
+        if (isinstance(value, str) and default is not None
+                and not isinstance(default, str)):
+            try:
+                value = ast.literal_eval(value)
+            except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+                pass  # Genuinely a string — keep it
+        healed[key] = value
+    return healed
+
+
 class Thing:
     """Base class for all placeable entities."""
     pixmap_path = None
@@ -235,17 +283,11 @@ class Thing:
     def to_dict(self):
         """Serialize to dictionary for saving."""
         props_copy = {k: v for k, v in self.properties.items() if k != '_io_connections'}
-        
+
+        # Heal legacy string-typed values on save, so old map files are
+        # repaired by the next save (see _heal_legacy_strings).
         serializable_props = {}
-        for k, v in props_copy.items():
-            # Coerce legacy string-typed values to their native types on save.
-            # This heals old map files automatically on next save.
-            if isinstance(v, str):
-                try:
-                    v = ast.literal_eval(v)
-                except (ValueError, SyntaxError):
-                    pass  # Genuinely a string — keep it
-            
+        for k, v in _heal_legacy_strings(type(self), props_copy).items():
             if isinstance(v, (str, int, float, bool, list, dict, type(None))):
                 serializable_props[k] = v
             else:
@@ -275,8 +317,7 @@ class Thing:
         """Deserialize from dictionary."""
         thing_type = data.get('type')
 
-        # Untouched copy for opaque preservation of unresolvable types; the
-        # loop below rewrites string property values in place.
+        # Untouched copy for opaque preservation of unresolvable types.
         original_record = copy.deepcopy(data)
 
         if not thing_type:
@@ -292,12 +333,8 @@ class Thing:
             return None
 
         properties = data.get('properties', {})
-        for key, value in properties.items():
-            if isinstance(value, str):
-                try:
-                    properties[key] = ast.literal_eval(value)
-                except (ValueError, SyntaxError):
-                    pass
+        if not isinstance(properties, dict):
+            properties = {}
 
         # A subclass may declare `map_type` when its serialised type token
         # differs from its class name; otherwise the class name is used.
@@ -307,18 +344,18 @@ class Thing:
         subclasses = find_subclasses(Thing)
         match = next((c for c in subclasses
                       if token == getattr(c, 'map_type', c.__name__.lower())), None)
+        if match is None and thing_type == 'thing':
+            match = Thing
         if match is not None:
-            thing = match(pos=data.get('pos'), properties=properties)
+            thing = match(pos=data.get('pos'),
+                          properties=_heal_legacy_strings(match, properties))
 
         if thing is None:
-            if thing_type == 'thing':
-                thing = Thing(pos=data.get('pos'), properties=properties)
-            else:
-                # Never drop an entity: a later save would erase it for good.
-                # Keep the record opaque so it round-trips byte-for-byte.
-                print(f"Warning: Unknown thing type '{thing_type}' found in map file; "
-                      f"preserved unchanged (is a plugin missing or disabled?).")
-                return UnresolvedThing(original_record)
+            # Never drop an entity: a later save would erase it for good.
+            # Keep the record opaque so it round-trips byte-for-byte.
+            print(f"Warning: Unknown thing type '{thing_type}' found in map file; "
+                  f"preserved unchanged (is a plugin missing or disabled?).")
+            return UnresolvedThing(original_record)
         
         io_data = copy.deepcopy(data.get('io_connections', []))
         if io_data:
