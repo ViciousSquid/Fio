@@ -20,6 +20,7 @@ from engine.portal_transform import (
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt
 import ast
+import posixpath
 
 from . import state_values as _sv
 
@@ -1048,9 +1049,17 @@ class LevelChanger(Thing):
         if not target_map.lower().endswith('.json'):
             target_map += '.json'
 
-        # ENFORCE MAPS FOLDER: Prepend maps/ if not already present
-        if not (target_map.startswith('maps/') or target_map.startswith('maps\\')):
+        # ENFORCE MAPS FOLDER: Prepend maps/ if not already present, and
+        # refuse a target that climbs back out of it.  target_map is authored
+        # map data (packages included), and the loaded map becomes the
+        # editor's save target.
+        target_map = target_map.replace('\\', '/')
+        if not target_map.startswith('maps/'):
             target_map = f"maps/{target_map}"
+        target_map = posixpath.normpath(target_map)
+        if not target_map.startswith('maps/'):
+            debug_log("Error", f"LevelChanger target '{target_map}' is outside the maps folder")
+            return False
 
         debug_log("IO", f"LevelChanger target resolved → '{target_map}'")
 
