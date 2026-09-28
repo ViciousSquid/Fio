@@ -2371,14 +2371,6 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'reset_layout_action'):
             self.reset_layout_action.setShortcut(QKeySequence(reset_layout_shortcut))
 
-    def toggle_backface_culling(self, state):
-        """Toggle OpenGL backface culling."""
-        self.view_3d.set_backface_culling(state == Qt.Checked)
-
-    def toggle_frustum_culling(self, state):
-        """Toggle CPU frustum culling."""
-        self.view_3d.set_frustum_culling(state == Qt.Checked)
-    
     def toggle_system_monitor(self):
         """Toggles the debug system monitor overlay in the 3D view."""
         self.view_3d.sysmon.toggle()
