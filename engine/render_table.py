@@ -206,7 +206,7 @@ class RenderTable:
                  'glass_color', 'glass_params',
                  'fog_color', 'fog_params',
                  'dynamic_slots', 'geometry_records', '_tex_ids', '_tex_names', '_epoch',
-                 '_hidden_buf')
+                 '_hidden_buf', '_row_obj_ids', '_slot_of_obj')
 
     def __init__(self):
         self.generation = 0
@@ -295,6 +295,13 @@ class RenderTable:
             self.intern_texture(_name)
         self._epoch = None
         self._hidden_buf = np.empty(0, dtype=bool)
+        #: ``id()`` of the brush dict at each slot, and its inverse.  The table
+        #: holds a reference to every row's dict (:attr:`brushes`), so an id in
+        #: here cannot be recycled by another dict while its row exists; that is
+        #: what lets an unchanged row set be recognised in one C-level compare,
+        #: and the journal's ``id()``-keyed dirty set be mapped to slots.
+        self._row_obj_ids: list = []
+        self._slot_of_obj: dict = {}
 
     # -- texture name interning -------------------------------------------
 
@@ -356,22 +363,26 @@ class RenderTable:
         self.fog_color = grow(self.fog_color)
         self.fog_params = grow(self.fog_params)
 
-    def _resolve_geometry(self, slot, brush):
-        """Materialise one dense cold geometry record from an authored brush."""
+    def _geometry_record(self, slot, brush):
+        """The dense cold geometry record for one row, or ``None`` for a box.
+
+        Returned rather than stored: where it goes depends on the caller.  A
+        reconcile collects records by slot and then compacts them into the
+        dense :attr:`geometry_records`; a row-local refresh replaces the row's
+        existing dense entry in place.
+        """
         if not (self.class_bits[slot] & CLASS_HAS_GEOMETRY):
-            self.geometry_records[slot] = None
-            return
+            return None
         convex = brush_geometry.get_convex(brush)
         if convex is None or not convex.is_valid:
-            self.geometry_records[slot] = None
-            return
+            return None
         pos = brush.get('pos') or (0.0, 0.0, 0.0)
         size = brush.get('size') or (64.0, 64.0, 64.0)
         origin = np.asarray(pos, dtype=np.float64).copy()
         scale = np.asarray([max(abs(float(s)), 1e-6) for s in size], dtype=np.float64)
         natural = {id(face): bool(brush_geometry.face_uses_natural_scale(
             brush, face.get('face'), face)) for face in convex.faces}
-        self.geometry_records[slot] = GeometryRecord(
+        return GeometryRecord(
             brush_geometry.geometry_signature(brush), convex, origin, scale, natural)
 
     # -- row resolution ----------------------------------------------------
@@ -430,13 +441,14 @@ class RenderTable:
         for k in range(3):
             self.glow_colour[slot, k] = min(glow_base[k] * intensity, 10.0)
 
+        # The brush's own geometry epoch, which every change to its shape
+        # bumps (brush_geometry._invalidate) whether or not anything marks the
+        # world changed.  begin_frame compares it per frame; see
+        # _geometry_changed_slots.  Not assigned for a box: read as-is.
         if self.class_bits[slot] & CLASS_HAS_GEOMETRY:
             self.geo_epoch[slot] = brush_geometry._brush_epoch(brush)
-            self.geometry_id[slot] = slot
         else:
-            self.geo_epoch[slot] = 0
-            self.geometry_id[slot] = -1
-        self._resolve_geometry(slot, brush)
+            self.geo_epoch[slot] = brush.get('_geo_epoch') or 0
 
         # Water / glass / fog shader state. Defaults deliberately match the
         # renderer's former brush.get(...) fallbacks.
@@ -514,7 +526,8 @@ class RenderTable:
 
         cold_dirty = epoch is None or epoch != self._epoch
         if cold_dirty or n != self.count:
-            self._reconcile(brushes, cold_dirty, dirty_objects)
+            if not self._refresh_in_place(brushes, n, epoch, dirty_objects):
+                self._reconcile(brushes, cold_dirty, dirty_objects)
             self._epoch = epoch
 
         # One list comprehension and one bulk store. Assigning a NumPy array
@@ -527,7 +540,11 @@ class RenderTable:
         return hidden
 
     def sync(self, brushes, epoch=None, dirty_objects=None):
-        """Reconcile without reading ``hidden``.  Returns whether it did.
+        """Bring the table up to date without reading ``hidden``.
+
+        Returns whether anything was refreshed: a reconcile (which moves
+        :attr:`generation`) or a row-local refresh of journalled rows (which
+        does not, because every slot keeps its address).
 
         :meth:`begin_frame` is what the render path calls; this is for callers
         that want the columns brought up to date on their own schedule (tests,
@@ -544,6 +561,11 @@ class RenderTable:
                     structural = True
                     break
         if structural:
+            if self._refresh_in_place(brushes, len(brushes), epoch,
+                                      dirty_objects):
+                # Slots are unchanged, so ``generation`` rightly stays put.
+                self._epoch = epoch
+                return True
             self._reconcile(brushes, cold_dirty, dirty_objects)
             self._epoch = epoch
         return self.generation != before
@@ -622,6 +644,7 @@ class RenderTable:
             self._resolve_warm(slot, brush)
             if slot not in survivors:
                 self._resolve_cold(slot, brush)
+                new_geometry_records[slot] = self._geometry_record(slot, brush)
 
         # Publish a genuinely dense geometry index. geometry_id is an index
         # into geometry_records, not a RenderTable row number. This keeps AABB
@@ -645,6 +668,9 @@ class RenderTable:
         # concurrently during benchmark/editor stress insertion; the next
         # frame will reconcile any newly appended rows.
         self.brushes = [brushes[i] for i in range(n)]
+        self._row_obj_ids = [id(b) for b in self.brushes]
+        self._slot_of_obj = {obj_id: slot
+                             for slot, obj_id in enumerate(self._row_obj_ids)}
         self.count = n
         self.dynamic_slots = np.flatnonzero(
             self.class_bits[:n] & CLASS_DYNAMIC).astype(np.int32)
@@ -656,9 +682,73 @@ class RenderTable:
             self._resolve_warm(slot, brushes[slot])
 
     def refresh_rows(self, brushes, slots):
-        """Re-resolve the cold columns for *slots* after a semantic change."""
+        """Re-resolve the cold columns for *slots* after a semantic change.
+
+        Row-local: the row set must be the one the table last reconciled.  A
+        row whose change adds or removes convex geometry changes the dense
+        geometry layout, so that case falls back to a full reconcile.
+        """
+        slots = sorted({int(slot) for slot in slots})
         for slot in slots:
-            self._resolve_cold(slot, brushes[slot])
+            brush = brushes[slot]
+            had_record = self.geometry_id[slot] >= 0
+            self._resolve_warm(slot, brush)
+            self._resolve_cold(slot, brush)
+            record = self._geometry_record(slot, brush)
+            if (record is not None) != had_record:
+                self._reconcile(brushes, True, {id(brushes[s]) for s in slots})
+                return
+            if record is not None:
+                self.geometry_records[int(self.geometry_id[slot])] = record
+        if slots:
+            self.dynamic_slots = np.flatnonzero(
+                self.class_bits[:self.count] & CLASS_DYNAMIC).astype(np.int32)
+
+    def _refresh_in_place(self, brushes, n, epoch, dirty_objects):
+        """Apply a precise journal without a reconcile, when that is exact.
+
+        A reconcile walks every row -- matching ids, re-reading every
+        transform, rebuilding the slot maps -- which for one retextured brush
+        on a 20 000-brush map is tens of milliseconds.  When the row set is
+        exactly the one already reconciled (same dict at every slot) and the
+        journal names the changed objects, the only rows whose cold columns can
+        be wrong are those objects' rows, so only they are re-resolved.
+
+        Returns ``False`` (having changed nothing) whenever that reasoning does
+        not hold, and the caller reconciles.
+        """
+        if epoch is None or dirty_objects is None or n != self.count:
+            return False
+        if n and list(map(id, brushes[:n])) != self._row_obj_ids:
+            return False
+        slots = [self._slot_of_obj[obj_id] for obj_id in dirty_objects
+                 if obj_id in self._slot_of_obj]
+        for slot in slots:
+            if brushes[slot].get('id') != self.ids[slot]:
+                return False               # renamed row: the id map moves
+        self.refresh_rows(brushes, slots)
+        return True
+
+    def refresh_changed_geometry(self, brushes):
+        """Re-resolve rows whose shape changed without a journal entry.
+
+        Editing a convex brush's vertices or edges mutates its planes over a
+        whole drag after a single checkpoint; nothing marks the world changed
+        per step, but every step bumps the brush's own ``_geo_epoch``.  The
+        table recorded that epoch per row, so comparing the two finds exactly
+        the rows whose cold geometry is stale.
+
+        One pass over the row set, so it belongs where the editor already
+        re-reads every row per frame -- not in play, where shapes are fixed.
+        """
+        n = self.count
+        if not n:
+            return
+        live = np.fromiter((b.get('_geo_epoch') or 0 for b in brushes[:n]),
+                           dtype=np.int64, count=n)
+        stale = np.flatnonzero(live != self.geo_epoch[:n])
+        if len(stale):
+            self.refresh_rows(brushes, stale)
 
     # -- derived views -----------------------------------------------------
 

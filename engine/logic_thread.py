@@ -4205,6 +4205,9 @@ class LogicThread(threading.Thread):
             # This is the cheap half of the table by design; the expensive cold
             # columns stay behind the epoch.
             table.refresh_transforms(brushes, range(total_count))
+            # The same drag can reshape a convex brush (component edits) with
+            # no journal entry; its own geometry epoch says so.
+            table.refresh_changed_geometry(brushes)
 
         # ---- T4: visibility, as masks over the table ---------------------
         keep = ~live_hidden
