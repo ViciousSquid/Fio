@@ -1434,30 +1434,47 @@ class MonsterAIThread(threading.Thread):
         self.tick_rate = tick_rate
         self.tick_duration = 1.0 / tick_rate
         self.running = False
-        
-    def run(self):
+        self._stop_event = threading.Event()
+
+    def start(self):
+        # Set before the thread exists, not in run(): a stop() arriving before
+        # run() got going would otherwise be overwritten, leaving a thread
+        # nobody holds running for good.
         self.running = True
+        super().start()
+
+    def run(self):
         last_time = time.perf_counter()
         accumulator = 0.0
-        
+
         while self.running:
             current_time = time.perf_counter()
             frame_time = current_time - last_time
             last_time = current_time
-            
+
             if frame_time > 0.25:
                 frame_time = 0.25
-                
+
             accumulator += frame_time
-            
-            while accumulator >= self.tick_duration:
+
+            while accumulator >= self.tick_duration and self.running:
                 with self.lock:
-                    self.monster_ai.update(self.tick_duration)
+                    try:
+                        self.monster_ai.update(self.tick_duration)
+                    except Exception:
+                        # Same policy as LogicThread.run: one bad update is
+                        # logged in full and the AI carries on, rather than
+                        # every monster silently freezing for the rest of the
+                        # session.
+                        import traceback
+                        debug_log("MonsterAI", "Unhandled exception in update:\n"
+                                  + traceback.format_exc())
                 accumulator -= self.tick_duration
-                
+
             sleep_time = self.tick_duration - (time.perf_counter() - current_time)
             if sleep_time > 0:
-                time.sleep(sleep_time * 0.9)
-                
+                self._stop_event.wait(sleep_time * 0.9)
+
     def stop(self):
         self.running = False
+        self._stop_event.set()

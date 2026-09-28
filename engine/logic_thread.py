@@ -158,6 +158,13 @@ class LogicThread(threading.Thread):
                  editor_state, 
                  visibility_system: Optional[Any] = None):
         super().__init__(daemon=True)
+        # Serialises the simulation with everything that rebuilds or reads the
+        # world from another thread.  The run loop holds it for each frame's
+        # ticks and render-state projection; entering or leaving play mode and
+        # saving or restoring a session (all called from the UI thread) hold it
+        # for their whole duration, so a tick never sees a half-built or
+        # half-torn-down session.  Reentrant: the same thread may nest.
+        self._tick_lock = threading.RLock()
         self.game_state = game_state
         self.editor_state = editor_state
         self.visibility_system = visibility_system
@@ -1047,6 +1054,16 @@ class LogicThread(threading.Thread):
             self.player2_dead = False
         
     def set_play_mode(self, enabled: bool):
+        """Enter or leave play mode.  Called from the UI thread.
+
+        Held under the tick lock: the flag and the session state it implies
+        (movers, doors, collision caches, spatial grid, Prop session, monster
+        thread) change together, never with a tick running in between.
+        """
+        with self._tick_lock:
+            self._apply_play_mode(enabled)
+
+    def _apply_play_mode(self, enabled: bool):
         self.play_mode = enabled
         
         if enabled:
@@ -1333,16 +1350,18 @@ class LogicThread(threading.Thread):
             # The live streaming session owns the persistent per-cell registry.
             session = getattr(self, "_bigworld", None)
             if session is not None and getattr(session, "streaming", False):
-                session.commit_all()   # flush every cell, loaded or unloaded
-                snapshot = savegame.build_snapshot(
-                    self, map_name=map_name,
-                    world_mode=savegame.WORLD_MODE_BIGWORLD,
-                    cell_deltas=session.serialize_registry(),
-                    base_world=session.base_identity(map_name))
+                with self._tick_lock:
+                    session.commit_all()   # flush every cell, loaded or unloaded
+                    snapshot = savegame.build_snapshot(
+                        self, map_name=map_name,
+                        world_mode=savegame.WORLD_MODE_BIGWORLD,
+                        cell_deltas=session.serialize_registry(),
+                        base_world=session.base_identity(map_name))
             else:
-                snapshot = savegame.build_snapshot(
-                    self, map_name=map_name, save_mode=save_mode,
-                    base_level=base_level)
+                with self._tick_lock:   # a consistent frame, not a torn one
+                    snapshot = savegame.build_snapshot(
+                        self, map_name=map_name, save_mode=save_mode,
+                        base_level=base_level)
             savegame.write(path, snapshot)
             mode_used = snapshot.get("save_mode", "full")
             world = snapshot.get("world_mode")
@@ -1371,7 +1390,8 @@ class LogicThread(threading.Thread):
         try:
             from engine import savegame
             data = savegame.read(path)
-            report = savegame.restore_auto(self, data, current_map_name=map_name)
+            with self._tick_lock:
+                report = savegame.restore_auto(self, data, current_map_name=map_name)
             msg = f"Loaded play session from '{os.path.basename(path)}'"
             warning = report.get("warning")
             if warning:
@@ -1391,10 +1411,18 @@ class LogicThread(threading.Thread):
         self.monster_ai_thread.start()
 
     def _stop_monster_ai(self):
-        """Signal the monster AI thread to stop."""
-        if self.monster_ai_thread is not None:
-            self.monster_ai_thread.stop()
-            self.monster_ai_thread = None
+        """Stop the monster AI thread and wait for it to finish.
+
+        Joined, not just signalled: the caller is about to tear down or
+        rebuild what ``MonsterAI.update`` reads (the spatial grid, the monster
+        list), and an update still in flight would run against it.
+        """
+        thread = self.monster_ai_thread
+        self.monster_ai_thread = None
+        if thread is not None:
+            thread.stop()
+            if thread.is_alive() and thread is not threading.current_thread():
+                thread.join(timeout=2.0)
 
     def _reset_all_monsters(self, clear_dead=True):
         """Reset all monster AI state. Called when entering or exiting play mode.
@@ -1765,8 +1793,13 @@ class LogicThread(threading.Thread):
     # MAIN LOOP
     # =========================================================================
             
-    def run(self):
+    def start(self):
+        # Set before the thread exists, not in run(): a stop() that arrives
+        # before run() gets going must not be overwritten.
         self.running = True
+        super().start()
+
+    def run(self):
         last_time = time.perf_counter()
         accumulator = 0.0
         
@@ -1779,7 +1812,21 @@ class LogicThread(threading.Thread):
                 frame_time = 0.25
                 
             accumulator += frame_time
+            accumulator = self._step_frame(accumulator)
+            self.game_state.request_swap()
             
+            sleep_time = self.TICK_DURATION - (time.perf_counter() - current_time)
+            if sleep_time > 0:
+                time.sleep(sleep_time * 0.9)
+                
+    def _step_frame(self, accumulator: float) -> float:
+        """Run every whole tick *accumulator* holds, then project the frame.
+
+        One acquisition of the tick lock per frame, so a play-mode change or a
+        save/restore from the UI thread lands between frames, never inside one.
+        Returns the time left over for the next frame.
+        """
+        with self._tick_lock:
             while accumulator >= self.TICK_DURATION:
                 try:
                     self._tick(self.TICK_DURATION)
@@ -1794,14 +1841,10 @@ class LogicThread(threading.Thread):
                               "Unhandled exception in _tick:\n" + traceback.format_exc())
                 accumulator -= self.TICK_DURATION
                 self._update_tps_counter()
-                
+
             self._prepare_render_state()
-            self.game_state.request_swap()
-            
-            sleep_time = self.TICK_DURATION - (time.perf_counter() - current_time)
-            if sleep_time > 0:
-                time.sleep(sleep_time * 0.9)
-                
+        return accumulator
+
     def stop(self):
         self.running = False
         self._stop_monster_ai()

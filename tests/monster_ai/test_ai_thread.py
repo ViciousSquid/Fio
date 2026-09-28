@@ -221,30 +221,60 @@ def test_holding_the_lock_keeps_the_ai_out(ai_thread):
 # Failure
 # ---------------------------------------------------------------------------
 
-@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
-def test_an_exception_on_the_ai_thread_stops_that_thread_and_nothing_else(
-        ai_thread):
-    """Documents what actually happens today so a change is a decision.
+def test_an_exception_on_the_ai_thread_is_logged_and_the_ai_carries_on(
+        ai_thread, monkeypatch):
+    """One bad update must not freeze every monster for the rest of the session.
 
-    ``MonsterAIThread.run`` does not guard the tick, so an exception ends the
-    thread: monsters silently stop moving while the game carries on.  The test
-    pins both halves - the thread dies, and the rest of the process does not -
-    so that adding a guard is a visible change rather than a silent one.
+    ``MonsterAIThread.run`` used not to guard the tick, so the first exception
+    ended the thread and monsters silently stopped moving while the game
+    carried on.  It now follows ``LogicThread.run``'s policy: log the full
+    traceback, keep ticking.
     """
+    import engine.monster_ai as monster_ai_module
+
+    logged = []
+    monkeypatch.setattr(monster_ai_module, "debug_log",
+                        lambda category, message: logged.append((category, message)))
     ai = CountingAI()
     ai.raise_on_tick = 3
     thread = ai_thread(ai)
 
-    _wait_for(lambda: not thread.is_alive(),
-              what="the AI thread to end after its tick raised")
+    _wait_for(lambda: ai.ticks >= 6, what="ticks after the failing one")
 
-    assert ai.ticks == 3, (
-        "the thread should have ended on the raising tick; it reached tick %d"
-        % ai.ticks)
-    assert threading.main_thread().is_alive(), \
-        "the failure escaped the AI thread"
-    # ``running`` is still True: nothing cleared it, which is how a caller can
-    # tell this thread died rather than being stopped.
-    assert thread.running is True, (
-        "a thread that died in its tick still reads as running; that is the "
-        "only signal a caller has that it was not stopped deliberately")
+    assert thread.is_alive()
+    assert any("deliberate failure on tick 3" in message
+               for _category, message in logged), logged
+
+
+def test_a_stop_straight_after_start_is_not_lost(ai_thread, monkeypatch):
+    """``running`` used to be set inside ``run()``.
+
+    A ``stop()`` issued before the new thread got that far was overwritten, and
+    the thread ran on with nobody holding a reference to stop it again.  The
+    window is normally tiny, so ``run`` is held back here to open it wide.
+    """
+    real_run = MonsterAIThread.run
+
+    def late_run(self):
+        time.sleep(0.05)
+        real_run(self)
+
+    monkeypatch.setattr(MonsterAIThread, "run", late_run)
+    thread = ai_thread()
+    thread.stop()
+    thread.join(timeout=1.0)
+    alive = thread.is_alive()
+    thread.stop()            # whatever happened, do not leak a live thread
+    assert not alive, "a stop issued right after start was lost"
+
+
+def test_stop_wakes_a_sleeping_thread_promptly(ai_thread):
+    """At 1 Hz the thread sleeps ~0.9 s between ticks; stop must not wait it out."""
+    ai = CountingAI()
+    thread = ai_thread(ai, tick_rate=1)
+    time.sleep(0.05)
+    started = time.perf_counter()
+    thread.stop()
+    thread.join(timeout=DEADLINE)
+    assert not thread.is_alive()
+    assert time.perf_counter() - started < 0.5
