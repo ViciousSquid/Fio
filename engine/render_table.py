@@ -202,7 +202,7 @@ class RenderTable:
                  'center', 'half', 'rot', 'class_bits', 'tex_name_id',
                  'uv_scale', 'uv_angle', 'uv_shift', 'uv_natural',
                  'uv_has_scale', 'colour', 'glow_colour', 'geo_epoch', 'geometry_id',
-                 'water_tint', 'water_params', 'water_plane', 'water_reflections',
+                 'water_tint', 'water_params', 'water_plane',
                  'glass_color', 'glass_params',
                  'fog_color', 'fog_params',
                  'dynamic_slots', 'geometry_records', '_tex_ids', '_tex_names', '_epoch',
@@ -277,7 +277,6 @@ class RenderTable:
         # distortion, refraction IOR, roughness
         self.water_params = np.zeros((0, 7), dtype=np.float32)
         self.water_plane = np.zeros((0,), dtype=bool)
-        self.water_reflections = np.zeros((0,), dtype=bool)
         self.glass_color = np.zeros((0, 3), dtype=np.float32)
         # opacity, distortion, refraction, roughness, fresnel
         self.glass_params = np.zeros((0, 5), dtype=np.float32)
@@ -352,7 +351,6 @@ class RenderTable:
         self.water_tint = grow(self.water_tint)
         self.water_params = grow(self.water_params)
         self.water_plane = grow(self.water_plane)
-        self.water_reflections = grow(self.water_reflections)
         self.glass_color = grow(self.glass_color)
         self.glass_params = grow(self.glass_params)
         self.fog_color = grow(self.fog_color)
@@ -454,7 +452,6 @@ class RenderTable:
             float(brush.get('water_roughness', 0.0)),
         )
         self.water_plane[slot] = bool(brush.get('water_plane', False))
-        self.water_reflections[slot] = bool(brush.get('water_reflections', False))
 
         self.glass_color[slot] = normalize_color(
             brush.get('glass_color', [0.7, 0.85, 0.95]))
@@ -605,7 +602,7 @@ class RenderTable:
                         self.uv_angle, self.uv_shift, self.uv_natural,
                         self.uv_has_scale, self.colour, self.glow_colour,
                         self.geo_epoch, self.geometry_id, self.water_tint, self.water_params,
-                        self.water_plane, self.water_reflections,
+                        self.water_plane,
                         self.glass_color, self.glass_params,
                         self.fog_color, self.fog_params):
                 arr[dst] = arr[src]

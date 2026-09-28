@@ -1,4 +1,10 @@
-"""Water shader and reflection contracts."""
+"""Water shader contracts.
+
+Planar water reflections (a mirrored-scene render per water surface) were
+removed.  The shader keeps its screen-space refraction and sky reflection; the
+capture pass, its render targets and the per-brush flag are gone, and these
+tests make sure they stay gone rather than being half-reintroduced.
+"""
 
 import pytest
 
@@ -9,16 +15,13 @@ def test_water_shader_has_glass_style_optical_inputs():
     src = shaders.DEFAULT_SHADERS['water.frag']
     for uniform in (
         'sceneColor',
-        'reflectionTexture',
-        'reflectionMatrix',
-        'reflectionEnabled',
         'screenSize',
         'distortionStrength',
         'refractionIndex',
         'roughness',
         'fresnelIntensity',
     ):
-        assert f'uniform ' in src
+        assert 'uniform ' in src
         assert uniform in src
 
 
@@ -29,18 +32,19 @@ def test_water_shader_performs_screen_space_refraction():
     assert 'screenUV' in src
 
 
-def test_water_shader_supports_planar_reflections():
+def test_water_shader_has_no_planar_reflection_inputs():
     src = shaders.DEFAULT_SHADERS['water.frag']
-    assert 'sampler2D reflectionTexture' in src
-    assert 'uniform mat4 reflectionMatrix' in src
-    assert 'reflectionEnabled == 1' in src
-    assert 'reflectionMatrix * vec4(FragPos, 1.0)' in src
+    for removed in ('reflectionTexture', 'reflectionMatrix', 'reflectionEnabled'):
+        assert removed not in src, removed
 
 
 @pytest.mark.gl
-def test_water_reflection_target_is_a_2d_texture():
+def test_the_renderer_has_no_reflection_capture_pass():
     from engine.renderer_core import BaseRenderer
+    from engine.renderer_F import Renderer_F
 
-    assert BaseRenderer.WATER_REFLECTION_SIZE == 256
-    assert not hasattr(BaseRenderer, 'WATER_REFLECTION_PROBE_HEIGHT')
-    assert BaseRenderer.WATER_REFLECTION_TEXTURE_UNIT == 3
+    for name in ('WATER_REFLECTION_SIZE', 'WATER_REFLECTION_TEXTURE_UNIT',
+                 '_ensure_water_reflection_resources',
+                 '_ensure_water_reflection_texture'):
+        assert not hasattr(BaseRenderer, name), name
+    assert not hasattr(Renderer_F, "_render_water_reflections")

@@ -494,7 +494,7 @@ def test_special_brush_passes_do_not_materialise_dense_slots():
 
     core = _read("engine/renderer_core.py")
     assert "table.water_params[brushes]" in core
-    assert "table.water_reflections[brushes]" in core
+    assert "water_reflections" not in core
     assert "table.glass_params[brushes]" in core
     assert "table.fog_params[brushes]" in core
     assert "brush.get('water_opacity'" not in core

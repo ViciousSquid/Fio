@@ -374,6 +374,8 @@ def test_special_volume_state_is_projected_as_dense_numeric_columns():
             water_roughness=0.2,
             water_fresnel=0.9,
             water_plane=True,
+            # A key from maps saved before planar reflections were removed:
+            # it must load, and must project to nothing.
             water_reflections=True,
         ),
         _brush(
@@ -402,7 +404,9 @@ def test_special_volume_state_is_projected_as_dense_numeric_columns():
         [0.7, 0.9, 0.6, 0.0, 0.35, 1.333, 0.2],
     )
     assert bool(t.water_plane[0])
-    assert bool(t.water_reflections[0])
+    assert not hasattr(t, 'water_reflections'), (
+        "planar water reflections were removed; the table should not carry "
+        "a column for them")
 
     np.testing.assert_allclose(t.glass_color[1], [0.4, 0.5, 0.6])
     np.testing.assert_allclose(t.glass_params[1], [0.25, 0.2, 1.33, 0.1, 0.9])
@@ -428,7 +432,6 @@ def test_special_volume_state_moves_with_a_surviving_row():
     assert old != new
     np.testing.assert_allclose(t.water_tint[new], [1.0, 0.2, 0.3])
     assert t.water_params[new, 0] == pytest.approx(0.7)
-    assert not bool(t.water_reflections[new])
 
 
 def test_special_volume_state_refreshes_on_epoch_change():
@@ -449,4 +452,3 @@ def test_water_optics_fall_back_to_existing_reflectivity():
     assert t.water_params[0, 4] == pytest.approx(0.5)
     assert t.water_params[0, 5] == pytest.approx(1.333)
     assert t.water_params[0, 6] == pytest.approx(0.0)
-    assert not bool(t.water_reflections[0])
