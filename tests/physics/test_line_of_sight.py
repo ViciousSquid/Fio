@@ -3,20 +3,24 @@
 ``SpatialGrid.has_line_of_sight`` has two ways through the brushes a ray's
 cells hold. The per-brush path deduplicates them through a set of ``id()``,
 reads each one's AABB from its dict and runs the slab test in Python; the dense
-path addresses them as :class:`~engine.render_table.RenderTable` rows, gathers
-the transform columns and tests all of them at once.
+path tests the static ones as rows of bounds the grid copied when it was
+populated, all at once, and walks only the movers and doors.
 
 They are one answer or the change moved a wall. The tests here drive both over
 the same grid and compare, with the cases most likely to separate them:
 
-* **grazing rays**, because the two derive the AABB differently -- the scalar
-  path through ``glm.vec3``, which is float32 -- and the slab test is a
-  comparison, so a difference of 3e-04 is enough to decide one;
+* **grazing rays**, because the slab test is a comparison, and bounds derived
+  any other way than through ``brush_aabb_bounds`` (float32, via ``glm.vec3``)
+  differ by up to 3e-04 -- enough to decide one;
 * **mesh-collision brushes**, because the grid files those by their mesh bounds
   while the narrow phase tests pos/size, so the cell a brush is *in* and the
   box that is *tested* are deliberately different things;
-* **movers**, whose transform the projection holds in a column the logic thread
-  rewrites per tick.
+* **movers**, which move while the grid stands still.
+
+The rows are the grid's own. Line of sight runs on the monster AI thread, and
+it used to read the renderer's :class:`~engine.render_table.RenderTable`
+instead -- a table the logic thread refreshes and reconciles every tick, and
+which the double-buffered publication recycles one frame after the AI saw it.
 """
 
 import contextlib
@@ -30,21 +34,13 @@ pytest.importorskip("glm")
 import glm                                                   # noqa: E402
 
 from engine.physics import SpatialGrid                       # noqa: E402
-from engine.render_table import RenderTable                  # noqa: E402
 from tests.helpers.worlds import box_brush                   # noqa: E402
 
 
-def _intersect_ray_aabb(start, direction, b_min, b_max):
-    """The callback the scalar path keeps for API compatibility."""
-    raise AssertionError("the inlined slab test should be used, not this")
-
-
 def _world(brushes):
-    table = RenderTable()
-    table.sync(brushes, 1)
     grid = SpatialGrid()
     grid.populate(brushes)
-    return grid, table
+    return grid
 
 
 @contextlib.contextmanager
@@ -64,18 +60,16 @@ def _forcing_dense(grid):
         del grid.LOS_DENSE_MIN_CANDIDATES
 
 
-def _both(grid, table, start, end):
+def _both(grid, start, end):
     """(scalar answer, dense answer) for one ray, one narrow phase each."""
-    scalar = grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end),
-                                    _intersect_ray_aabb, None)
+    scalar = grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end))
     with _forcing_dense(grid):
-        dense = grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end),
-                                       _intersect_ray_aabb, table)
+        dense = grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end))
     return scalar, dense
 
 
-def _agree(grid, table, start, end, what):
-    scalar, dense = _both(grid, table, start, end)
+def _agree(grid, start, end, what):
+    scalar, dense = _both(grid, start, end)
     assert scalar == dense, (
         "%s: the per-brush path said %s and the dense path said %s for the ray "
         "%s -> %s" % (what, scalar, dense, start, end))
@@ -83,121 +77,74 @@ def _agree(grid, table, start, end, what):
 
 
 # ---------------------------------------------------------------------------
-# The projection itself
+# The rows
 # ---------------------------------------------------------------------------
 
-def test_the_projection_addresses_every_brush_in_the_grid():
+def test_every_static_brush_has_one_row_holding_its_tested_bounds():
+    from engine.constants import brush_aabb_bounds
+
     brushes = [box_brush("w%d" % i, (i * 200.0, 0.0, 0.0)) for i in range(5)]
-    grid, table = _world(brushes)
+    brushes.append(box_brush("long", (0.0, 0.0, 0.0), (32.0, 64.0, 3000.0)))
+    grid = _world(brushes)
+    rows = grid._los_rows
 
-    slots = grid.cell_slots(table)
-
-    assert slots is not None
-    addressed = sorted({int(s) for arr in slots.values() for s in arr})
-    assert addressed == sorted(table.slot_of_id[b["id"]] for b in brushes)
-
-
-def test_a_brush_the_table_cannot_address_keeps_the_scalar_path():
-    """Fail-safe: an unaddressable brush would be a missing occluder."""
-    brushes = [box_brush("wall", (0.0, 0.0, 0.0))]
-    grid, table = _world(brushes)
-    brushes[0]["id"] = "not-in-the-table"
-    grid.populate(brushes)
-
-    assert grid.cell_slots(table) is None
-
-
-def test_the_failed_attempt_is_not_repeated_every_ray(monkeypatch):
-    brushes = [box_brush("wall", (0.0, 0.0, 0.0))]
-    grid, table = _world(brushes)
-    brushes[0]["id"] = "not-in-the-table"
-    grid.populate(brushes)
-
-    builds = []
-    real = SpatialGrid._build_cell_slots
-    monkeypatch.setattr(SpatialGrid, "_build_cell_slots",
-                        lambda self, m: builds.append(1) or real(self, m))
-    for _ in range(20):
-        grid.cell_slots(table)
-    assert len(builds) == 1, (
-        "rebuilt %d times; a grid the table cannot address must be asked once "
-        "per generation, not once per ray" % len(builds))
-
-
-def test_populate_drops_the_projection():
-    brushes = [box_brush("wall", (0.0, 0.0, 0.0))]
-    grid, table = _world(brushes)
-    first = grid.cell_slots(table)
-    assert first is not None
-
-    grid.populate(brushes)
-    assert grid._cell_slots is None, (
-        "the projection outlived the buckets it was derived from")
-    assert grid.cell_slots(table) is not None
-
-
-def test_a_reconciled_table_rebuilds_the_projection():
-    """Slots are addresses valid within one generation."""
-    brushes = [box_brush("a", (0.0, 0.0, 0.0)), box_brush("b", (600.0, 0.0, 0.0))]
-    grid, table = _world(brushes)
-    grid.cell_slots(table)
-    generation = table.generation
-
-    # Reorder: same brushes, different rows.
-    brushes.reverse()
-    table.sync(brushes, 2)
-    assert table.generation != generation
-
-    slots = grid.cell_slots(table)
+    assert len(rows.lo) == len(brushes), (
+        "a brush filed under several cells must still be one row")
     for coord, bucket in grid.cells.items():
-        for i, brush in enumerate(bucket):
-            assert table.ids[int(slots[coord][i])] == brush["id"], (
-                "a slot still points at the row the brush had before the "
-                "table reconciled")
+        for brush, row in zip(bucket, rows.static_by_cell[coord]):
+            bounds = brush_aabb_bounds(brush)
+            assert tuple(rows.lo[row]) == bounds[:3]
+            assert tuple(rows.hi[row]) == bounds[3:]
 
 
-def test_the_projection_is_built_once_while_nothing_changes(monkeypatch):
-    brushes = [box_brush("w%d" % i, (i * 200.0, 0.0, 0.0)) for i in range(5)]
-    grid, table = _world(brushes)
+def test_movers_and_doors_are_walked_not_copied():
+    lift = box_brush("lift", (0.0, 0.0, 0.0), is_mover=True)
+    door = box_brush("door", (100.0, 0.0, 0.0), is_door=True)
+    grid = _world([lift, door, box_brush("wall", (300.0, 0.0, 0.0))])
+    rows = grid._los_rows
 
-    builds = []
-    real = SpatialGrid._build_cell_slots
-    monkeypatch.setattr(SpatialGrid, "_build_cell_slots",
-                        lambda self, m: builds.append(1) or real(self, m))
-    for _ in range(50):
-        grid.cell_slots(table)
-    assert len(builds) == 1
+    assert len(rows.lo) == 1
+    assert [b["name"] for b in rows.moving_by_cell[(0, 0)]] == ["lift", "door"]
 
 
-def test_a_torn_read_of_the_columns_falls_back_rather_than_raising():
-    """The one failure mode the scalar path does not have.
+def test_populate_replaces_the_rows_rather_than_editing_them():
+    """A ray in flight on the AI thread keeps the rows it started with."""
+    brushes = [box_brush("wall", (0.0, 0.0, 0.0))]
+    grid = _world(brushes)
+    first = grid._los_rows
+    lo = first.lo.copy()
+    cells = dict(first.brushes_by_cell)
 
-    Line of sight runs on the AI thread and reads two columns of a table the
-    logic thread owns. Reading a mover's transform mid-write is the race this
-    path has always had -- the scalar path reads ``brush['pos']`` live for the
-    same reason, deliberately. What is new is that there are two arrays: a
-    reconcile landing between the reads would reallocate them, and a slot valid
-    for one could be past the end of the other.
+    grid.populate(brushes + [box_brush("more", (900.0, 0.0, 0.0))])
 
-    That cannot be made atomic without synchronising against the render pass,
-    so it is answered by the scalar path instead -- the same direction as a
-    brush the table cannot address.
-    """
-    brushes = [box_brush("wall", (0.0, 0.0, 0.0), (32.0, 256.0, 512.0))]
-    grid, table = _world(brushes)
-    assert grid.cell_slots(table) is not None
+    assert grid._los_rows is not first
+    assert len(grid._los_rows.lo) == 2
+    np.testing.assert_array_equal(first.lo, lo)
+    assert first.brushes_by_cell == cells
 
-    blocked = grid.has_line_of_sight(glm.vec3(-300, 0, 0), glm.vec3(300, 0, 0),
-                                     _intersect_ray_aabb, table)
-    # Simulate the reallocation: the columns no longer hold the row the
-    # projection was built against.
-    table.center = table.center[:0]
-    still = grid.has_line_of_sight(glm.vec3(-300, 0, 0), glm.vec3(300, 0, 0),
-                                   _intersect_ray_aabb, table)
-    assert blocked is False
-    assert still == blocked, (
-        "a torn read changed the answer instead of falling back to the "
-        "per-brush path")
+
+def test_clearing_the_grid_clears_line_of_sight():
+    grid = _world([box_brush("wall", (0.0, 0.0, 0.0), (32.0, 256.0, 512.0))])
+    assert grid.has_line_of_sight(glm.vec3(-300, 0, 0), glm.vec3(300, 0, 0)) is False
+    grid.clear()
+    assert grid.has_line_of_sight(glm.vec3(-300, 0, 0), glm.vec3(300, 0, 0)) is True
+
+
+def test_the_monster_ai_does_not_read_the_render_table():
+    """The AI thread must not touch a table the logic thread is rewriting."""
+    from engine.monster_ai import MonsterAI
+
+    class _Logic:
+        @property
+        def _render_table(self):
+            raise AssertionError("line of sight read the logic thread's render table")
+
+    ai = object.__new__(MonsterAI)
+    ai.lt = _Logic()
+    ai._grid = _world([box_brush("wall", (0.0, 0.0, 0.0), (32.0, 256.0, 512.0))])
+
+    assert ai._has_line_of_sight(glm.vec3(-300, 0, 0), glm.vec3(300, 0, 0)) is False
+    assert ai._has_line_of_sight(glm.vec3(-300, 0, 900), glm.vec3(300, 0, 900)) is True
 
 
 # ---------------------------------------------------------------------------
@@ -206,22 +153,22 @@ def test_a_torn_read_of_the_columns_falls_back_rather_than_raising():
 
 def test_a_wall_blocks_both_paths():
     brushes = [box_brush("wall", (0.0, 0.0, 0.0), (32.0, 256.0, 512.0))]
-    grid, table = _world(brushes)
-    assert _agree(grid, table, (-300, 0, 0), (300, 0, 0), "through a wall") is False
+    grid = _world(brushes)
+    assert _agree(grid, (-300, 0, 0), (300, 0, 0), "through a wall") is False
 
 
 def test_a_clear_line_passes_both_paths():
     brushes = [box_brush("wall", (0.0, 0.0, 900.0), (32.0, 256.0, 128.0))]
-    grid, table = _world(brushes)
-    assert _agree(grid, table, (-300, 0, 0), (300, 0, 0), "clear line") is True
+    grid = _world(brushes)
+    assert _agree(grid, (-300, 0, 0), (300, 0, 0), "clear line") is True
 
 
 def test_a_ray_that_stops_short_of_the_wall_reaches_neither():
     """`limit = ray_len - 0.1`: a hit past the end is not a hit."""
     brushes = [box_brush("wall", (500.0, 0.0, 0.0), (32.0, 256.0, 256.0))]
-    grid, table = _world(brushes)
-    assert _agree(grid, table, (0, 0, 0), (100, 0, 0), "ray stops short") is True
-    assert _agree(grid, table, (0, 0, 0), (600, 0, 0), "ray reaches") is False
+    grid = _world(brushes)
+    assert _agree(grid, (0, 0, 0), (100, 0, 0), "ray stops short") is True
+    assert _agree(grid, (0, 0, 0), (600, 0, 0), "ray reaches") is False
 
 
 @pytest.mark.parametrize("offset", [
@@ -236,11 +183,11 @@ def test_a_ray_grazing_a_face_agrees_to_the_last_ulp(offset):
     """
     size = 127.3
     brushes = [box_brush("wall", (0.0, 0.0, 0.0), (size, size, size))]
-    grid, table = _world(brushes)
+    grid = _world(brushes)
     edge = size * 0.5
-    _agree(grid, table, (-400.0, edge + offset, 0.0), (400.0, edge + offset, 0.0),
+    _agree(grid, (-400.0, edge + offset, 0.0), (400.0, edge + offset, 0.0),
            "grazing the top face by %g" % offset)
-    _agree(grid, table, (-400.0, 0.0, edge + offset), (400.0, 0.0, edge + offset),
+    _agree(grid, (-400.0, 0.0, edge + offset), (400.0, 0.0, edge + offset),
            "grazing the side face by %g" % offset)
 
 
@@ -258,7 +205,7 @@ def test_a_ray_between_the_float32_and_float64_faces_agrees():
 
     size = 1500.3
     wall = box_brush("big", (0.0, 40.0, 0.0), (size, size, size))
-    grid, table = _world([wall])
+    grid = _world([wall])
 
     glm_hi_y = brush_aabb_bounds(wall)[4]
     float64_hi_y = wall["pos"][1] + wall["size"][1] * 0.5
@@ -269,7 +216,7 @@ def test_a_ray_between_the_float32_and_float64_faces_agrees():
     between = (glm_hi_y + float64_hi_y) * 0.5
     assert float64_hi_y < between < glm_hi_y
 
-    scalar, dense = _both(grid, table, (-4000.0, between, 0.0),
+    scalar, dense = _both(grid, (-4000.0, between, 0.0),
                           (4000.0, between, 0.0))
     assert scalar is False, "the ray should be inside the float32 box"
     assert dense == scalar, (
@@ -280,14 +227,14 @@ def test_a_ray_between_the_float32_and_float64_faces_agrees():
 def test_an_axis_parallel_ray_agrees():
     """The degenerate branch: parallel to a slab, inside it or rejected."""
     brushes = [box_brush("wall", (0.0, 0.0, 0.0), (64.0, 64.0, 64.0))]
-    grid, table = _world(brushes)
+    grid = _world(brushes)
     for start, end, what in (
             ((-400, 0, 0), (400, 0, 0), "along +x through the box"),
             ((-400, 200, 0), (400, 200, 0), "along +x above the box"),
             ((0, -400, 0), (0, 400, 0), "along +y through the box"),
             ((0, 0, -400), (0, 0, 400), "along +z through the box"),
             ((-400, 32.0, 0), (400, 32.0, 0), "along +x exactly on the top face")):
-        _agree(grid, table, start, end, what)
+        _agree(grid, start, end, what)
 
 
 def test_a_mesh_collision_brush_is_filed_by_mesh_but_tested_by_size():
@@ -302,25 +249,24 @@ def test_a_mesh_collision_brush_is_filed_by_mesh_but_tested_by_size():
     wall["_collision_mode"] = "mesh"
     wall["_mesh_bounds"] = ([-700.0, -128.0, -700.0], [700.0, 128.0, 700.0])
     brushes = [wall]
-    grid, table = _world(brushes)
+    grid = _world(brushes)
 
     occupied = len(grid.cells)
     assert occupied > 1, (
         "the mesh bounds should span several cells; got %d" % occupied)
-    assert _agree(grid, table, (-300, 0, 0), (300, 0, 0), "mesh brush, through") is False
-    assert _agree(grid, table, (-300, 0, 600), (300, 0, 600),
+    assert _agree(grid, (-300, 0, 0), (300, 0, 0), "mesh brush, through") is False
+    assert _agree(grid, (-300, 0, 600), (300, 0, 600),
                   "mesh brush, past its pos/size box but inside its mesh bounds") is True
 
 
 def test_a_moved_mover_is_seen_live_by_both_paths():
     lift = box_brush("lift", (0.0, 0.0, 0.0), (64.0, 256.0, 256.0), is_mover=True)
     brushes = [lift]
-    grid, table = _world(brushes)
-    assert _agree(grid, table, (-300, 0, 0), (300, 0, 0), "mover in the way") is False
+    grid = _world(brushes)
+    assert _agree(grid, (-300, 0, 0), (300, 0, 0), "mover in the way") is False
 
     lift["pos"] = [0.0, 900.0, 0.0]
-    table.refresh_transforms(brushes, [table.slot_of_id[lift["id"]]])
-    assert _agree(grid, table, (-300, 0, 0), (300, 0, 0), "mover lifted away") is True
+    assert _agree(grid, (-300, 0, 0), (300, 0, 0), "mover lifted away") is True
 
 
 def test_the_two_paths_agree_over_a_random_sweep():
@@ -331,14 +277,14 @@ def test_the_two_paths_agree_over_a_random_sweep():
         pos = rng.uniform(-1200, 1200, 3)
         size = rng.uniform(16, 320, 3)
         brushes.append(box_brush("b%d" % i, tuple(pos), tuple(size)))
-    grid, table = _world(brushes)
+    grid = _world(brushes)
 
     disagreements = []
     blocked = 0
     for _ in range(400):
         start = tuple(rng.uniform(-1500, 1500, 3))
         end = tuple(rng.uniform(-1500, 1500, 3))
-        scalar, dense = _both(grid, table, start, end)
+        scalar, dense = _both(grid, start, end)
         if scalar != dense:
             disagreements.append((start, end, scalar, dense))
         blocked += not scalar
@@ -402,22 +348,20 @@ def _traversal(fn):
         SpatialGrid._cells_along_ray = real
 
 
-def _fan_answer(grid, table, start, end):
+def _fan_answer(grid, start, end):
     with _traversal(_fan_cells):
-        return grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end),
-                                      _intersect_ray_aabb, table)
+        return grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end))
 
 
-def _sampled_answer(grid, table, start, end):
+def _sampled_answer(grid, start, end):
     with _traversal(_sampled_cells):
-        return grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end),
-                                      _intersect_ray_aabb, table)
+        return grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end))
 
 
-def _matches_the_fan(grid, table, start, end, what):
+def _matches_the_fan(grid, start, end, what):
     """Both of today's paths must answer what the fan answered."""
-    reference = _fan_answer(grid, table, start, end)
-    scalar, dense = _both(grid, table, start, end)
+    reference = _fan_answer(grid, start, end)
+    scalar, dense = _both(grid, start, end)
     assert scalar == reference, (
         "%s: the fan said %s and the per-brush path now says %s for %s -> %s"
         % (what, reference, scalar, start, end))
@@ -452,7 +396,7 @@ def test_the_sampling_gap_the_fan_was_added_for_is_real():
     If this ever starts passing as visible==False, the case has stopped being
     a gap and the test below it is no longer proving anything.
     """
-    grid, table = _world([box_brush(*_GAP_BRUSH)])
+    grid = _world([box_brush(*_GAP_BRUSH)])
 
     sampled = _sampled_cells(grid, glm.vec3(*_GAP_START),
                              glm.normalize(glm.vec3(*_GAP_END)
@@ -462,19 +406,19 @@ def test_the_sampling_gap_the_fan_was_added_for_is_real():
     assert (1, 0) not in sampled, (
         "the sampled points now include (1,0), so this ray no longer skips a "
         "cell and cannot demonstrate the gap")
-    assert _sampled_answer(grid, table, _GAP_START, _GAP_END) is True, (
+    assert _sampled_answer(grid, _GAP_START, _GAP_END) is True, (
         "sampling alone was supposed to miss the occluder")
-    assert _fan_answer(grid, table, _GAP_START, _GAP_END) is False, (
+    assert _fan_answer(grid, _GAP_START, _GAP_END) is False, (
         "the fan was supposed to catch it")
 
 
 def test_the_traversal_closes_the_sampling_gap():
     """The reason the fan can go: the skipped cell is now walked, not guessed."""
-    grid, table = _world([box_brush(*_GAP_BRUSH)])
+    grid = _world([box_brush(*_GAP_BRUSH)])
 
     assert (1, 0) in _walk(grid, _GAP_START, _GAP_END), (
         "the traversal skipped the cell the ray crosses")
-    assert _matches_the_fan(grid, table, _GAP_START, _GAP_END,
+    assert _matches_the_fan(grid, _GAP_START, _GAP_END,
                             "the diagonal straddle") is False
 
 
@@ -567,20 +511,20 @@ def test_every_direction_answers_what_the_fan_answered(name, start, end):
     rng = np.random.default_rng(31)
     brushes = [box_brush("b%d" % i, tuple(rng.uniform(-1200, 1200, 3)),
                          tuple(rng.uniform(32, 400, 3))) for i in range(60)]
-    grid, table = _world(brushes)
-    _matches_the_fan(grid, table, start, end, name)
+    grid = _world(brushes)
+    _matches_the_fan(grid, start, end, name)
 
 
 # --- boundaries, corners and grazes ----------------------------------------
 
 def test_a_ray_that_starts_exactly_on_a_cell_boundary():
     """floor() puts the origin in the upper cell; the walk must start there."""
-    grid, table = _world([box_brush("a", (700.0, 0.0, 100.0), (64.0, 256.0, 64.0)),
+    grid = _world([box_brush("a", (700.0, 0.0, 100.0), (64.0, 256.0, 64.0)),
                           box_brush("b", (300.0, 0.0, 100.0), (64.0, 256.0, 64.0))])
     assert _walk(grid, (512.0, 0.0, 100.0), (900.0, 0.0, 100.0))[0] == (1, 0)
-    _matches_the_fan(grid, table, (512.0, 0.0, 100.0), (900.0, 0.0, 100.0),
+    _matches_the_fan(grid, (512.0, 0.0, 100.0), (900.0, 0.0, 100.0),
                      "starting on the boundary, forwards")
-    _matches_the_fan(grid, table, (512.0, 0.0, 100.0), (100.0, 0.0, 100.0),
+    _matches_the_fan(grid, (512.0, 0.0, 100.0), (100.0, 0.0, 100.0),
                      "starting on the boundary, backwards")
 
 
@@ -588,8 +532,8 @@ def test_a_ray_running_along_a_cell_boundary():
     """Degenerate: the ray never leaves the seam between two cell columns."""
     brushes = [box_brush("b%d" % i, (512.0, 0.0, i * 300.0 - 600.0),
                          (64.0, 256.0, 64.0)) for i in range(5)]
-    grid, table = _world(brushes)
-    _matches_the_fan(grid, table, (512.0, 0.0, -900.0), (512.0, 0.0, 900.0),
+    grid = _world(brushes)
+    _matches_the_fan(grid, (512.0, 0.0, -900.0), (512.0, 0.0, 900.0),
                      "along the x=512 seam")
 
 
@@ -599,46 +543,46 @@ def test_a_ray_through_an_exact_grid_corner():
                box_brush("ne", (600.0, 0.0, 600.0), (64.0, 256.0, 64.0)),
                box_brush("sw", (400.0, 0.0, 400.0), (64.0, 256.0, 64.0)),
                box_brush("se", (600.0, 0.0, 400.0), (64.0, 256.0, 64.0))]
-    grid, table = _world(brushes)
+    grid = _world(brushes)
 
     cells = set(_walk(grid, (12.0, 0.0, 12.0), (1012.0, 0.0, 1012.0)))
     for corner in ((0, 0), (1, 0), (0, 1), (1, 1)):
         assert corner in cells, (
             "the ray crosses the corner at (512,512) but the walk skipped %s; "
             "a brush filed only there would be invisible" % (corner,))
-    _matches_the_fan(grid, table, (12.0, 0.0, 12.0), (1012.0, 0.0, 1012.0),
+    _matches_the_fan(grid, (12.0, 0.0, 12.0), (1012.0, 0.0, 1012.0),
                      "straight through the corner")
 
 
 def test_a_brush_spanning_several_cells_is_found_from_any_of_them():
     """A long wall is filed under every cell it crosses; each must block."""
     brushes = [box_brush("wall", (0.0, 0.0, 0.0), (32.0, 512.0, 3000.0))]
-    grid, table = _world(brushes)
+    grid = _world(brushes)
     for z in (-1400.0, -700.0, 0.0, 700.0, 1400.0):
-        assert _matches_the_fan(grid, table, (-400.0, 0.0, z), (400.0, 0.0, z),
+        assert _matches_the_fan(grid, (-400.0, 0.0, z), (400.0, 0.0, z),
                                 "through the wall at z=%g" % z) is False
 
 
 def test_a_walk_through_empty_cells_is_clear():
     """Most cells hold nothing; `get` misses and the ray must still answer."""
-    grid, table = _world([box_brush("far", (9000.0, 0.0, 9000.0))])
+    grid = _world([box_brush("far", (9000.0, 0.0, 9000.0))])
     assert len(set(_walk(grid, (-2000, 0, -2000), (2000, 0, 2000)))) > 4
-    assert _matches_the_fan(grid, table, (-2000, 0, -2000), (2000, 0, 2000),
+    assert _matches_the_fan(grid, (-2000, 0, -2000), (2000, 0, 2000),
                             "across empty cells") is True
 
 
 def test_grazing_rays_answer_what_the_fan_answered():
     """Rays aimed at a face, an edge and a corner of the same brush."""
     brushes = [box_brush("box", (600.0, 0.0, 600.0), (200.0, 200.0, 200.0))]
-    grid, table = _world(brushes)
+    grid = _world(brushes)
     for dx in (-100.0, -100.0000001, -99.9999999, 0.0, 100.0, 100.0000001):
         for dz in (-100.0, 0.0, 100.0, 100.0000001):
             start = (600.0 + dx, 0.0, -400.0)
             end = (600.0 + dx, 0.0, 1600.0)
-            _matches_the_fan(grid, table, start, end,
+            _matches_the_fan(grid, start, end,
                              "grazing at dx=%r dz=%r" % (dx, dz))
     for dy in (-100.0, -99.9999999, 0.0, 99.9999999, 100.0):
-        _matches_the_fan(grid, table, (-400.0, dy, 600.0), (1600.0, dy, 600.0),
+        _matches_the_fan(grid, (-400.0, dy, 600.0), (1600.0, dy, 600.0),
                          "grazing the top/bottom face at dy=%r" % dy)
 
 
@@ -646,13 +590,13 @@ def test_short_and_long_rays_answer_what_the_fan_answered():
     rng = np.random.default_rng(101)
     brushes = [box_brush("b%d" % i, tuple(rng.uniform(-4000, 4000, 3)),
                          tuple(rng.uniform(32, 600, 3))) for i in range(200)]
-    grid, table = _world(brushes)
+    grid = _world(brushes)
     for reach in (1.0, 20.0, 400.0, 512.0, 513.0, 2000.0, 9000.0):
         for _ in range(40):
             start = rng.uniform(-3000, 3000, 3)
             direction = rng.normal(size=3)
             direction /= np.linalg.norm(direction)
-            _matches_the_fan(grid, table, tuple(start),
+            _matches_the_fan(grid, tuple(start),
                              tuple(start + direction * reach),
                              "a ray of %g units" % reach)
 
@@ -662,15 +606,15 @@ def test_the_traversal_agrees_with_the_fan_over_a_random_sweep():
     rng = np.random.default_rng(77)
     brushes = [box_brush("b%d" % i, tuple(rng.uniform(-2500, 2500, 3)),
                          tuple(rng.uniform(16, 200, 3))) for i in range(400)]
-    grid, table = _world(brushes)
+    grid = _world(brushes)
 
     differed = []
     blocked = 0
     for _ in range(600):
         start = tuple(rng.uniform(-2600, 2600, 3))
         end = tuple(rng.uniform(-2600, 2600, 3))
-        reference = _fan_answer(grid, table, start, end)
-        scalar, dense = _both(grid, table, start, end)
+        reference = _fan_answer(grid, start, end)
+        scalar, dense = _both(grid, start, end)
         if scalar != reference or dense != reference:
             differed.append((start, end, reference, scalar, dense))
         blocked += not reference
@@ -694,7 +638,7 @@ def test_the_traversal_agrees_with_the_fan_over_a_random_sweep():
 # actually has.
 # ---------------------------------------------------------------------------
 
-def _path_taken(grid, table, start, end):
+def _path_taken(grid, start, end):
     """('dense'|'scalar', answer) -- which narrow phase decided this ray."""
     taken = []
     real = SpatialGrid._los_dense
@@ -706,18 +650,17 @@ def _path_taken(grid, table, start, end):
 
     SpatialGrid._los_dense = spy
     try:
-        answer = grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end),
-                                        _intersect_ray_aabb, table)
+        answer = grid.has_line_of_sight(glm.vec3(*start), glm.vec3(*end))
     finally:
         SpatialGrid._los_dense = real
     return (taken[0] if taken else "scalar"), answer
 
 
-def _candidate_count(grid, table, start, end):
+def _candidate_count(grid, start, end):
     """The number the gate compares against, counted the way the gate does."""
     direction = glm.vec3(*end) - glm.vec3(*start)
     length = glm.length(direction)
-    slots_by_cell = grid.cell_slots(table)
+    slots_by_cell = grid._los_rows.static_by_cell
     total = 0
     for coord in grid._cells_along_ray(glm.vec3(*start), direction / length,
                                        length):
@@ -735,17 +678,17 @@ def _crowded_world(n=40):
 
 
 def test_the_gate_counts_the_candidates_the_ray_actually_has():
-    grid, table = _crowded_world()
+    grid = _crowded_world()
     start, end = (20.0, 0.0, 20.0), (400.0, 0.0, 400.0)
-    counted = _candidate_count(grid, table, start, end)
+    counted = _candidate_count(grid, start, end)
     assert counted > 2, "the fixture stopped being crowded"
 
     grid.LOS_DENSE_MIN_CANDIDATES = counted
-    assert _path_taken(grid, table, start, end)[0] == "dense", (
+    assert _path_taken(grid, start, end)[0] == "dense", (
         "a ray with exactly the threshold count took the scalar path; the gate "
         "is off by one or is counting something else")
     grid.LOS_DENSE_MIN_CANDIDATES = counted + 1
-    assert _path_taken(grid, table, start, end)[0] == "scalar", (
+    assert _path_taken(grid, start, end)[0] == "scalar", (
         "a ray one candidate short of the threshold still took the dense path")
 
 
@@ -754,7 +697,7 @@ def test_both_sides_of_the_threshold_give_the_same_answer():
     rng = np.random.default_rng(97)
     brushes = [box_brush("b%d" % i, tuple(rng.uniform(-900, 900, 3)),
                          tuple(rng.uniform(24, 260, 3))) for i in range(150)]
-    grid, table = _world(brushes)
+    grid = _world(brushes)
 
     rays = []
     for _ in range(120):
@@ -765,12 +708,12 @@ def test_both_sides_of_the_threshold_give_the_same_answer():
     for start, end in rays:
         if glm.length(glm.vec3(*end) - glm.vec3(*start)) < 0.001:
             continue
-        counted = _candidate_count(grid, table, start, end)
+        counted = _candidate_count(grid, start, end)
         answers = {}
         for threshold in (0, max(0, counted - 1), counted, counted + 1,
                           counted + 1000):
             grid.LOS_DENSE_MIN_CANDIDATES = threshold
-            path, answer = _path_taken(grid, table, start, end)
+            path, answer = _path_taken(grid, start, end)
             answers[threshold] = (path, answer)
         distinct = {a for _, a in answers.values()}
         assert len(distinct) == 1, (
@@ -795,7 +738,7 @@ def test_the_default_threshold_leaves_a_normal_scene_on_the_scalar_walk():
     rng = np.random.default_rng(13)
     brushes = [box_brush("b%d" % i, tuple(rng.uniform(-2000, 2000, 3)),
                          tuple(rng.uniform(32, 256, 3))) for i in range(600)]
-    grid, table = _world(brushes)
+    grid = _world(brushes)
 
     counts, dense_rays = [], 0
     for _ in range(200):
@@ -803,8 +746,8 @@ def test_the_default_threshold_leaves_a_normal_scene_on_the_scalar_walk():
         end = tuple(rng.uniform(-1800, 1800, 3))
         if glm.length(glm.vec3(*end) - glm.vec3(*start)) < 0.001:
             continue
-        counts.append(_candidate_count(grid, table, start, end))
-        dense_rays += _path_taken(grid, table, start, end)[0] == "dense"
+        counts.append(_candidate_count(grid, start, end))
+        dense_rays += _path_taken(grid, start, end)[0] == "dense"
 
     assert max(counts) < SpatialGrid.LOS_DENSE_MIN_CANDIDATES, (
         "a 600-brush scene reached %d candidates on one ray, at or above the "
@@ -813,17 +756,3 @@ def test_the_default_threshold_leaves_a_normal_scene_on_the_scalar_walk():
     assert dense_rays == 0, (
         "%d of %d rays took the dense path in an ordinary scene"
         % (dense_rays, len(counts)))
-
-
-def test_an_unaddressable_brush_still_beats_the_gate():
-    """Order matters: the fail-safe is not something the threshold can skip."""
-    brushes = [box_brush("wall", (0.0, 0.0, 0.0), (32.0, 256.0, 512.0))]
-    grid, table = _world(brushes)
-    brushes[0]["id"] = "not-in-the-table"
-    grid.populate(brushes)
-
-    grid.LOS_DENSE_MIN_CANDIDATES = 0
-    path, answer = _path_taken(grid, table, (-300, 0, 0), (300, 0, 0))
-    assert path == "scalar", (
-        "a brush the table cannot address was tested as a row anyway")
-    assert answer is False, "the occluder went missing"

@@ -412,19 +412,25 @@ class BenchmarkTests:
         deadline = time.perf_counter() + self._preparation_timeout_s
         while time.perf_counter() < deadline:
             state = view.game_state.get_render_state()
-            table = getattr(state, "render_table", None)
-            slots = getattr(state, "all_brush_slots", None)
-            entity_table = getattr(state, "entity_table", None)
-            hidden = getattr(state, "thing_hidden", None)
-            if (
-                table is not None
-                and int(getattr(table, "count", -1)) == int(expected_count)
-                and slots is not None
-                and len(slots) == int(expected_count)
-                and entity_table is not None
-                and hidden is not None
-                and len(hidden) >= int(getattr(entity_table, "count", 0))
-            ):
+            try:
+                table = getattr(state, "render_table", None)
+                slots = getattr(state, "all_brush_slots", None)
+                entity_table = getattr(state, "entity_table", None)
+                hidden = getattr(state, "thing_hidden", None)
+                published = (
+                    table is not None
+                    and int(getattr(table, "count", -1)) == int(expected_count)
+                    and slots is not None
+                    and len(slots) == int(expected_count)
+                    and entity_table is not None
+                    and hidden is not None
+                    and len(hidden) >= int(getattr(entity_table, "count", 0))
+                )
+            finally:
+                # Publication waits while the frame is borrowed; do not hold
+                # it across the yield below.
+                view.game_state.release_render_state(state)
+            if published:
                 return
             self._live_cooperative_yield(label)
         raise TimeoutError(

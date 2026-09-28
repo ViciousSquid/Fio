@@ -358,7 +358,7 @@ def test_load_world_build_render_state_modify_world_rebuild(session):
     first = thread.game_state.get_write_state()
     first_count = len(first.all_brushes)
     assert first_count == 6, "the room is six brushes, the frame has %d" % first_count
-    assert len(first.all_things) == 1
+    assert first.entity_table.count == 1
 
     thread.game_state.request_swap()
     state.brushes.append(box_brush("new_pillar", (0, 64, 0), (64, 128, 64)))
@@ -369,7 +369,7 @@ def test_load_world_build_render_state_modify_world_rebuild(session):
     assert len(second.all_brushes) == first_count + 1, (
         "the rebuilt frame holds %d brushes, expected %d"
         % (len(second.all_brushes), first_count + 1))
-    assert len(second.all_things) == 2
+    assert second.entity_table.count == 2
 
 
 def test_a_geometry_edit_reaches_the_renderers_derived_mesh(session):

@@ -350,16 +350,33 @@ class QtGameView(QOpenGLWidget):
                 count += 1
         print(f"[Audio] Preloaded {count} sound files.")
 
+    #: Seconds between attempts to open the audio device after one failed.
+    MIXER_RETRY_SECONDS = 10.0
+
     def _ensure_pygame_mixer(self) -> bool:
-        """Initialize pygame mixer if it isn't already active."""
+        """Initialize pygame mixer if it isn't already active.
+
+        A failed attempt probes the audio stack for ~100 ms on the UI thread,
+        and every sound request asks, so on a machine with no working device
+        each gunshot used to stall a frame. The failure is remembered and the
+        device retried at most every :data:`MIXER_RETRY_SECONDS`, so one
+        plugged in later is still picked up.
+        """
         if pygame.mixer.get_init():
             return True
+        now = time.perf_counter()
+        failed_at = getattr(self, '_mixer_failed_at', None)
+        if failed_at is not None and now - failed_at < self.MIXER_RETRY_SECONDS:
+            return False
         try:
             pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
             print("[Audio] pygame.mixer late-initialized")
+            self._mixer_failed_at = None
             return True
         except pygame.error as e:
-            print(f"[Audio] pygame.mixer init failed: {e}")
+            if failed_at is None:
+                print(f"[Audio] pygame.mixer init failed: {e}")
+            self._mixer_failed_at = now
             return False
 
     def _load_sound_to_cache(self, name, path):
@@ -882,10 +899,16 @@ class QtGameView(QOpenGLWidget):
             self.game_state.set_keys(keys)
             # Update Player 2 input from arrow keys (if no gamepad)
             self._update_p2_keyboard_input()
-            has_new = self.game_state.try_swap()
-            self.repaint()
-            if has_new and self.play_mode:
-                self.editor.update_views()
+            # Paint only a frame that is new. Repainting the one already on
+            # screen draws the same image again, and -- publication being
+            # double-buffered -- borrows the published frame for the whole
+            # paint, so back-to-back repaints leave the logic thread no gap
+            # to publish the next one in. Input that changes only editor
+            # overlays asks Qt for a paint on its own (``update()``).
+            if self.game_state.try_swap():
+                self.repaint()
+                if self.play_mode:
+                    self.editor.update_views()
         else:
             self.repaint()
 
@@ -1062,7 +1085,7 @@ class QtGameView(QOpenGLWidget):
             return
         for cmd in commands:
             try:
-                handler.handle_command(cmd)
+                handler.handle_command(cmd, from_map=True)
             except Exception as exc:
                 print(f"[QtGameView] console command '{cmd}' failed: {exc}")
 
@@ -1305,29 +1328,46 @@ class QtGameView(QOpenGLWidget):
     def paintGL(self):
         if not self.renderer or getattr(self.renderer, '_shader_init_failed', False):
             return
+        started = time.perf_counter()
         render_state: Optional[RenderState] = None
         if self.use_threading and self.logic_thread:
             render_state = self.game_state.get_render_state()
-            if render_state:
-                self._cached_health = render_state.player_health
-                self._cached_max_health = render_state.player_max_health
-                self._cached_player_ammo = getattr(render_state, 'player_ammo', 0)
-                self._cached_shot_ready = getattr(render_state, 'shot_ready', False)
-                self._cached_active_weapon = getattr(render_state, 'active_weapon', None)
-                self._cached_hud_message = getattr(render_state, 'hud_message', '')
-                self._cached_collected_keys = getattr(render_state, 'collected_keys', set())
-                if getattr(render_state, 'muzzle_flash_active', False):
-                    self._muzzle_flash_counter = self._muzzle_flash_duration_frames
-                self._cached_muzzle_flash = self._muzzle_flash_counter > 0
-                self._cached_player_dead = getattr(render_state, 'player_dead', False)
-                self._cached_monster_debug = getattr(render_state, 'monster_debug_active', False)
-                self._cached_bullet_marks = list(getattr(render_state, 'bullet_marks', []))
-                self._cached_projectiles = list(getattr(render_state, 'projectiles', []))
-                self._cached_monster_rays = list(getattr(render_state, 'monster_debug_rays', []))
-                self._cached_level_complete_ui = getattr(render_state, 'level_complete_ui', None)
-                self._cached_underwater = getattr(render_state, 'player_underwater', False)
-                self._cached_underwater_tint = getattr(render_state, 'underwater_tint', [0.0, 0.4, 0.6])
-                self._cached_p2_underwater = getattr(render_state, 'player2_underwater', False)
+        try:
+            self._paint_frame(render_state)
+        finally:
+            # The render state is a borrowed snapshot, and publication waits
+            # while it is borrowed: release it the moment this synchronous
+            # paint is done, even if the paint raised.
+            if render_state is not None:
+                self.game_state.release_render_state(render_state)
+            #: CPU milliseconds the last paint took, for Debug Tables.
+            self.paint_ms = (time.perf_counter() - started) * 1000.0
+
+        if self._muzzle_flash_counter > 0:
+            self._muzzle_flash_counter -= 1
+
+    def _paint_frame(self, render_state):
+        """Draw one frame from *render_state* (None when not threaded)."""
+        if render_state:
+            self._cached_health = render_state.player_health
+            self._cached_max_health = render_state.player_max_health
+            self._cached_player_ammo = getattr(render_state, 'player_ammo', 0)
+            self._cached_shot_ready = getattr(render_state, 'shot_ready', False)
+            self._cached_active_weapon = getattr(render_state, 'active_weapon', None)
+            self._cached_hud_message = getattr(render_state, 'hud_message', '')
+            self._cached_collected_keys = getattr(render_state, 'collected_keys', set())
+            if getattr(render_state, 'muzzle_flash_active', False):
+                self._muzzle_flash_counter = self._muzzle_flash_duration_frames
+            self._cached_muzzle_flash = self._muzzle_flash_counter > 0
+            self._cached_player_dead = getattr(render_state, 'player_dead', False)
+            self._cached_monster_debug = getattr(render_state, 'monster_debug_active', False)
+            self._cached_bullet_marks = list(getattr(render_state, 'bullet_marks', []))
+            self._cached_projectiles = list(getattr(render_state, 'projectiles', []))
+            self._cached_monster_rays = list(getattr(render_state, 'monster_debug_rays', []))
+            self._cached_level_complete_ui = getattr(render_state, 'level_complete_ui', None)
+            self._cached_underwater = getattr(render_state, 'player_underwater', False)
+            self._cached_underwater_tint = getattr(render_state, 'underwater_tint', [0.0, 0.4, 0.6])
+            self._cached_p2_underwater = getattr(render_state, 'player2_underwater', False)
         if self.grid_dirty:
             self.renderer.update_grid_buffers(self.world_size, self.grid_size)
             self.grid_dirty = False
@@ -1401,10 +1441,6 @@ class QtGameView(QOpenGLWidget):
             self._render_config["all_brushes"] = render_state.all_brushes
         else:
             self._render_config["all_brushes"] = self.editor.state.brushes
-        if render_state and hasattr(render_state, 'all_things'):
-            self._render_config["all_things"] = render_state.all_things
-        else:
-            self._render_config["all_things"] = self.editor.state.things
         if render_state and hasattr(render_state, 'all_lights'):
             self._render_config["all_lights"] = render_state.all_lights
         else:
@@ -1427,17 +1463,6 @@ class QtGameView(QOpenGLWidget):
                 np.arange(etable.count, dtype=np.int32))
             self._render_config["thing_hidden"] = hidden
 
-        # The render-state position buffer is a derived snapshot of
-        # authoritative Thing.pos values. It is aligned with things_to_render
-        # and lets the renderer batch the expensive X/Z distance arithmetic.
-        self._render_config["thing_positions"] = (
-            getattr(render_state, "visible_thing_positions", None)
-            if render_state is not None else None
-        )
-        self._render_config["brush_positions"] = (
-            getattr(render_state, "visible_brush_positions", None)
-            if render_state is not None else None
-        )
         # The dense render projection and the per-slot render references. With
         # these the main pass classifies, depth-orders and batches brushes from
         # the projection's columns instead of walking the published object list
@@ -1469,23 +1494,6 @@ class QtGameView(QOpenGLWidget):
                 getattr(render_state, _field, None)
                 if render_state is not None else None
             )
-
-        # The EntityTable is shared by the editor/logic paths, while RenderState
-        # is a shallow snapshot. A structural entity change can therefore become
-        # visible in the live table one frame before the snapshot's hidden mask
-        # is refreshed. Repair only this transient mismatch; the normal frame
-        # keeps consuming the published dense mask without another object walk.
-        _etable = self._render_config.get("entity_table")
-        _hidden = self._render_config.get("thing_hidden")
-        if (_etable is not None
-                and (_hidden is None or len(_hidden) < _etable.count)):
-            self._render_config["thing_hidden"] = _etable.begin_frame(
-                things_to_render,
-                getattr(self.editor.state, 'world_epoch', None),
-                effect_runtime=self.play_mode,
-            )
-            self._render_config["visible_thing_slots"] = np.arange(
-                _etable.count, dtype=np.int32)
 
         _splitscreen = (
             self.play_mode
@@ -1773,20 +1781,6 @@ class QtGameView(QOpenGLWidget):
 
         painter.end()
 
-        # The render state is a borrowed snapshot. Release it as soon as this
-        # synchronous paint is complete so its persistent buffer can be recycled
-        # on the next logic publication. weakref.finalize remains as a safety
-        # net for exceptional exits.
-        if (
-            render_state is not None
-            and self.use_threading
-            and self.logic_thread is not None
-        ):
-            self.game_state.release_render_state(render_state)
-            render_state = None
-
-        if self._muzzle_flash_counter > 0:
-            self._muzzle_flash_counter -= 1
 
     def _draw_underwater_overlay(self, painter, render_state):
         """Tint the view while the camera is below a water surface."""
@@ -2332,24 +2326,6 @@ class QtGameView(QOpenGLWidget):
         if self.renderer:
             self.renderer.set_sprite_textures(self.sprite_textures)
 
-    def _pixmap_to_texture(self, pixmap):
-        image = pixmap.toImage().convertToFormat(QImage.Format_RGBA8888)
-        width, height = image.width(), image.height()
-        ptr = image.constBits()
-        try:
-            nbytes = image.sizeInBytes()
-        except AttributeError:
-            nbytes = image.byteCount()
-        data = ptr.asstring(nbytes)
-        tex_id = gl.glGenTextures(1)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
-        gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, width, height, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, data)
-        return tex_id
-
     def update_instance_textures(self, things):
         if not self.renderer:
             return
@@ -2548,10 +2524,6 @@ class QtGameView(QOpenGLWidget):
         pos = getattr(self, '_last_player_start_pos', [0, 0, 0])
         angle = getattr(self, '_last_player_start_angle', 0)
         self.toggle_play_mode(pos, angle)
-
-    def set_culling(self, enabled):
-        self.culling_enabled = enabled
-        self.update()
 
     def set_cull_distance(self, distance):
         """Set the camera's maximum render distance, in world units.
@@ -3160,10 +3132,10 @@ class QtGameView(QOpenGLWidget):
         if self.play_mode and event.button() == Qt.LeftButton:
             if self.console_overlay_active:
                 return
-            render_state = self.game_state.get_render_state()
-            if getattr(render_state, 'player_dead', False):
+            published = self.game_state.published
+            if published('player_dead', False):
                 return
-            active_weapon = getattr(render_state, 'active_weapon', None)
+            active_weapon = published('active_weapon')
             if active_weapon:
                 from engine.monster_constants import NON_FIRING_WEAPONS
                 # Non-firing weapons (e.g. cig) are display-only. For firing
@@ -3171,7 +3143,7 @@ class QtGameView(QOpenGLWidget):
                 # piling up while gun2 is cooling down or out of ammo.
                 if (
                     active_weapon not in NON_FIRING_WEAPONS
-                    and getattr(render_state, 'shot_ready', False)
+                    and published('shot_ready', False)
                 ):
                     self.game_state.queue_shot()
                 return
@@ -3545,8 +3517,7 @@ class QtGameView(QOpenGLWidget):
                 self.editor.enter_kiosk_mode()
             return
         if self.play_mode:
-            render_state = self.game_state.get_render_state()
-            if getattr(render_state, 'player_dead', False):
+            if self.game_state.published('player_dead', False):
                 if event.key() == Qt.Key_Escape:
                     self._exit_play_mode()
                     return

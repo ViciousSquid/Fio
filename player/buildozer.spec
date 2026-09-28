@@ -21,7 +21,8 @@ package.domain = org.vicioussquid.fio
 # plus a bundled game. `source.dir` points at the repo root so `player/`,
 # `engine/` and `plugins/` are all packaged. Including `plugins/*` bakes the
 # plugin code + assets (e.g. the tidy object model) into the APK, so plugin
-# games run on-device; a .fiopak that carries its own plugins still works too.
+# games run on-device. A .fiopak never carries plugin code; one that tries is
+# refused by player/fiopak.py.
 source.dir = ..
 source.include_exts = py,png,jpg,jpeg,tga,bmp,ogg,wav,json,fiopak,glsl,vert,frag,obj,glb,mtl,ttf,otf
 source.include_patterns = player/*,engine/*,plugins/*,assets/*,game.fiopak

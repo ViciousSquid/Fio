@@ -10,6 +10,7 @@ import math
 import uuid
 import importlib
 
+from engine.change_journal import TrackedAttribute, TrackedPosition, touch
 from engine.portal_transform import (
     basis_from_rotation as _portal_basis_from_rotation,
     map_point as _portal_map_point,
@@ -20,6 +21,7 @@ from engine.portal_transform import (
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt
 import ast
+import posixpath
 
 from . import state_values as _sv
 
@@ -61,7 +63,7 @@ def update_all_counters_from_entities(entities):
         else:
             name = entity.properties.get('name', '')
 
-        if not name:
+        if not name or not isinstance(name, str):
             continue
 
         # Names are typically "ClassName_number" (e.g., "Monster_5", "Light_12")
@@ -84,8 +86,59 @@ def update_all_counters_from_entities(entities):
             cls._counters[class_name] = 0
 
 
+#: Entity class -> its default properties, learned once from a probe instance.
+_CLASS_DEFAULTS = {}
+
+
+def _class_defaults(cls):
+    """The properties a fresh *cls* declares, keyed by name.
+
+    Learned from one probe instance per class.  The probe is given a name and
+    id so that constructing it neither advances the naming counters nor
+    generates a UUID.
+    """
+    defaults = _CLASS_DEFAULTS.get(cls)
+    if defaults is None:
+        try:
+            probe = cls(pos=[0.0, 0.0, 0.0],
+                        properties={'name': '\x00probe', 'id': '\x00probe'})
+            defaults = dict(probe.properties)
+        except Exception:
+            defaults = {}
+        _CLASS_DEFAULTS[cls] = defaults
+    return defaults
+
+
+def _heal_legacy_strings(cls, properties):
+    """*properties* with legacy string-encoded values restored to their type.
+
+    Old maps stored numbers, booleans and lists as their text (``"0.5"``,
+    ``"True"``).  Such a string is parsed back only where *cls* declares a
+    non-string default for that property: a property that is text by
+    declaration (a name, a message, a map path) or that the class does not
+    declare at all keeps exactly what was authored.  Parsing every string
+    turned an entity named ``"2"`` into the integer 2 on save, and the next
+    load of that map crashed.
+    """
+    defaults = _class_defaults(cls)
+    healed = {}
+    for key, value in properties.items():
+        default = defaults.get(key)
+        if (isinstance(value, str) and default is not None
+                and not isinstance(default, str)):
+            try:
+                value = ast.literal_eval(value)
+            except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+                pass  # Genuinely a string — keep it
+        healed[key] = value
+    return healed
+
+
 class Thing:
     """Base class for all placeable entities."""
+    #: Assigning ``pos`` tells the render projection the entity moved; see
+    #: :mod:`engine.change_journal`. Assign a new list rather than mutating it.
+    pos = TrackedPosition()
     pixmap_path = None
     _pixmap_cache = {}  # Class-level cache for loaded pixmaps
     _counters = {}      # Class-level counter for unique naming
@@ -235,17 +288,11 @@ class Thing:
     def to_dict(self):
         """Serialize to dictionary for saving."""
         props_copy = {k: v for k, v in self.properties.items() if k != '_io_connections'}
-        
+
+        # Heal legacy string-typed values on save, so old map files are
+        # repaired by the next save (see _heal_legacy_strings).
         serializable_props = {}
-        for k, v in props_copy.items():
-            # Coerce legacy string-typed values to their native types on save.
-            # This heals old map files automatically on next save.
-            if isinstance(v, str):
-                try:
-                    v = ast.literal_eval(v)
-                except (ValueError, SyntaxError):
-                    pass  # Genuinely a string — keep it
-            
+        for k, v in _heal_legacy_strings(type(self), props_copy).items():
             if isinstance(v, (str, int, float, bool, list, dict, type(None))):
                 serializable_props[k] = v
             else:
@@ -275,8 +322,7 @@ class Thing:
         """Deserialize from dictionary."""
         thing_type = data.get('type')
 
-        # Untouched copy for opaque preservation of unresolvable types; the
-        # loop below rewrites string property values in place.
+        # Untouched copy for opaque preservation of unresolvable types.
         original_record = copy.deepcopy(data)
 
         if not thing_type:
@@ -292,12 +338,8 @@ class Thing:
             return None
 
         properties = data.get('properties', {})
-        for key, value in properties.items():
-            if isinstance(value, str):
-                try:
-                    properties[key] = ast.literal_eval(value)
-                except (ValueError, SyntaxError):
-                    pass
+        if not isinstance(properties, dict):
+            properties = {}
 
         # A subclass may declare `map_type` when its serialised type token
         # differs from its class name; otherwise the class name is used.
@@ -307,18 +349,18 @@ class Thing:
         subclasses = find_subclasses(Thing)
         match = next((c for c in subclasses
                       if token == getattr(c, 'map_type', c.__name__.lower())), None)
+        if match is None and thing_type == 'thing':
+            match = Thing
         if match is not None:
-            thing = match(pos=data.get('pos'), properties=properties)
+            thing = match(pos=data.get('pos'),
+                          properties=_heal_legacy_strings(match, properties))
 
         if thing is None:
-            if thing_type == 'thing':
-                thing = Thing(pos=data.get('pos'), properties=properties)
-            else:
-                # Never drop an entity: a later save would erase it for good.
-                # Keep the record opaque so it round-trips byte-for-byte.
-                print(f"Warning: Unknown thing type '{thing_type}' found in map file; "
-                      f"preserved unchanged (is a plugin missing or disabled?).")
-                return UnresolvedThing(original_record)
+            # Never drop an entity: a later save would erase it for good.
+            # Keep the record opaque so it round-trips byte-for-byte.
+            print(f"Warning: Unknown thing type '{thing_type}' found in map file; "
+                  f"preserved unchanged (is a plugin missing or disabled?).")
+            return UnresolvedThing(original_record)
         
         io_data = copy.deepcopy(data.get('io_connections', []))
         if io_data:
@@ -666,21 +708,6 @@ class Monster(Thing):
             print(f"[Monster] Custom sprite not found, using default: {custom_path}")
         return default_path
 
-    def get_render_snapshot(self):
-        """Return a lightweight dictionary snapshot for the renderer."""
-        return {
-            'pos': list(self.pos),                         # copy list
-            'dead': self.properties.get('dead', False),
-            'is_shooting': self.properties.get('is_shooting', False),
-            'monster_type': self.properties.get('monster_type', 'human'),
-            'variant': self.properties.get('variant', '<None>'),
-            'sprite_width': self.properties.get('sprite_width', 128),
-            'sprite_height': self.properties.get('sprite_height', 128),
-            'custom_idle': self.properties.get('custom_idle', ''),
-            'custom_shoot': self.properties.get('custom_shoot', ''),
-            'custom_dead': self.properties.get('custom_dead', ''),
-        }
-
     def get_sprite_path(self) -> str:
         """
         Return the sprite path for the current monster type and state.
@@ -1011,9 +1038,17 @@ class LevelChanger(Thing):
         if not target_map.lower().endswith('.json'):
             target_map += '.json'
 
-        # ENFORCE MAPS FOLDER: Prepend maps/ if not already present
-        if not (target_map.startswith('maps/') or target_map.startswith('maps\\')):
+        # ENFORCE MAPS FOLDER: Prepend maps/ if not already present, and
+        # refuse a target that climbs back out of it.  target_map is authored
+        # map data (packages included), and the loaded map becomes the
+        # editor's save target.
+        target_map = target_map.replace('\\', '/')
+        if not target_map.startswith('maps/'):
             target_map = f"maps/{target_map}"
+        target_map = posixpath.normpath(target_map)
+        if not target_map.startswith('maps/'):
+            debug_log("Error", f"LevelChanger target '{target_map}' is outside the maps folder")
+            return False
 
         debug_log("IO", f"LevelChanger target resolved → '{target_map}'")
 
@@ -1278,6 +1313,10 @@ class Portal(Thing):
     TRANSIT_COOLDOWN = 0.5
 
     # Duration of a full fade-in or fade-out transition (seconds).
+    #: Rendered opacity, advanced per tick; journalled so the render
+    #: projection re-reads it only while it is actually changing.
+    _fade_alpha = TrackedAttribute(1.0)
+
     FADE_DURATION = 0.35
 
     # Minimum projectile exit clearance along the destination normal. Player
@@ -1381,6 +1420,7 @@ class Portal(Thing):
     def set_yaw_degrees(self, yaw: float) -> None:
         self.properties['rotation'][0] = yaw
         self.properties['angle'] = yaw
+        touch(self)
 
 
     def get_basis(self):
@@ -1417,17 +1457,6 @@ class Portal(Thing):
         return _portal_corners(
             self.pos, self.get_basis(), self.get_width(), self.get_height()
         )
-
-    def _local_of(self, x: float, y: float, z: float):
-        """World point → (right, up, normal) coordinates in this portal's frame."""
-        r, u, n = self.get_basis()
-        dx = x - self.pos[0]
-        dy = y - self.pos[1]
-        dz = z - self.pos[2]
-        return (dx * r[0] + dy * r[1] + dz * r[2],
-                dx * u[0] + dy * u[1] + dz * u[2],
-                dx * n[0] + dy * n[1] + dz * n[2])
-
 
     def map_point(self, dest, x: float, y: float, z: float):
         """Map a world point through the shared engine transform."""
@@ -1941,9 +1970,16 @@ ENTITY_TYPES = {
     'LogicSpawner': LogicSpawner,
     'Portal': Portal,
     'LogicState': LogicState,
-    # Core primitive is imported only after editor Thing/Model definitions exist.
-    'Effect': importlib.import_module('engine.effect_entity').Effect,
 }
+
+# Effect is a core primitive defined in engine/ (the head-less player needs it)
+# and it imports this module, so it can only be fetched now that Thing exists.
+# When the process imported engine.effect_entity *first*, this module is being
+# run by that import and the class does not exist yet; effect_entity then
+# registers itself as soon as it is defined (see the end of that module).
+_effect_class = getattr(importlib.import_module('engine.effect_entity'), 'Effect', None)
+if _effect_class is not None:
+    ENTITY_TYPES['Effect'] = _effect_class
 
 # Categories for editor UI
 ENTITY_CATEGORIES = {

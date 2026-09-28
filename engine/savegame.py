@@ -82,6 +82,8 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
+from .change_journal import touch
+from .fileio import write_json_atomic
 from .spatial import PARKED_DISABLED_KEY, PARKED_HIDDEN_KEY
 
 #: Bump only when the snapshot layout changes incompatibly. This is the *save
@@ -620,6 +622,8 @@ def _overlay_entities(logic, level: dict) -> None:
                 _overlay_parkable(live.properties, k, props)
         except Exception:
             continue
+        finally:
+            touch(live)
 
     if prop_session is not None and restored_props:
         prop_session.refile(restored_props)
@@ -640,6 +644,7 @@ def _overlay_entities(logic, level: dict) -> None:
                 live[k] = b_data[k]
             else:
                 live.pop(k, None)
+        touch(live)
 
 
 def _restore_runtime_and_players(logic, data: dict) -> None:
@@ -853,10 +858,7 @@ def classify_base_map(data: dict, current_level: dict,
         for t in (current_level or {}).get("things", [])
     }
     live_ids.discard(None)
-    if not base_ids:
-        overlap = 0.0
-    else:
-        overlap = len(base_ids & live_ids) / float(len(base_ids))
+    overlap = len(base_ids & live_ids) / float(len(base_ids))
 
     if same_name or overlap >= 0.5:
         return BASE_RELATED
@@ -1030,8 +1032,9 @@ def write(path: str, snapshot: dict) -> None:
     directory = os.path.dirname(os.path.abspath(path))
     if directory:
         os.makedirs(directory, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(snapshot, fh, indent=2, default=_json_default)
+    # Atomic: a quicksave overwrites the same slot every time, and a failure
+    # part-way through must not cost the player the save they already had.
+    write_json_atomic(path, snapshot, indent=2, default=_json_default)
 
 
 def read(path: str) -> dict:
@@ -1041,6 +1044,8 @@ def read(path: str) -> dict:
     if not isinstance(data, dict) or not data.get(_MAGIC):
         raise ValueError(f"'{path}' is not a Fio save file")
     ver = data.get("save_version", 0)
+    if isinstance(ver, bool) or not isinstance(ver, (int, float)):
+        raise ValueError(f"'{path}' has an invalid save_version: {ver!r}")
     if ver > SAVE_VERSION:
         raise ValueError(
             f"save '{path}' is version {ver}, newer than this build supports "

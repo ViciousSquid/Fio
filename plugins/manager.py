@@ -159,37 +159,20 @@ class PluginManager:
         _debug(message)
 
     # -- discovery + load ---------------------------------------------------
-    def discover_and_load(self, extra_roots=()):
-        """Find and load all plugins. Safe to call repeatedly.
+    def discover_and_load(self):
+        """Find and load all plugins installed under this package. Safe to call repeatedly.
 
-        *extra_roots* are additional directories to scan for plugin packages,
-        used when a ``.fiopak`` brings its own. Passing any re-opens discovery
-        on an already-loaded manager, because the point is to pick up packages
-        that were not on disk the first time round.
-
-        A plugin package already loaded is skipped by name whichever root it
-        came from, so a second package cannot hot-swap a plugin the session is
-        already running -- the first one loaded wins, and the rest of the
-        session keeps the classes it already has live objects for.
+        Plugins come only from the installed ``plugins/`` directory: a
+        ``.fiopak`` is a world container and never a source of code.
         """
-        if extra_roots:
-            self._loaded = False
         if self._loaded or self._loading:
             return
         self._loading = True
 
-        package_dir = os.path.dirname(os.path.abspath(__file__))
-        roots = [package_dir]
-        for root in extra_roots:
-            bundled = os.path.join(root, "plugins")
-            if os.path.isdir(bundled) and bundled not in roots:
-                roots.append(bundled)
+        roots = [os.path.dirname(os.path.abspath(__file__))]
         found = 0
         self._deferred.clear()
-        # Sort by name, not by the ModuleInfo tuple: a tuple compare starts on
-        # the finder, and two roots mean two different FileFinders, which do
-        # not order.  Name order is what was wanted anyway -- a deterministic
-        # load sequence.
+        # Name order gives a deterministic load sequence.
         for entry in sorted(pkgutil.iter_modules(roots), key=lambda e: e.name):
             mod_name = entry.name
             if not entry.ispkg:
@@ -264,10 +247,9 @@ class PluginManager:
 
         # Name gate: one plugin per name, first one loaded wins.  The module
         # guard above is keyed on the package directory, which is not the same
-        # question -- a .fiopak can carry a plugin under a differently-spelled
-        # directory, and registering it a second time would give the session
-        # two plugins answering to one name, with live entity classes split
-        # between them.  Nothing is hot-swapped: the running one stays.
+        # question -- two directories can declare the same plugin name, and
+        # registering it a second time would give the session two plugins
+        # answering to one name, with live entity classes split between them.
         existing = {p.name.lower() for p in self.plugins}
         if str(getattr(plugin, "name", "")).lower() in existing:
             self._debug(
@@ -617,7 +599,9 @@ class PluginManager:
         return str(type_name).replace("_", "").lower()
 
     def _record_entity_owner(self, cls: type, plugin: FioPlugin):
-        key = cls.__name__.lower()
+        # Stored under the same normalisation every lookup applies, so a class
+        # name containing an underscore is still found by its map type.
+        key = self._normalise_type(cls.__name__)
         self._entity_owner[key] = plugin
         self._entity_classes[key] = cls
 
@@ -970,10 +954,6 @@ def get_manager() -> PluginManager:
     return _MANAGER
 
 
-def load_plugins(extra_roots=()):
-    """Discover and load all plugins (idempotent). Call this early at startup.
-
-    *extra_roots* forwards to :meth:`PluginManager.discover_and_load` for the
-    case of a package that carries its own plugins.
-    """
-    get_manager().discover_and_load(extra_roots=extra_roots)
+def load_plugins():
+    """Discover and load all plugins (idempotent). Call this early at startup."""
+    get_manager().discover_and_load()

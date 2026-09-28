@@ -21,6 +21,7 @@ try:
 except ImportError:  # pragma: no cover - exercised by the head-less player
     def debug_log(category, message):
         print(f"[{category}] {message}")
+from .change_journal import touch
 from .constants import is_solid_world_brush
 from .monster_constants import (
     MONSTER_SIGHT_RANGE,
@@ -66,6 +67,19 @@ def _flatten_to_ground(direction):
     if length < 1e-6:
         return None
     return flat / length
+
+
+def _set_render_flag(thing, key, value):
+    """Write a monster property its sprite is resolved from.
+
+    The AI writes these every tick; the render projection is told only when
+    the value actually changes, so a monster that keeps shooting costs no
+    per-frame re-resolve.
+    """
+    props = thing.properties
+    if props.get(key) != value:
+        props[key] = value
+        touch(thing)
 
 
 class MonsterAI:
@@ -210,7 +224,7 @@ class MonsterAI:
 
             # ---- Kill input handling ----
             if thing.properties.pop('_kill', False):
-                thing.properties['dead'] = True
+                _set_render_flag(thing, 'dead', True)
                 thing.properties.pop('is_shooting', None)
                 if self.monster_debug_active:
                     name = thing.properties.get('name', '?')
@@ -262,7 +276,7 @@ class MonsterAI:
             # ---- Notarget: skip all player-targeting when cheat is active ----
             #      Monsters still gravity-fall and patrol, just don't chase/attack.
             if self.lt.notarget:
-                thing.properties['is_shooting'] = False
+                _set_render_flag(thing, 'is_shooting', False)
                 if mid in self.monster_states:
                     self.monster_states[mid]['anim_timer'] = 0.0
                 # Even in notarget mode, monsters with can_hear investigate sounds
@@ -450,9 +464,9 @@ class MonsterAI:
 
                 if state['anim_timer'] > 0.0:
                     state['anim_timer'] -= delta
-                    thing.properties['is_shooting'] = True
+                    _set_render_flag(thing, 'is_shooting', True)
                 else:
-                    thing.properties['is_shooting'] = False
+                    _set_render_flag(thing, 'is_shooting', False)
 
             else:
                 # ---- Out of sight ----
@@ -464,7 +478,7 @@ class MonsterAI:
                         name = thing.properties.get('name', '?')
                         debug_log("MonsterAI", f"{name} lost target (dist={math.sqrt(distance_sq):.0f})")
 
-                thing.properties['is_shooting'] = False
+                _set_render_flag(thing, 'is_shooting', False)
                 state['anim_timer'] = 0.0
 
                 # If we had an aggro target but it's out of range, drop it
@@ -779,7 +793,7 @@ class MonsterAI:
                        f"(health {health} -> {new_health})")
 
         if new_health <= 0:
-            victim.properties['dead'] = True
+            _set_render_flag(victim, 'dead', True)
             victim.properties.pop('is_shooting', None)
             victim.properties.pop('_aggro_target', None)
             if self.lt.io_manager:
@@ -1336,14 +1350,7 @@ class MonsterAI:
     def _has_line_of_sight(self, start: glm.vec3, end: glm.vec3) -> bool:
         """Return True if ray from start to end hits no solid wall brush."""
         if self._grid:
-            # The dense render projection, when the logic thread has published
-            # one: line of sight then tests the candidate brushes as rows
-            # rather than as dicts. The grid falls back to its own per-brush
-            # path when there is no table, or when it holds a brush the table
-            # cannot address.
-            return self._grid.has_line_of_sight(
-                start, end, self.lt.intersect_ray_aabb,
-                getattr(self.lt, '_render_table', None))
+            return self._grid.has_line_of_sight(start, end)
 
         # Fallback: full brush scan (should not happen in play mode)
         ray_dir = end - start
@@ -1434,30 +1441,51 @@ class MonsterAIThread(threading.Thread):
         self.tick_rate = tick_rate
         self.tick_duration = 1.0 / tick_rate
         self.running = False
-        
-    def run(self):
+        self._stop_event = threading.Event()
+
+    def start(self):
+        # Set before the thread exists, not in run(): a stop() arriving before
+        # run() got going would otherwise be overwritten, leaving a thread
+        # nobody holds running for good.
         self.running = True
+        super().start()
+
+    def run(self):
         last_time = time.perf_counter()
         accumulator = 0.0
-        
+
         while self.running:
             current_time = time.perf_counter()
             frame_time = current_time - last_time
             last_time = current_time
-            
+
             if frame_time > 0.25:
                 frame_time = 0.25
-                
+
             accumulator += frame_time
-            
-            while accumulator >= self.tick_duration:
+
+            while accumulator >= self.tick_duration and self.running:
+                started = time.perf_counter()
                 with self.lock:
-                    self.monster_ai.update(self.tick_duration)
+                    try:
+                        self.monster_ai.update(self.tick_duration)
+                    except Exception:
+                        # Same policy as LogicThread.run: one bad update is
+                        # logged in full and the AI carries on, rather than
+                        # every monster silently freezing for the rest of the
+                        # session.
+                        import traceback
+                        debug_log("MonsterAI", "Unhandled exception in update:\n"
+                                  + traceback.format_exc())
+                #: Milliseconds the last AI update took, lock wait included
+                #: (Debug Tables).
+                self.update_ms = (time.perf_counter() - started) * 1000.0
                 accumulator -= self.tick_duration
-                
+
             sleep_time = self.tick_duration - (time.perf_counter() - current_time)
             if sleep_time > 0:
-                time.sleep(sleep_time * 0.9)
-                
+                self._stop_event.wait(sleep_time * 0.9)
+
     def stop(self):
         self.running = False
+        self._stop_event.set()

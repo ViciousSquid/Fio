@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import random
 
+from engine.change_journal import TrackedAttribute
+
 try:
     from editor.things import Thing as _ThingBase
     EDITOR_TIER = True
@@ -75,6 +77,12 @@ class Effect(_ThingBase):
     # All Effect controls are rendered by the dedicated property panel.
     EDITOR_PRIMARY_PROPERTIES = ()
     EDITOR_ADVANCED_PROPERTIES = ()
+
+    #: Playback runtime the render projection derives the animation from.
+    #: Owned here, not by a render table, so both render buffers agree.
+    _effect_spawn_time = TrackedAttribute(0.0)
+    _effect_animation_phase = TrackedAttribute(0.0)
+    _effect_active = TrackedAttribute(False)
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -194,3 +202,11 @@ class Effect(_ThingBase):
         self._effect_animation_phase = 0.0
         self._effect_active = True
         return True
+
+
+if EDITOR_TIER:
+    # Normally editor.things registers Effect itself.  When this module was the
+    # process's first import of the two, editor.things ran inside the import
+    # above, before Effect existed, and left the registration to here.
+    from editor import things as _editor_things
+    _editor_things.ENTITY_TYPES.setdefault('Effect', Effect)

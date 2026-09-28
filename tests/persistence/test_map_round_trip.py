@@ -291,3 +291,81 @@ def test_a_version_1_map_opens():
     assert [t.name for t in state.things] == ["old_lamp"]
 
 
+
+
+# ---------------------------------------------------------------------------
+# String-typed properties
+# ---------------------------------------------------------------------------
+
+def test_text_that_looks_like_a_literal_stays_text():
+    """An entity named "2" used to be saved as the integer 2.
+
+    Every string property was run through ``ast.literal_eval`` on save and on
+    load; the resulting non-string name then crashed the next load of the map
+    (the name-counter scan does ``re.match`` on it), so the map would not open.
+    """
+    state = EditorState()
+    relay = make_thing(LogicRelay, "2", (0, 0, 0))
+    relay.properties["message"] = "True"
+    state.things = [relay]
+
+    loaded, data = _round_trip(state)
+
+    saved = data["things"][0]["properties"]
+    assert saved["name"] == "2" and saved["message"] == "True"
+    props = loaded.things[0].properties
+    assert props["name"] == "2" and props["message"] == "True"
+
+
+def test_legacy_string_numbers_are_healed_where_the_class_declares_a_number():
+    """Older maps stored numbers as text; a declared numeric default heals them."""
+    legacy = {"version": 3, "brushes": [], "things": [{
+        "type": "playerstart", "pos": [0, 0, 0],
+        "properties": {"type": "playerstart", "name": "spawn", "angle": "90"},
+    }]}
+
+    state = EditorState()
+    state.load_from_data(json.loads(json.dumps(legacy)))
+
+    assert state.things[0].properties["angle"] == 90
+    assert state.things[0].get_angle() == 90.0
+
+
+def test_loading_does_not_rewrite_the_callers_document():
+    document = {"version": 3, "brushes": [], "things": [{
+        "type": "playerstart", "pos": [0, 0, 0],
+        "properties": {"type": "playerstart", "name": "spawn", "angle": "90"},
+    }]}
+    before = json.dumps(document, sort_keys=True)
+
+    EditorState().load_from_data(document)
+
+    assert json.dumps(document, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("document", [
+    [],
+    {"version": 3, "brushes": {"a": 1}, "things": []},
+    {"version": 3, "brushes": [5], "things": []},
+    {"version": 3, "brushes": [], "things": ["x"]},
+    {"version": 3, "brushes": [], "things": [
+        {"type": "light", "properties": {"name": "ok"}},
+        {"type": "light", "io_connections": [5]}]},
+])
+def test_a_malformed_map_leaves_the_current_scene_untouched(scene, document):
+    """Parse everything, then swap: never half of one map and half of another."""
+    before_brushes = list(scene.brushes)
+    before_things = list(scene.things)
+
+    with pytest.raises(Exception):
+        scene.load_from_data(document)
+
+    assert scene.brushes == before_brushes
+    assert scene.things == before_things
+
+
+def test_a_numeric_brush_name_does_not_stop_the_map_opening():
+    state = EditorState()
+    state.load_from_data({"version": 3, "things": [], "brushes": [
+        {"name": 7, "pos": [0, 0, 0], "size": [64, 64, 64]}]})
+    assert len(state.brushes) == 1

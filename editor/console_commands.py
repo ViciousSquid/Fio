@@ -3,6 +3,7 @@ import json
 from PyQt5.QtWidgets import QMessageBox
 
 from editor.debug_console import debug_log
+from engine.change_journal import touch
 
 # Try to import I/O system (available in both editor and play mode)
 try:
@@ -116,7 +117,6 @@ class ConsoleCommandHandler:
             'r_deferred': self.cmd_render_deferred,
             'r_vsync': self.cmd_render_vsync,
             'r_clearcolor': self.cmd_render_clearcolor,
-            'r_reloadshaders': self.cmd_reload_shaders,
             'r_info': self.cmd_render_info,
 
             # View distance & far-plane fog. These are the commands the I/O
@@ -144,7 +144,6 @@ class ConsoleCommandHandler:
             'lighting': self.cmd_render_lighting,
             'deferred': self.cmd_render_deferred,
             'vsync': self.cmd_render_vsync,
-            'reloadshaders': self.cmd_reload_shaders,
             'viewdistance': self.cmd_view_distance,
             'culldistance': self.cmd_view_distance,
             'cullfogdist': self.cmd_view_distance,
@@ -182,12 +181,28 @@ class ConsoleCommandHandler:
             'portal_delete': self.cmd_portal_delete,
         }
 
-    def handle_command(self, cmd_string):
+    #: Commands a map may not run through a logic_command entity.  ``bind``
+    #: writes a key -> command binding into settings.ini, so a played package
+    #: could otherwise leave the user's editor with keys that run its commands
+    #: long after the package is closed.
+    USER_ONLY_COMMANDS = frozenset({'bind'})
+
+    def handle_command(self, cmd_string, *, from_map=False):
+        """Run one console command line.
+
+        *from_map* marks a command queued by map logic (a ``logic_command``
+        entity) rather than typed by the user; those may not run the
+        :attr:`USER_ONLY_COMMANDS`.
+        """
         parts = cmd_string.strip().split(maxsplit=1)
         if not parts:
             return
         cmd = parts[0].lower()
         args = parts[1].strip() if len(parts) > 1 else ""
+
+        if from_map and cmd in self.USER_ONLY_COMMANDS:
+            debug_log("Error", f"'{cmd}' cannot be run by map logic.")
+            return
 
         handler = self.commands.get(cmd)
         if handler:
@@ -304,6 +319,7 @@ class ConsoleCommandHandler:
         # Kill the monster
         entity.properties['health'] = 0
         entity.properties['dead'] = True
+        touch(entity)
 
         # Fire I/O output if available
         try:
@@ -402,6 +418,7 @@ class ConsoleCommandHandler:
         # wake logic will re-apply correctly on next play mode start.
         entity.properties['awake']       = False
         entity.properties.pop('is_shooting', None)
+        touch(entity)
 
         # Clear the sprite cache so the editor 2D views and 3D billboard
         # switch back to idle.png immediately rather than staying on dead.png.
@@ -429,6 +446,7 @@ class ConsoleCommandHandler:
             entity['hidden'] = True
         elif hasattr(entity, 'properties'):
             entity.properties['hidden'] = True
+        touch(entity)
         debug_log("Info", f"'{name}' is now hidden")
 
     def cmd_show(self, args):
@@ -445,6 +463,7 @@ class ConsoleCommandHandler:
             entity['hidden'] = False
         elif hasattr(entity, 'properties'):
             entity.properties['hidden'] = False
+        touch(entity)
         debug_log("Info", f"'{name}' is now visible")
 
     def cmd_tint(self, args):
@@ -467,6 +486,7 @@ class ConsoleCommandHandler:
                 entity.pop('tint', None)
             elif hasattr(entity, 'properties'):
                 entity.properties.pop('tint', None)
+            touch(entity)
             debug_log("Info", f"Cleared tint on '{name}'")
             return
 
@@ -485,6 +505,7 @@ class ConsoleCommandHandler:
             entity['tint'] = [r, g, b]
         elif hasattr(entity, 'properties'):
             entity.properties['tint'] = [r, g, b]
+        touch(entity)
         debug_log("Info", f"Set tint on '{name}' to ({r}, {g}, {b})")
 
     # ===================================================================
@@ -615,6 +636,7 @@ class ConsoleCommandHandler:
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
                 t.properties['color'] = [r, g, b]
+                touch(t)
                 found = True
                 debug_log("Info", f"Portal '{name}' color set to ({r}, {g}, {b})")
 
@@ -636,6 +658,7 @@ class ConsoleCommandHandler:
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
                 t.properties['active'] = True
+                touch(t)
                 self.editor_state.save_state()
                 debug_log("Info", f"Portal '{name}' enabled")
                 self.main_window.update_all_ui()
@@ -653,6 +676,7 @@ class ConsoleCommandHandler:
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
                 t.properties['active'] = False
+                touch(t)
                 self.editor_state.save_state()
                 debug_log("Info", f"Portal '{name}' disabled")
                 self.main_window.update_all_ui()
@@ -842,7 +866,6 @@ class ConsoleCommandHandler:
 <b style="color:orange;">r_shadows</b>{sep}<b style="color:orange;">shadows</b> — Toggle shadows<br>
 <b style="color:orange;">r_fog</b>{sep}<b style="color:orange;">fog</b> — Toggle volumetric fog (fog brushes)<br>
 <b style="color:orange;">r_lighting</b>{sep}<b style="color:orange;">lighting</b> — Toggle real-time lighting<br>
-<b style="color:orange;">r_reloadshaders</b> — Hot-reload all shaders<br>
 <b style="color:orange;">r_clearcolor</b> r g b — Set background colour<br>
 <b style="color:cyan;">=== View Distance &amp; Far-Plane Fog ===</b><br>
 <i>Fog always reaches full opacity before the clip, so pulling the view
@@ -1299,22 +1322,6 @@ entity to drive them from the I/O system.</i><br>
         r, g, b = vd.ambient
         debug_log("Info", f"Ambient light: [{r:.2f}, {g:.2f}, {b:.2f}]")
 
-    def cmd_reload_shaders(self, args):
-        renderer = self._get_renderer()
-        if not renderer:
-            return
-        try:
-            if hasattr(renderer, 'reload_shaders') and callable(renderer.reload_shaders):
-                success = renderer.reload_shaders()
-                if success:
-                    debug_log("Info", "✅ Shaders reloaded successfully")
-                else:
-                    debug_log("Warning", "Some shaders failed to reload")
-            else:
-                debug_log("Error", "Renderer does not support hot-reloading shaders")
-        except Exception as e:
-            debug_log("Error", f"Failed to reload shaders: {e}")
-
     # ===================================================================
     # EXISTING COMMANDS (unchanged)
     # ===================================================================
@@ -1490,6 +1497,7 @@ entity to drive them from the I/O system.</i><br>
             entity[key] = value
         else:
             entity.properties[key] = value
+        touch(entity)
 
         debug_log("Info", f"Set {name}.{key} = {value}")
         self.editor_state.save_state()
@@ -2059,7 +2067,14 @@ entity to drive them from the I/O system.</i><br>
         map_name = args if isinstance(args, str) else args[0]
         if not map_name.endswith('.json'):
             map_name += '.json'
-        map_path = os.path.join(self.main_window.root_dir, 'maps', map_name)
+        maps_dir = os.path.realpath(os.path.join(self.main_window.root_dir, 'maps'))
+        map_path = os.path.realpath(os.path.join(maps_dir, map_name))
+        # Maps can queue console commands (logic_command), so the name is not
+        # trusted: loading a file makes it the save target, and a name that
+        # climbed out of maps/ would let the next Ctrl+S overwrite it.
+        if not map_path.startswith(maps_dir + os.sep):
+            debug_log("Error", f"map: '{map_name}' is outside the maps folder")
+            return
         if os.path.exists(map_path):
             self.main_window.load_level_file(map_path)
             debug_log("Info", f"Loaded map {map_name}")
@@ -2137,8 +2152,8 @@ entity to drive them from the I/O system.</i><br>
     def _base_level(self):
         """The normalized *original* map document, for delta diffing.
 
-        Reads the currently-loaded map file straight from disk (or the active
-        resource package) and re-serializes it through the editor's own pipeline
+        Reads the currently-loaded map file straight from disk and
+        re-serializes it through the editor's own pipeline
         so it compares like-for-like with the live level. Returns ``None`` when
         the base map can't be resolved — the saver then degrades to a full save.
         """
@@ -2146,18 +2161,10 @@ entity to drive them from the I/O system.</i><br>
         if not fp:
             return None
         try:
-            from engine.resource_manager import ResourceManager
-            rm = ResourceManager()
-            if rm.is_package_mode():
-                raw = rm.get_text_asset(fp)
-                if raw is None:
-                    return None
-                raw_level = json.loads(raw)
-            else:
-                if not os.path.exists(fp):
-                    return None
-                with open(fp, 'r') as f:
-                    raw_level = json.load(f)
+            if not os.path.exists(fp):
+                return None
+            with open(fp, 'r', encoding='utf-8') as f:
+                raw_level = json.load(f)
         except Exception as exc:
             debug_log("Warning", f"save: could not read base map for delta: {exc}")
             return None
@@ -2232,11 +2239,12 @@ entity to drive them from the I/O system.</i><br>
 
         map_name = data.get('map', '')
         if map_name:
-            map_path = map_name
-            if not os.path.exists(map_path):
-                map_path = os.path.join(self.main_window.root_dir, 'maps',
-                                        os.path.basename(map_name))
-            if os.path.exists(map_path):
+            # Saves record the map's basename; it is looked up in maps/ only,
+            # never followed as a path (a save file is shareable input, and
+            # the map it loads becomes the editor's save target).
+            map_path = os.path.join(self.main_window.root_dir, 'maps',
+                                    os.path.basename(str(map_name)))
+            if os.path.isfile(map_path):
                 self.main_window.load_level_file(map_path)
             else:
                 debug_log("Warning",

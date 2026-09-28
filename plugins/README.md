@@ -293,22 +293,13 @@ plugins must already be installed in the player/editor environment. The player
 rejects any archive containing a top-level `plugins/` payload before loading its
 manifest. This removes executable-code loading from world containers entirely.
 
-- Plugin assets keep their repo-relative paths (e.g.
-  `plugins/tidy/assets/tidy_object.obj`), so a map's `model_path` resolves
-  straight out of the package — no rewriting.
-- Packages that use no plugin entities are unaffected (the step is a no-op)
-  unless a **global plugin** is in play (below).
 - **Global plugins** (no placeable entities — which sets `global_plugin = True`)
-  can't be found from a map's `things`. They are bundled when they are *enabled*
-  at export time, or when a map names them under a top-level
-  `"required_plugins": [...]` (with optional `"plugin_config": {name: {...}}`).
-  The exporter bundles them, records them in the manifest, and bakes
-  `required_plugins` / `plugin_config` into each map so the standalone player
-  (which only sees map data) enables and configures them without any entity to
-  trigger auto-enable.
+  can't be found from a map's `things`. A map names them under a top-level
+  `"required_plugins": [...]` (with optional `"plugin_config": {name: {...}}`)
+  so the standalone player (which only sees map data) enables and configures
+  them without any entity to trigger auto-enable.
 - The player side exposes the dependency: `FioPackage.required_plugins` reads the
-  manifest list, and `plugins.packaging.load_package_plugins(root)` loads the
-  bundled plugins from an extracted package.
+  manifest list; the plugins themselves come from the player's own install.
 
 ## Running plugins outside the editor
 
@@ -317,7 +308,7 @@ Plugin gameplay runs in **both** hosts:
 - **Editor Play mode** — the logic thread dispatches the plugin lifecycle/tick
   (via `plugins.integration`).
 - **Standalone `.fiopak` player** (`player/`, incl. the Android build) — the
-  `player.plugin_host.PlayerPluginHost` loads the package's plugins, builds
+  `player.plugin_host.PlayerPluginHost` loads the installed plugins, builds
   entity instances from the map, and drives the same lifecycle/tick from the
   player's frame loop against a camera→player bridge (USE = interact).
 
@@ -336,13 +327,9 @@ same plugin loads in the editor, the desktop player, and the APK.
 
 ## Android APK
 
-`player/buildozer.spec` includes `plugins/*`, so the plugin system + bundled
-plugins (code and `.obj`/`.mtl` assets) ship inside the APK. The **Android Player
-Build** workflow (`.github/workflows/android-build.yml`) bundles
-`maps/Tidy_Test.json` as the sample `game.fiopak` (self-contained — the plugin
-travels with it), so the on-device build exercises the plugin loader and runtime.
-Trigger it from **Actions → Android Player Build → Run workflow**; the APK is
-uploaded as the `fio-player-debug-apk` artifact.
+`player/buildozer.spec` includes `plugins/*`, so the plugin system and the
+installed plugins (code and `.obj`/`.mtl` assets) ship inside the APK. Packages
+played on the device name the plugins they need; they never carry them.
 
 ---
 
@@ -356,7 +343,7 @@ The tests are headless — no display / OpenGL required:
 ```bash
 # Tidy plugin (gameplay)
 QT_QPA_PLATFORM=offscreen python plugins/tidy/tests/test_smoke.py       # runtime + integration
-QT_QPA_PLATFORM=offscreen python plugins/tidy/tests/test_packaging.py   # .fiopak bundling
+QT_QPA_PLATFORM=offscreen python plugins/tidy/tests/test_packaging.py   # .fiopak plugin boundary
 python plugins/tidy/tests/test_player.py                                # player path (editor/PyQt/glm blocked)
 
 # Big World plugin (runtime scalability)
@@ -378,5 +365,4 @@ python -m plugins.bigworld.tests.test_bigworld
 | Read a complete gameplay plugin | [`tidy/`](tidy/) |
 | Read a runtime-layer plugin | [`bigworld/README.md`](bigworld/README.md) |
 | Understand editor wiring | [`integration.py`](integration.py) |
-| Understand `.fiopak` bundling | [`packaging.py`](packaging.py) |
 | Write for the PyQt-free player | [`entitybase.py`](entitybase.py) |

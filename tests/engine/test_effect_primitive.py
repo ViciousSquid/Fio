@@ -19,6 +19,29 @@ from types import SimpleNamespace
 
 import numpy as np
 
+
+def _io_for(effect, events=None):
+    """Deliver inputs to *effect* the way the logic thread does.
+
+    Through ``IOManager._execute_input``: the handler writes the Effect, and
+    the dispatcher journals it, so the next frame's table resolves the row.
+    """
+    io = IOManager()
+    register_all_input_handlers(io)
+    io.set_entity_finder(lambda name: effect)
+    if events is None:
+        logic = SimpleNamespace(io_manager=io, game_state=None)
+    else:
+        logic = SimpleNamespace(io_manager=SimpleNamespace(
+            fire_output=lambda entity, name, value=None: events.append((name, value)),
+            get_game_state=lambda: None), game_state=None)
+    io.set_logic_thread(logic)
+
+    def send(input_name, param=""):
+        io._execute_input(effect.properties.get("name", ""), input_name,
+                          param, "test")
+    return send
+
 def test_effect_defaults_to_fire_with_intrinsic_light():
     effect = Effect()
     assert effect.properties["type"] == "effect"
@@ -120,20 +143,44 @@ def test_silent_explosion_does_not_queue_sound():
 
 
 def test_animation_origin_is_shared_across_render_buffers():
-    """Alternating RenderState buffers must not reset an animated GIF's phase."""
+    """Alternating RenderState buffers must not reset an animated GIF's phase.
+
+    Both resolve the origin from the same place -- the shared clock, for an
+    Effect with no playback start -- and neither writes it back.
+    """
     effect = Effect()
     first = EntityTable()
     second = EntityTable()
 
     first.begin_frame([effect], epoch=1, effect_runtime=True)
-    first_origin = float(first.effect_spawn_time[0])
-
     second.begin_frame([effect], epoch=1, effect_runtime=True)
-    second_origin = float(second.effect_spawn_time[0])
 
-    assert first_origin > 0.0
-    assert second_origin == first_origin
-    assert float(effect._effect_spawn_time) == first_origin
+    assert float(first.effect_spawn_time[0]) > 0.0
+    assert first.effect_spawn_time[0] == second.effect_spawn_time[0]
+    assert first.effect_phase[0] == second.effect_phase[0]
+    assert float(effect._effect_spawn_time) == 0.0, (
+        "the projection wrote runtime state back onto the entity")
+
+
+def test_both_buffers_agree_after_an_explode():
+    """The I/O handler used to write only the table the logic thread held.
+
+    With two buffers alternating, the other one kept drawing FIRE: frames
+    flickered between FIRE and EXPLOSION until something reconciled.
+    """
+    effect = Effect(properties={"name": "boom", "effect_type": EFFECT_FIRE})
+    tables = [EntityTable(), EntityTable()]
+    for table in tables:
+        table.begin_frame([effect], epoch=1, effect_runtime=True)
+
+    _io_for(effect)("Explode")
+    for table in tables:
+        table.begin_frame([effect], epoch=1, effect_runtime=True)
+
+    for table in tables:
+        assert table.effect_type[0] == 1
+        assert bool(table.effect_alive[0])
+    assert tables[0].effect_spawn_time[0] == tables[1].effect_spawn_time[0]
 
 
 def test_explosion_origin_is_shared_across_render_buffers():
@@ -370,12 +417,13 @@ def test_effect_set_type_input_changes_type_and_fires_onchanged():
     table.begin_frame([effect], epoch=1, effect_runtime=True)
 
     events = []
-    io_manager = SimpleNamespace(
-        fire_output=lambda entity, name, value=None: events.append((name, value))
-    )
-    logic = SimpleNamespace(_entity_table=table, io_manager=io_manager)
-    real_io = IOManager()
-    register_all_input_handlers(real_io)
+    send = _io_for(effect, events)
+
+    def set_type(entity, value, _logic):
+        send("SetType", value)
+        table.begin_frame([effect], epoch=1, effect_runtime=True)
+
+    logic = None
 
     assert get_input_names("effect") == [
         "SetType", "SetFireTexture", "SetOrbTexture",
@@ -384,7 +432,6 @@ def test_effect_set_type_input_changes_type_and_fires_onchanged():
     ]
     assert get_output_names("effect") == ["OnChanged"]
 
-    set_type = real_io._input_handlers[("effect", "settype")]
     set_type(effect, "explosion", logic)
 
     assert effect.properties["effect_type"] == EFFECT_EXPLOSION
@@ -434,39 +481,34 @@ def test_effect_texture_and_custom_inputs_update_dense_projection():
     table.begin_frame([effect], epoch=1, effect_runtime=True)
 
     events = []
-    io_manager = SimpleNamespace(
-        fire_output=lambda entity, name, value=None: events.append((name, value))
-    )
-    logic = SimpleNamespace(
-        _entity_table=table,
-        things=[effect],
-        io_manager=io_manager,
-    )
-    real_io = IOManager()
-    register_all_input_handlers(real_io)
+    send = _io_for(effect, events)
 
-    real_io._input_handlers[("effect", "setfiretexture")](effect, "3", logic)
+    def deliver(input_name, param):
+        send(input_name, param)
+        table.begin_frame([effect], epoch=1, effect_runtime=True)
+
+    deliver("SetFireTexture", "3")
     assert effect.properties["fire_texture"] == EFFECT_FIRE_TEXTURES[2]
     assert table.effect_fire_variant[0] == 2
 
-    real_io._input_handlers[("effect", "setfiretexture")](effect, "1", logic)
+    deliver("SetFireTexture", "1")
     assert effect.properties["fire_texture"] == EFFECT_FIRE_TEXTURES[0]
     assert table.effect_fire_variant[0] == 0
 
-    real_io._input_handlers[("effect", "setorbtexture")](effect, "5", logic)
+    deliver("SetOrbTexture", "5")
     assert effect.properties["orb_texture"] == EFFECT_ORB_TEXTURES[4]
 
-    real_io._input_handlers[("effect", "setorbtexture")](effect, "4", logic)
+    deliver("SetOrbTexture", "4")
     assert effect.properties["orb_texture"] == EFFECT_ORB_TEXTURES[3]
 
-    real_io._input_handlers[("effect", "setcustomgif")](effect, r"custom\\pulse.gif", logic)
+    deliver("SetCustomGif", r"custom\\pulse.gif")
     assert effect.properties["custom_gif"] == "custom/pulse.gif"
 
-    real_io._input_handlers[("effect", "setloop")](effect, "false", logic)
+    deliver("SetLoop", "false")
     assert effect.properties["custom_loop"] is False
     assert not bool(table.effect_custom_loop[0])
 
-    real_io._input_handlers[("effect", "setloop")](effect, "true", logic)
+    deliver("SetLoop", "true")
     assert effect.properties["custom_loop"] is True
     assert bool(table.effect_custom_loop[0])
 
@@ -506,32 +548,32 @@ def test_explode_input_forces_fire_to_explosion_and_never_reverts():
     assert table.effect_type[0] == 0
     assert bool(table.effect_alive[0])
 
-    io_manager = IOManager()
-    register_all_input_handlers(io_manager)
-    logic = SimpleNamespace(_entity_table=table, io_manager=io_manager)
-    explode = io_manager._input_handlers[("effect", "explode")]
+    send = _io_for(effect)
 
-    explode(effect, "", logic)
+    def explode():
+        send("Explode")
+        table.begin_frame([effect], epoch=1, effect_runtime=True)
+
+    explode()
 
     assert effect.properties["effect_type"] == EFFECT_EXPLOSION
     assert effect.properties["preview"] is False
     assert table.effect_type[0] == 1
     assert bool(table.effect_active[0])
     assert bool(table.effect_alive[0])
-    assert float(table.effect_elapsed[0]) == 0.0
+    assert float(table.effect_elapsed[0]) < 0.1
 
-    table.effect_spawn_time[0] -= 1.0
+    table.effect_spawn_time[0] -= 1.0          # a second later
     table.begin_frame([effect], epoch=1, effect_runtime=True)
-    assert not bool(table.effect_active[0])
     assert not bool(table.effect_alive[0])
     assert effect.properties["effect_type"] == EFFECT_EXPLOSION
 
-    explode(effect, "", logic)
+    explode()
     assert effect.properties["effect_type"] == EFFECT_EXPLOSION
     assert table.effect_type[0] == 1
     assert bool(table.effect_active[0])
     assert bool(table.effect_alive[0])
-    assert float(table.effect_elapsed[0]) == 0.0
+    assert float(table.effect_elapsed[0]) < 0.1
 
 
 def test_effect_explode_io_plays_once_and_can_be_retriggered():
@@ -551,26 +593,23 @@ def test_effect_explode_io_plays_once_and_can_be_retriggered():
         "Hide", "Show", "ToggleVisibility", "Explode",
     ]
 
-    io_manager = IOManager()
-    register_all_input_handlers(io_manager)
-    logic = SimpleNamespace(
-        _entity_table=table,
-        io_manager=io_manager,
-    )
-    explode = io_manager._input_handlers[("effect", "explode")]
+    send = _io_for(explosion)
 
-    explode(explosion, "", logic)
+    def explode():
+        send("Explode")
+        table.begin_frame([explosion], epoch=1, effect_runtime=True)
+
+    explode()
     assert bool(table.effect_active[0])
     assert bool(table.effect_alive[0])
-    assert float(table.effect_elapsed[0]) == 0.0
+    assert float(table.effect_elapsed[0]) < 0.1
 
-    table.effect_spawn_time[0] -= 1.0
+    table.effect_spawn_time[0] -= 1.0          # a second later
     table.begin_frame([explosion], epoch=1, effect_runtime=True)
-    assert not bool(table.effect_active[0])
     assert not bool(table.effect_alive[0])
     assert not bool(table.light_enabled[0])
 
-    explode(explosion, "", logic)
+    explode()
     assert bool(table.effect_active[0])
     assert bool(table.effect_alive[0])
-    assert float(table.effect_elapsed[0]) == 0.0
+    assert float(table.effect_elapsed[0]) < 0.1

@@ -21,6 +21,8 @@ pytest.importorskip("PyQt5", reason="the logic thread pulls in editor.things")
 
 from editor.editor_state import EditorState             # noqa: E402
 from editor.things import Light, Monster, Prop        # noqa: E402
+from engine.change_journal import touch                   # noqa: E402
+from engine.spatial import set_authored_flag              # noqa: E402
 from engine.logic_thread import LogicThread             # noqa: E402
 from engine import render_table as render_table_module      # noqa: E402
 from engine.threaded_game_state import RenderState, ThreadedGameState  # noqa: E402
@@ -257,7 +259,7 @@ def test_lights_and_entities_reach_the_render_state(logic):
     thread._prepare_render_state()
 
     published = thread.game_state.get_write_state()
-    assert len(published.all_things) == 2
+    assert published.entity_table.count == 2
     assert len(published.visible_things) == 2
 
 
@@ -337,7 +339,7 @@ def test_all_lights_stays_lazy_until_light_consumer_reads_it(logic):
     assert lights._list is not None
 
 
-def test_visible_thing_positions_are_contiguous_and_aligned_with_snapshots(logic):
+def test_published_entity_rows_carry_their_positions(logic):
     lamp = make_thing(Light, "lamp", (100, 200, -300))
     monster = make_thing(Monster, "grunt", (-50, 96, 700))
     thread = logic(things=[lamp, monster])
@@ -345,38 +347,33 @@ def test_visible_thing_positions_are_contiguous_and_aligned_with_snapshots(logic
     thread._prepare_render_state()
 
     published = thread.game_state.get_write_state()
-    positions = published.visible_thing_positions
-    assert positions.flags.c_contiguous
-    assert positions.shape[1] == 2
-    assert published.visible_thing_position_count == 2
-    assert np.allclose(positions[:2], [[100.0, -300.0], [-50.0, 700.0]])
-    assert published.visible_things[0] is lamp
-    assert published.visible_things[1] is not monster
-    assert published.visible_things[1]["pos"] == [-50.0, 96.0, 700.0]
+    slots = published.visible_thing_slots
+    assert published.entity_table.pos[slots].tolist() == [
+        [100.0, 200.0, -300.0], [-50.0, 96.0, 700.0]]
+    assert list(published.visible_things) == [lamp, monster]
 
 
-def test_visible_thing_position_buffer_is_reused_and_tracks_movement(logic):
+def test_a_moved_entity_updates_its_row_without_reconciling(logic):
     monster = make_thing(Monster, "grunt", (0, 96, -300))
     thread = logic(things=[monster])
 
     thread._prepare_render_state()
-    first = thread.game_state.get_write_state().visible_thing_positions
+    table = thread.game_state.get_write_state().entity_table
+    generation = table.generation
 
     monster.pos = [800.0, 96.0, -900.0]
     thread._prepare_render_state()
-    second = thread.game_state.get_write_state().visible_thing_positions
 
-    assert second is first
-    assert np.allclose(second[:1], [[800.0, -900.0]])
+    assert table.pos[0].tolist() == [800.0, 96.0, -900.0]
+    assert table.generation == generation
 
 
-def test_visible_thing_position_buffer_handles_entity_deletion_and_creation(logic):
+def test_a_same_length_swap_of_the_entity_list_re_rows_the_table(logic):
+    """A removal and an addition in one frame leave the count unchanged."""
     first_thing = make_thing(Light, "first", (0, 100, 0))
     second_thing = make_thing(Light, "second", (100, 100, 0))
     thread = logic(things=[first_thing, second_thing])
-
     thread._prepare_render_state()
-    buffer = thread.game_state.get_write_state().visible_thing_positions
 
     thread.things.remove(second_thing)
     third_thing = make_thing(Light, "third", (900, 100, -700))
@@ -384,25 +381,45 @@ def test_visible_thing_position_buffer_handles_entity_deletion_and_creation(logi
     thread._prepare_render_state()
 
     published = thread.game_state.get_write_state()
-    assert published.visible_thing_positions is buffer
-    assert published.visible_thing_position_count == 2
-    assert np.allclose(
-        published.visible_thing_positions[:2],
-        [[0.0, 0.0], [900.0, -700.0]],
-    )
+    table = published.entity_table
+    assert table.ids == [first_thing.properties["id"], third_thing.properties["id"]]
+    assert table.pos[1].tolist() == [900.0, 100.0, -700.0]
+    assert list(published.visible_things) == [first_thing, third_thing]
 
 
-def test_a_monster_is_submitted_as_a_render_snapshot(logic):
-    """The AI thread moves monsters; the renderer must read a stable copy."""
+def _publish(thread):
+    thread._prepare_render_state()
+    assert thread.game_state.request_swap() is True
+    return thread.game_state.get_render_state()
+
+
+def test_a_published_monster_row_is_stable_while_the_ai_moves_it(logic):
+    """The renderer draws monsters from the published table's rows.
+
+    The AI thread moves the live Monster whenever it likes; what the renderer
+    reads is the row the frame was published with, which nothing writes until
+    the renderer hands the frame back.
+    """
     monster = make_thing(Monster, "grunt", (0, 96, -300))
     thread = logic(things=[monster])
 
-    thread._prepare_render_state()
+    frame = _publish(thread)
+    monster.pos = [10.0, 96.0, -300.0]            # the AI moves it
+    monster.properties["dead"] = True
+    touch(monster)
+    thread._prepare_render_state()                # the next frame is built
 
-    submitted = thread.game_state.get_write_state().visible_things[0]
-    assert submitted is not monster, (
-        "the live Monster object was handed to the renderer while the AI "
-        "thread is free to move it")
+    assert frame.entity_table.pos[0].tolist() == [0.0, 96.0, -300.0]
+    assert frame.entity_table is not thread.game_state.get_write_state().entity_table
+    thread.game_state.release_render_state(frame)
+    assert thread.game_state.request_swap() is True
+    moved = thread.game_state.get_render_state()
+    assert moved.entity_table.pos[0].tolist() == [10.0, 96.0, -300.0]
+    # Sprite ids are per-table intern ids; compare the recipes they name.
+    def recipe(table):
+        return table.sprite_recipes()[int(table.sprite_key_id[0])][0][0]
+    assert recipe(frame.entity_table) == 'msprite_human_<None>_idle_'
+    assert recipe(moved.entity_table) == 'msprite_human_<None>_dead_'
 
 
 # ---------------------------------------------------------------------------
@@ -459,13 +476,9 @@ def test_visibility_is_published_as_slots_into_the_projection(logic):
         thread.set_play_mode(False)
 
 
-def test_hidden_is_not_baked_into_the_projection(logic):
-    """I/O Show/Hide toggles it at runtime, so it is read fresh each frame.
-
-    Big World parks objects through the same flag, with no notification, which
-    is why the projection reads it live rather than caching it -- see
-    engine.spatial.PARKED_HIDDEN_KEY.
-    """
+def test_hiding_a_brush_mid_session_reaches_the_frame(logic):
+    """I/O Show/Hide toggles ``hidden`` at runtime, through the parking-aware
+    writer Big World and save restores share, which journals the change."""
     brush = box_brush("switchable", (0, 0, -400))
     thread = logic(brushes=[brush])
     thread.set_play_mode(True)
@@ -474,11 +487,10 @@ def test_hidden_is_not_baked_into_the_projection(logic):
         thread._prepare_render_state()
         assert len(thread.game_state.get_write_state().all_brushes) == 1
 
-        brush["hidden"] = True
+        set_authored_flag(brush, "hidden", True)
         thread._prepare_render_state()
         assert len(thread.game_state.get_write_state().all_brushes) == 0, (
-            "hiding a brush mid-session did not remove it from the frame; the "
-            "projection baked 'hidden' in instead of reading it live")
+            "hiding a brush mid-session did not remove it from the frame")
     finally:
         thread.set_play_mode(False)
 
@@ -632,82 +644,148 @@ def test_recycled_render_state_keeps_dense_projection_objects():
     assert len(recycled.thing_hidden) == 0
 
 
-def test_a_borrowed_render_state_survives_multiple_publication_cycles():
-    """A held snapshot keeps tables and published slot buffers immutable."""
+def _publish_frame(game_state, brushes, things, epoch, visible):
+    write = game_state.get_write_state()
+    write.render_table.sync(brushes, epoch=epoch)
+    write.all_brush_slots = np.arange(len(brushes), dtype=np.int32)
+    write.visible_brush_slots = np.array(visible, dtype=np.int32)
+    write.entity_table.begin_frame(things, epoch=epoch)
+    write.visible_thing_slots = np.array(visible, dtype=np.int32)
+    return write, game_state.request_swap()
+
+
+def test_there_are_exactly_two_buffers():
+    """Double buffering: every publication alternates the same two states."""
+    game_state = ThreadedGameState()
+    seen = set()
+    for _ in range(6):
+        seen.add(id(game_state.get_write_state()))
+        assert game_state.request_swap() is True
+    assert len(seen) == 2
+
+
+def test_a_borrowed_frame_is_not_swapped_until_it_is_returned():
+    """While the renderer reads, the logic thread keeps (and rewrites) its buffer.
+
+    The renderer borrows the read buffer for a paint. Publishing then would
+    make that buffer the next write buffer, and the next tick would rewrite the
+    tables being drawn -- so the swap declines, the logic thread keeps the
+    write buffer, and the frame after the paint is the one that gets out.
+    """
     game_state = ThreadedGameState()
     brush = box_brush("wall")
     second_brush = box_brush("wall2", (128, 0, 0))
     lamp = make_thing(Light, "lamp", (0, 100, 0))
     second_thing = make_thing(Monster, "grunt", (0, 96, -300))
 
-    write = game_state.get_write_state()
-
-    # Build an actually published frame, including the three pieces whose
-    # lifetime matters at the render boundary: dense tables plus slot vectors.
-    write.render_table.sync([brush], epoch=1)
-    write.all_brush_slots = np.array([0], dtype=np.int32)
-    write.visible_brush_slots = np.array([0], dtype=np.int32)
-
-    write.entity_table.begin_frame([lamp], epoch=1)
-    write.visible_thing_slots = np.array([0], dtype=np.int32)
-
-    assert game_state.request_swap() is True
+    _, published = _publish_frame(game_state, [brush], [lamp], 1, [0])
+    assert published is True
+    assert game_state.try_swap() is True
 
     snapshot = game_state.get_render_state()
     first_render_table = snapshot.render_table
     first_entity_table = snapshot.entity_table
-    first_all_brush_slots = snapshot.all_brush_slots
-    first_visible_brush_slots = snapshot.visible_brush_slots
-    first_visible_thing_slots = snapshot.visible_thing_slots
+    first_slots = snapshot.all_brush_slots
+    writer = game_state.get_write_state()
+    assert writer.render_table is not first_render_table
 
-    assert first_render_table.count == 1
-    assert first_entity_table.count == 1
-    assert first_all_brush_slots.tolist() == [0]
-    assert first_visible_brush_slots.tolist() == [0]
-    assert first_visible_thing_slots.tolist() == [0]
-
-    # Publish two newer frames while the first frame is still borrowed. The
-    # spare RenderState absorbs the extra publication, and each write buffer
-    # gets materially different projection/slot data. Any accidental alias
-    # with the borrowed snapshot will therefore be visible here.
+    brush["shader"] = "Fog"
+    brush["is_fog"] = True
     for epoch in (2, 3):
-        write = game_state.get_write_state()
+        write, published = _publish_frame(
+            game_state, [brush, second_brush], [lamp, second_thing], epoch, [1])
+        assert published is False, "swapped while the renderer was reading"
+        assert write is writer, "the logic thread lost its write buffer"
+        assert game_state.try_swap() is False
 
-        brush["shader"] = "Fog"
-        brush["is_fog"] = True
-        write.render_table.sync([brush, second_brush], epoch=epoch)
-        write.all_brush_slots = np.array([0, 1], dtype=np.int32)
-        write.visible_brush_slots = np.array([1], dtype=np.int32)
-
-        write.entity_table.begin_frame([lamp, second_thing], epoch=epoch)
-        write.visible_thing_slots = np.array([1], dtype=np.int32)
-
-        assert game_state.request_swap() is True
-
-        # The originally published frame must still be byte-for-byte
-        # equivalent in the critical state that the renderer owns.
+        # The borrowed frame is untouched.
         assert snapshot.render_table is first_render_table
-        assert snapshot.entity_table is first_entity_table
         assert first_render_table.count == 1
         assert first_entity_table.count == 1
-        assert bool(
-            first_render_table.class_bits[0]
-            & render_table_module.CLASS_FOG
-        ) is False
-        assert first_all_brush_slots.tolist() == [0]
-        assert first_visible_brush_slots.tolist() == [0]
-        assert first_visible_thing_slots.tolist() == [0]
+        assert not (first_render_table.class_bits[0]
+                    & render_table_module.CLASS_FOG)
+        assert first_slots.tolist() == [0]
 
-    # Once the renderer releases the old frame, that retired buffer becomes
-    # reusable and publication continues without allocating a fourth state.
+    # Letting go publishes the frame that was held back for it.
     game_state.release_render_state(snapshot)
-    write = game_state.get_write_state()
-    write.render_table.sync([brush], epoch=4)
-    write.all_brush_slots = np.array([0], dtype=np.int32)
-    write.visible_brush_slots = np.array([0], dtype=np.int32)
-    write.entity_table.begin_frame([lamp], epoch=4)
-    write.visible_thing_slots = np.array([0], dtype=np.int32)
+    assert game_state.try_swap() is True
+    latest = game_state.get_render_state()
+    assert latest.render_table is writer.render_table
+    assert latest.render_table.count == 2
+    assert latest.visible_thing_slots.tolist() == [1]
+    assert game_state.get_write_state().render_table is first_render_table
+
+
+def test_a_frame_held_back_by_a_paint_is_published_when_the_paint_ends():
+    """No waiting for the logic thread's next tick once the renderer is free."""
+    game_state = ThreadedGameState()
     assert game_state.request_swap() is True
+    assert game_state.try_swap() is True
+
+    painting = game_state.get_render_state()
+    game_state.get_write_state().hud_message = "finished"
+    assert game_state.request_swap() is False        # the paint is running
+    game_state.release_render_state(painting)          # the paint ends
+
+    assert game_state.try_swap() is True
+    assert game_state.published("hud_message") == "finished"
+
+
+def test_a_buffer_the_logic_thread_is_writing_is_never_published_under_it():
+    game_state = ThreadedGameState()
+    painting = game_state.get_render_state()
+    assert game_state.request_swap() is False        # held back, finished
+    game_state.get_write_state()                      # the next tick starts on it
+    game_state.release_render_state(painting)
+
+    assert game_state.try_swap() is False, (
+        "the renderer published a buffer the logic thread had started writing")
+
+
+def test_a_dropped_snapshot_returns_its_borrow():
+    """The finalizer is the safety net for a caller that never releases."""
+    game_state = ThreadedGameState()
+    snapshot = game_state.get_render_state()
+    assert game_state.request_swap() is False
+    del snapshot
+    assert game_state.request_swap() is True
+
+
+def test_published_reads_a_field_without_borrowing_the_frame():
+    game_state = ThreadedGameState()
+    game_state.get_write_state().player_dead = True
+    assert game_state.request_swap() is True
+
+    assert game_state.published("player_dead") is True
+    assert game_state.published("no_such_field", 7) == 7
+    assert game_state.request_swap() is True, (
+        "reading one published field pinned the frame")
+
+
+def test_a_muzzle_flash_is_published_even_if_the_renderer_was_busy(logic):
+    """One-shot state waits for a publication instead of expiring per tick.
+
+    The flash was cleared at the start of every play tick, so it reached the
+    renderer only if the frame of the tick that fired was the one published --
+    not when that swap was declined mid-paint, nor when a catch-up frame ran a
+    second tick before publishing.
+    """
+    thread = logic(brushes=[box_brush("floor", (0, -16, 0), (512, 32, 512))])
+    thread.set_play_mode(True)
+    try:
+        thread.muzzle_flash_active = True
+        busy = thread.game_state.get_render_state()     # renderer mid-paint
+        thread._step_frame(0.0)
+        assert thread._publish_frame() is False
+        thread.game_state.release_render_state(busy)
+
+        thread._step_frame(thread.TICK_DURATION)        # one more play tick
+        assert thread._publish_frame() is True
+        assert thread.game_state.published("muzzle_flash_active") is True, (
+            "the shot's muzzle flash never reached the renderer")
+        assert thread.muzzle_flash_active is False
+    finally:
+        thread.set_play_mode(False)
 
 
 def test_the_published_brush_lists_are_not_materialised_unless_read(logic):
@@ -782,26 +860,7 @@ def test_entity_slots_index_the_rows_they_were_published_beside(logic):
     assert len(slots) == len(state.visible_things)
     assert table.ids[int(slots[0])] == lamp.properties["id"]
     assert table.ids[int(slots[1])] == monster.properties["id"]
-    # The position column is the same numbers the XZ snapshot carries.
     assert np.allclose(table.pos[int(slots[0])], lamp.pos)
-
-
-def test_a_monster_row_is_republished_as_a_snapshot_every_frame(logic):
-    """The AI thread moves monsters, so the renderer must read a stable copy."""
-    monster = make_thing(Monster, "grunt", (0, 96, -300))
-    thread = logic(things=[monster])
-
-    thread._prepare_render_state()
-    first = thread.game_state.get_write_state().visible_things[0]
-    assert first is not monster
-    assert first["pos"] == [0.0, 96.0, -300.0]
-
-    monster.pos = [10.0, 96.0, -300.0]
-    thread._prepare_render_state()
-    second = thread.game_state.get_write_state().visible_things[0]
-    assert second["pos"] == [10.0, 96.0, -300.0]
-    assert first["pos"] == [0.0, 96.0, -300.0], (
-        "the previous frame's snapshot was mutated under the renderer")
 
 
 def test_a_collected_prop_is_not_published(logic):
@@ -815,7 +874,6 @@ def test_a_collected_prop_is_not_published(logic):
         state = thread.game_state.get_write_state()
 
         assert list(state.visible_things) == [keep]
-        assert state.visible_thing_position_count == 1
         assert len(state.visible_thing_slots) == 1
     finally:
         thread.set_play_mode(False)
@@ -849,3 +907,27 @@ def test_whether_the_map_has_portals_is_published(logic):
         assert with_portal.game_state.get_write_state().has_portals is True
     finally:
         with_portal.set_play_mode(False)
+
+
+def test_the_renderer_does_not_reuse_texture_ids_across_an_adopt():
+    """Its per-table cache resolved a prefix of the old name list."""
+    from engine import render_table as rt
+    from engine.renderer_F import Renderer_F
+
+    renderer = Renderer_F.__new__(Renderer_F)
+    renderer._gl_tex_by_table = {}
+    renderer.texture_manager = {}
+    renderer._tex_cache_path = lambda name: name
+    renderer.load_texture_callback = lambda name, _folder: {
+        'a.png': 11, 'b.png': 22}.get(name, 0)
+
+    table = rt.RenderTable()
+    table.intern_texture('a.png')
+    before = renderer._gl_texture_ids(table).tolist()
+
+    peer = rt.RenderTable()
+    peer.intern_texture('b.png')              # same id, different name
+    table.adopt(peer)
+
+    after = renderer._gl_texture_ids(table).tolist()
+    assert before[-1] == 11 and after[-1] == 22

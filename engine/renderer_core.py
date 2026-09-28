@@ -19,6 +19,7 @@ Both Renderer_F and Renderer_D inherit from BaseRenderer.
 """
 
 import ctypes
+import functools
 import re
 import math
 import os
@@ -33,9 +34,10 @@ import glm
 import numpy as np
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
+from OpenGL.raw.GL.VERSION.GL_2_0 import (
+    glVertexAttribPointer as _raw_vertex_attrib_pointer)
 
-from engine.constants import (is_water_brush, brush_aabb_bounds,
-                              normalize_color)
+from engine.constants import brush_aabb_bounds, normalize_color
 from engine import brush_geometry
 from engine import render_table
 from engine import entity_table as entity_projection
@@ -51,10 +53,6 @@ from engine.portal_transform import (
     map_direction as _portal_map_direction,
     corners as _portal_corners,
     contains_point as _portal_contains_point,
-)
-from editor.things import (
-    Thing, PathNode, Prop, Monster, LogicGate, LogicRelay,
-    LogicTimer, LevelChanger, Light, LogicSpawner, LogicCamera,
 )
 
 # Try to import OBJ and GLB loaders
@@ -125,13 +123,38 @@ class LODManager:
 
 class RenderStats:
     __slots__ = ('total_brushes', 'culled_brushes', 'visible_brushes', 'draw_calls',
-                 'shadow_draw_calls', 'total_tris', 'visible_tris', 'batched_draws')
+                 'shadow_draw_calls', 'total_tris', 'visible_tris', 'batched_draws',
+                 'pass_ms')
     def __init__(self):
+        #: CPU milliseconds spent submitting each pass this frame, measured by
+        #: :func:`timed_pass`. Inclusive: a pass that draws others (portals,
+        #: shadow maps) counts theirs too.
+        self.pass_ms = {}
         self.reset()
     def reset(self):
         self.total_brushes = self.culled_brushes = self.visible_brushes = 0
         self.draw_calls = self.shadow_draw_calls = self.batched_draws = 0
         self.total_tris = self.visible_tris = 0
+        self.pass_ms.clear()
+
+
+def timed_pass(name):
+    """Accumulate a renderer pass's CPU time into ``render_stats.pass_ms``.
+
+    Two clock reads per call, a handful of calls per frame: what the Debug
+    Tables instrument shows as the per-pass submission cost.
+    """
+    def decorate(method):
+        @functools.wraps(method)
+        def timed(self, *args, **kwargs):
+            started = time.perf_counter()
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                ms = self.render_stats.pass_ms
+                ms[name] = ms.get(name, 0.0) + (time.perf_counter() - started) * 1000.0
+        return timed
+    return decorate
 
 
 class BrushGeoMesh:
@@ -282,8 +305,6 @@ class BaseRenderer:
     MAX_SHADOW_LIGHTS = 8          # number of point lights that can cast shadows at once
     SHADOW_MAP_SIZE = 384         # per-face resolution of each depth cube-map
     SHADOW_TEXTURE_UNIT_BASE = 4   # shadow cube-maps bind to units 4..(4+MAX_SHADOW_LIGHTS-1)
-    WATER_REFLECTION_SIZE = 256
-    WATER_REFLECTION_TEXTURE_UNIT = 3
 
     #: Uniform names of the shared distance-fog / global-ambient block
     #: (engine.shaders.FOG_GLSL). Preloaded for every shader that splices it in,
@@ -301,13 +322,6 @@ class BaseRenderer:
         self._glass_scene_size = (0, 0)
         self._glass_scene_texture_unit = 2
 
-        # Water reflections are fully lazy. The checkbox creates one
-        # 256x256 RGBA 2D render texture per reflected water slot, plus one
-        # shared depth target used while rendering the mirrored scene.
-        self._water_reflection_fbo = None
-        self._water_reflection_depth = None
-        self._water_reflection_textures = {}
-        self._water_reflection_matrices = {}
 
         self.load_texture_callback = texture_loader
         self._identity_mat4 = glm.mat4(1.0)
@@ -936,52 +950,7 @@ layout (location = 10) in vec4 iPayload;
         ):
             print(f'{_BASE_RENDERER_PREFIX} Effect instancing shader compiled successfully.')
 
-    def _ensure_effect_instance_buffer(self, count):
-        if self._effect_instance_vbo is None:
-            self._effect_instance_vbo = gl.glGenBuffers(1)
-        if count <= self._effect_instance_capacity:
-            return
-        capacity = max(count, 64, self._effect_instance_capacity * 2)
-        self._effect_instance_capacity = capacity
-        self._effect_instance_data = np.empty(
-            (capacity, self.EFFECT_INSTANCE_FLOATS), dtype=np.float32
-        )
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
-        gl.glBufferData(
-            gl.GL_ARRAY_BUFFER,
-            self._effect_instance_data.nbytes,
-            None,
-            gl.GL_DYNAMIC_DRAW,
-        )
-
-    def _ensure_effect_instance_vao(self):
-        if self._effect_instance_vao is not None:
-            return self._effect_instance_vao
-        self._ensure_effect_instance_buffer(1)
-        vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_vbo)
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-        gl.glEnableVertexAttribArray(0)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
-        stride = self.EFFECT_INSTANCE_FLOATS * 4
-        for location, size, offset in (
-            (1, 3, 0),
-            (2, 4, 12),
-            (3, 4, 28),
-            (4, 4, 44),
-            (5, 1, 60),
-        ):
-            gl.glVertexAttribPointer(
-                location, size, gl.GL_FLOAT, gl.GL_FALSE,
-                stride, ctypes.c_void_p(offset)
-            )
-            gl.glEnableVertexAttribArray(location)
-            gl.glVertexAttribDivisor(location, 1)
-        gl.glBindVertexArray(0)
-        self._effect_instance_vao = vao
-        return vao
-
+    @timed_pass('fire effects')
     def draw_fire_effects_instanced(
         self, projection, view, table, slots, hidden=None, camera_pos=None,
     ):
@@ -1189,6 +1158,7 @@ layout (location = 10) in vec4 iPayload;
         gl.glBindVertexArray(0)
         return count
 
+    @timed_pass('effects')
     def draw_effects_instanced(
         self, projection, view, table, slots, hidden=None,
         play_mode=True, editor_time=0.0, camera_pos=None,
@@ -1400,11 +1370,13 @@ layout (location = 10) in vec4 iPayload;
         #: submission tests to recover what a run actually drew.
         self._sprite_instance_base = base
         origin = base * stride
+        # The raw entry point, as for brush runs: an integer offset into the
+        # bound buffer needs none of the wrapper's array handling.
         for location, size, offset in (
             (1, 3, 0), (2, 2, 12), (3, 1, 20), (4, 1, 24)
         ):
-            gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
-                                     stride, ctypes.c_void_p(origin + offset))
+            _raw_vertex_attrib_pointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
+                                       stride, ctypes.c_void_p(origin + offset))
 
     def _compile_instanced_lit_brush_shader(self, lit_vert, lit_frag):
         """Compile the flat-shaded brush shader with instanced colour.
@@ -1522,8 +1494,12 @@ layout (location = 10) in vec4 iPayload;
         """
         stride = self.BRUSH_INSTANCE_FLOATS * 4
         origin = int(base) * stride
+        # The raw entry point: the offset is a plain integer into the bound
+        # buffer, so PyOpenGL's array handling and the pointer bookkeeping it
+        # keeps per context (a dict write per call) buy nothing here -- and
+        # they were most of the cost of a brush pass.
         for location in range(3, 11):
-            gl.glVertexAttribPointer(
+            _raw_vertex_attrib_pointer(
                 location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
                 ctypes.c_void_p(origin + (location - 3) * 16))
 
@@ -1696,7 +1672,7 @@ layout (location = 10) in float iInstanceAlpha;
         uniforms = self.uniforms['water']
         uniforms.preload([
             'projection', 'view', 'model', 'time', 'viewPos',
-            'normalMap', 'sceneColor', 'reflectionTexture', 'reflectionMatrix', 'reflectionEnabled',
+            'normalMap', 'sceneColor',
             'screenSize', 'waterOpacity', 'waterReflectivity',
             'waterTint', 'distortionStrength', 'refractionIndex',
             'roughness', 'fresnelIntensity', 'normalMatrix',
@@ -1713,16 +1689,7 @@ layout (location = 10) in float iInstanceAlpha;
     # FIRE animation textures
     # --------------------------------------------------------------------------
     def _fire_asset_bytes(self, asset_path):
-        """Read an effect asset from the mounted ResourceManager or filesystem."""
-        try:
-            from engine.resource_manager import ResourceManager
-            data = ResourceManager().get_asset(asset_path)
-        except Exception:
-            data = None
-
-        if data is not None:
-            return data
-
+        """Read an effect asset's bytes from the project directory."""
         disk_path = os.path.join(os.getcwd(), asset_path)
         if os.path.exists(disk_path):
             try:
@@ -2068,6 +2035,7 @@ layout (location = 10) in float iInstanceAlpha;
         self._grid_vbo = vbo
         self.vaos['grid'] = vao
 
+    @timed_pass('grid')
     def draw_grid(self, projection, view, grid_indices_count, play_mode=False, grid_visible=True):
         if not self.vaos['grid'] or play_mode or not grid_visible or 'simple' not in self.shaders:
             return
@@ -2116,6 +2084,7 @@ layout (location = 10) in float iInstanceAlpha;
                 new_id = self.load_texture(filename, 'textures/terrain')
                 setattr(terrain, attr, new_id)
 
+    @timed_pass('terrain')
     def render_terrain(self, projection, view, camera_pos, terrain, lights, frustum_planes=None):
         if terrain is None or not terrain.enabled:
             return
@@ -2414,6 +2383,7 @@ layout (location = 10) in float iInstanceAlpha;
         return draws
 
 
+    @timed_pass('models')
     def draw_models_instanced(self, projection, view, camera_pos, table, slots,
                               lights, config=None):
         """Render model instances from dense EntityTable columns.
@@ -2736,6 +2706,7 @@ layout (location = 10) in float iInstanceAlpha;
             gl.glBindVertexArray(0)
         return count
 
+    @timed_pass('sprites')
     def draw_sprites_instanced(self, projection, view, table, slots,
                                gl_ids=None, camera_pos=None):
         """The sprite pass over dense columns: one draw per texture run.
@@ -2863,6 +2834,7 @@ layout (location = 10) in float iInstanceAlpha;
     # --------------------------------------------------------------------------
     # Water / Glass / Fog
     # --------------------------------------------------------------------------
+    @timed_pass('water')
     def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config,
                            table):
         """Draw water from dense RenderTable state.
@@ -2917,17 +2889,12 @@ layout (location = 10) in float iInstanceAlpha;
             float(scene_height),
         )
 
-        reflection_unit = self.WATER_REFLECTION_TEXTURE_UNIT
-        gl.glActiveTexture(gl.GL_TEXTURE0 + reflection_unit)
-        gl.glUniform1i(uniforms['reflectionTexture'], reflection_unit)
-
         opacity_loc = uniforms['waterOpacity']
         reflectivity_loc = uniforms['waterReflectivity']
         fresnel_loc = uniforms['fresnelIntensity']
         distortion_loc = uniforms['distortionStrength']
         refraction_loc = uniforms['refractionIndex']
         roughness_loc = uniforms['roughness']
-        reflection_enabled_loc = uniforms['reflectionEnabled']
         tint_loc = uniforms['waterTint']
         model_loc = uniforms['model']
         normal_mat_loc = uniforms.get('normalMatrix', -1)
@@ -2939,7 +2906,6 @@ layout (location = 10) in float iInstanceAlpha;
         params = table.water_params[brushes]
         tints = table.water_tint[brushes]
         planes = table.water_plane[brushes]
-        reflection_flags = table.water_reflections[brushes]
         bits = table.class_bits[brushes]
         geo = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
         geo_meshes = self._prepare_geo_meshes(table, brushes)
@@ -2979,12 +2945,6 @@ layout (location = 10) in float iInstanceAlpha;
             amp = h * 30.0 if params[i, 3] != 0.0 else 1.2
             amp = min(amp, float(sizes[i, 1]) * 0.45, 30.0)
             gl.glUniform1f(wave_amp_loc, amp)
-
-            # Water reflections are no longer an authored property. Keep the
-            # shader path explicitly disabled so older maps carrying the removed
-            # flag cannot re-enable the deleted reflection capture pass.
-            gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
-            gl.glUniform1i(reflection_enabled_loc, 0)
 
             mesh = (
                 geo_meshes.get(int(table.geometry_id[slot]))
@@ -3070,6 +3030,7 @@ layout (location = 10) in float iInstanceAlpha;
             gl.GL_TEXTURE_2D, 0, 0, 0, x, y, width, height)
         return width, height
 
+    @timed_pass('glass')
     def draw_glass_brushes(self, projection, view, camera_pos, brushes, lights, config,
                            table):
         if len(brushes) == 0 or 'glass' not in self.shaders:
@@ -3139,6 +3100,7 @@ layout (location = 10) in float iInstanceAlpha;
         gl.glDisable(gl.GL_CULL_FACE)
         gl.glBindVertexArray(0)
         return
+    @timed_pass('fog')
     def draw_fog_volumes(self, projection, view, camera_pos, brushes, lights, config, *, table):
         if len(brushes) == 0 or 'fog' not in self.shaders:
             return
@@ -3439,11 +3401,16 @@ layout (location = 10) in float iInstanceAlpha;
 
         active['indices'][:, 0] = shadow_indices
 
+        # Respecify the whole store rather than sub-updating it: earlier draws
+        # still queued against the old contents would otherwise make the
+        # driver wait for them before the write. A fresh store (orphaning)
+        # lets them finish on the old one.
         gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
-        gl.glBufferSubData(
+        gl.glBufferData(
             gl.GL_UNIFORM_BUFFER,
-            0,
-            active,
+            self._light_ubo_data.nbytes,
+            self._light_ubo_data,
+            gl.GL_DYNAMIC_DRAW,
         )
         self._light_ubo_key = key
 
@@ -3474,7 +3441,11 @@ layout (location = 10) in float iInstanceAlpha;
             id(table), table.generation,
             tuple(int(x) for x in slots[:cap]))
         gl.glUniform1i(self.uniforms[shader_name]['active_lights'], num_lights)
-        self._upload_light_ubo(lights, num_lights)
+        # One upload serves every pass: the buffer holds the frame's light
+        # prefix up to MAX_LIGHTS, and each shader reads its own first
+        # ``active_lights`` entries of it. Uploading per shader cap re-sent
+        # the same lights once per pass.
+        self._upload_light_ubo(lights, min(len(slots), self.MAX_LIGHTS))
 
         # Keep sampler2D and samplerCube uniforms on distinct texture units.
         # This is one shader-pass operation, never part of the per-draw loop.
@@ -3530,58 +3501,6 @@ layout (location = 10) in float iInstanceAlpha;
             print(f"[Shadow] initialisation failed: {e}")
             self._shadow_fbo = None
             self._shadow_cubemaps = []
-
-    def _ensure_water_reflection_resources(self):
-        """Create the shared planar-reflection framebuffer."""
-        if self._water_reflection_fbo and self._water_reflection_depth:
-            return True
-        try:
-            size = self.WATER_REFLECTION_SIZE
-            self._water_reflection_fbo = int(gl.glGenFramebuffers(1))
-            self._water_reflection_depth = int(gl.glGenRenderbuffers(1))
-            gl.glBindRenderbuffer(gl.GL_RENDERBUFFER, self._water_reflection_depth)
-            gl.glRenderbufferStorage(
-                gl.GL_RENDERBUFFER, gl.GL_DEPTH_COMPONENT24, size, size)
-            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, self._water_reflection_fbo)
-            gl.glFramebufferRenderbuffer(
-                gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
-                gl.GL_RENDERBUFFER, self._water_reflection_depth)
-            gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, 0)
-            gl.glBindRenderbuffer(gl.GL_RENDERBUFFER, 0)
-            return True
-        except Exception as exc:
-            print(f"[Water] reflection target initialisation failed: {exc}")
-            self._water_reflection_depth = None
-            if self._water_reflection_fbo:
-                try:
-                    gl.glDeleteFramebuffers(1, [self._water_reflection_fbo])
-                except Exception:
-                    pass
-            self._water_reflection_fbo = None
-            return False
-
-    def _ensure_water_reflection_texture(self, slot):
-        """Return the 256x256 RGBA 2D reflection texture for a water slot."""
-        slot = int(slot)
-        existing = self._water_reflection_textures.get(slot)
-        if existing:
-            return existing
-        tex = int(gl.glGenTextures(1))
-        gl.glBindTexture(gl.GL_TEXTURE_2D, tex)
-        size = self.WATER_REFLECTION_SIZE
-        gl.glTexImage2D(
-            gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, size, size, 0,
-            gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
-        self._water_reflection_textures[slot] = tex
-        return tex
-
-    def _water_reflection_texture(self, slot):
-        return self._water_reflection_textures.get(int(slot), 0)
 
     def _bind_shadow_maps(self, uniforms):
         """Bind shadow samplers to dedicated texture units.
@@ -3717,19 +3636,6 @@ layout (location = 10) in float iInstanceAlpha;
     #: the casters once and drawing them six times is the whole saving.
     SHADOW_RUN_KEY = KeyLayout([('face', 3)])
 
-    def _shadow_face_runs(self):
-        """The six cube faces, as sorted runs.
-
-        Trivial today -- six items, one field, already in order -- and that is
-        the point of routing it through the same machinery rather than a bare
-        ``range(6)``: the ordering is a property of the key, so a second field
-        (batching two lights into one pass, say) changes the layout and nothing
-        else.
-        """
-        keys = self.SHADOW_RUN_KEY.pack(face=np.arange(6, dtype=np.int64))
-        order, starts = sort_into_runs(keys)
-        return self.SHADOW_RUN_KEY.field(keys[order], 'face'), starts
-
     def _prepare_shadow_instances(self, table, in_brushes, instanced):
         """Pack dense brush casters and return dense convex geometry slots.
 
@@ -3753,6 +3659,7 @@ layout (location = 10) in float iInstanceAlpha;
             self._pack_brush_instances(models, None, rows, 0.0, 0.0)
 
         return cube_slots, geo_slots
+    @timed_pass('shadow maps')
     def render_shadow_maps(self, shadow_lights, config, camera_pos=None):
         """Refresh depth cube-maps from dense RenderTable/EntityTable state.
 
@@ -4520,11 +4427,12 @@ layout (location = 10) in float iInstanceAlpha;
         gl.glBindVertexArray(0)
         gl.glUseProgram(0)
 
-    def draw_path_node_cubes(self, projection, view, things):
-        if 'simple' not in self.shaders:
+    def draw_path_node_cubes(self, projection, view, table):
+        """The editor's PathNode markers, from the entity table's node rows."""
+        if 'simple' not in self.shaders or table is None:
             return
-        nodes = [t for t in things if isinstance(t, PathNode)]
-        if not nodes:
+        slots = table.path_node_slots
+        if not len(slots):
             return
 
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
@@ -4535,10 +4443,9 @@ layout (location = 10) in float iInstanceAlpha;
         gl.glUniform1f(uniforms['alpha'], 1.0)
         cube_size = 16.0
         gl.glBindVertexArray(self.vaos['cube'])
-        for node in nodes:
-            pos = node.pos
+        for x, y, z in table.pos[slots].tolist():
             model_matrix = glm.scale(glm.translate(self._identity_mat4,
-                                                   glm.vec3(float(pos[0]), float(pos[1]), float(pos[2]))),
+                                                   glm.vec3(x, y, z)),
                                      glm.vec3(cube_size, cube_size, cube_size))
             gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
@@ -4935,6 +4842,7 @@ layout (location = 10) in float iInstanceAlpha;
     def _portal_direction(self, table, slot):
         return int(table.portal_direction[int(slot)])
 
+    @timed_pass('portals (incl. their views)')
     def draw_portals(self, portal_table, portal_slots, projection, main_view, camera_pos, config, draw_scene_fn):
         """Render portal views from dense EntityTable topology."""
         if not self._portal_gl_ready:
@@ -5267,17 +5175,6 @@ layout (location = 10) in float iInstanceAlpha;
             self._geo_mesh_cache[cache_key] = new
         return new
 
-    @staticmethod
-    def _geo_uv_axes(n):
-        """World axes a face's planar UVs project onto, by dominant normal
-        axis.  Matches the cube VAO's orientation (v runs up walls).
-
-        The rule itself lives in brush_geometry so the geometry layer can
-        materialise the same basis when it locks a face's texture to a
-        rotation; this stays as the renderer's name for it.
-        """
-        return brush_geometry.render_uv_axes(n)
-
     def _build_geo_mesh(self, record, convex, key):
         origin = record.origin
         scale = record.scale
@@ -5589,26 +5486,6 @@ layout (location = 10) in float iInstanceAlpha;
         self._shadow_slot_owner = [None] * self.MAX_SHADOW_LIGHTS
         self._shadow_slot_sig = [None] * self.MAX_SHADOW_LIGHTS
         self._light_shadow_index = {}
-
-        if self._water_reflection_textures:
-            try:
-                gl.glDeleteTextures(list(self._water_reflection_textures.values()))
-            except Exception:
-                pass
-            self._water_reflection_textures.clear()
-        self._water_reflection_matrices.clear()
-        if self._water_reflection_depth:
-            try:
-                gl.glDeleteRenderbuffers(1, [self._water_reflection_depth])
-            except Exception:
-                pass
-            self._water_reflection_depth = None
-        if self._water_reflection_fbo:
-            try:
-                gl.glDeleteFramebuffers(1, [self._water_reflection_fbo])
-            except Exception:
-                pass
-            self._water_reflection_fbo = None
 
         if self._cube_vbo:
             gl.glDeleteBuffers(1, [self._cube_vbo])

@@ -94,3 +94,30 @@ def test_the_tests_list_starts_collapsed(manager):
 
 def test_export_is_absent_until_there_is_something_to_export(manager):
     assert not manager.export_button.isVisible()
+
+
+def test_export_writes_the_html_report(qt_app, tmp_path):
+    """The report template is %-formatted and also carries CSS percentages.
+
+    An unescaped ``width:100%}`` made every export raise ``ValueError:
+    unsupported format character``, so the button offered after a run could
+    never produce a report.
+    """
+    args = argparse.Namespace(host="127.0.0.1", port=1, token="t", pid=123,
+                              root=str(tmp_path), repetitions=1, duration=None,
+                              auto_start=False)
+    win = BenchmarkManager(args)
+    try:
+        win.results = [{"test": "live_io_1000", "status": "passed",
+                        "description": "I/O <stress>", "fps": 60.0,
+                        "samples": [1, 2, 3]}]
+        win.export_html()
+        report = (tmp_path / "BENCHMARK_REPORT.html").read_text(encoding="utf-8")
+    finally:
+        win.close()
+        win.deleteLater()
+
+    assert "width:100%}" in report and "width:28%}" in report
+    assert "Fio PID: 123" in report
+    assert "I/O &lt;stress&gt;" in report
+    assert not (tmp_path / "BENCHMARK_REPORT.html.tmp").exists()

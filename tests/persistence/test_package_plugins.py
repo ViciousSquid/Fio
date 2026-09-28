@@ -47,3 +47,26 @@ def test_package_rejection_applies_to_backslash_entries_too():
     })
     with pytest.raises(PackageError, match="Bundled plugins are not permitted"):
         FioPackage.from_bytes(data)
+
+
+@pytest.mark.parametrize("name", ["Plugins/packagedemo/__init__.py",
+                                  "maps/../plugins/packagedemo/__init__.py",
+                                  "./PLUGINS/x.py"])
+def test_package_rejection_is_not_fooled_by_spelling(name):
+    """Case and ``..`` do not change where an entry lands once extracted."""
+    data = _bytes({
+        "metadata.json": b'{"title":"Demo"}',
+        "maps/start.json": b'{"version":3,"things":[]}',
+        name: b"x",
+    })
+    with pytest.raises(PackageError, match="Bundled plugins are not permitted"):
+        FioPackage.from_bytes(data)
+
+
+def test_a_map_merely_named_after_plugins_is_fine():
+    data = _bytes({
+        "metadata.json": b'{"title":"Demo"}',
+        "maps/plugins_showcase.json": b'{"version":3,"things":[]}',
+    })
+    with FioPackage.from_bytes(data) as package:
+        assert package.list_maps() == ["maps/plugins_showcase.json"]

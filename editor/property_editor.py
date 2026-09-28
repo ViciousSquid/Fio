@@ -4519,50 +4519,6 @@ class PropertyEditor(QWidget):
         if collect:
             self.editor.select_object(collect)
 
-    def _update_collect_door_link(self, thing):
-        link_lbl = self._widgets.get('collect_door_link_label')
-        sel_btn = self._widgets.get('collect_door_select_btn')
-        if not link_lbl or not isinstance(thing, Prop) or thing.properties.get('collect_type') != 'key':
-            link_lbl.setVisible(False) if link_lbl else None
-            if sel_btn:
-                sel_btn.setVisible(False)
-            return
-
-        collect_key_name = thing.properties.get('collect_key_name', '')
-        if not collect_key_name:
-            link_lbl.setText("⚠ No key name set")
-            link_lbl.setStyleSheet("QLabel { color: #FF8800; padding: 4px; }")
-            link_lbl.setVisible(True)
-            if sel_btn:
-                sel_btn.setVisible(False)
-            return
-
-        matching = [b for b in self.editor.state.brushes
-                    if b.get('is_door') and b.get('door_needs_key') and b.get('door_key_name') == collect_key_name]
-        if matching:
-            self._linked_door_brush = matching[0]
-            door_name = matching[0].get('name', 'unnamed door')
-            pos = matching[0].get('pos', [0, 0, 0])
-            pos_str = f"({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f})"
-            extra = f" (+{len(matching) - 1} more)" if len(matching) > 1 else ""
-            link_lbl.setText(f"🚪 Unlocks: {door_name} {pos_str}{extra}")
-            link_lbl.setStyleSheet("QLabel { color: #88AAFF; padding: 4px; }")
-            link_lbl.setVisible(True)
-            if sel_btn:
-                sel_btn.setVisible(True)
-        else:
-            link_lbl.setText(f"⚠ No door requires key '{collect_key_name}'")
-            link_lbl.setStyleSheet("QLabel { color: #FF4444; padding: 4px; }")
-            link_lbl.setVisible(True)
-            self._linked_door_brush = None
-            if sel_btn:
-                sel_btn.setVisible(False)
-
-    def _select_linked_door(self):
-        brush = getattr(self, '_linked_door_brush', None)
-        if brush:
-            self.editor.select_object(brush)
-
     def toggle_mover_preview(self, checked):
         if self.editor:
             btn = self._widgets.get('mover_preview_btn')

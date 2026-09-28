@@ -37,6 +37,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from engine.change_journal import touch
+
 from .cell import cell_of_point
 from .manager import (BigWorldManager, DEFAULT_ACTIVATION_RADIUS,
                       DEFAULT_DEACTIVATION_RADIUS)
@@ -534,6 +536,7 @@ class BigWorldSession:
             brush["hidden"] = True
             brush["bw_active"] = False
             self._parked_brushes[id(brush)] = brush
+        touch(brush)
 
     def _restore_brush(self, brush: dict) -> None:
         if _HID_MARK in brush:
@@ -566,6 +569,7 @@ class BigWorldSession:
             props["disabled"] = True
             props["bw_active"] = False
             self._parked_things[id(thing)] = thing
+        touch(thing)
 
     def _set_light_active(self, light, active: bool) -> None:
         props = getattr(light, "properties", None)
@@ -580,6 +584,7 @@ class BigWorldSession:
             props["hidden"] = True
             props["bw_active"] = False
             self._parked_lights[id(light)] = light
+        touch(light)
 
     def _restore_thing(self, thing) -> None:
         props = getattr(thing, "properties", None)

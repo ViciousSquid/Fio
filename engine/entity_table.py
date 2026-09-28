@@ -36,37 +36,33 @@ Identical in kind to :class:`engine.render_table.RenderTable`, deliberately:
 * it stores nothing authored.  Every column resolves something the entity
   already says, so rebuilding the table from ``EditorState.things`` gives
   identical bits;
-* it is never written back to.  The single exception is the ``glm``-vector
-  normalisation the publish loop has always done, which repairs an entity whose
-  ``pos`` is not a list -- and which this module does exactly when the old loop
-  did, so the projection stays read-only with respect to everything else;
+* it is never written back to.  (A ``glm`` vector assigned to ``pos`` is
+  stored as a list by the setter, where it is assigned, not repaired here.)
 * identity stays the entity's own UUID.  ``slot`` is an *address*, valid within
   one :attr:`generation`; ``properties['id']`` is the *name*.  Frame code
   indexes columns by slot and never looks a name up.
 
-Refresh discipline, from the brush table
-----------------------------------------
-``cold``
-    :attr:`class_bits` -- the entity's class and its representation
-    (``model_path`` / ``render_mode`` / ``sprite_path``).  Resolved when the
-    row set changes or the world epoch moves, never per frame.  Nothing in Fio
-    writes those three at runtime: the property panel, the console and the
-    model importer all write them through an editor gesture, which bumps the
-    epoch.
+Refresh discipline
+------------------
+Nothing is re-read per frame. A row is resolved when the row set changes or
+the editor's world epoch moves, and again whenever :mod:`engine.change_journal`
+names its entity:
 
-``warm``
-    :attr:`pos` -- one bulk store per frame.  Entities move constantly and have
-    no per-entity notification, exactly like movers and doors.
+* assigning ``Thing.pos`` journals the move itself -- the AI, physics,
+  parented lights and portals, plugins and the editor all move entities by
+  assignment;
+* runtime render state that is not authored -- a carried Prop's yaw, a respawn
+  fade, a portal's fade, an Effect's playback clock -- is a
+  :class:`~engine.change_journal.TrackedAttribute` and journals itself too;
+* everything else a row reads (``hidden``, a Monster's ``dead`` and
+  ``is_shooting``, a Light's state) is written by code that calls ``touch``:
+  the I/O dispatcher after every input, the parking-aware flag writer, the
+  monster AI when a flag actually changes, the console, save restores.
 
-``live``
-    ``hidden``, read per frame and never cached, because Big World parks
-    entities by writing it directly and relies on every per-frame consumer
-    seeing it (:data:`engine.spatial.PARKED_HIDDEN_KEY`).  The same field the
-    brush table singles out, for the same reason.
-
-The gap this leaves is the brush table's gap: an entity mutated in place by
-something that bumps no counter and changes no row is not noticed.  Every path
-Fio itself has goes through an editor gesture or changes the entity set.
+The one per-frame computation is the Effect clock -- elapsed time, liveness and
+the flickering light -- and it is column arithmetic over the Effect rows.
+A row whose object cannot journal (a raw dict standing in for a Thing) has its
+position and ``hidden`` read per frame instead.
 
 Entity classes are imported defensively, the way :mod:`engine.logic_thread`
 imports them, so a tier without ``editor.things`` -- the standalone player, a
@@ -82,6 +78,7 @@ from itertools import chain
 import glm
 import numpy as np
 
+from .change_journal import JOURNAL, OVERFLOW, STATE, is_tracked
 from .portal_transform import basis_from_rotation
 
 # Defensive, as everywhere else in engine/: editor.things pulls in PyQt5, and
@@ -111,8 +108,7 @@ except ImportError:                                   # pragma: no cover
 #: Never drawn by the Thing passes: a PathNode (it has its own debug pass), or
 #: an object that is not a Thing at all.
 ENT_SKIP            = 1 << 0
-#: Drawn as a sprite whatever else is true -- a Portal, or the render-snapshot
-#: dict the logic thread publishes in place of a live Monster.
+#: Drawn as a sprite whatever else is true -- a Portal or a Monster.
 ENT_ALWAYS_SPRITE   = 1 << 1
 #: Carries a ``model_path``.
 ENT_HAS_MODEL       = 1 << 2
@@ -129,22 +125,18 @@ ENT_ENTITY_SPRITE   = 1 << 7
 ENT_PROP            = 1 << 8
 #: A Light.  Collected into the frame's light list; never a sprite in play.
 ENT_LIGHT           = 1 << 9
-#: A Monster, whose published reference is refreshed from
-#: ``get_render_snapshot()`` every frame -- the entity half of the brush
-#: table's dynamic rows.
+#: A Monster.  Its row is re-resolved when the AI journals a change to the
+#: flags its sprite is chosen from.
 ENT_MONSTER         = 1 << 10
-#: A Portal.  Distinct from :data:`ENT_ALWAYS_SPRITE`, which a monster snapshot
-#: also carries, because the distance cull exempts Portals and Lights and must
-#: not exempt monsters.
+#: A Portal.  Distinct from :data:`ENT_ALWAYS_SPRITE`, which a monster also
+#: carries, because the distance cull exempts Portals and Lights and must not
+#: exempt monsters.
 ENT_PORTAL          = 1 << 11
+#: A PathNode: skipped by the entity passes, drawn by the editor's node
+#: overlay from :attr:`EntityTable.path_node_slots`.
+ENT_PATH_NODE       = 1 << 12
 #: Procedural Effect primitive; FIRE and EXPLOSION share one render path.
 ENT_EFFECT          = 1 << 13
-#: This row's *sprite identity* can change without an edit, so it is re-resolved
-#: every frame.  Exactly the classes ``update_instance_textures`` re-hashes per
-#: frame -- a monster's sprite follows ``dead``/``is_shooting``, a gate's its
-#: type, a Prop's representation.  Everything else
-#: resolves its sprite once, at reconcile.
-ENT_SPRITE_WARM     = 1 << 12
 
 #: Never dropped by the broad-phase distance cull, whatever its distance --
 #: ``Renderer_F._cull_keep_thing``'s predicate, as bits.  Lighting and portal
@@ -165,7 +157,7 @@ BIT_NAMES = (
     (ENT_ENTITY_SPRITE, 'ENTITY_SPRITE'),
     (ENT_PROP, 'PROP'), (ENT_LIGHT, 'LIGHT'), (ENT_MONSTER, 'MONSTER'),
     (ENT_PORTAL, 'PORTAL'), (ENT_EFFECT, 'EFFECT'),
-    (ENT_SPRITE_WARM, 'SPRITE_WARM'),
+    (ENT_PATH_NODE, 'PATH_NODE'),
 )
 
 
@@ -175,18 +167,13 @@ def describe(bits) -> str:
 
 
 # --------------------------------------------------------------------------
-# Sprite identity -- the warm half
+# Sprite identity
 # --------------------------------------------------------------------------
 #
-# A sprite's *position* is warm and its *size* is cold, both straightforwardly.
-# Its texture is neither: a monster's sprite is chosen from `dead` and
-# `is_shooting` every frame, and a logic gate's and a Prop's from
-# properties the renderer already re-reads every frame to decide whether its
-# instance-texture cache is stale.  So sprite identity is resolved per frame for
-# those rows and at reconcile for everything else -- the same cold/warm split
-# the brush projection makes, drawn in a different place because entities are
-# a different kind of thing.  It is deliberately NOT pushed into
-# :mod:`engine.render_table`, whose texture column is wholly cold.
+# A monster's sprite follows `dead` and `is_shooting`, a logic gate's its type
+# and a Prop's its representation.  All of it is resolved with the rest of the
+# row -- at reconcile, and whenever the entity is journalled as changed -- so a
+# frame in which no sprite changed builds no recipe.
 #
 # What is resolved here is a *name*, never a GL id: a tuple of candidate cache
 # keys and the recipe for loading each, interned to a dense integer exactly as
@@ -209,9 +196,8 @@ _LOOKUP_ONLY = ('', '', False)
 def _monster_sprite_candidates(props):
     """The monster sprite branch, expressed as numeric texture candidates.
 
-    Monsters reach the renderer as render-snapshot dicts, so this reads the
-    same four state fields that branch reads and builds the same ``msprite_``
-    cache key.  The recipe also carries the fallback behaviour of
+    Reads the same four state fields that branch reads, from a Monster's
+    properties, and builds the same ``msprite_`` cache key.  The recipe also carries the fallback behaviour of
     ``Monster.get_sprite_path()``: a missing dead/shoot frame falls back to
     idle rather than making the monster disappear.  The renderer tries the
     candidates in order and caches the first one that actually loads, so this
@@ -269,13 +255,10 @@ def sprite_candidates(thing):
     sprite pass draws nothing for.
     """
     if isinstance(thing, dict):
-        if 'monster_type' in thing:
-            return _monster_sprite_candidates(thing)
-        props = thing
-    else:
-        if Portal is not None and isinstance(thing, Portal):
-            return None            # the sprite pass has always skipped Portals
-        props = _props_of(thing)
+        return None                # a raw dict row is never drawn
+    if Portal is not None and isinstance(thing, Portal):
+        return None                # the sprite pass has always skipped Portals
+    props = _props_of(thing)
     if Monster is not None and isinstance(thing, Monster):
         return _monster_sprite_candidates(props)
 
@@ -314,9 +297,6 @@ def sprite_candidates(thing):
 
 def sprite_size(thing):
     """The billboard's world size, in the order ``draw_sprites`` decides it."""
-    if isinstance(thing, dict):
-        return (float(thing.get('sprite_width', 128)),
-                float(thing.get('sprite_height', 128)))
     props = _props_of(thing)
     if Monster is not None and isinstance(thing, Monster):
         return (float(props.get('sprite_width', 128)),
@@ -339,12 +319,10 @@ def _entity_class_bits(thing) -> int:
     ``_sort_objects``.  Reads the same classes and the same property keys that
     chain read, in the same order, so the projection cannot disagree with it.
     """
-    # A monster render snapshot is a plain dict carrying 'monster_type'; the
-    # renderer's chain tests for exactly that before it tests for a Thing.
     if isinstance(thing, dict):
-        return ENT_ALWAYS_SPRITE if 'monster_type' in thing else ENT_SKIP
-    if PathNode is not None and isinstance(thing, PathNode):
         return ENT_SKIP
+    if PathNode is not None and isinstance(thing, PathNode):
+        return ENT_SKIP | ENT_PATH_NODE
     if Portal is not None and isinstance(thing, Portal):
         return ENT_ALWAYS_SPRITE | ENT_PORTAL
     if Thing is not None and not isinstance(thing, Thing):
@@ -381,10 +359,6 @@ def _entity_class_bits(thing) -> int:
         bits |= ENT_LIGHT
     if Effect is not None and isinstance(thing, Effect):
         bits |= ENT_EFFECT
-    warm_types = tuple(c for c in (Monster, LogicGate, Prop)
-                       if c is not None)
-    if warm_types and isinstance(thing, warm_types):
-        bits |= ENT_SPRITE_WARM
     return bits
 
 
@@ -565,65 +539,90 @@ def _render_alpha(thing):
         return 1.0
 
 
-def sprite_state(thing):
-    """Return the authored state that can change an entity's sprite recipe."""
-    props = thing if isinstance(thing, dict) else _props_of(thing)
-    if Monster is not None and isinstance(thing, Monster):
-        return (
-            'Monster',
-            bool(props.get('dead', False)),
-            bool(props.get('is_shooting', False)),
-            str(props.get('monster_type', 'human')),
-            str(props.get('variant', '<None>')),
-            str(props.get('custom_idle', '')),
-            str(props.get('custom_shoot', '')),
-            str(props.get('custom_dead', '')),
-        )
-    if LogicGate is not None and isinstance(thing, LogicGate):
-        return ('LogicGate', str(props.get('logic_type', 'and')).lower())
-    if Prop is not None and isinstance(thing, Prop):
-        return (
-            'Prop',
-            str(props.get('render_mode', 'model')).lower(),
-            str(props.get('sprite_path', '')),
-            str(props.get('model_path', '')),
-            str(props.get('texture', '')),
-            repr(props.get('color', [0.8, 0.8, 0.8])),
-            repr(props.get('rotation', [0.0, 0.0, 0.0])),
-            repr(props.get('scale', 1.0)),
-            repr(props.get('sprite_size', [32.0, 32.0])),
-            _carry_sprite_yaw(thing),
-        )
-    return None
+#: Every per-row column: ``(name, trailing shape, dtype, fill)``. One list, so
+#: growing the table and moving surviving rows at a reconcile cannot miss one.
+_COLUMNS = (
+    # float64 to match the brush table's centre column, so the two can be
+    # compared and combined without a cast.
+    ('pos', (3,), np.float64, 0.0),
+    ('class_bits', (), np.uint16, 0),
+    #: The authored ``hidden`` flag (Big World parks through it).
+    ('hidden', (), bool, False),
+    #: Per-light GL colour 0..1, (intensity, radius), on/off, shadows.
+    ('light_color', (3,), np.float32, 0.0),
+    ('light_params', (2,), np.float32, 0.0),
+    ('light_enabled', (), bool, False),
+    ('light_casts_shadows', (), bool, False),
+    #: Portal topology/render columns. Target links are resolved to integer
+    #: entity slots at reconcile.
+    ('portal_target_slot', (), np.int32, -1),
+    ('portal_active', (), bool, False),
+    ('portal_direction', (), np.uint8, 0),
+    ('portal_width_height', (2,), np.float32, 0.0),
+    ('portal_basis', (3, 3), np.float64, 0.0),
+    ('portal_fade', (), np.float32, 0.0),
+    ('portal_color', (3,), np.float32, 1.0),
+    ('portal_show_rim', (), bool, False),
+    #: Procedural Effect state. Authored data and the playback runtime the
+    #: Effect owns are resolved per row; elapsed/alive are advanced per frame
+    #: from those, numerically.
+    ('effect_type', (), np.uint8, 0),
+    ('effect_fire_variant', (), np.uint8, 0),
+    ('effect_custom_id', (), np.int32, 0),
+    ('effect_custom_loop', (), bool, True),
+    ('effect_preview', (), bool, False),
+    ('effect_params', (4,), np.float32, 0.0),
+    ('effect_color', (3,), np.float32, 1.0),
+    ('effect_light_color', (3,), np.float32, 1.0),
+    ('effect_light_enabled', (), bool, False),
+    ('effect_lifetime', (), np.float32, 0.5),
+    ('effect_seed', (), np.float32, 1.0),
+    #: When the animation started: the Effect's playback start, or the shared
+    #: clock origin for one that has none (see :data:`_CLOCK_ORIGIN`).
+    ('effect_spawn_time', (), np.float64, 0.0),
+    # Fraction of the animation cycle at which this Effect starts.
+    ('effect_phase', (), np.float32, 0.0),
+    ('effect_elapsed', (), np.float32, 0.0),
+    ('effect_active', (), bool, False),
+    ('effect_alive', (), bool, False),
+    #: The billboard's world size.
+    ('sprite_size', (2,), np.float32, 0.0),
+    #: Runtime opacity (a respawning Prop fades in).
+    ('render_alpha', (), np.float32, 1.0),
+    #: Locked world-facing yaw for a carried billboard; -10000 means an
+    #: ordinary camera-facing billboard.
+    ('sprite_fixed_yaw', (), np.float32, -10000.0),
+    #: Interned sprite recipe id; :data:`SPRITE_NONE` for a row that draws none.
+    ('sprite_key_id', (), np.int32, SPRITE_NONE),
+    #: Interned model recipe id; -1 means no model.
+    ('model_recipe_id', (), np.int32, -1),
+    #: Model transform, a flattened mat4, and its normal matrix padded to 12.
+    ('model_base_matrix', (16,), np.float32, 0.0),
+    ('model_normal_matrix', (12,), np.float32, 0.0),
+)
 
-
-def _sprite_state_fingerprint(state):
-    """Pack a sprite-state tuple into the numeric projection's uint64 column."""
-    return np.uint64(hash(state) & ((1 << 64) - 1))
+#: Seconds since import: the clock an Effect with no playback origin animates
+#: on. Both render buffers read the same one, and it stays small enough for the
+#: float32 elapsed column to keep millisecond precision.
+_CLOCK_ORIGIN = time.perf_counter()
 
 
 class EntityTable:
-    """A dense, disposable projection of a Thing list.
+    """A dense projection of a Thing list, kept current by change, not polling.
 
-    Rows are addressed by ``slot`` and named by ``properties['id']``.  Build
+    Rows are addressed by ``slot`` and named by ``properties['id']``. Build
     one, :meth:`begin_frame` it once per frame, and read its columns.
     """
 
-    __slots__ = ('generation', 'count', 'ids', 'slot_of_id', 'things',
-                 'pos', 'class_bits', 'light_slots', 'light_color',
-                 'light_params', 'light_enabled', 'light_casts_shadows',
-                 'portal_slots', 'portal_target_slot', 'portal_active',
-                 'portal_direction', 'portal_width_height', 'portal_basis',
-                 'portal_fade', 'portal_color', 'portal_show_rim',
-                 'monster_slots', 'effect_slots',
-                 'effect_type', 'effect_fire_variant', 'effect_custom_id', 'effect_custom_loop', 'effect_preview', 'effect_params', 'effect_color',
-                 'effect_light_color', 'effect_light_enabled', 'effect_lifetime', 'effect_seed',
-                  'effect_spawn_time', 'effect_shared_spawn_time', 'effect_phase', 'effect_elapsed', 'effect_active', 'effect_alive',
-                 'sprite_size', 'sprite_key_id', 'render_alpha', 'sprite_fixed_yaw', '_sprite_state',
-                 'model_recipe_id', 'model_base_matrix', 'model_normal_matrix',
-                 '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
-                 '_effect_custom_ids', '_effect_custom_paths',
-                 '_epoch', '_hidden_buf')
+    __slots__ = (tuple(name for name, *_ in _COLUMNS) + (
+        'generation', 'count', 'ids', 'slot_of_id', 'things',
+        'refs', 'all_slots', 'light_slots', 'portal_slots', 'monster_slots',
+        'path_node_slots',
+        'effect_slots',
+        '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
+        '_effect_custom_ids', '_effect_custom_paths',
+        '_epoch', '_slot_of_obj', '_poll_slots', '_row_tuple', 'rows_read',
+        '__weakref__'))
 
     def __init__(self):
         self.generation = 0
@@ -635,86 +634,28 @@ class EntityTable:
         #: slot -> the live entity.  A reference; the object's data still lives
         #: in exactly one place.
         self.things: list = []
+        #: ``id(entity)`` -> slot, for applying the change journal.
+        self._slot_of_obj: dict = {}
+        #: Rows whose object does not journal its changes (a raw dict standing
+        #: in for a Thing); their position and ``hidden`` are read per frame.
+        self._poll_slots = np.empty(0, dtype=np.intp)
+        for name, shape, dtype, fill in _COLUMNS:
+            setattr(self, name, np.full((0,) + shape, fill, dtype=dtype))
 
-        # float64 to match the brush table's centre column, so the two can be
-        # compared and combined without a cast.
-        self.pos = np.zeros((0, 3), dtype=np.float64)
-        self.class_bits = np.zeros((0,), dtype=np.uint16)
-        #: Dense portal topology/render columns. Target links are resolved to
-        #: integer entity slots at reconcile; transforms are refreshed only for
-        #: portal rows so moving/parented portals stay numeric in the renderer.
-        self.portal_slots = np.empty(0, dtype=np.int32)
-        self.portal_target_slot = np.full((0,), -1, dtype=np.int32)
-        self.portal_active = np.zeros((0,), dtype=bool)
-        self.portal_direction = np.zeros((0,), dtype=np.uint8)
-        self.portal_width_height = np.zeros((0, 2), dtype=np.float32)
-        self.portal_basis = np.zeros((0, 3, 3), dtype=np.float64)
-        self.portal_fade = np.zeros((0,), dtype=np.float32)
-        self.portal_color = np.ones((0, 3), dtype=np.float32)
-        self.portal_show_rim = np.zeros((0,), dtype=bool)
-
-        #: Slots of the Lights -- the frame's light list, without a scan.
+        #: slot -> the entity, as an object array (``PublishedEntities``).
+        self.refs = np.empty(0, dtype=object)
+        #: Every row, as a slot vector; rebuilt only when the rows change.
+        self.all_slots = np.empty(0, dtype=np.int32)
         self.light_slots = np.empty(0, dtype=np.int32)
-        #: Per-light GL colour, normalized to 0..1. Warm: I/O may change it.
-        self.light_color = np.zeros((0, 3), dtype=np.float32)
-        #: Per-light (intensity, radius). Warm because gameplay can mutate both.
-        self.light_params = np.zeros((0, 2), dtype=np.float32)
-        #: Live on/off state, kept numeric so GL never needs the Light object.
-        self.light_enabled = np.zeros((0,), dtype=bool)
-        #: Shadow participation, normalized from bool/string authored state.
-        self.light_casts_shadows = np.zeros((0,), dtype=bool)
-        #: Slots of the Monsters, whose published reference is a fresh snapshot
-        #: each frame.  The entity half of ``RenderTable.dynamic_slots``.
+        self.portal_slots = np.empty(0, dtype=np.int32)
+        self.path_node_slots = np.empty(0, dtype=np.int32)
         self.monster_slots = np.empty(0, dtype=np.int32)
-        #: Dense procedural Effect state. Authored data is cold; elapsed/alive
-        #: are runtime columns and the renderer never touches Effect objects.
         self.effect_slots = np.empty(0, dtype=np.int32)
-        self.effect_type = np.zeros((0,), dtype=np.uint8)
-        self.effect_fire_variant = np.zeros((0,), dtype=np.uint8)
-        self.effect_custom_id = np.zeros((0,), dtype=np.int32)
-        self.effect_custom_loop = np.ones((0,), dtype=bool)
-        self.effect_preview = np.zeros((0,), dtype=bool)
-        self.effect_params = np.zeros((0, 4), dtype=np.float32)
-        self.effect_color = np.ones((0, 3), dtype=np.float32)
-        self.effect_light_color = np.ones((0, 3), dtype=np.float32)
-        self.effect_light_enabled = np.zeros((0,), dtype=bool)
-        self.effect_lifetime = np.full((0,), 0.5, dtype=np.float32)
-        self.effect_seed = np.ones((0,), dtype=np.float32)
-        self.effect_spawn_time = np.zeros((0,), dtype=np.float64)
-        self.effect_shared_spawn_time = np.zeros((0,), dtype=np.float64)
-        # Fraction of the animation cycle at which this Effect starts.
-        self.effect_phase = np.zeros((0,), dtype=np.float32)
-        self.effect_elapsed = np.zeros((0,), dtype=np.float32)
-        self.effect_active = np.zeros((0,), dtype=bool)
-        self.effect_alive = np.zeros((0,), dtype=bool)
-
-        #: The billboard's world size. Cold: it comes from authored properties.
-        self.sprite_size = np.zeros((0, 2), dtype=np.float32)
-        #: Runtime opacity; defaults to opaque and is non-authored.
-        self.render_alpha = np.ones((0,), dtype=np.float32)
-        #: Locked world-facing yaw for a carried billboard. -10000 means
-        #: ordinary camera-facing billboard behaviour.
-        self.sprite_fixed_yaw = np.full((0,), -10000.0, dtype=np.float32)
-        #: Dense sprite recipe id per entity slot.  -1 means no sprite.
-        self.sprite_key_id = np.full((0,), SPRITE_NONE, dtype=np.int32)
-        self._sprite_state = np.zeros((0,), dtype=np.uint64)
-        #: Dense model recipe id per entity slot.  -1 means no model.
-        self.model_recipe_id = np.full((0,), -1, dtype=np.int32)
-        #: Cold model transform, flattened as a mat4 per entity slot.
-        self.model_base_matrix = np.zeros((0, 16), dtype=np.float32)
-        #: Cold normal transform, flattened as a 3x3 matrix padded to 12 floats.
-        self.model_normal_matrix = np.zeros((0, 12), dtype=np.float32)
-        #: Interned sprite identity, :data:`SPRITE_NONE` for a row that draws
-        #: none. Authored sprite identity is cold; Monster snapshots update it
-        #: directly when the logic thread publishes them.
-        # Candidate-list intern table.  GL-free, like the brush table's texture
+        # Recipe intern tables.  GL-free, like the brush table's texture
         # names: these are ids for *recipes*, and the renderer maps them to GL
-        # texture ids once per unique recipe on the thread that has a context.
+        # objects once per unique recipe on the thread that has a context.
         self._sprite_ids: dict = {}
         self._sprite_recipes: list = []
-        #: slot -> the state tuple its sprite identity was last resolved from.
-        #: A plain list: it is compared per warm row per frame and never
-        #: indexed numerically.
         self._model_ids = {}
         self._model_recipes = []
         #: Interned CUSTOM GIF paths; these remain cold data outside numeric rows.
@@ -722,9 +663,13 @@ class EntityTable:
         self._effect_custom_paths = []
 
         self._epoch = None
-        self._hidden_buf = np.empty(0, dtype=bool)
+        #: The row set as a tuple, for :meth:`needs_reconcile`.
+        self._row_tuple = ()
+        #: Rows whose entity the last :meth:`begin_frame` read (Debug Tables).
+        self.rows_read = 0
+        JOURNAL.subscribe(self)
 
-    # -- sprite identity interning ----------------------------------------
+    # -- recipe interning --------------------------------------------------
 
     def intern_sprite(self, candidates) -> int:
         """The dense id for a candidate list, assigning one on first sight."""
@@ -774,11 +719,6 @@ class EntityTable:
         """Interned model recipes, indexed by dense entity column id."""
         return self._model_recipes
 
-    def update_monster_snapshot(self, slot, snapshot):
-        """Publish a Monster render snapshot into numeric sprite columns."""
-        self.sprite_size[slot] = sprite_size(snapshot)
-        self.sprite_key_id[slot] = self.intern_sprite(sprite_candidates(snapshot))
-
     @property
     def center(self):
         """``pos`` under the name :class:`engine.render_table.RenderTable` uses.
@@ -795,496 +735,240 @@ class EntityTable:
     # -- capacity ----------------------------------------------------------
 
     def _resize(self, n):
-        if n <= len(self.pos):
+        capacity = len(self.pos)
+        if n <= capacity:
             return
-        grown = max(16, len(self.pos) * 2, n)
-
-        pos = np.zeros((grown, 3), dtype=np.float64)
-        if len(self.pos):
-            pos[:len(self.pos)] = self.pos
-        self.pos = pos
-
-        bits = np.zeros((grown,), dtype=np.uint16)
-        if len(self.class_bits):
-            bits[:len(self.class_bits)] = self.class_bits
-        self.class_bits = bits
-
-        light_color = np.zeros((grown, 3), dtype=np.float32)
-        if len(self.light_color):
-            light_color[:len(self.light_color)] = self.light_color
-        self.light_color = light_color
-        light_params = np.zeros((grown, 2), dtype=np.float32)
-        if len(self.light_params):
-            light_params[:len(self.light_params)] = self.light_params
-        self.light_params = light_params
-        light_enabled = np.zeros((grown,), dtype=bool)
-        if len(self.light_enabled):
-            light_enabled[:len(self.light_enabled)] = self.light_enabled
-        self.light_enabled = light_enabled
-        light_casts = np.zeros((grown,), dtype=bool)
-        if len(self.light_casts_shadows):
-            light_casts[:len(self.light_casts_shadows)] = self.light_casts_shadows
-        self.light_casts_shadows = light_casts
-        effect_type = np.zeros((grown,), dtype=np.uint8)
-        if len(self.effect_type):
-            effect_type[:len(self.effect_type)] = self.effect_type
-        self.effect_type = effect_type
-
-        effect_fire_variant = np.zeros((grown,), dtype=np.uint8)
-        if len(self.effect_fire_variant):
-            effect_fire_variant[:len(self.effect_fire_variant)] = self.effect_fire_variant
-        self.effect_fire_variant = effect_fire_variant
-
-        effect_custom_id = np.zeros((grown,), dtype=np.int32)
-        if len(self.effect_custom_id):
-            effect_custom_id[:len(self.effect_custom_id)] = self.effect_custom_id
-        self.effect_custom_id = effect_custom_id
-
-        effect_custom_loop = np.ones((grown,), dtype=bool)
-        if len(self.effect_custom_loop):
-            effect_custom_loop[:len(self.effect_custom_loop)] = self.effect_custom_loop
-        self.effect_custom_loop = effect_custom_loop
-
-        effect_preview = np.zeros((grown,), dtype=bool)
-        if len(self.effect_preview):
-            effect_preview[:len(self.effect_preview)] = self.effect_preview
-        self.effect_preview = effect_preview
-
-        effect_params = np.zeros((grown, 4), dtype=np.float32)
-        if len(self.effect_params):
-            effect_params[:len(self.effect_params)] = self.effect_params
-        self.effect_params = effect_params
-
-        effect_color = np.ones((grown, 3), dtype=np.float32)
-        if len(self.effect_color):
-            effect_color[:len(self.effect_color)] = self.effect_color
-        self.effect_color = effect_color
-
-        effect_light_color = np.ones((grown, 3), dtype=np.float32)
-        if len(self.effect_light_color):
-            effect_light_color[:len(self.effect_light_color)] = self.effect_light_color
-        self.effect_light_color = effect_light_color
-
-        effect_light_enabled = np.zeros((grown,), dtype=bool)
-        if len(self.effect_light_enabled):
-            effect_light_enabled[:len(self.effect_light_enabled)] = self.effect_light_enabled
-        self.effect_light_enabled = effect_light_enabled
-
-        effect_lifetime = np.full((grown,), 0.5, dtype=np.float32)
-        if len(self.effect_lifetime):
-            effect_lifetime[:len(self.effect_lifetime)] = self.effect_lifetime
-        self.effect_lifetime = effect_lifetime
-
-        effect_seed = np.ones((grown,), dtype=np.float32)
-        if len(self.effect_seed):
-            effect_seed[:len(self.effect_seed)] = self.effect_seed
-        self.effect_seed = effect_seed
-
-        effect_spawn = np.zeros((grown,), dtype=np.float64)
-        if len(self.effect_spawn_time):
-            effect_spawn[:len(self.effect_spawn_time)] = self.effect_spawn_time
-        self.effect_spawn_time = effect_spawn
-
-        effect_shared_spawn = np.zeros((grown,), dtype=np.float64)
-        if len(self.effect_shared_spawn_time):
-            effect_shared_spawn[:len(self.effect_shared_spawn_time)] = self.effect_shared_spawn_time
-        self.effect_shared_spawn_time = effect_shared_spawn
-
-        effect_phase = np.zeros((grown,), dtype=np.float32)
-        if len(self.effect_phase):
-            effect_phase[:len(self.effect_phase)] = self.effect_phase
-        self.effect_phase = effect_phase
-
-        effect_elapsed = np.zeros((grown,), dtype=np.float32)
-        if len(self.effect_elapsed):
-            effect_elapsed[:len(self.effect_elapsed)] = self.effect_elapsed
-        self.effect_elapsed = effect_elapsed
-
-        effect_active = np.zeros((grown,), dtype=bool)
-        if len(self.effect_active):
-            effect_active[:len(self.effect_active)] = self.effect_active
-        self.effect_active = effect_active
-
-        effect_alive = np.zeros((grown,), dtype=bool)
-        if len(self.effect_alive):
-            effect_alive[:len(self.effect_alive)] = self.effect_alive
-        self.effect_alive = effect_alive
-
-        size = np.zeros((grown, 2), dtype=np.float32)
-        if len(self.sprite_size):
-            size[:len(self.sprite_size)] = self.sprite_size
-        self.sprite_size = size
-
-        render_alpha = np.ones((grown,), dtype=np.float32)
-        if len(self.render_alpha):
-            render_alpha[:len(self.render_alpha)] = self.render_alpha
-        self.render_alpha = render_alpha
-
-        fixed_yaw = np.full((grown,), -10000.0, dtype=np.float32)
-        if len(self.sprite_fixed_yaw):
-            fixed_yaw[:len(self.sprite_fixed_yaw)] = self.sprite_fixed_yaw
-        self.sprite_fixed_yaw = fixed_yaw
-
-        keys = np.full((grown,), SPRITE_NONE, dtype=np.int32)
-        if len(self.sprite_key_id):
-            keys[:len(self.sprite_key_id)] = self.sprite_key_id
-        self.sprite_key_id = keys
-
-        sprite_state_bits = np.zeros((grown,), dtype=np.uint64)
-        if len(self._sprite_state):
-            sprite_state_bits[:len(self._sprite_state)] = self._sprite_state
-        self._sprite_state = sprite_state_bits
-
-        model_ids = np.full((grown,), -1, dtype=np.int32)
-        if len(self.model_recipe_id):
-            model_ids[:len(self.model_recipe_id)] = self.model_recipe_id
-        self.model_recipe_id = model_ids
-
-        base = np.zeros((grown, 16), dtype=np.float32)
-        if len(self.model_base_matrix):
-            base[:len(self.model_base_matrix)] = self.model_base_matrix
-        self.model_base_matrix = base
-
-        normal = np.zeros((grown, 12), dtype=np.float32)
-        if len(self.model_normal_matrix):
-            normal[:len(self.model_normal_matrix)] = self.model_normal_matrix
-        self.model_normal_matrix = normal
-
-        ptarget = np.full((grown,), -1, dtype=np.int32)
-        if len(self.portal_target_slot):
-            ptarget[:len(self.portal_target_slot)] = self.portal_target_slot
-        self.portal_target_slot = ptarget
-
-        pactive = np.zeros((grown,), dtype=bool)
-        if len(self.portal_active):
-            pactive[:len(self.portal_active)] = self.portal_active
-        self.portal_active = pactive
-
-        pdirection = np.zeros((grown,), dtype=np.uint8)
-        if len(self.portal_direction):
-            pdirection[:len(self.portal_direction)] = self.portal_direction
-        self.portal_direction = pdirection
-
-        psize = np.zeros((grown, 2), dtype=np.float32)
-        if len(self.portal_width_height):
-            psize[:len(self.portal_width_height)] = self.portal_width_height
-        self.portal_width_height = psize
-
-        pbasis = np.zeros((grown, 3, 3), dtype=np.float64)
-        if len(self.portal_basis):
-            pbasis[:len(self.portal_basis)] = self.portal_basis
-        self.portal_basis = pbasis
-
-        pfade = np.zeros((grown,), dtype=np.float32)
-        if len(self.portal_fade):
-            pfade[:len(self.portal_fade)] = self.portal_fade
-        self.portal_fade = pfade
-
-        pcolor = np.ones((grown, 3), dtype=np.float32)
-        if len(self.portal_color):
-            pcolor[:len(self.portal_color)] = self.portal_color
-        self.portal_color = pcolor
-
-        prim = np.zeros((grown,), dtype=bool)
-        if len(self.portal_show_rim):
-            prim[:len(self.portal_show_rim)] = self.portal_show_rim
-        self.portal_show_rim = prim
+        grown = max(16, capacity * 2, n)
+        for name, shape, dtype, fill in _COLUMNS:
+            old = getattr(self, name)
+            new = np.full((grown,) + shape, fill, dtype=dtype)
+            new[:capacity] = old
+            setattr(self, name, new)
 
     # -- synchronisation ---------------------------------------------------
 
     def needs_reconcile(self, things, epoch=None) -> bool:
         """Whether the next :meth:`begin_frame` will rebuild the row mapping.
 
-        Two O(1) comparisons, so a caller that has to stamp ids before a
-        reconcile can ask rather than stamping unconditionally every frame.
+        The epoch says the editor changed something; the row comparison
+        catches what changes the entity list without one -- a Kill and a
+        spawn in the same frame leave the count alone. Comparing two tuples
+        of the same objects is an identity check per element in C, a few
+        nanoseconds a row, and reads nothing from any entity.
         """
-        return epoch is None or epoch != self._epoch or len(things) != self.count
+        if epoch is None or epoch != self._epoch:
+            return True
+        return tuple(things) != self._row_tuple
 
     def begin_frame(self, things, epoch=None, dirty_objects=None,
-                    effect_runtime=False):
-        """Bring the table into line with *things*; return the live hidden mask.
+                    effect_runtime=False, peer=None):
+        """Bring the table into line with *things*; return the ``hidden`` mask.
 
-        The whole of the projection's per-frame Python cost: one comprehension
-        reading ``pos`` and one reading ``hidden``.  Both are bulk-stored into
-        their columns -- assigning a NumPy array element by element from Python
-        costs several times as much, and this runs over every entity in the
-        level every frame.
-
-        ``hidden`` is the one field that cannot be cached, for the reason the
-        brush table gives: Big World parks through it with no notification.
+        Nothing here visits an entity that has not changed. The row set is
+        reconciled when the editor's world epoch moves; after that, the rows
+        that change are the ones :mod:`engine.change_journal` names -- entities
+        that moved (``pos`` assignment journals itself) and entities whose
+        render state changed (``touch``). The only per-frame work over the
+        whole table is the Effect clock, which is column arithmetic.
         """
-        # The logic thread normally hands us EditorState.things, which is a
-        # live list also reachable from the editor/main thread. Freeze the
-        # sequence at the frame boundary before deriving any dense column.
-        # Otherwise a concurrent append/remove can make n describe one list
-        # while a later comprehension sees another length, producing mismatched
-        # table columns (and, worse, silently truncated position data in
-        # np.fromiter(..., count=...) ).
+        # The logic thread normally hands us EditorState.things, a live list
+        # the editor thread can also append to. Freeze it at the frame
+        # boundary so every step below sees the same rows.
         things = tuple(things)
         n = len(things)
+        changes = JOURNAL.drain(self)
+        self.rows_read = 0
+        resolved_all = False
         if self.needs_reconcile(things, epoch):
-            self._reconcile(things, dirty_objects=dirty_objects)
+            if self._refresh_in_place(things, epoch, dirty_objects):
+                pass
+            elif (peer is not None and dirty_objects is None and epoch is not None
+                    and peer._epoch == epoch and peer._row_tuple == things):
+                # The other buffer's table already resolved exactly these
+                # rows at this epoch: copy rather than re-derive.
+                self.adopt(peer)
+            else:
+                resolved_all = self._reconcile(things, dirty_objects=dirty_objects)
             self._epoch = epoch
-
-        if n:
-            try:
-                rows = [t.pos for t in things]
-            except AttributeError:
-                # A row standing in as a raw dict rather than a Thing.  The
-                # retry keeps the ordinary path a bare attribute read; see the
-                # same shape below for `hidden`.
-                rows = [_pos_of(t) for t in things]
-            # Flattened rather than stored as a list of triples: NumPy's
-            # nested-sequence conversion walks and type-checks every inner
-            # sequence, and feeding it one flat stream instead is twice as
-            # fast over the whole entity list.  Measured, not assumed --
-            # 0.218 ms against 0.096 ms at 961 entities.
-            self.pos[:n].reshape(-1)[:] = np.fromiter(
-                chain.from_iterable(rows), dtype=np.float64, count=n * 3)
-            # The publish loop this replaces also normalised a glm vector back
-            # onto the entity.  The store above is already correct either way,
-            # so this repairs the entity, and only when one is actually
-            # present.  `set(map(type, ...))` is a native scan, so the ordinary
-            # case pays no Python-level branch per entity.
-            if not set(map(type, rows)) <= {list}:
-                for i, p in enumerate(rows):
-                    if type(p) is not list:
-                        things[i].pos = [float(p[0]), float(p[1]), float(p[2])]
-
-        # Authored sprite identity is cold. Dynamic Monster sprite identity is
-        # published from the existing snapshot path, avoiding a second object walk.
-        # Portal state is the other small live entity family; keep it numeric so
-        # secondary render views never need Portal objects.
-        warm_slots = np.flatnonzero(
-            self.class_bits[:n] & ENT_SPRITE_WARM
-        ).astype(np.int32, copy=False)
-        if len(warm_slots):
-            changed = []
-            for slot_value in warm_slots:
-                slot = int(slot_value)
-                thing = things[slot]
-                state = _sprite_state_fingerprint(sprite_state(thing))
-                if state != self._sprite_state[slot]:
-                    changed.append(slot)
-                if self.class_bits[slot] & ENT_PROP:
-                    self.render_alpha[slot] = _render_alpha(thing)
-            if changed:
-                self.refresh_rows(things, changed)
-
-        self._refresh_portal_live(things)
-
-        # Effect animation phase is runtime state shared by both render buffers.
-        # Copy only Effect rows: a phase is assigned once per playback and then
-        # remains stable, so the renderer can animate from a dense numeric column.
+        # A reconcile that re-resolved every row has read everything the
+        # journal could name.
+        if resolved_all:
+            pass
+        elif changes is OVERFLOW:
+            self.refresh_rows(things, range(n))
+        elif changes:
+            self._apply_changes(things, changes)
+        if len(self._poll_slots):
+            self._poll(things)
         if len(self.effect_slots):
-            effect_phase = np.fromiter(
-                (
-                    max(0.0, min(1.0, float(
-                        getattr(things[int(slot)], "_effect_animation_phase", 0.0)
-                    )))
-                    for slot in self.effect_slots
-                ),
-                dtype=np.float32,
-                count=len(self.effect_slots),
-            )
-            self.effect_phase[self.effect_slots] = effect_phase
+            self._advance_effects(effect_runtime)
+        return self.hidden[:n]
 
-        # Light state is render state, not renderer metadata. Ordinary Lights
-        # retain their existing warm object-backed state; Effect rows stay fully
-        # numeric and derive animated light from the dense effect columns.
-        if len(self.light_slots):
-            ls = self.light_slots
-            effect_mask = (self.class_bits[ls] & ENT_EFFECT) != 0
-            normal_ls = ls[~effect_mask]
-            effect_ls = ls[effect_mask]
+    def adopt(self, peer):
+        """Become a copy of *peer*: its rows, columns and intern tables."""
+        for name, *_ in _COLUMNS:
+            setattr(self, name, getattr(peer, name).copy())
+        self.count = peer.count
+        self.ids = list(peer.ids)
+        self.slot_of_id = dict(peer.slot_of_id)
+        self.things = list(peer.things)
+        self.refs = peer.refs.copy()
+        for name in ('all_slots', 'light_slots', 'portal_slots', 'monster_slots',
+                     'path_node_slots', 'effect_slots', '_poll_slots'):
+            setattr(self, name, getattr(peer, name).copy())
+        self._sprite_ids = dict(peer._sprite_ids)
+        self._sprite_recipes = list(peer._sprite_recipes)
+        self._model_ids = dict(peer._model_ids)
+        self._model_recipes = list(peer._model_recipes)
+        self._effect_custom_ids = dict(peer._effect_custom_ids)
+        self._effect_custom_paths = list(peer._effect_custom_paths)
+        self._epoch = peer._epoch
+        self._row_tuple = peer._row_tuple
+        self._slot_of_obj = dict(peer._slot_of_obj)
+        self.generation += 1
 
-            if len(normal_ls):
-                light_rows = [things[int(i)] for i in normal_ls]
-                self.light_color[normal_ls] = np.asarray(
-                    [_light_color_of(t) for t in light_rows], dtype=np.float32)
-                self.light_params[normal_ls] = np.asarray(
-                    [[_light_float(t, 'intensity', 1.0),
-                      _light_float(t, 'radius', 512.0)] for t in light_rows],
-                    dtype=np.float32)
-                self.light_enabled[normal_ls] = np.asarray(
-                    [_light_bool(t, 'state', True) for t in light_rows], dtype=bool)
-                self.light_casts_shadows[normal_ls] = np.asarray(
-                    [_light_bool(t, 'casts_shadows', False) for t in light_rows],
-                    dtype=bool)
+    def _refresh_in_place(self, things, epoch, dirty_objects):
+        """An editor transaction on an unchanged row set: re-resolve its rows.
 
-            if len(effect_ls):
-                # Animation origin is runtime state owned by the Effect itself,
-                # not by this particular render buffer. Two RenderState buffers
-                # alternate ownership; keeping the clock only in EntityTable
-                # makes A/B swap phases differ by a logic tick. Read the shared
-                # object state into the dense column before any timing decision.
-                runtime_spawns = np.fromiter(
-                    (
-                        float(getattr(things[int(slot)], "_effect_spawn_time", 0.0))
-                        for slot in effect_ls
-                    ),
-                    dtype=np.float64,
-                    count=len(effect_ls),
-                )
-                shared_spawns = self.effect_shared_spawn_time[effect_ls]
-                changed_shared = runtime_spawns != shared_spawns
-                if np.any(changed_shared):
-                    changed_slots = effect_ls[changed_shared]
-                    self.effect_spawn_time[changed_slots] = runtime_spawns[changed_shared]
-                self.effect_shared_spawn_time[effect_ls] = runtime_spawns
+        A reconcile walks every row -- ids, identities, the slot maps -- which
+        on a few thousand entities is most of an editor frame, for an edit
+        that touched one. When the rows are exactly the ones already
+        reconciled and the journal names the changed objects, only their rows
+        can be stale. Returns False, having changed nothing, otherwise.
+        """
+        if (epoch is None or self._epoch is None or dirty_objects is None
+                or things != self._row_tuple):
+            return False
+        slot_of = self._slot_of_obj
+        slots = [slot_of[oid] for oid in dirty_objects if oid in slot_of]
+        for slot in slots:
+            if _props_of(things[slot]).get('id') != self.ids[slot]:
+                return False                # renamed: the id map moves
+        portal_rows = any(self.class_bits[slot] & ENT_PORTAL for slot in slots)
+        self.refresh_rows(things, slots)
+        if portal_rows or any(self.class_bits[slot] & ENT_PORTAL for slot in slots):
+            # A portal's name or target may be what changed.
+            self._resolve_portal_links(things)
+        return True
 
-                now = float(time.perf_counter())
-                explosion = self.effect_type[effect_ls] == 1
-                fire = ~explosion
+    def _apply_changes(self, things, changes):
+        """Re-read the rows the change journal names, and nothing else."""
+        slot_of = self._slot_of_obj
+        moved = []
+        state = []
+        for oid, flags in changes.items():
+            slot = slot_of.get(oid)
+            if slot is None:
+                continue
+            if flags & STATE:
+                state.append(slot)
+            else:
+                moved.append(slot)
+        if moved:
+            self._read_positions(things, moved)
+        if state:
+            self.refresh_rows(things, state)
 
-                # FIRE is continuously active. EXPLOSION is dormant until the
-                # I/O handler starts it, then consumes its lifetime exactly once.
-                if np.any(fire):
-                    fire_slots = effect_ls[fire]
-                    unset_fire = self.effect_spawn_time[fire_slots] <= 0.0
-                    if np.any(unset_fire):
-                        start_slots = fire_slots[unset_fire]
-                        self.effect_spawn_time[start_slots] = now
-                        self.effect_shared_spawn_time[start_slots] = now
-                        # Persist the same origin on the authored Effect runtime
-                        # object so the other render buffer sees it on its next
-                        # publication instead of inventing a second origin.
-                        for slot in start_slots:
-                            try:
-                                things[int(slot)]._effect_spawn_time = now
-                            except AttributeError:
-                                pass
-                    self.effect_active[fire_slots] = True
+    def _read_positions(self, things, slots):
+        self.rows_read += len(slots)
+        slots = np.asarray(slots, dtype=np.intp)
+        self.pos[slots] = np.fromiter(
+            chain.from_iterable(_pos_of(things[s]) for s in slots.tolist()),
+            dtype=np.float64, count=len(slots) * 3).reshape(-1, 3)
 
-                active = self.effect_active[effect_ls]
-                explosion_active = explosion & active
-                if effect_runtime:
-                    elapsed = np.maximum(
-                        now - self.effect_spawn_time[effect_ls], 0.0
-                    ).astype(np.float32, copy=False)
-                else:
-                    # FIRE animates in the editor; EXPLOSION remains dormant
-                    # until an Explode input is fired.
-                    elapsed = np.where(
-                        fire, max(now, 0.0), 0.0
-                    ).astype(np.float32, copy=False)
+    def _poll(self, things):
+        """Rows whose objects cannot journal: read what may have changed."""
+        slots = self._poll_slots
+        self._read_positions(things, slots)
+        self.hidden[slots] = [
+            bool(_props_of(things[s]).get('hidden', False)) for s in slots.tolist()]
 
-                lifetime = np.maximum(self.effect_lifetime[effect_ls], 0.01)
-                # Editor preview makes an otherwise dormant EXPLOSION visible
-                # at atlas frame 10 without arming its runtime state.
-                preview_explosion = (
-                    explosion
-                    & self.effect_preview[effect_ls]
-                    & (not effect_runtime)
-                )
-                expired = explosion_active & (elapsed >= lifetime)
-                if np.any(expired):
-                    expired_slots = effect_ls[expired]
-                    self.effect_active[expired_slots] = False
-                    active = self.effect_active[effect_ls]
-                explosion_active = explosion & active
+    def _advance_effects(self, effect_runtime):
+        """The Effect clock: elapsed time, liveness and light, as columns.
 
-                # Effect lights are numeric too. FIRE keeps its authored light
-                # continuously; EXPLOSION gets only a short decaying flash when
-                # actually triggered in runtime. Editor preview emits no light.
-                self.light_enabled[effect_ls] = self.effect_light_enabled[effect_ls]
-                self.light_params[effect_ls, 0] = self.effect_params[effect_ls, 2]
-                self.light_params[effect_ls, 1] = self.effect_params[effect_ls, 3]
-                if np.any(explosion):
-                    explosion_slots = effect_ls[explosion]
-                    if effect_runtime:
-                        explosion_elapsed = elapsed[explosion]
-                        explosion_lifetime = lifetime[explosion]
-                        flash_duration = np.minimum(explosion_lifetime, 0.12)
-                        flash_active = (
-                            explosion_active[explosion]
-                            & (explosion_elapsed < flash_duration)
-                        )
-                        decay = np.exp(-explosion_elapsed / 0.035).astype(
-                            np.float32, copy=False
-                        )
-                        base = self.effect_params[explosion_slots, 2]
-                        self.light_enabled[explosion_slots] = (
-                            self.effect_light_enabled[explosion_slots]
-                            & flash_active
-                        )
-                        self.light_params[explosion_slots, 0] = (
-                            base * (1.0 + 2.0 * decay)
-                        )
-                    else:
-                        self.light_enabled[explosion_slots] = False
+        Everything here is derived from columns resolved from the Effect's own
+        runtime state (:attr:`effect_spawn_time`, :attr:`effect_active`), so
+        the two render buffers compute the same frame from the same entity.
+        """
+        effect_ls = self.effect_slots
+        now = time.perf_counter()
+        explosion = self.effect_type[effect_ls] == 1
+        fire = ~explosion
+        origin = self.effect_spawn_time[effect_ls]
+        lifetime = np.maximum(self.effect_lifetime[effect_ls], 0.01)
 
-                # EXPLOSION preview is editor-only and static: place the
-                # sprite on atlas frame 10 without arming runtime playback.
-                if np.any(preview_explosion):
-                    preview_slots = effect_ls[preview_explosion]
-                    preview_t = (
-                        (float(_EXPLOSION_PREVIEW_FRAME) - 0.5)
-                        / _EXPLOSION_FRAME_COUNT
-                    )
-                    self.effect_elapsed[preview_slots] = (
-                        np.maximum(self.effect_lifetime[preview_slots], 0.01)
-                        * preview_t
-                    ).astype(np.float32, copy=False)
-                else:
-                    self.effect_elapsed[effect_ls] = elapsed
+        if effect_runtime:
+            elapsed = np.maximum(now - origin, 0.0).astype(np.float32)
+            explosion_active = (explosion & self.effect_active[effect_ls]
+                                & (elapsed < lifetime))
+            preview_explosion = np.zeros_like(explosion)
+        else:
+            # The editor animates FIRE and leaves EXPLOSION dormant; with
+            # preview on, an EXPLOSION is shown on its atlas preview frame.
+            elapsed = np.where(
+                fire, np.float32(now - _CLOCK_ORIGIN), np.float32(0.0)
+            ).astype(np.float32)
+            explosion_active = np.zeros_like(explosion)
+            preview_explosion = explosion & self.effect_preview[effect_ls]
 
-                # FIRE light flicker is derived from the same deterministic
-                # seed/clock family as the procedural flame.  The base authored
-                # intensity remains in effect_params[:, 2]; this only modulates
-                # the live light column so authored properties stay unchanged.
-                if np.any(fire):
-                    fire_slots = effect_ls[fire]
-                    flicker = _effect_flicker(
-                        self.effect_seed[fire_slots],
-                        elapsed[fire] + self.effect_phase[fire_slots],
-                    )
-                    base_light = self.effect_params[fire_slots, 2]
-                    self.light_params[fire_slots, 0] = (
-                        base_light * (0.78 + 0.38 * flicker)
-                    )
+        # Effect lights: FIRE keeps its authored light; an EXPLOSION gets a
+        # short decaying flash only when actually triggered at runtime.
+        self.light_enabled[effect_ls] = self.effect_light_enabled[effect_ls]
+        self.light_params[effect_ls, 0] = self.effect_params[effect_ls, 2]
+        self.light_params[effect_ls, 1] = self.effect_params[effect_ls, 3]
+        if explosion.any():
+            explosion_slots = effect_ls[explosion]
+            if effect_runtime:
+                explosion_elapsed = elapsed[explosion]
+                flash_active = (explosion_active[explosion]
+                                & (explosion_elapsed
+                                   < np.minimum(lifetime[explosion], 0.12)))
+                decay = np.exp(-explosion_elapsed / 0.035).astype(np.float32)
+                self.light_enabled[explosion_slots] = (
+                    self.effect_light_enabled[explosion_slots] & flash_active)
+                self.light_params[explosion_slots, 0] = (
+                    self.effect_params[explosion_slots, 2] * (1.0 + 2.0 * decay))
+            else:
+                self.light_enabled[explosion_slots] = False
 
-                alive = fire | explosion_active | preview_explosion
-                self.effect_alive[effect_ls] = alive
+        if preview_explosion.any():
+            preview_t = ((float(_EXPLOSION_PREVIEW_FRAME) - 0.5)
+                         / _EXPLOSION_FRAME_COUNT)
+            elapsed = np.where(preview_explosion,
+                               (lifetime * preview_t).astype(np.float32),
+                               elapsed)
+        self.effect_elapsed[effect_ls] = elapsed
 
-        if len(self._hidden_buf) < n:
-            self._hidden_buf = np.empty(max(n, 16), dtype=bool)
-        hidden = self._hidden_buf[:n]
-        if n:
-            try:
-                hidden[:] = [t.properties.get('hidden', False) for t in things]
-            except AttributeError:
-                # A row that is not a Thing -- a raw dict standing in for one.
-                # Rare enough to be worth the retry rather than a per-entity
-                # getattr on the ordinary path, which costs nearly twice as much.
-                hidden[:] = [_props_of(t).get('hidden', False) for t in things]
-        return hidden
+        # FIRE light flicker, from the same seed/clock family as the
+        # procedural flame. Modulates the live light column only.
+        if fire.any():
+            fire_slots = effect_ls[fire]
+            flicker = _effect_flicker(
+                self.effect_seed[fire_slots],
+                elapsed[fire] + self.effect_phase[fire_slots])
+            self.light_params[fire_slots, 0] = (
+                self.effect_params[fire_slots, 2] * (0.78 + 0.38 * flicker))
+
+        self.effect_alive[effect_ls] = fire | explosion_active | preview_explosion
 
     def sync(self, things, epoch=None, dirty_objects=None) -> bool:
-        """Reconcile without reading ``hidden``.  Returns whether it did.
+        """Reconcile without the frame's journal step.  Returns whether it did.
 
         :meth:`begin_frame` is what the render path calls; this is for callers
         bringing the columns up to date on their own schedule -- tests, and
         anything preparing a pass outside the frame loop.
         """
         before = self.generation
-        structural = self.needs_reconcile(things, epoch)
-        if not structural:
-            # The identity check :meth:`begin_frame` deliberately does not pay
-            # for: an entity replaced in place, at the same index, by something
-            # that bumped no counter.  Off the frame path it is affordable, and
-            # it is what lets a test drive the table without an epoch.
-            for i, thing in enumerate(things):
-                if self.things[i] is not thing:
-                    structural = True
-                    break
-        if structural:
+        if self.needs_reconcile(things, epoch):
             self._reconcile(things, dirty_objects=dirty_objects)
             self._epoch = epoch
         return self.generation != before
 
-    def _reconcile(self, things, dirty_objects=None):
-        """Rebuild slot mapping while preserving untouched cold entity rows."""
+    def _reconcile(self, things, dirty_objects=None) -> bool:
+        """Rebuild the slot mapping, keeping surviving rows' resolved columns.
+
+        Returns whether every row was re-resolved.
+        """
         n = len(things)
         self._resize(max(n, 16))
 
@@ -1313,46 +997,40 @@ class EntityTable:
         if move_src:
             src = np.asarray(move_src, dtype=np.intp)
             dst = np.asarray(move_dst, dtype=np.intp)
-            for arr in (self.class_bits, self.light_color, self.light_params,
-                        self.light_enabled, self.light_casts_shadows,
-                        self.sprite_size, self.render_alpha, self.sprite_key_id,
-                        self.sprite_fixed_yaw, self._sprite_state, self.model_recipe_id, self.model_base_matrix,
-                        self.model_normal_matrix, self.effect_type,
-                        self.effect_fire_variant, self.effect_custom_id,
-                        self.effect_custom_loop, self.effect_params, self.effect_color,
-                        self.effect_light_color, self.effect_light_enabled, self.effect_lifetime,
-                         self.effect_seed, self.effect_spawn_time,
-                        self.effect_phase, self.effect_elapsed, self.effect_active,
-                        self.effect_alive,
-                        self.portal_target_slot,
-                        self.portal_active, self.portal_direction,
-                        self.portal_width_height, self.portal_basis,
-                        self.portal_fade, self.portal_color,
-                        self.portal_show_rim):
-                arr[dst] = arr[src]
-
-        for slot, thing in enumerate(things):
-            self.pos[slot] = _pos_of(thing)
-            if slot not in survivors:
-                self._resolve_entity_cold(slot, thing)
+            for name, *_ in _COLUMNS:
+                column = getattr(self, name)
+                column[dst] = column[src]
 
         self.ids = ids
         self.slot_of_id = {eid: slot for slot, eid in enumerate(ids)
                            if eid is not None}
+        self._slot_of_obj = {id(thing): slot for slot, thing in enumerate(things)}
         self.things = list(things)
+        self._row_tuple = tuple(things)
+        refs = np.empty(n, dtype=object)
+        for slot, thing in enumerate(things):
+            refs[slot] = thing
+        self.refs = refs
         self.count = n
+        # Rows before the class columns below are recomputed: a row resolved
+        # here has its own class bits by the time the slot vectors are built.
+        self.refresh_rows(things, [slot for slot in range(n)
+                                   if slot not in survivors])
         bits = self.class_bits[:n]
-        self.effect_slots = np.flatnonzero(
-            bits & ENT_EFFECT
-        ).astype(np.int32)
+        self.all_slots = np.arange(n, dtype=np.int32)
+        self.effect_slots = np.flatnonzero(bits & ENT_EFFECT).astype(np.int32)
         self.light_slots = np.flatnonzero(
-            bits & (ENT_LIGHT | ENT_EFFECT)
-        ).astype(np.int32)
+            bits & (ENT_LIGHT | ENT_EFFECT)).astype(np.int32)
         self.portal_slots = np.flatnonzero(bits & ENT_PORTAL).astype(np.int32)
         self.monster_slots = np.flatnonzero(bits & ENT_MONSTER).astype(np.int32)
+        self.path_node_slots = np.flatnonzero(
+            bits & ENT_PATH_NODE).astype(np.int32)
+        self._poll_slots = np.asarray(
+            [slot for slot, thing in enumerate(things) if not is_tracked(thing)],
+            dtype=np.intp)
         self._resolve_portal_links(things)
         self.generation += 1
-
+        return not survivors
 
     def _resolve_portal_links(self, things):
         """Resolve authored portal names to integer entity slots."""
@@ -1383,30 +1061,12 @@ class EntityTable:
             return PORTAL_DIRECTION_BOTH
         return 0
 
-    def _refresh_portal_live(self, things):
-        """Refresh only runtime-mutated portal state."""
-        if not len(self.portal_slots):
-            return
-        for slot_value in self.portal_slots:
-            slot = int(slot_value)
-            thing = things[slot]
-            props = _props_of(thing)
-            self.portal_active[slot] = _bool_property(
-                props.get('active', True), True)
-            self.portal_fade[slot] = float(
-                max(0.0, min(1.0, _float_property(
-                    getattr(thing, '_fade_alpha', 1.0), 1.0))))
-            # Parent movers can change a portal's world orientation at runtime.
-            # Authored dimensions, direction, rim and colour remain cold.
-            self.portal_basis[slot] = np.asarray(
-                basis_from_rotation(props.get(
-                    'rotation', [props.get('angle', 0.0), 0.0, 0.0])),
-                dtype=np.float64)
 
-    def _resolve_entity_cold(self, slot, thing):
+    def _resolve_row(self, slot, thing):
         """Resolve authored render state for one entity row."""
         self.class_bits[slot] = _entity_class_bits(thing)
-        self._sprite_state[slot] = _sprite_state_fingerprint(sprite_state(thing))
+        props = _props_of(thing)
+        self.hidden[slot] = bool(props.get('hidden', False))
 
         # Sprite identity/size is cold for authored entities.  This must be
         # resolved at the same edit boundary as class_bits/model_recipe_id:
@@ -1484,15 +1144,20 @@ class EntityTable:
             )
             self.effect_lifetime[slot] = lifetime
             self.effect_seed[slot] = seed
-            self.effect_spawn_time[slot] = 0.0
-            self.effect_phase[slot] = float(
-                max(0.0, min(1.0, float(
-                    getattr(thing, "_effect_animation_phase", 0.0)
-                )))
-            )
+            # Playback runtime is the Effect's own (Explode, SetType and a
+            # reset all write it there and journal the change), so both
+            # render buffers resolve the same origin from it.
+            # The column is the animation's origin: an Effect with no
+            # playback start (a looping FIRE) runs on the shared clock.
+            spawn = _float_property(getattr(thing, '_effect_spawn_time', 0.0), 0.0)
+            self.effect_spawn_time[slot] = spawn if spawn > 0.0 else _CLOCK_ORIGIN
+            self.effect_phase[slot] = max(0.0, min(1.0, _float_property(
+                getattr(thing, '_effect_animation_phase', 0.0), 0.0)))
+            active = bool(getattr(thing, '_effect_active',
+                                  effect_type != 'EXPLOSION'))
             self.effect_elapsed[slot] = 0.0
-            self.effect_active[slot] = effect_type != 'EXPLOSION'
-            self.effect_alive[slot] = effect_type != 'EXPLOSION'
+            self.effect_active[slot] = active
+            self.effect_alive[slot] = effect_type != 'EXPLOSION' or active
 
             self.sprite_size[slot] = (width, height)
             self.light_color[slot] = self.effect_light_color[slot]
@@ -1539,8 +1204,19 @@ class EntityTable:
             self.model_normal_matrix[slot, 5] = 1.0
             self.model_normal_matrix[slot, 10] = 1.0
 
+        if (self.class_bits[slot] & (ENT_LIGHT | ENT_EFFECT)) == ENT_LIGHT:
+            self.light_color[slot] = _light_color_of(thing)
+            self.light_params[slot] = (_light_float(thing, 'intensity', 1.0),
+                                       _light_float(thing, 'radius', 512.0))
+            self.light_enabled[slot] = _light_bool(thing, 'state', True)
+            self.light_casts_shadows[slot] = _light_bool(
+                thing, 'casts_shadows', False)
+
         if self.class_bits[slot] & ENT_PORTAL:
-            props = _props_of(thing)
+            self.portal_active[slot] = _bool_property(
+                props.get('active', True), True)
+            self.portal_fade[slot] = max(0.0, min(1.0, _float_property(
+                getattr(thing, '_fade_alpha', 1.0), 1.0)))
             self.portal_direction[slot] = self._portal_direction_code(
                 props.get('portal_direction', 'both'))
             self.portal_width_height[slot] = (
@@ -1563,10 +1239,14 @@ class EntityTable:
                 dtype=np.float64)
 
     def refresh_rows(self, things, slots):
-        """Re-resolve cold render columns for *slots* after an editor change."""
+        """Re-resolve every column of *slots* from their entities."""
+        slots = list(slots)
+        self.rows_read += len(slots)
         for slot in slots:
             slot = int(slot)
-            self._resolve_entity_cold(slot, things[slot])
+            thing = things[slot]
+            self.pos[slot] = _pos_of(thing)
+            self._resolve_row(slot, thing)
 
 
 _EMPTY: dict = {}

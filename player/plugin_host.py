@@ -82,6 +82,8 @@ class PlayerPluginHost:
         self.manager = None
         self.bridge: Optional[_BridgeLogic] = None
         self.active = False
+        # True between build_and_start() and stop(): a session is running.
+        self._playing = False
         self.hud_message = ""
 
     # ------------------------------------------------------------------
@@ -150,6 +152,8 @@ class PlayerPluginHost:
         """Instantiate core Props and plugin entities, then start play."""
         if not self.active or self.manager is None:
             return
+        # A new map ends the session the previous one started.
+        self.stop()
 
         try:
             self.manager.auto_enable_for_map(map_data)
@@ -189,6 +193,7 @@ class PlayerPluginHost:
             return
 
         self.bridge = _BridgeLogic(things)
+        self._playing = True
         # The engine's Prop registry, exactly as the editor logic thread builds
         # it: one session, filled from the authoritative thing list.  The player
         # does not decide for itself which Things are Props.
@@ -212,7 +217,7 @@ class PlayerPluginHost:
 
     def tick(self, dt: float, cam_pos, cam_yaw_deg: float, cam_pitch_deg: float,
              use_pressed: bool) -> None:
-        if not self.active or self.bridge is None or self.manager is None:
+        if not self._playing or self.bridge is None or self.manager is None:
             return
 
         self.bridge.player.update(cam_pos, cam_yaw_deg, cam_pitch_deg)
@@ -266,23 +271,35 @@ class PlayerPluginHost:
             pitch = ev.get("pitch", cam_pitch_deg)
             return ((float(pos[0]), float(pos[1]), float(pos[2])),
                     float(yaw), float(pitch))
-        except (TypeError, ValueError, IndexError, KeyError):
-            return default
         except Exception:
             return default
 
     def stop(self) -> None:
-        if self.active and self.bridge is not None and self.manager is not None:
+        """End the play session: stop the Props, then the plugins. Idempotent.
+
+        A second call (a level switch and then a quit, say) finds no session
+        and does nothing, rather than dispatching ``on_play_stop`` again; and a
+        Prop session that fails to stop cannot keep the plugins from hearing
+        that play ended.  The bridge, and so :attr:`things`, stays readable:
+        it is the world as the session left it.
+        """
+        bridge = self.bridge
+        if not self._playing or bridge is None or self.manager is None:
+            return
+        self._playing = False
+
+        props = getattr(bridge, "_props", None)
+        bridge._props = None
+        if props is not None:
             try:
-                props = getattr(self.bridge, "_props", None)
-                if props is not None:
-                    props.stop()
-                self.bridge._props = None
+                props.stop()
+            except Exception as exc:
+                print(f"[Fio Player] prop session stop failed: {exc}")
 
-                self.manager.dispatch_play_stop(self.bridge)
-                emit = getattr(self.manager, "emit", None)
-                if emit is not None:
-                    emit("play_stop", logic=self.bridge)
-            except Exception:
-                pass
-
+        try:
+            self.manager.dispatch_play_stop(bridge)
+            emit = getattr(self.manager, "emit", None)
+            if emit is not None:
+                emit("play_stop", logic=bridge)
+        except Exception as exc:
+            print(f"[Fio Player] plugin play-stop failed: {exc}")

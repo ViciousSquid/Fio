@@ -7,6 +7,8 @@ from PyQt5 import QtCore
 import re
 from PyQt5.QtCore import Qt, QTimer
 
+from engine.change_journal import touch
+
 
 try:
     IO_AVAILABLE = True
@@ -498,10 +500,6 @@ class SceneHierarchy(QWidget):
             terrain_item.setData(0, Qt.UserRole, ('terrain', 0))
             terrain_item.setForeground(0, QBrush(QColor("#8FBC8F")))  # Earthy green
 
-            # Show if terrain is selected
-            if 'terrain' in [getattr(obj, '_terrain_marker', None) for obj in selected_objects]:
-                terrain_item.setSelected(True)
-
         # =====================================================================
         # BRUSHES SECTION
         # =====================================================================
@@ -804,11 +802,13 @@ class SceneHierarchy(QWidget):
                 self.main_window.save_state()
                 for _, idx in brush_items:
                     self.main_window.state.brushes[idx]['hidden'] = True
+                    touch(self.main_window.state.brushes[idx])
                 self.main_window.update_all_ui()
             elif action == show_action:
                 self.main_window.save_state()
                 for _, idx in brush_items:
                     self.main_window.state.brushes[idx]['hidden'] = False
+                    touch(self.main_window.state.brushes[idx])
                 self.main_window.update_all_ui()
             return
         
@@ -836,11 +836,13 @@ class SceneHierarchy(QWidget):
                 self.main_window.save_state()
                 for _, idx in thing_items:
                     self.main_window.state.things[idx].properties['hidden'] = True
+                    touch(self.main_window.state.things[idx])
                 self.main_window.update_all_ui()
             elif action == show_action:
                 self.main_window.save_state()
                 for _, idx in thing_items:
                     self.main_window.state.things[idx].properties['hidden'] = False
+                    touch(self.main_window.state.things[idx])
                 self.main_window.update_all_ui()
             return
 
@@ -898,6 +900,7 @@ class SceneHierarchy(QWidget):
             elif action == hide_action:
                 self.main_window.save_state()
                 brush_dict['hidden'] = not is_hidden
+                touch(brush_dict)
                 self.main_window.update_all_ui()
             elif action == properties_action:
                 self.show_properties_for(brush_dict)
@@ -952,6 +955,7 @@ class SceneHierarchy(QWidget):
             elif action == hide_action:
                 self.main_window.save_state()
                 thing_obj.properties['hidden'] = not is_hidden
+                touch(thing_obj)
                 self.main_window.update_all_ui()
             elif action == properties_action:
                 self.show_properties_for(thing_obj)

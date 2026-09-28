@@ -58,3 +58,37 @@ def test_player_plugin_host_has_no_package_extraction_path():
     host = PlayerPluginHost()
     assert not hasattr(host, "_extract_plugins")
     assert not hasattr(host, "_plugin_permission_callback")
+
+
+def test_stopping_twice_dispatches_play_stop_once():
+    """A second stop() must not tell the plugins play ended again.
+
+    Also: a Prop session that raises on stop must not swallow the plugins'
+    ``on_play_stop``.
+    """
+    from player.plugin_host import _BridgeLogic
+
+    class _Manager:
+        def __init__(self):
+            self.stops = []
+
+        def dispatch_play_stop(self, logic):
+            self.stops.append(logic)
+
+    class _BrokenProps:
+        def stop(self):
+            raise RuntimeError("props failed to stop")
+
+    host = PlayerPluginHost()
+    host.manager = _Manager()
+    host.active = True
+    bridge = _BridgeLogic([])
+    bridge._props = _BrokenProps()
+    host.bridge = bridge
+    host._playing = True
+
+    host.stop()
+    host.stop()
+
+    assert host.manager.stops == [bridge]
+    assert bridge._props is None

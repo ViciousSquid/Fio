@@ -171,3 +171,33 @@ def test_renaming_bumps_the_revision_so_dependent_panels_rebuild(scene):
 
     assert brushes[0]['name'] == 'renamed'
     assert io.io_revision() != before
+
+
+def test_a_deleted_source_does_not_outlive_a_delete_then_place():
+    """Delete one entity, place another: counts and list identity are restored.
+
+    The index key is (revision, counts, list ids), and a delete followed by a
+    placement puts all of those back, so "Targeted by" went on listing the
+    deleted source.  Every editor operation checkpoints through
+    ``EditorState.save_state`` first, which now invalidates the index.
+    """
+    pytest.importorskip("PyQt5", reason="EditorState builds editor.things entities")
+    from editor.editor_state import EditorState
+    from editor.things import LogicRelay
+
+    state = EditorState()
+    target = LogicRelay(pos=[0, 0, 0], properties={"name": "door"})
+    source = LogicRelay(pos=[0, 0, 0], properties={"name": "button"})
+    io.add_connection(source, io.OutputConnection(
+        output_name="OnTrigger", target_name="door", input_name="Trigger"))
+    state.things = [target, source]
+    assert io.find_targeting_sources(state.brushes, state.things,
+                                     target_name="door") == [("button", "I/O: OnTrigger")]
+
+    state.save_state()
+    state.things.remove(source)
+    state.save_state()
+    state.things.append(LogicRelay(pos=[0, 0, 0], properties={"name": "lamp"}))
+
+    assert io.find_targeting_sources(state.brushes, state.things,
+                                     target_name="door") == []

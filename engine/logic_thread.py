@@ -26,8 +26,8 @@ from .camera import Camera
 from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
 from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
 from .prop_runtime import PropSession
-from .render_table import RenderTable
-from .entity_table import EntityTable, ENT_PROP
+from .change_journal import touch
+from .entity_table import ENT_PROP
 from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
 from .effect_entity import Effect
 
@@ -158,6 +158,13 @@ class LogicThread(threading.Thread):
                  editor_state, 
                  visibility_system: Optional[Any] = None):
         super().__init__(daemon=True)
+        # Serialises the simulation with everything that rebuilds or reads the
+        # world from another thread.  The run loop holds it for each frame's
+        # ticks and render-state projection; entering or leaving play mode and
+        # saving or restoring a session (all called from the UI thread) hold it
+        # for their whole duration, so a tick never sees a half-built or
+        # half-torn-down session.  Reentrant: the same thread may nest.
+        self._tick_lock = threading.RLock()
         self.game_state = game_state
         self.editor_state = editor_state
         self.visibility_system = visibility_system
@@ -224,9 +231,6 @@ class LogicThread(threading.Thread):
         write_state = self.game_state.get_write_state()
         self._render_table = write_state.render_table
         self._entity_table = write_state.entity_table
-        self._entity_refs = write_state.entity_refs
-        self._entity_all_slots = np.empty(0, dtype=np.int32)
-        self._render_refs = write_state.render_refs
 
         # Editor camera
         self.editor_camera = Camera()
@@ -1047,6 +1051,16 @@ class LogicThread(threading.Thread):
             self.player2_dead = False
         
     def set_play_mode(self, enabled: bool):
+        """Enter or leave play mode.  Called from the UI thread.
+
+        Held under the tick lock: the flag and the session state it implies
+        (movers, doors, collision caches, spatial grid, Prop session, monster
+        thread) change together, never with a tick running in between.
+        """
+        with self._tick_lock:
+            self._apply_play_mode(enabled)
+
+    def _apply_play_mode(self, enabled: bool):
         self.play_mode = enabled
         
         if enabled:
@@ -1333,16 +1347,18 @@ class LogicThread(threading.Thread):
             # The live streaming session owns the persistent per-cell registry.
             session = getattr(self, "_bigworld", None)
             if session is not None and getattr(session, "streaming", False):
-                session.commit_all()   # flush every cell, loaded or unloaded
-                snapshot = savegame.build_snapshot(
-                    self, map_name=map_name,
-                    world_mode=savegame.WORLD_MODE_BIGWORLD,
-                    cell_deltas=session.serialize_registry(),
-                    base_world=session.base_identity(map_name))
+                with self._tick_lock:
+                    session.commit_all()   # flush every cell, loaded or unloaded
+                    snapshot = savegame.build_snapshot(
+                        self, map_name=map_name,
+                        world_mode=savegame.WORLD_MODE_BIGWORLD,
+                        cell_deltas=session.serialize_registry(),
+                        base_world=session.base_identity(map_name))
             else:
-                snapshot = savegame.build_snapshot(
-                    self, map_name=map_name, save_mode=save_mode,
-                    base_level=base_level)
+                with self._tick_lock:   # a consistent frame, not a torn one
+                    snapshot = savegame.build_snapshot(
+                        self, map_name=map_name, save_mode=save_mode,
+                        base_level=base_level)
             savegame.write(path, snapshot)
             mode_used = snapshot.get("save_mode", "full")
             world = snapshot.get("world_mode")
@@ -1371,7 +1387,8 @@ class LogicThread(threading.Thread):
         try:
             from engine import savegame
             data = savegame.read(path)
-            report = savegame.restore_auto(self, data, current_map_name=map_name)
+            with self._tick_lock:
+                report = savegame.restore_auto(self, data, current_map_name=map_name)
             msg = f"Loaded play session from '{os.path.basename(path)}'"
             warning = report.get("warning")
             if warning:
@@ -1391,10 +1408,18 @@ class LogicThread(threading.Thread):
         self.monster_ai_thread.start()
 
     def _stop_monster_ai(self):
-        """Signal the monster AI thread to stop."""
-        if self.monster_ai_thread is not None:
-            self.monster_ai_thread.stop()
-            self.monster_ai_thread = None
+        """Stop the monster AI thread and wait for it to finish.
+
+        Joined, not just signalled: the caller is about to tear down or
+        rebuild what ``MonsterAI.update`` reads (the spatial grid, the monster
+        list), and an update still in flight would run against it.
+        """
+        thread = self.monster_ai_thread
+        self.monster_ai_thread = None
+        if thread is not None:
+            thread.stop()
+            if thread.is_alive() and thread is not threading.current_thread():
+                thread.join(timeout=2.0)
 
     def _reset_all_monsters(self, clear_dead=True):
         """Reset all monster AI state. Called when entering or exiting play mode.
@@ -1765,8 +1790,13 @@ class LogicThread(threading.Thread):
     # MAIN LOOP
     # =========================================================================
             
-    def run(self):
+    def start(self):
+        # Set before the thread exists, not in run(): a stop() that arrives
+        # before run() gets going must not be overwritten.
         self.running = True
+        super().start()
+
+    def run(self):
         last_time = time.perf_counter()
         accumulator = 0.0
         
@@ -1779,8 +1809,35 @@ class LogicThread(threading.Thread):
                 frame_time = 0.25
                 
             accumulator += frame_time
+            accumulator = self._step_frame(accumulator)
+            self._publish_frame()
             
+            sleep_time = self.TICK_DURATION - (time.perf_counter() - current_time)
+            if sleep_time > 0:
+                time.sleep(sleep_time * 0.9)
+                
+    def _publish_frame(self) -> bool:
+        """Hand the frame just prepared to the renderer, if it is not reading.
+
+        One-shot events stay latched until a frame carrying them is actually
+        published: a declined swap (the renderer is mid-paint) or a catch-up
+        frame running several ticks would otherwise drop them.
+        """
+        if not self.game_state.request_swap():
+            return False
+        self.muzzle_flash_active = False
+        return True
+
+    def _step_frame(self, accumulator: float) -> float:
+        """Run every whole tick *accumulator* holds, then project the frame.
+
+        One acquisition of the tick lock per frame, so a play-mode change or a
+        save/restore from the UI thread lands between frames, never inside one.
+        Returns the time left over for the next frame.
+        """
+        with self._tick_lock:
             while accumulator >= self.TICK_DURATION:
+                started = time.perf_counter()
                 try:
                     self._tick(self.TICK_DURATION)
                 except Exception:
@@ -1793,15 +1850,13 @@ class LogicThread(threading.Thread):
                     debug_log("LogicThread",
                               "Unhandled exception in _tick:\n" + traceback.format_exc())
                 accumulator -= self.TICK_DURATION
+                #: Milliseconds the last simulation tick took (Debug Tables).
+                self.tick_ms = (time.perf_counter() - started) * 1000.0
                 self._update_tps_counter()
-                
+
             self._prepare_render_state()
-            self.game_state.request_swap()
-            
-            sleep_time = self.TICK_DURATION - (time.perf_counter() - current_time)
-            if sleep_time > 0:
-                time.sleep(sleep_time * 0.9)
-                
+        return accumulator
+
     def stop(self):
         self.running = False
         self._stop_monster_ai()
@@ -1897,9 +1952,6 @@ class LogicThread(threading.Thread):
             self.game_state.consume_shot()
             return
         
-        # Clear muzzle flash from previous frame
-        self.muzzle_flash_active = False
-
         # Player input
         keys = self.game_state.get_keys()
         mouse_dx, mouse_dy = self.game_state.consume_mouse_delta()
@@ -2282,6 +2334,7 @@ class LogicThread(threading.Thread):
             duration = st['duration']
             t = 1.0 if duration <= 0.0 else min(1.0, st['elapsed'] / duration)
             entity.properties['intensity'] = st['from'] + (st['to'] - st['from']) * t
+            touch(entity)
             if t >= 1.0:
                 entity.properties['intensity'] = st['to']
                 if st['end_off']:
@@ -3407,9 +3460,8 @@ class LogicThread(threading.Thread):
     def _update_parented_lights(self):
         for light, brush, offset in self._parented_lights:
             bpos = brush['pos']
-            light.pos[0] = bpos[0] + offset[0]
-            light.pos[1] = bpos[1] + offset[1]
-            light.pos[2] = bpos[2] + offset[2]
+            light.pos = [bpos[0] + offset[0], bpos[1] + offset[1],
+                         bpos[2] + offset[2]]
 
 
     # =========================================================================
@@ -3467,9 +3519,7 @@ class LogicThread(threading.Thread):
             sin_y = math.sin(yaw_rad)
             world_x = mover_pos[0] + local_pos[0] * cos_y - local_pos[2] * sin_y
             world_z = mover_pos[2] + local_pos[0] * sin_y + local_pos[2] * cos_y
-            portal.pos[0] = world_x
-            portal.pos[1] = mover_pos[1] + local_pos[1]
-            portal.pos[2] = world_z
+            portal.pos = [world_x, mover_pos[1] + local_pos[1], world_z]
 
             portal.set_yaw_degrees(mover_yaw + local_yaw)
 
@@ -3593,6 +3643,7 @@ class LogicThread(threading.Thread):
                 if new_health <= 0:
                     closest_monster.properties['dead'] = True
                     closest_monster.properties.pop('is_shooting', None)
+                    touch(closest_monster)
                     if self.io_manager:
                         self.io_manager.fire_output(closest_monster, 'OnDeath')
                     if self.monster_ai.monster_debug_active:
@@ -3852,17 +3903,27 @@ class LogicThread(threading.Thread):
         two NumPy matmuls over the whole brush batch and all six planes at
         once — no per-plane Python iteration or temporary-array allocation.
         """
-        c = np.asarray(centers, dtype=np.float64)
-        h = np.asarray(halves, dtype=np.float64)
+        c = np.asarray(centers, dtype=np.float64).reshape(-1, 3)
+        h = np.asarray(halves, dtype=np.float64).reshape(-1, 3)
         if c.size == 0:
             return np.ones(len(centers), dtype=bool)
+        return self._aabb_in_frustum_bounds(planes, np.concatenate((c, h), axis=1))
+
+    @staticmethod
+    def _aabb_in_frustum_bounds(planes, bounds):
+        """The frustum test over ``[centre | half]`` rows, as one product.
+
+        Positive-vertex distance for every (box, plane) pair, branch-free:
+        ``dot(n, c + sign(n)*h) + d == dot([n, |n|], [c, h]) + d``. One
+        (N, 6) x (6, 6) product, one compare and one reduction: each NumPy
+        call on a big array releases and re-takes the GIL, and with the AI and
+        UI threads running every re-take can wait, so the count of calls is
+        what this is shaped by, as much as the arithmetic.
+        """
         p = np.asarray(planes, dtype=np.float64)        # (6, 4)
-        normals = p[:, :3]                               # (6, 3)
-        d = p[:, 3]                                       # (6,)
-        # Positive-vertex distance for every (box, plane) pair, branch-free:
-        #   dot(n, c + sign(n)*h) + d  ==  dot(n, c) + dot(|n|, h) + d
-        dist = c @ normals.T + h @ np.abs(normals).T + d  # (N, 6)
-        return np.all(dist >= 0.0, axis=1)
+        normals = p[:, :3]
+        weights = np.concatenate((normals, np.abs(normals)), axis=1)   # (6, 6)
+        return (bounds @ weights.T >= -p[:, 3]).all(axis=1)
 
     # =========================================================================
     # RENDER STATE PREPARATION
@@ -3946,6 +4007,7 @@ class LogicThread(threading.Thread):
         return _sample(now)
 
     def _prepare_render_state(self):
+        started = time.perf_counter()
         write_state = self.game_state.get_write_state()
         write_state.is_play_mode = self.play_mode
 
@@ -4122,73 +4184,37 @@ class LogicThread(threading.Thread):
         # table reconciles -- but only then, not on every frame.
         # Stable ids are needed when rows are first created/replaced, not
         # for ordinary epoch bumps. Avoid walking the whole scene on every edit.
-        if (table.needs_reconcile(brushes, world_epoch)
-                and (len(brushes) != table.count
-                     or any(b.get('id') is None for b in brushes))):
+        # A brush without one can only have arrived with a change to the row
+        # set, so only then is the scene walked.
+        if (len(brushes) != table.count
+                and any(b.get('id') is None for b in brushes)):
             self.editor_state.ensure_entity_ids()
-        generation = table.generation
-        # One Python pass over the brush list, for the only two things that
-        # cannot be cached: the live `hidden` flag (Big World parks through it)
-        # and an unannounced change to the row set.
-        live_hidden = table.begin_frame(
-            brushes, world_epoch, dirty_objects=render_dirty)
-        refs = write_state.render_refs
-        if (table.generation != generation or len(refs) != table.count):
-            # RenderState owns the reference array for this buffer as well.  Never
-            # reuse the other buffer's object array: the renderer may still be
-            # holding its previous frame while this one is being prepared.
-            refs = np.empty(table.count, dtype=object)
-            for i, brush in enumerate(table.brushes):
-                refs[i] = brush
-            write_state.render_refs = refs
-            self._render_refs = refs
-        else:
-            self._render_refs = refs
+        # In the editor, a tool drags the selection by writing its dicts in
+        # place for many frames after one undo checkpoint: those rows are the
+        # only ones re-read every frame. Everything else changes through a
+        # journal (see RenderTable.begin_frame).
+        edited = () if self.play_mode else self.editor_state.edited_objects()
+        peer = self.game_state.peer_state()
+        table.begin_frame(
+            brushes, world_epoch, dirty_objects=render_dirty, edited=edited,
+            peer=peer.render_table if peer is not write_state else None)
+        # The table owns its row objects; each buffer owns its table.
+        refs = table.refs
         total_count = table.count
 
-        # ---- warm columns ------------------------------------------------
-        # Movers and doors move every tick and have no per-tick notification,
-        # so their transform columns are re-read unconditionally.  The table
-        # is the render-thread snapshot of that state: do not copy the source
-        # brush dictionaries here.  Main-camera transform paths consume
-        # table.center / table.half / table.rot, while the object reference is
-        # only an escape hatch for data the table does not yet contain.
-        dynamic_slots = table.dynamic_slots
-        if len(dynamic_slots):
-            table.refresh_transforms(brushes, dynamic_slots)
-
-        if not self.play_mode:
-            # An editor drag mutates pos for hundreds of frames after its one
-            # save_state, so in the editor every row's warm columns are re-read.
-            # This is the cheap half of the table by design; the expensive cold
-            # columns stay behind the epoch.
-            table.refresh_transforms(brushes, range(total_count))
-
         # ---- T4: visibility, as masks over the table ---------------------
-        keep = ~live_hidden
+        keep, all_slots = table.shown()
         if self.culling_enabled and total_count:
-            visible_mask = keep & self._aabb_in_frustum_batch(
-                frustum_planes, table.center[:total_count],
-                table.half[:total_count])
+            visible_slots = np.flatnonzero(keep & self._aabb_in_frustum_bounds(
+                frustum_planes, table.bounds[:total_count]))
         else:
-            visible_mask = keep
-
-        all_slots = np.flatnonzero(keep)
-        visible_slots = np.flatnonzero(visible_mask)
+            visible_slots = all_slots
         # Published as views over the slots, not as lists: the conversion back
         # to Python objects happens only if something actually reads one, and
         # on the main camera path nothing does.
         all_brushes = PublishedBrushes(refs, all_slots)
         visible_brushes = PublishedBrushes(refs, visible_slots)
         culled_count = total_count - len(visible_slots)
-
-        brush_positions = write_state.ensure_visible_brush_positions(
-            len(visible_slots))
-        if len(visible_slots):
-            np.take(table.center[:, 0], visible_slots,
-                    out=brush_positions[:len(visible_slots), 0])
-            np.take(table.center[:, 2], visible_slots,
-                    out=brush_positions[:len(visible_slots), 1])
 
         # The numerical result itself, published rather than thrown away: the
         # slots index every column of the table, so the renderer can classify,
@@ -4199,7 +4225,6 @@ class LogicThread(threading.Thread):
         write_state.all_brush_slots = all_slots
 
         write_state.visible_brushes = visible_brushes
-        write_state.visible_brush_position_count = len(visible_brushes)
         write_state.all_brushes = all_brushes
         write_state.total_brushes = total_count
         write_state.culled_brushes = culled_count
@@ -4208,59 +4233,32 @@ class LogicThread(threading.Thread):
         # What used to be one Python pass per entity per frame -- two NumPy
         # scalar stores, three isinstance tests and a list append each -- is a
         # bulk position store, a live `hidden` read, and masks over columns.
-        # Monster benchmark/editor mutations already use this lock when they
-        # mutate EditorState.things. Hold the same lock through the table
-        # reconciliation and reference publication so the live list cannot
-        # change between those two operations. This avoids taking a full
-        # per-frame Python copy of the entity list.
-        with self._monster_lock:
-            things = self.things
-            # etable is the table owned by the current write buffer.  It is the
-            # only EntityTable touched until request_swap publishes this frame.
-            etable = write_state.entity_table
-            self._entity_table = etable
-            entity_generation = etable.generation
-            thing_hidden = etable.begin_frame(
-                things,
-                world_epoch,
-                dirty_objects=render_dirty,
-                effect_runtime=self.play_mode,
-            )
-            entity_refs = write_state.entity_refs
-            if (etable.generation != entity_generation
-                    or len(entity_refs) != etable.count):
-                # EntityTable owns the stable row snapshot for this publication.
-                # Do not enumerate the live list again here: benchmark/editor
-                # code can mutate it from another thread immediately after the
-                # lock is released.  Keep the reference array with the same
-                # RenderState as the dense table it indexes.
-                entity_refs = np.empty(etable.count, dtype=object)
-                for i, thing in enumerate(etable.things):
-                    entity_refs[i] = thing
-                write_state.entity_refs = entity_refs
-                self._entity_refs = entity_refs
-                self._entity_all_slots = np.arange(etable.count, dtype=np.int32)
-            else:
-                self._entity_refs = entity_refs
-            erefs = entity_refs
-            entity_things = etable.things
-            thing_count = etable.count
+        # No lock: begin_frame freezes the entity list with one atomic copy
+        # and builds everything from that, and the change journal is
+        # thread-safe. Taking the monster lock here used to make every frame
+        # wait out whatever AI update was running.
+        things = self.things
+        # etable is the table owned by the current write buffer.  It is the
+        # only EntityTable touched until request_swap publishes this frame.
+        etable = write_state.entity_table
+        self._entity_table = etable
+        thing_hidden = etable.begin_frame(
+            things,
+            world_epoch,
+            dirty_objects=render_dirty,
+            effect_runtime=self.play_mode,
+            peer=peer.entity_table if peer is not write_state else None,
+        )
+        erefs = etable.refs
+        entity_things = etable.things
+        thing_count = etable.count
 
         self.editor_state.clear_render_dirty(render_dirty_snapshot)
-
-        # A Monster is handed to the renderer as a render snapshot, because the
-        # AI thread is free to move it while the frame is being drawn.  Those
-        # rows are the entity table's dynamic rows, and refreshing them is the
-        # only per-entity work left that is not a column operation.
-        for i in etable.monster_slots:
-            snapshot = entity_things[i].get_render_snapshot()
-            erefs[i] = snapshot
-            etable.update_monster_snapshot(int(i), snapshot)
 
         # A collected Prop is not published. The dense Prop registry owns
         # collection state, so the renderer filters only Prop rows rather than
         # walking the whole Thing list.
-        visible_thing_slots = self._entity_all_slots
+        visible_thing_slots = etable.all_slots
         collected = self._props.collected_ids if self._props is not None else set()
         if self.play_mode and collected:
             # class_bits is a capacity-sized array, while etable.things
@@ -4276,15 +4274,6 @@ class LogicThread(threading.Thread):
                 keep_things[dropped] = False
                 visible_thing_slots = np.flatnonzero(keep_things)
 
-        visible_count = len(visible_thing_slots)
-        visible_thing_positions = write_state.ensure_visible_thing_positions(
-            visible_count)
-        if visible_count:
-            np.take(etable.pos[:, 0], visible_thing_slots,
-                    out=visible_thing_positions[:visible_count, 0])
-            np.take(etable.pos[:, 2], visible_thing_slots,
-                    out=visible_thing_positions[:visible_count, 1])
-
         # Lights still need their authored object state (colour, intensity,
         # state, etc.) during GL setup, but do not materialise them on the logic
         # thread. Keep the dense selection published and let the actual light
@@ -4295,10 +4284,6 @@ class LogicThread(threading.Thread):
         visible_things = PublishedEntities(erefs, visible_thing_slots)
 
         write_state.visible_things = visible_things
-        write_state.visible_thing_position_count = visible_count
-        # Keep the compatibility object list aligned with the exact dense
-        # entity snapshot that produced the published slots.
-        write_state.all_things = list(entity_things)
         write_state.all_lights = all_lights
         # Portal existence is a numeric projection fact; the renderer reads
         # the published portal slot vector directly.
@@ -4333,3 +4318,4 @@ class LogicThread(threading.Thread):
         else:
             write_state.splitscreen_active  = False
         write_state.level_complete_ui = self.level_complete_ui
+        write_state.prepare_ms = (time.perf_counter() - started) * 1000.0

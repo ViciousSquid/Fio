@@ -31,36 +31,34 @@ def _synced(brushes, epoch=1):
     return t
 
 
-def test_reconcile_freezes_the_observed_row_count_during_live_append():
-    """A benchmark append during reconciliation belongs to the next frame."""
-    first = _brush(id='first')
-    late = _brush(id='late')
+def test_a_frame_reads_the_live_brush_list_exactly_once():
+    """The row set is frozen by one C-level copy; the live list is never indexed.
 
-    class GrowingBrushes(list):
-        def __init__(self, values, extra):
-            super().__init__(values)
-            self.extra = extra
-            self.grown = False
+    The editor and the benchmark append to the live list from another thread,
+    so everything a frame does has to agree on one row set: an append lands
+    in the next frame, whole.
+    """
+    reads = []
 
+    class WatchedBrushes(list):
         def __getitem__(self, index):
-            if index == 0 and not self.grown:
-                self.grown = True
-                super().append(self.extra)
+            reads.append(('index', index))
             return super().__getitem__(index)
 
-    brushes = GrowingBrushes([first], late)
+        def __iter__(self):
+            reads.append(('iter',))
+            return super().__iter__()
+
+    brushes = WatchedBrushes([_brush(id='first')])
     table = RenderTable()
-
-    table.sync(brushes, 1)
-
-    assert table.count == 1
-    assert table.brushes == [first]
-    assert table.geometry_records == []
+    table.begin_frame(brushes, 1)
+    assert reads == [('iter',)]
     assert table.ids == ['first']
 
-    # The concurrently appended row is reconciled normally on the next frame.
-    table.sync(brushes, 1)
-    assert table.count == 2
+    brushes.append(_brush(id='late'))          # lands between frames
+    reads.clear()
+    table.begin_frame(brushes, 1)
+    assert reads == [('iter',)]
     assert table.ids == ['first', 'late']
 
 
@@ -136,12 +134,14 @@ def test_class_bits_carry_authored_hidden_not_the_parked_flag():
     assert t.class_bits[0] & rt.CLASS_SHADOW_CASTER
 
 
-def test_live_hidden_sees_a_park_the_table_never_refreshed_for():
+def test_a_park_reaches_the_hidden_column_through_the_journal():
+    from engine.spatial import set_authored_flag
+
     b = _brush(id='p')
-    t = _synced([b])
-    assert not t.live_hidden([b])[0]
-    b['hidden'] = True                          # parked, with no notification
-    assert t.live_hidden([b])[0]
+    t = RenderTable()
+    assert not t.begin_frame([b], 1)[0]
+    set_authored_flag(b, 'hidden', True)        # what parking and I/O Hide do
+    assert t.begin_frame([b], 1)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +374,8 @@ def test_special_volume_state_is_projected_as_dense_numeric_columns():
             water_roughness=0.2,
             water_fresnel=0.9,
             water_plane=True,
+            # A key from maps saved before planar reflections were removed:
+            # it must load, and must project to nothing.
             water_reflections=True,
         ),
         _brush(
@@ -402,7 +404,9 @@ def test_special_volume_state_is_projected_as_dense_numeric_columns():
         [0.7, 0.9, 0.6, 0.0, 0.35, 1.333, 0.2],
     )
     assert bool(t.water_plane[0])
-    assert bool(t.water_reflections[0])
+    assert not hasattr(t, 'water_reflections'), (
+        "planar water reflections were removed; the table should not carry "
+        "a column for them")
 
     np.testing.assert_allclose(t.glass_color[1], [0.4, 0.5, 0.6])
     np.testing.assert_allclose(t.glass_params[1], [0.25, 0.2, 1.33, 0.1, 0.9])
@@ -428,7 +432,6 @@ def test_special_volume_state_moves_with_a_surviving_row():
     assert old != new
     np.testing.assert_allclose(t.water_tint[new], [1.0, 0.2, 0.3])
     assert t.water_params[new, 0] == pytest.approx(0.7)
-    assert not bool(t.water_reflections[new])
 
 
 def test_special_volume_state_refreshes_on_epoch_change():
@@ -449,4 +452,3 @@ def test_water_optics_fall_back_to_existing_reflectivity():
     assert t.water_params[0, 4] == pytest.approx(0.5)
     assert t.water_params[0, 5] == pytest.approx(1.333)
     assert t.water_params[0, 6] == pytest.approx(0.0)
-    assert not bool(t.water_reflections[0])
