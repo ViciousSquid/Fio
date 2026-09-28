@@ -4400,10 +4400,3 @@ class View2D(QWidget):
         # the pan correction is a plain difference in world space.
         self.pan_offset += QPointF(before.x() - after.x(), before.y() - after.y())
         self.update()
-
-    def zoom_in(self):
-        # Zoom toward the view centre (used by buttons/keys without a cursor).
-        self.zoom_at(QPointF(self.width() / 2, self.height() / 2), 1.25)
-
-    def zoom_out(self):
-        self.zoom_at(QPointF(self.width() / 2, self.height() / 2), 0.8)
