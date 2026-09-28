@@ -196,8 +196,8 @@ Next milestones (seams are marked `TODO(port)` in the code):
       from `InputState` instead of the free-look camera (`app.py:_advance_simulation`).
 - [ ] **M5 — entities, lighting, portals**: `logic_thread.py`, `monster_ai.py`,
       shadow cube-maps, stencil portals on ES (stencil buffer already requested).
-- [ ] **M6 — audio**: back `engine/audio_manager.py` with `pygame.mixer`,
-      streaming sounds from the package via `FioPackage.open_asset`.
+- [ ] **M6 — audio**: play sounds with `pygame.mixer`, streaming them from the
+      package via `FioPackage.open_asset`.
 - [ ] **M7 — polish for Play**: on-screen control theming, settings, safe-area
       insets, store assets, signing.
 

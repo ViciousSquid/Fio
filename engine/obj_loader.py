@@ -6,9 +6,8 @@ import OpenGL.GL as gl
 
 class OBJLoader:
     """
-    Wavefront OBJ/MTL loader.
-    Uses direct filesystem access (like the rest of the renderer) with
-    optional ResourceManager fallback for package mode.
+    Wavefront OBJ/MTL loader, reading straight from the filesystem like the
+    rest of the renderer.
     """
     
     def __init__(self):
@@ -38,10 +37,7 @@ class OBJLoader:
         return index if 0 <= index < length else -1
 
     def load(self, filepath: str) -> bool:
-        """
-        Load model from filesystem path.
-        Falls back to ResourceManager for package mode.
-        """
+        """Load model from filesystem path."""
         text = None
         if os.path.exists(filepath):
             try:
@@ -49,15 +45,7 @@ class OBJLoader:
                     text = f.read()
             except (IOError, UnicodeDecodeError):
                 pass
-        
-        if text is None:
-            try:
-                from engine.resource_manager import ResourceManager
-                rm = ResourceManager()
-                text = rm.get_text_asset(filepath)
-            except ImportError:
-                pass
-        
+
         if text is None:
             print(f"[OBJLoader] Failed to load: {filepath}")
             return False
@@ -125,15 +113,7 @@ class OBJLoader:
                     mtl_text = f.read()
             except (IOError, UnicodeDecodeError):
                 pass
-        
-        if mtl_text is None:
-            try:
-                from engine.resource_manager import ResourceManager
-                rm = ResourceManager()
-                mtl_text = rm.get_text_asset(mtl_path.replace(os.sep, '/'))
-            except ImportError:
-                pass
-        
+
         if mtl_text is None:
             print(f"[OBJLoader] MTL not found: {mtl_path}")
             self._discover_base_color_texture(obj_path)

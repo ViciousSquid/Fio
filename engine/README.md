@@ -1,13 +1,10 @@
 # `engine/`
 
-The runtime engine: world simulation, physics, resource/package loading, numerical render projection, OpenGL rendering, shaders, terrain, models, sprites and the Qt game viewport.
+The runtime engine: world simulation, physics, resource loading, numerical render projection, OpenGL rendering, shaders, terrain, models, sprites and the Qt game viewport.
 
 The engine's authoritative gameplay/world state remains object-oriented. Performance-sensitive execution paths increasingly project that state into dense NumPy representations before entering hot loops. Rendering and physics both use this pattern: Python objects provide the API and world model; contiguous numerical arrays provide the execution representation.
 
 ---
-
-### `audio_manager.py`
-Sound effect loading and playback via pygame. Routes through `ResourceManager` for `.fiopak` package compatibility and caches loaded sounds.
 
 ### `brush_geometry.py`
 Convex brush geometry based on intersections of half-space planes. Computes surface windings, collision meshes, 2D silhouettes and bounds. The plane set is the source of truth; derived geometry is cached using a geometry signature and invalidation epoch. Also provides component-edit geometry operations including convex-hull reconstruction and plane/point dragging primitives. Uses NumPy without depending on Qt or the editor.
@@ -17,6 +14,9 @@ Camera state and view/projection matrix computation for first-person and other 3
 
 ### `constants.py`
 Shared engine constants covering window defaults, dimensions, render modes, physics tuning and water physics.
+
+### `fileio.py`
+Crash-safe JSON writes for maps, autosaves and saved games: the document is serialised first, written beside the destination and moved over it, so a failed save never truncates the previous file.
 
 ### `floating_windows.py`
 Reusable Qt floating-window infrastructure used by `QtGameView` overlays such as SysMon. Provides draggable/collapsible window chrome, stacking and event routing without importing the editor or game systems.
@@ -36,7 +36,7 @@ Monster behaviour, movement, sight, pursuit, attacks, projectile spawning, death
 Monster AI tuning and asset constants: sight range, movement, attacks, projectile parameters, sprite frames, billboard dimensions and physics values.
 
 ### `obj_loader.py`
-Wavefront OBJ/MTL model loader. Parses vertices, UVs, normals, faces and materials and builds the OpenGL buffers used by the renderer. Uses `ResourceManager` in package mode.
+Wavefront OBJ/MTL model loader. Parses vertices, UVs, normals, faces and materials and builds the OpenGL buffers used by the renderer.
 
 ### `overhead_sprite.py`
 Top-down player sprite controller and renderer for Overhead camera mode. Animation state is separated from drawing; the renderer draws the selected frame as a ground quad oriented to the player's heading.
@@ -95,9 +95,6 @@ The renderer consumes the dense numerical render representation and turns equal-
 ### `savegame.py`
 Native play-session save/load. Serialises player state, entity/mover state, trigger/collection progress and I/O state to `.fiosave` files and restores it on a freshly loaded map.
 
-### `resource_manager.py`
-Singleton asset provider for ordinary filesystem projects and mounted `.fiopak` archives. Handles path resolution, byte/text loading, streams, caching and package manifests.
-
 ### `shaders.py`
 Shader source management, compilation and uniform binding. Owns the shared dynamic-light capacities and low-power hardware detection used to select cheaper shader variants.
 
@@ -119,7 +116,7 @@ Benchmark tooling consumes these same SysMon values rather than inventing a sepa
 Chunked terrain generation and rendering, including Perlin-noise heightmaps, chunk LOD meshes, normals, texture blending and collision queries.
 
 ### `textures.py`
-OpenGL texture manager. Loads images through `QImage`, converts them to RGBA, uploads them and caches texture IDs, with package-mode access through `ResourceManager`.
+OpenGL texture manager. Loads images through `QImage`, converts them to RGBA, uploads them and caches texture IDs.
 
 ### `threaded_game_state.py`
 Thread-safe bridge between simulation and rendering. `ThreadedGameState` synchronises updates; `RenderState` provides the per-frame render snapshot containing camera, player, visible-world and HUD state.

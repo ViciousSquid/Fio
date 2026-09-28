@@ -1713,16 +1713,7 @@ layout (location = 10) in float iInstanceAlpha;
     # FIRE animation textures
     # --------------------------------------------------------------------------
     def _fire_asset_bytes(self, asset_path):
-        """Read an effect asset from the mounted ResourceManager or filesystem."""
-        try:
-            from engine.resource_manager import ResourceManager
-            data = ResourceManager().get_asset(asset_path)
-        except Exception:
-            data = None
-
-        if data is not None:
-            return data
-
+        """Read an effect asset's bytes from the project directory."""
         disk_path = os.path.join(os.getcwd(), asset_path)
         if os.path.exists(disk_path):
             try:

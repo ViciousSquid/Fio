@@ -116,7 +116,7 @@ class FioPlayerApp:
 
     def _on_pause(self) -> None:
         self._paused = True
-        # TODO(port): pause engine audio (engine/audio_manager.py) here.
+        # TODO(port): pause audio here once the player has any (README M6).
 
     def _on_resume(self) -> None:
         # Stay paused until the player taps; avoids a jarring resume.

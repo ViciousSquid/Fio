@@ -2137,8 +2137,8 @@ entity to drive them from the I/O system.</i><br>
     def _base_level(self):
         """The normalized *original* map document, for delta diffing.
 
-        Reads the currently-loaded map file straight from disk (or the active
-        resource package) and re-serializes it through the editor's own pipeline
+        Reads the currently-loaded map file straight from disk and
+        re-serializes it through the editor's own pipeline
         so it compares like-for-like with the live level. Returns ``None`` when
         the base map can't be resolved — the saver then degrades to a full save.
         """
@@ -2146,18 +2146,10 @@ entity to drive them from the I/O system.</i><br>
         if not fp:
             return None
         try:
-            from engine.resource_manager import ResourceManager
-            rm = ResourceManager()
-            if rm.is_package_mode():
-                raw = rm.get_text_asset(fp)
-                if raw is None:
-                    return None
-                raw_level = json.loads(raw)
-            else:
-                if not os.path.exists(fp):
-                    return None
-                with open(fp, 'r') as f:
-                    raw_level = json.load(f)
+            if not os.path.exists(fp):
+                return None
+            with open(fp, 'r', encoding='utf-8') as f:
+                raw_level = json.load(f)
         except Exception as exc:
             debug_log("Warning", f"save: could not read base map for delta: {exc}")
             return None
