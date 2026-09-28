@@ -6,7 +6,13 @@ missing, unreadable, a directory — raised ``AttributeError`` out of ``load``
 into the logic thread's collision builder.
 """
 
-from engine.glb_loader import GLBLoader
+import pytest
+
+pytest.importorskip("OpenGL", reason="engine.glb_loader imports PyOpenGL")
+
+from engine.glb_loader import GLBLoader           # noqa: E402
+
+pytestmark = pytest.mark.qt
 
 
 def test_a_missing_glb_is_reported_not_raised(tmp_path):
