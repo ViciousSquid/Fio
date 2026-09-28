@@ -1508,12 +1508,6 @@ class Terrain:
     # SCULPT DEFORMATION
     # =========================================================================
 
-    def _sculpt_key(self, world_x: float, world_z: float) -> Tuple[int, int]:
-        """Quantize world position to sculpt grid key."""
-        gx = int(math.floor(world_x / self.sculpt_grid_resolution))
-        gz = int(math.floor(world_z / self.sculpt_grid_resolution))
-        return (gx, gz)
-
     def _sample_sculpt_scalar(self, world_x: float, world_z: float) -> float:
         """Get interpolated sculpt offset at a world position."""
         if not self.sculpt_offsets:

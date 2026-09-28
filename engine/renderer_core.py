@@ -3585,19 +3585,6 @@ layout (location = 10) in float iInstanceAlpha;
     #: the casters once and drawing them six times is the whole saving.
     SHADOW_RUN_KEY = KeyLayout([('face', 3)])
 
-    def _shadow_face_runs(self):
-        """The six cube faces, as sorted runs.
-
-        Trivial today -- six items, one field, already in order -- and that is
-        the point of routing it through the same machinery rather than a bare
-        ``range(6)``: the ordering is a property of the key, so a second field
-        (batching two lights into one pass, say) changes the layout and nothing
-        else.
-        """
-        keys = self.SHADOW_RUN_KEY.pack(face=np.arange(6, dtype=np.int64))
-        order, starts = sort_into_runs(keys)
-        return self.SHADOW_RUN_KEY.field(keys[order], 'face'), starts
-
     def _prepare_shadow_instances(self, table, in_brushes, instanced):
         """Pack dense brush casters and return dense convex geometry slots.
 
@@ -5134,17 +5121,6 @@ layout (location = 10) in float iInstanceAlpha;
             new.frame = self._geo_mesh_frame
             self._geo_mesh_cache[cache_key] = new
         return new
-
-    @staticmethod
-    def _geo_uv_axes(n):
-        """World axes a face's planar UVs project onto, by dominant normal
-        axis.  Matches the cube VAO's orientation (v runs up walls).
-
-        The rule itself lives in brush_geometry so the geometry layer can
-        materialise the same basis when it locks a face's texture to a
-        rotation; this stays as the renderer's name for it.
-        """
-        return brush_geometry.render_uv_axes(n)
 
     def _build_geo_mesh(self, record, convex, key):
         origin = record.origin

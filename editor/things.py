@@ -1464,17 +1464,6 @@ class Portal(Thing):
             self.pos, self.get_basis(), self.get_width(), self.get_height()
         )
 
-    def _local_of(self, x: float, y: float, z: float):
-        """World point → (right, up, normal) coordinates in this portal's frame."""
-        r, u, n = self.get_basis()
-        dx = x - self.pos[0]
-        dy = y - self.pos[1]
-        dz = z - self.pos[2]
-        return (dx * r[0] + dy * r[1] + dz * r[2],
-                dx * u[0] + dy * u[1] + dz * u[2],
-                dx * n[0] + dy * n[1] + dz * n[2])
-
-
     def map_point(self, dest, x: float, y: float, z: float):
         """Map a world point through the shared engine transform."""
         return _portal_map_point(

@@ -25,7 +25,7 @@ from editor.things import Light, PlayerStart, Model, update_all_counters_from_en
 from editor.SettingsWindow import SettingsWindow
 from editor.ui import LAYOUT_VERSION, Ui_MainWindow
 from editor.tooltips import set_tooltips_enabled
-from engine.constants import TILE_SIZE, WALL_TILE, FLOOR_TILE
+from engine.constants import TILE_SIZE
 from engine import brush_geometry
 from engine.fileio import write_json_atomic
 from editor.view_2d import View2D
@@ -123,14 +123,6 @@ class Toast(QLabel):
         else:
             final_duration = duration if duration is not None else (4000 if is_error else 2500)
             self.timer.start(final_duration)
-
-    def hide_toast(self, toast_id=None):
-        """Hide toast, optionally only if matching ID."""
-        if self.isVisible():
-            if toast_id is not None and self.current_toast_id != toast_id:
-                return
-            self.current_toast_id = None
-            self.fade_out()
 
     def fade_out(self):
         self.anim.setDirection(QPropertyAnimation.Backward)
@@ -1445,9 +1437,6 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-    def update_scene_hierarchy(self):
-        self.scene_hierarchy.refresh_list(self.state.brushes, self.state.things, self.state.selected_object)
-    
     def select_object(self, obj):
         self.set_selected_object(obj)
 
@@ -1851,17 +1840,6 @@ class MainWindow(QMainWindow):
                     "\n".join(f"• {setting}" for setting in restart_required) +
                     "\n\nPlease restart the application for the changes to take effect.")
 
-    def apply_caulk_to_brush(self):
-        if not isinstance(self.state.selected_object, dict):
-            QMessageBox.warning(self, "No Brush Selected", "Select a brush to apply caulk to.")
-            return
-        self.save_state()
-        if 'textures' not in self.state.selected_object:
-            self.state.selected_object['textures'] = {}
-        for face in ['north','south','east','west','top','down']:
-            self.state.selected_object['textures'][face] = 'caulk.jpg'
-        self.update_views()
-
     def apply_tooltip_settings(self):
         """Settings > Editor > Tooltips: show or hide each area's tooltips.
 
@@ -2176,75 +2154,6 @@ class MainWindow(QMainWindow):
             target = (brushes[0], keys[0]) if keys else (None, None)
         self.show_surface_inspector(*target)
 
-    def generate_collision_map(self):
-        if not self.state.brushes:
-            return None
-
-        min_x_world, max_x_world = float('inf'), float('-inf')
-        min_z_world, max_z_world = float('inf'), float('-inf')
-
-        solid_brushes_exist = False
-        for brush in self.state.brushes:
-            if not brush.get('is_trigger', False) and not brush.get('operation') == 'subtract':
-                solid_brushes_exist = True
-                pos, size = np.array(brush['pos']), np.array(brush['size'])
-                half_size = size / 2.0
-
-                min_x_world = min(min_x_world, pos[0] - half_size[0])
-                max_x_world = max(max_x_world, pos[0] + half_size[0])
-                min_z_world = min(min_z_world, pos[2] - half_size[2])
-                max_z_world = max(max_z_world, pos[2] + half_size[2])
-
-        if not solid_brushes_exist:
-            return None
-
-        padding = TILE_SIZE * 2
-        padded_min_x = min_x_world - padding
-        padded_max_x = max_x_world + padding
-        padded_min_z = min_z_world - padding
-        padded_max_z = max_z_world + padding
-
-        min_x_tile_idx = int(math.floor(padded_min_x / TILE_SIZE))
-        max_x_tile_idx = int(math.ceil(padded_max_x / TILE_SIZE))
-        min_z_tile_idx = int(math.floor(padded_min_z / TILE_SIZE))
-        max_z_tile_idx = int(math.ceil(padded_max_z / TILE_SIZE))
-
-        map_width_tiles = max_x_tile_idx - min_x_tile_idx
-        map_depth_tiles = max_z_tile_idx - min_z_tile_idx
-
-        map_width_tiles = max(1, map_width_tiles)
-        map_depth_tiles = max(1, map_depth_tiles)
-
-        collision_tile_map = np.full((map_depth_tiles, map_width_tiles), FLOOR_TILE, dtype=int)
-
-        for brush in self.state.brushes:
-            if brush.get('is_trigger', False) or brush.get('operation') == 'subtract':
-                continue
-
-            pos, size = np.array(brush['pos']), np.array(brush['size'])
-            half_size = size / 2.0
-
-            brush_min_x_world = pos[0] - half_size[0]
-            brush_max_x_world = pos[0] + half_size[0]
-            brush_min_z_world = pos[2] - half_size[2]
-            brush_max_z_world = pos[2] + half_size[2]
-
-            brush_min_x_map_tile = int(math.floor(brush_min_x_world / TILE_SIZE) - min_x_tile_idx)
-            brush_max_x_map_tile = int(math.ceil(brush_max_x_world / TILE_SIZE) - min_x_tile_idx)
-            brush_min_z_map_tile = int(math.floor(brush_min_z_world / TILE_SIZE) - min_z_tile_idx)
-            brush_max_z_map_tile = int(math.ceil(brush_max_z_world / TILE_SIZE) - min_z_tile_idx)
-
-            min_x_idx_clamped = max(0, brush_min_x_map_tile)
-            max_x_idx_clamped = min(map_width_tiles, brush_max_x_map_tile)
-            min_z_idx_clamped = max(0, brush_min_z_map_tile)
-            max_z_idx_clamped = min(map_depth_tiles, brush_max_z_map_tile)
-
-            if min_x_idx_clamped < max_x_idx_clamped and min_z_idx_clamped < max_z_idx_clamped:
-                collision_tile_map[min_z_idx_clamped:max_x_idx_clamped, min_x_idx_clamped:max_x_idx_clamped] = WALL_TILE
-
-        return collision_tile_map
-
-
     def enter_play_mode(self):
         """Toggle play mode on/off. Called by the Play/Stop button."""
         # If already in play mode, exit instead
@@ -2331,35 +2240,6 @@ class MainWindow(QMainWindow):
             self._prev_properties_tab_index = None
 
 
-    def show_generate_tilemap_dialog(self):
-        if not self.file_path:
-            self.save_level_as()
-            if not self.file_path:
-                QMessageBox.warning(self, "File Not Saved", "Please save the level before generating a tilemap.")
-                return
-        self.generate_and_save_tilemap(save_png=True)
-
-
-    def generate_and_save_tilemap(self, save_png=False):
-        self.save_level()
-
-        generator_script_path = os.path.join(self.root_dir, 'tools', 'generate_tilemap.py')
-        if not os.path.exists(generator_script_path):
-            QMessageBox.critical(self, "Error", f"Tilemap generator script not found at:\n{generator_script_path}")
-            return
-
-        try:
-            command = [sys.executable, generator_script_path, self.file_path]
-            if save_png:
-                command.append('--save-png')
-            
-            subprocess.run(command, check=True)
-            QMessageBox.information(self, "Success", "Collision tilemap generated successfully.")
-        except subprocess.CalledProcessError as e:
-            QMessageBox.critical(self, "Error", f"Failed to generate tilemap.\n\nError: {e}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"An unexpected error occurred:\n{e}")
-
     def update_shortcuts(self):
         save_layout_shortcut = self.config.get('Controls', 'save_layout', fallback='Ctrl+Shift+S')
         if hasattr(self, 'save_layout_action'):
@@ -2442,16 +2322,6 @@ class MainWindow(QMainWindow):
                 spin.setValue(int(round(self.view_3d.view_distance.distance)))
             finally:
                 spin.blockSignals(False)
-
-    def zoom_in_2d(self):
-        current_view = self.right_tabs.currentWidget()
-        if isinstance(current_view, View2D):
-            current_view.zoom_in()
-
-    def zoom_out_2d(self):
-        current_view = self.right_tabs.currentWidget()
-        if isinstance(current_view, View2D):
-            current_view.zoom_out()
 
     def save_state(self):
         self.state.save_state()
@@ -2746,27 +2616,6 @@ class MainWindow(QMainWindow):
             dialog.dep_label.setStyleSheet("color: #f44336; font-size: 12px; padding: 4px;")
             dialog.dep_label.setText("Export failed:\n" + "\n".join(errors[:5]))
             # Error already shown in exporter
-
-    def _restore_properties_tabs(self):
-        """Restore the Properties / Debug Console tab widget."""
-        # Remove the export container
-        if hasattr(self, '_export_container') and self._export_container:
-            self._export_container.setParent(None)
-            self._export_container.deleteLater()
-            self._export_container = None
-        
-        # Restore the original tab widget to the dock
-        self.properties_dock.setWidget(self.properties_tab_widget)
-        self.properties_tab_widget.setParent(self.properties_dock)
-        self.properties_tab_widget.show()
-        
-        # Restore previous tab if we tracked it
-        if hasattr(self, '_original_properties_widget') and self._original_properties_widget:
-            idx = self.properties_tab_widget.indexOf(self._original_properties_widget)
-            if idx >= 0:
-                self.properties_tab_widget.setCurrentIndex(idx)
-        
-        self._export_dialog = None
 
     def new_map(self):
         # Check for unsaved changes
@@ -3214,29 +3063,6 @@ class MainWindow(QMainWindow):
         light_count = num_lights_x * num_lights_z
         self.show_toast(f"Created room with {thickness} unit walls and {light_count} light(s)")
 
-    def rotate_selected_brush(self):
-        if not isinstance(self.state.selected_object, dict):
-            QMessageBox.warning(self, "Invalid Selection", "Please select a brush to rotate.")
-            return
-
-        current_view = self.right_tabs.currentWidget()
-        if not isinstance(current_view, View2D):
-            QMessageBox.warning(self, "Invalid View", "Select a 2D view (Top, Side, or Front) to define the rotation axis.")
-            return
-
-        self.save_state()
-        size = self.state.selected_object['size']
-        view_type = current_view.view_type
-
-        if view_type == 'top':
-            size[0], size[2] = size[2], size[0]
-        elif view_type == 'side':
-            size[1], size[2] = size[2], size[1]
-        elif view_type == 'front':
-            size[0], size[1] = size[1], size[0]
-
-        self.update_all_ui()
-
     def toggle_trigger_display(self, checked):
         self.view_3d.show_triggers_as_solid = checked
         self.view_3d.update()
@@ -3570,11 +3396,6 @@ class MainWindow(QMainWindow):
             self.keys_pressed.remove(event.key())
         self.update_views()
         super().keyReleaseEvent(event)
-
-    def toggle_snap_to_grid(self, state):
-        enabled = state == Qt.Checked
-        for view in [self.view_top, self.view_side, self.view_front]:
-            view.snap_to_grid_enabled = enabled
 
     def snap_to_grid_enabled(self):
         """Whether editor drags snap to the grid.

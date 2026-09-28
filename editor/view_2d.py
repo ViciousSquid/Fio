@@ -1053,38 +1053,6 @@ class View2D(QWidget):
             self._store_previous_tab_index()
             self.main_window.properties_tab_widget.setCurrentIndex(0)
 
-    def _restore_previous_tab(self):
-        """Restore focus to the previously active tab before Properties was focused."""
-        if hasattr(self.main_window, 'properties_tab_widget'):
-            prev_idx = getattr(self.main_window, '_previous_tab_index', None)
-            if prev_idx is not None and prev_idx < self.main_window.properties_tab_widget.count():
-                self.main_window.properties_tab_widget.setCurrentIndex(prev_idx)
-
-    def start_connection_mode(self, source_obj):
-        """Start connection mode programmatically (e.g., from property editor)."""
-        if not source_obj:
-            return
-        
-        self.is_connecting = True
-        self.connection_source = source_obj
-        self.connection_snap_target = None
-        
-        # Set initial drag position to object center
-        ax1, ax2 = self.get_axes()
-        ax_map = {'x': 0, 'y': 1, 'z': 2}
-        
-        # FIX: Handle Brush (dict) vs Thing (object)
-        if isinstance(source_obj, dict):
-            source_pos = source_obj['pos']
-        else:
-            source_pos = source_obj.pos
-            
-        self.connection_drag_pos = QPointF(source_pos[ax_map[ax1]], source_pos[ax_map[ax2]])
-        
-        self.setCursor(Qt.CrossCursor)
-        self.setFocus()  # Take focus so we can receive key events
-        self.update()
-
     def keyPressEvent(self, event):
         # --- Escape backs out of the innermost thing in progress ---
         if event.key() == Qt.Key_Escape:
@@ -1990,41 +1958,6 @@ class View2D(QWidget):
                 self.draw_resize_handles(painter, screen_rect)
 
             self.draw_brush_color_tag(painter, brush, screen_rect)
-
-    def draw_mover_arrow(self, painter, brush, ax1, ax2, ax_map):
-        direction = brush.get('direction', [0, 1, 0])
-        distance = brush.get('distance', 128.0)
-
-        play_mode = getattr(self.main_window.view_3d, 'play_mode', False)
-        if play_mode and 'original_pos' in brush:
-            start_3d = brush['original_pos']
-        else:
-            start_3d = brush['pos']
-
-        d_vec = np.array(direction, dtype=float)
-        norm = np.linalg.norm(d_vec)
-        if norm == 0: return 
-        d_vec = d_vec / norm * distance
-        end_3d = [start_3d[0] + d_vec[0], start_3d[1] + d_vec[1], start_3d[2] + d_vec[2]]
-        
-        p_start = QPointF(start_3d[ax_map[ax1]], start_3d[ax_map[ax2]])
-        p_end = QPointF(end_3d[ax_map[ax1]], end_3d[ax_map[ax2]])
-        
-        if (p_start - p_end).manhattanLength() < 2: return 
-
-        s_start = self.world_to_screen(p_start)
-        s_end = self.world_to_screen(p_end)
-        
-        arrow_color = QColor(0, 255, 0)
-        painter.setPen(QPen(arrow_color, 2))
-        painter.drawLine(s_start, s_end)
-        
-        angle = math.atan2(s_end.y() - s_start.y(), s_end.x() - s_start.x())
-        arrow_size = 10
-        p1 = s_end - QPointF(math.cos(angle - math.pi / 6) * arrow_size, math.sin(angle - math.pi / 6) * arrow_size)
-        p2 = s_end - QPointF(math.cos(angle + math.pi / 6) * arrow_size, math.sin(angle + math.pi / 6) * arrow_size)
-        painter.setBrush(QBrush(arrow_color))
-        painter.drawPolygon(QPolygonF([s_end, p1, p2]))
 
     def draw_glow_light_arrow(self, painter, brush, ax1, ax2, ax_map):
         """Draw a wide colored arrow radiating from the glow brush's light emission face."""
@@ -3130,127 +3063,6 @@ class View2D(QWidget):
                 painter.drawRect(QRectF(h.x() - hs / 2, h.y() - hs / 2, hs, hs))
         painter.restore()
 
-    def draw_trigger_connections(self, painter, visible_bounds):
-        show_connections = self.main_window.config.getboolean('Display', 'show_connections', fallback=True)
-        
-        # Check play mode visibility
-        play_mode = getattr(self.main_window.view_3d, 'play_mode', False)
-        show_in_play = getattr(self.main_window.view_3d, 'show_connections_in_play_mode', False)
-        
-        if play_mode and not show_in_play:
-            return
-        
-        if not show_connections: 
-            return
-        
-        ax1, ax2 = self.get_axes()
-        if not ax1 or not ax2:
-            return
-            
-        ax_map = {'x': 0, 'y': 1, 'z': 2}
-        axis1_idx = ax_map[ax1]
-        axis2_idx = ax_map[ax2]
-        
-        current_connections = set()
-        connections_to_draw = []
-        
-        for i, brush in enumerate(self.editor.state.brushes):
-            target_name = brush.get('target')
-            if not target_name: 
-                continue
-            is_source = brush.get('is_trigger') or brush.get('is_mover')
-            if not is_source: 
-                continue
-            
-            # Get source position
-            source_pos = brush['pos']
-            source_2d = QPointF(source_pos[axis1_idx], source_pos[axis2_idx])
-            
-            # Find target position
-            target_pos = None
-            for b in self.editor.state.brushes:
-                if b.get('name') == target_name:
-                    target_pos = b['pos']
-                    break
-            if target_pos is None:
-                for t in self.editor.state.things:
-                    if hasattr(t, 'name') and t.name == target_name:
-                        target_pos = t.pos
-                        break
-            
-            if not target_pos:
-                continue
-                
-            target_2d = QPointF(target_pos[axis1_idx], target_pos[axis2_idx])
-            
-            # CULL connection if both source and target are outside visible bounds
-            margin = 10.0 / self.zoom_factor if self.zoom_factor > 0 else 10.0
-            source_rect = QRectF(source_2d.x() - margin, source_2d.y() - margin, margin * 2, margin * 2)
-            target_rect = QRectF(target_2d.x() - margin, target_2d.y() - margin, margin * 2, margin * 2)
-            
-            if not (visible_bounds.intersects(source_rect) or visible_bounds.intersects(target_rect)):
-                continue
-            
-            # Connection is visible - add to tracking and drawing list
-            source_id = f"brush_{id(brush)}"
-            conn_key = (source_id, target_name)
-            current_connections.add(conn_key)
-            connections_to_draw.append({
-                'key': conn_key,
-                'source_pos': source_2d,
-                'target_pos': target_2d,
-                'is_trigger': brush.get('is_trigger', False)
-            })
-        
-        # Animation tracking (only for visible connections)
-        for conn_key in current_connections - self.last_patrol_connections:
-            self.connection_animations[conn_key] = {'progress': 0.0, 'growing': True}
-            # Initialize traveling arrows for this connection
-            self.arrow_travel_progress[conn_key] = [0.0]  # Start with one arrow at 0
-        for conn_key in self.last_patrol_connections - current_connections:
-            if conn_key in self.connection_animations:
-                self.connection_animations[conn_key]['growing'] = False
-        
-        self.last_patrol_connections = current_connections
-        
-        # Draw visible connections
-        for conn in connections_to_draw:
-            conn_key = conn['key']
-            if conn_key not in self.connection_animations:
-                self.connection_animations[conn_key] = {'progress': 1.0, 'growing': True}
-                self.arrow_travel_progress[conn_key] = [0.0]
-            
-            anim = self.connection_animations[conn_key]
-            progress = anim['progress']
-            if progress <= 0: 
-                continue
-            
-            p1 = self.world_to_screen(conn['source_pos'])
-            p2 = self.world_to_screen(conn['target_pos'])
-            
-            animated_p2 = QPointF(p1.x() + (p2.x() - p1.x()) * progress, p1.y() + (p2.y() - p1.y()) * progress)
-            color = QColor(0, 255, 255, 180) if conn['is_trigger'] else QColor(139, 69, 19, 180)
-            
-            pen = QPen(color, 2, Qt.DotLine)
-            painter.setPen(pen)
-            painter.drawLine(p1, animated_p2)
-            
-            # Draw traveling arrows along the line
-            if progress >= 1.0 and conn_key in self.arrow_travel_progress:
-                self._draw_traveling_arrows(painter, p1, p2, color, conn_key)
-            elif progress > 0.1:
-                self._draw_connection_arrow(painter, p1, animated_p2, color)
-        
-        # Clean up finished animations
-        keys_to_remove = []
-        for conn_key, anim in self.connection_animations.items():
-            if conn_key not in current_connections and anim['progress'] <= 0:
-                keys_to_remove.append(conn_key)
-        for key in keys_to_remove: 
-            del self.connection_animations[key]
-            if key in self.arrow_travel_progress:
-                del self.arrow_travel_progress[key]
-    
     def _draw_traveling_arrows(self, painter, p1, p2, color, conn_key):
         """Draw arrows that travel along the connection line."""
         if conn_key not in self.arrow_travel_progress:

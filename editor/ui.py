@@ -1,9 +1,9 @@
 import os
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStatusBar, QToolBar,
-    QLabel, QSpinBox, QCheckBox, QComboBox, QAction, QMessageBox, QFrame,
-    QDockWidget, QTabWidget, QPushButton, QActionGroup, QDialog,
-    QDialogButtonBox, QApplication, QSizePolicy, QInputDialog, QMenu,
+    QMainWindow, QWidget, QHBoxLayout, QStatusBar, QToolBar,
+    QLabel, QSpinBox, QComboBox, QAction, QMessageBox, QFrame,
+    QDockWidget, QTabWidget, QPushButton, QActionGroup,
+    QApplication, QSizePolicy, QInputDialog, QMenu,
     QStyle, QStyleOptionButton
 )
 from PyQt5.QtCore import Qt, QSize, QByteArray, QRect
@@ -80,22 +80,6 @@ class RotatablePlayButton(QPushButton):
         self.style().drawControl(QStyle.CE_PushButton, option, painter, self)
         painter.end()
 
-
-class GenerateTilemapDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Generate Tilemap")
-        layout = QVBoxLayout(self)
-        self.save_png_checkbox = QCheckBox("Save a PNG copy of the tilemap")
-        layout.addWidget(self.save_png_checkbox)
-        
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-        
-    def save_png_checked(self):
-        return self.save_png_checkbox.isChecked()
 
 #: Bumped whenever the default dock arrangement changes.  A layout saved by
 #: an older version is dropped once, so a new default actually reaches an

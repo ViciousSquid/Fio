@@ -2332,24 +2332,6 @@ class QtGameView(QOpenGLWidget):
         if self.renderer:
             self.renderer.set_sprite_textures(self.sprite_textures)
 
-    def _pixmap_to_texture(self, pixmap):
-        image = pixmap.toImage().convertToFormat(QImage.Format_RGBA8888)
-        width, height = image.width(), image.height()
-        ptr = image.constBits()
-        try:
-            nbytes = image.sizeInBytes()
-        except AttributeError:
-            nbytes = image.byteCount()
-        data = ptr.asstring(nbytes)
-        tex_id = gl.glGenTextures(1)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
-        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
-        gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, width, height, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, data)
-        return tex_id
-
     def update_instance_textures(self, things):
         if not self.renderer:
             return
@@ -2548,10 +2530,6 @@ class QtGameView(QOpenGLWidget):
         pos = getattr(self, '_last_player_start_pos', [0, 0, 0])
         angle = getattr(self, '_last_player_start_angle', 0)
         self.toggle_play_mode(pos, angle)
-
-    def set_culling(self, enabled):
-        self.culling_enabled = enabled
-        self.update()
 
     def set_cull_distance(self, distance):
         """Set the camera's maximum render distance, in world units.
