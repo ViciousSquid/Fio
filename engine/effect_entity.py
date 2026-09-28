@@ -194,3 +194,11 @@ class Effect(_ThingBase):
         self._effect_animation_phase = 0.0
         self._effect_active = True
         return True
+
+
+if EDITOR_TIER:
+    # Normally editor.things registers Effect itself.  When this module was the
+    # process's first import of the two, editor.things ran inside the import
+    # above, before Effect existed, and left the registration to here.
+    from editor import things as _editor_things
+    _editor_things.ENTITY_TYPES.setdefault('Effect', Effect)

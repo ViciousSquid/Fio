@@ -1976,9 +1976,16 @@ ENTITY_TYPES = {
     'LogicSpawner': LogicSpawner,
     'Portal': Portal,
     'LogicState': LogicState,
-    # Core primitive is imported only after editor Thing/Model definitions exist.
-    'Effect': importlib.import_module('engine.effect_entity').Effect,
 }
+
+# Effect is a core primitive defined in engine/ (the head-less player needs it)
+# and it imports this module, so it can only be fetched now that Thing exists.
+# When the process imported engine.effect_entity *first*, this module is being
+# run by that import and the class does not exist yet; effect_entity then
+# registers itself as soon as it is defined (see the end of that module).
+_effect_class = getattr(importlib.import_module('engine.effect_entity'), 'Effect', None)
+if _effect_class is not None:
+    ENTITY_TYPES['Effect'] = _effect_class
 
 # Categories for editor UI
 ENTITY_CATEGORIES = {
