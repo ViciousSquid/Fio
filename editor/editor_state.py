@@ -333,6 +333,10 @@ class EditorState:
             self._render_dirty_all = True
             self._render_dirty_all_epoch = self.world_epoch
             self.mark_world_changed()
+        self._bump_io_revision()
+
+    @staticmethod
+    def _bump_io_revision():
         if IO_AVAILABLE:
             try:
                 from .io_system import bump_io_revision
@@ -621,6 +625,10 @@ class EditorState:
         capture the live scene itself — see the note there.
         """
         self.mark_world_changed(getattr(self, "selected_objects", ()))
+        # The operation may add or delete a connection's source or target.
+        # The I/O reverse index keys on object counts and list identity, which
+        # a delete followed by a placement restores exactly, so it must be told.
+        self._bump_io_revision()
         # Keep the redo branch we are about to drop, so an operation that turns
         # out to change nothing can put it back (see discard_last_checkpoint).
         self._discarded_redo = list(self.redo_stack)
