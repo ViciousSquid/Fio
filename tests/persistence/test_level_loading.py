@@ -44,8 +44,10 @@ class _Window:
         self.applied = []
         self.recent = []
         self.toasts = []
+        self.calls = []
 
     def _apply_level_data(self, level_data):
+        self.calls.append("replace scene")
         self.applied.append(level_data)
         if self.fail_apply:
             raise RuntimeError("entity failed to build")
@@ -70,6 +72,14 @@ class _Window:
 
     def _close_current_overlay(self):
         pass
+
+    def _exit_play_mode(self):
+        self.calls.append("exit play")
+        self.view_3d.play_mode = False
+
+    def enter_play_mode(self):
+        self.calls.append("enter play")
+        self.view_3d.play_mode = True
 
 
 LEVEL = {"version": 3, "brushes": [], "things": []}
@@ -136,3 +146,23 @@ def test_a_document_that_is_not_a_map_changes_nothing(tmp_path, document):
     assert window.applied == []
     assert window.file_path == "maps/previous.json"
     assert not window.unsaved_changes
+
+
+def test_a_level_change_during_play_ends_the_session_before_the_swap(tmp_path):
+    """LevelChanger loads the next map while play is running.
+
+    The restart looked for an ``exit_play_mode`` that does not exist (the
+    method is ``_exit_play_mode``) and fell back to flipping the view's flag,
+    so the running session was never torn down: the logic thread was never
+    told play had ended and the plugins never got ``on_play_stop``.  The
+    teardown must also run *before* the scene is replaced, because it
+    restores movers and doors by index into the world it started on.
+    """
+    path = tmp_path / "next.json"
+    path.write_text(json.dumps(LEVEL))
+    window = _Window()
+    window.view_3d.play_mode = True
+
+    assert window.load_level_file(str(path)) is True
+
+    assert window.calls == ["exit play", "replace scene", "enter play"]

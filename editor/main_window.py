@@ -4154,8 +4154,13 @@ class MainWindow(QMainWindow):
 
         loaded = False
         try:
-            # Capture play state BEFORE doing anything
-            was_playing = hasattr(self.view_3d, 'play_mode') and self.view_3d.play_mode
+            # A level change during play: end the running session *before*
+            # the scene is replaced.  Its teardown (movers, doors, Props, the
+            # plugins' on_play_stop) restores state by index into the world it
+            # was started on, so it must run against that world, not the new one.
+            was_playing = bool(getattr(self.view_3d, 'play_mode', False))
+            if was_playing:
+                self._exit_play_mode()
 
             # From here the scene is being replaced.  Until it has been, it
             # belongs to no file: a failure part-way must never leave the
@@ -4213,13 +4218,9 @@ class MainWindow(QMainWindow):
             self.set_selected_object(None)
             self.update_all_ui()
 
-            # Proper, synchronous play mode restart
+            # Resume play on the new level.
             if was_playing:
                 print("[MainWindow] Restarting Play Mode with new level...")
-                if hasattr(self, 'exit_play_mode'):
-                    self.exit_play_mode()
-                else:
-                    self.view_3d.play_mode = False
                 self.enter_play_mode()
 
             name = os.path.basename(file_path) if file_path else "generated level"
