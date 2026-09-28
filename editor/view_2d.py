@@ -1980,10 +1980,8 @@ class View2D(QWidget):
             
             # Draw glow light direction arrow
             if brush.get('shader') == 'Glow':
-                # Hide arrows in play mode unless F5 toggle is enabled
-                play_mode = getattr(self.main_window.view_3d, 'play_mode', False)
-                show_arrows = getattr(self.main_window.view_3d, 'show_glow_arrows_in_play_mode', False)
-                if not play_mode or show_arrows:
+                # Editor-only guide: hidden in play mode.
+                if not getattr(self.main_window.view_3d, 'play_mode', False):
                     self.draw_glow_light_arrow(painter, brush, ax1, ax2, ax_map)
 
             # A lone selected brush keeps its own resize handles; when several

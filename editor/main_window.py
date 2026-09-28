@@ -2361,9 +2361,6 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"An unexpected error occurred:\n{e}")
 
     def update_shortcuts(self):
-        apply_texture_shortcut = self.config.get('Controls', 'apply_texture', fallback='Shift+T')
-        if hasattr(self, 'apply_texture_action'):
-            self.apply_texture_action.setShortcut(QKeySequence(apply_texture_shortcut))
         save_layout_shortcut = self.config.get('Controls', 'save_layout', fallback='Ctrl+Shift+S')
         if hasattr(self, 'save_layout_action'):
             self.save_layout_action.setShortcut(QKeySequence(save_layout_shortcut))
@@ -4854,15 +4851,12 @@ class MainWindow(QMainWindow):
                 self.tooltip_timer.stop()
             if hasattr(self, 'autosave_timer'):
                 self.autosave_timer.stop()
-            if hasattr(self, '_play_button_sync_timer'):
-                self._play_button_sync_timer.stop()
 
             # Cleanup extracted package temp dir
             self._discard_package_temp_dir()
 
             try:
-                if not getattr(self, '_resetting_layout', False):
-                    self.save_layout()
+                self.save_layout()
             except Exception as e:
                 print(f"save_layout failed: {e}")
 

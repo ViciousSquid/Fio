@@ -116,7 +116,6 @@ class ConsoleCommandHandler:
             'r_deferred': self.cmd_render_deferred,
             'r_vsync': self.cmd_render_vsync,
             'r_clearcolor': self.cmd_render_clearcolor,
-            'r_reloadshaders': self.cmd_reload_shaders,
             'r_info': self.cmd_render_info,
 
             # View distance & far-plane fog. These are the commands the I/O
@@ -144,7 +143,6 @@ class ConsoleCommandHandler:
             'lighting': self.cmd_render_lighting,
             'deferred': self.cmd_render_deferred,
             'vsync': self.cmd_render_vsync,
-            'reloadshaders': self.cmd_reload_shaders,
             'viewdistance': self.cmd_view_distance,
             'culldistance': self.cmd_view_distance,
             'cullfogdist': self.cmd_view_distance,
@@ -858,7 +856,6 @@ class ConsoleCommandHandler:
 <b style="color:orange;">r_shadows</b>{sep}<b style="color:orange;">shadows</b> — Toggle shadows<br>
 <b style="color:orange;">r_fog</b>{sep}<b style="color:orange;">fog</b> — Toggle volumetric fog (fog brushes)<br>
 <b style="color:orange;">r_lighting</b>{sep}<b style="color:orange;">lighting</b> — Toggle real-time lighting<br>
-<b style="color:orange;">r_reloadshaders</b> — Hot-reload all shaders<br>
 <b style="color:orange;">r_clearcolor</b> r g b — Set background colour<br>
 <b style="color:cyan;">=== View Distance &amp; Far-Plane Fog ===</b><br>
 <i>Fog always reaches full opacity before the clip, so pulling the view
@@ -1314,22 +1311,6 @@ entity to drive them from the I/O system.</i><br>
         self._refresh_view()
         r, g, b = vd.ambient
         debug_log("Info", f"Ambient light: [{r:.2f}, {g:.2f}, {b:.2f}]")
-
-    def cmd_reload_shaders(self, args):
-        renderer = self._get_renderer()
-        if not renderer:
-            return
-        try:
-            if hasattr(renderer, 'reload_shaders') and callable(renderer.reload_shaders):
-                success = renderer.reload_shaders()
-                if success:
-                    debug_log("Info", "✅ Shaders reloaded successfully")
-                else:
-                    debug_log("Warning", "Some shaders failed to reload")
-            else:
-                debug_log("Error", "Renderer does not support hot-reloading shaders")
-        except Exception as e:
-            debug_log("Error", f"Failed to reload shaders: {e}")
 
     # ===================================================================
     # EXISTING COMMANDS (unchanged)

@@ -498,10 +498,6 @@ class SceneHierarchy(QWidget):
             terrain_item.setData(0, Qt.UserRole, ('terrain', 0))
             terrain_item.setForeground(0, QBrush(QColor("#8FBC8F")))  # Earthy green
 
-            # Show if terrain is selected
-            if 'terrain' in [getattr(obj, '_terrain_marker', None) for obj in selected_objects]:
-                terrain_item.setSelected(True)
-
         # =====================================================================
         # BRUSHES SECTION
         # =====================================================================
