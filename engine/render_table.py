@@ -71,6 +71,7 @@ from engine.constants import is_water_brush, normalize_color
 from engine.spatial import authored_hidden
 from engine import brush_geometry
 from engine.change_journal import JOURNAL, OVERFLOW, STATE
+from engine.render_cells import SlotCellIndex
 
 # --------------------------------------------------------------------------
 # Classification bits
@@ -262,7 +263,8 @@ class RenderTable:
         'generation', 'count', 'ids', 'slot_of_id', 'brushes',
         'dynamic_slots', 'geometry_records', '_tex_ids', '_tex_names',
         '_epoch', '_row_tuple', '_slot_of_obj', 'rows_read', 'refs',
-        '_shown_mask', '_shown_slots', '_shown_stale', '__weakref__'))
+        '_shown_mask', '_shown_slots', '_shown_stale', 'cells',
+        '__weakref__'))
 
     @property
     def center(self):
@@ -301,6 +303,9 @@ class RenderTable:
         self._shown_mask = np.empty(0, dtype=bool)
         self._shown_slots = np.empty(0, dtype=np.intp)
         self._shown_stale = True
+        #: Occupied cells -> slots, the frustum cull's broad phase. Rebuilt when
+        #: the row set changes; told about every other bounds re-read.
+        self.cells = SlotCellIndex()
         for name, shape, dtype, fill in _COLUMNS:
             setattr(self, name, np.full((0,) + shape, fill, dtype=dtype))
 
@@ -633,7 +638,10 @@ class RenderTable:
             if moved:
                 self.refresh_transforms(brushes, moved)
         if len(self.dynamic_slots):
-            self.refresh_transforms(brushes, self.dynamic_slots.tolist())
+            # Movers are always frustum candidates, so their filing in the
+            # cell index is never read and they need not report moving.
+            self.refresh_transforms(brushes, self.dynamic_slots.tolist(),
+                                    track=False)
         if edited:
             self.refresh_edited(brushes, edited)
         return self.hidden[:n]
@@ -671,6 +679,7 @@ class RenderTable:
         self._row_tuple = peer._row_tuple
         self._slot_of_obj = dict(peer._slot_of_obj)
         self._shown_stale = True
+        self.cells = peer.cells.copy()
         self.generation += 1
 
     def epoch_is_current(self, epoch):
@@ -804,14 +813,21 @@ class RenderTable:
         self.count = n
         self.dynamic_slots = np.flatnonzero(
             self.class_bits[:n] & CLASS_DYNAMIC).astype(np.int32)
+        self.cells.invalidate()
         self.generation += 1
         return not survivors
 
-    def refresh_transforms(self, brushes, slots):
-        """Re-read the warm columns for *slots* (movers and doors, per tick)."""
+    def refresh_transforms(self, brushes, slots, track=True):
+        """Re-read the warm columns for *slots* (movers and doors, per tick).
+
+        *track* tells the cell index the rows' bounds may have moved; only the
+        per-tick mover refresh, whose rows the index never relies on, skips it.
+        """
         for slot in slots:
             self._resolve_warm(slot, brushes[slot])
         self.rows_read += len(slots)
+        if track and slots:
+            self.cells.touch(slots)
 
     def refresh_rows(self, brushes, slots):
         """Re-resolve the cold columns for *slots* after a semantic change.
@@ -823,6 +839,7 @@ class RenderTable:
         slots = sorted({int(slot) for slot in slots})
         self.rows_read += len(slots)
         self._resolve_warm_rows(slots, brushes)
+        self.cells.touch(slots)
         self._resolve_cold_rows(slots, brushes)
         for slot in slots:
             brush = brushes[slot]
