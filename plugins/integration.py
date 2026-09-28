@@ -24,10 +24,8 @@ a log line rather than breaking startup. It patches:
 * ``editor.ui.Ui_MainWindow``
     - ``create_menu_bar``     → add a top-level **Plugins** menu bar entry
 
-Package export is **not** patched here: bundling the plugins a ``.fiopak``'s
-maps depend on is a first-class step of ``PackageExporter.export`` itself
-(``editor/package_exporter.py``), which calls ``plugins.packaging.augment_fiopak``
-natively once the base archive is written.
+Package export is not patched either: a ``.fiopak`` is a world container and
+never carries plugin code, so the exporter has nothing plugin-specific to do.
 
 The equivalent hand-edits (for reference / an alternative to this shim) would
 be small insertions in those files; see ``plugins/README.md``.
@@ -299,19 +297,6 @@ def _patch_editor_menu():
     Ui_MainWindow._fio_plugins_patched = True
 
 
-def refresh_plugin_ui(MainWindow):
-    """Rebuild the plugin-facing editor UI after the plugin set changes.
-
-    Loading a package's bundled plugins mid-session adds entity types and menu
-    actions that were not there when the menus were built. This is the one
-    entry point that puts them on screen; it is safe to call repeatedly.
-    """
-    try:
-        _build_plugins_menu(MainWindow)
-    except Exception as exc:
-        _log(f"plugin UI refresh failed: {exc}")
-
-
 def _disabled_from_config(MainWindow):
     """Read the persisted set of disabled plugin names from settings.ini."""
     cfg = getattr(MainWindow, "config", None)
@@ -350,11 +335,14 @@ def _build_plugins_menu(MainWindow):
     mgr = get_manager()
 
     # Apply any persisted enable/disable choices before drawing the menu.
+    # Through set_enabled, not the attribute: the manager caches which plugins
+    # tick and dispatch keyed on its enabled generation, and a plugin is told
+    # (on_enabled_changed) so it can release what it holds.
     persisted_off = _disabled_from_config(MainWindow)
     for plugin in mgr.plugins:
         if mgr.plugin_package_name(plugin).lower() in persisted_off or \
                 plugin.name.lower() in persisted_off:
-            plugin.enabled = False
+            mgr.set_enabled(plugin, False)
 
     menubar = MainWindow.menuBar()
 
@@ -365,8 +353,8 @@ def _build_plugins_menu(MainWindow):
             help_action = action
             break
 
-    # Drop a previously built menu: this runs again when a .fiopak brings
-    # plugins of its own, and two "Plugins" entries is not a menu bar.
+    # Drop a previously built menu, so a rebuild never leaves two "Plugins"
+    # entries in the menu bar.
     for action in list(menubar.actions()):
         if action.text().replace("&", "") == "Plugins":
             menubar.removeAction(action)

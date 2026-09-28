@@ -674,3 +674,40 @@ def test_the_plugin_api_does_not_pull_in_qt_or_opengl():
     assert result.returncode == 0 and "OK" in result.stdout, (
         "importing the plugin API is not dependency-light:\n%s%s"
         % (result.stdout[-500:], result.stderr[-500:]))
+
+
+def test_an_underscored_entity_class_is_found_by_its_map_type(monkeypatch):
+    """Ownership is looked up normalised (lowercase, no underscores).
+
+    It used to be *stored* only lowercased, so a class named ``Crate_Stack``
+    was filed under ``crate_stack`` and every lookup - ``crate_stack``,
+    ``CrateStack`` - asked for ``cratestack`` and missed: the player host could
+    not build the entity and the owning plugin was never auto-enabled.
+    """
+    import copy
+
+    from plugins.entitybase import Thing
+    from plugins.manager import PluginManager
+
+    try:        # register_entity also files the class in the editor palette
+        from editor import things as editor_things
+    except Exception:
+        editor_things = None
+    if editor_things is not None:
+        for name in ("ENTITY_TYPES", "ENTITY_CATEGORIES"):
+            monkeypatch.setattr(editor_things, name,
+                                copy.deepcopy(getattr(editor_things, name)))
+
+    class Crate_Stack(Thing):
+        pass
+
+    class _Owner(FioPlugin):
+        name = "crates"
+
+    manager = PluginManager()
+    owner = _Owner()
+    EditorAPI(manager, owner).register_entity(Crate_Stack, placeable=False)
+
+    for spelling in ("Crate_Stack", "crate_stack", "CrateStack"):
+        assert manager.entity_class_for_type(spelling) is Crate_Stack, spelling
+        assert manager.plugin_for_type(spelling) is owner, spelling

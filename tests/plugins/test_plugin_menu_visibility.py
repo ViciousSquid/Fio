@@ -116,3 +116,38 @@ def _live_actions(window, plugin_name):
                     out.append(entry)
                 return out
     return []
+
+
+def test_a_persisted_disable_really_stops_the_plugin(window, monkeypatch):
+    """settings.ini's ``[Plugins] disabled`` must turn the plugin off for real.
+
+    Building the menu used to write ``plugin.enabled = False`` directly. The
+    manager caches the list of plugins it dispatches to, keyed on a generation
+    that only ``set_enabled`` bumps, so a plugin that had already been
+    dispatched to kept ticking with its menu toggle showing it off.
+    """
+    import configparser
+    import types
+
+    mgr, tidy = _tidy()
+    if not mgr._overrides(tidy, "on_tick"):
+        pytest.skip("Tidy no longer ticks; pick another plugin")
+    ticks = []
+    monkeypatch.setattr(tidy, "on_tick", lambda logic, ctx: ticks.append(1))
+    was = mgr.is_enabled(tidy)
+    logic = types.SimpleNamespace(things=[], brushes=[], player=None,
+                                  current_hud_message="")
+    try:
+        mgr.set_enabled(tidy, True)
+        mgr.tick(logic)
+        assert ticks == [1], "fixture: an enabled Tidy should tick"
+
+        window.config = configparser.ConfigParser()
+        window.config["Plugins"] = {"disabled": "tidy"}
+        integration._build_plugins_menu(window)
+
+        assert not mgr.is_enabled(tidy)
+        mgr.tick(logic)
+        assert ticks == [1], "a plugin disabled in settings.ini still ticked"
+    finally:
+        mgr.set_enabled(tidy, was)
