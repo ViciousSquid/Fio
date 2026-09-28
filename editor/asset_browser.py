@@ -268,7 +268,7 @@ class AssetBrowserTab(QWidget):
 
         if not os.path.exists(self.current_asset_folder):
             try: os.makedirs(self.current_asset_folder)
-            except: pass
+            except OSError: pass
 
         # Main layout: action bar at top (below tabs), then splitter (tree + grid)
         main_layout = QVBoxLayout(self)
@@ -769,7 +769,7 @@ class AssetBrowser(QWidget):
         for p in [self.textures_path, self.models_path, self.maps_folder, self.packages_folder]:
             if not os.path.exists(p):
                 try: os.makedirs(p)
-                except: pass
+                except OSError: pass
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)

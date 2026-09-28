@@ -140,7 +140,7 @@ if __name__ == "__main__":
             import ctypes
             myappid = 'fio.editor.v1'  # arbitrary string
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-        except:
+        except Exception:
             pass
     # ---------------------------------------------------------
 
@@ -249,7 +249,7 @@ if __name__ == "__main__":
             icon_file = os.path.join(root_directory, 'assets', 'icon.icns')
             if os.path.exists(icon_file):
                 bundle.setInfoDictionary_({'CFBundleIconFile': 'icon'})
-        except:
+        except Exception:
             pass
 
     splash.set_progress(100, "Ready.")
