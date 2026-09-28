@@ -107,13 +107,8 @@ def _benchmark_scene(brushes, things, name, **config_overrides):
         renderer = glh.make_renderer()
         try:
             projection, view, eye = glh.camera_matrices(aspect=1.0)
-            options = dict(config_overrides)
-            use_batched_positions = bool(
-                options.pop("batched_thing_positions", False))
             config = glh.render_config(all_brushes=brushes, all_things=things,
-                                       **options)
-            if use_batched_positions:
-                config["thing_positions"] = _thing_xz_positions(things)
+                                       **config_overrides)
 
             def _frame():
                 context.bind()
@@ -256,10 +251,7 @@ PATHS = [
     ("frustum_cull_on", _many_culled, {"camera_distance_cull": True}),
     ("many_visible", _many_visible, {}),
     ("many_culled", _many_culled, {}),
-    ("many_entities_scalar", _many_entities,
-     {"camera_distance_cull": True}),
-    ("many_entities_batched", _many_entities,
-     {"camera_distance_cull": True, "batched_thing_positions": True}),
+    ("many_entities", _many_entities, {"camera_distance_cull": True}),
 ]
 
 

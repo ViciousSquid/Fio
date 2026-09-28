@@ -339,7 +339,7 @@ def test_all_lights_stays_lazy_until_light_consumer_reads_it(logic):
     assert lights._list is not None
 
 
-def test_visible_thing_positions_are_contiguous_and_aligned_with_snapshots(logic):
+def test_published_entity_rows_carry_their_positions(logic):
     lamp = make_thing(Light, "lamp", (100, 200, -300))
     monster = make_thing(Monster, "grunt", (-50, 96, 700))
     thread = logic(things=[lamp, monster])
@@ -347,38 +347,33 @@ def test_visible_thing_positions_are_contiguous_and_aligned_with_snapshots(logic
     thread._prepare_render_state()
 
     published = thread.game_state.get_write_state()
-    positions = published.visible_thing_positions
-    assert positions.flags.c_contiguous
-    assert positions.shape[1] == 2
-    assert published.visible_thing_position_count == 2
-    assert np.allclose(positions[:2], [[100.0, -300.0], [-50.0, 700.0]])
-    assert published.visible_things[0] is lamp
-    assert published.visible_things[1] is monster
-    assert published.entity_table.pos[1].tolist() == [-50.0, 96.0, 700.0]
+    slots = published.visible_thing_slots
+    assert published.entity_table.pos[slots].tolist() == [
+        [100.0, 200.0, -300.0], [-50.0, 96.0, 700.0]]
+    assert list(published.visible_things) == [lamp, monster]
 
 
-def test_visible_thing_position_buffer_is_reused_and_tracks_movement(logic):
+def test_a_moved_entity_updates_its_row_without_reconciling(logic):
     monster = make_thing(Monster, "grunt", (0, 96, -300))
     thread = logic(things=[monster])
 
     thread._prepare_render_state()
-    first = thread.game_state.get_write_state().visible_thing_positions
+    table = thread.game_state.get_write_state().entity_table
+    generation = table.generation
 
     monster.pos = [800.0, 96.0, -900.0]
     thread._prepare_render_state()
-    second = thread.game_state.get_write_state().visible_thing_positions
 
-    assert second is first
-    assert np.allclose(second[:1], [[800.0, -900.0]])
+    assert table.pos[0].tolist() == [800.0, 96.0, -900.0]
+    assert table.generation == generation
 
 
-def test_visible_thing_position_buffer_handles_entity_deletion_and_creation(logic):
+def test_a_same_length_swap_of_the_entity_list_re_rows_the_table(logic):
+    """A removal and an addition in one frame leave the count unchanged."""
     first_thing = make_thing(Light, "first", (0, 100, 0))
     second_thing = make_thing(Light, "second", (100, 100, 0))
     thread = logic(things=[first_thing, second_thing])
-
     thread._prepare_render_state()
-    buffer = thread.game_state.get_write_state().visible_thing_positions
 
     thread.things.remove(second_thing)
     third_thing = make_thing(Light, "third", (900, 100, -700))
@@ -386,12 +381,10 @@ def test_visible_thing_position_buffer_handles_entity_deletion_and_creation(logi
     thread._prepare_render_state()
 
     published = thread.game_state.get_write_state()
-    assert published.visible_thing_positions is buffer
-    assert published.visible_thing_position_count == 2
-    assert np.allclose(
-        published.visible_thing_positions[:2],
-        [[0.0, 0.0], [900.0, -700.0]],
-    )
+    table = published.entity_table
+    assert table.ids == [first_thing.properties["id"], third_thing.properties["id"]]
+    assert table.pos[1].tolist() == [900.0, 100.0, -700.0]
+    assert list(published.visible_things) == [first_thing, third_thing]
 
 
 def _publish(thread):
@@ -867,7 +860,6 @@ def test_entity_slots_index_the_rows_they_were_published_beside(logic):
     assert len(slots) == len(state.visible_things)
     assert table.ids[int(slots[0])] == lamp.properties["id"]
     assert table.ids[int(slots[1])] == monster.properties["id"]
-    # The position column is the same numbers the XZ snapshot carries.
     assert np.allclose(table.pos[int(slots[0])], lamp.pos)
 
 
@@ -882,7 +874,6 @@ def test_a_collected_prop_is_not_published(logic):
         state = thread.game_state.get_write_state()
 
         assert list(state.visible_things) == [keep]
-        assert state.visible_thing_position_count == 1
         assert len(state.visible_thing_slots) == 1
     finally:
         thread.set_play_mode(False)

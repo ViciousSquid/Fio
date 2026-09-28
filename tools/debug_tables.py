@@ -59,11 +59,18 @@ class FrozenTable:
         self.slot_of_id = dict(getattr(table, "slot_of_id", {}))
         self.rows_read = int(getattr(table, "rows_read", 0))
 
+    #: Columns a table exposes as views of another: RenderTable's centre and
+    #: half-extent live in its ``bounds`` block.
+    _VIEWS = {"center": ("bounds", slice(0, 3)), "half": ("bounds", slice(3, 6))}
+
     def __getattr__(self, name):
-        try:
-            return self.__dict__["fields"][name]
-        except KeyError:
-            raise AttributeError(name) from None
+        fields = self.__dict__["fields"]
+        if name in fields:
+            return fields[name]
+        view = self._VIEWS.get(name)
+        if view is not None and view[0] in fields:
+            return fields[view[0]][:, view[1]]
+        raise AttributeError(name)
 
 
 def _slot_names(cls):
@@ -692,7 +699,11 @@ class DebugTablesWindow(QMainWindow):
             span = now - last[0]
             rates = ((published - last[1]) / span, (declined - last[2]) / span)
         self._last_counters = (now, published, declined)
+        logic = getattr(view, "logic_thread", None)
+        ai = getattr(logic, "monster_ai_thread", None)
         return {
+            "tick": float(getattr(logic, "tick_ms", 0.0)),
+            "ai": float(getattr(ai, "update_ms", 0.0)) if ai is not None else 0.0,
             "prepare": float(getattr(self.snapshot, "prepare_ms", 0.0)),
             "paint": float(getattr(view, "paint_ms", 0.0)),
             "passes": dict(getattr(stats, "pass_ms", {}) or {}),
@@ -744,6 +755,8 @@ class DebugTablesWindow(QMainWindow):
             f"  swaps declined     {timings['declined_per_s']:7.1f} /s"
             "   (renderer was reading the other buffer)\n\n"
             "TIMINGS (measured, CPU)\n"
+            f"  simulation tick (logic)      {timings['tick']:8.3f} ms\n"
+            f"  monster AI update            {timings['ai']:8.3f} ms\n"
             f"  prepare (logic thread)       {timings['prepare']:8.3f} ms\n"
             f"  paint (UI thread, total)     {timings['paint']:8.3f} ms\n"
             f"  draw calls {draw_calls:,}   batched draws {batched:,}   "

@@ -197,10 +197,11 @@ def _brush_class_bits(brush) -> int:
 #: growing the table and moving surviving rows at a reconcile cannot miss one.
 _COLUMNS = (
     # -- warm: the transform and visibility, re-read for the rows that change.
-    # float64 deliberately: the frustum batch works in float64, so matching
-    # the dtype keeps the cull exact and saves a per-frame cast.
-    ('center', (3,), np.float64, 0.0),
-    ('half', (3,), np.float64, 0.0),
+    #: ``[centre xyz | half-extent xyz]`` in one contiguous block, float64:
+    #: the frustum test is then a single (N, 6) x (6, 6) product with no
+    #: per-frame gather. :attr:`RenderTable.center` and
+    #: :attr:`RenderTable.half` are views of it.
+    ('bounds', (6,), np.float64, 0.0),
     #: ``[axis_x, axis_y, axis_z, angle_degrees]``; angle 0 for the common
     #: unrotated brush, which is what lets the instance-matrix build stay a
     #: vectorised translate+scale for almost every row.
@@ -260,7 +261,18 @@ class RenderTable:
     __slots__ = (tuple(name for name, *_ in _COLUMNS) + (
         'generation', 'count', 'ids', 'slot_of_id', 'brushes',
         'dynamic_slots', 'geometry_records', '_tex_ids', '_tex_names',
-        '_epoch', '_row_tuple', '_slot_of_obj', 'rows_read', '__weakref__'))
+        '_epoch', '_row_tuple', '_slot_of_obj', 'rows_read', 'refs',
+        '_shown_mask', '_shown_slots', '_shown_stale', '__weakref__'))
+
+    @property
+    def center(self):
+        """The AABB centre per row: a view of :attr:`bounds`."""
+        return self.bounds[:, :3]
+
+    @property
+    def half(self):
+        """The AABB half-extent per row: a view of :attr:`bounds`."""
+        return self.bounds[:, 3:]
 
     def __init__(self):
         self.generation = 0
@@ -281,6 +293,14 @@ class RenderTable:
         #: Dense geometry records keyed directly by geometry_id. AABB
         #: brushes have no record; their geometry_id stays -1.
         self.geometry_records: list = []
+        #: slot -> the brush dict, as an object array, for publishing rows as
+        #: objects on demand (``PublishedBrushes``). Rebuilt only when the rows
+        #: change.
+        self.refs = np.empty(0, dtype=object)
+        #: ``~hidden`` and its slots, cached until a ``hidden`` value changes.
+        self._shown_mask = np.empty(0, dtype=bool)
+        self._shown_slots = np.empty(0, dtype=np.intp)
+        self._shown_stale = True
         for name, shape, dtype, fill in _COLUMNS:
             setattr(self, name, np.full((0,) + shape, fill, dtype=dtype))
 
@@ -367,7 +387,10 @@ class RenderTable:
 
     def _resolve_warm(self, slot, brush):
         """Transform and visibility for one row.  Cheap; per tick for movers."""
-        self.hidden[slot] = bool(brush.get('hidden', False))
+        hidden = bool(brush.get('hidden', False))
+        if hidden != self.hidden[slot]:
+            self.hidden[slot] = hidden
+            self._shown_stale = True
         pos = brush.get('pos') or (0.0, 0.0, 0.0)
         size = brush.get('size') or (64.0, 64.0, 64.0)
         self.center[slot] = pos
@@ -525,6 +548,23 @@ class RenderTable:
             self.refresh_edited(brushes, edited)
         return self.hidden[:n]
 
+    def shown(self):
+        """``(mask, slots)`` of the rows not hidden, over the live rows.
+
+        Recomputed only when a ``hidden`` value or the row set changed: on a
+        still frame this is two attribute reads, not two passes over the
+        table.
+        """
+        if self._shown_stale:
+            self._shown_mask = ~self.hidden[:self.count]
+            self._shown_slots = np.flatnonzero(self._shown_mask)
+            self._shown_stale = False
+        return self._shown_mask, self._shown_slots
+
+    def epoch_is_current(self, epoch):
+        """Whether the table was last reconciled at *epoch*."""
+        return epoch is not None and epoch == self._epoch
+
     def sync(self, brushes, epoch=None, dirty_objects=None):
         """Bring the table up to date outside the frame loop.
 
@@ -643,6 +683,11 @@ class RenderTable:
         # frame will reconcile any newly appended rows.
         self.brushes = list(brushes[:n])
         self._row_tuple = tuple(self.brushes)
+        refs = np.empty(n, dtype=object)
+        for slot, brush in enumerate(self.brushes):
+            refs[slot] = brush
+        self.refs = refs
+        self._shown_stale = True
         self._slot_of_obj = {id(brush): slot
                              for slot, brush in enumerate(self.brushes)}
         self.count = n

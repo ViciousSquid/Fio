@@ -54,7 +54,6 @@ from engine.portal_transform import (
     corners as _portal_corners,
     contains_point as _portal_contains_point,
 )
-from editor.things import PathNode
 
 # Try to import OBJ and GLB loaders
 try:
@@ -1371,11 +1370,13 @@ layout (location = 10) in vec4 iPayload;
         #: submission tests to recover what a run actually drew.
         self._sprite_instance_base = base
         origin = base * stride
+        # The raw entry point, as for brush runs: an integer offset into the
+        # bound buffer needs none of the wrapper's array handling.
         for location, size, offset in (
             (1, 3, 0), (2, 2, 12), (3, 1, 20), (4, 1, 24)
         ):
-            gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
-                                     stride, ctypes.c_void_p(origin + offset))
+            _raw_vertex_attrib_pointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
+                                       stride, ctypes.c_void_p(origin + offset))
 
     def _compile_instanced_lit_brush_shader(self, lit_vert, lit_frag):
         """Compile the flat-shaded brush shader with instanced colour.
@@ -4426,11 +4427,12 @@ layout (location = 10) in float iInstanceAlpha;
         gl.glBindVertexArray(0)
         gl.glUseProgram(0)
 
-    def draw_path_node_cubes(self, projection, view, things):
-        if 'simple' not in self.shaders:
+    def draw_path_node_cubes(self, projection, view, table):
+        """The editor's PathNode markers, from the entity table's node rows."""
+        if 'simple' not in self.shaders or table is None:
             return
-        nodes = [t for t in things if isinstance(t, PathNode)]
-        if not nodes:
+        slots = table.path_node_slots
+        if not len(slots):
             return
 
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
@@ -4441,10 +4443,9 @@ layout (location = 10) in float iInstanceAlpha;
         gl.glUniform1f(uniforms['alpha'], 1.0)
         cube_size = 16.0
         gl.glBindVertexArray(self.vaos['cube'])
-        for node in nodes:
-            pos = node.pos
+        for x, y, z in table.pos[slots].tolist():
             model_matrix = glm.scale(glm.translate(self._identity_mat4,
-                                                   glm.vec3(float(pos[0]), float(pos[1]), float(pos[2]))),
+                                                   glm.vec3(x, y, z)),
                                      glm.vec3(cube_size, cube_size, cube_size))
             gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)

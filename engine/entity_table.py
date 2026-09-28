@@ -132,6 +132,9 @@ ENT_MONSTER         = 1 << 10
 #: carries, because the distance cull exempts Portals and Lights and must not
 #: exempt monsters.
 ENT_PORTAL          = 1 << 11
+#: A PathNode: skipped by the entity passes, drawn by the editor's node
+#: overlay from :attr:`EntityTable.path_node_slots`.
+ENT_PATH_NODE       = 1 << 12
 #: Procedural Effect primitive; FIRE and EXPLOSION share one render path.
 ENT_EFFECT          = 1 << 13
 
@@ -154,6 +157,7 @@ BIT_NAMES = (
     (ENT_ENTITY_SPRITE, 'ENTITY_SPRITE'),
     (ENT_PROP, 'PROP'), (ENT_LIGHT, 'LIGHT'), (ENT_MONSTER, 'MONSTER'),
     (ENT_PORTAL, 'PORTAL'), (ENT_EFFECT, 'EFFECT'),
+    (ENT_PATH_NODE, 'PATH_NODE'),
 )
 
 
@@ -318,7 +322,7 @@ def _entity_class_bits(thing) -> int:
     if isinstance(thing, dict):
         return ENT_SKIP
     if PathNode is not None and isinstance(thing, PathNode):
-        return ENT_SKIP
+        return ENT_SKIP | ENT_PATH_NODE
     if Portal is not None and isinstance(thing, Portal):
         return ENT_ALWAYS_SPRITE | ENT_PORTAL
     if Thing is not None and not isinstance(thing, Thing):
@@ -612,7 +616,8 @@ class EntityTable:
 
     __slots__ = (tuple(name for name, *_ in _COLUMNS) + (
         'generation', 'count', 'ids', 'slot_of_id', 'things',
-        'all_slots', 'light_slots', 'portal_slots', 'monster_slots',
+        'refs', 'all_slots', 'light_slots', 'portal_slots', 'monster_slots',
+        'path_node_slots',
         'effect_slots',
         '_sprite_ids', '_sprite_recipes', '_model_ids', '_model_recipes',
         '_effect_custom_ids', '_effect_custom_paths',
@@ -637,10 +642,13 @@ class EntityTable:
         for name, shape, dtype, fill in _COLUMNS:
             setattr(self, name, np.full((0,) + shape, fill, dtype=dtype))
 
+        #: slot -> the entity, as an object array (``PublishedEntities``).
+        self.refs = np.empty(0, dtype=object)
         #: Every row, as a slot vector; rebuilt only when the rows change.
         self.all_slots = np.empty(0, dtype=np.int32)
         self.light_slots = np.empty(0, dtype=np.int32)
         self.portal_slots = np.empty(0, dtype=np.int32)
+        self.path_node_slots = np.empty(0, dtype=np.int32)
         self.monster_slots = np.empty(0, dtype=np.int32)
         self.effect_slots = np.empty(0, dtype=np.int32)
         # Recipe intern tables.  GL-free, like the brush table's texture
@@ -941,6 +949,10 @@ class EntityTable:
         self._slot_of_obj = {id(thing): slot for slot, thing in enumerate(things)}
         self.things = list(things)
         self._row_tuple = tuple(things)
+        refs = np.empty(n, dtype=object)
+        for slot, thing in enumerate(things):
+            refs[slot] = thing
+        self.refs = refs
         self.count = n
         # Rows before the class columns below are recomputed: a row resolved
         # here has its own class bits by the time the slot vectors are built.
@@ -953,6 +965,8 @@ class EntityTable:
             bits & (ENT_LIGHT | ENT_EFFECT)).astype(np.int32)
         self.portal_slots = np.flatnonzero(bits & ENT_PORTAL).astype(np.int32)
         self.monster_slots = np.flatnonzero(bits & ENT_MONSTER).astype(np.int32)
+        self.path_node_slots = np.flatnonzero(
+            bits & ENT_PATH_NODE).astype(np.int32)
         self._poll_slots = np.asarray(
             [slot for slot, thing in enumerate(things) if not is_tracked(thing)],
             dtype=np.intp)

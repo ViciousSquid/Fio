@@ -15,6 +15,13 @@ os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = ""
 if os.environ.get("FIO_GL_DEBUG") != "1":
     os.environ.setdefault("PYOPENGL_ERROR_CHECKING", "0")
 
+# Fio runs the UI/renderer, the logic thread and the monster AI as Python
+# threads. Whenever one releases the GIL (every GL call, every large NumPy
+# operation) and another takes it, the first waits up to the switch interval to
+# get it back -- 5 ms by default, a third of a frame. Measured on a 24k-brush
+# map, 1 ms cuts the logic thread's p95 frame preparation from ~59 to ~25 ms.
+sys.setswitchinterval(0.001)
+
 
 # Dark theme
 dark_stylesheet = """

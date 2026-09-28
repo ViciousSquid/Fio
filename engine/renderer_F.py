@@ -1229,7 +1229,7 @@ class Renderer_F(BaseRenderer):
                     projection, view, camera_pos, etable, opaque_model_slots,
                     lights, config)
         if not config.get('play_mode', False):
-            self.draw_path_node_cubes(projection, view, things)
+            self.draw_path_node_cubes(projection, view, etable)
         if etable is not None:
             self.draw_portal_wireframes(
                 projection, view, etable, etable.portal_slots,

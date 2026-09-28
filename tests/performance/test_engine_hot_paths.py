@@ -58,15 +58,15 @@ def test_the_cull_buffers_are_built_once_per_session_not_per_frame(logic):
     try:
         thread._prepare_render_state()
         table = thread._render_table
-        centers = table.center
-        halves = table.half
+        bounds = table.bounds
         generation = table.generation
         for _ in range(20):
             thread._prepare_render_state()
-        assert table.center is centers, (
-            "the projection's centre array was reallocated during a frame; it "
-            "is built once and refreshed in place")
-        assert table.half is halves
+        assert table.bounds is bounds, (
+            "the projection's centre/half-extent block was reallocated during "
+            "a frame; it is built once and refreshed in place")
+        assert np.shares_memory(table.center, bounds)
+        assert np.shares_memory(table.half, bounds)
         assert table.generation == generation, (
             "the projection reconciled during a steady-state frame; the world "
             "epoch has not moved, so sync should be a couple of comparisons")

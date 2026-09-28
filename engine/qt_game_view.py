@@ -1446,17 +1446,6 @@ class QtGameView(QOpenGLWidget):
                 np.arange(etable.count, dtype=np.int32))
             self._render_config["thing_hidden"] = hidden
 
-        # The render-state position buffer is a derived snapshot of
-        # authoritative Thing.pos values. It is aligned with things_to_render
-        # and lets the renderer batch the expensive X/Z distance arithmetic.
-        self._render_config["thing_positions"] = (
-            getattr(render_state, "visible_thing_positions", None)
-            if render_state is not None else None
-        )
-        self._render_config["brush_positions"] = (
-            getattr(render_state, "visible_brush_positions", None)
-            if render_state is not None else None
-        )
         # The dense render projection and the per-slot render references. With
         # these the main pass classifies, depth-orders and batches brushes from
         # the projection's columns instead of walking the published object list

@@ -1837,6 +1837,7 @@ class LogicThread(threading.Thread):
         """
         with self._tick_lock:
             while accumulator >= self.TICK_DURATION:
+                started = time.perf_counter()
                 try:
                     self._tick(self.TICK_DURATION)
                 except Exception:
@@ -1849,6 +1850,8 @@ class LogicThread(threading.Thread):
                     debug_log("LogicThread",
                               "Unhandled exception in _tick:\n" + traceback.format_exc())
                 accumulator -= self.TICK_DURATION
+                #: Milliseconds the last simulation tick took (Debug Tables).
+                self.tick_ms = (time.perf_counter() - started) * 1000.0
                 self._update_tps_counter()
 
             self._prepare_render_state()
@@ -3900,17 +3903,27 @@ class LogicThread(threading.Thread):
         two NumPy matmuls over the whole brush batch and all six planes at
         once — no per-plane Python iteration or temporary-array allocation.
         """
-        c = np.asarray(centers, dtype=np.float64)
-        h = np.asarray(halves, dtype=np.float64)
+        c = np.asarray(centers, dtype=np.float64).reshape(-1, 3)
+        h = np.asarray(halves, dtype=np.float64).reshape(-1, 3)
         if c.size == 0:
             return np.ones(len(centers), dtype=bool)
+        return self._aabb_in_frustum_bounds(planes, np.concatenate((c, h), axis=1))
+
+    @staticmethod
+    def _aabb_in_frustum_bounds(planes, bounds):
+        """The frustum test over ``[centre | half]`` rows, as one product.
+
+        Positive-vertex distance for every (box, plane) pair, branch-free:
+        ``dot(n, c + sign(n)*h) + d == dot([n, |n|], [c, h]) + d``. One
+        (N, 6) x (6, 6) product, one compare and one reduction: each NumPy
+        call on a big array releases and re-takes the GIL, and with the AI and
+        UI threads running every re-take can wait, so the count of calls is
+        what this is shaped by, as much as the arithmetic.
+        """
         p = np.asarray(planes, dtype=np.float64)        # (6, 4)
-        normals = p[:, :3]                               # (6, 3)
-        d = p[:, 3]                                       # (6,)
-        # Positive-vertex distance for every (box, plane) pair, branch-free:
-        #   dot(n, c + sign(n)*h) + d  ==  dot(n, c) + dot(|n|, h) + d
-        dist = c @ normals.T + h @ np.abs(normals).T + d  # (N, 6)
-        return np.all(dist >= 0.0, axis=1)
+        normals = p[:, :3]
+        weights = np.concatenate((normals, np.abs(normals)), axis=1)   # (6, 6)
+        return (bounds @ weights.T >= -p[:, 3]).all(axis=1)
 
     # =========================================================================
     # RENDER STATE PREPARATION
@@ -4171,54 +4184,34 @@ class LogicThread(threading.Thread):
         # table reconciles -- but only then, not on every frame.
         # Stable ids are needed when rows are first created/replaced, not
         # for ordinary epoch bumps. Avoid walking the whole scene on every edit.
-        if (table.needs_reconcile(brushes, world_epoch)
-                and (len(brushes) != table.count
-                     or any(b.get('id') is None for b in brushes))):
+        if ((not table.epoch_is_current(world_epoch)
+                or len(brushes) != table.count)
+                and any(b.get('id') is None for b in brushes)):
             self.editor_state.ensure_entity_ids()
-        generation = table.generation
         # In the editor, a tool drags the selection by writing its dicts in
         # place for many frames after one undo checkpoint: those rows are the
         # only ones re-read every frame. Everything else changes through a
         # journal (see RenderTable.begin_frame).
         edited = () if self.play_mode else self.editor_state.edited_objects()
-        live_hidden = table.begin_frame(
+        table.begin_frame(
             brushes, world_epoch, dirty_objects=render_dirty, edited=edited)
-        refs = write_state.render_refs
-        if (table.generation != generation or len(refs) != table.count):
-            # RenderState owns the reference array for this buffer as well.  Never
-            # reuse the other buffer's object array: the renderer may still be
-            # holding its previous frame while this one is being prepared.
-            refs = np.empty(table.count, dtype=object)
-            for i, brush in enumerate(table.brushes):
-                refs[i] = brush
-            write_state.render_refs = refs
+        # The table owns its row objects; each buffer owns its table.
+        refs = table.refs
         total_count = table.count
 
         # ---- T4: visibility, as masks over the table ---------------------
-        keep = ~live_hidden
+        keep, all_slots = table.shown()
         if self.culling_enabled and total_count:
-            visible_mask = keep & self._aabb_in_frustum_batch(
-                frustum_planes, table.center[:total_count],
-                table.half[:total_count])
+            visible_slots = np.flatnonzero(keep & self._aabb_in_frustum_bounds(
+                frustum_planes, table.bounds[:total_count]))
         else:
-            visible_mask = keep
-
-        all_slots = np.flatnonzero(keep)
-        visible_slots = np.flatnonzero(visible_mask)
+            visible_slots = all_slots
         # Published as views over the slots, not as lists: the conversion back
         # to Python objects happens only if something actually reads one, and
         # on the main camera path nothing does.
         all_brushes = PublishedBrushes(refs, all_slots)
         visible_brushes = PublishedBrushes(refs, visible_slots)
         culled_count = total_count - len(visible_slots)
-
-        brush_positions = write_state.ensure_visible_brush_positions(
-            len(visible_slots))
-        if len(visible_slots):
-            np.take(table.center[:, 0], visible_slots,
-                    out=brush_positions[:len(visible_slots), 0])
-            np.take(table.center[:, 2], visible_slots,
-                    out=brush_positions[:len(visible_slots), 1])
 
         # The numerical result itself, published rather than thrown away: the
         # slots index every column of the table, so the renderer can classify,
@@ -4229,7 +4222,6 @@ class LogicThread(threading.Thread):
         write_state.all_brush_slots = all_slots
 
         write_state.visible_brushes = visible_brushes
-        write_state.visible_brush_position_count = len(visible_brushes)
         write_state.all_brushes = all_brushes
         write_state.total_brushes = total_count
         write_state.culled_brushes = culled_count
@@ -4238,39 +4230,24 @@ class LogicThread(threading.Thread):
         # What used to be one Python pass per entity per frame -- two NumPy
         # scalar stores, three isinstance tests and a list append each -- is a
         # bulk position store, a live `hidden` read, and masks over columns.
-        # Monster benchmark/editor mutations already use this lock when they
-        # mutate EditorState.things. Hold the same lock through the table
-        # reconciliation and reference publication so the live list cannot
-        # change between those two operations. This avoids taking a full
-        # per-frame Python copy of the entity list.
-        with self._monster_lock:
-            things = self.things
-            # etable is the table owned by the current write buffer.  It is the
-            # only EntityTable touched until request_swap publishes this frame.
-            etable = write_state.entity_table
-            self._entity_table = etable
-            entity_generation = etable.generation
-            thing_hidden = etable.begin_frame(
-                things,
-                world_epoch,
-                dirty_objects=render_dirty,
-                effect_runtime=self.play_mode,
-            )
-            entity_refs = write_state.entity_refs
-            if (etable.generation != entity_generation
-                    or len(entity_refs) != etable.count):
-                # EntityTable owns the stable row snapshot for this publication.
-                # Do not enumerate the live list again here: benchmark/editor
-                # code can mutate it from another thread immediately after the
-                # lock is released.  Keep the reference array with the same
-                # RenderState as the dense table it indexes.
-                entity_refs = np.empty(etable.count, dtype=object)
-                for i, thing in enumerate(etable.things):
-                    entity_refs[i] = thing
-                write_state.entity_refs = entity_refs
-            erefs = entity_refs
-            entity_things = etable.things
-            thing_count = etable.count
+        # No lock: begin_frame freezes the entity list with one atomic copy
+        # and builds everything from that, and the change journal is
+        # thread-safe. Taking the monster lock here used to make every frame
+        # wait out whatever AI update was running.
+        things = self.things
+        # etable is the table owned by the current write buffer.  It is the
+        # only EntityTable touched until request_swap publishes this frame.
+        etable = write_state.entity_table
+        self._entity_table = etable
+        thing_hidden = etable.begin_frame(
+            things,
+            world_epoch,
+            dirty_objects=render_dirty,
+            effect_runtime=self.play_mode,
+        )
+        erefs = etable.refs
+        entity_things = etable.things
+        thing_count = etable.count
 
         self.editor_state.clear_render_dirty(render_dirty_snapshot)
 
@@ -4293,15 +4270,6 @@ class LogicThread(threading.Thread):
                 keep_things[dropped] = False
                 visible_thing_slots = np.flatnonzero(keep_things)
 
-        visible_count = len(visible_thing_slots)
-        visible_thing_positions = write_state.ensure_visible_thing_positions(
-            visible_count)
-        if visible_count:
-            np.take(etable.pos[:, 0], visible_thing_slots,
-                    out=visible_thing_positions[:visible_count, 0])
-            np.take(etable.pos[:, 2], visible_thing_slots,
-                    out=visible_thing_positions[:visible_count, 1])
-
         # Lights still need their authored object state (colour, intensity,
         # state, etc.) during GL setup, but do not materialise them on the logic
         # thread. Keep the dense selection published and let the actual light
@@ -4312,7 +4280,6 @@ class LogicThread(threading.Thread):
         visible_things = PublishedEntities(erefs, visible_thing_slots)
 
         write_state.visible_things = visible_things
-        write_state.visible_thing_position_count = visible_count
         write_state.all_lights = all_lights
         # Portal existence is a numeric projection fact; the renderer reads
         # the published portal slot vector directly.

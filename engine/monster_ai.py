@@ -1465,6 +1465,7 @@ class MonsterAIThread(threading.Thread):
             accumulator += frame_time
 
             while accumulator >= self.tick_duration and self.running:
+                started = time.perf_counter()
                 with self.lock:
                     try:
                         self.monster_ai.update(self.tick_duration)
@@ -1476,6 +1477,9 @@ class MonsterAIThread(threading.Thread):
                         import traceback
                         debug_log("MonsterAI", "Unhandled exception in update:\n"
                                   + traceback.format_exc())
+                #: Milliseconds the last AI update took, lock wait included
+                #: (Debug Tables).
+                self.update_ms = (time.perf_counter() - started) * 1000.0
                 accumulator -= self.tick_duration
 
             sleep_time = self.tick_duration - (time.perf_counter() - current_time)

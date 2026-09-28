@@ -102,12 +102,6 @@ class RenderState:
         # Authoritative Light objects for renderer lighting; avoids scanning
         # the full Thing set every render frame.
         self.all_lights = []
-        # Reusable numeric views aligned with the published render-object lists.
-        # These are snapshots derived from authoritative transforms.
-        self.visible_brush_positions = np.empty((0, 2), dtype=np.float64)
-        self.visible_brush_position_count = 0
-        self.visible_thing_positions = np.empty((0, 2), dtype=np.float64)
-        self.visible_thing_position_count = 0
         # The entity half of the dense projection (engine.entity_table), with
         # the slots the frame published and the live hidden mask it read.  The
         # renderer classifies entities into passes from these rather than
@@ -181,31 +175,6 @@ class RenderState:
         #: Logic-thread milliseconds spent preparing this frame.
         self.prepare_ms = 0.0
 
-    def ensure_visible_brush_positions(self, count):
-        """Ensure a reusable contiguous [x, z] buffer can hold count brushes."""
-        count = max(0, int(count))
-        capacity = int(self.visible_brush_positions.shape[0])
-        if count > capacity:
-            new_capacity = max(count, 16 if capacity == 0 else capacity * 2)
-            self.visible_brush_positions = np.empty(
-                (new_capacity, 2), dtype=np.float64)
-        self.visible_brush_position_count = count
-        return self.visible_brush_positions
-
-    def ensure_visible_thing_positions(self, count):
-        """Ensure a reusable contiguous [x, z] buffer can hold count entities.
-
-        Capacity grows geometrically and is never shrunk. The buffer is a render
-        snapshot derived from live Thing.pos values; it is not a transform store.
-        """
-        count = max(0, int(count))
-        capacity = int(self.visible_thing_positions.shape[0])
-        if count > capacity:
-            new_capacity = max(count, 16 if capacity == 0 else capacity * 2)
-            self.visible_thing_positions = np.empty(
-                (new_capacity, 2), dtype=np.float64)
-        self.visible_thing_position_count = count
-        return self.visible_thing_positions
     def reset(self):
         """Reset all fields to defaults for reuse (avoids per-frame allocation)."""
         self.camera_view_matrix = glm.mat4(1.0)
@@ -239,8 +208,6 @@ class RenderState:
         self.all_brushes = []
         self.visible_things = []
         self.all_lights = []
-        self.visible_brush_position_count = 0
-        self.visible_thing_position_count = 0
         # Keep the dense projection objects across buffer recycling.  Their
         # published slot vectors below are emptied, so an interstitial frame
         # cannot draw stale rows, while the next LogicThread publish reuses the
