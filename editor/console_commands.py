@@ -2059,7 +2059,14 @@ entity to drive them from the I/O system.</i><br>
         map_name = args if isinstance(args, str) else args[0]
         if not map_name.endswith('.json'):
             map_name += '.json'
-        map_path = os.path.join(self.main_window.root_dir, 'maps', map_name)
+        maps_dir = os.path.realpath(os.path.join(self.main_window.root_dir, 'maps'))
+        map_path = os.path.realpath(os.path.join(maps_dir, map_name))
+        # Maps can queue console commands (logic_command), so the name is not
+        # trusted: loading a file makes it the save target, and a name that
+        # climbed out of maps/ would let the next Ctrl+S overwrite it.
+        if not map_path.startswith(maps_dir + os.sep):
+            debug_log("Error", f"map: '{map_name}' is outside the maps folder")
+            return
         if os.path.exists(map_path):
             self.main_window.load_level_file(map_path)
             debug_log("Info", f"Loaded map {map_name}")
@@ -2224,11 +2231,12 @@ entity to drive them from the I/O system.</i><br>
 
         map_name = data.get('map', '')
         if map_name:
-            map_path = map_name
-            if not os.path.exists(map_path):
-                map_path = os.path.join(self.main_window.root_dir, 'maps',
-                                        os.path.basename(map_name))
-            if os.path.exists(map_path):
+            # Saves record the map's basename; it is looked up in maps/ only,
+            # never followed as a path (a save file is shareable input, and
+            # the map it loads becomes the editor's save target).
+            map_path = os.path.join(self.main_window.root_dir, 'maps',
+                                    os.path.basename(str(map_name)))
+            if os.path.isfile(map_path):
                 self.main_window.load_level_file(map_path)
             else:
                 debug_log("Warning",
