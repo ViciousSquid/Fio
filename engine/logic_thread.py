@@ -4184,8 +4184,9 @@ class LogicThread(threading.Thread):
         # table reconciles -- but only then, not on every frame.
         # Stable ids are needed when rows are first created/replaced, not
         # for ordinary epoch bumps. Avoid walking the whole scene on every edit.
-        if ((not table.epoch_is_current(world_epoch)
-                or len(brushes) != table.count)
+        # A brush without one can only have arrived with a change to the row
+        # set, so only then is the scene walked.
+        if (len(brushes) != table.count
                 and any(b.get('id') is None for b in brushes)):
             self.editor_state.ensure_entity_ids()
         # In the editor, a tool drags the selection by writing its dicts in

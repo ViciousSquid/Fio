@@ -655,7 +655,7 @@ class EditorState:
             'brushes': self._serialize_brushes_for_undo(),
             'things': [t.to_dict() for t in self.things],
             'selection': self._selection_identifiers(),
-        })
+        }, separators=(',', ':'), check_circular=False)
 
     def save_state(self):
         """Checkpoint the scene *before* an operation changes it.
@@ -705,36 +705,33 @@ class EditorState:
         return True
 
     def _serialize_brushes_for_undo(self):
-        """Serialize brushes for undo stack (deep copy with I/O)."""
+        """The brushes as JSON-ready dicts for an undo checkpoint.
+
+        Shallow: the checkpoint is encoded to a JSON string straight away, and
+        encoding already makes an independent copy, so a deep copy first only
+        doubled the work -- about 0.4 s a checkpoint on a 24k-brush map.
+        Renderer-internal cache keys are left out (GLM matrices, cached convex
+        geometry: neither serialisable nor meaningful outside the renderer),
+        and I/O connections are written as dicts.
+        """
         result = []
         for brush in self.brushes:
-            # Strip renderer-internal cache keys *before* the deep copy.  They
-            # hold GLM matrices and cached convex geometry that are neither
-            # JSON-serialisable nor meaningful outside the renderer's lifetime,
-            # and deep-copying them first only to throw them away made every
-            # undo checkpoint pay for geometry it discards.
             # Give every brush a stable id before it is checkpointed. Undo
             # rebuilds brush dicts from JSON, so the id is what lets the
             # selection (and anything else holding a reference) be re-pointed at
             # the brush that replaced it; a brush drawn in a view and not saved
             # since would otherwise have nothing to be recognised by.
-            brush.setdefault('id', str(uuid.uuid4()))
-            shallow = {k: v for k, v in brush.items()
-                       if k not in _RENDERER_PRIVATE_KEYS}
-            brush_copy = copy.deepcopy(shallow)
-
-            # Convert OutputConnection objects to dicts for JSON
-            if '_io_connections' in brush_copy:
-                connections = brush_copy['_io_connections']
-                serialized = []
-                for conn in connections:
-                    if hasattr(conn, 'to_dict'):
-                        serialized.append(conn.to_dict())
-                    elif isinstance(conn, dict):
-                        serialized.append(conn)
-                brush_copy['_io_connections'] = serialized
-
-            result.append(brush_copy)
+            if 'id' not in brush:
+                brush['id'] = str(uuid.uuid4())
+            entry = {k: v for k, v in brush.items()
+                     if k not in _RENDERER_PRIVATE_KEYS}
+            connections = entry.get('_io_connections')
+            if connections:
+                entry['_io_connections'] = [
+                    conn.to_dict() if hasattr(conn, 'to_dict') else conn
+                    for conn in connections
+                    if hasattr(conn, 'to_dict') or isinstance(conn, dict)]
+            result.append(entry)
         return result
 
     def restore_state(self, state_json):

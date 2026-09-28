@@ -780,7 +780,8 @@ class EntityTable:
         self.rows_read = 0
         resolved_all = False
         if self.needs_reconcile(things, epoch):
-            resolved_all = self._reconcile(things, dirty_objects=dirty_objects)
+            if not self._refresh_in_place(things, epoch, dirty_objects):
+                resolved_all = self._reconcile(things, dirty_objects=dirty_objects)
             self._epoch = epoch
         if changes is OVERFLOW:
             if not resolved_all:
@@ -792,6 +793,30 @@ class EntityTable:
         if len(self.effect_slots):
             self._advance_effects(effect_runtime)
         return self.hidden[:n]
+
+    def _refresh_in_place(self, things, epoch, dirty_objects):
+        """An editor transaction on an unchanged row set: re-resolve its rows.
+
+        A reconcile walks every row -- ids, identities, the slot maps -- which
+        on a few thousand entities is most of an editor frame, for an edit
+        that touched one. When the rows are exactly the ones already
+        reconciled and the journal names the changed objects, only their rows
+        can be stale. Returns False, having changed nothing, otherwise.
+        """
+        if (epoch is None or self._epoch is None or dirty_objects is None
+                or things != self._row_tuple):
+            return False
+        slot_of = self._slot_of_obj
+        slots = [slot_of[oid] for oid in dirty_objects if oid in slot_of]
+        for slot in slots:
+            if _props_of(things[slot]).get('id') != self.ids[slot]:
+                return False                # renamed: the id map moves
+        portal_rows = any(self.class_bits[slot] & ENT_PORTAL for slot in slots)
+        self.refresh_rows(things, slots)
+        if portal_rows or any(self.class_bits[slot] & ENT_PORTAL for slot in slots):
+            # A portal's name or target may be what changed.
+            self._resolve_portal_links(things)
+        return True
 
     def _apply_changes(self, things, changes):
         """Re-read the rows the change journal names, and nothing else."""

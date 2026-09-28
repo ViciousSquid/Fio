@@ -357,3 +357,33 @@ def test_a_refused_clip_leaves_no_undo_step(state):
     # A plane that misses the brush entirely cuts nothing.
     assert state.clip_brush(state.brushes[0], (1.0, 0.0, 0.0), 10_000.0) is False
     assert len(state.undo_stack) == depth
+
+
+# ---------------------------------------------------------------------------
+# What a checkpoint does to the live scene: nothing
+# ---------------------------------------------------------------------------
+
+def test_a_checkpoint_leaves_the_live_brushes_untouched(state):
+    """Checkpoints are shallow copies encoded straight to JSON.
+
+    So they must not write to what they share with the live scene: a brush
+    keeps its id (it used to be offered a fresh uuid4 on every checkpoint),
+    and its I/O connection list keeps its objects.
+    """
+    import json
+    from editor.io_system import OutputConnection
+
+    brush = state.brushes[0]
+    brush_id = brush.setdefault("id", "fixed-id")
+    connection = OutputConnection("OnTrigger", "door", "Open")
+    connections = [connection]
+    brush["_io_connections"] = connections
+
+    state.save_state()
+
+    assert brush["id"] == brush_id
+    assert brush["_io_connections"] is connections
+    assert connections == [connection]
+    saved = json.loads(state.undo_stack[-1])["brushes"][0]
+    assert saved["id"] == brush_id
+    assert saved["_io_connections"][0]["target"] == "door"

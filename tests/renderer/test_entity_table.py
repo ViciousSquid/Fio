@@ -864,3 +864,41 @@ def test_sprite_columns_are_a_pure_projection():
                           second.sprite_size[:second.count])
     assert ([_keys(first, i) for i in range(first.count)]
             == [_keys(second, i) for i in range(second.count)])
+
+
+# ---------------------------------------------------------------------------
+# Editor transactions
+# ---------------------------------------------------------------------------
+
+def test_an_editor_transaction_resolves_only_its_rows(monkeypatch):
+    """A retarget of one entity must not re-walk a few thousand others."""
+    things = [make_thing(Light, 'l%d' % i, (i * 10.0, 0.0, 0.0)) for i in range(200)]
+    table = EntityTable()
+    table.begin_frame(things, epoch=1)
+    generation = table.generation
+    resolved = []
+    real = EntityTable._resolve_row
+    monkeypatch.setattr(EntityTable, '_resolve_row',
+                        lambda self, slot, thing: (resolved.append(slot),
+                                                   real(self, slot, thing)))
+
+    things[57].properties['colour'] = [255, 0, 0]
+    table.begin_frame(things, epoch=2, dirty_objects={id(things[57])})
+
+    assert resolved == [57]
+    assert table.generation == generation
+    assert table.light_color[57].tolist() == [1.0, 0.0, 0.0]
+
+
+def test_retargeting_a_portal_in_place_relinks_it():
+    a = make_thing(Portal, 'a', portal_target='b')
+    b = make_thing(Portal, 'b', portal_target='a')
+    c = make_thing(Portal, 'c', portal_target='')
+    table = EntityTable()
+    table.begin_frame([a, b, c], epoch=1)
+    assert table.portal_target_slot[0] == 1
+
+    a.properties['portal_target'] = 'c'
+    table.begin_frame([a, b, c], epoch=2, dirty_objects={id(a)})
+
+    assert table.portal_target_slot[0] == 2
