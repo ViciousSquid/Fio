@@ -81,3 +81,31 @@ def test_a_saved_game_names_its_map_by_basename_in_maps_only(project, tmp_path):
                                 "map": "start.json"}))
     handler._load_from_editor(str(save))
     assert window.loaded == [str(project / "maps" / "start.json")]
+
+
+def test_map_logic_cannot_bind_keys_but_the_user_can(tmp_path):
+    """``bind`` persists a key -> command binding into settings.ini.
+
+    Commands a map queues (logic_command entities) run through the same
+    console, so a played package could leave keys bound to its commands in
+    the user's editor for good.  The queue drain marks them as map-originated.
+    """
+    import types
+
+    from engine.qt_game_view import QtGameView
+    from engine.threaded_game_state import ThreadedGameState
+
+    bound = []
+    window = _MainWindow(tmp_path)
+    window.set_key_binding = lambda key, command: bound.append((key, command))
+    handler = ConsoleCommandHandler(window)
+
+    game_state = ThreadedGameState()
+    game_state.queue_console_command("bind K delete everything")
+    view = types.SimpleNamespace(game_state=game_state,
+                                 editor=types.SimpleNamespace(console_handler=handler))
+    QtGameView._process_console_command_queue(view)
+    assert bound == []
+
+    handler.handle_command("bind K god")
+    assert bound == [("K", "god")]

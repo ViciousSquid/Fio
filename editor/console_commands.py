@@ -182,12 +182,28 @@ class ConsoleCommandHandler:
             'portal_delete': self.cmd_portal_delete,
         }
 
-    def handle_command(self, cmd_string):
+    #: Commands a map may not run through a logic_command entity.  ``bind``
+    #: writes a key -> command binding into settings.ini, so a played package
+    #: could otherwise leave the user's editor with keys that run its commands
+    #: long after the package is closed.
+    USER_ONLY_COMMANDS = frozenset({'bind'})
+
+    def handle_command(self, cmd_string, *, from_map=False):
+        """Run one console command line.
+
+        *from_map* marks a command queued by map logic (a ``logic_command``
+        entity) rather than typed by the user; those may not run the
+        :attr:`USER_ONLY_COMMANDS`.
+        """
         parts = cmd_string.strip().split(maxsplit=1)
         if not parts:
             return
         cmd = parts[0].lower()
         args = parts[1].strip() if len(parts) > 1 else ""
+
+        if from_map and cmd in self.USER_ONLY_COMMANDS:
+            debug_log("Error", f"'{cmd}' cannot be run by map logic.")
+            return
 
         handler = self.commands.get(cmd)
         if handler:

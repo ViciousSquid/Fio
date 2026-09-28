@@ -1062,7 +1062,7 @@ class QtGameView(QOpenGLWidget):
             return
         for cmd in commands:
             try:
-                handler.handle_command(cmd)
+                handler.handle_command(cmd, from_map=True)
             except Exception as exc:
                 print(f"[QtGameView] console command '{cmd}' failed: {exc}")
 
