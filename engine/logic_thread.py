@@ -1812,12 +1812,24 @@ class LogicThread(threading.Thread):
                 
             accumulator += frame_time
             accumulator = self._step_frame(accumulator)
-            self.game_state.request_swap()
+            self._publish_frame()
             
             sleep_time = self.TICK_DURATION - (time.perf_counter() - current_time)
             if sleep_time > 0:
                 time.sleep(sleep_time * 0.9)
                 
+    def _publish_frame(self) -> bool:
+        """Hand the frame just prepared to the renderer, if it is not reading.
+
+        One-shot events stay latched until a frame carrying them is actually
+        published: a declined swap (the renderer is mid-paint) or a catch-up
+        frame running several ticks would otherwise drop them.
+        """
+        if not self.game_state.request_swap():
+            return False
+        self.muzzle_flash_active = False
+        return True
+
     def _step_frame(self, accumulator: float) -> float:
         """Run every whole tick *accumulator* holds, then project the frame.
 
@@ -1939,9 +1951,6 @@ class LogicThread(threading.Thread):
             self.game_state.consume_shot()
             return
         
-        # Clear muzzle flash from previous frame
-        self.muzzle_flash_active = False
-
         # Player input
         keys = self.game_state.get_keys()
         mouse_dx, mouse_dy = self.game_state.consume_mouse_delta()

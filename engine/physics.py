@@ -5,6 +5,23 @@ import numpy as np
 from .constants import is_water_brush, brush_aabb_bounds
 from .spatial import CELL_SIZE, CellIndex, authored_hidden, cells_of_points
 
+class _LosRows:
+    """Line of sight's view of a populated grid; see SpatialGrid._build_los_rows."""
+
+    __slots__ = ('lo', 'hi', 'static_by_cell', 'moving_by_cell',
+                 'brushes_by_cell')
+
+    def __init__(self, lo, hi, static_by_cell, moving_by_cell, brushes_by_cell):
+        self.lo = lo
+        self.hi = hi
+        self.static_by_cell = static_by_cell
+        self.moving_by_cell = moving_by_cell
+        self.brushes_by_cell = brushes_by_cell
+
+
+_EMPTY_LOS_ROWS = _LosRows(np.empty((0, 3)), np.empty((0, 3)), {}, {}, {})
+
+
 class SpatialGrid:
     """
     A 2D spatial partitioning grid to optimize collision detection.
@@ -71,89 +88,66 @@ class SpatialGrid:
         self.cells = self._index.cells
         self._all_solid = []          # flat list kept for ray queries that span many cells
         self.water_brushes = []       # non-solid water volumes, for swim physics queries
-        # The cell buckets re-expressed as dense render-projection rows. Built
-        # lazily, disposable, and holding nothing the buckets do not already
-        # say -- see cell_slots().
-        self._cell_slots = None
-        self._cell_slots_generation = None
-        self._slot_source = None
+        # What line of sight reads, built once per populate: see _build_los_rows.
+        self._los_rows = _EMPTY_LOS_ROWS
 
     def clear(self):
         self.cells.clear()
         self._all_solid.clear()
         self.water_brushes.clear()
-        self._invalidate_cell_slots()
+        self._los_rows = _EMPTY_LOS_ROWS
 
     # ------------------------------------------------------------------
-    # Dense addressing: the buckets, as render-projection rows
+    # Line-of-sight rows
     # ------------------------------------------------------------------
 
-    def _invalidate_cell_slots(self):
-        self._cell_slots = None
-        self._cell_slots_generation = None
-        self._slot_source = None
+    def _build_los_rows(self):
+        """The buckets as line of sight reads them: static rows plus movers.
 
-    def cell_slots(self, table):
-        """``{(cx, cz): int32 slots}`` -- this grid's buckets, as table rows.
+        Line of sight runs on the monster AI thread, so it must not read
+        anything the logic thread rewrites -- in particular not a render
+        table, which the logic thread refreshes and reconciles every tick and
+        which, double-buffered, is recycled one publication after the AI saw
+        it. What it reads instead is split by how often it can change:
 
-        Line of sight spends almost all of its time not on finding cells but on
-        what it does with the brushes in them: deduplicating them through a set
-        of ``id()``, fetching each one's AABB from its dict, and running the
-        slab test in Python.  Measured over rays captured from a real AI tick,
-        that is 96% of the pass and the cell traversal is the other 4%.
+        * a **static** brush cannot move during play, so its AABB is copied
+          here once, straight from :func:`brush_aabb_bounds` -- the exact
+          tuple the per-brush walk tests, so the dense narrow phase over these
+          rows is bit-for-bit the same test;
+        * a **mover or door** is kept as the brush itself and always walked
+          per brush, reading ``pos`` live, which is what makes a prop riding a
+          platform see its current height.
 
-        All three of those become array work if the candidates are *rows* of
-        :class:`engine.render_table.RenderTable` rather than dicts -- and the
-        rows already exist, holding the same numbers.  The only thing missing
-        was the address, which is what this supplies.
-
-        Emphatically a projection, like the table itself:
-
-        * it stores nothing authored.  Every entry is ``slot_of_id[brush['id']]``
-          for a brush the bucket already holds, so discarding it and rebuilding
-          gives identical bits;
-        * it is built **lazily**, on first use, and never by :meth:`populate`.
-          At play start the grid is populated before the brushes have UUIDs and
-          before the table has any rows at all -- the ids are stamped by the
-          first render-state pass -- so building it eagerly would build it from
-          nothing;
-        * it is dropped whenever the grid is rebuilt, and whenever the table
-          reconciles.  A ``slot`` is an address valid within one
-          :attr:`~engine.render_table.RenderTable.generation`; the generation
-          and the identity of the id map together say which address space this
-          was built for.  In a play session neither moves, so this is built
-          once.
-
-        Returns ``None`` -- and remembers that it did, so the attempt is not
-        repeated every ray -- when any brush in the grid has no row.  That is
-        the fail-safe direction: a brush the projection could not address would
-        be a missing occluder, so the caller keeps the scalar path instead.
+        Everything is held in fresh containers published by one assignment at
+        the end of :meth:`populate`, so a ray in flight on the AI thread keeps
+        the rows it started with even if the grid is rebuilt under it.
         """
-        if table is None:
-            return None
-        if (self._cell_slots_generation == table.generation
-                and self._slot_source is table.slot_of_id):
-            return self._cell_slots
-        # Held rather than merely compared: keeping the dict alive is what stops
-        # its identity being recycled under the check above. It is one small
-        # dict, and it does not keep the table itself alive.
-        self._slot_source = table.slot_of_id
-        self._cell_slots_generation = table.generation
-        self._cell_slots = self._build_cell_slots(table.slot_of_id)
-        return self._cell_slots
-
-    def _build_cell_slots(self, slot_of_id):
-        """One int32 array per occupied cell, or None if a brush has no row."""
-        built = {}
+        row_of = {}
+        bounds = []
+        static_by_cell = {}
+        moving_by_cell = {}
+        brushes_by_cell = {}
         for coord, bucket in self.cells.items():
-            slots = np.empty(len(bucket), dtype=np.int32)
-            for i, brush in enumerate(bucket):
-                slot = slot_of_id.get(brush.get('id'))
-                if slot is None:
-                    return None
-                slots[i] = slot
-            built[coord] = slots
-        return built
+            brushes_by_cell[coord] = tuple(bucket)
+            rows = []
+            moving = []
+            for brush in bucket:
+                if brush.get('is_mover') or brush.get('is_door'):
+                    moving.append(brush)
+                    continue
+                row = row_of.get(id(brush))
+                if row is None:
+                    row = row_of[id(brush)] = len(bounds)
+                    bounds.append(brush_aabb_bounds(brush))
+                rows.append(row)
+            if rows:
+                static_by_cell[coord] = np.asarray(rows, dtype=np.intp)
+            if moving:
+                moving_by_cell[coord] = tuple(moving)
+        box = np.asarray(bounds, dtype=np.float64).reshape(-1, 6)
+        return _LosRows(np.ascontiguousarray(box[:, :3]),
+                        np.ascontiguousarray(box[:, 3:]),
+                        static_by_cell, moving_by_cell, brushes_by_cell)
 
     # ------------------------------------------------------------------
     # Build
@@ -163,10 +157,13 @@ class SpatialGrid:
         """Builds the grid from a list of brushes.  Call once on play-mode enter
         and again whenever the static brush list changes (rare).
 
-        The dense :meth:`cell_slots` projection goes with the buckets it was
-        derived from -- ``clear()`` drops it, and the next line of sight
-        rebuilds it against whatever the table says by then."""
-        self.clear()
+        Line of sight's rows are derived from the buckets here, at the end,
+        and published in one assignment (:meth:`_build_los_rows`)."""
+        # Buckets only: line of sight keeps the rows it has until the new ones
+        # are published below.
+        self.cells.clear()
+        self._all_solid.clear()
+        self.water_brushes.clear()
         for brush in brushes:
             # `authored_hidden` rather than `hidden`: a cell-streaming layer
             # parks out-of-range brushes by hiding them, and this grid outlives
@@ -202,6 +199,8 @@ class SpatialGrid:
             self._index.insert(brush,
                                pos[0] - size[0] * 0.5, pos[2] - size[2] * 0.5,
                                pos[0] + size[0] * 0.5, pos[2] + size[2] * 0.5)
+
+        self._los_rows = self._build_los_rows()
 
     # ------------------------------------------------------------------
     # Player queries  (unchanged API)
@@ -414,28 +413,92 @@ class SpatialGrid:
             append((cx, cz))
         return cells
 
-    def _los_dense(self, start, ray_dir, ray_len, table, slots_by_cell, coords):
-        """Line of sight over the projection's rows, when there are enough of them.
+    def raycast_down(self, x, z, start_y=10000.0):
+        """Return Y of the highest solid brush surface below (x, z), or None.
+        Uses the grid — only checks brushes in the cell containing (x, z)."""
+        cx = int(math.floor(x / self.cell_size))
+        cz = int(math.floor(z / self.cell_size))
+        cell = (cx, cz)
+        brushes = self.cells.get(cell, [])
+
+        best_y = None
+        for brush in brushes:
+            pos = brush['pos']
+            size = brush['size']
+            bx_min = pos[0] - size[0] * 0.5
+            bx_max = pos[0] + size[0] * 0.5
+            bz_min = pos[2] - size[2] * 0.5
+            bz_max = pos[2] + size[2] * 0.5
+            by_max = pos[1] + size[1] * 0.5
+
+            if bx_min <= x <= bx_max and bz_min <= z <= bz_max:
+                if by_max <= start_y:
+                    if best_y is None or by_max > best_y:
+                        best_y = by_max
+        return best_y
+
+    def has_line_of_sight(self, start, end):
+        """Return True if ray from start to end hits no solid wall brush.
+        Uses the grid to only test brushes in cells the ray passes through.
+
+        The cells are the ones the ray crosses, stepped boundary by boundary
+        (:meth:`_cells_along_ray`). This used to be a point sample every
+        ``cell_size`` plus that sample's eight neighbours -- a fan wide enough
+        to cover the cells the sampling skipped. Stepping the boundaries skips
+        none, so the fan has nothing left to cover; the equivalence, including
+        the diagonal-straddle case the fan was added for, is held by
+        ``tests/physics/test_line_of_sight.py``.
+
+        With at least :data:`LOS_DENSE_MIN_CANDIDATES` static candidates the
+        static brushes are tested as rows of :meth:`_build_los_rows` in a
+        handful of NumPy operations (:meth:`_los_dense`) and only movers and
+        doors are walked; below that count every candidate is walked. Both
+        reach the same answer; see ``tests/physics/test_line_of_sight.py``.
+
+        Which one is faster is a question about the candidate set, not about
+        the scene or the hardware, so the count decides it: the array work is
+        a fixed per-ray fee, the walk is a per-brush cost that can exit early.
+        The constant carries the measurements.
+
+        The cell traversal is the same either way -- it happens once, here, and
+        is handed to whichever narrow phase takes the ray, so the two cannot
+        drift apart on which brushes they consider, only on how they test them.
+        """
+        ray_dir = end - start
+        ray_len = glm.length(ray_dir)
+        if ray_len < 0.001:
+            return True
+        ray_dir = ray_dir / ray_len
+
+        # Walked once, and handed to whichever narrow phase takes the ray.
+        coords = self._cells_along_ray(start, ray_dir, ray_len)
+        # One read: a populate() on the logic thread publishes a new set of
+        # rows rather than editing these.
+        rows = self._los_rows
+
+        dense = self._los_dense(start, ray_dir, ray_len, rows, coords)
+        if dense is None:
+            return self._los_walk(rows.brushes_by_cell, coords,
+                                  start, ray_dir, ray_len)
+        if not dense:
+            return False
+        return self._los_walk(rows.moving_by_cell, coords,
+                              start, ray_dir, ray_len)
+
+    def _los_dense(self, start, ray_dir, ray_len, rows, coords):
+        """Line of sight over the static rows, when there are enough of them.
 
         Same candidate set as the walk, from the same traversal, and the same
-        arithmetic -- expressed over arrays. The three phases the scalar path
-        spends its time in become: ``concatenate`` the cells' slot arrays,
-        ``np.unique`` in place of the ``id()`` set, one gather of
-        ``center``/``half``, and one slab test over all candidates at once.
+        arithmetic -- expressed over arrays: ``concatenate`` the cells' row
+        arrays, ``np.unique`` in place of the ``id()`` set, one gather of the
+        bounds, and one slab test over all candidates at once. The bounds are
+        the tuples :func:`brush_aabb_bounds` returned, so the comparison is on
+        the same numbers the walk compares.
 
-        **The float32 is not incidental.** ``brush_aabb_bounds`` builds its
-        bounds through ``glm.vec3``, which is float32, and the slab test is a
-        comparison -- so a float64 derivation from the same columns differs by
-        up to 3.6e-04 and can decide a grazing ray differently. Casting the
-        columns to float32 before the subtract and add reproduces it bit for
-        bit (verified over 2000 random brushes); the arithmetic afterwards is
-        float64, exactly as the scalar path's is once it has read the tuple.
-
-        Returns ``None`` if this ray is not worth the array work, or if the
-        projection cannot be read consistently. Either way the caller takes the
-        scalar path, which answers the same thing.
+        Returns ``None`` if this ray is not worth the array work, in which case
+        the caller walks every candidate instead.
         """
-        get = slots_by_cell.get
+        get = rows.static_by_cell.get
         parts = []
         candidates = 0
         for coord in coords:
@@ -454,27 +517,8 @@ class SpatialGrid:
             return None
 
         slots = np.unique(parts[0] if len(parts) == 1 else np.concatenate(parts))
-
-        # float32 to match glm's rounding, then float64 for the test itself.
-        #
-        # The two columns are read separately, and this runs on the AI thread
-        # while the logic thread owns the table. Reading a mover's transform
-        # while it is being written is the race this path has always had --
-        # the scalar path reads `brush['pos']` live for exactly the same
-        # reason, deliberately, so a prop riding a platform sees its current
-        # height. What is new is only that there are two arrays rather than
-        # one dict: a reconcile between the reads would reallocate them, and a
-        # slot valid for one could be past the end of the other. That cannot
-        # be made atomic without synchronising the render pass, so it is
-        # caught and answered by the scalar path instead -- the same fail-safe
-        # direction as an unaddressable brush.
-        try:
-            centre = table.center[slots].astype(np.float32)
-            half = table.half[slots].astype(np.float32)
-        except IndexError:
-            return None
-        lo = (centre - half).astype(np.float64)
-        hi = (centre + half).astype(np.float64)
+        lo = rows.lo[slots]
+        hi = rows.hi[slots]
 
         origin = (start.x, start.y, start.z)
         direction = (ray_dir.x, ray_dir.y, ray_dir.z)
@@ -506,87 +550,20 @@ class SpatialGrid:
         # it: `alive` only ever loses entries.
         return not bool(np.any(alive & (t_min < ray_len - 0.1)))
 
-    def raycast_down(self, x, z, start_y=10000.0):
-        """Return Y of the highest solid brush surface below (x, z), or None.
-        Uses the grid — only checks brushes in the cell containing (x, z)."""
-        cx = int(math.floor(x / self.cell_size))
-        cz = int(math.floor(z / self.cell_size))
-        cell = (cx, cz)
-        brushes = self.cells.get(cell, [])
-
-        best_y = None
-        for brush in brushes:
-            pos = brush['pos']
-            size = brush['size']
-            bx_min = pos[0] - size[0] * 0.5
-            bx_max = pos[0] + size[0] * 0.5
-            bz_min = pos[2] - size[2] * 0.5
-            bz_max = pos[2] + size[2] * 0.5
-            by_max = pos[1] + size[1] * 0.5
-
-            if bx_min <= x <= bx_max and bz_min <= z <= bz_max:
-                if by_max <= start_y:
-                    if best_y is None or by_max > best_y:
-                        best_y = by_max
-        return best_y
-
-    def has_line_of_sight(self, start, end, intersect_ray_aabb_fn, table=None):
-        """Return True if ray from start to end hits no solid wall brush.
-        Uses the grid to only test brushes in cells the ray passes through.
-
-        The cells are the ones the ray crosses, stepped boundary by boundary
-        (:meth:`_cells_along_ray`). This used to be a point sample every
-        ``cell_size`` plus that sample's eight neighbours -- a fan wide enough
-        to cover the cells the sampling skipped. Stepping the boundaries skips
-        none, so the fan has nothing left to cover; the equivalence, including
-        the diagonal-straddle case the fan was added for, is held by
-        ``tests/physics/test_line_of_sight.py``.
-
-        *table* is an optional :class:`engine.render_table.RenderTable`. Given
-        one, and a ray with at least :data:`LOS_DENSE_MIN_CANDIDATES` candidate
-        brushes, they are tested as dense rows in a handful of NumPy operations
-        (:meth:`_los_dense`). Below that count -- or without a table, or when
-        the grid holds a brush the table cannot address -- the per-brush path
-        below runs unchanged. Both reach the same answer; see
-        ``tests/physics/test_line_of_sight.py``.
-
-        Which one is faster is a question about the candidate set, not about
-        the scene or the hardware, so the count decides it: the array work is
-        a fixed per-ray fee, the walk is a per-brush cost that can exit early.
-        The constant carries the measurements.
-
-        The cell traversal is the same either way -- it happens once, here, and
-        is handed to whichever narrow phase takes the ray, so the two cannot
-        drift apart on which brushes they consider, only on how they test them.
-        """
-        ray_dir = end - start
-        ray_len = glm.length(ray_dir)
-        if ray_len < 0.001:
-            return True
-        ray_dir = ray_dir / ray_len
-
-        # Walked once, and handed to whichever narrow phase takes the ray.
-        coords = self._cells_along_ray(start, ray_dir, ray_len)
-
-        slots_by_cell = self.cell_slots(table)
-        if slots_by_cell is not None:
-            dense = self._los_dense(start, ray_dir, ray_len, table,
-                                    slots_by_cell, coords)
-            if dense is not None:
-                return dense
-
+    @staticmethod
+    def _los_walk(cells, coords, start, ray_dir, ray_len):
+        """The per-brush narrow phase over ``cells`` (coord -> brushes)."""
         # PERF: hoist the ray endpoints/direction to scalars once and inline the
-        # slab test below (bit-identical to intersect_ray_aabb_fn). This avoids
-        # two throwaway glm.vec3 constructions + a Python call per brush along
-        # the ray -- the dominant cost of AI line-of-sight at tick rate. The
-        # signature keeps intersect_ray_aabb_fn so existing callers are unchanged.
+        # slab test below (bit-identical to LogicThread.intersect_ray_aabb).
+        # This avoids two throwaway glm.vec3 constructions + a Python call per
+        # brush along the ray -- the dominant cost of AI line-of-sight at tick
+        # rate.
         ox, oy, oz = start.x, start.y, start.z
         rdx, rdy, rdz = ray_dir.x, ray_dir.y, ray_dir.z
         limit = ray_len - 0.1
 
         # Walk the cells the ray crosses. Test each unique brush immediately so
         # no temporary candidate list or second traversal is needed.
-        cells = self.cells
         seen = set()
         seen_add = seen.add
         for coord in coords:

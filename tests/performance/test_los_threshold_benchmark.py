@@ -33,7 +33,6 @@ pytest.importorskip("glm")
 import glm                                                   # noqa: E402
 
 from engine.physics import SpatialGrid                       # noqa: E402
-from engine.render_table import RenderTable                  # noqa: E402
 from tests.helpers.worlds import box_brush                    # noqa: E402
 
 pytestmark = [pytest.mark.benchmark, pytest.mark.slow]
@@ -56,11 +55,9 @@ def _world(n_brushes, spread):
                    ((i * 97) % spread) - spread / 2.0),
                   (64.0, 128.0, 64.0))
         for i in range(n_brushes)]
-    table = RenderTable()
-    table.sync(brushes, 1)
     grid = SpatialGrid()
     grid.populate(brushes)
-    return grid, table
+    return grid
 
 
 def _rays(rng):
@@ -75,8 +72,8 @@ def _rays(rng):
     return out
 
 
-def _candidates_per_ray(grid, table, rays):
-    slots_by_cell = grid.cell_slots(table)
+def _candidates_per_ray(grid, rays):
+    slots_by_cell = grid._los_rows.static_by_cell
     total = 0
     for start, end in rays:
         direction = end - start
@@ -106,20 +103,22 @@ def test_report_the_narrow_phase_crossover():
           % ("cands/ray", "blocked", "scalar ms", "dense ms", "faster"))
     crossed_at = None
     for n_brushes, spread in DENSITIES:
-        grid, table = _world(n_brushes, spread)
+        grid = _world(n_brushes, spread)
         rays = _rays(rng)
-        per_ray = _candidates_per_ray(grid, table, rays)
+        per_ray = _candidates_per_ray(grid, rays)
 
-        def scalar():
-            return [grid.has_line_of_sight(s, e, None, None) for s, e in rays]
-
-        def dense():
-            grid.LOS_DENSE_MIN_CANDIDATES = 0
+        def forced(threshold):
+            grid.LOS_DENSE_MIN_CANDIDATES = threshold
             try:
-                return [grid.has_line_of_sight(s, e, None, table)
-                        for s, e in rays]
+                return [grid.has_line_of_sight(s, e) for s, e in rays]
             finally:
                 del grid.LOS_DENSE_MIN_CANDIDATES
+
+        def scalar():
+            return forced(1 << 62)
+
+        def dense():
+            return forced(0)
 
         answers = scalar()
         blocked = 100.0 * sum(1 for a in answers if not a) / len(answers)

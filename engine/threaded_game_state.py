@@ -281,30 +281,25 @@ class ThreadedGameState:
     """
     def __init__(self):
         self._render_state_lock = threading.Lock()
-        
-        # Double Buffering: One state for reading (Render), one for writing (Logic)
-        # Three persistent publication buffers:
-        #   read  = currently published frame
-        #   write = logic-owned frame being prepared
-        #   spare = one additional free frame for a slow/held renderer
+
+        # Double buffering, as in Quake 3's SMP renderer: the renderer reads
+        # one RenderState while the logic thread writes the other, and each
+        # owns its own persistent RenderTable/EntityTable.
         #
-        # The spare is important: a renderer can legitimately hold a published
-        # snapshot across more than one logic publication. We must not recycle
-        # that buffer, and we also must not allocate a new RenderTable per tick.
+        # The renderer borrows the read buffer for the length of a paint
+        # (get_render_state / release_render_state). While it is borrowed the
+        # logic thread does not swap: request_swap() declines, the write buffer
+        # stays logic-owned, and the next tick rebuilds it with newer state.
+        # So a slow paint delays publication by at most the paint, never lets
+        # the logic thread write into a buffer that is being drawn, and never
+        # needs a third copy of the dense tables to hide behind.
         self._read_state = RenderState()
         self._write_state = RenderState()
-        self._available_render_states = [RenderState()]
-
-        # Number of live renderer-side snapshots borrowing each published
-        # RenderState. A published buffer must never be recycled while one of
-        # these snapshots can still reach its dense tables/arrays.
-        self._render_leases = {
-            self._read_state: 0,
-            self._write_state: 0,
-            self._available_render_states[0]: 0,
-        }
+        # Live renderer snapshots borrowing the read buffer. Only the read
+        # buffer can be borrowed, and it cannot change while this is non-zero.
+        self._read_leases = 0
         self._has_new_frame = False
-        
+
         # Input state
         self._keys_lock = threading.Lock()
         self._keys = set()
@@ -340,49 +335,35 @@ class ThreadedGameState:
         self.console_command_queue = deque()
 
     @staticmethod
-    def _release_render_state_lease(owner_ref, state) -> None:
-        """Release one borrowed published-state reference."""
+    def _release_render_state_lease(owner_ref) -> None:
+        """Return one borrow of the read buffer."""
         owner = owner_ref()
         if owner is None:
             return
         with owner._render_state_lock:
-            leases = owner._render_leases.get(state, 0)
-            if leases > 0:
-                leases -= 1
-                owner._render_leases[state] = leases
-                if (
-                    leases == 0
-                    and state is not owner._read_state
-                    and state is not owner._write_state
-                    and state not in owner._available_render_states
-                ):
-                    # A retired published buffer has become reusable. It is
-                    # reset here, before the logic thread can claim it again.
-                    state.reset()
-                    owner._available_render_states.append(state)
+            if owner._read_leases > 0:
+                owner._read_leases -= 1
 
     def get_render_state(self) -> RenderState:
         """Borrow the latest published frame for the renderer/UI.
 
         The returned object is a shallow snapshot for API compatibility, but
-        its arrays/tables still belong to the published RenderState. A lease
-        therefore pins that source buffer until ``release_render_state()`` is
-        called or the snapshot is garbage-collected. This lets the dense
-        RenderTable/EntityTable remain persistent without allowing the logic
-        thread to recycle them underneath the renderer.
+        its arrays/tables still belong to the published RenderState, so the
+        borrow pins that buffer: no swap happens until
+        ``release_render_state()`` is called or the snapshot is garbage-
+        collected. Hold it for one paint, not longer -- publication waits for
+        it. For a scalar or two outside a paint use :meth:`published`, which
+        borrows nothing.
         """
         with self._render_state_lock:
             source = self._read_state
-            self._render_leases[source] = self._render_leases.get(source, 0) + 1
+            self._read_leases += 1
             snap = object.__new__(RenderState)
             snap.__dict__ = source.__dict__.copy()
-            owner_ref = weakref.ref(self)
-            snap._render_lease_state = source
             snap._render_lease_finalizer = weakref.finalize(
                 snap,
                 ThreadedGameState._release_render_state_lease,
-                owner_ref,
-                source,
+                weakref.ref(self),
             )
             return snap
 
@@ -396,6 +377,16 @@ class ThreadedGameState:
         if finalizer is not None:
             finalizer()
 
+    def published(self, name, default=None):
+        """One field of the latest published frame, without borrowing it.
+
+        For UI event handlers that need a flag (is the player dead, is a shot
+        ready): the value is read under the swap lock, so it is the field of
+        one whole published frame, and nothing is pinned afterwards.
+        """
+        with self._render_state_lock:
+            return getattr(self._read_state, name, default)
+
     def get_write_state(self) -> RenderState:
         """Called by LogicThread to get the object to write to."""
         return self._write_state
@@ -405,26 +396,20 @@ class ThreadedGameState:
         with self._render_state_lock:
             return self._has_new_frame
 
-    def request_swap(self):
-        """Publish the completed write buffer without recycling borrowed state."""
+    def request_swap(self) -> bool:
+        """Publish the completed write buffer, unless the renderer is reading.
+
+        Returns False, and publishes nothing, while the read buffer is
+        borrowed: the write buffer then stays with the logic thread, which
+        overwrites it on its next tick and tries again.
+        """
         with self._render_state_lock:
+            if self._read_leases:
+                return False
             old_read = self._read_state
-            if self._render_leases.get(old_read, 0) > 0:
-                if not self._available_render_states:
-                    # The renderer has retained enough old snapshots that all
-                    # persistent buffers are live. Keep the current write buffer
-                    # logic-owned and publish it on a later tick after a lease
-                    # is released.
-                    return False
-
-                next_write = self._available_render_states.pop()
-                next_write.reset()
-            else:
-                next_write = old_read
-                next_write.reset()
-
             self._read_state = self._write_state
-            self._write_state = next_write
+            old_read.reset()
+            self._write_state = old_read
             self._has_new_frame = True
             return True
 

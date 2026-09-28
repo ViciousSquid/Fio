@@ -1308,26 +1308,40 @@ class QtGameView(QOpenGLWidget):
         render_state: Optional[RenderState] = None
         if self.use_threading and self.logic_thread:
             render_state = self.game_state.get_render_state()
-            if render_state:
-                self._cached_health = render_state.player_health
-                self._cached_max_health = render_state.player_max_health
-                self._cached_player_ammo = getattr(render_state, 'player_ammo', 0)
-                self._cached_shot_ready = getattr(render_state, 'shot_ready', False)
-                self._cached_active_weapon = getattr(render_state, 'active_weapon', None)
-                self._cached_hud_message = getattr(render_state, 'hud_message', '')
-                self._cached_collected_keys = getattr(render_state, 'collected_keys', set())
-                if getattr(render_state, 'muzzle_flash_active', False):
-                    self._muzzle_flash_counter = self._muzzle_flash_duration_frames
-                self._cached_muzzle_flash = self._muzzle_flash_counter > 0
-                self._cached_player_dead = getattr(render_state, 'player_dead', False)
-                self._cached_monster_debug = getattr(render_state, 'monster_debug_active', False)
-                self._cached_bullet_marks = list(getattr(render_state, 'bullet_marks', []))
-                self._cached_projectiles = list(getattr(render_state, 'projectiles', []))
-                self._cached_monster_rays = list(getattr(render_state, 'monster_debug_rays', []))
-                self._cached_level_complete_ui = getattr(render_state, 'level_complete_ui', None)
-                self._cached_underwater = getattr(render_state, 'player_underwater', False)
-                self._cached_underwater_tint = getattr(render_state, 'underwater_tint', [0.0, 0.4, 0.6])
-                self._cached_p2_underwater = getattr(render_state, 'player2_underwater', False)
+        try:
+            self._paint_frame(render_state)
+        finally:
+            # The render state is a borrowed snapshot, and publication waits
+            # while it is borrowed: release it the moment this synchronous
+            # paint is done, even if the paint raised.
+            if render_state is not None:
+                self.game_state.release_render_state(render_state)
+
+        if self._muzzle_flash_counter > 0:
+            self._muzzle_flash_counter -= 1
+
+    def _paint_frame(self, render_state):
+        """Draw one frame from *render_state* (None when not threaded)."""
+        if render_state:
+            self._cached_health = render_state.player_health
+            self._cached_max_health = render_state.player_max_health
+            self._cached_player_ammo = getattr(render_state, 'player_ammo', 0)
+            self._cached_shot_ready = getattr(render_state, 'shot_ready', False)
+            self._cached_active_weapon = getattr(render_state, 'active_weapon', None)
+            self._cached_hud_message = getattr(render_state, 'hud_message', '')
+            self._cached_collected_keys = getattr(render_state, 'collected_keys', set())
+            if getattr(render_state, 'muzzle_flash_active', False):
+                self._muzzle_flash_counter = self._muzzle_flash_duration_frames
+            self._cached_muzzle_flash = self._muzzle_flash_counter > 0
+            self._cached_player_dead = getattr(render_state, 'player_dead', False)
+            self._cached_monster_debug = getattr(render_state, 'monster_debug_active', False)
+            self._cached_bullet_marks = list(getattr(render_state, 'bullet_marks', []))
+            self._cached_projectiles = list(getattr(render_state, 'projectiles', []))
+            self._cached_monster_rays = list(getattr(render_state, 'monster_debug_rays', []))
+            self._cached_level_complete_ui = getattr(render_state, 'level_complete_ui', None)
+            self._cached_underwater = getattr(render_state, 'player_underwater', False)
+            self._cached_underwater_tint = getattr(render_state, 'underwater_tint', [0.0, 0.4, 0.6])
+            self._cached_p2_underwater = getattr(render_state, 'player2_underwater', False)
         if self.grid_dirty:
             self.renderer.update_grid_buffers(self.world_size, self.grid_size)
             self.grid_dirty = False
@@ -1773,20 +1787,6 @@ class QtGameView(QOpenGLWidget):
 
         painter.end()
 
-        # The render state is a borrowed snapshot. Release it as soon as this
-        # synchronous paint is complete so its persistent buffer can be recycled
-        # on the next logic publication. weakref.finalize remains as a safety
-        # net for exceptional exits.
-        if (
-            render_state is not None
-            and self.use_threading
-            and self.logic_thread is not None
-        ):
-            self.game_state.release_render_state(render_state)
-            render_state = None
-
-        if self._muzzle_flash_counter > 0:
-            self._muzzle_flash_counter -= 1
 
     def _draw_underwater_overlay(self, painter, render_state):
         """Tint the view while the camera is below a water surface."""
@@ -3138,10 +3138,10 @@ class QtGameView(QOpenGLWidget):
         if self.play_mode and event.button() == Qt.LeftButton:
             if self.console_overlay_active:
                 return
-            render_state = self.game_state.get_render_state()
-            if getattr(render_state, 'player_dead', False):
+            published = self.game_state.published
+            if published('player_dead', False):
                 return
-            active_weapon = getattr(render_state, 'active_weapon', None)
+            active_weapon = published('active_weapon')
             if active_weapon:
                 from engine.monster_constants import NON_FIRING_WEAPONS
                 # Non-firing weapons (e.g. cig) are display-only. For firing
@@ -3149,7 +3149,7 @@ class QtGameView(QOpenGLWidget):
                 # piling up while gun2 is cooling down or out of ammo.
                 if (
                     active_weapon not in NON_FIRING_WEAPONS
-                    and getattr(render_state, 'shot_ready', False)
+                    and published('shot_ready', False)
                 ):
                     self.game_state.queue_shot()
                 return
@@ -3523,8 +3523,7 @@ class QtGameView(QOpenGLWidget):
                 self.editor.enter_kiosk_mode()
             return
         if self.play_mode:
-            render_state = self.game_state.get_render_state()
-            if getattr(render_state, 'player_dead', False):
+            if self.game_state.published('player_dead', False):
                 if event.key() == Qt.Key_Escape:
                     self._exit_play_mode()
                     return

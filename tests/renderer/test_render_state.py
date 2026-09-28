@@ -632,82 +632,121 @@ def test_recycled_render_state_keeps_dense_projection_objects():
     assert len(recycled.thing_hidden) == 0
 
 
-def test_a_borrowed_render_state_survives_multiple_publication_cycles():
-    """A held snapshot keeps tables and published slot buffers immutable."""
+def _publish_frame(game_state, brushes, things, epoch, visible):
+    write = game_state.get_write_state()
+    write.render_table.sync(brushes, epoch=epoch)
+    write.all_brush_slots = np.arange(len(brushes), dtype=np.int32)
+    write.visible_brush_slots = np.array(visible, dtype=np.int32)
+    write.entity_table.begin_frame(things, epoch=epoch)
+    write.visible_thing_slots = np.array(visible, dtype=np.int32)
+    return write, game_state.request_swap()
+
+
+def test_there_are_exactly_two_buffers():
+    """Double buffering: every publication alternates the same two states."""
+    game_state = ThreadedGameState()
+    seen = set()
+    for _ in range(6):
+        seen.add(id(game_state.get_write_state()))
+        assert game_state.request_swap() is True
+    assert len(seen) == 2
+
+
+def test_a_borrowed_frame_is_not_swapped_until_it_is_returned():
+    """While the renderer reads, the logic thread keeps (and rewrites) its buffer.
+
+    The renderer borrows the read buffer for a paint. Publishing then would
+    make that buffer the next write buffer, and the next tick would rewrite the
+    tables being drawn -- so the swap declines, the logic thread keeps the
+    write buffer, and the frame after the paint is the one that gets out.
+    """
     game_state = ThreadedGameState()
     brush = box_brush("wall")
     second_brush = box_brush("wall2", (128, 0, 0))
     lamp = make_thing(Light, "lamp", (0, 100, 0))
     second_thing = make_thing(Monster, "grunt", (0, 96, -300))
 
-    write = game_state.get_write_state()
-
-    # Build an actually published frame, including the three pieces whose
-    # lifetime matters at the render boundary: dense tables plus slot vectors.
-    write.render_table.sync([brush], epoch=1)
-    write.all_brush_slots = np.array([0], dtype=np.int32)
-    write.visible_brush_slots = np.array([0], dtype=np.int32)
-
-    write.entity_table.begin_frame([lamp], epoch=1)
-    write.visible_thing_slots = np.array([0], dtype=np.int32)
-
-    assert game_state.request_swap() is True
+    _, published = _publish_frame(game_state, [brush], [lamp], 1, [0])
+    assert published is True
+    assert game_state.try_swap() is True
 
     snapshot = game_state.get_render_state()
     first_render_table = snapshot.render_table
     first_entity_table = snapshot.entity_table
-    first_all_brush_slots = snapshot.all_brush_slots
-    first_visible_brush_slots = snapshot.visible_brush_slots
-    first_visible_thing_slots = snapshot.visible_thing_slots
+    first_slots = snapshot.all_brush_slots
+    writer = game_state.get_write_state()
+    assert writer.render_table is not first_render_table
 
-    assert first_render_table.count == 1
-    assert first_entity_table.count == 1
-    assert first_all_brush_slots.tolist() == [0]
-    assert first_visible_brush_slots.tolist() == [0]
-    assert first_visible_thing_slots.tolist() == [0]
-
-    # Publish two newer frames while the first frame is still borrowed. The
-    # spare RenderState absorbs the extra publication, and each write buffer
-    # gets materially different projection/slot data. Any accidental alias
-    # with the borrowed snapshot will therefore be visible here.
+    brush["shader"] = "Fog"
+    brush["is_fog"] = True
     for epoch in (2, 3):
-        write = game_state.get_write_state()
+        write, published = _publish_frame(
+            game_state, [brush, second_brush], [lamp, second_thing], epoch, [1])
+        assert published is False, "swapped while the renderer was reading"
+        assert write is writer, "the logic thread lost its write buffer"
+        assert game_state.try_swap() is False
 
-        brush["shader"] = "Fog"
-        brush["is_fog"] = True
-        write.render_table.sync([brush, second_brush], epoch=epoch)
-        write.all_brush_slots = np.array([0, 1], dtype=np.int32)
-        write.visible_brush_slots = np.array([1], dtype=np.int32)
-
-        write.entity_table.begin_frame([lamp, second_thing], epoch=epoch)
-        write.visible_thing_slots = np.array([1], dtype=np.int32)
-
-        assert game_state.request_swap() is True
-
-        # The originally published frame must still be byte-for-byte
-        # equivalent in the critical state that the renderer owns.
+        # The borrowed frame is untouched.
         assert snapshot.render_table is first_render_table
-        assert snapshot.entity_table is first_entity_table
         assert first_render_table.count == 1
         assert first_entity_table.count == 1
-        assert bool(
-            first_render_table.class_bits[0]
-            & render_table_module.CLASS_FOG
-        ) is False
-        assert first_all_brush_slots.tolist() == [0]
-        assert first_visible_brush_slots.tolist() == [0]
-        assert first_visible_thing_slots.tolist() == [0]
+        assert not (first_render_table.class_bits[0]
+                    & render_table_module.CLASS_FOG)
+        assert first_slots.tolist() == [0]
 
-    # Once the renderer releases the old frame, that retired buffer becomes
-    # reusable and publication continues without allocating a fourth state.
     game_state.release_render_state(snapshot)
-    write = game_state.get_write_state()
-    write.render_table.sync([brush], epoch=4)
-    write.all_brush_slots = np.array([0], dtype=np.int32)
-    write.visible_brush_slots = np.array([0], dtype=np.int32)
-    write.entity_table.begin_frame([lamp], epoch=4)
-    write.visible_thing_slots = np.array([0], dtype=np.int32)
     assert game_state.request_swap() is True
+    latest = game_state.get_render_state()
+    assert latest.render_table is writer.render_table
+    assert latest.render_table.count == 2
+    assert latest.visible_thing_slots.tolist() == [1]
+    assert game_state.get_write_state().render_table is first_render_table
+
+
+def test_a_dropped_snapshot_returns_its_borrow():
+    """The finalizer is the safety net for a caller that never releases."""
+    game_state = ThreadedGameState()
+    snapshot = game_state.get_render_state()
+    assert game_state.request_swap() is False
+    del snapshot
+    assert game_state.request_swap() is True
+
+
+def test_published_reads_a_field_without_borrowing_the_frame():
+    game_state = ThreadedGameState()
+    game_state.get_write_state().player_dead = True
+    assert game_state.request_swap() is True
+
+    assert game_state.published("player_dead") is True
+    assert game_state.published("no_such_field", 7) == 7
+    assert game_state.request_swap() is True, (
+        "reading one published field pinned the frame")
+
+
+def test_a_muzzle_flash_is_published_even_if_the_renderer_was_busy(logic):
+    """One-shot state waits for a publication instead of expiring per tick.
+
+    The flash was cleared at the start of every play tick, so it reached the
+    renderer only if the frame of the tick that fired was the one published --
+    not when that swap was declined mid-paint, nor when a catch-up frame ran a
+    second tick before publishing.
+    """
+    thread = logic(brushes=[box_brush("floor", (0, -16, 0), (512, 32, 512))])
+    thread.set_play_mode(True)
+    try:
+        thread.muzzle_flash_active = True
+        busy = thread.game_state.get_render_state()     # renderer mid-paint
+        thread._step_frame(0.0)
+        assert thread._publish_frame() is False
+        thread.game_state.release_render_state(busy)
+
+        thread._step_frame(thread.TICK_DURATION)        # one more play tick
+        assert thread._publish_frame() is True
+        assert thread.game_state.published("muzzle_flash_active") is True, (
+            "the shot's muzzle flash never reached the renderer")
+        assert thread.muzzle_flash_active is False
+    finally:
+        thread.set_play_mode(False)
 
 
 def test_the_published_brush_lists_are_not_materialised_unless_read(logic):

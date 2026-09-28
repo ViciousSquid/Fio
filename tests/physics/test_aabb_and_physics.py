@@ -297,7 +297,7 @@ def test_line_of_sight_matches_reference():
                          rng.uniform(-1500, 1500))
         end = glm.vec3(rng.uniform(-1500, 1500), rng.uniform(-200, 200),
                        rng.uniform(-1500, 1500))
-        got = grid.has_line_of_sight(start, end, _reference_intersect_ray_aabb)
+        got = grid.has_line_of_sight(start, end)
         exp = _reference_has_line_of_sight(grid, start, end)
         assert got == exp, (tuple(start), tuple(end))
         blocked += not got
@@ -314,18 +314,17 @@ def test_line_of_sight_axis_aligned_rays():
         s = glm.vec3(0, 0, 0)
         e = glm.vec3(0, 0, 0)
         e[axis] = 600.0
-        got = grid.has_line_of_sight(s, e, _reference_intersect_ray_aabb)
+        got = grid.has_line_of_sight(s, e)
         exp = _reference_has_line_of_sight(grid, s, e)
         assert got == exp
     # Straight down +X must be blocked by the wall.
-    assert not grid.has_line_of_sight(glm.vec3(0, 0, 0), glm.vec3(600, 0, 0),
-                                      _reference_intersect_ray_aabb)
+    assert not grid.has_line_of_sight(glm.vec3(0, 0, 0), glm.vec3(600, 0, 0))
 
 
 def test_line_of_sight_degenerate_zero_length_ray():
     grid, _ = _populated_grid(n=20, seed=31)
     p = glm.vec3(0, 0, 0)
-    assert grid.has_line_of_sight(p, p, _reference_intersect_ray_aabb) is True
+    assert grid.has_line_of_sight(p, p) is True
 
 
 def test_line_of_sight_uses_cached_bounds_and_tracks_moved_brushes():
@@ -333,8 +332,8 @@ def test_line_of_sight_uses_cached_bounds_and_tracks_moved_brushes():
     wall = _brush([200, 0, 0], [50, 400, 400])
     grid.populate([wall])
     start, end = glm.vec3(0, 0, 0), glm.vec3(600, 0, 0)
-    assert not grid.has_line_of_sight(start, end, _reference_intersect_ray_aabb)
+    assert not grid.has_line_of_sight(start, end)
     # Move the wall out of the way; the cached bounds must refresh.
     wall["pos"] = [200, 5000, 0]
     grid.populate([wall])
-    assert grid.has_line_of_sight(start, end, _reference_intersect_ray_aabb)
+    assert grid.has_line_of_sight(start, end)
