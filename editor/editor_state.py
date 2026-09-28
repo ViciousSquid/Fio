@@ -467,16 +467,48 @@ class EditorState:
 
         return result
 
+    @staticmethod
+    def validate_level_data(level_data):
+        """Raise ``ValueError`` if *level_data* is not shaped like a map.
+
+        Structural only (an object holding lists of objects), and cheap, so a
+        caller can reject a document before it clears the current scene.
+        """
+        if not isinstance(level_data, dict):
+            raise ValueError("a map document must be a JSON object")
+        for kind in ('brushes', 'things'):
+            items = level_data.get(kind) or []
+            if not isinstance(items, list):
+                raise ValueError(f"a map's '{kind}' must be a list")
+            for index, item in enumerate(items):
+                if not isinstance(item, dict):
+                    raise ValueError(f"{kind}[{index}] is not an object")
+
     def load_from_data(self, level_data, *, yield_hook=None, save_undo=True):
         """Populates the scene from a dictionary.
 
         ``yield_hook`` is an optional cooperative callback used by long-running
         imports. Normal editor loads remain unchanged.
         """
-        self._invalidate_entity_caches()
+        # Everything is parsed before the scene is touched: a malformed map
+        # raises here and leaves the current scene exactly as it was, rather
+        # than half of one map mixed with half of another.
+        self.validate_level_data(level_data)
+        brushes_data = level_data.get('brushes') or []
+        things_data = level_data.get('things') or []
 
-        self.brushes = self._deserialize_brushes(
-            level_data.get('brushes', []), yield_hook=yield_hook)
+        new_brushes = self._deserialize_brushes(brushes_data, yield_hook=yield_hook)
+        new_things = []
+        for index, t_data in enumerate(things_data):
+            if yield_hook is not None and index % 25 == 0:
+                yield_hook()
+            thing = Thing.from_dict(t_data)
+            if thing is not None:
+                new_things.append(thing)
+
+        self._invalidate_entity_caches()
+        self.brushes = new_brushes
+        self.things = new_things
 
         self.terrain_data = level_data.get('terrain_data', None)
         # Absent in maps written before this existed; the overview falls back to
@@ -486,20 +518,10 @@ class EditorState:
         # Store logic graph positions for later use by the graph window
         self._logic_graph_positions = {}
         lg = level_data.get('logic_graph', {})
-        if lg:
-            self._logic_graph_positions = lg.get('node_positions', {})
-
-        # Load things
-        things_data = level_data.get('things', [])
-        new_things = []
-        for index, t_data in enumerate(things_data):
-            if yield_hook is not None and index % 25 == 0:
-                yield_hook()
-            thing = Thing.from_dict(t_data)
-            if thing is not None:
-                new_things.append(thing)
-
-        self.things = new_things
+        if isinstance(lg, dict):
+            positions = lg.get('node_positions', {})
+            if isinstance(positions, dict):
+                self._logic_graph_positions = positions
 
         # ===== NEW: Reset class counters based on loaded entity names =====
         update_all_counters_from_entities(self.brushes + self.things)

@@ -62,7 +62,7 @@ def update_all_counters_from_entities(entities):
         else:
             name = entity.properties.get('name', '')
 
-        if not name:
+        if not name or not isinstance(name, str):
             continue
 
         # Names are typically "ClassName_number" (e.g., "Monster_5", "Light_12")

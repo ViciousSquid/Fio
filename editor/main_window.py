@@ -4101,6 +4101,8 @@ class MainWindow(QMainWindow):
         The one place a parsed map becomes the editor's scene: opening a file,
         a level change and playing a package all go through it.
         """
+        # Refuse a malformed document before the current scene is cleared.
+        self.state.validate_level_data(level_data)
         self.state.clear_scene()
 
         # Clear existing terrain BEFORE loading new data
@@ -4141,6 +4143,15 @@ class MainWindow(QMainWindow):
         exists only in memory (a generated map): that one opens untitled and
         unsaved, so the first save asks where it goes and closing warns.
         """
+        try:
+            self.state.validate_level_data(level_data)
+        except ValueError as e:
+            # Not a map at all: refused before anything changed, so the open
+            # level and its file stay exactly as they were.
+            print(f"ERROR loading level {file_path or '(generated)'}: {e}")
+            self.show_toast(f"Failed to load level: {e}", is_error=True)
+            return False
+
         loaded = False
         try:
             # Capture play state BEFORE doing anything

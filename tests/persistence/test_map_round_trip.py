@@ -341,3 +341,31 @@ def test_loading_does_not_rewrite_the_callers_document():
     EditorState().load_from_data(document)
 
     assert json.dumps(document, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("document", [
+    [],
+    {"version": 3, "brushes": {"a": 1}, "things": []},
+    {"version": 3, "brushes": [5], "things": []},
+    {"version": 3, "brushes": [], "things": ["x"]},
+    {"version": 3, "brushes": [], "things": [
+        {"type": "light", "properties": {"name": "ok"}},
+        {"type": "light", "io_connections": [5]}]},
+])
+def test_a_malformed_map_leaves_the_current_scene_untouched(scene, document):
+    """Parse everything, then swap: never half of one map and half of another."""
+    before_brushes = list(scene.brushes)
+    before_things = list(scene.things)
+
+    with pytest.raises(Exception):
+        scene.load_from_data(document)
+
+    assert scene.brushes == before_brushes
+    assert scene.things == before_things
+
+
+def test_a_numeric_brush_name_does_not_stop_the_map_opening():
+    state = EditorState()
+    state.load_from_data({"version": 3, "things": [], "brushes": [
+        {"name": 7, "pos": [0, 0, 0], "size": [64, 64, 64]}]})
+    assert len(state.brushes) == 1

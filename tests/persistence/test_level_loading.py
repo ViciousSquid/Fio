@@ -19,6 +19,7 @@ import pytest
 
 pytest.importorskip("PyQt5", reason="level loading lives on the editor window")
 
+from editor.editor_state import EditorState        # noqa: E402
 from editor.main_window import MainWindow          # noqa: E402
 
 pytestmark = pytest.mark.qt
@@ -35,7 +36,8 @@ class _Window:
         self.file_path = "maps/previous.json"
         self.unsaved_changes = False
         self.config = configparser.ConfigParser()
-        self.state = types.SimpleNamespace(things=[])
+        self.state = types.SimpleNamespace(
+            things=[], validate_level_data=EditorState.validate_level_data)
         self.view_3d = types.SimpleNamespace(
             play_mode=False, camera=types.SimpleNamespace())
         self.fail_apply = fail_apply
@@ -119,5 +121,18 @@ def test_an_unreadable_file_leaves_the_open_level_alone(tmp_path):
     assert window.load_level_file(str(path)) is False
 
     assert window.applied == [], "the scene was touched for a file never parsed"
+    assert window.file_path == "maps/previous.json"
+    assert not window.unsaved_changes
+
+
+@pytest.mark.parametrize("document", [[], {"brushes": {"a": 1}}, {"things": ["x"]}])
+def test_a_document_that_is_not_a_map_changes_nothing(tmp_path, document):
+    path = tmp_path / "odd.json"
+    path.write_text(json.dumps(document))
+    window = _Window()
+
+    assert window.load_level_file(str(path)) is False
+
+    assert window.applied == []
     assert window.file_path == "maps/previous.json"
     assert not window.unsaved_changes
