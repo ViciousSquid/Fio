@@ -122,9 +122,10 @@ def test_a_journalled_edit_resolves_only_its_rows(monkeypatch):
     table = RenderTable()
     table.sync(brushes, 1)
     resolved = []
-    real = RenderTable._resolve_cold
-    monkeypatch.setattr(RenderTable, '_resolve_cold',
-                        lambda self, slot, b: (resolved.append(slot), real(self, slot, b)))
+    real = RenderTable._resolve_cold_rows
+    monkeypatch.setattr(RenderTable, '_resolve_cold_rows',
+                        lambda self, slots, b: (resolved.extend(slots),
+                                                real(self, slots, b)))
 
     brushes[57]['textures']['top'] = 'brick.png'
     table.begin_frame(brushes, 2, dirty_objects={id(brushes[57])})
@@ -193,3 +194,43 @@ def test_a_reshaped_convex_brush_is_noticed_while_it_is_being_edited():
 
     table.begin_frame(brushes, 1, edited=[convex])
     assert table.geometry_records[0].signature == bg.geometry_signature(convex)
+
+
+# ---------------------------------------------------------------------------
+# The other buffer
+# ---------------------------------------------------------------------------
+
+def test_a_table_adopts_its_peer_instead_of_rebuilding(monkeypatch):
+    """After a load or an undo both buffers need every row; one pays."""
+    rng = random.Random(9)
+    brushes = [_brush(i, rng) for i in range(40)]
+    first, second = RenderTable(), RenderTable()
+    first.begin_frame(brushes, 5)
+
+    reconciles = []
+    real = RenderTable._reconcile
+    monkeypatch.setattr(RenderTable, '_reconcile',
+                        lambda self, *a, **k: (reconciles.append(self),
+                                               real(self, *a, **k)))
+    second.begin_frame(brushes, 5, peer=first)
+
+    assert reconciles == []
+    fresh = RenderTable()
+    real(fresh, tuple(brushes), True)
+    _assert_same(second, fresh, brushes)
+    # A copy, not a share: the next edit to one must not reach the other.
+    assert second.bounds is not first.bounds
+    assert second.texture_names() is not first.texture_names()
+
+
+def test_a_peer_at_another_epoch_or_row_set_is_not_adopted(monkeypatch):
+    rng = random.Random(10)
+    brushes = [_brush(i, rng) for i in range(10)]
+    peer = RenderTable()
+    peer.begin_frame(brushes, 5)
+    adopted = []
+    monkeypatch.setattr(RenderTable, 'adopt', lambda self, p: adopted.append(p))
+
+    RenderTable().begin_frame(brushes, 6, peer=peer)            # newer epoch
+    RenderTable().begin_frame(brushes[:-1], 5, peer=peer)       # other rows
+    assert adopted == []

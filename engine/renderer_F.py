@@ -293,10 +293,13 @@ class Renderer_F(BaseRenderer):
         names = table.texture_names()
         key = id(table)
         entry = self._gl_tex_by_table.get(key)
-        if entry is None or entry[0] is not table:
+        # Valid only for the same table *and* the same name list: a table
+        # that adopts another's state takes a copy of its list, whose ids need
+        # not match the prefix this cache resolved.
+        if entry is None or entry[0] is not table or entry[1] is not names:
             cached = np.zeros(0, dtype=np.int32)
         else:
-            cached = entry[1]
+            cached = entry[2]
         if len(cached) == len(names):
             self._gl_tex_by_name_id = cached
             return cached
@@ -308,7 +311,7 @@ class Renderer_F(BaseRenderer):
             grown[name_id] = (
                 self.texture_manager.get(self._tex_cache_path(name))
                 or self.load_texture_callback(name, 'textures') or 0)
-        self._gl_tex_by_table[key] = (table, grown)
+        self._gl_tex_by_table[key] = (table, names, grown)
         self._gl_tex_by_name_id = grown
         return grown
 
@@ -317,10 +320,10 @@ class Renderer_F(BaseRenderer):
         names = table.texture_names()
         key = id(table)
         entry = self._tex_size_by_table.get(key)
-        if entry is None or entry[0] is not table:
+        if entry is None or entry[0] is not table or entry[1] is not names:
             cached = np.zeros((0, 2), dtype=np.float32)
         else:
-            cached = entry[1]
+            cached = entry[2]
         if len(cached) == len(names):
             self._tex_size_by_name_id = cached
             return cached
@@ -331,7 +334,7 @@ class Renderer_F(BaseRenderer):
         for name_id in range(len(cached), len(names)):
             w, h = dims.get(self._tex_cache_path(names[name_id]), (128, 128))
             grown[name_id] = (w, h)
-        self._tex_size_by_table[key] = (table, grown)
+        self._tex_size_by_table[key] = (table, names, grown)
         self._tex_size_by_name_id = grown
         return grown
     @staticmethod

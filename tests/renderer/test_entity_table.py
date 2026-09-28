@@ -902,3 +902,21 @@ def test_retargeting_a_portal_in_place_relinks_it():
     table.begin_frame([a, b, c], epoch=2, dirty_objects={id(a)})
 
     assert table.portal_target_slot[0] == 2
+
+
+def test_an_entity_table_adopts_its_peer_instead_of_rebuilding():
+    things = [make_thing(Light, 'l'), make_thing(Monster, 'm'),
+              make_thing(Portal, 'p'), make_thing(Prop, 'prop')]
+    first, second = EntityTable(), EntityTable()
+    first.begin_frame(things, 3)
+    second.begin_frame(things, 3, peer=first)
+
+    fresh = _synced(things, epoch=3)
+    n = len(things)
+    for name in ('pos', 'class_bits', 'hidden', 'light_color', 'sprite_size',
+                 'portal_target_slot', 'model_recipe_id'):
+        np.testing.assert_array_equal(getattr(second, name)[:n],
+                                      getattr(fresh, name)[:n])
+    assert second.ids == fresh.ids
+    assert second.sprite_recipes() == fresh.sprite_recipes()
+    assert second.pos is not first.pos

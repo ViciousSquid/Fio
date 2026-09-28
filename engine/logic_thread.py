@@ -4194,8 +4194,10 @@ class LogicThread(threading.Thread):
         # only ones re-read every frame. Everything else changes through a
         # journal (see RenderTable.begin_frame).
         edited = () if self.play_mode else self.editor_state.edited_objects()
+        peer = self.game_state.peer_state()
         table.begin_frame(
-            brushes, world_epoch, dirty_objects=render_dirty, edited=edited)
+            brushes, world_epoch, dirty_objects=render_dirty, edited=edited,
+            peer=peer.render_table if peer is not write_state else None)
         # The table owns its row objects; each buffer owns its table.
         refs = table.refs
         total_count = table.count
@@ -4245,6 +4247,7 @@ class LogicThread(threading.Thread):
             world_epoch,
             dirty_objects=render_dirty,
             effect_runtime=self.play_mode,
+            peer=peer.entity_table if peer is not write_state else None,
         )
         erefs = etable.refs
         entity_things = etable.things

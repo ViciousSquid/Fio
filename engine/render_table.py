@@ -402,87 +402,164 @@ class RenderTable:
         elif self.rot[slot, 3]:
             self.rot[slot] = 0.0
 
+    def _resolve_warm_rows(self, slots, brushes):
+        """:meth:`_resolve_warm` for many rows, one column store each."""
+        if not len(slots):
+            return
+        idx = np.asarray(slots, dtype=np.intp)
+        hidden = np.empty(len(idx), dtype=bool)
+        bounds = np.empty((len(idx), 6), dtype=np.float64)
+        rot = np.zeros((len(idx), 4), dtype=np.float32)
+        for row, slot in enumerate(idx.tolist()):
+            brush = brushes[slot]
+            hidden[row] = bool(brush.get('hidden', False))
+            pos = brush.get('pos') or (0.0, 0.0, 0.0)
+            size = brush.get('size') or (64.0, 64.0, 64.0)
+            bounds[row] = (pos[0], pos[1], pos[2],
+                           size[0] * 0.5, size[1] * 0.5, size[2] * 0.5)
+            angle = brush.get('_rot_angle') or 0.0
+            if angle:
+                axis = brush.get('rot_axis') or (0.0, 1.0, 0.0)
+                rot[row] = (axis[0], axis[1], axis[2], angle)
+        if not np.array_equal(self.hidden[idx], hidden):
+            self._shown_stale = True
+        self.hidden[idx] = hidden
+        self.bounds[idx] = bounds
+        self.rot[idx] = rot
+
     def _resolve_cold(self, slot, brush):
-        """Classification and material columns for one row.
+        """Classification and material columns for one row."""
+        self._resolve_cold_rows([slot], {slot: brush})
+
+    def _resolve_cold_rows(self, slots, brushes):
+        """Classification and material columns for *slots*.
 
         Expensive by design -- this is where ``is_water_brush``'s string search,
         the texture-name resolution and the UV lookups happen.  Running it here,
-        at edit frequency, is the point of the whole table.
+        at edit frequency, is the point of the whole table.  The dict work is
+        per brush, but each column is stored once for all the rows: a single
+        NumPy element store costs as much as the lookup that produced it, and a
+        row has some forty of them.
         """
-        self.class_bits[slot] = _brush_class_bits(brush)
+        slots = [int(slot) for slot in slots]
+        if not slots:
+            return
+        count = len(slots)
+        bits = np.empty(count, dtype=np.uint16)
+        tex = np.empty((count, 6), dtype=np.int32)
+        uv_scale = np.empty((count, 6, 2), dtype=np.float32)
+        uv_angle = np.empty((count, 6), dtype=np.float32)
+        uv_shift = np.empty((count, 6, 2), dtype=np.float32)
+        uv_natural = np.empty((count, 6), dtype=bool)
+        uv_has = np.empty((count, 6), dtype=bool)
+        colour = np.empty((count, 3), dtype=np.float32)
+        glow = np.empty((count, 3), dtype=np.float32)
+        geo_epoch = np.empty(count, dtype=np.int64)
+        special = []                     # (row, slot, brush, class bits)
+        intern = self.intern_texture
+        natural_scale = brush_geometry.face_uses_natural_scale
 
-        textures = brush.get('textures') or {}
-        uv_scale = brush.get('uv_scale') or {}
-        uv_angle = brush.get('uv_angle') or {}
-        uv_shift = brush.get('uv_shift') or {}
-        for i, face in enumerate(CUBE_FACE_KEYS):
-            self.tex_name_id[slot, i] = self.intern_texture(
-                textures.get(face, TEX_DEFAULT))
-            scale = uv_scale.get(face)
-            self.uv_has_scale[slot, i] = scale is not None
-            if scale is None:
-                self.uv_scale[slot, i, 0] = 1.0
-                self.uv_scale[slot, i, 1] = 1.0
-            else:
-                self.uv_scale[slot, i, 0] = scale[0]
-                self.uv_scale[slot, i, 1] = scale[1]
-            self.uv_natural[slot, i] = brush_geometry.face_uses_natural_scale(
-                brush, face)
-            self.uv_angle[slot, i] = uv_angle.get(face, 0.0)
-            shift = uv_shift.get(face) or (0.0, 0.0)
-            self.uv_shift[slot, i, 0] = shift[0]
-            self.uv_shift[slot, i, 1] = shift[1]
+        for row, slot in enumerate(slots):
+            brush = brushes[slot]
+            b = _brush_class_bits(brush)
+            bits[row] = b
+            textures = brush.get('textures') or {}
+            scales = brush.get('uv_scale') or {}
+            angles = brush.get('uv_angle') or {}
+            shifts = brush.get('uv_shift') or {}
+            tex[row] = [intern(textures.get(face, TEX_DEFAULT))
+                        for face in CUBE_FACE_KEYS]
+            row_scale = []
+            row_has = []
+            row_shift = []
+            for face in CUBE_FACE_KEYS:
+                scale = scales.get(face)
+                row_has.append(scale is not None)
+                row_scale.append((1.0, 1.0) if scale is None
+                                 else (scale[0], scale[1]))
+                shift = shifts.get(face) or (0.0, 0.0)
+                row_shift.append((shift[0], shift[1]))
+            uv_scale[row] = row_scale
+            uv_has[row] = row_has
+            uv_shift[row] = row_shift
+            uv_angle[row] = [angles.get(face, 0.0) for face in CUBE_FACE_KEYS]
+            uv_natural[row] = [natural_scale(brush, face) for face in CUBE_FACE_KEYS]
 
-        tint = brush.get('tint')
-        base = normalize_color(tint) if tint else normalize_color(
-            brush.get('colour'))
-        self.colour[slot] = base
-        intensity = float(brush.get('glow_intensity', 10.0))
-        glow_base = normalize_color(tint or brush.get('colour'),
-                                    default=[1.0, 1.0, 1.0])
-        for k in range(3):
-            self.glow_colour[slot, k] = min(glow_base[k] * intensity, 10.0)
+            tint = brush.get('tint')
+            colour[row] = (normalize_color(tint) if tint
+                           else normalize_color(brush.get('colour')))
+            intensity = float(brush.get('glow_intensity', 10.0))
+            glow_base = normalize_color(tint or brush.get('colour'),
+                                        default=[1.0, 1.0, 1.0])
+            glow[row] = [min(c * intensity, 10.0) for c in glow_base]
 
-        # The brush's own geometry epoch, which every change to its shape
-        # bumps (brush_geometry._invalidate) whether or not anything marks the
-        # world changed.  begin_frame compares it per frame; see
-        # _geometry_changed_slots.  Not assigned for a box: read as-is.
-        if self.class_bits[slot] & CLASS_HAS_GEOMETRY:
-            self.geo_epoch[slot] = brush_geometry._brush_epoch(brush)
-        else:
-            self.geo_epoch[slot] = brush.get('_geo_epoch') or 0
+            # The brush's own geometry epoch, which every change to its shape
+            # bumps (brush_geometry._invalidate) whether or not anything marks
+            # the world changed; see refresh_edited. Not assigned for a box.
+            geo_epoch[row] = (brush_geometry._brush_epoch(brush)
+                              if b & CLASS_HAS_GEOMETRY
+                              else brush.get('_geo_epoch') or 0)
+            if b & (CLASS_WATER | CLASS_GLASS | CLASS_FOG):
+                special.append((slot, brush, b))
 
-        # Water / glass / fog shader state. Defaults deliberately match the
-        # renderer's former brush.get(...) fallbacks.
-        water_tint = brush.get('water_tint', [0.0, 0.4, 0.6])
-        self.water_tint[slot] = normalize_color(water_tint)
-        self.water_params[slot] = (
-            float(brush.get('water_opacity', 0.5)),
-            float(brush.get('water_fresnel', brush.get('water_reflectivity', 0.5))),
-            float(brush.get('water_wave_height', 0.5)),
-            1.0 if brush.get('water_wave_enabled', True) else 0.0,
-            float(brush.get('water_distortion', 0.5)),
-            float(brush.get('water_refraction', 1.333)),
-            float(brush.get('water_roughness', 0.0)),
-        )
-        self.water_plane[slot] = bool(brush.get('water_plane', False))
+        idx = np.asarray(slots, dtype=np.intp)
+        self.class_bits[idx] = bits
+        self.tex_name_id[idx] = tex
+        self.uv_scale[idx] = uv_scale
+        self.uv_angle[idx] = uv_angle
+        self.uv_shift[idx] = uv_shift
+        self.uv_natural[idx] = uv_natural
+        self.uv_has_scale[idx] = uv_has
+        self.colour[idx] = colour
+        self.glow_colour[idx] = glow
+        self.geo_epoch[idx] = geo_epoch
+        self._resolve_special_rows(idx, special)
 
-        self.glass_color[slot] = normalize_color(
-            brush.get('glass_color', [0.7, 0.85, 0.95]))
-        self.glass_params[slot] = (
-            float(brush.get('glass_opacity', 0.3)),
-            float(brush.get('glass_distortion', 0.5)),
-            float(brush.get('glass_refraction', 1.5)),
-            float(brush.get('glass_roughness', 0.0)),
-            float(brush.get('glass_fresnel', 0.5)),
-        )
+    #: The special-shader columns, and the fill a row of no special class
+    #: holds (nothing reads them for such a row, but a rebuild gives it too).
+    _SPECIAL_COLUMNS = ('water_tint', 'water_params', 'water_plane',
+                        'glass_color', 'glass_params', 'fog_color', 'fog_params')
 
-        self.fog_color[slot] = normalize_color(
-            brush.get('fog_color', [0.5, 0.6, 0.7]))
-        self.fog_params[slot] = (
-            float(brush.get('fog_density', 0.01)),
-            float(brush.get('fog_noise_scale', 0.01)),
-        )
+    def _resolve_special_rows(self, idx, special):
+        """Water, glass and fog shader state -- only for rows of those classes.
+
+        Defaults deliberately match the renderer's former brush.get(...)
+        fallbacks.
+        """
+        for name in self._SPECIAL_COLUMNS:
+            getattr(self, name)[idx] = 0
+        for slot, brush, b in special:
+            if b & CLASS_WATER:
+                self.water_tint[slot] = normalize_color(
+                    brush.get('water_tint', [0.0, 0.4, 0.6]))
+                self.water_params[slot] = (
+                    float(brush.get('water_opacity', 0.5)),
+                    float(brush.get('water_fresnel',
+                                    brush.get('water_reflectivity', 0.5))),
+                    float(brush.get('water_wave_height', 0.5)),
+                    1.0 if brush.get('water_wave_enabled', True) else 0.0,
+                    float(brush.get('water_distortion', 0.5)),
+                    float(brush.get('water_refraction', 1.333)),
+                    float(brush.get('water_roughness', 0.0)),
+                )
+                self.water_plane[slot] = bool(brush.get('water_plane', False))
+            if b & CLASS_GLASS:
+                self.glass_color[slot] = normalize_color(
+                    brush.get('glass_color', [0.7, 0.85, 0.95]))
+                self.glass_params[slot] = (
+                    float(brush.get('glass_opacity', 0.3)),
+                    float(brush.get('glass_distortion', 0.5)),
+                    float(brush.get('glass_refraction', 1.5)),
+                    float(brush.get('glass_roughness', 0.0)),
+                    float(brush.get('glass_fresnel', 0.5)),
+                )
+            if b & CLASS_FOG:
+                self.fog_color[slot] = normalize_color(
+                    brush.get('fog_color', [0.5, 0.6, 0.7]))
+                self.fog_params[slot] = (
+                    float(brush.get('fog_density', 0.01)),
+                    float(brush.get('fog_noise_scale', 0.01)),
+                )
 
     # -- synchronisation ---------------------------------------------------
 
@@ -498,7 +575,7 @@ class RenderTable:
         return tuple(brushes) != self._row_tuple
 
     def begin_frame(self, brushes, epoch=None, dirty_objects=None,
-                    edited=()):
+                    edited=(), peer=None):
         """Bring the table into line with *brushes*; return the ``hidden`` mask.
 
         Nothing here visits a brush that has not changed:
@@ -518,17 +595,30 @@ class RenderTable:
         An unannounced change to the row set -- the same count, different
         dicts -- is caught by comparing the row tuple, an identity check per
         row in C that reads nothing from any brush.
+
+        *peer* is the other buffer's table. When this one would have to
+        re-resolve every row and the peer already holds exactly this row set
+        at this epoch -- the frame after a load, an undo, any global
+        invalidation -- its columns are copied instead of re-derived.
         """
         brushes = tuple(brushes)
         n = len(brushes)
         changes = JOURNAL.drain(self)
         self.rows_read = 0
+        resolved_all = False
         if epoch is None or epoch != self._epoch or brushes != self._row_tuple:
             cold_dirty = epoch is None or epoch != self._epoch
-            if not self._refresh_in_place(brushes, n, epoch, dirty_objects):
-                self._reconcile(brushes, cold_dirty, dirty_objects)
+            if self._refresh_in_place(brushes, n, epoch, dirty_objects):
+                pass
+            elif (peer is not None and dirty_objects is None and epoch is not None
+                    and peer._epoch == epoch and peer._row_tuple == brushes):
+                self.adopt(peer)
+            else:
+                resolved_all = self._reconcile(brushes, cold_dirty, dirty_objects)
             self._epoch = epoch
-        if changes is OVERFLOW:
+        if resolved_all:
+            pass            # every row was just read from its brush
+        elif changes is OVERFLOW:
             self.refresh_rows(brushes, range(n))
         elif changes:
             slot_of = self._slot_of_obj
@@ -560,6 +650,28 @@ class RenderTable:
             self._shown_slots = np.flatnonzero(self._shown_mask)
             self._shown_stale = False
         return self._shown_mask, self._shown_slots
+
+    def adopt(self, peer):
+        """Become a copy of *peer*: its rows, columns and intern tables.
+
+        The slot addresses change meaning, so :attr:`generation` moves on.
+        """
+        for name, *_ in _COLUMNS:
+            setattr(self, name, getattr(peer, name).copy())
+        self.count = peer.count
+        self.ids = list(peer.ids)
+        self.slot_of_id = dict(peer.slot_of_id)
+        self.brushes = list(peer.brushes)
+        self.refs = peer.refs.copy()
+        self.dynamic_slots = peer.dynamic_slots.copy()
+        self.geometry_records = list(peer.geometry_records)
+        self._tex_ids = dict(peer._tex_ids)
+        self._tex_names = list(peer._tex_names)
+        self._epoch = peer._epoch
+        self._row_tuple = peer._row_tuple
+        self._slot_of_obj = dict(peer._slot_of_obj)
+        self._shown_stale = True
+        self.generation += 1
 
     def epoch_is_current(self, epoch):
         """Whether the table was last reconciled at *epoch*."""
@@ -653,12 +765,11 @@ class RenderTable:
                 new_geometry_records[slot] = old_geometry_by_slot[old]
         self.geometry_records = new_geometry_records
 
-        for slot in range(n):
-            brush = brushes[slot]
-            self._resolve_warm(slot, brush)
-            if slot not in survivors:
-                self._resolve_cold(slot, brush)
-                new_geometry_records[slot] = self._geometry_record(slot, brush)
+        self._resolve_warm_rows(range(n), brushes)
+        fresh = [slot for slot in range(n) if slot not in survivors]
+        self._resolve_cold_rows(fresh, brushes)
+        for slot in fresh:
+            new_geometry_records[slot] = self._geometry_record(slot, brushes[slot])
 
         # Publish a genuinely dense geometry index. geometry_id is an index
         # into geometry_records, not a RenderTable row number. This keeps AABB
@@ -694,6 +805,7 @@ class RenderTable:
         self.dynamic_slots = np.flatnonzero(
             self.class_bits[:n] & CLASS_DYNAMIC).astype(np.int32)
         self.generation += 1
+        return not survivors
 
     def refresh_transforms(self, brushes, slots):
         """Re-read the warm columns for *slots* (movers and doors, per tick)."""
@@ -710,11 +822,11 @@ class RenderTable:
         """
         slots = sorted({int(slot) for slot in slots})
         self.rows_read += len(slots)
+        self._resolve_warm_rows(slots, brushes)
+        self._resolve_cold_rows(slots, brushes)
         for slot in slots:
             brush = brushes[slot]
             had_record = self.geometry_id[slot] >= 0
-            self._resolve_warm(slot, brush)
-            self._resolve_cold(slot, brush)
             record = self._geometry_record(slot, brush)
             if (record is not None) != had_record:
                 self._reconcile(brushes, True, {id(brushes[s]) for s in slots})

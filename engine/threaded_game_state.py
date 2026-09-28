@@ -378,6 +378,17 @@ class ThreadedGameState:
             self._write_ready = False
             return self._write_state
 
+    def peer_state(self) -> RenderState:
+        """The buffer the logic thread is *not* writing, for reading only.
+
+        Its tables are complete (the last published frame, or one prepared and
+        held back) and nothing writes them until the next swap, which only
+        the logic thread performs -- so the logic thread can copy from them
+        while it prepares the other buffer.
+        """
+        with self._render_state_lock:
+            return self._read_state
+
     def peek_has_new_frame(self) -> bool:
         """Non-consuming check used by update_loop."""
         with self._render_state_lock:

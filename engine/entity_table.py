@@ -761,7 +761,7 @@ class EntityTable:
         return tuple(things) != self._row_tuple
 
     def begin_frame(self, things, epoch=None, dirty_objects=None,
-                    effect_runtime=False):
+                    effect_runtime=False, peer=None):
         """Bring the table into line with *things*; return the ``hidden`` mask.
 
         Nothing here visits an entity that has not changed. The row set is
@@ -780,12 +780,22 @@ class EntityTable:
         self.rows_read = 0
         resolved_all = False
         if self.needs_reconcile(things, epoch):
-            if not self._refresh_in_place(things, epoch, dirty_objects):
+            if self._refresh_in_place(things, epoch, dirty_objects):
+                pass
+            elif (peer is not None and dirty_objects is None and epoch is not None
+                    and peer._epoch == epoch and peer._row_tuple == things):
+                # The other buffer's table already resolved exactly these
+                # rows at this epoch: copy rather than re-derive.
+                self.adopt(peer)
+            else:
                 resolved_all = self._reconcile(things, dirty_objects=dirty_objects)
             self._epoch = epoch
-        if changes is OVERFLOW:
-            if not resolved_all:
-                self.refresh_rows(things, range(n))
+        # A reconcile that re-resolved every row has read everything the
+        # journal could name.
+        if resolved_all:
+            pass
+        elif changes is OVERFLOW:
+            self.refresh_rows(things, range(n))
         elif changes:
             self._apply_changes(things, changes)
         if len(self._poll_slots):
@@ -793,6 +803,29 @@ class EntityTable:
         if len(self.effect_slots):
             self._advance_effects(effect_runtime)
         return self.hidden[:n]
+
+    def adopt(self, peer):
+        """Become a copy of *peer*: its rows, columns and intern tables."""
+        for name, *_ in _COLUMNS:
+            setattr(self, name, getattr(peer, name).copy())
+        self.count = peer.count
+        self.ids = list(peer.ids)
+        self.slot_of_id = dict(peer.slot_of_id)
+        self.things = list(peer.things)
+        self.refs = peer.refs.copy()
+        for name in ('all_slots', 'light_slots', 'portal_slots', 'monster_slots',
+                     'path_node_slots', 'effect_slots', '_poll_slots'):
+            setattr(self, name, getattr(peer, name).copy())
+        self._sprite_ids = dict(peer._sprite_ids)
+        self._sprite_recipes = list(peer._sprite_recipes)
+        self._model_ids = dict(peer._model_ids)
+        self._model_recipes = list(peer._model_recipes)
+        self._effect_custom_ids = dict(peer._effect_custom_ids)
+        self._effect_custom_paths = list(peer._effect_custom_paths)
+        self._epoch = peer._epoch
+        self._row_tuple = peer._row_tuple
+        self._slot_of_obj = dict(peer._slot_of_obj)
+        self.generation += 1
 
     def _refresh_in_place(self, things, epoch, dirty_objects):
         """An editor transaction on an unchanged row set: re-resolve its rows.
