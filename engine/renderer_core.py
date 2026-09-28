@@ -19,6 +19,7 @@ Both Renderer_F and Renderer_D inherit from BaseRenderer.
 """
 
 import ctypes
+import functools
 import re
 import math
 import os
@@ -33,6 +34,8 @@ import glm
 import numpy as np
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
+from OpenGL.raw.GL.VERSION.GL_2_0 import (
+    glVertexAttribPointer as _raw_vertex_attrib_pointer)
 
 from engine.constants import brush_aabb_bounds, normalize_color
 from engine import brush_geometry
@@ -121,13 +124,38 @@ class LODManager:
 
 class RenderStats:
     __slots__ = ('total_brushes', 'culled_brushes', 'visible_brushes', 'draw_calls',
-                 'shadow_draw_calls', 'total_tris', 'visible_tris', 'batched_draws')
+                 'shadow_draw_calls', 'total_tris', 'visible_tris', 'batched_draws',
+                 'pass_ms')
     def __init__(self):
+        #: CPU milliseconds spent submitting each pass this frame, measured by
+        #: :func:`timed_pass`. Inclusive: a pass that draws others (portals,
+        #: shadow maps) counts theirs too.
+        self.pass_ms = {}
         self.reset()
     def reset(self):
         self.total_brushes = self.culled_brushes = self.visible_brushes = 0
         self.draw_calls = self.shadow_draw_calls = self.batched_draws = 0
         self.total_tris = self.visible_tris = 0
+        self.pass_ms.clear()
+
+
+def timed_pass(name):
+    """Accumulate a renderer pass's CPU time into ``render_stats.pass_ms``.
+
+    Two clock reads per call, a handful of calls per frame: what the Debug
+    Tables instrument shows as the per-pass submission cost.
+    """
+    def decorate(method):
+        @functools.wraps(method)
+        def timed(self, *args, **kwargs):
+            started = time.perf_counter()
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                ms = self.render_stats.pass_ms
+                ms[name] = ms.get(name, 0.0) + (time.perf_counter() - started) * 1000.0
+        return timed
+    return decorate
 
 
 class BrushGeoMesh:
@@ -923,6 +951,7 @@ layout (location = 10) in vec4 iPayload;
         ):
             print(f'{_BASE_RENDERER_PREFIX} Effect instancing shader compiled successfully.')
 
+    @timed_pass('fire effects')
     def draw_fire_effects_instanced(
         self, projection, view, table, slots, hidden=None, camera_pos=None,
     ):
@@ -1130,6 +1159,7 @@ layout (location = 10) in vec4 iPayload;
         gl.glBindVertexArray(0)
         return count
 
+    @timed_pass('effects')
     def draw_effects_instanced(
         self, projection, view, table, slots, hidden=None,
         play_mode=True, editor_time=0.0, camera_pos=None,
@@ -1463,8 +1493,12 @@ layout (location = 10) in vec4 iPayload;
         """
         stride = self.BRUSH_INSTANCE_FLOATS * 4
         origin = int(base) * stride
+        # The raw entry point: the offset is a plain integer into the bound
+        # buffer, so PyOpenGL's array handling and the pointer bookkeeping it
+        # keeps per context (a dict write per call) buy nothing here -- and
+        # they were most of the cost of a brush pass.
         for location in range(3, 11):
-            gl.glVertexAttribPointer(
+            _raw_vertex_attrib_pointer(
                 location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
                 ctypes.c_void_p(origin + (location - 3) * 16))
 
@@ -2000,6 +2034,7 @@ layout (location = 10) in float iInstanceAlpha;
         self._grid_vbo = vbo
         self.vaos['grid'] = vao
 
+    @timed_pass('grid')
     def draw_grid(self, projection, view, grid_indices_count, play_mode=False, grid_visible=True):
         if not self.vaos['grid'] or play_mode or not grid_visible or 'simple' not in self.shaders:
             return
@@ -2048,6 +2083,7 @@ layout (location = 10) in float iInstanceAlpha;
                 new_id = self.load_texture(filename, 'textures/terrain')
                 setattr(terrain, attr, new_id)
 
+    @timed_pass('terrain')
     def render_terrain(self, projection, view, camera_pos, terrain, lights, frustum_planes=None):
         if terrain is None or not terrain.enabled:
             return
@@ -2346,6 +2382,7 @@ layout (location = 10) in float iInstanceAlpha;
         return draws
 
 
+    @timed_pass('models')
     def draw_models_instanced(self, projection, view, camera_pos, table, slots,
                               lights, config=None):
         """Render model instances from dense EntityTable columns.
@@ -2668,6 +2705,7 @@ layout (location = 10) in float iInstanceAlpha;
             gl.glBindVertexArray(0)
         return count
 
+    @timed_pass('sprites')
     def draw_sprites_instanced(self, projection, view, table, slots,
                                gl_ids=None, camera_pos=None):
         """The sprite pass over dense columns: one draw per texture run.
@@ -2795,6 +2833,7 @@ layout (location = 10) in float iInstanceAlpha;
     # --------------------------------------------------------------------------
     # Water / Glass / Fog
     # --------------------------------------------------------------------------
+    @timed_pass('water')
     def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config,
                            table):
         """Draw water from dense RenderTable state.
@@ -2990,6 +3029,7 @@ layout (location = 10) in float iInstanceAlpha;
             gl.GL_TEXTURE_2D, 0, 0, 0, x, y, width, height)
         return width, height
 
+    @timed_pass('glass')
     def draw_glass_brushes(self, projection, view, camera_pos, brushes, lights, config,
                            table):
         if len(brushes) == 0 or 'glass' not in self.shaders:
@@ -3059,6 +3099,7 @@ layout (location = 10) in float iInstanceAlpha;
         gl.glDisable(gl.GL_CULL_FACE)
         gl.glBindVertexArray(0)
         return
+    @timed_pass('fog')
     def draw_fog_volumes(self, projection, view, camera_pos, brushes, lights, config, *, table):
         if len(brushes) == 0 or 'fog' not in self.shaders:
             return
@@ -3359,11 +3400,16 @@ layout (location = 10) in float iInstanceAlpha;
 
         active['indices'][:, 0] = shadow_indices
 
+        # Respecify the whole store rather than sub-updating it: earlier draws
+        # still queued against the old contents would otherwise make the
+        # driver wait for them before the write. A fresh store (orphaning)
+        # lets them finish on the old one.
         gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
-        gl.glBufferSubData(
+        gl.glBufferData(
             gl.GL_UNIFORM_BUFFER,
-            0,
-            active,
+            self._light_ubo_data.nbytes,
+            self._light_ubo_data,
+            gl.GL_DYNAMIC_DRAW,
         )
         self._light_ubo_key = key
 
@@ -3394,7 +3440,11 @@ layout (location = 10) in float iInstanceAlpha;
             id(table), table.generation,
             tuple(int(x) for x in slots[:cap]))
         gl.glUniform1i(self.uniforms[shader_name]['active_lights'], num_lights)
-        self._upload_light_ubo(lights, num_lights)
+        # One upload serves every pass: the buffer holds the frame's light
+        # prefix up to MAX_LIGHTS, and each shader reads its own first
+        # ``active_lights`` entries of it. Uploading per shader cap re-sent
+        # the same lights once per pass.
+        self._upload_light_ubo(lights, min(len(slots), self.MAX_LIGHTS))
 
         # Keep sampler2D and samplerCube uniforms on distinct texture units.
         # This is one shader-pass operation, never part of the per-draw loop.
@@ -3608,6 +3658,7 @@ layout (location = 10) in float iInstanceAlpha;
             self._pack_brush_instances(models, None, rows, 0.0, 0.0)
 
         return cube_slots, geo_slots
+    @timed_pass('shadow maps')
     def render_shadow_maps(self, shadow_lights, config, camera_pos=None):
         """Refresh depth cube-maps from dense RenderTable/EntityTable state.
 
@@ -4790,6 +4841,7 @@ layout (location = 10) in float iInstanceAlpha;
     def _portal_direction(self, table, slot):
         return int(table.portal_direction[int(slot)])
 
+    @timed_pass('portals (incl. their views)')
     def draw_portals(self, portal_table, portal_slots, projection, main_view, camera_pos, config, draw_scene_fn):
         """Render portal views from dense EntityTable topology."""
         if not self._portal_gl_ready:

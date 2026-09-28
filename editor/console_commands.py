@@ -3,6 +3,7 @@ import json
 from PyQt5.QtWidgets import QMessageBox
 
 from editor.debug_console import debug_log
+from engine.change_journal import touch
 
 # Try to import I/O system (available in both editor and play mode)
 try:
@@ -318,6 +319,7 @@ class ConsoleCommandHandler:
         # Kill the monster
         entity.properties['health'] = 0
         entity.properties['dead'] = True
+        touch(entity)
 
         # Fire I/O output if available
         try:
@@ -416,6 +418,7 @@ class ConsoleCommandHandler:
         # wake logic will re-apply correctly on next play mode start.
         entity.properties['awake']       = False
         entity.properties.pop('is_shooting', None)
+        touch(entity)
 
         # Clear the sprite cache so the editor 2D views and 3D billboard
         # switch back to idle.png immediately rather than staying on dead.png.
@@ -443,6 +446,7 @@ class ConsoleCommandHandler:
             entity['hidden'] = True
         elif hasattr(entity, 'properties'):
             entity.properties['hidden'] = True
+        touch(entity)
         debug_log("Info", f"'{name}' is now hidden")
 
     def cmd_show(self, args):
@@ -459,6 +463,7 @@ class ConsoleCommandHandler:
             entity['hidden'] = False
         elif hasattr(entity, 'properties'):
             entity.properties['hidden'] = False
+        touch(entity)
         debug_log("Info", f"'{name}' is now visible")
 
     def cmd_tint(self, args):
@@ -481,6 +486,7 @@ class ConsoleCommandHandler:
                 entity.pop('tint', None)
             elif hasattr(entity, 'properties'):
                 entity.properties.pop('tint', None)
+            touch(entity)
             debug_log("Info", f"Cleared tint on '{name}'")
             return
 
@@ -499,6 +505,7 @@ class ConsoleCommandHandler:
             entity['tint'] = [r, g, b]
         elif hasattr(entity, 'properties'):
             entity.properties['tint'] = [r, g, b]
+        touch(entity)
         debug_log("Info", f"Set tint on '{name}' to ({r}, {g}, {b})")
 
     # ===================================================================
@@ -629,6 +636,7 @@ class ConsoleCommandHandler:
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
                 t.properties['color'] = [r, g, b]
+                touch(t)
                 found = True
                 debug_log("Info", f"Portal '{name}' color set to ({r}, {g}, {b})")
 
@@ -650,6 +658,7 @@ class ConsoleCommandHandler:
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
                 t.properties['active'] = True
+                touch(t)
                 self.editor_state.save_state()
                 debug_log("Info", f"Portal '{name}' enabled")
                 self.main_window.update_all_ui()
@@ -667,6 +676,7 @@ class ConsoleCommandHandler:
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
                 t.properties['active'] = False
+                touch(t)
                 self.editor_state.save_state()
                 debug_log("Info", f"Portal '{name}' disabled")
                 self.main_window.update_all_ui()
@@ -1487,6 +1497,7 @@ entity to drive them from the I/O system.</i><br>
             entity[key] = value
         else:
             entity.properties[key] = value
+        touch(entity)
 
         debug_log("Info", f"Set {name}.{key} = {value}")
         self.editor_state.save_state()

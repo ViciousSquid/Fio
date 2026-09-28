@@ -59,6 +59,11 @@ except ImportError:
 class EditorState:
     """Manages all the data for the current level being edited."""
 
+    #: ``post_event(fn)`` runs *fn* once the UI event being handled has
+    #: finished. The main window installs one (a zero-delay timer); without a
+    #: UI event loop, edits are synchronous and nothing needs deferring.
+    post_event = None
+
     def __init__(self):
         #: Coarse "something about the world changed" counter -- see
         #: :meth:`mark_world_changed`.  Set before anything that bumps it can
@@ -318,6 +323,20 @@ class EditorState:
         """Sets the currently selected object."""
         self.selected_object = obj
         self.selected_objects = [] if obj is None else [obj]
+
+    def edited_objects(self) -> tuple:
+        """The objects an editor tool may be writing in place right now.
+
+        A drag, a nudge or a component edit changes the selection for many
+        frames after one undo checkpoint, writing the dicts directly; the
+        render projection re-reads these rows every frame instead of every
+        row. Safe to call from the logic thread: the lists are copied.
+        """
+        selected = tuple(self.selected_objects)
+        primary = self.selected_object
+        if primary is not None and primary not in selected:
+            selected += (primary,)
+        return selected
 
     def _invalidate_entity_caches(self):
         """Tell anything caching per-object data that the objects are changing.
@@ -646,7 +665,15 @@ class EditorState:
         record of what the scene now looks like.  :meth:`undo` therefore has to
         capture the live scene itself — see the note there.
         """
-        self.mark_world_changed(getattr(self, "selected_objects", ()))
+        selected = tuple(getattr(self, "selected_objects", ()))
+        self.mark_world_changed(selected)
+        # A checkpoint is taken *before* the operation changes anything, so a
+        # render frame prepared in between consumes the journal entry while the
+        # objects still hold their old state. Journal them again once the UI
+        # event that is making the change has finished.
+        post_event = self.post_event
+        if post_event is not None and selected:
+            post_event(lambda: self.mark_world_changed(selected))
         # The operation may add or delete a connection's source or target.
         # The I/O reverse index keys on object counts and list identity, which
         # a delete followed by a placement restores exactly, so it must be told.

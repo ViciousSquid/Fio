@@ -8,6 +8,7 @@ the failure occurs in the pure data projection before rendering.
 import pytest
 
 from engine import entity_table
+from engine.change_journal import touch
 
 
 @pytest.mark.parametrize(
@@ -23,43 +24,42 @@ def test_split_asset_path_returns_filename_and_asset_relative_folder(path, expec
     assert entity_table._split_asset_path(path) == expected
 
 
+class Barrel:
+    """A Qt-free stand-in for an entity with a ``properties`` dict."""
+
+    def __init__(self, **properties):
+        self.properties = properties
+
+
 def test_sprite_candidates_resolves_prop_sprite_path_without_name_error():
-    thing = {"sprite_path": "assets/sprites/props/barrel.png"}
+    thing = Barrel(sprite_path="assets/sprites/props/barrel.png")
 
     candidates = entity_table.sprite_candidates(thing)
 
-    assert candidates[-1] == ("dict", "barrel.png", "sprites/props", True)
+    assert candidates[-1] == ("Barrel", "barrel.png", "sprites/props", True)
 
 
 def test_sprite_candidates_resolves_nested_sprite_path_without_name_error():
-    thing = {"sprite_path": "assets/sprites/animated/door/frame_01.png"}
+    thing = Barrel(sprite_path="assets/sprites/animated/door/frame_01.png")
 
     candidates = entity_table.sprite_candidates(thing)
 
-    assert candidates[-1] == ("dict", "frame_01.png", "sprites/animated/door", True)
+    assert candidates[-1] == ("Barrel", "frame_01.png", "sprites/animated/door", True)
 
 
-def test_monster_dead_snapshot_interns_distinct_dead_sprite_recipe():
+def test_a_dead_monster_row_interns_a_distinct_dead_sprite_recipe():
+    pytest.importorskip("PyQt5", reason="Monster lives in editor.things")
+    from editor.things import Monster
+    from tests.helpers.worlds import make_thing
+
     table = entity_table.EntityTable()
-    idle = {
-        "pos": [0.0, 0.0, 0.0],
-        "dead": False,
-        "is_shooting": False,
-        "monster_type": "human",
-        "variant": "<None>",
-        "sprite_width": 128,
-        "sprite_height": 128,
-        "custom_idle": "",
-        "custom_shoot": "",
-        "custom_dead": "",
-    }
-    dead = dict(idle, dead=True)
-
-    # The snapshot path updates an already-projected monster row.
-    table.begin_frame([idle], epoch=1)
-    table.update_monster_snapshot(0, idle)
+    grunt = make_thing(Monster, "grunt", monster_type="human")
+    # A journalled state change re-resolves the already-projected row.
+    table.begin_frame([grunt], epoch=1)
     idle_id = int(table.sprite_key_id[0])
-    table.update_monster_snapshot(0, dead)
+    grunt.properties["dead"] = True
+    touch(grunt)
+    table.begin_frame([grunt], epoch=1)
     dead_id = int(table.sprite_key_id[0])
 
     assert dead_id != idle_id

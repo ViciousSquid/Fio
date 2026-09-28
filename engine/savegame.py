@@ -82,6 +82,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
+from .change_journal import touch
 from .fileio import write_json_atomic
 from .spatial import PARKED_DISABLED_KEY, PARKED_HIDDEN_KEY
 
@@ -621,6 +622,8 @@ def _overlay_entities(logic, level: dict) -> None:
                 _overlay_parkable(live.properties, k, props)
         except Exception:
             continue
+        finally:
+            touch(live)
 
     if prop_session is not None and restored_props:
         prop_session.refile(restored_props)
@@ -641,6 +644,7 @@ def _overlay_entities(logic, level: dict) -> None:
                 live[k] = b_data[k]
             else:
                 live.pop(k, None)
+        touch(live)
 
 
 def _restore_runtime_and_players(logic, data: dict) -> None:

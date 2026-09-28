@@ -8,6 +8,13 @@ import os
 os.environ["QT_PLUGIN_PATH"] = ""
 os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = ""
 
+# PyOpenGL calls glGetError after every GL call unless told not to, which on a
+# frame of a few hundred calls is a measurable share of the paint. It must be
+# decided before anything imports OpenGL.GL. FIO_GL_DEBUG=1 keeps the checks
+# (the test suite never comes through here, so it always runs with them).
+if os.environ.get("FIO_GL_DEBUG") != "1":
+    os.environ.setdefault("PYOPENGL_ERROR_CHECKING", "0")
+
 
 # Dark theme
 dark_stylesheet = """

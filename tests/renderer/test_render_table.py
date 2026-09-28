@@ -31,36 +31,34 @@ def _synced(brushes, epoch=1):
     return t
 
 
-def test_reconcile_freezes_the_observed_row_count_during_live_append():
-    """A benchmark append during reconciliation belongs to the next frame."""
-    first = _brush(id='first')
-    late = _brush(id='late')
+def test_a_frame_reads_the_live_brush_list_exactly_once():
+    """The row set is frozen by one C-level copy; the live list is never indexed.
 
-    class GrowingBrushes(list):
-        def __init__(self, values, extra):
-            super().__init__(values)
-            self.extra = extra
-            self.grown = False
+    The editor and the benchmark append to the live list from another thread,
+    so everything a frame does has to agree on one row set: an append lands
+    in the next frame, whole.
+    """
+    reads = []
 
+    class WatchedBrushes(list):
         def __getitem__(self, index):
-            if index == 0 and not self.grown:
-                self.grown = True
-                super().append(self.extra)
+            reads.append(('index', index))
             return super().__getitem__(index)
 
-    brushes = GrowingBrushes([first], late)
+        def __iter__(self):
+            reads.append(('iter',))
+            return super().__iter__()
+
+    brushes = WatchedBrushes([_brush(id='first')])
     table = RenderTable()
-
-    table.sync(brushes, 1)
-
-    assert table.count == 1
-    assert table.brushes == [first]
-    assert table.geometry_records == []
+    table.begin_frame(brushes, 1)
+    assert reads == [('iter',)]
     assert table.ids == ['first']
 
-    # The concurrently appended row is reconciled normally on the next frame.
-    table.sync(brushes, 1)
-    assert table.count == 2
+    brushes.append(_brush(id='late'))          # lands between frames
+    reads.clear()
+    table.begin_frame(brushes, 1)
+    assert reads == [('iter',)]
     assert table.ids == ['first', 'late']
 
 
@@ -136,12 +134,14 @@ def test_class_bits_carry_authored_hidden_not_the_parked_flag():
     assert t.class_bits[0] & rt.CLASS_SHADOW_CASTER
 
 
-def test_live_hidden_sees_a_park_the_table_never_refreshed_for():
+def test_a_park_reaches_the_hidden_column_through_the_journal():
+    from engine.spatial import set_authored_flag
+
     b = _brush(id='p')
-    t = _synced([b])
-    assert not t.live_hidden([b])[0]
-    b['hidden'] = True                          # parked, with no notification
-    assert t.live_hidden([b])[0]
+    t = RenderTable()
+    assert not t.begin_frame([b], 1)[0]
+    set_authored_flag(b, 'hidden', True)        # what parking and I/O Hide do
+    assert t.begin_frame([b], 1)[0]
 
 
 # ---------------------------------------------------------------------------

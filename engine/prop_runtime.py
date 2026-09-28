@@ -572,7 +572,7 @@ class PropSession:
                     )
 
             if floor_y is not None and new_y <= float(floor_y) + half_height:
-                prop.pos[1] = float(floor_y) + half_height
+                prop.pos = [prop.pos[0], float(floor_y) + half_height, prop.pos[2]]
                 self.moved(prop)
                 finished.append(pid)
                 io = getattr(self.logic, "io_manager", None)
@@ -580,7 +580,7 @@ class PropSession:
                     io.fire_output(prop, "OnRest")
                 continue
 
-            prop.pos[1] = new_y
+            prop.pos = [prop.pos[0], new_y, prop.pos[2]]
             self.moved(prop)
             state["velocity"] = velocity
 

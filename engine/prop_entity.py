@@ -10,6 +10,8 @@ it is not a separate entity type.
 
 from __future__ import annotations
 
+from engine.change_journal import TrackedAttribute
+
 try:
     from editor.things import Model as _ModelBase
     EDITOR_TIER = True
@@ -105,6 +107,10 @@ class Prop(_ModelBase):
         'drop_velocity',
         'drop_angular_velocity',
     )
+
+    #: Runtime render state the projection resolves; assignment journals it.
+    _respawn_fade_alpha = TrackedAttribute(1.0)
+    _carry_sprite_yaw = TrackedAttribute(None)
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)

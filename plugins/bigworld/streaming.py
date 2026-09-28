@@ -40,6 +40,8 @@ import os
 from collections import Counter
 from typing import Dict, List, Optional, Set, Tuple
 
+from engine.change_journal import touch
+
 from .cell import (CELL_SIZE, CellCoord, cell_distance_sq, cell_of_point,
                    cells_for_aabb)
 from .manager import (DEFAULT_ACTIVATION_RADIUS, DEFAULT_DEACTIVATION_RADIUS,
@@ -553,6 +555,7 @@ class DiskStreamingSession:
                 thing.properties[k] = v
         except Exception:
             pass
+        touch(thing)
         return placed
 
     def _apply_brush_rec(self, brush: dict, rec: dict) -> None:
@@ -562,6 +565,7 @@ class DiskStreamingSession:
                 brush[k] = rec[k]
             else:
                 brush.pop(k, None)
+        touch(brush)
 
     # ------------------------------------------------------------------
     # Commit / registry

@@ -26,6 +26,7 @@ from .camera import Camera
 from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
 from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
 from .prop_runtime import PropSession
+from .change_journal import touch
 from .entity_table import ENT_PROP
 from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
 from .effect_entity import Effect
@@ -230,9 +231,6 @@ class LogicThread(threading.Thread):
         write_state = self.game_state.get_write_state()
         self._render_table = write_state.render_table
         self._entity_table = write_state.entity_table
-        self._entity_refs = write_state.entity_refs
-        self._entity_all_slots = np.empty(0, dtype=np.int32)
-        self._render_refs = write_state.render_refs
 
         # Editor camera
         self.editor_camera = Camera()
@@ -2333,6 +2331,7 @@ class LogicThread(threading.Thread):
             duration = st['duration']
             t = 1.0 if duration <= 0.0 else min(1.0, st['elapsed'] / duration)
             entity.properties['intensity'] = st['from'] + (st['to'] - st['from']) * t
+            touch(entity)
             if t >= 1.0:
                 entity.properties['intensity'] = st['to']
                 if st['end_off']:
@@ -3458,9 +3457,8 @@ class LogicThread(threading.Thread):
     def _update_parented_lights(self):
         for light, brush, offset in self._parented_lights:
             bpos = brush['pos']
-            light.pos[0] = bpos[0] + offset[0]
-            light.pos[1] = bpos[1] + offset[1]
-            light.pos[2] = bpos[2] + offset[2]
+            light.pos = [bpos[0] + offset[0], bpos[1] + offset[1],
+                         bpos[2] + offset[2]]
 
 
     # =========================================================================
@@ -3518,9 +3516,7 @@ class LogicThread(threading.Thread):
             sin_y = math.sin(yaw_rad)
             world_x = mover_pos[0] + local_pos[0] * cos_y - local_pos[2] * sin_y
             world_z = mover_pos[2] + local_pos[0] * sin_y + local_pos[2] * cos_y
-            portal.pos[0] = world_x
-            portal.pos[1] = mover_pos[1] + local_pos[1]
-            portal.pos[2] = world_z
+            portal.pos = [world_x, mover_pos[1] + local_pos[1], world_z]
 
             portal.set_yaw_degrees(mover_yaw + local_yaw)
 
@@ -3644,6 +3640,7 @@ class LogicThread(threading.Thread):
                 if new_health <= 0:
                     closest_monster.properties['dead'] = True
                     closest_monster.properties.pop('is_shooting', None)
+                    touch(closest_monster)
                     if self.io_manager:
                         self.io_manager.fire_output(closest_monster, 'OnDeath')
                     if self.monster_ai.monster_debug_active:
@@ -3997,6 +3994,7 @@ class LogicThread(threading.Thread):
         return _sample(now)
 
     def _prepare_render_state(self):
+        started = time.perf_counter()
         write_state = self.game_state.get_write_state()
         write_state.is_play_mode = self.play_mode
 
@@ -4178,11 +4176,13 @@ class LogicThread(threading.Thread):
                      or any(b.get('id') is None for b in brushes))):
             self.editor_state.ensure_entity_ids()
         generation = table.generation
-        # One Python pass over the brush list, for the only two things that
-        # cannot be cached: the live `hidden` flag (Big World parks through it)
-        # and an unannounced change to the row set.
+        # In the editor, a tool drags the selection by writing its dicts in
+        # place for many frames after one undo checkpoint: those rows are the
+        # only ones re-read every frame. Everything else changes through a
+        # journal (see RenderTable.begin_frame).
+        edited = () if self.play_mode else self.editor_state.edited_objects()
         live_hidden = table.begin_frame(
-            brushes, world_epoch, dirty_objects=render_dirty)
+            brushes, world_epoch, dirty_objects=render_dirty, edited=edited)
         refs = write_state.render_refs
         if (table.generation != generation or len(refs) != table.count):
             # RenderState owns the reference array for this buffer as well.  Never
@@ -4192,31 +4192,7 @@ class LogicThread(threading.Thread):
             for i, brush in enumerate(table.brushes):
                 refs[i] = brush
             write_state.render_refs = refs
-            self._render_refs = refs
-        else:
-            self._render_refs = refs
         total_count = table.count
-
-        # ---- warm columns ------------------------------------------------
-        # Movers and doors move every tick and have no per-tick notification,
-        # so their transform columns are re-read unconditionally.  The table
-        # is the render-thread snapshot of that state: do not copy the source
-        # brush dictionaries here.  Main-camera transform paths consume
-        # table.center / table.half / table.rot, while the object reference is
-        # only an escape hatch for data the table does not yet contain.
-        dynamic_slots = table.dynamic_slots
-        if len(dynamic_slots):
-            table.refresh_transforms(brushes, dynamic_slots)
-
-        if not self.play_mode:
-            # An editor drag mutates pos for hundreds of frames after its one
-            # save_state, so in the editor every row's warm columns are re-read.
-            # This is the cheap half of the table by design; the expensive cold
-            # columns stay behind the epoch.
-            table.refresh_transforms(brushes, range(total_count))
-            # The same drag can reshape a convex brush (component edits) with
-            # no journal entry; its own geometry epoch says so.
-            table.refresh_changed_geometry(brushes)
 
         # ---- T4: visibility, as masks over the table ---------------------
         keep = ~live_hidden
@@ -4292,29 +4268,16 @@ class LogicThread(threading.Thread):
                 for i, thing in enumerate(etable.things):
                     entity_refs[i] = thing
                 write_state.entity_refs = entity_refs
-                self._entity_refs = entity_refs
-                self._entity_all_slots = np.arange(etable.count, dtype=np.int32)
-            else:
-                self._entity_refs = entity_refs
             erefs = entity_refs
             entity_things = etable.things
             thing_count = etable.count
 
         self.editor_state.clear_render_dirty(render_dirty_snapshot)
 
-        # A Monster is handed to the renderer as a render snapshot, because the
-        # AI thread is free to move it while the frame is being drawn.  Those
-        # rows are the entity table's dynamic rows, and refreshing them is the
-        # only per-entity work left that is not a column operation.
-        for i in etable.monster_slots:
-            snapshot = entity_things[i].get_render_snapshot()
-            erefs[i] = snapshot
-            etable.update_monster_snapshot(int(i), snapshot)
-
         # A collected Prop is not published. The dense Prop registry owns
         # collection state, so the renderer filters only Prop rows rather than
         # walking the whole Thing list.
-        visible_thing_slots = self._entity_all_slots
+        visible_thing_slots = etable.all_slots
         collected = self._props.collected_ids if self._props is not None else set()
         if self.play_mode and collected:
             # class_bits is a capacity-sized array, while etable.things
@@ -4350,9 +4313,6 @@ class LogicThread(threading.Thread):
 
         write_state.visible_things = visible_things
         write_state.visible_thing_position_count = visible_count
-        # Keep the compatibility object list aligned with the exact dense
-        # entity snapshot that produced the published slots.
-        write_state.all_things = list(entity_things)
         write_state.all_lights = all_lights
         # Portal existence is a numeric projection fact; the renderer reads
         # the published portal slot vector directly.
@@ -4387,3 +4347,4 @@ class LogicThread(threading.Thread):
         else:
             write_state.splitscreen_active  = False
         write_state.level_complete_ui = self.level_complete_ui
+        write_state.prepare_ms = (time.perf_counter() - started) * 1000.0

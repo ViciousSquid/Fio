@@ -2,6 +2,7 @@ import math
 import glm
 import numpy as np
 
+from .change_journal import touch
 from .constants import is_water_brush, brush_aabb_bounds
 from .spatial import CELL_SIZE, CellIndex, authored_hidden, cells_of_points
 
@@ -1103,11 +1104,12 @@ class PhysicsWorld:
         current = np.zeros((spinning.size, 3), dtype=np.float32)
         targets = []
         for slot, index in enumerate(spinning):
-            props = getattr(self._entities[int(index)], 'properties', None)
+            entity = self._entities[int(index)]
+            props = getattr(entity, 'properties', None)
             if not isinstance(props, dict):
                 targets.append(None)
                 continue
-            targets.append(props)
+            targets.append((entity, props))
             rotation = props.get('rotation')
             if rotation is None:
                 continue
@@ -1119,9 +1121,11 @@ class PhysicsWorld:
                 current[slot] = 0.0
 
         updated = (current + angular[spinning] * dt).tolist()
-        for props, rotation in zip(targets, updated):
-            if props is not None:
+        for target, rotation in zip(targets, updated):
+            if target is not None:
+                entity, props = target
                 props['rotation'] = rotation
+                touch(entity)
 
     def _sync_entities(self, indices=None):
         # Position only. Rotation is integrated (angular * dt) in step();
@@ -1129,8 +1133,9 @@ class PhysicsWorld:
         if indices is None:
             indices = range(len(self._entities))
         for i in indices:
-            entity = self._entities[int(i)]
-            entity.pos[:] = self._position[int(i)].tolist()
+            # Assigned, not written in place: assignment is what tells the
+            # render projection the entity moved.
+            self._entities[int(i)].pos = self._position[int(i)].tolist()
 
     def _rebuild_static_cells(self):
         """Cache static collision AABBs as contiguous NumPy arrays per grid cell."""

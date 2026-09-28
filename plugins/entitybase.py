@@ -20,10 +20,14 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
+from engine.change_journal import TrackedPosition
+
 
 class Thing:
     """Minimal placeable-entity base (no editor/PyQt dependency)."""
 
+    #: Assignment notifies the render projection; see engine.change_journal.
+    pos = TrackedPosition()
     pixmap_path = None
     _counters: dict = {}
 

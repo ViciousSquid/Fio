@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import math
 
+from .change_journal import touch
+
 #: Cell edge length in world units.  512 is the size the collision grid has
 #: always used; Big World streams the same columns.
 CELL_SIZE = 512.0
@@ -159,6 +161,7 @@ def set_authored_flag(obj, flag, value):
         props[mark] = bool(value)
     else:
         props[flag] = bool(value)
+    touch(obj)
     return True
 
 

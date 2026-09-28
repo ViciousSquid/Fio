@@ -12,6 +12,8 @@ Example: A trigger_once fires "OnTrigger" which calls "Open" on "door_main" afte
 from dataclasses import dataclass, field
 from typing import List, Dict, Callable, Optional, Set
 
+from engine.change_journal import touch
+
 # Import debug logger - with fallback to print if not available
 try:
     from .debug_console import debug_log
@@ -531,6 +533,10 @@ class IOManager:
             else:
                 self._try_generic_input(target, input_name, parameter)
         finally:
+            # An input exists to change its target; whatever it changed, the
+            # render projection re-resolves that one row -- including when a
+            # handler failed part-way through its writes.
+            touch(target)
             (self._source_entity, self._source_id,
              self._activator_entity, self._activator_id) = previous
     

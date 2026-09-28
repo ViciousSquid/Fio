@@ -175,8 +175,12 @@ def test_refresh_rows_keeps_the_dense_geometry_layout():
     assert table.geometry_id.tolist()[:3] == [-1, -1, 0]
 
 
-def test_a_reshaped_convex_brush_is_noticed_without_a_journal_entry():
-    """Component edits reshape a brush over a drag, after one checkpoint."""
+def test_a_reshaped_convex_brush_is_noticed_while_it_is_being_edited():
+    """Component edits reshape the selection over a drag, after one checkpoint.
+
+    Its rows are passed as *edited*, and the geometry epoch says which of them
+    actually changed shape.
+    """
     convex = {'id': 'cvx', 'pos': [0, 0, 0], 'size': [64, 64, 64]}
     bg.clip_brush(convex, (0.0, 1.0, 1.0), 30.0)
     brushes = [convex]
@@ -187,5 +191,5 @@ def test_a_reshaped_convex_brush_is_noticed_without_a_journal_entry():
     table.begin_frame(brushes, 1)
     assert table.geometry_records[0].signature != bg.geometry_signature(convex)
 
-    table.refresh_changed_geometry(brushes)
+    table.begin_frame(brushes, 1, edited=[convex])
     assert table.geometry_records[0].signature == bg.geometry_signature(convex)

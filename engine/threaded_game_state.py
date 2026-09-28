@@ -178,6 +178,8 @@ class RenderState:
         self.total_brushes = 0
         self.culled_brushes = 0
         self.timestamp = 0.0
+        #: Logic-thread milliseconds spent preparing this frame.
+        self.prepare_ms = 0.0
 
     def ensure_visible_brush_positions(self, count):
         """Ensure a reusable contiguous [x, z] buffer can hold count brushes."""
@@ -273,6 +275,7 @@ class RenderState:
         self.total_brushes = 0
         self.culled_brushes = 0
         self.timestamp = 0.0
+        self.prepare_ms = 0.0
 
 
 class ThreadedGameState:
@@ -299,6 +302,14 @@ class ThreadedGameState:
         # buffer can be borrowed, and it cannot change while this is non-zero.
         self._read_leases = 0
         self._has_new_frame = False
+        # The write buffer holds a finished frame whose swap was declined, and
+        # the logic thread has not started writing it again: the renderer may
+        # publish it itself the moment it lets go of the read buffer.
+        self._write_ready = False
+        #: Publication counters for the Debug Tables instrument: frames
+        #: handed to the renderer, and swaps declined because it was reading.
+        self.published_frames = 0
+        self.declined_swaps = 0
 
         # Input state
         self._keys_lock = threading.Lock()
@@ -336,13 +347,19 @@ class ThreadedGameState:
 
     @staticmethod
     def _release_render_state_lease(owner_ref) -> None:
-        """Return one borrow of the read buffer."""
+        """Return one borrow of the read buffer.
+
+        If that was the last borrow and a finished frame was held back for it,
+        publish that frame now rather than on the logic thread's next tick.
+        """
         owner = owner_ref()
         if owner is None:
             return
         with owner._render_state_lock:
             if owner._read_leases > 0:
                 owner._read_leases -= 1
+            if owner._read_leases == 0 and owner._write_ready:
+                owner._swap_locked()
 
     def get_render_state(self) -> RenderState:
         """Borrow the latest published frame for the renderer/UI.
@@ -388,8 +405,11 @@ class ThreadedGameState:
             return getattr(self._read_state, name, default)
 
     def get_write_state(self) -> RenderState:
-        """Called by LogicThread to get the object to write to."""
-        return self._write_state
+        """The buffer the logic thread writes; it stays the logic thread's
+        until the next :meth:`request_swap` publishes it."""
+        with self._render_state_lock:
+            self._write_ready = False
+            return self._write_state
 
     def peek_has_new_frame(self) -> bool:
         """Non-consuming check used by update_loop."""
@@ -400,18 +420,26 @@ class ThreadedGameState:
         """Publish the completed write buffer, unless the renderer is reading.
 
         Returns False, and publishes nothing, while the read buffer is
-        borrowed: the write buffer then stays with the logic thread, which
-        overwrites it on its next tick and tries again.
+        borrowed. The finished frame is then published by whichever comes
+        first: the renderer letting go of the read buffer, or the logic
+        thread's next tick (which rebuilds it with newer state first).
         """
         with self._render_state_lock:
             if self._read_leases:
+                self.declined_swaps += 1
+                self._write_ready = True
                 return False
-            old_read = self._read_state
-            self._read_state = self._write_state
-            old_read.reset()
-            self._write_state = old_read
-            self._has_new_frame = True
+            self._swap_locked()
             return True
+
+    def _swap_locked(self) -> None:
+        self.published_frames += 1
+        self._write_ready = False
+        old_read = self._read_state
+        self._read_state = self._write_state
+        old_read.reset()
+        self._write_state = old_read
+        self._has_new_frame = True
 
     def try_swap(self) -> bool:
         """Called by QtGameView to check if a new frame is available."""

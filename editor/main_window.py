@@ -27,6 +27,7 @@ from editor.ui import LAYOUT_VERSION, Ui_MainWindow
 from editor.tooltips import set_tooltips_enabled
 from engine.constants import TILE_SIZE
 from engine import brush_geometry
+from engine.change_journal import touch
 from engine.fileio import write_json_atomic
 from editor.view_2d import View2D
 from editor.editor_state import EditorState
@@ -156,6 +157,8 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 1600, 900)
         self.setMinimumSize(1280, 800)
         self.state = EditorState()
+        # Checkpoints re-journal their objects once the editing event is done.
+        self.state.post_event = lambda fn: QTimer.singleShot(0, fn)
         self.load_recent_files()
         
         # Initialize selected_objects list for multi-selection support
@@ -3371,6 +3374,7 @@ class MainWindow(QMainWindow):
         if isinstance(self.state.selected_object, dict):
             self.save_state()
             self.state.selected_object['hidden'] = True
+            touch(self.state.selected_object)
             self.update_all_ui()
 
     def unhide_all_brushes(self):
@@ -3378,6 +3382,7 @@ class MainWindow(QMainWindow):
         for brush in self.state.brushes:
             if 'hidden' in brush:
                 brush['hidden'] = False
+                touch(brush)
         self.update_all_ui()
 
     def keyReleaseEvent(self, event):

@@ -882,10 +882,16 @@ class QtGameView(QOpenGLWidget):
             self.game_state.set_keys(keys)
             # Update Player 2 input from arrow keys (if no gamepad)
             self._update_p2_keyboard_input()
-            has_new = self.game_state.try_swap()
-            self.repaint()
-            if has_new and self.play_mode:
-                self.editor.update_views()
+            # Paint only a frame that is new. Repainting the one already on
+            # screen draws the same image again, and -- publication being
+            # double-buffered -- borrows the published frame for the whole
+            # paint, so back-to-back repaints leave the logic thread no gap
+            # to publish the next one in. Input that changes only editor
+            # overlays asks Qt for a paint on its own (``update()``).
+            if self.game_state.try_swap():
+                self.repaint()
+                if self.play_mode:
+                    self.editor.update_views()
         else:
             self.repaint()
 
@@ -1305,6 +1311,7 @@ class QtGameView(QOpenGLWidget):
     def paintGL(self):
         if not self.renderer or getattr(self.renderer, '_shader_init_failed', False):
             return
+        started = time.perf_counter()
         render_state: Optional[RenderState] = None
         if self.use_threading and self.logic_thread:
             render_state = self.game_state.get_render_state()
@@ -1316,6 +1323,8 @@ class QtGameView(QOpenGLWidget):
             # paint is done, even if the paint raised.
             if render_state is not None:
                 self.game_state.release_render_state(render_state)
+            #: CPU milliseconds the last paint took, for Debug Tables.
+            self.paint_ms = (time.perf_counter() - started) * 1000.0
 
         if self._muzzle_flash_counter > 0:
             self._muzzle_flash_counter -= 1
@@ -1415,10 +1424,6 @@ class QtGameView(QOpenGLWidget):
             self._render_config["all_brushes"] = render_state.all_brushes
         else:
             self._render_config["all_brushes"] = self.editor.state.brushes
-        if render_state and hasattr(render_state, 'all_things'):
-            self._render_config["all_things"] = render_state.all_things
-        else:
-            self._render_config["all_things"] = self.editor.state.things
         if render_state and hasattr(render_state, 'all_lights'):
             self._render_config["all_lights"] = render_state.all_lights
         else:
@@ -1483,23 +1488,6 @@ class QtGameView(QOpenGLWidget):
                 getattr(render_state, _field, None)
                 if render_state is not None else None
             )
-
-        # The EntityTable is shared by the editor/logic paths, while RenderState
-        # is a shallow snapshot. A structural entity change can therefore become
-        # visible in the live table one frame before the snapshot's hidden mask
-        # is refreshed. Repair only this transient mismatch; the normal frame
-        # keeps consuming the published dense mask without another object walk.
-        _etable = self._render_config.get("entity_table")
-        _hidden = self._render_config.get("thing_hidden")
-        if (_etable is not None
-                and (_hidden is None or len(_hidden) < _etable.count)):
-            self._render_config["thing_hidden"] = _etable.begin_frame(
-                things_to_render,
-                getattr(self.editor.state, 'world_epoch', None),
-                effect_runtime=self.play_mode,
-            )
-            self._render_config["visible_thing_slots"] = np.arange(
-                _etable.count, dtype=np.int32)
 
         _splitscreen = (
             self.play_mode

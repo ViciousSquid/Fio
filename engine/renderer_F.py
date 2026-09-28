@@ -10,7 +10,7 @@ from collections import defaultdict
 import math
 import os
 
-from .renderer_core import BaseRenderer, normalize_color
+from .renderer_core import BaseRenderer, normalize_color, timed_pass
 from engine import render_table
 from engine import entity_table as entity_projection
 from engine.portal_transform import map_point as _portal_map_point
@@ -113,6 +113,7 @@ class Renderer_F(BaseRenderer):
         slot = table.slot_of_id.get(selected.get('id'))
         return -1 if slot is None else int(slot)
 
+    @timed_pass('lit brushes')
     def draw_lit_brushes_optimized(self, projection, view, camera_pos, brushes,
                                    lights, config, table,
                                    is_transparent_pass=False):
@@ -563,6 +564,7 @@ class Renderer_F(BaseRenderer):
                       where=natural[:, None])
         return scale
 
+    @timed_pass('textured brushes')
     def draw_textured_brushes_optimized(self, projection, view, camera_pos,
                                         brushes, lights, config,
                                         table):
@@ -721,6 +723,7 @@ class Renderer_F(BaseRenderer):
         self._portal_end_cull()
         gl.glBindVertexArray(0)
 
+    @timed_pass('glow brushes')
     def draw_glow_brushes(self, projection, view, camera_pos, brushes, lights,
                           config, table):
         """Overbright brushes.

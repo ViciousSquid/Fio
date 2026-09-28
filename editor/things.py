@@ -10,6 +10,7 @@ import math
 import uuid
 import importlib
 
+from engine.change_journal import TrackedAttribute, TrackedPosition, touch
 from engine.portal_transform import (
     basis_from_rotation as _portal_basis_from_rotation,
     map_point as _portal_map_point,
@@ -135,6 +136,9 @@ def _heal_legacy_strings(cls, properties):
 
 class Thing:
     """Base class for all placeable entities."""
+    #: Assigning ``pos`` tells the render projection the entity moved; see
+    #: :mod:`engine.change_journal`. Assign a new list rather than mutating it.
+    pos = TrackedPosition()
     pixmap_path = None
     _pixmap_cache = {}  # Class-level cache for loaded pixmaps
     _counters = {}      # Class-level counter for unique naming
@@ -703,21 +707,6 @@ class Monster(Thing):
                 return custom_path
             print(f"[Monster] Custom sprite not found, using default: {custom_path}")
         return default_path
-
-    def get_render_snapshot(self):
-        """Return a lightweight dictionary snapshot for the renderer."""
-        return {
-            'pos': list(self.pos),                         # copy list
-            'dead': self.properties.get('dead', False),
-            'is_shooting': self.properties.get('is_shooting', False),
-            'monster_type': self.properties.get('monster_type', 'human'),
-            'variant': self.properties.get('variant', '<None>'),
-            'sprite_width': self.properties.get('sprite_width', 128),
-            'sprite_height': self.properties.get('sprite_height', 128),
-            'custom_idle': self.properties.get('custom_idle', ''),
-            'custom_shoot': self.properties.get('custom_shoot', ''),
-            'custom_dead': self.properties.get('custom_dead', ''),
-        }
 
     def get_sprite_path(self) -> str:
         """
@@ -1324,6 +1313,10 @@ class Portal(Thing):
     TRANSIT_COOLDOWN = 0.5
 
     # Duration of a full fade-in or fade-out transition (seconds).
+    #: Rendered opacity, advanced per tick; journalled so the render
+    #: projection re-reads it only while it is actually changing.
+    _fade_alpha = TrackedAttribute(1.0)
+
     FADE_DURATION = 0.35
 
     # Minimum projectile exit clearance along the destination normal. Player
@@ -1427,6 +1420,7 @@ class Portal(Thing):
     def set_yaw_degrees(self, yaw: float) -> None:
         self.properties['rotation'][0] = yaw
         self.properties['angle'] = yaw
+        touch(self)
 
 
     def get_basis(self):

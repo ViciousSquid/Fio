@@ -165,26 +165,30 @@ def test_entity_classification_is_not_re_resolved_per_frame(logic):
         thread.set_play_mode(False)
 
 
-def test_only_monster_rows_are_republished_each_frame(logic):
-    """Entities whose reference cannot change are handed over by identity."""
+def test_no_entity_is_copied_or_re_read_on_an_unchanged_frame(logic, monkeypatch):
+    """Entities are handed over by identity and resolved only when they change.
+
+    Monsters used to be republished as a fresh snapshot dict every frame, with
+    their sprite recipe rebuilt from it; the published table row is now what
+    the renderer reads, and a monster that did not change costs nothing.
+    """
+    from engine import entity_table as et_module
+
     lamp = make_thing(Light, "lamp", (0, 100, 0))
     grunt = make_thing(Monster, "grunt", (0, 96, -300))
+    # Editor mode: no AI thread, so nothing can legitimately change a row.
     thread = logic(things=[lamp, grunt])
-    thread.set_play_mode(True)
-    try:
-        thread._prepare_render_state()
-        first = list(thread.game_state.get_write_state().visible_things)
-        thread._prepare_render_state()
-        second = list(thread.game_state.get_write_state().visible_things)
+    thread._prepare_render_state()
+    first = list(thread.game_state.get_write_state().visible_things)
+    resolved = []
+    monkeypatch.setattr(et_module, "sprite_candidates",
+                        lambda thing: resolved.append(thing) or ())
+    thread._prepare_render_state()
+    second = list(thread.game_state.get_write_state().visible_things)
 
-        assert first[0] is second[0] is lamp, (
-            "a Light was copied between frames; only Monsters need a snapshot")
-        assert first[1] is not second[1], (
-            "the Monster snapshot was not refreshed, so the renderer would "
-            "read a frame-old copy")
-        assert list(thread._entity_table.monster_slots) == [1]
-    finally:
-        thread.set_play_mode(False)
+    assert first == second == [lamp, grunt]
+    assert resolved == [], "an unchanged entity was re-resolved"
+    assert list(thread._entity_table.monster_slots) == [1]
 
 
 def test_the_frustum_test_is_one_batched_numpy_pass(logic):

@@ -181,49 +181,17 @@ def register_all_input_handlers(io_manager: IOManager):
             return None
         return textures[int(value) - 1]
 
-    def _effect_refresh_cold_preserving_runtime(entity, logic, slot):
-        """Refresh authored Effect projection without restarting playback."""
-        table = logic._entity_table
-        slot = int(slot)
-        runtime = (
-            table.effect_spawn_time[slot],
-            table.effect_elapsed[slot],
-            table.effect_active[slot],
-            table.effect_phase[slot],
-            table.effect_alive[slot],
-        )
-        table._resolve_entity_cold(slot, entity)
-        (
-            table.effect_spawn_time[slot],
-            table.effect_elapsed[slot],
-            table.effect_active[slot],
-            table.effect_alive[slot],
-            table.effect_phase[slot],
-        ) = runtime
+    # Every Effect input writes the Effect itself -- its authored properties
+    # and, for SetType and Explode, its playback runtime -- and nothing else.
+    # The I/O dispatcher journals the target afterwards, and each render buffer
+    # re-resolves the row from the entity. Writing a render table from here
+    # would reach only the one buffer the logic thread happened to be holding.
 
     def effect_set_type(entity, param, logic):
         """Set the Effect TYPE by name and notify connected outputs."""
         effect_type = str(param or "").strip().upper()
         if not entity.set_effect_type(effect_type):
             return
-
-        table = getattr(logic, '_entity_table', None)
-        if table is not None:
-            slot = table.slot_of_id.get(entity.properties.get('id'))
-            if slot is not None:
-                slot = int(slot)
-                table._resolve_entity_cold(slot, entity)
-                # A SetType-to-EXPLOSION switch is not a trigger. It leaves
-                # EXPLOSION dormant until Explode is received.
-                animated = table.effect_type[slot] != 1
-                table.effect_active[slot] = animated
-                table.effect_alive[slot] = animated
-                table.light_enabled[slot] = (
-                    bool(table.effect_light_enabled[slot])
-                    if animated
-                    else False
-                )
-
         logic.io_manager.fire_output(
             entity, 'OnChanged', value=entity.properties['effect_type']
         )
@@ -233,11 +201,6 @@ def register_all_input_handlers(io_manager: IOManager):
         if path is None:
             return
         entity.properties["fire_texture"] = path
-        table = getattr(logic, '_entity_table', None)
-        if table is not None:
-            slot = table.slot_of_id.get(entity.properties.get('id'))
-            if slot is not None:
-                _effect_refresh_cold_preserving_runtime(entity, logic, slot)
         logic.io_manager.fire_output(entity, 'OnChanged', value=path)
 
     def effect_set_orb_texture(entity, param, logic):
@@ -245,11 +208,6 @@ def register_all_input_handlers(io_manager: IOManager):
         if path is None:
             return
         entity.properties["orb_texture"] = path
-        table = getattr(logic, '_entity_table', None)
-        if table is not None:
-            slot = table.slot_of_id.get(entity.properties.get('id'))
-            if slot is not None:
-                _effect_refresh_cold_preserving_runtime(entity, logic, slot)
         logic.io_manager.fire_output(entity, 'OnChanged', value=path)
 
     def effect_set_custom_gif(entity, param, logic):
@@ -259,29 +217,18 @@ def register_all_input_handlers(io_manager: IOManager):
         if not path:
             return
         entity.properties["custom_gif"] = path
-        table = getattr(logic, '_entity_table', None)
-        if table is not None:
-            slot = table.slot_of_id.get(entity.properties.get('id'))
-            if slot is not None:
-                _effect_refresh_cold_preserving_runtime(entity, logic, slot)
         logic.io_manager.fire_output(entity, 'OnChanged', value=path)
 
     def effect_set_loop(entity, param, logic):
         loop = _effect_bool_param(param, True)
         entity.properties["custom_loop"] = loop
-        table = getattr(logic, '_entity_table', None)
-        if table is not None:
-            slot = table.slot_of_id.get(entity.properties.get('id'))
-            if slot is not None:
-                table.effect_custom_loop[int(slot)] = loop
         logic.io_manager.fire_output(
             entity, 'OnChanged', value=str(loop).lower()
         )
 
     def effect_explode(entity, param, logic):
         """Switch an Effect to EXPLOSION permanently and play it once."""
-        now = time.perf_counter()
-        if not entity.trigger_explosion(now):
+        if not entity.trigger_explosion(time.perf_counter()):
             return
 
         game_state = getattr(logic, 'game_state', None)
@@ -309,37 +256,6 @@ def register_all_input_handlers(io_manager: IOManager):
                 'volume': 1.0,
                 'position': source_position,
             })
-
-        table = getattr(logic, '_entity_table', None)
-        if table is None:
-            return
-        slot = table.slot_of_id.get(entity.properties.get('id'))
-        if slot is None:
-            return
-
-        slot = int(slot)
-        table.effect_type[slot] = 1  # EXPLOSION
-        table.effect_preview[slot] = False
-        table.effect_spawn_time[slot] = now
-        table.effect_shared_spawn_time[slot] = now
-        table.effect_elapsed[slot] = 0.0
-        table.effect_phase[slot] = 0.0
-        table.effect_active[slot] = True
-        table.effect_alive[slot] = True
-
-        value = entity.properties.get('light_colour', [255, 165, 70])
-        try:
-            rgb = [
-                max(0.0, min(1.0, float(value[i]) / 255.0))
-                for i in range(3)
-            ]
-        except (TypeError, ValueError, IndexError):
-            rgb = [1.0, 165.0 / 255.0, 70.0 / 255.0]
-        table.effect_light_color[slot] = rgb
-        table.light_color[slot] = rgb
-        table.light_enabled[slot] = bool(
-            entity.properties.get('light_enabled', True)
-        )
         logic.io_manager.fire_output(entity, 'OnChanged', value='EXPLOSION')
 
     io_manager.register_input_handler('effect', 'settype', effect_set_type)

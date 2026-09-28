@@ -21,6 +21,7 @@ try:
 except ImportError:  # pragma: no cover - exercised by the head-less player
     def debug_log(category, message):
         print(f"[{category}] {message}")
+from .change_journal import touch
 from .constants import is_solid_world_brush
 from .monster_constants import (
     MONSTER_SIGHT_RANGE,
@@ -66,6 +67,19 @@ def _flatten_to_ground(direction):
     if length < 1e-6:
         return None
     return flat / length
+
+
+def _set_render_flag(thing, key, value):
+    """Write a monster property its sprite is resolved from.
+
+    The AI writes these every tick; the render projection is told only when
+    the value actually changes, so a monster that keeps shooting costs no
+    per-frame re-resolve.
+    """
+    props = thing.properties
+    if props.get(key) != value:
+        props[key] = value
+        touch(thing)
 
 
 class MonsterAI:
@@ -210,7 +224,7 @@ class MonsterAI:
 
             # ---- Kill input handling ----
             if thing.properties.pop('_kill', False):
-                thing.properties['dead'] = True
+                _set_render_flag(thing, 'dead', True)
                 thing.properties.pop('is_shooting', None)
                 if self.monster_debug_active:
                     name = thing.properties.get('name', '?')
@@ -262,7 +276,7 @@ class MonsterAI:
             # ---- Notarget: skip all player-targeting when cheat is active ----
             #      Monsters still gravity-fall and patrol, just don't chase/attack.
             if self.lt.notarget:
-                thing.properties['is_shooting'] = False
+                _set_render_flag(thing, 'is_shooting', False)
                 if mid in self.monster_states:
                     self.monster_states[mid]['anim_timer'] = 0.0
                 # Even in notarget mode, monsters with can_hear investigate sounds
@@ -450,9 +464,9 @@ class MonsterAI:
 
                 if state['anim_timer'] > 0.0:
                     state['anim_timer'] -= delta
-                    thing.properties['is_shooting'] = True
+                    _set_render_flag(thing, 'is_shooting', True)
                 else:
-                    thing.properties['is_shooting'] = False
+                    _set_render_flag(thing, 'is_shooting', False)
 
             else:
                 # ---- Out of sight ----
@@ -464,7 +478,7 @@ class MonsterAI:
                         name = thing.properties.get('name', '?')
                         debug_log("MonsterAI", f"{name} lost target (dist={math.sqrt(distance_sq):.0f})")
 
-                thing.properties['is_shooting'] = False
+                _set_render_flag(thing, 'is_shooting', False)
                 state['anim_timer'] = 0.0
 
                 # If we had an aggro target but it's out of range, drop it
@@ -779,7 +793,7 @@ class MonsterAI:
                        f"(health {health} -> {new_health})")
 
         if new_health <= 0:
-            victim.properties['dead'] = True
+            _set_render_flag(victim, 'dead', True)
             victim.properties.pop('is_shooting', None)
             victim.properties.pop('_aggro_target', None)
             if self.lt.io_manager:

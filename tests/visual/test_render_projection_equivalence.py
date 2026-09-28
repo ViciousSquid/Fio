@@ -387,10 +387,7 @@ def test_numeric_sprite_render_submits_instanced_quads(renderer, context):
     import engine.renderer_core as rc
 
     brushes, things = _entity_scene()
-    published = [
-        t.get_render_snapshot() if type(t).__name__ == "Monster" else t
-        for t in things
-    ]
+    published = list(things)
     calls = {"draws": 0, "instances": 0}
     real = rc.gl.glDrawArraysInstanced
 

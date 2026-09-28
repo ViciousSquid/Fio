@@ -10,6 +10,7 @@ import io
 import json
 import time
 import zipfile
+from types import SimpleNamespace
 
 import numpy as np
 from PyQt5.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer
@@ -39,15 +40,49 @@ QTextBrowser { background:#0b0d0f; color:#cbd2d8; border:1px solid #252a2e; }
 """
 
 
+class FrozenTable:
+    """A copy of one dense table, taken while the published frame was borrowed.
+
+    The published frame is pinned for as long as anything holds it, and with
+    double-buffered publication a pinned frame is a frozen renderer: the logic
+    thread cannot swap. So the instrument copies what it shows and hands the
+    frame straight back, rather than keeping it between refreshes.
+    """
+
+    def __init__(self, table):
+        self.fields = {}
+        for name in _slot_names(type(table)):
+            value = getattr(table, name, None)
+            if isinstance(value, np.ndarray):
+                self.fields[name] = value.copy()
+        self.count = int(getattr(table, "count", 0))
+        self.slot_of_id = dict(getattr(table, "slot_of_id", {}))
+        self.rows_read = int(getattr(table, "rows_read", 0))
+
+    def __getattr__(self, name):
+        try:
+            return self.__dict__["fields"][name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+
+def _slot_names(cls):
+    return tuple(name for klass in cls.__mro__
+                 for name in getattr(klass, "__slots__", ()))
+
+
+def _array_fields(table):
+    """``(name, ndarray)`` for every column of a live or frozen table."""
+    if isinstance(table, FrozenTable):
+        return list(table.fields.items())
+    return [(name, value) for name in _slot_names(type(table))
+            for value in (getattr(table, name, None),)
+            if isinstance(value, np.ndarray)]
+
+
 def _num_bytes(table):
-    total = 0
-    arrays = []
-    for name in getattr(table, "__slots__", ()):
-        value = getattr(table, name, None)
-        if isinstance(value, np.ndarray):
-            total += int(value.nbytes)
-            arrays.append((name, value))
-    return total, arrays
+    arrays = _array_fields(table)
+    return sum(int(value.nbytes) for _, value in arrays), arrays
 
 
 def _fmt(value):
@@ -150,11 +185,8 @@ class RawTable(QWidget):
 
     def update_table(self, table):
         self.table = table
-        fields = []
-        for name in getattr(table, "__slots__", ()):
-            value = getattr(table, name, None)
-            if isinstance(value, np.ndarray) and value.ndim >= 1 and value.size:
-                fields.append(name)
+        fields = [name for name, value in _array_fields(table)
+                  if value.ndim >= 1 and value.size]
         current = self.selector.currentText()
         self.selector.blockSignals(True)
         self.selector.clear()
@@ -343,12 +375,7 @@ class DebugTablesWindow(QMainWindow):
 
     def _table_arrays(self, table):
         """Return every NumPy field, including unused capacity, for export."""
-        arrays = {}
-        for name in getattr(table, "__slots__", ()):
-            value = getattr(table, name, None)
-            if isinstance(value, np.ndarray):
-                arrays[name] = np.asarray(value)
-        return arrays
+        return dict(_array_fields(table))
 
     def _key_snapshot(self):
         """Build the complete logical key stream represented by KEY MICROSCOPE."""
@@ -449,15 +476,9 @@ class DebugTablesWindow(QMainWindow):
         pipeline = {
             "format": "fio-debug-tables-v1",
             "export_time_unix": time.time(),
-            "snapshot_timestamp": float(
-                getattr(self.snapshot, "timestamp", time.time())
-            ),
-            "frame_age_ms": max(
-                0.0,
-                (time.time() - float(
-                    getattr(self.snapshot, "timestamp", time.time())
-                )) * 1000.0,
-            ),
+            "snapshot_timestamp": self.snapshot.timestamp,
+            "frame_age_ms": self._frame_age_ms(),
+            "timings_ms": self._timings(),
             "is_play_mode": bool(getattr(self.snapshot, "is_play_mode", False)),
             "render_rows": int(self.render.count),
             "render_capacity": int(len(self.render.center)),
@@ -598,31 +619,35 @@ class DebugTablesWindow(QMainWindow):
         if hasattr(self, "timer"):
             self.timer.stop()
 
-    def _state(self):
+    def _game_state(self):
         view = getattr(self.main_window, "view_3d", None)
         logic = getattr(view, "logic_thread", None)
-        if logic is None:
-            return None
-        game_state = getattr(logic, "game_state", None)
-        if game_state is None:
-            return None
-        try:
-            return game_state.get_render_state()
-        except Exception:
-            return None
+        return getattr(logic, "game_state", None) if logic is not None else None
 
     def refresh(self):
         started = time.perf_counter()
-        snap = self._state()
-        if snap is None:
+        game_state = self._game_state()
+        if game_state is None:
             self.status.setText("DETACHED — no LogicThread/render state")
             return
-        self.snapshot = snap
-        self.render = getattr(snap, "render_table", None)
-        self.entities = getattr(snap, "entity_table", None)
-        if self.render is None or self.entities is None:
-            self.status.setText("ATTACHED — dense tables not published yet")
-            return
+        snap = game_state.get_render_state()
+        try:
+            render = getattr(snap, "render_table", None)
+            entities = getattr(snap, "entity_table", None)
+            if render is None or entities is None:
+                self.status.setText("ATTACHED — dense tables not published yet")
+                return
+            self.render = FrozenTable(render)
+            self.entities = FrozenTable(entities)
+            self.snapshot = SimpleNamespace(
+                visible_brush_slots=np.array(
+                    getattr(snap, "visible_brush_slots", ()), dtype=np.int32),
+                is_play_mode=bool(getattr(snap, "is_play_mode", False)),
+                timestamp=float(getattr(snap, "timestamp", 0.0)),
+                prepare_ms=float(getattr(snap, "prepare_ms", 0.0)),
+            )
+        finally:
+            game_state.release_render_state(snap)
 
         self._update_raw_tables()
         self._update_dashboard(started)
@@ -648,6 +673,35 @@ class DebugTablesWindow(QMainWindow):
             self._last_raw_signature[id(raw)] = signature
             raw.update_table(table)
 
+    def _frame_age_ms(self):
+        """How old the published frame is; its timestamp is ``perf_counter``."""
+        stamp = float(getattr(self.snapshot, "timestamp", 0.0))
+        return max(0.0, (time.perf_counter() - stamp) * 1000.0) if stamp else 0.0
+
+    def _timings(self):
+        """Measured stage timings: the logic prepare, the paint, each pass."""
+        view = getattr(self.main_window, "view_3d", None)
+        stats = getattr(getattr(view, "renderer", None), "render_stats", None)
+        game_state = self._game_state()
+        now = time.perf_counter()
+        published = int(getattr(game_state, "published_frames", 0))
+        declined = int(getattr(game_state, "declined_swaps", 0))
+        last = getattr(self, "_last_counters", None)
+        rates = (0.0, 0.0)
+        if last is not None and now > last[0]:
+            span = now - last[0]
+            rates = ((published - last[1]) / span, (declined - last[2]) / span)
+        self._last_counters = (now, published, declined)
+        return {
+            "prepare": float(getattr(self.snapshot, "prepare_ms", 0.0)),
+            "paint": float(getattr(view, "paint_ms", 0.0)),
+            "passes": dict(getattr(stats, "pass_ms", {}) or {}),
+            "published_per_s": rates[0],
+            "declined_per_s": rates[1],
+            "render_rows_read": int(getattr(self.render, "rows_read", 0)),
+            "entity_rows_read": int(getattr(self.entities, "rows_read", 0)),
+        }
+
     def _update_dashboard(self, started):
         rbytes, _ = _num_bytes(self.render)
         ebytes, _ = _num_bytes(self.entities)
@@ -661,42 +715,40 @@ class DebugTablesWindow(QMainWindow):
         batched = int(getattr(stats, "batched_draws", 0)) if stats else 0
         tris = int(getattr(stats, "visible_tris", 0)) if stats else 0
         total = rbytes + ebytes
+        timings = self._timings()
         sample_ms = (time.perf_counter() - started) * 1000.0
-        frame_time = time.time() - float(
-            getattr(self.snapshot, "timestamp", time.time())
-        )
         self.status.setText(
-            f"ATTACHED  |  frame age {frame_time*1000:.1f} ms  | "
+            f"ATTACHED  |  frame age {self._frame_age_ms():.1f} ms  | "
             f"inspector sample {sample_ms:.2f} ms"
         )
-        self.bars.set_items([
-            ("RenderTable rows", int(self.render.count)),
-            ("RenderTable capacity", render_cap),
-            ("EntityTable rows", int(self.entities.count)),
-            ("EntityTable capacity", entity_cap),
-            ("render draw calls", draw_calls),
-            ("batched draws", batched),
-            ("visible triangles", tris),
-        ])
-        _set_text_preserve_scroll(self.dashboard, 
+        passes = sorted(timings["passes"].items(), key=lambda kv: -kv[1])
+        self.bars.set_items(
+            [("prepare (logic) us", int(timings["prepare"] * 1000)),
+             ("paint (UI) us", int(timings["paint"] * 1000))]
+            + [(f"{name} us", int(ms * 1000)) for name, ms in passes[:8]]
+        )
+        pass_lines = "\n".join(
+            f"  {name:<28} {ms:8.3f} ms" for name, ms in passes) or "  (no frame drawn yet)"
+        _set_text_preserve_scroll(self.dashboard,
             "PIPELINE / PUBLISHED STATE\n\n"
             f"RenderTable   rows={int(self.render.count):,}  "
-            f"capacity={render_cap:,}  dense bytes={rbytes:,}\n"
+            f"capacity={render_cap:,}  dense bytes={rbytes:,}  "
+            f"rows read last frame={timings['render_rows_read']:,}\n"
             f"EntityTable   rows={int(self.entities.count):,}  "
-            f"capacity={entity_cap:,}  dense bytes={ebytes:,}\n"
+            f"capacity={entity_cap:,}  dense bytes={ebytes:,}  "
+            f"rows read last frame={timings['entity_rows_read']:,}\n"
             f"TOTAL NUMERICAL STORAGE (ndarrays)  {total:,} bytes "
             f"({total/1024/1024:.2f} MiB)\n\n"
-            "Published path\n"
-            "  world / LogicThread\n"
-            "       -> RenderTable + EntityTable\n"
-            "       -> visible integer slots\n"
-            "       -> renderer key generation / sorting\n"
-            "       -> contiguous runs\n"
-            "       -> instanced GL submission\n\n"
-            "TIMINGS\n"
-            "  Engine stage timings are intentionally not fabricated here.\n"
-            "  This build exposes live row counts, memory, frame age and "
-            "renderer submission counters."
+            "PUBLICATION (double-buffered)\n"
+            f"  frames published   {timings['published_per_s']:7.1f} /s\n"
+            f"  swaps declined     {timings['declined_per_s']:7.1f} /s"
+            "   (renderer was reading the other buffer)\n\n"
+            "TIMINGS (measured, CPU)\n"
+            f"  prepare (logic thread)       {timings['prepare']:8.3f} ms\n"
+            f"  paint (UI thread, total)     {timings['paint']:8.3f} ms\n"
+            f"  draw calls {draw_calls:,}   batched draws {batched:,}   "
+            f"visible triangles {tris:,}\n\n"
+            "PASSES (inclusive)\n" + pass_lines
         )
 
     def _update_keys(self):
@@ -775,10 +827,7 @@ class DebugTablesWindow(QMainWindow):
             lines.append("")
             lines.append(label)
             count = int(table.count)
-            for name in getattr(table, "__slots__", ()):
-                value = getattr(table, name, None)
-                if not isinstance(value, np.ndarray):
-                    continue
+            for name, value in _array_fields(table):
                 shown_shape = tuple(value[:count].shape) if value.ndim else ()
                 lines.append(
                     f"  {name:<30} {str(shown_shape):<20} "

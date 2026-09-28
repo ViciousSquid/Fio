@@ -39,26 +39,28 @@ logic thread from ever needing a context.
 
 Refresh discipline
 ------------------
-Columns are grouped by *how often they change*, which turns out to line up with
-*how expensive they are to recompute*:
+A row is re-read when something says it changed, never to find out whether it
+did:
 
-``cold``
-    classification and material -- ``class_bits``, ``tex_name_id``, the UV
-    columns, ``geo_epoch``.  Expensive (dict walks, string searches) and changed
-    only by an editor edit or an I/O handler, both of which have a choke point.
-    Refreshed when the world epoch moves, never per frame.
+* **editor transactions** move the world epoch and journal their objects
+  (:meth:`EditorState.mark_world_changed`); those rows are re-resolved, in
+  place when the row set is unchanged;
+* **runtime changes** -- I/O inputs, console commands, Big World parking, a
+  save restore -- go through :mod:`engine.change_journal`, which each table
+  drains once per frame;
+* **movers and doors** move every tick with no notification, so their
+  transforms (:attr:`RenderTable.dynamic_slots`) are re-read every frame;
+* **an editor drag** writes the selection's dicts in place for many frames
+  after one undo checkpoint, so the frame passes the selection as *edited* and
+  only those rows' transforms are re-read.
 
-``warm``
-    ``center``, ``half``, ``rot``.  Cheap (a handful of float copies) and
-    changed every tick by movers and doors, which have no per-tick notification
-    and should not grow one.  Refreshed unconditionally for the rows that move.
+``hidden`` is a column like any other. Big World parks through it and I/O
+Hide/Show toggles it, both via :func:`engine.spatial.set_authored_flag`, which
+journals the object. ``class_bits`` separately carries the *authored* value
+(:func:`engine.spatial.authored_hidden`), as the collision grid does.
 
-The one field deliberately left out of ``cold`` is the *live* ``hidden`` flag.
-Big World parks objects by writing ``hidden`` directly and relies on every
-per-frame consumer reading it live -- see :data:`engine.spatial.PARKED_HIDDEN_KEY`
--- so caching it would break streaming.  ``class_bits`` therefore carries the
-*authored* value via :func:`engine.spatial.authored_hidden`, exactly as the
-collision grid does, and the live flag stays a per-frame read.
+On a still frame the table reads nothing but the movers; Debug Tables shows
+the count (``rows read last frame``).
 """
 
 from __future__ import annotations
@@ -68,6 +70,7 @@ import numpy as np
 from engine.constants import is_water_brush, normalize_color
 from engine.spatial import authored_hidden
 from engine import brush_geometry
+from engine.change_journal import JOURNAL, OVERFLOW, STATE
 
 # --------------------------------------------------------------------------
 # Classification bits
@@ -190,23 +193,74 @@ def _brush_class_bits(brush) -> int:
     return bits
 
 
-class RenderTable:
-    """A dense, disposable projection of a brush list.
+#: Every per-row column: ``(name, trailing shape, dtype, fill)``. One list, so
+#: growing the table and moving surviving rows at a reconcile cannot miss one.
+_COLUMNS = (
+    # -- warm: the transform and visibility, re-read for the rows that change.
+    # float64 deliberately: the frustum batch works in float64, so matching
+    # the dtype keeps the cull exact and saves a per-frame cast.
+    ('center', (3,), np.float64, 0.0),
+    ('half', (3,), np.float64, 0.0),
+    #: ``[axis_x, axis_y, axis_z, angle_degrees]``; angle 0 for the common
+    #: unrotated brush, which is what lets the instance-matrix build stay a
+    #: vectorised translate+scale for almost every row.
+    ('rot', (4,), np.float32, 0.0),
+    #: The live ``hidden`` flag, Big World parking included.
+    ('hidden', (), bool, False),
+    # -- cold: classification and material.
+    ('class_bits', (), np.uint16, 0),
+    ('tex_name_id', (6,), np.int32, TEX_NONE),
+    ('uv_scale', (6, 2), np.float32, 0.0),
+    ('uv_angle', (6,), np.float32, 0.0),
+    ('uv_shift', (6, 2), np.float32, 0.0),
+    #: Per face: the texture keeps a constant texel size, recomputed from the
+    #: brush's live extent every time it is drawn.  A *mode*, so it cannot be
+    #: baked into uv_scale -- but whether the mode is on is material state.
+    ('uv_natural', (6,), bool, False),
+    #: Per face: an explicit uv_scale was authored.  Distinguishes "no scale
+    #: set, fall back to FIT" from a scale that happens to be zero.
+    ('uv_has_scale', (6,), bool, False),
+    #: The flat-shaded colour, normalised to 0..1: the tint if it has one,
+    #: else its colour, else the default grey.
+    ('colour', (3,), np.float32, 0.0),
+    #: The Glow pass's overbright colour -- base colour times intensity,
+    #: clamped.
+    ('glow_colour', (3,), np.float32, 0.0),
+    #: The brush's geometry epoch when the row was resolved, so a stale mesh
+    #: can be told from a live one without re-deriving the signature.
+    ('geo_epoch', (), np.int64, 0),
+    #: Index into :attr:`RenderTable.geometry_records` for a convex row; -1
+    #: draws the shared box.
+    ('geometry_id', (), np.int32, -1),
+    # Special-brush render state: narrow numeric projections of the authored
+    # dictionaries the water/glass/fog shaders consume.
+    ('water_tint', (3,), np.float32, 0.0),
+    #: opacity, reflectivity/fresnel, wave_height, wave_enabled, distortion,
+    #: refraction IOR, roughness
+    ('water_params', (7,), np.float32, 0.0),
+    ('water_plane', (), bool, False),
+    ('glass_color', (3,), np.float32, 0.0),
+    #: opacity, distortion, refraction, roughness, fresnel
+    ('glass_params', (5,), np.float32, 0.0),
+    ('fog_color', (3,), np.float32, 0.0),
+    #: density, noise_scale
+    ('fog_params', (2,), np.float32, 0.0),
+)
 
-    Rows are addressed by ``slot`` and named by ``brush['id']``.  Build one,
-    :meth:`sync` it against the live brush list whenever the world epoch moves,
-    and :meth:`refresh_transforms` the handful of rows that move per tick.
+
+class RenderTable:
+    """A dense projection of a brush list, kept current by change, not polling.
+
+    Rows are addressed by ``slot`` and named by ``brush['id']``.  Build one and
+    :meth:`begin_frame` it once per frame: it reconciles when the editor's
+    world epoch moves, re-reads the rows :mod:`engine.change_journal` names,
+    and re-reads the transforms of the movers and doors, which move every tick.
     """
 
-    __slots__ = ('generation', 'count', 'ids', 'slot_of_id', 'brushes',
-                 'center', 'half', 'rot', 'class_bits', 'tex_name_id',
-                 'uv_scale', 'uv_angle', 'uv_shift', 'uv_natural',
-                 'uv_has_scale', 'colour', 'glow_colour', 'geo_epoch', 'geometry_id',
-                 'water_tint', 'water_params', 'water_plane',
-                 'glass_color', 'glass_params',
-                 'fog_color', 'fog_params',
-                 'dynamic_slots', 'geometry_records', '_tex_ids', '_tex_names', '_epoch',
-                 '_hidden_buf', '_row_obj_ids', '_slot_of_obj')
+    __slots__ = (tuple(name for name, *_ in _COLUMNS) + (
+        'generation', 'count', 'ids', 'slot_of_id', 'brushes',
+        'dynamic_slots', 'geometry_records', '_tex_ids', '_tex_names',
+        '_epoch', '_row_tuple', '_slot_of_obj', 'rows_read', '__weakref__'))
 
     def __init__(self):
         self.generation = 0
@@ -227,62 +281,8 @@ class RenderTable:
         #: Dense geometry records keyed directly by geometry_id. AABB
         #: brushes have no record; their geometry_id stays -1.
         self.geometry_records: list = []
-
-        # float64 deliberately: this is exactly what _build_cull_cache held,
-        # and the frustum batch casts to float64 internally -- matching the
-        # dtype keeps the cull bit-identical and saves the per-frame cast.
-        self.center = np.zeros((0, 3), dtype=np.float64)
-        self.half = np.zeros((0, 3), dtype=np.float64)
-        #: ``[axis_x, axis_y, axis_z, angle_degrees]``; angle 0 for the common
-        #: unrotated brush, which is what lets the instance-matrix build stay a
-        #: vectorised translate+scale for almost every row.
-        self.rot = np.zeros((0, 4), dtype=np.float32)
-
-        self.class_bits = np.zeros((0,), dtype=np.uint16)
-        self.tex_name_id = np.full((0, 6), TEX_NONE, dtype=np.int32)
-        self.uv_scale = np.zeros((0, 6, 2), dtype=np.float32)
-        self.uv_angle = np.zeros((0, 6), dtype=np.float32)
-        self.uv_shift = np.zeros((0, 6, 2), dtype=np.float32)
-        #: Per face: the texture keeps a constant texel size, recomputed from
-        #: the brush's live extent every time it is drawn.  A *mode*, so it
-        #: cannot be baked into uv_scale -- but whether the mode is on is
-        #: material state, and that is what lives here.
-        self.uv_natural = np.zeros((0, 6), dtype=bool)
-        #: Per face: an explicit uv_scale was authored.  Distinguishes "no
-        #: scale set, fall back to FIT" from a scale that happens to be zero.
-        self.uv_has_scale = np.zeros((0, 6), dtype=bool)
-        #: The brush's flat-shaded colour, already normalised to 0..1: the
-        #: tint if it has one, else its colour, else the default grey. Read
-        #: per brush per frame by the lit pass, and changed only by an edit.
-        self.colour = np.zeros((0, 3), dtype=np.float32)
-        #: The Glow pass's overbright colour -- base colour times intensity,
-        #: clamped -- resolved here for the same reason.
-        self.glow_colour = np.zeros((0, 3), dtype=np.float32)
-        #: The brush's geometry epoch at the time the row was resolved, so a
-        #: consumer caching GPU data per row can tell a stale mesh from a live
-        #: one without re-deriving ``geometry_signature``.  0 for box brushes.
-        self.geo_epoch = np.zeros((0,), dtype=np.int64)
-        #: Dense row handle for convex/custom geometry.  ``-1`` means the
-        #: shared box VAO; for a geometry row this is the row's slot, so the
-        #: renderer can prepare the mesh once at the cache boundary and then
-        #: draw from a pure integer column in the hot loop.
-        self.geometry_id = np.full((0,), -1, dtype=np.int32)
-
-        # Special-brush render state. These are narrow numerical projections of
-        # the authored dictionaries consumed by the water/glass/fog shaders.
-        # Params are deliberately packed so the renderer can gather a whole
-        # pass without materialising Brush objects.
-        self.water_tint = np.zeros((0, 3), dtype=np.float32)
-        # opacity, reflectivity/fresnel, wave_height, wave_enabled,
-        # distortion, refraction IOR, roughness
-        self.water_params = np.zeros((0, 7), dtype=np.float32)
-        self.water_plane = np.zeros((0,), dtype=bool)
-        self.glass_color = np.zeros((0, 3), dtype=np.float32)
-        # opacity, distortion, refraction, roughness, fresnel
-        self.glass_params = np.zeros((0, 5), dtype=np.float32)
-        self.fog_color = np.zeros((0, 3), dtype=np.float32)
-        # density, noise_scale
-        self.fog_params = np.zeros((0, 2), dtype=np.float32)
+        for name, shape, dtype, fill in _COLUMNS:
+            setattr(self, name, np.full((0,) + shape, fill, dtype=dtype))
 
         # Texture-name intern table.  GL-free: these are ids for *names*, and
         # the renderer maps them to GL texture ids once per unique name.
@@ -294,14 +294,17 @@ class RenderTable:
         for _name in (TEX_DEFAULT, TEX_SKIP, TEX_NODRAW):
             self.intern_texture(_name)
         self._epoch = None
-        self._hidden_buf = np.empty(0, dtype=bool)
-        #: ``id()`` of the brush dict at each slot, and its inverse.  The table
-        #: holds a reference to every row's dict (:attr:`brushes`), so an id in
-        #: here cannot be recycled by another dict while its row exists; that is
-        #: what lets an unchanged row set be recognised in one C-level compare,
-        #: and the journal's ``id()``-keyed dirty set be mapped to slots.
-        self._row_obj_ids: list = []
+        #: The row set as a tuple of the brush dicts it was reconciled from.
+        #: The table holds a reference to every row's dict, so the identities
+        #: in here stay unique; comparing it with the live list is how an
+        #: unannounced change to the row set is recognised, in one C compare.
+        self._row_tuple = ()
+        #: ``id(brush)`` -> slot, for applying the change journals.
         self._slot_of_obj: dict = {}
+        #: Rows whose brush dict the last :meth:`begin_frame` read (Debug
+        #: Tables shows it: on a still frame it is the movers and doors).
+        self.rows_read = 0
+        JOURNAL.subscribe(self)
 
     # -- texture name interning -------------------------------------------
 
@@ -333,35 +336,10 @@ class RenderTable:
         if n <= capacity:
             return
         grown = max(16, capacity * 2, n)
-
-        def grow(arr, fill=0):
-            shape = (grown,) + arr.shape[1:]
-            new = np.full(shape, fill, dtype=arr.dtype)
-            if len(arr):
-                new[:len(arr)] = arr
-            return new
-
-        self.center = grow(self.center)
-        self.half = grow(self.half)
-        self.rot = grow(self.rot)
-        self.class_bits = grow(self.class_bits)
-        self.tex_name_id = grow(self.tex_name_id, TEX_NONE)
-        self.uv_scale = grow(self.uv_scale)
-        self.uv_angle = grow(self.uv_angle)
-        self.uv_shift = grow(self.uv_shift)
-        self.uv_natural = grow(self.uv_natural)
-        self.uv_has_scale = grow(self.uv_has_scale)
-        self.colour = grow(self.colour)
-        self.glow_colour = grow(self.glow_colour)
-        self.geo_epoch = grow(self.geo_epoch)
-        self.geometry_id = grow(self.geometry_id, -1)
-        self.water_tint = grow(self.water_tint)
-        self.water_params = grow(self.water_params)
-        self.water_plane = grow(self.water_plane)
-        self.glass_color = grow(self.glass_color)
-        self.glass_params = grow(self.glass_params)
-        self.fog_color = grow(self.fog_color)
-        self.fog_params = grow(self.fog_params)
+        for name, shape, dtype, fill in _COLUMNS:
+            new = np.full((grown,) + shape, fill, dtype=dtype)
+            new[:capacity] = getattr(self, name)
+            setattr(self, name, new)
 
     def _geometry_record(self, slot, brush):
         """The dense cold geometry record for one row, or ``None`` for a box.
@@ -388,7 +366,8 @@ class RenderTable:
     # -- row resolution ----------------------------------------------------
 
     def _resolve_warm(self, slot, brush):
-        """Transform columns for one row.  Cheap; runs per frame for movers."""
+        """Transform and visibility for one row.  Cheap; per tick for movers."""
+        self.hidden[slot] = bool(brush.get('hidden', False))
         pos = brush.get('pos') or (0.0, 0.0, 0.0)
         size = brush.get('size') or (64.0, 64.0, 64.0)
         self.center[slot] = pos
@@ -487,60 +466,67 @@ class RenderTable:
     def needs_reconcile(self, brushes, epoch=None):
         """Whether the next :meth:`begin_frame` will rebuild the row mapping.
 
-        Two O(1) comparisons.  A caller that has to prepare something before a
-        reconcile -- stamping ids onto brushes that have not got one -- asks
-        this rather than doing that work unconditionally every frame.
+        A caller that has to prepare something before a reconcile -- stamping
+        ids onto brushes that have not got one -- asks this rather than doing
+        that work unconditionally every frame.
         """
-        return epoch is None or epoch != self._epoch or len(brushes) != self.count
+        if epoch is None or epoch != self._epoch:
+            return True
+        return tuple(brushes) != self._row_tuple
 
-    def begin_frame(self, brushes, epoch=None, dirty_objects=None):
-        """Bring the table into line with *brushes* and return the live hidden mask.
+    def begin_frame(self, brushes, epoch=None, dirty_objects=None,
+                    edited=()):
+        """Bring the table into line with *brushes*; return the ``hidden`` mask.
 
-        This is the whole of the projection's per-frame Python cost: one pass
-        reading the **live** ``hidden`` flag.  Big World parks objects by
-        writing it directly, with no notification, precisely because every
-        per-frame consumer already reads it
-        (:data:`engine.spatial.PARKED_HIDDEN_KEY`), so it is the one field that
-        cannot be cached -- and at one dict lookup per brush it is also the
-        cheapest, which is what makes paying for it per frame the right trade.
+        Nothing here visits a brush that has not changed:
 
-        Everything else -- classification, texture resolution, UVs, colour --
-        is behind *epoch*, the world's coarse change counter.  When it moves,
-        the cold columns are re-resolved: O(N) once per editor gesture, never
-        per frame.
+        * when the editor's world *epoch* moves, the journalled rows
+          (*dirty_objects*) are re-resolved -- in place when the row set is
+          unchanged, by a reconcile when it is not;
+        * the rows :mod:`engine.change_journal` names since the last frame --
+          I/O, the console, Big World parking, a save restore -- are
+          re-resolved;
+        * the movers and doors, which move every tick with no notification,
+          have their transforms re-read;
+        * *edited* names the objects an editor tool may be changing in place
+          right now (the selection, during a drag); their transforms are
+          re-read and their geometry epochs compared.
 
-        The row set is re-derived when the epoch moves or the brush count
-        changes. When an editor transaction supplies its dirty-object journal,
-        only those rows lose their cold columns; unrelated survivors keep their
-        cached classification/material state.
-
-        Rows are matched by ``brush['id']``, so a structural change costs a set
-        diff rather than a full re-resolution: surviving rows keep the columns
-        they had.  Call :meth:`EditorState.ensure_entity_ids` first when
-        :meth:`needs_reconcile` says so.
+        An unannounced change to the row set -- the same count, different
+        dicts -- is caught by comparing the row tuple, an identity check per
+        row in C that reads nothing from any brush.
         """
+        brushes = tuple(brushes)
         n = len(brushes)
-        if len(self._hidden_buf) < n:
-            self._hidden_buf = np.empty(max(n, 16), dtype=bool)
-        hidden = self._hidden_buf[:n]
-
-        cold_dirty = epoch is None or epoch != self._epoch
-        if cold_dirty or n != self.count:
+        changes = JOURNAL.drain(self)
+        self.rows_read = 0
+        if epoch is None or epoch != self._epoch or brushes != self._row_tuple:
+            cold_dirty = epoch is None or epoch != self._epoch
             if not self._refresh_in_place(brushes, n, epoch, dirty_objects):
                 self._reconcile(brushes, cold_dirty, dirty_objects)
             self._epoch = epoch
-
-        # One list comprehension and one bulk store. Assigning a NumPy array
-        # element by element from Python costs several times as much, and this
-        # runs over every brush in the level every frame.
-        # Freeze the row count observed at the start of this call. The live
-        # editor/benchmark list may grow concurrently; never let an append
-        # change the number of rows written into this fixed-size buffer.
-        hidden[:] = [brushes[i].get('hidden', False) for i in range(n)]
-        return hidden
+        if changes is OVERFLOW:
+            self.refresh_rows(brushes, range(n))
+        elif changes:
+            slot_of = self._slot_of_obj
+            state = []
+            moved = []
+            for oid, flags in changes.items():
+                slot = slot_of.get(oid)
+                if slot is not None:
+                    (state if flags & STATE else moved).append(slot)
+            if state:
+                self.refresh_rows(brushes, state)
+            if moved:
+                self.refresh_transforms(brushes, moved)
+        if len(self.dynamic_slots):
+            self.refresh_transforms(brushes, self.dynamic_slots.tolist())
+        if edited:
+            self.refresh_edited(brushes, edited)
+        return self.hidden[:n]
 
     def sync(self, brushes, epoch=None, dirty_objects=None):
-        """Bring the table up to date without reading ``hidden``.
+        """Bring the table up to date outside the frame loop.
 
         Returns whether anything was refreshed: a reconcile (which moves
         :attr:`generation`) or a row-local refresh of journalled rows (which
@@ -550,24 +536,17 @@ class RenderTable:
         that want the columns brought up to date on their own schedule (tests,
         and anything preparing a pass outside the frame loop).
         """
-        before = self.generation
+        brushes = tuple(brushes)
+        if not self.needs_reconcile(brushes, epoch):
+            return False
         cold_dirty = epoch is None or epoch != self._epoch
-        structural = cold_dirty or len(brushes) != self.count
-        if not structural:
-            # The row count was already validated above. Index only the
-            # observed rows so a concurrent append cannot extend this scan.
-            for i in range(self.count):
-                if self.brushes[i] is not brushes[i]:
-                    structural = True
-                    break
-        if structural:
-            if self._refresh_in_place(brushes, len(brushes), epoch,
-                                      dirty_objects):
-                # Slots are unchanged, so ``generation`` rightly stays put.
-                self._epoch = epoch
-                return True
-            self._reconcile(brushes, cold_dirty, dirty_objects)
+        if self._refresh_in_place(brushes, len(brushes), epoch, dirty_objects):
+            # Slots are unchanged, so ``generation`` rightly stays put.
             self._epoch = epoch
+            return True
+        before = self.generation
+        self._reconcile(brushes, cold_dirty, dirty_objects)
+        self._epoch = epoch
         return self.generation != before
 
     def _reconcile(self, brushes, cold_dirty, dirty_objects=None):
@@ -620,14 +599,9 @@ class RenderTable:
             # moving down the list cannot clobber one not yet copied.
             src = np.asarray(move_src, dtype=np.intp)
             dst = np.asarray(move_dst, dtype=np.intp)
-            for arr in (self.class_bits, self.tex_name_id, self.uv_scale,
-                        self.uv_angle, self.uv_shift, self.uv_natural,
-                        self.uv_has_scale, self.colour, self.glow_colour,
-                        self.geo_epoch, self.geometry_id, self.water_tint, self.water_params,
-                        self.water_plane,
-                        self.glass_color, self.glass_params,
-                        self.fog_color, self.fog_params):
-                arr[dst] = arr[src]
+            for name, *_ in _COLUMNS:
+                column = getattr(self, name)
+                column[dst] = column[src]
 
         # Reconstruct the temporary slot-indexed geometry view needed while
         # cold rows are being resolved. The published representation below is
@@ -667,10 +641,10 @@ class RenderTable:
         # Publish exactly the row set reconciled above. The live list may grow
         # concurrently during benchmark/editor stress insertion; the next
         # frame will reconcile any newly appended rows.
-        self.brushes = [brushes[i] for i in range(n)]
-        self._row_obj_ids = [id(b) for b in self.brushes]
-        self._slot_of_obj = {obj_id: slot
-                             for slot, obj_id in enumerate(self._row_obj_ids)}
+        self.brushes = list(brushes[:n])
+        self._row_tuple = tuple(self.brushes)
+        self._slot_of_obj = {id(brush): slot
+                             for slot, brush in enumerate(self.brushes)}
         self.count = n
         self.dynamic_slots = np.flatnonzero(
             self.class_bits[:n] & CLASS_DYNAMIC).astype(np.int32)
@@ -680,6 +654,7 @@ class RenderTable:
         """Re-read the warm columns for *slots* (movers and doors, per tick)."""
         for slot in slots:
             self._resolve_warm(slot, brushes[slot])
+        self.rows_read += len(slots)
 
     def refresh_rows(self, brushes, slots):
         """Re-resolve the cold columns for *slots* after a semantic change.
@@ -689,6 +664,7 @@ class RenderTable:
         geometry layout, so that case falls back to a full reconcile.
         """
         slots = sorted({int(slot) for slot in slots})
+        self.rows_read += len(slots)
         for slot in slots:
             brush = brushes[slot]
             had_record = self.geometry_id[slot] >= 0
@@ -719,7 +695,7 @@ class RenderTable:
         """
         if epoch is None or dirty_objects is None or n != self.count:
             return False
-        if n and list(map(id, brushes[:n])) != self._row_obj_ids:
+        if tuple(brushes) != self._row_tuple:
             return False
         slots = [self._slot_of_obj[obj_id] for obj_id in dirty_objects
                  if obj_id in self._slot_of_obj]
@@ -729,42 +705,24 @@ class RenderTable:
         self.refresh_rows(brushes, slots)
         return True
 
-    def refresh_changed_geometry(self, brushes):
-        """Re-resolve rows whose shape changed without a journal entry.
+    def refresh_edited(self, brushes, objects):
+        """Re-read the rows an editor tool may be changing in place.
 
-        Editing a convex brush's vertices or edges mutates its planes over a
-        whole drag after a single checkpoint; nothing marks the world changed
-        per step, but every step bumps the brush's own ``_geo_epoch``.  The
-        table recorded that epoch per row, so comparing the two finds exactly
-        the rows whose cold geometry is stale.
-
-        One pass over the row set, so it belongs where the editor already
-        re-reads every row per frame -- not in play, where shapes are fixed.
+        A drag moves, resizes or reshapes the selection for hundreds of frames
+        after its one undo checkpoint, writing the brush dicts directly. Those
+        rows -- and only those -- have their transforms re-read, and any whose
+        shape changed (its ``_geo_epoch`` moved) are re-resolved.
         """
-        n = self.count
-        if not n:
+        slot_of = self._slot_of_obj
+        slots = [slot for slot in map(slot_of.get, map(id, objects))
+                 if slot is not None]
+        if not slots:
             return
-        live = np.fromiter((b.get('_geo_epoch') or 0 for b in brushes[:n]),
-                           dtype=np.int64, count=n)
-        stale = np.flatnonzero(live != self.geo_epoch[:n])
-        if len(stale):
+        self.refresh_transforms(brushes, slots)
+        stale = [slot for slot in slots
+                 if (brushes[slot].get('_geo_epoch') or 0) != self.geo_epoch[slot]]
+        if stale:
             self.refresh_rows(brushes, stale)
-
-    # -- derived views -----------------------------------------------------
-
-    def live_hidden(self, brushes):
-        """The live ``hidden`` flag per row, without reconciling.
-
-        The frame path gets this from :meth:`begin_frame`, which reads it in
-        the same pass it checks the row set in.  This is for everything else.
-        """
-        n = len(brushes)
-        if len(self._hidden_buf) < n:
-            self._hidden_buf = np.empty(max(n, 16), dtype=bool)
-        out = self._hidden_buf[:n]
-        for i in range(n):
-            out[i] = brushes[i].get('hidden', False)
-        return out
 
 
 def model_matrices(table, slots, out_model=None, out_normal=None):

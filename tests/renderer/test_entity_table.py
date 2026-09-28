@@ -19,6 +19,7 @@ from editor.things import (Effect, Light, LevelChanger, LogicGate,  # noqa: E402
                            Portal, Thing)
 from plugins.bigworld.entities import BigWorldSettings  # noqa: E402
 from engine import entity_table as et                        # noqa: E402
+from engine.change_journal import touch                      # noqa: E402
 from engine.entity_table import EntityTable                  # noqa: E402
 from engine.prop_entity import Prop                          # noqa: E402
 from tests.helpers.worlds import make_thing                  # noqa: E402
@@ -58,32 +59,28 @@ def test_a_monster_classifies_as_what_is_actually_published():
     table = _synced([make_thing(Monster, 'grunt')])
     bits = int(table.class_bits[0])
     assert bits & et.ENT_ALWAYS_SPRITE, (
-        "a Monster is published as a render-snapshot dict, which the renderer "
-        "draws as a sprite before it looks at anything else; got %s"
-        % et.describe(bits))
-
-
-def test_a_monster_snapshot_dict_classifies_the_same_way():
-    snapshot = make_thing(Monster, 'grunt').get_render_snapshot()
-    assert et._entity_class_bits(snapshot) & et.ENT_ALWAYS_SPRITE
+        "the renderer draws a Monster as a sprite before it looks at "
+        "anything else; got %s" % et.describe(bits))
 
 
 def test_a_plain_dict_is_skipped_rather_than_drawn():
     assert et._entity_class_bits({'pos': [0, 0, 0]}) == et.ENT_SKIP
+    assert et.sprite_candidates({'pos': [0, 0, 0]}) is None
 
 
-def test_a_published_list_of_snapshots_can_be_projected_too():
-    """The table is built over the live Things; a caller projecting what was
-    published instead must not hit an AttributeError on a snapshot dict."""
-    published = [make_thing(Monster, 'grunt', (5.0, 6.0, 7.0)).get_render_snapshot(),
-                 make_thing(Light, 'lamp', (1.0, 2.0, 3.0))]
+def test_a_raw_dict_row_is_polled_since_it_cannot_journal():
+    """A dict standing in for a Thing has no setter to journal a move."""
+    row = {'pos': [5.0, 6.0, 7.0]}
     table = EntityTable()
-    hidden = table.begin_frame(published, epoch=1)
+    table.begin_frame([row, make_thing(Light, 'lamp')], epoch=1)
 
-    assert np.allclose(table.pos[0], [5.0, 6.0, 7.0])
-    assert np.allclose(table.pos[1], [1.0, 2.0, 3.0])
-    assert list(hidden) == [False, False]
-    assert table.class_bits[0] & et.ENT_ALWAYS_SPRITE
+    row['pos'] = [8.0, 9.0, 10.0]
+    row['hidden'] = True
+    hidden = table.begin_frame([row, table.things[1]], epoch=1)
+
+    assert table.pos[0].tolist() == [8.0, 9.0, 10.0]
+    assert list(hidden) == [True, False]
+    assert table.rows_read == 1, "only the dict row should be read"
 
 
 def test_portal_and_light_are_the_cull_exempt_pair():
@@ -197,6 +194,7 @@ def test_light_render_state_stays_dense_and_tracks_motion_and_io():
     lamp.properties['intensity'] = 0.75
     lamp.properties['radius'] = 1200.0
     lamp.properties['state'] = 'off'
+    touch(lamp)          # what the I/O dispatcher does after any input
     table.begin_frame([lamp], epoch=1)
 
     assert np.allclose(table.pos[0], [110.0, 220.0, 330.0])
@@ -262,6 +260,7 @@ def test_light_shadow_flag_is_normalised_in_the_projection():
     assert bool(table.light_casts_shadows[0]) is True
 
     lamp.properties['casts_shadows'] = 'off'
+    touch(lamp)
     table.begin_frame([lamp], epoch=1)
     assert bool(table.light_casts_shadows[0]) is False
 
@@ -273,8 +272,21 @@ def test_released_prop_with_no_carry_yaw_uses_free_billboard_sentinel():
 
     table = _synced([prop])
 
-    assert et.sprite_state(prop)[-1] == -10000.0
     assert table.sprite_fixed_yaw[0] == -10000.0
+
+
+def test_carrying_a_prop_reaches_its_row_without_a_touch():
+    """The carry yaw journals itself on assignment, like ``pos``."""
+    prop = make_thing(Prop, 'carried', render_mode='billboard',
+                      sprite_path='assets/sprites/pickup.png')
+    table = _synced([prop])
+
+    prop._carry_sprite_yaw = 1.25
+    prop._respawn_fade_alpha = 0.5
+    table.begin_frame([prop], epoch=1)
+
+    assert table.sprite_fixed_yaw[0] == pytest.approx(1.25)
+    assert table.render_alpha[0] == pytest.approx(0.5)
 
 
 def test_prop_respawn_alpha_is_a_dense_render_column():
@@ -299,14 +311,32 @@ def test_positions_refresh_every_frame_without_reconciling():
     assert np.allclose(table.pos[0], [128.0, 64.0, -256.0])
 
 
-def test_hidden_is_read_live_and_never_cached():
-    """Big World parks entities by writing `hidden` with no notification."""
+def test_hiding_through_the_parking_aware_writer_reaches_the_table():
+    """I/O Hide/Show, Big World and save restores all write through here."""
+    from engine.spatial import set_authored_flag
+
     light = make_thing(Light, 'l')
     table = _synced([light])
     assert table.begin_frame([light], epoch=1)[0] == False  # noqa: E712
 
-    light.properties['hidden'] = True
+    set_authored_flag(light, 'hidden', True)
     assert table.begin_frame([light], epoch=1)[0] == True   # noqa: E712
+
+
+def test_a_frame_with_nothing_journalled_reads_no_entity(monkeypatch):
+    """The whole point: an unchanged world costs no per-entity Python."""
+    things = [make_thing(Light, 'l%d' % i) for i in range(50)]
+    things += [make_thing(Monster, 'm%d' % i) for i in range(50)]
+    table = _synced(things)
+
+    reads = []
+    monkeypatch.setattr(et, '_props_of',
+                        lambda thing: reads.append(thing) or thing.properties)
+    monkeypatch.setattr(et, '_pos_of', lambda thing: reads.append(thing) or thing.pos)
+    for _ in range(3):
+        table.begin_frame(things, epoch=1)
+
+    assert reads == [], "%d entity reads on frames where nothing changed" % len(reads)
 
 
 def test_rows_are_named_by_the_entitys_existing_uuid():
@@ -316,17 +346,16 @@ def test_rows_are_named_by_the_entitys_existing_uuid():
     assert table.slot_of_id[light.properties['id']] == 0
 
 
-def test_a_glm_position_is_normalised_back_onto_the_entity():
-    """The publish loop this replaces did it, so the projection must too."""
+def test_a_glm_position_is_stored_as_a_list():
+    """Normalised where it is assigned, so the projection never writes back."""
     glm = pytest.importorskip("glm")
     thing = make_thing(Light, 'l')
-    thing.pos = glm.vec3(1.0, 2.0, 3.0)
     table = _synced([thing])
 
+    thing.pos = glm.vec3(1.0, 2.0, 3.0)
     table.begin_frame([thing], epoch=1)
 
-    assert isinstance(thing.pos, list), (
-        "a Thing carrying a glm vector was left carrying one")
+    assert thing.pos == [1.0, 2.0, 3.0] and isinstance(thing.pos, list)
     assert np.allclose(table.pos[0], [1.0, 2.0, 3.0])
 
 
@@ -342,16 +371,15 @@ def test_the_columns_are_a_pure_projection():
     assert np.array_equal(first.pos[:first.count], second.pos[:second.count])
 
 
-def test_monster_snapshot_updates_sprite_key_without_reconciling():
+def test_a_monster_dying_updates_its_sprite_key_without_reconciling():
     monster = make_thing(Monster, 'grunt')
     table = _synced([monster])
     generation = table.generation
     before = int(table.sprite_key_id[0])
 
-    snapshot = monster.get_render_snapshot()
-    snapshot['dead'] = True
-    snapshot['is_shooting'] = False
-    table.update_monster_snapshot(0, snapshot)
+    monster.properties['dead'] = True
+    touch(monster)
+    table.begin_frame([monster], epoch=1)
 
     assert table.generation == generation
     assert int(table.sprite_key_id[0]) != before
@@ -612,10 +640,12 @@ def test_a_monsters_sprite_key_names_its_current_frame():
     assert _keys(table, 0) == ['msprite_human_<None>_idle_']
 
     grunt.properties['is_shooting'] = True
+    touch(grunt)
     table.begin_frame([grunt], epoch=1)
     assert _keys(table, 0) == ['msprite_human_<None>_shoot_']
 
     grunt.properties['dead'] = True
+    touch(grunt)
     table.begin_frame([grunt], epoch=1)
     assert _keys(table, 0) == ['msprite_human_<None>_dead_'], (
         "dead wins over shooting, as the object path's chain decides it")
@@ -675,6 +705,7 @@ def test_a_logic_gates_sprite_follows_its_type():
     assert _keys(table, 0)[0] == 'logic_and'
 
     gate.properties['logic_type'] = 'or'
+    touch(gate)
     table.begin_frame([gate], epoch=1)
     assert _keys(table, 0)[0] == 'logic_or'
 
@@ -759,7 +790,7 @@ def test_a_steady_frame_re_resolves_no_sprite_at_all(monkeypatch):
         "%d sprite recipes were rebuilt over five unchanged frames" % len(calls))
 
 
-def test_a_warm_row_is_re_resolved_when_its_state_moves(monkeypatch):
+def test_only_the_journalled_row_is_re_resolved(monkeypatch):
     calls = _count_resolves(monkeypatch)
     grunt = make_thing(Monster, 'grunt', monster_type='human')
     lamp = make_thing(Light, 'lamp')
@@ -768,6 +799,7 @@ def test_a_warm_row_is_re_resolved_when_its_state_moves(monkeypatch):
     calls.clear()
 
     grunt.properties['is_shooting'] = True
+    touch(grunt)
     table.begin_frame([grunt, lamp], epoch=1)
 
     assert calls == ['Monster'], (
@@ -800,27 +832,20 @@ def test_a_cold_row_is_never_re_resolved_by_a_frame(monkeypatch):
     (Prop, 'render_mode', 'billboard'),
     (Prop, 'sprite_path', 'assets/sprites/x.png'),
 ])
-def test_every_field_the_identity_reads_is_in_the_state_check(cls, field, value):
-    """A field the recipe reads but the state check does not would freeze.
-
-    The check is what decides whether to rebuild, so anything the rebuild
-    consults has to be in it -- otherwise the sprite silently stops following
-    that field, which is the failure mode the old per-frame rebuild could not
-    have.
-    """
+def test_a_journalled_row_matches_a_rebuild(cls, field, value):
+    """Whatever field changed, re-resolving the row gives what a fresh table has."""
     thing = make_thing(cls, 'e', render_mode='billboard',
                        sprite_path='assets/sprites/pickup.png')
-    before_state = et.sprite_state(thing)
-    before_keys = et.sprite_candidates(thing)
+    table = _synced([thing])
 
     thing.properties[field] = value
-    after_state = et.sprite_state(thing)
-    after_keys = et.sprite_candidates(thing)
+    touch(thing)
+    table.begin_frame([thing], epoch=1)
 
-    if after_keys != before_keys:
-        assert after_state != before_state, (
-            "%s.%s changes the sprite recipe but not the state check, so the "
-            "column would never notice" % (cls.__name__, field))
+    fresh = _synced([thing])
+    assert table.sprite_recipes()[int(table.sprite_key_id[0])] == \
+        fresh.sprite_recipes()[int(fresh.sprite_key_id[0])]
+    assert table.class_bits[0] == fresh.class_bits[0]
 
 
 def test_identical_recipes_intern_to_one_id():
