@@ -315,6 +315,48 @@ def test_the_box_is_never_smaller_than_the_visible_volume():
         assert max_x - min_x > 0.0
 
 
+def _inside_frustum_samples(cam, corners, rng, count):
+    """Points uniformly spread through the pyramid ``cam`` + four far corners."""
+    c00, c10, c01, c11 = (np.asarray(c, dtype=np.float64) for c in corners)
+    cam = np.asarray(cam, dtype=np.float64)
+    u, v, t = rng.random(count), rng.random(count), rng.random(count)
+    far = ((1 - u)[:, None] * ((1 - v)[:, None] * c00 + v[:, None] * c01)
+           + u[:, None] * ((1 - v)[:, None] * c10 + v[:, None] * c11))
+    return cam + t[:, None] * (far - cam)
+
+
+@pytest.mark.parametrize("direction, up, cam", [
+    ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 64.0, 0.0)),        # level, thin world
+    ((1.0, 0.05, 0.3), (0.0, 1.0, 0.0), (500.0, 64.0, -800.0)),  # slight climb
+    ((0.3, -0.4, 1.0), (0.0, 1.0, 0.0), (0.0, 900.0, 0.0)),      # raked overhead
+    ((0.0, -1.0, 0.0), (0.0, 0.0, -1.0), (0.0, 800.0, 0.0)),     # straight down
+    ((1.0, 0.0, 1.0), (0.0, 1.0, 0.0), (0.0, 3000.0, 0.0)),      # above the slab
+])
+def test_every_visible_point_in_the_slab_is_inside_the_box(direction, up, cam):
+    """The bug this pins: sampling only the corner rays undershoots sideways.
+
+    Looking level over a world 272 units thick, the corner rays leave the slab
+    within ~1 300 units, but the far face still crosses it ~8 000 units to
+    either side; the old box was ±1 252 wide and dropped a point at
+    (6000, 64, 5000) that is squarely in view.
+    """
+    y_min, y_max, reach = -16.0, 256.0, 10000.0
+    corners = _corners(cam, direction, up, far=12000.0)
+    min_x, min_z, max_x, max_z = visible_xz_bounds(cam, corners, y_min, y_max,
+                                                   max_dist=reach)
+    points = _inside_frustum_samples(cam, corners, np.random.default_rng(1), 200000)
+    offset = points - np.asarray(cam)
+    wanted = ((points[:, 1] >= y_min - WORLD_SLAB_MARGIN)
+              & (points[:, 1] <= y_max + WORLD_SLAB_MARGIN)
+              & ((offset * offset).sum(axis=1) <= reach * reach))
+    x, z = points[wanted, 0], points[wanted, 2]
+    outside = (x < min_x - 1e-6) | (x > max_x + 1e-6) | (z < min_z - 1e-6) | (z > max_z + 1e-6)
+    assert not outside.any(), (
+        "%d visible points fall outside the box %r, e.g. %r"
+        % (outside.sum(), (min_x, min_z, max_x, max_z),
+           points[wanted][outside][0].tolist()))
+
+
 # ---------------------------------------------------------------------------
 # sort_by_distance keeps two implementations: a Python sort below
 # min_numpy_count objects and a batched NumPy argsort at or above it. A scene
