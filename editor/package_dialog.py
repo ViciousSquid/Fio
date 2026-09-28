@@ -152,7 +152,6 @@ class PackageMetadataDialog(QDialog):
             'author': self.author_edit.text().strip(),
             'version': self.version_edit.text().strip(),
             'description': self.desc_edit.toPlainText().strip(),
-            'banner_source_path': ''
         }
         self.accept()
     
@@ -175,7 +174,6 @@ class PackageMetadataDialog(QDialog):
             'author': self.author_edit.text().strip(),
             'version': self.version_edit.text().strip(),
             'description': self.desc_edit.toPlainText().strip(),
-            'banner_source_path': ''
         }
     
     def closeEvent(self, event):

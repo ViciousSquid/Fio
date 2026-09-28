@@ -10,7 +10,6 @@ import copy
 import uuid
 import glm
 import time
-from datetime import datetime
 
 
 from PyQt5.QtWidgets import (
@@ -28,6 +27,7 @@ from editor.ui import LAYOUT_VERSION, Ui_MainWindow
 from editor.tooltips import set_tooltips_enabled
 from engine.constants import TILE_SIZE, WALL_TILE, FLOOR_TILE
 from engine import brush_geometry
+from engine.fileio import write_json_atomic
 from editor.view_2d import View2D
 from editor.editor_state import EditorState
 from editor import component_edit
@@ -329,10 +329,25 @@ class MainWindow(QMainWindow):
                 self._original_properties_widget = None
 
     def _cleanup_export_overlay(self):
-        """Clean up references after the export overlay is closed."""
+        """Clean up after the export overlay is closed, however it closes.
+
+        An unsaved level is exported from a temporary copy written into
+        ``maps/``; it is removed here so Cancel or the close button do not
+        leave an ``export_temp_*.json`` behind in the project.
+        """
         if hasattr(self, '_export_dialog'):
             self._export_dialog = None
+        self._discard_export_temp_file()
         # The overlay itself will be destroyed by _close_current_overlay
+
+    def _discard_export_temp_file(self):
+        temp_file = getattr(self, '_export_temp_file', None)
+        self._export_temp_file = None
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+            except OSError as e:
+                print(f"Warning: could not delete temp file {temp_file}: {e}")
 
     def _show_overlay(self, overlay_widget, close_callback=None):
         """
@@ -514,9 +529,8 @@ class MainWindow(QMainWindow):
                 
             save_path = os.path.join(autosave_dir, save_name)
             
-            with open(save_path, 'w') as f:
-                json.dump(self.state.get_level_data(), f, indent=4)
-            
+            write_json_atomic(save_path, self.state.get_level_data(), indent=4)
+
             print(f"[Autosave] Saved to {save_path}")
             # Do NOT clear unsaved_changes flag on autosave
             
@@ -541,78 +555,13 @@ class MainWindow(QMainWindow):
         - if map_data is None → user clicked X → close the overlay
         """
         if map_data is not None:
-            # Load the generated map without closing the generator
-            import tempfile, json, os
-            fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="procedural_")
-            os.close(fd)
-            with open(temp_path, 'w') as f:
-                json.dump(map_data, f, indent=4)
-            self.load_level_file(temp_path)
-            os.unlink(temp_path)
-            self.show_toast("Generated map loaded – use Save As to keep it")
+            # Loaded straight from memory: the level has no file until the
+            # user saves it, so it opens untitled and unsaved.
+            if self._load_level(map_data, None):
+                self.show_toast("Generated map loaded – use Save As to keep it")
         else:
             # User closed the generator – close the overlay
             self._close_current_overlay()
-
-    def _on_procedural_map_closed(self, map_data):
-        """
-        Called when the procedural map widget emits map_generated.
-        - If map_data is None → user clicked X → restore original Properties tab.
-        - Else → load the generated map into the editor (generator remains open).
-        """
-        if map_data is None:
-            # Restore original content (user closed the generator)
-            self.properties_dock.setWidget(self._original_properties_widget)
-            self._original_properties_widget = None
-        else:
-            # Load the generated map without closing the generator
-            try:
-                # Create a temporary file name (not saved to disk unless user saves later)
-                import tempfile
-                fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="procedural_", dir=None)
-                os.close(fd)
-                with open(temp_path, 'w') as f:
-                    json.dump(map_data, f, indent=4)
-
-                # Load the temporary file
-                self.load_level_file(temp_path)
-
-                # Optionally delete the temp file after load
-                # (load_level_file makes a copy of the data, so we can delete)
-                os.unlink(temp_path)
-
-                self.show_toast("Generated map loaded – use Save As to keep it")
-            except Exception as e:
-                self.show_toast(f"Failed to load generated map: {e}", is_error=True)
-                import traceback
-                traceback.print_exc()
-
-    def load_procedural_map(self, map_data):
-        """Save the generated map to maps/ folder and load it."""
-        if not self.check_unsaved_changes():
-            return
-        try:
-            # Ensure maps directory exists
-            maps_dir = os.path.join(self.root_dir, "maps")
-            if not os.path.exists(maps_dir):
-                os.makedirs(maps_dir)
-
-            # Generate a unique filename with timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"procedural_{timestamp}.json"
-            filepath = os.path.join(maps_dir, filename)
-
-            # Save map data to file
-            with open(filepath, 'w') as f:
-                json.dump(map_data, f, indent=4)
-
-            # Now load the saved file (reuse existing load_level_file logic)
-            self.load_level_file(filepath)
-
-        except Exception as e:
-            self.show_toast(f"Failed to save/load procedural map: {e}", is_error=True)
-            import traceback
-            traceback.print_exc()
 
     def center_2d_views_on(self, world_pos):
         """Center all 2D views on the given world position (list/tuple of [x, y, z])."""
@@ -2700,7 +2649,10 @@ class MainWindow(QMainWindow):
         import os
         import json
 
-        temp_file = None
+        # Close any open overlay first: its close callback runs now, not
+        # after the temporary copy below exists (an earlier export overlay's
+        # cleanup would otherwise delete this export's copy).
+        self._close_current_overlay()
 
         # Determine the map path to use for export
         if self.unsaved_changes or self.file_path is None:
@@ -2714,15 +2666,16 @@ class MainWindow(QMainWindow):
                 # Create a temporary file inside maps/ (or system temp)
                 fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="export_temp_", dir=maps_dir)
                 os.close(fd)
+                self._export_temp_file = temp_path
 
                 # Write current level data to temp file
                 with open(temp_path, 'w', encoding='utf-8') as f:
                     json.dump(self.state.get_level_data(), f, indent=4)
 
-                temp_file = temp_path
                 current_map = temp_path
                 self.show_toast("Using temporary saved copy for export...")
             except Exception as e:
+                self._discard_export_temp_file()
                 self.show_toast(f"Failed to create temporary map: {e}", is_error=True)
                 return
         else:
@@ -2748,7 +2701,7 @@ class MainWindow(QMainWindow):
         # Replace the export button's default behaviour with actual export
         self._export_dialog.export_btn.clicked.disconnect()
         self._export_dialog.export_btn.clicked.connect(
-            lambda: self._run_export(self._export_dialog, current_map, temp_file)
+            lambda: self._run_export(self._export_dialog, current_map)
         )
 
         # Cancel button and close event should close the overlay
@@ -2758,8 +2711,8 @@ class MainWindow(QMainWindow):
 
         self._show_overlay(container, close_callback=self._cleanup_export_overlay)
 
-    def _run_export(self, dialog, current_map, temp_file=None):
-        """Execute the export. If temp_file is provided, delete it afterwards."""
+    def _run_export(self, dialog, current_map):
+        """Execute the export from the dialog's metadata."""
         metadata = dialog.build_metadata()
         if not metadata:
             return
@@ -2774,8 +2727,6 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # metadata['map_path'] is set by the exporter to the correct archive-internal path
-
         # Ask user where to save the package
         packages_dir = os.path.join(self.root_dir, "packages")
         if not os.path.exists(packages_dir):
@@ -2788,25 +2739,13 @@ class MainWindow(QMainWindow):
             "Game Packages (*.fiopak)"
         )
         if not output_path:
-            # User cancelled – clean up temp file if any
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    os.unlink(temp_file)
-                except:
-                    pass
+            # Cancelled the file dialog only: the overlay stays open, so the
+            # temporary copy stays too (the overlay's close removes it).
             return
 
-        # Run the export
         from editor.package_exporter import PackageExporter
         exporter = PackageExporter(self.state, self.root_dir)
         success, errors = exporter.export(output_path, metadata, abs_map, parent_widget=dialog)
-
-        # Clean up temporary file if it exists
-        if temp_file and os.path.exists(temp_file):
-            try:
-                os.unlink(temp_file)
-            except Exception as e:
-                print(f"Warning: could not delete temp file {temp_file}: {e}")
 
         if success:
             dialog.dep_label.setStyleSheet("color: #4CAF50; font-size: 12px; padding: 4px;")
@@ -4133,8 +4072,7 @@ class MainWindow(QMainWindow):
         self.stop_mover_preview()
 
         try:
-            with open(self.file_path, 'w') as f:
-                json.dump(self.state.get_level_data(), f, indent=4)
+            write_json_atomic(self.file_path, self.state.get_level_data(), indent=4)
             print(f"Level saved to {self.file_path}")
             self.unsaved_changes = False
             self.update_title()
@@ -4157,52 +4095,62 @@ class MainWindow(QMainWindow):
         if filePath:
             self.load_level_file(filePath)
 
-    def load_level_file(self, filePath):
-        """Loads a level. Used for both normal loading and LevelChanger."""
-        try:
-            print(f"[MainWindow] Loading level: {filePath}")
+    def _apply_level_data(self, level_data):
+        """Replace the scene with *level_data*, terrain included.
 
+        The one place a parsed map becomes the editor's scene: opening a file,
+        a level change and playing a package all go through it.
+        """
+        self.state.clear_scene()
+
+        # Clear existing terrain BEFORE loading new data
+        self._clear_terrain()
+        self.view_3d.terrain = None
+
+        self.state.load_from_data(level_data)
+
+        # Re-initialize terrain if present in the new map
+        if getattr(self.state, 'terrain_data', None):
+            if self.terrain is None:
+                from engine.terrain import Terrain
+                self.terrain = Terrain()
+            self.terrain.from_dict(self.state.terrain_data)
+
+            if getattr(self.view_3d, 'renderer', None):
+                self.view_3d.renderer.setup_terrain_shader(self.terrain)
+
+            if getattr(self.view_3d, 'logic_thread', None):
+                self.view_3d.logic_thread.set_terrain(self.terrain)
+
+    def load_level_file(self, filePath):
+        """Loads a level from disk. Used for both normal loading and LevelChanger."""
+        print(f"[MainWindow] Loading level: {filePath}")
+        try:
+            with open(filePath, 'r', encoding='utf-8') as f:
+                level_data = json.load(f)
+        except Exception as e:
+            print(f"ERROR loading level {filePath}: {e}")
+            self.show_toast(f"Failed to load level: {e}", is_error=True)
+            return False
+        return self._load_level(level_data, filePath)
+
+    def _load_level(self, level_data, file_path=None):
+        """Make *level_data* the open level.
+
+        *file_path* is the file it was read from, or ``None`` for a level that
+        exists only in memory (a generated map): that one opens untitled and
+        unsaved, so the first save asks where it goes and closing warns.
+        """
+        loaded = False
+        try:
             # Capture play state BEFORE doing anything
             was_playing = hasattr(self.view_3d, 'play_mode') and self.view_3d.play_mode
 
-            from engine.resource_manager import ResourceManager
-            rm = ResourceManager()
-
-            if rm.is_package_mode():
-                map_data = rm.get_text_asset(filePath)
-                if map_data is None:
-                    raise FileNotFoundError(f"Map {filePath} not found in package.")
-                level_data = json.loads(map_data)
-            else:
-                with open(filePath, 'r') as f:
-                    level_data = json.load(f)
-
-            # Clear current scene completely
-            self.state.clear_scene()
-
-            # --- Clear existing terrain BEFORE loading new data ---
-            self._clear_terrain()
-            self.view_3d.terrain = None
-            if self.view_3d.logic_thread:
-                self.view_3d.logic_thread.set_terrain(None)
-
-            # Load new data
-            self.state.load_from_data(level_data)
-
-            # Re-initialize terrain if present in the new map
-            if hasattr(self.state, 'terrain_data') and self.state.terrain_data:
-                if self.terrain is None:
-                    from engine.terrain import Terrain
-                    self.terrain = Terrain()
-                self.terrain.from_dict(self.state.terrain_data)
-
-                if hasattr(self.view_3d, 'renderer') and self.view_3d.renderer:
-                    self.view_3d.renderer.setup_terrain_shader(self.terrain)
-
-                if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
-                    self.view_3d.logic_thread.set_terrain(self.terrain)
-            else:
-                self._clear_terrain()
+            # From here the scene is being replaced.  Until it has been, it
+            # belongs to no file: a failure part-way must never leave the
+            # previous map's path on a half-built scene for Ctrl+S to write.
+            self.file_path = None
+            self._apply_level_data(level_data)
 
             # --- Find PlayerStart and reposition camera ---
             player_start_pos = None
@@ -4243,10 +4191,12 @@ class MainWindow(QMainWindow):
                 self.view_3d.camera.pitch = -20
 
             # Update file path and UI state
-            self.file_path = filePath
-            self.unsaved_changes = False
+            self.file_path = file_path
+            self.unsaved_changes = file_path is None
+            loaded = True
             self.update_title()
-            self.add_recent_file(filePath)
+            if file_path:
+                self.add_recent_file(file_path)
 
             # Force full UI and view refresh
             self.set_selected_object(None)
@@ -4261,8 +4211,9 @@ class MainWindow(QMainWindow):
                     self.view_3d.play_mode = False
                 self.enter_play_mode()
 
-            print(f"[MainWindow] Successfully loaded {os.path.basename(filePath)}")
-            self.show_toast(f"Loaded {os.path.basename(filePath)}")
+            name = os.path.basename(file_path) if file_path else "generated level"
+            print(f"[MainWindow] Successfully loaded {name}")
+            self.show_toast(f"Loaded {name}")
 
             # Keep the Logic Graph in sync
             self._refresh_logic_graph()
@@ -4270,35 +4221,16 @@ class MainWindow(QMainWindow):
             return True
 
         except Exception as e:
-            print(f"ERROR loading level {filePath}: {e}")
+            if not loaded:
+                # Whatever made it into the scene is unsaved work of no file.
+                self.unsaved_changes = True
+                self.update_title()
+            print(f"ERROR loading level {file_path or '(generated)'}: {e}")
             import traceback
             traceback.print_exc()
             self.show_toast(f"Failed to load level: {e}", is_error=True)
             return False
 
-    def quicksave_and_launch(self):
-        maps_dir = "maps"
-        if not os.path.exists(maps_dir):
-            os.makedirs(maps_dir)
-
-        quicksave_path = os.path.join(maps_dir, "quick_save.json")
-        try:
-            with open(quicksave_path, 'w') as f:
-                json.dump(self.state.get_level_data(), f, indent=4)
-            print(f"Quicksave successful: {quicksave_path}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Could not quicksave level:\n{e}")
-            return
-
-        game_script_path = 'game.py'
-        if not os.path.exists(game_script_path):
-            QMessageBox.warning(self, "Warning", f"Could not find '{game_script_path}' to launch.")
-            return
-        try:
-            subprocess.Popen([sys.executable, game_script_path, quicksave_path])
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Could not launch game:\n{e}")
-            
     def _enforce_layout_constraints(self):
         """Keep saved/restored Qt layout state inside Fio's supported topology.
 
@@ -4528,150 +4460,53 @@ class MainWindow(QMainWindow):
 
 
     def play_game_package(self):
-        """Import a .fiopak file and launch it in kiosk mode."""
-        import zipfile
-        import tempfile
-        import shutil
-
-        # Check for unsaved changes first
-        if not self.check_unsaved_changes():
-            return
-
-        # Default to packages/ folder, fallback to root dir if empty
+        """Pick a .fiopak and launch it in kiosk mode."""
         packages_dir = os.path.join(self.root_dir, "packages")
         start_dir = packages_dir if os.path.exists(packages_dir) else self.root_dir
 
         filePath, _ = QFileDialog.getOpenFileName(
             self, "Select Game Package", start_dir, "Game Packages (*.fiopak)"
         )
-        if not filePath:
-            return
+        if filePath:
+            self.play_package_from_path(filePath)
 
-        temp_dir = None
-        try:
-            if not zipfile.is_zipfile(filePath):
-                QMessageBox.critical(self, "Error", "Selected file is not a valid game package.")
-                return
+    def _extract_package(self, file_path):
+        """Validate a .fiopak, extract it, and return ``(temp_dir, map_path)``.
 
-            # Extract package to temp directory
-            temp_dir = tempfile.mkdtemp(prefix="fio_package_")
-            self._safe_extract_zip(filePath, temp_dir)
-
-            # Find the map JSON inside the package
-            map_path = self._find_map_in_package(temp_dir)
-            # Do NOT set file_path to the archive path – saving would corrupt the package.
-            # Force a "Save As" dialog the first time the user saves.
-            self.file_path = None
-            if not map_path:
-                QMessageBox.critical(self, "Error", "No map file found in game package.")
-                return
-
-            self._load_package_plugins(temp_dir)
-
-            # Try to configure ResourceManager for package assets
-            try:
-                from engine.resource_manager import ResourceManager
-                rm = ResourceManager()
-                if hasattr(rm, 'set_package_root'):
-                    rm.set_package_root(temp_dir)
-                elif hasattr(rm, 'load_package'):
-                    rm.load_package(filePath)
-            except Exception as e:
-                print(f"[Package] ResourceManager setup warning: {e}")
-
-            # Load level data
-            with open(map_path, 'r') as f:
-                level_data = json.load(f)
-
-            # Clear current scene and load package map
-            self.state.clear_scene()
-            self._clear_terrain()
-            self.state.load_from_data(level_data)
-
-            # ── Re-initialize terrain if present in the package map ───────────
-            if hasattr(self.state, 'terrain_data') and self.state.terrain_data:
-                if self.terrain is None:
-                    from engine.terrain import Terrain
-                    self.terrain = Terrain()
-                self.terrain.from_dict(self.state.terrain_data)
-
-                if hasattr(self.view_3d, 'renderer') and self.view_3d.renderer:
-                    self.view_3d.renderer.setup_terrain_shader(self.terrain)
-
-                if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
-                    self.view_3d.logic_thread.set_terrain(self.terrain)
-            else:
-                # No terrain in the package map – ensure it is absent from the scene
-                self._clear_terrain()
-            # ─────────────────────────────────────────────────────────────────
-
-            # Store temp dir for cleanup on application close
-            self._package_temp_dir = temp_dir
-            temp_dir = None  # Prevent cleanup in finally block
-
-            # Update UI state.  file_path deliberately stays None (set above):
-            # it is what save_level() writes to, and writing a map over the
-            # .fiopak replaces the archive -- and every asset in it -- with a
-            # JSON file.  The first save must go through Save As.
-            self.unsaved_changes = False
-            self.update_title()
-            self.set_selected_object(None)
-            self.update_all_ui()
-
-            # Check if user wants editor mode instead of kiosk
-            launch_in_editor = self.config.getboolean('Kiosk', 'launch_in_editor', fallback=False)
-            if launch_in_editor:
-                # Just load the map in the editor — no kiosk, no play mode
-                self.show_toast(f"Loaded package: {os.path.basename(filePath)}")
-            else:
-                # Hide editor chrome and launch play mode
-                self.enter_kiosk_mode()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load game package:\n{e}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            if temp_dir and os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir, ignore_errors=True)
-
-    def _load_package_plugins(self, package_root):
-        """Load the plugins a .fiopak carries, before its map is parsed.
-
-        A package bundles the plugin code its maps need so it plays on a
-        machine without those plugins installed (see the .fiopak format docs).
-        Both import paths go through here, and it runs *before* the map is
-        loaded: Thing.from_dict resolves an entity's class at parse time, so a
-        plugin arriving afterwards would leave every one of its entities as an
-        unresolved record.
+        The package is opened with the player's reader first, so the editor
+        accepts exactly what the player accepts (no bundled plugin code) and
+        starts on the map the manifest names rather than whichever ``.json``
+        the extraction happens to list first.
         """
-        try:
-            from plugins.packaging import load_package_plugins
-        except Exception:
-            return []          # no plugin system in this build
-        try:
-            added = load_package_plugins(package_root, log=print)
-        except Exception as exc:
-            print(f"[Package] plugin load failed: {exc}")
-            return []
-        if added:
-            self.show_toast("Package plugins loaded: %s" % ", ".join(added))
-            try:
-                from plugins.integration import refresh_plugin_ui
-                refresh_plugin_ui(self)
-            except Exception:
-                pass
-        return added
-
-    def play_package_from_path(self, file_path):
-        """Load and launch a game package from the given file path.
-        This is used by the asset browser when double‑clicking a .fiopak.
-        """
-        import zipfile
         import tempfile
         import shutil
+        from player.fiopak import FioPackage
 
-        # Check for unsaved changes first
+        with FioPackage.open(file_path) as package:
+            start_map = package.start_map_path()
+
+        temp_dir = tempfile.mkdtemp(prefix="fio_package_")
+        try:
+            self._safe_extract_zip(file_path, temp_dir)
+            map_path = os.path.join(temp_dir, *start_map.split('/'))
+            if not os.path.isfile(map_path):
+                raise FileNotFoundError(f"Start map '{start_map}' missing from package")
+        except Exception:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
+        return temp_dir, map_path
+
+    def _discard_package_temp_dir(self):
+        temp_dir = getattr(self, '_package_temp_dir', None)
+        self._package_temp_dir = None
+        if temp_dir:
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def play_package_from_path(self, file_path):
+        """Load and launch a game package (Tools menu and asset browser)."""
+        import shutil
+
         if not self.check_unsaved_changes():
             return
 
@@ -4681,76 +4516,35 @@ class MainWindow(QMainWindow):
 
         temp_dir = None
         try:
-            if not zipfile.is_zipfile(file_path):
-                self.show_toast("Selected file is not a valid game package.", is_error=True)
-                return
+            # The archive is read-only input: extract, and work on the copy.
+            temp_dir, map_path = self._extract_package(file_path)
 
-            # Extract package to temp directory
-            temp_dir = tempfile.mkdtemp(prefix="fio_package_")
-            self._safe_extract_zip(file_path, temp_dir)
-
-            # Find the map JSON inside the package
-            map_path = self._find_map_in_package(temp_dir)
-            # Force a "Save As" dialog the first time the user saves.
-            self.file_path = None
-            if not map_path:
-                self.show_toast("No map file found in game package.", is_error=True)
-                return
-
-            self._load_package_plugins(temp_dir)
-
-            # Configure ResourceManager for package assets
-            try:
-                from engine.resource_manager import ResourceManager
-                rm = ResourceManager()
-                if hasattr(rm, 'set_package_root'):
-                    rm.set_package_root(temp_dir)
-                elif hasattr(rm, 'load_package'):
-                    rm.load_package(file_path)
-            except Exception as e:
-                print(f"[Package] ResourceManager setup warning: {e}")
-
-            # Load level data
-            with open(map_path, 'r') as f:
+            with open(map_path, 'r', encoding='utf-8') as f:
                 level_data = json.load(f)
 
-            # Clear current scene and load package map
-            self.state.clear_scene()
-            self._clear_terrain()
-            self.state.load_from_data(level_data)
+            # Never point file_path at the package (or its extraction):
+            # save_level() writes that path, and writing a map over the
+            # .fiopak replaces the archive with a JSON file.  Cleared before
+            # the scene is replaced, so no failure below can leave the
+            # previous map's path attached to this scene.  The first save
+            # goes through Save As.
+            self.file_path = None
+            self._apply_level_data(level_data)
 
-            # Re-initialize terrain if present in the package map
-            if hasattr(self.state, 'terrain_data') and self.state.terrain_data:
-                if self.terrain is None:
-                    from engine.terrain import Terrain
-                    self.terrain = Terrain()
-                self.terrain.from_dict(self.state.terrain_data)
-
-                if hasattr(self.view_3d, 'renderer') and self.view_3d.renderer:
-                    self.view_3d.renderer.setup_terrain_shader(self.terrain)
-
-                if hasattr(self.view_3d, 'logic_thread') and self.view_3d.logic_thread:
-                    self.view_3d.logic_thread.set_terrain(self.terrain)
-            else:
-                self._clear_terrain()
-
-            # Store temp dir for cleanup on application close
+            # One extracted package at a time; the previous one is released.
+            self._discard_package_temp_dir()
             self._package_temp_dir = temp_dir
-            temp_dir = None  # Prevent cleanup in finally block
+            temp_dir = None  # owned by the window now; removed on close
 
-            # Update UI state
             self.unsaved_changes = False
             self.update_title()
             self.set_selected_object(None)
             self.update_all_ui()
 
-            # Check if user wants editor mode instead of kiosk
             launch_in_editor = self.config.getboolean('Kiosk', 'launch_in_editor', fallback=False)
             if launch_in_editor:
-                # Just load the map in the editor — no kiosk, no play mode
                 self.show_toast(f"Loaded package: {os.path.basename(file_path)}")
             else:
-                # Hide editor chrome and launch play mode
                 self.enter_kiosk_mode()
 
         except Exception as e:
@@ -4760,23 +4554,6 @@ class MainWindow(QMainWindow):
         finally:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
-    
-
-    def _find_map_in_package(self, root_dir):
-        """Find the first suitable .json map file in an extracted package."""
-        best_match = None
-        fallback = None
-        for root, dirs, files in os.walk(root_dir):
-            for f in files:
-                if f.endswith('.json'):
-                    filepath = os.path.join(root, f)
-                    if fallback is None:
-                        fallback = filepath
-                    # Prefer files inside a 'maps' folder or with 'level' in the name
-                    if 'maps' in root.lower() or 'level' in f.lower():
-                        best_match = filepath
-                        return best_match
-        return best_match or fallback
 
     def enter_kiosk_mode(self):
         """Hide all editor UI and launch play mode fullscreen."""
@@ -5069,9 +4846,7 @@ class MainWindow(QMainWindow):
                 self._play_button_sync_timer.stop()
 
             # Cleanup extracted package temp dir
-            if hasattr(self, '_package_temp_dir') and self._package_temp_dir:
-                import shutil
-                shutil.rmtree(self._package_temp_dir, ignore_errors=True)
+            self._discard_package_temp_dir()
 
             try:
                 if not getattr(self, '_resetting_layout', False):

@@ -75,36 +75,122 @@ def test_saving_over_a_package_would_destroy_it(tmp_path):
         "guard of its own, assert on that instead")
 
 
-def test_no_import_path_leaves_file_path_pointing_at_the_package():
-    """Read as source: driving the real importer needs a live editor window.
+class PlayStub:
+    """The slice of MainWindow that playing a package touches.
 
-    Every assignment of ``self.file_path`` inside the two package-import
-    functions must be ``None``. A first save then goes through Save As, which
-    is what the comment in those functions has always promised.
+    The package-handling methods are the real ones; only the scene and the
+    chrome around it are recorded instead of built.
     """
-    source = open("editor/main_window.py", encoding="utf-8").read()
 
-    for func in ("play_game_package", "play_package_from_path"):
-        start = source.index("def %s(self" % func)
-        end = source.index("\n    def ", start + 1)
-        body = source[start:end]
-        assigned = re.findall(r"self\.file_path\s*=\s*(.+)", body)
-        assert assigned, "%s no longer assigns file_path at all" % func
-        for value in assigned:
-            assert value.strip() == "None", (
-                "%s sets self.file_path = %s; save_level() writes that path, so "
-                "the package is overwritten on the first Ctrl+S"
-                % (func, value.strip()))
+    _extract_package = MainWindow._extract_package
+    _safe_extract_zip = MainWindow._safe_extract_zip
+    _discard_package_temp_dir = MainWindow._discard_package_temp_dir
+    play_package_from_path = MainWindow.play_package_from_path
+
+    def __init__(self, file_path="maps/previous.json"):
+        import configparser
+        self.file_path = file_path
+        self.unsaved_changes = False
+        self.config = configparser.ConfigParser()
+        self.config["Kiosk"] = {"launch_in_editor": "true"}
+        self.applied = []
+        self.toasts = []
+
+    def check_unsaved_changes(self):
+        return True
+
+    def _apply_level_data(self, level_data):
+        # What the scene is built from must be a copy, not the archive.
+        self.applied.append(level_data)
+
+    def show_toast(self, message, is_error=False, **kwargs):
+        self.toasts.append((message, is_error))
+
+    def update_title(self):
+        pass
+
+    def set_selected_object(self, obj):
+        pass
+
+    def update_all_ui(self):
+        pass
+
+    def enter_kiosk_mode(self):
+        raise AssertionError("launch_in_editor is set")
 
 
-def test_the_importers_still_extract_to_a_temp_directory():
-    """The archive is read-only input; the working copy is the extraction."""
-    source = open("editor/main_window.py", encoding="utf-8").read()
-    for func in ("play_game_package", "play_package_from_path"):
-        start = source.index("def %s(self" % func)
-        end = source.index("\n    def ", start + 1)
-        body = source[start:end]
-        assert "tempfile.mkdtemp" in body, (
-            "%s no longer extracts to a temp directory" % func)
-        assert "_safe_extract_zip" in body, (
-            "%s extracts without the path-traversal guard" % func)
+def _multi_map_package(path):
+    """Two maps; the manifest names the one that does not sort first."""
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("metadata.json", json.dumps({"title": "Demo",
+                                                "map_path": "maps/z_start.json"}))
+        z.writestr("maps/a_other.json", json.dumps({"version": 3, "name": "other",
+                                                    "brushes": [], "things": []}))
+        z.writestr("maps/z_start.json", json.dumps({"version": 3, "name": "start",
+                                                    "brushes": [], "things": []}))
+    return path
+
+
+def test_playing_a_package_never_leaves_file_path_on_it(tmp_path):
+    pak = make_package(str(tmp_path / "demo.fiopak"))
+    before = open(pak, "rb").read()
+    window = PlayStub()
+
+    window.play_package_from_path(pak)
+
+    assert window.applied, window.toasts
+    assert window.file_path is None, (
+        "file_path points at %r; save_level() writes that path, so the first "
+        "Ctrl+S would overwrite it" % window.file_path)
+    assert open(pak, "rb").read() == before, "the archive itself was modified"
+    window._discard_package_temp_dir()
+
+
+def test_the_manifest_start_map_is_the_one_loaded(tmp_path):
+    pak = _multi_map_package(str(tmp_path / "multi.fiopak"))
+    window = PlayStub()
+
+    window.play_package_from_path(pak)
+
+    assert [level["name"] for level in window.applied] == ["start"]
+    window._discard_package_temp_dir()
+
+
+def test_the_extraction_is_a_temp_copy_released_by_the_next_package(tmp_path):
+    first = make_package(str(tmp_path / "first.fiopak"))
+    second = make_package(str(tmp_path / "second.fiopak"))
+    window = PlayStub()
+
+    window.play_package_from_path(first)
+    first_dir = window._package_temp_dir
+    assert first_dir and os.path.isfile(
+        os.path.join(first_dir, "assets", "sprites", "pickup.png"))
+    assert not first_dir.startswith(str(tmp_path))
+
+    window.play_package_from_path(second)
+    assert not os.path.exists(first_dir), "the previous extraction leaked"
+    second_dir = window._package_temp_dir
+    window._discard_package_temp_dir()
+    assert not os.path.exists(second_dir)
+
+
+@pytest.mark.parametrize("entries", [
+    {"../escape.json": "{}"},
+    {"plugins/evil/__init__.py": "raise SystemExit"},
+], ids=["path-traversal", "bundled-plugin-code"])
+def test_a_hostile_package_is_refused_before_the_scene_changes(tmp_path, entries):
+    pak = str(tmp_path / "hostile.fiopak")
+    with zipfile.ZipFile(pak, "w") as z:
+        z.writestr("metadata.json", json.dumps({"map_path": "maps/level.json"}))
+        z.writestr("maps/level.json", json.dumps({"version": 3}))
+        for name, data in entries.items():
+            z.writestr(name, data)
+    window = PlayStub()
+
+    window.play_package_from_path(pak)
+
+    assert window.applied == []
+    assert window.file_path == "maps/previous.json"
+    assert getattr(window, "_package_temp_dir", None) is None
+    assert window.toasts and window.toasts[-1][1], window.toasts
+    assert not (tmp_path / "escape.json").exists()

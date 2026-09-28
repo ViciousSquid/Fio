@@ -82,6 +82,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
+from .fileio import write_json_atomic
 from .spatial import PARKED_DISABLED_KEY, PARKED_HIDDEN_KEY
 
 #: Bump only when the snapshot layout changes incompatibly. This is the *save
@@ -1030,8 +1031,9 @@ def write(path: str, snapshot: dict) -> None:
     directory = os.path.dirname(os.path.abspath(path))
     if directory:
         os.makedirs(directory, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(snapshot, fh, indent=2, default=_json_default)
+    # Atomic: a quicksave overwrites the same slot every time, and a failure
+    # part-way through must not cost the player the save they already had.
+    write_json_atomic(path, snapshot, indent=2, default=_json_default)
 
 
 def read(path: str) -> dict:

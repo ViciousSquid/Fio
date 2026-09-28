@@ -189,7 +189,7 @@ def test_cut_face_highlight_and_texturing_survive():
 def test_procedural_map_generation_survives():
     mw = _read("editor/main_window.py")
     assert "def show_procedural_map_generator(" in mw
-    assert "def load_procedural_map(" in mw
+    assert "def _on_procedural_map_generated(" in mw
     ui = _read("editor/ui.py")
     assert "procedural_action" in ui
     assert (ROOT / "editor" / "procedural_generator.py").exists()
