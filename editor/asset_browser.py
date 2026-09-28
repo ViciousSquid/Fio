@@ -3,8 +3,8 @@ import sys
 import math
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
                              QHBoxLayout, QGridLayout, QSplitter, QApplication,
-                             QMainWindow, QPushButton, QFileDialog, QTreeView, 
-                             QFileSystemModel, QTabWidget, QAbstractItemView,
+                             QMainWindow, QPushButton, QTreeView,
+                             QFileSystemModel, QTabWidget,
                              QSizePolicy, QListWidget, QListWidgetItem)
 from PyQt5.QtCore import Qt, QDir, QRect, QPointF, QTimer
 from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QPen, QPolygonF, QIcon

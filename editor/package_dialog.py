@@ -1,7 +1,7 @@
 import os
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit,
-    QPushButton, QFileDialog, QMessageBox, QFormLayout, QWidget, QApplication
+    QPushButton, QMessageBox, QFormLayout, QApplication
 )
 from PyQt5.QtCore import Qt
 

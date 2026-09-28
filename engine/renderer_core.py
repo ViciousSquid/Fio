@@ -34,8 +34,7 @@ import numpy as np
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
 
-from engine.constants import (is_water_brush, brush_aabb_bounds,
-                              normalize_color)
+from engine.constants import brush_aabb_bounds, normalize_color
 from engine import brush_geometry
 from engine import render_table
 from engine import entity_table as entity_projection
@@ -52,10 +51,7 @@ from engine.portal_transform import (
     corners as _portal_corners,
     contains_point as _portal_contains_point,
 )
-from editor.things import (
-    Thing, PathNode, Prop, Monster, LogicGate, LogicRelay,
-    LogicTimer, LevelChanger, Light, LogicSpawner, LogicCamera,
-)
+from editor.things import PathNode
 
 # Try to import OBJ and GLB loaders
 try:
@@ -935,52 +931,6 @@ layout (location = 10) in vec4 iPayload;
             extra_uniforms=['projection', 'view', 'explosion_texture'],
         ):
             print(f'{_BASE_RENDERER_PREFIX} Effect instancing shader compiled successfully.')
-
-    def _ensure_effect_instance_buffer(self, count):
-        if self._effect_instance_vbo is None:
-            self._effect_instance_vbo = gl.glGenBuffers(1)
-        if count <= self._effect_instance_capacity:
-            return
-        capacity = max(count, 64, self._effect_instance_capacity * 2)
-        self._effect_instance_capacity = capacity
-        self._effect_instance_data = np.empty(
-            (capacity, self.EFFECT_INSTANCE_FLOATS), dtype=np.float32
-        )
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
-        gl.glBufferData(
-            gl.GL_ARRAY_BUFFER,
-            self._effect_instance_data.nbytes,
-            None,
-            gl.GL_DYNAMIC_DRAW,
-        )
-
-    def _ensure_effect_instance_vao(self):
-        if self._effect_instance_vao is not None:
-            return self._effect_instance_vao
-        self._ensure_effect_instance_buffer(1)
-        vao = gl.glGenVertexArrays(1)
-        gl.glBindVertexArray(vao)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_vbo)
-        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
-        gl.glEnableVertexAttribArray(0)
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
-        stride = self.EFFECT_INSTANCE_FLOATS * 4
-        for location, size, offset in (
-            (1, 3, 0),
-            (2, 4, 12),
-            (3, 4, 28),
-            (4, 4, 44),
-            (5, 1, 60),
-        ):
-            gl.glVertexAttribPointer(
-                location, size, gl.GL_FLOAT, gl.GL_FALSE,
-                stride, ctypes.c_void_p(offset)
-            )
-            gl.glEnableVertexAttribArray(location)
-            gl.glVertexAttribDivisor(location, 1)
-        gl.glBindVertexArray(0)
-        self._effect_instance_vao = vao
-        return vao
 
     def draw_fire_effects_instanced(
         self, projection, view, table, slots, hidden=None, camera_pos=None,

@@ -24,7 +24,6 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QDialog,
-    QFileDialog,
     QLabel,
     QMessageBox,
     QProgressBar,

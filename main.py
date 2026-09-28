@@ -3,8 +3,6 @@
 
 import sys
 import os
-import shutil
-import argparse
 
 
 os.environ["QT_PLUGIN_PATH"] = ""
