@@ -413,6 +413,19 @@ class QtGameView(QOpenGLWidget):
        
 
 
+    @staticmethod
+    def _hud_count_baseline(metrics, text, bottom):
+        """Baseline that sets the health count's digits just above *bottom*.
+
+        The digits' own ink is measured, not the font's descent: digits end
+        at the baseline, so a baseline raised by the (large) descent of the
+        HUD font left a band of empty screen under the numbers. A small
+        margin, in proportion to the view, keeps them off the very edge.
+        """
+        ink_bottom = metrics.tightBoundingRect(text).bottom()
+        margin = max(4, int(bottom * 0.012))
+        return bottom - margin - max(0, ink_bottom)
+
     def _load_health_font(self):
         """Load the bundled Rushford Clean font for the numeric health HUD."""
         fonts_dir = os.path.join(os.getcwd(), 'assets', 'fonts')
@@ -1924,9 +1937,9 @@ class QtGameView(QOpenGLWidget):
         painter.setPen(health_color)
         health_text = str(int(health))
         metrics = QFontMetrics(health_font)
-        # Pin health against the absolute bottom-left edge of the viewport.
+        # Pin health against the bottom-left edge of the viewport.
         health_x = 0
-        health_y = viewport_height - metrics.descent()
+        health_y = self._hud_count_baseline(metrics, health_text, viewport_height)
 
         # Health is the large orange count. Only the health count gets the
         # independent dim/alert fade; ammo follows the normal whole-HUD opacity.
@@ -2116,7 +2129,7 @@ class QtGameView(QOpenGLWidget):
         metrics = QFontMetrics(health_font)
         painter.drawText(
             half + margin,
-            h - margin - metrics.descent(),
+            self._hud_count_baseline(metrics, health_text, h),
             health_text,
         )
         painter.restore()
