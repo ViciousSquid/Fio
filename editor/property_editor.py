@@ -2979,8 +2979,9 @@ class PropertyEditor(QWidget):
                 for row in range(candidate.rowCount()):
                     label_item = candidate.itemAt(row, QFormLayout.LabelRole)
                     label = label_item.widget() if label_item is not None else None
-                    if label is not None and self._qt_object_alive(label) \\
-                            and label.text() == "Collect as:":
+                    if (label is not None
+                            and self._qt_object_alive(label)
+                            and label.text() == "Collect as:"):
                         self._prop_collection_form = candidate
                         self._prop_form = candidate
                         return candidate
