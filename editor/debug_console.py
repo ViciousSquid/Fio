@@ -774,10 +774,20 @@ class DebugConsole(QWidget):
         # rewriting its own filter anchors.
         version_prefix = "[Info] Fio version "
         if message.startswith(version_prefix):
-            version = message[len(version_prefix):].strip()
-            version_parts = version.split('.')
-            if len(version_parts) == 4 and all(part.isdigit() for part in version_parts):
-                version_html = self._version_banner_html(version)
+            version_text = message[len(version_prefix):].strip()
+            # The startup log currently says "Fio version version X.Y.Z.B".
+            # Treat both that form and the older "Fio version X.Y.Z.B" form
+            # as a single presentation-only banner so the generic entity
+            # highlighter cannot turn 2, 5, or 10 into filter links.
+            version_match = re.fullmatch(
+                r"(?:version\\s+)?(\\d+\\.\\d+\\.\\d+\\.\\d+)",
+                version_text,
+            )
+            if version_match:
+                version_html = self._version_banner_html(
+                    version_match.group(1),
+                    include_version_word=version_text.lower().startswith("version "),
+                )
                 html = f'<span style="color: {color};">{version_html}</span><br>'
                 cursor = self.console.textCursor()
                 cursor.movePosition(QTextCursor.End)
@@ -901,8 +911,8 @@ class DebugConsole(QWidget):
         self.message_count += 1
         self.count_label.setText(f"{self.message_count} messages")
 
-    def _version_banner_html(self, version: str) -> str:
-        """Render the startup version banner exactly once."""
+    def _version_banner_html(self, version: str, include_version_word: bool = False) -> str:
+        """Render the startup version banner without entity-filter links."""
         parts = version.split('.')
         if len(parts) != 4:
             return f'<b>Fio version</b> <b>{version}</b>'
@@ -912,12 +922,12 @@ class DebugConsole(QWidget):
         label_style = 'color: #F08000; font-weight: bold;'
 
         rendered = [f'<span style="{label_style}">Fio version</span> ']
-        for part in parts[:3]:
-            rendered.append(
-                f'<span style="{label_style}">{part}</span>'
-                f'<b style="{label_style}">.</b>'
-            )
-        rendered.append(f'<span style="{label_style}">{parts[3]}</span>')
+        if include_version_word:
+            rendered.append(f'<span style="{label_style}">version</span> ')
+        for index, part in enumerate(parts):
+            rendered.append(f'<span style="{label_style}">{part}</span>')
+            if index < len(parts) - 1:
+                rendered.append(f'<b style="{label_style}">.</b>')
         return ''.join(rendered)
     def _plugin_message_color(self, message: str) -> str:
         """Pick a colour for a 'Plugins' message based on its content.
