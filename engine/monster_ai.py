@@ -659,30 +659,41 @@ class MonsterAI:
         22509.0. The precision has to be in the inputs and the intermediates,
         not just the answer.
 
-        Three ``(M, M)`` float32 planes rather than one ``(M, M, 3)``, so the
-        peak temporary is two of them.
+        One block per team rather than one ``(M, M)`` matrix: a monster's
+        candidates are only the living, teamed monsters of *other* teams, so
+        each team's rows are measured against exactly those columns. With two
+        teams that is half the matrix and none of the mask planes -- and it is
+        the number of large NumPy operations that matters here, not just their
+        size: each one releases the GIL, and in a live session every release
+        can wait out a switch interval to get it back (15.8 ms standalone was
+        80 ms in the running game at 1000 monsters). Columns keep their
+        ascending order, so ``argmin`` still breaks exact ties by row order.
+        A teamless row is answered too, against every teamed monster, exactly
+        as the single matrix answered it (its caller ignores it).
         """
         count = len(pos)
         p = np.asarray(pos, dtype=np.float32)
-        dx = p[:, None, 0] - p[None, :, 0]
-        dy = p[:, None, 1] - p[None, :, 1]
-        dz = p[:, None, 2] - p[None, :, 2]
-        distance = dx * dx + dy * dy + dz * dz
-
-        # A monster is excluded from its own row by the team comparison -- its
-        # team equals its own -- exactly as the walk's `t is thing` guard was
-        # already implied by its `other_team == my_team` one. An explicit
-        # diagonal clear was here and removed: no test could distinguish it,
-        # because nothing can reach it.
-        eligible = (team_id[:, None] != team_id[None, :])
-        eligible &= alive[None, :]
-        eligible &= team_id[None, :] >= 0        # a teamless monster is nobody's enemy
-        eligible &= distance <= np.float32(max_range) * np.float32(max_range)
-
-        distance = np.where(eligible, distance, np.float32(np.inf))
-        nearest = np.argmin(distance, axis=1)
-        found = np.isfinite(distance[np.arange(count), nearest])
-        return np.where(found, nearest, -1).astype(np.int32)
+        nearest = np.full(count, -1, dtype=np.int32)
+        if not count:
+            return nearest
+        limit = np.float32(max_range) * np.float32(max_range)
+        targets = alive & (team_id >= 0)       # who can be anybody's enemy
+        for code in np.unique(team_id):
+            rows = np.flatnonzero(team_id == code)
+            cols = np.flatnonzero(targets & (team_id != code))
+            if not len(cols):
+                continue
+            a = p[rows]
+            b = p[cols]
+            dx = a[:, None, 0] - b[None, :, 0]
+            dy = a[:, None, 1] - b[None, :, 1]
+            dz = a[:, None, 2] - b[None, :, 2]
+            distance = dx * dx + dy * dy + dz * dz
+            distance[distance > limit] = np.float32(np.inf)
+            best = np.argmin(distance, axis=1)
+            found = np.isfinite(distance[np.arange(len(rows)), best])
+            nearest[rows] = np.where(found, cols[best], -1)
+        return nearest
 
     def _find_closest_enemy_scalar(self, thing, my_team: str, max_range: float):
         """The per-monster walk: the batch's reference, and its fallback."""

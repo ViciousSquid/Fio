@@ -10,17 +10,22 @@ class _LosRows:
     """Line of sight's view of a populated grid; see SpatialGrid._build_los_rows."""
 
     __slots__ = ('lo', 'hi', 'static_by_cell', 'moving_by_cell',
-                 'brushes_by_cell')
+                 'brushes_by_cell', 'static_bounds_by_cell')
 
-    def __init__(self, lo, hi, static_by_cell, moving_by_cell, brushes_by_cell):
+    def __init__(self, lo, hi, static_by_cell, moving_by_cell, brushes_by_cell,
+                 static_bounds_by_cell=None):
         self.lo = lo
         self.hi = hi
         self.static_by_cell = static_by_cell
         self.moving_by_cell = moving_by_cell
         self.brushes_by_cell = brushes_by_cell
+        #: coord -> ``(row, lo_x, lo_y, lo_z, hi_x, hi_y, hi_z)`` per static
+        #: brush: what the per-brush walk tests, resolved once per populate
+        #: instead of once per brush per ray.
+        self.static_bounds_by_cell = static_bounds_by_cell or {}
 
 
-_EMPTY_LOS_ROWS = _LosRows(np.empty((0, 3)), np.empty((0, 3)), {}, {}, {})
+_EMPTY_LOS_ROWS = _LosRows(np.empty((0, 3)), np.empty((0, 3)), {}, {}, {}, {})
 
 
 class SpatialGrid:
@@ -126,6 +131,7 @@ class SpatialGrid:
         row_of = {}
         bounds = []
         static_by_cell = {}
+        static_bounds_by_cell = {}
         moving_by_cell = {}
         brushes_by_cell = {}
         for coord, bucket in self.cells.items():
@@ -143,12 +149,15 @@ class SpatialGrid:
                 rows.append(row)
             if rows:
                 static_by_cell[coord] = np.asarray(rows, dtype=np.intp)
+                static_bounds_by_cell[coord] = tuple(
+                    (row,) + bounds[row] for row in rows)
             if moving:
                 moving_by_cell[coord] = tuple(moving)
         box = np.asarray(bounds, dtype=np.float64).reshape(-1, 6)
         return _LosRows(np.ascontiguousarray(box[:, :3]),
                         np.ascontiguousarray(box[:, 3:]),
-                        static_by_cell, moving_by_cell, brushes_by_cell)
+                        static_by_cell, moving_by_cell, brushes_by_cell,
+                        static_bounds_by_cell)
 
     # ------------------------------------------------------------------
     # Build
@@ -479,9 +488,13 @@ class SpatialGrid:
 
         dense = self._los_dense(start, ray_dir, ray_len, rows, coords)
         if dense is None:
-            return self._los_walk(rows.brushes_by_cell, coords,
-                                  start, ray_dir, ray_len)
-        if not dense:
+            # Static brushes from their resolved bounds, then the movers live:
+            # the same candidate set as walking every brush, split by whether
+            # its box can change. Either blocking the ray is the whole answer.
+            if not self._los_walk(rows.static_bounds_by_cell, coords,
+                                  start, ray_dir, ray_len, resolved=True):
+                return False
+        elif not dense:
             return False
         return self._los_walk(rows.moving_by_cell, coords,
                               start, ray_dir, ray_len)
@@ -552,8 +565,13 @@ class SpatialGrid:
         return not bool(np.any(alive & (t_min < ray_len - 0.1)))
 
     @staticmethod
-    def _los_walk(cells, coords, start, ray_dir, ray_len):
-        """The per-brush narrow phase over ``cells`` (coord -> brushes)."""
+    def _los_walk(cells, coords, start, ray_dir, ray_len, resolved=False):
+        """The per-brush narrow phase over ``cells``.
+
+        ``cells`` maps coord -> brushes, whose bounds are read live; with
+        *resolved*, coord -> ``(key, lo_x, lo_y, lo_z, hi_x, hi_y, hi_z)``
+        tuples already resolved by :meth:`SpatialGrid._build_los_rows`.
+        """
         # PERF: hoist the ray endpoints/direction to scalars once and inline the
         # slab test below (bit-identical to LogicThread.intersect_ray_aabb).
         # This avoids two throwaway glm.vec3 constructions + a Python call per
@@ -568,12 +586,16 @@ class SpatialGrid:
         seen = set()
         seen_add = seen.add
         for coord in coords:
-            for brush in cells.get(coord, ()):
-                bid = id(brush)
+            for entry in cells.get(coord, ()):
+                if resolved:
+                    bid, b0, b1, b2, b3, b4, b5 = entry
+                else:
+                    bid = id(entry)
                 if bid in seen:
                     continue
                 seen_add(bid)
-                b0, b1, b2, b3, b4, b5 = brush_aabb_bounds(brush)
+                if not resolved:
+                    b0, b1, b2, b3, b4, b5 = brush_aabb_bounds(entry)
                 # --- ray/AABB slab test (matches intersect_ray_aabb) ---
                 t_min = 0.0
                 t_max = 10000.0

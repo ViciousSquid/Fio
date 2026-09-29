@@ -3638,85 +3638,124 @@ class LogicThread(threading.Thread):
     # MONSTER PROJECTILES (flying monster ranged attacks)
     # =========================================================================
 
+    #: Monster hit sphere for projectiles: centred 64 units above the
+    #: monster's origin, radius 64.
+    PROJECTILE_MONSTER_LIFT = 64.0
+    PROJECTILE_MONSTER_RADIUS = 64.0
+
+    def _projectile_targets(self):
+        """This tick's monsters as the arrays the projectile test reads.
+
+        Built once per tick under the monster lock: the hit-sphere centres
+        (float32, as the ``glm`` test they replace), a team code per monster
+        (-1 for none) and the live ``dead``/``hidden`` flags. The list order is
+        ``self.things`` order, which is what makes "first candidate" the same
+        monster the per-projectile walk found first.
+        """
+        monsters = [t for t in self.things if isinstance(t, MonsterThing)]
+        count = len(monsters)
+        centres = np.empty((count, 3), dtype=np.float32)
+        codes = np.full(count, -1, dtype=np.int32)
+        team_code = {}
+        for row, monster in enumerate(monsters):
+            pos = monster.pos
+            centres[row, 0] = pos[0]
+            centres[row, 1] = pos[1] + self.PROJECTILE_MONSTER_LIFT
+            centres[row, 2] = pos[2]
+            team = monster.properties.get('team', '')
+            if team:
+                codes[row] = team_code.setdefault(team, len(team_code))
+        row_of = {id(m): row for row, m in enumerate(monsters)}
+        return monsters, centres, codes, row_of, self._monster_alive(monsters)
+
+    @staticmethod
+    def _monster_alive(monsters):
+        return np.fromiter(
+            (not (m.properties.get('dead', False) or m.properties.get('hidden', False))
+             for m in monsters), dtype=bool, count=len(monsters))
+
     def _update_monster_projectiles(self, delta: float):
-        """Update all active monster projectiles: move, check collisions, apply damage."""
+        """Update all active monster projectiles: move, check collisions, apply damage.
+
+        The monster test is one NumPy expression per projectile over every
+        monster at once. It used to be a Python walk over every Thing per
+        projectile, inside the monster lock -- 140 ms of a 147 ms tick with
+        500 monsters fighting, during which the AI thread could not run.
+        """
         if not hasattr(self, '_monster_projectiles'):
             return
 
         remaining = []
-        if self._monster_projectiles:
-            # PERF: reuse the cached combined collision-brush list instead of
-            # rebuilding it (was previously rebuilt once per projectile).
-            all_collision_brushes = self._collision_brushes_cache
-            owner_team_by_id = {}
-            with self._monster_lock:
-                for t in self.things:
-                    if isinstance(t, MonsterThing):
-                        owner_team_by_id[id(t)] = t.properties.get('team', '')
-        for proj in self._monster_projectiles:
-            # Update position
-            vel = proj['vel']
-            prev_pos = (proj['pos'][0], proj['pos'][1], proj['pos'][2])
-            proj['pos'][0] += vel[0] * delta
-            proj['pos'][1] += vel[1] * delta
-            proj['pos'][2] += vel[2] * delta
+        projectiles = self._monster_projectiles
+        if not projectiles:
+            self._monster_projectiles = remaining
+            self.game_state.get_write_state().projectiles = []
+            return
 
-            # Route the projectile through any portal it crossed this step, so
-            # ranged attacks can travel between linked portals like the player.
-            self._transit_projectile_through_portals(proj, prev_pos)
+        # PERF: reuse the cached combined collision-brush list instead of
+        # rebuilding it (was previously rebuilt once per projectile).
+        all_collision_brushes = self._collision_brushes_cache
+        radius_sq = np.float32(self.PROJECTILE_MONSTER_RADIUS) ** 2
+        # One acquisition for the pass: the monsters cannot move or die under
+        # the batch, and the AI thread waits once, briefly, not per projectile.
+        with self._monster_lock:
+            monsters, centres, codes, row_of, alive = self._projectile_targets()
+            for proj in projectiles:
+                # Update position
+                vel = proj['vel']
+                prev_pos = (proj['pos'][0], proj['pos'][1], proj['pos'][2])
+                proj['pos'][0] += vel[0] * delta
+                proj['pos'][1] += vel[1] * delta
+                proj['pos'][2] += vel[2] * delta
 
-            # Track distance travelled
-            speed = math.sqrt(vel[0]**2 + vel[1]**2 + vel[2]**2)
-            proj['distance_travelled'] += speed * delta
+                # Route the projectile through any portal it crossed this step, so
+                # ranged attacks can travel between linked portals like the player.
+                self._transit_projectile_through_portals(proj, prev_pos)
 
-            # Decrease lifetime
-            proj['lifetime'] -= delta
+                # Track distance travelled
+                speed = math.sqrt(vel[0]**2 + vel[1]**2 + vel[2]**2)
+                proj['distance_travelled'] += speed * delta
 
-            # Check max distance
-            if proj['distance_travelled'] >= MONSTER_PROJECTILE_MAX_DIST:
-                continue  # Expired
+                # Decrease lifetime
+                proj['lifetime'] -= delta
 
-            if proj['lifetime'] <= 0.0:
-                continue  # Expired
+                # Check max distance
+                if proj['distance_travelled'] >= MONSTER_PROJECTILE_MAX_DIST:
+                    continue  # Expired
 
-            p_pos = glm.vec3(proj['pos'][0], proj['pos'][1], proj['pos'][2])
+                if proj['lifetime'] <= 0.0:
+                    continue  # Expired
 
-            # ---- Collision with player ----
-            if self.player and not self.god_mode and not self.player_dead:
-                player_pos = self.player.pos
-                # Simple sphere collision with player (radius ~32 units)
-                dist_to_player = glm.distance(p_pos, player_pos)
-                if dist_to_player < 32.0:
-                    damage = proj['damage']
-                    self._apply_player_damage(damage)
-                    if self.monster_ai.monster_debug_active:
-                        debug_log("MonsterAI", f"Projectile hit player for {damage} dmg")
-                    continue  # Projectile consumed
+                p_pos = glm.vec3(proj['pos'][0], proj['pos'][1], proj['pos'][2])
 
-            # ---- Collision with monsters (team-aware) ----
-            owner_id = proj['owner_id']
-            hit_monster = None
-            
-            owner_team = owner_team_by_id.get(owner_id)
-            with self._monster_lock:
-                for thing in self.things:
-                    if not isinstance(thing, MonsterThing):
-                        continue
-                    if id(thing) == owner_id:
-                        continue  # Don\'t hit self
-                    if thing.properties.get('dead', False) or thing.properties.get('hidden', False):
-                        continue
+                # ---- Collision with player ----
+                if self.player and not self.god_mode and not self.player_dead:
+                    player_pos = self.player.pos
+                    # Simple sphere collision with player (radius ~32 units)
+                    dist_to_player = glm.distance(p_pos, player_pos)
+                    if dist_to_player < 32.0:
+                        damage = proj['damage']
+                        self._apply_player_damage(damage)
+                        if self.monster_ai.monster_debug_active:
+                            debug_log("MonsterAI", f"Projectile hit player for {damage} dmg")
+                        continue  # Projectile consumed
 
-                    # Team-aware: don\'t hit same-team allies
-                    target_team = thing.properties.get('team', '')
-                    if owner_team and target_team and owner_team == target_team:
-                        continue
-
-                    t_pos = glm.vec3(thing.pos[0], thing.pos[1] + 64.0, thing.pos[2])
-                    dist = glm.distance(p_pos, t_pos)
-                    if dist < 64.0:  # Monster hit radius (increased for better feel)
-                        hit_monster = thing
-                        break
+                # ---- Collision with monsters (team-aware) ----
+                hit_monster = None
+                if len(monsters):
+                    delta_pos = centres - np.asarray(
+                        (p_pos.x, p_pos.y, p_pos.z), dtype=np.float32)
+                    near = np.einsum('ij,ij->i', delta_pos, delta_pos) < radius_sq
+                    near &= alive
+                    owner_row = row_of.get(proj['owner_id'])
+                    if owner_row is not None:
+                        near[owner_row] = False            # never hits itself
+                        owner_code = codes[owner_row]
+                        if owner_code >= 0:
+                            near &= codes != owner_code    # nor its own team
+                    candidates = np.flatnonzero(near)
+                    if len(candidates):
+                        hit_monster = monsters[int(candidates[0])]
 
                 if hit_monster is not None:
                     damage = proj['damage']
@@ -3724,40 +3763,42 @@ class LogicThread(threading.Thread):
                     if self.monster_ai.monster_debug_active:
                         name = hit_monster.properties.get('name', '?')
                         debug_log("MonsterAI", f"Projectile hit {name} for {damage} dmg")
+                    # Damage can kill, and its I/O can hide or revive others.
+                    alive = self._monster_alive(monsters)
                     continue  # Projectile consumed
 
-            # ---- Collision with solid brushes (walls) ----
-            hit_wall = False
-            # PERF: narrow candidates via the spatial grid (same brush set
-            # and filtering as populate()) instead of scanning every brush.
-            grid = getattr(self, '_spatial_grid', None)
-            if grid is not None:
-                wall_candidates = grid.get_nearby_brushes(p_pos.x, p_pos.z)
-            else:
-                wall_candidates = all_collision_brushes
-            for brush in wall_candidates:
-                if not is_solid_world_brush(brush):
-                    continue
-                pos = brush['pos']
-                size = brush['size']
-                bx_min = pos[0] - size[0] * 0.5
-                bx_max = pos[0] + size[0] * 0.5
-                by_min = pos[1] - size[1] * 0.5
-                by_max = pos[1] + size[1] * 0.5
-                bz_min = pos[2] - size[2] * 0.5
-                bz_max = pos[2] + size[2] * 0.5
+                # ---- Collision with solid brushes (walls) ----
+                hit_wall = False
+                # PERF: narrow candidates via the spatial grid (same brush set
+                # and filtering as populate()) instead of scanning every brush.
+                grid = getattr(self, '_spatial_grid', None)
+                if grid is not None:
+                    wall_candidates = grid.get_nearby_brushes(p_pos.x, p_pos.z)
+                else:
+                    wall_candidates = all_collision_brushes
+                for brush in wall_candidates:
+                    if not is_solid_world_brush(brush):
+                        continue
+                    pos = brush['pos']
+                    size = brush['size']
+                    bx_min = pos[0] - size[0] * 0.5
+                    bx_max = pos[0] + size[0] * 0.5
+                    by_min = pos[1] - size[1] * 0.5
+                    by_max = pos[1] + size[1] * 0.5
+                    bz_min = pos[2] - size[2] * 0.5
+                    bz_max = pos[2] + size[2] * 0.5
 
-                if (bx_min <= p_pos.x <= bx_max and
-                    by_min <= p_pos.y <= by_max and
-                    bz_min <= p_pos.z <= bz_max):
-                    hit_wall = True
-                    break
+                    if (bx_min <= p_pos.x <= bx_max and
+                        by_min <= p_pos.y <= by_max and
+                        bz_min <= p_pos.z <= bz_max):
+                        hit_wall = True
+                        break
 
-            if hit_wall:
-                continue  # Projectile consumed
+                if hit_wall:
+                    continue  # Projectile consumed
 
-            # Projectile survived this tick
-            remaining.append(proj)
+                # Projectile survived this tick
+                remaining.append(proj)
 
         self._monster_projectiles = remaining
 
