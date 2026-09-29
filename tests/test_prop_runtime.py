@@ -27,6 +27,7 @@ def _floor_grid():
 def test_core_prop_carry_drop_rest_without_plugins():
     spin = 90.0  # degrees per second about X
     prop = Prop(pos=[0.0, 40.0, 30.0], properties={
+        'carry_enabled': True,
         'physics_enabled': True,
         'no_collision': False,
         'drop_angular_velocity': [spin, 0.0, 0.0],
@@ -90,6 +91,7 @@ def test_core_prop_carry_drop_rest_without_plugins():
 
 def test_non_physics_prop_still_falls_to_ground_on_drop():
     prop = Prop(pos=[0.0, 40.0, 55.0], properties={
+        'carry_enabled': True,
         'carry_offset': [0.0, 70.0, 0.0],
     })
     io = IO()
@@ -173,7 +175,7 @@ def test_respawn_fade_state_resets_when_session_restarts():
 
 
 def test_carried_billboard_keeps_its_facing_when_player_turns():
-    prop = Prop(pos=[0.0, 40.0, 55.0])
+    prop = Prop(pos=[0.0, 40.0, 55.0], properties={'carry_enabled': True})
     logic = SimpleNamespace(
         things=[prop], io_manager=IO(),
         _spatial_grid=None, _physics_world=None,

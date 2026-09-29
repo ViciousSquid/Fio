@@ -553,7 +553,7 @@ class BenchmarkTests:
                 QApplication.processEvents()
                 self._prepare_player_area_sweep()
                 self._append(
-                    "  Live model scene: 500 model Props (scenery, as the Asset "
+                    "  Live model scene: 500 model Props (as the Asset "
                     "Browser places them) and 4 shadow-casting lights; the camera "
                     "sweep exercises the instanced model pass, its frustum cull "
                     "and the shadow pass's model casters."

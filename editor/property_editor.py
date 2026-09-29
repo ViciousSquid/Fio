@@ -2593,7 +2593,7 @@ class PropertyEditor(QWidget):
 
         carry_cb = _make_checkbox(
             "Carryable",
-            bool(thing.properties.get('carry_enabled', True)),
+            bool(thing.properties.get('carry_enabled', False)),
             lambda checked: self.update_object_prop('carry_enabled', bool(checked)),
             _Style.CHECKBOX,
         )

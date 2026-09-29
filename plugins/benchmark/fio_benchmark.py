@@ -378,10 +378,10 @@ def make_model_stress_world(count=500, shadow_lights=4, spacing=72.0,
     the instanced model pass, its frustum cull, nor the shadow pass's model
     casters were ever measured. Every model is a Prop, so this places exactly
     what the Asset Browser places (:meth:`engine.prop_entity.Prop.for_model`):
-    a square grid of *count* scenery drums centred on the PlayerStart, and the
+    a square grid of *count* drums centred on the PlayerStart, and the
     *shadow_lights* room lights nearest it switched to cast shadows.
     """
-    from engine.prop_entity import LEGACY_MODEL_DEFAULTS
+    from engine.prop_entity import MODEL_PROP_DEFAULTS
 
     data = _generate_procedural_map(monsters=0, relay_count=0, seed=seed,
                                     live_monster=True, yield_hook=yield_hook)
@@ -396,7 +396,7 @@ def make_model_stress_world(count=500, shadow_lights=4, spacing=72.0,
         if yield_hook is not None and i % 100 == 0:
             yield_hook()
         row, col = divmod(i, side)
-        props = dict(LEGACY_MODEL_DEFAULTS)
+        props = dict(MODEL_PROP_DEFAULTS)
         props.update({
             "type": "prop",
             "name": "BenchmarkModel_%d" % i,

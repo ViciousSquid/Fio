@@ -109,6 +109,7 @@ def test_player_host_runs_core_prop_and_tidy():
                     "type": "prop",
                     "tidy_category": "book",
                     "model_path": "plugins/tidy/assets/book.obj",
+                    "carry_enabled": True,
                     "name": "b1",
                 },
             },

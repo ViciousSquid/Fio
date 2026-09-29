@@ -88,8 +88,9 @@ PROP_DEFAULTS = {
     'sprite_path': 'assets/sprites/pickup.png',
     'sprite_size': [32.0, 32.0],
 
-    # Carry behaviour.
-    'carry_enabled': True,
+    # Carry behaviour. Off unless the author turns it on: a Prop is scenery by
+    # default -- neither carryable nor solid (see no_collision below).
+    'carry_enabled': False,
     'carry_reach': 110.0,
     'carry_distance': 55.0,
     'carry_offset': [0.0, -6.0, 0.0],
@@ -128,10 +129,15 @@ PROP_DEFAULTS = {
     'scale': [1, 1, 1],
 }
 
-#: What a model placed as scenery is: solid, and not something the player
-#: picks up. The old ``Model`` entity behaved exactly so, and a model added
-#: from the Asset Browser is scenery until the author says otherwise. Applied
-#: under whatever the record itself authors.
+#: What a Prop placed to show a model starts as: the Prop defaults (neither
+#: carryable nor solid) in model representation.
+MODEL_PROP_DEFAULTS = {
+    'render_mode': 'model',
+}
+
+#: What a map saved with the old ``Model`` entity meant by one: solid, and not
+#: something the player picks up. Applied under whatever the record authors,
+#: so a saved map keeps playing as it was saved.
 LEGACY_MODEL_DEFAULTS = {
     'render_mode': 'model',
     'no_collision': False,
@@ -225,7 +231,7 @@ class Prop(_ThingBase):
         # is kept, so resetting the collection restores it rather than forcing
         # every Prop carryable.
         self._carry_before_collect = bool(
-            self.properties.get('carry_enabled', True))
+            self.properties.get('carry_enabled', False))
         if self.properties.get('collect_collected'):
             self.properties['carry_enabled'] = False
 
@@ -237,13 +243,14 @@ class Prop(_ThingBase):
 
     @classmethod
     def for_model(cls, model_path, pos=None, properties=None):
-        """A Prop showing the model at *model_path*, as scenery.
+        """A Prop showing the model at *model_path*, with the Prop defaults.
 
         The one way a model enters a world from the editor -- the Asset
         Browser and the 2D view's Add Model both come here -- so a model is
-        always a Prop, never a separate kind of entity.
+        always a Prop, never a separate kind of entity. Like any Prop it is
+        neither carryable nor solid until the author says so.
         """
-        props = dict(LEGACY_MODEL_DEFAULTS)
+        props = dict(MODEL_PROP_DEFAULTS)
         props.update(properties or {})
         props['model_path'] = str(model_path).replace('\\', '/')
         return cls(pos=list(pos) if pos is not None else [0, 0, 0],

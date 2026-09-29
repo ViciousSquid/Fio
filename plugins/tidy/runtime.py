@@ -192,7 +192,7 @@ class TidySession:
             prop_session.moved(obj)
         obj.properties.setdefault(
             "_tidy_previous_carry_enabled",
-            bool(obj.properties.get("carry_enabled", True)),
+            bool(obj.properties.get("carry_enabled", False)),
         )
         obj.properties["carry_enabled"] = False
 

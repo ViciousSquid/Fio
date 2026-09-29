@@ -1203,8 +1203,8 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        # Every model is a Prop: the Asset Browser places one as scenery
-        # (solid, not carryable), exactly what the old Model entity was.
+        # Every model is a Prop, with a Prop's defaults: not solid and not
+        # carryable until the author turns either on.
         new_model = Prop.for_model(filepath, pos=[0, 0, 0],
                                    properties={'rotation': rotation})
 

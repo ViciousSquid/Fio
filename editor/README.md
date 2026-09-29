@@ -101,7 +101,7 @@ Terrain parameter editor for noise seed, scale, amplitude and texturing/chunk se
 ### `things.py`
 Definitions for placeable entities including `PlayerStart`, `Light`, `Speaker`, `Prop`, `Monster`, `PathNode`, `Portal`, `LevelChanger`, `LogicGate`, `LogicRelay`, `LogicTimer`, `LogicCommand`, `LogicSpawner`, `LogicCamera`, `LogicState` and `TriggerBrush`.
 
-Every 3D model is a `Prop` with `render_mode='model'`: the Asset Browser and the 2D view place models as Props (solid, not carryable), and a map's old `model` records load as such.
+Every 3D model is a `Prop` with `render_mode='model'`. A Prop is neither solid nor carryable by default -- including a model placed from the Asset Browser or the 2D view -- until the author turns either on. A map saved with the old `model` entity loads its models as Props that stay solid and not carryable, as they were saved.
 
 Entity classes provide defaults and I/O registration. `LogicState` is the persistent typed-state primitive shared by maps and plugins. `LogicCommand` provides a deliberate bridge from declarative I/O into an explicitly requested debug/play command rather than becoming a general-purpose scripting runtime.
 

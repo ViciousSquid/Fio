@@ -1,9 +1,10 @@
 """Every model in a Fio world is a Prop.
 
 There is no separate ``Model`` entity. A model placed from the Asset Browser
-or the 2D view is a Prop with ``render_mode='model'``; a map written when the
-``model`` type still existed loads its models as such Props, keeping what
-they were -- solid scenery the player does not pick up.
+or the 2D view is a Prop with ``render_mode='model'`` and a Prop's defaults
+(neither solid nor carryable); a map written when the ``model`` type still
+existed loads its models as Props that keep what they were -- solid scenery
+the player does not pick up.
 """
 
 import json
@@ -117,7 +118,8 @@ def test_the_asset_browser_places_a_model_as_a_prop():
     assert prop.properties["model_path"] == DRUM
     assert prop.properties["rotation"] == [0, 90, 0]
     assert prop.properties["name"] == "Oil_Drum"
-    assert prop.properties["no_collision"] is False
+    # A Prop's defaults: neither solid nor carryable until the author says so.
+    assert prop.properties["no_collision"] is True
     assert prop.properties["carry_enabled"] is False
 
 
