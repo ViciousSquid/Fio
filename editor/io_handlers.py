@@ -1810,8 +1810,9 @@ def register_all_input_handlers(io_manager: IOManager):
         pass
 
     # Keep the startup banner as plain text. DebugConsole renders the
-    # version numbers as filter links in one dedicated pass; embedding HTML
-    # here would send that markup back through the console's generic highlighter.
+    # version components with presentation-only styling in one dedicated pass;
+    # embedding HTML here would send that markup back through the console's
+    # generic highlighter.
     debug_log('Info', f'Fio version {version_str}')
     debug_log_raw("github.com/vicioussquid/Fio")
     debug_log('Info', f"Registered {len(io_manager._input_handlers)} input handlers")
