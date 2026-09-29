@@ -780,7 +780,7 @@ class DebugConsole(QWidget):
             # as a single presentation-only banner so the generic entity
             # highlighter cannot turn 2, 5, or 10 into filter links.
             version_match = re.fullmatch(
-                r"(?:version\\s+)?(\\d+\\.\\d+\\.\\d+\\.\\d+)",
+                r"(?:version\s+)?(\d+\.\d+\.\d+\.\d+)",
                 version_text,
             )
             if version_match:
