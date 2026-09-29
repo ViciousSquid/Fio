@@ -582,8 +582,8 @@ class Monster(Thing):
     _icon_cache = {}       # 1.2.6.0: cache for 2D view icons (60×60)
 
     # PERF: get_sprite_path used to run up to 5 os.path.isfile() calls every
-    # time it was called — and it is called per-Monster per-frame from
-    # qt_game_view.update_instance_textures. This cache memoises the resolved
+    # time it was called — and it is called per Monster whenever the entity
+    # projection resolves a monster's sprite. This cache memoises the resolved
     # (idle, dead, shoot) default paths by (monster_type, variant) so the
     # filesystem only sees the stats once per distinct monster configuration.
     # Keyed tuple: (mtype, variant)

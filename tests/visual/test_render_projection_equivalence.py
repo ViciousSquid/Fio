@@ -135,34 +135,6 @@ def _entity_projection_for(live, published, table=None):
 _ENTITY_TABLES = {}
 
 
-class _InstanceTextureHost:
-    """The handful of attributes ``QtGameView.update_instance_textures`` uses.
-
-    The object path has two halves in production: this one, which runs on the
-    Qt thread and resolves the per-entity texture override, and
-    ``draw_sprites``, which falls back to the texture shared by a class.  A
-    reference that ran only the second half would be a weaker renderer than the
-    one Fio ships, and the comparison would flatter the dense path.  So the
-    real function is driven here against a stub rather than reimplemented.
-    """
-
-    def __init__(self, renderer):
-        self.renderer = renderer
-        self.sprite_textures = renderer.sprite_textures
-        self._instance_tex_hash = None
-
-    def load_texture(self, filename, subfolder):
-        return self.renderer.load_texture(filename, subfolder)
-
-
-def _apply_instance_textures(renderer, published):
-    """Run the production override resolution, as the Qt thread would."""
-    from engine.qt_game_view import QtGameView
-
-    host = _InstanceTextureHost(renderer)
-    QtGameView.update_instance_textures(host, published)
-
-
 def _render(renderer, context, brushes, things, numeric, live_things=None,
             **overrides):
     import OpenGL.GL as gl
@@ -171,10 +143,6 @@ def _render(renderer, context, brushes, things, numeric, live_things=None,
     config = glh.render_config(all_brushes=brushes, all_things=things,
                                **overrides)
     brush_slots = config["all_brush_slots"]
-    # The object path's first half. It runs every frame in production, before
-    # the renderer sees anything, so it runs here for both paths -- what it
-    # populates is a renderer-level cache, not a per-path one.
-    _apply_instance_textures(renderer, things)
     if numeric:
         table, refs, slots = _projection_for(brushes)
         config["render_table"] = table

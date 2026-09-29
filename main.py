@@ -223,6 +223,10 @@ if __name__ == "__main__":
 
     # Create app
     app = QApplication(sys.argv)
+    # Without this PyQt5 aborts the process on any exception escaping a Qt
+    # callback, losing the open map.
+    from editor.debug_console import install_excepthook
+    install_excepthook()
     app.setStyleSheet(dark_stylesheet)
 
     # Set application icon

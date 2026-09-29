@@ -4,6 +4,7 @@ from PyQt5.QtWidgets import QMessageBox
 
 from editor.debug_console import debug_log
 from engine.change_journal import touch
+from engine.spatial import set_authored_flag
 
 # Try to import I/O system (available in both editor and play mode)
 try:
@@ -432,6 +433,19 @@ class ConsoleCommandHandler:
     # VISIBILITY & TINT
     # ===================================================================
 
+    def _set_hidden(self, entity, hidden):
+        """Write *entity*'s authored ``hidden`` the way an I/O Hide/Show does.
+
+        Through the parking-aware writer (which journals the render row), and
+        for a brush in play the collision grid is rebuilt, since it files
+        brushes by their authored visibility.
+        """
+        set_authored_flag(entity, 'hidden', hidden)
+        if isinstance(entity, dict):
+            mark = getattr(self._logic_thread(), 'mark_collision_dirty', None)
+            if mark is not None:
+                mark()
+
     def cmd_hide(self, args):
         """hide <name> — Set hidden flag on a brush or entity."""
         if not args:
@@ -442,11 +456,7 @@ class ConsoleCommandHandler:
         if not entity:
             debug_log("Error", f"Entity '{name}' not found")
             return
-        if isinstance(entity, dict):
-            entity['hidden'] = True
-        elif hasattr(entity, 'properties'):
-            entity.properties['hidden'] = True
-        touch(entity)
+        self._set_hidden(entity, True)
         debug_log("Info", f"'{name}' is now hidden")
 
     def cmd_show(self, args):
@@ -459,11 +469,7 @@ class ConsoleCommandHandler:
         if not entity:
             debug_log("Error", f"Entity '{name}' not found")
             return
-        if isinstance(entity, dict):
-            entity['hidden'] = False
-        elif hasattr(entity, 'properties'):
-            entity.properties['hidden'] = False
-        touch(entity)
+        self._set_hidden(entity, False)
         debug_log("Info", f"'{name}' is now visible")
 
     def cmd_tint(self, args):
@@ -1504,7 +1510,7 @@ entity to drive them from the I/O system.</i><br>
 
     def cmd_get_property(self, args):
         parts = args.split()
-        if len(parts) < 2:
+        if len(parts) != 2:
             debug_log("Error", "Usage: getprop <entity> <key>")
             return
         name, key = parts

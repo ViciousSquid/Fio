@@ -75,6 +75,9 @@ DEFAULT_FOG_DENSITY = 0.0
 
 
 def _clamp(value, low, high):
+    # NaN compares false both ways and would pass straight through.
+    if value != value:
+        return low
     return low if value < low else (high if value > high else value)
 
 
@@ -123,7 +126,10 @@ class ViewDistance:
 
     @distance.setter
     def distance(self, value):
-        self._distance = _clamp(float(value), MIN_VIEW_DISTANCE, MAX_VIEW_DISTANCE)
+        value = float(value)
+        if value != value:
+            return              # NaN: keep the distance the view already has
+        self._distance = _clamp(value, MIN_VIEW_DISTANCE, MAX_VIEW_DISTANCE)
 
     @property
     def distance_sq(self):

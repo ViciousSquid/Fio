@@ -33,6 +33,21 @@ except ImportError:
     ENTITY_TYPES = {}
 
 
+def _finite(param) -> float:
+    """``float(param)``, refusing NaN and infinity with ``ValueError``.
+
+    An I/O parameter is mapper- or console-supplied text, and ``float``
+    happily parses ``"nan"`` and ``"inf"``: a mover given speed ``inf`` spins
+    to a NaN angle and its brush leaves the world. Every handler that parses a
+    number goes through here, so a bad value is ignored like any other
+    malformed parameter.
+    """
+    value = float(param)
+    if value != value or value in (float('inf'), float('-inf')):
+        raise ValueError("non-finite I/O parameter %r" % (param,))
+    return value
+
+
 def register_all_input_handlers(io_manager: IOManager):
     """Register all input handlers with the I/O manager."""
     
@@ -57,9 +72,9 @@ def register_all_input_handlers(io_manager: IOManager):
     
     def light_set_brightness(entity, param, logic):
         try:
-            value = float(param) if param else 1.0
+            value = _finite(param) if param else 1.0
             entity.properties['intensity'] = max(0.0, min(10.0, value))
-        except ValueError:
+        except (TypeError, ValueError):
             pass
     
     def light_set_color(entity, param, logic):
@@ -114,7 +129,7 @@ def register_all_input_handlers(io_manager: IOManager):
         if not hasattr(logic, 'light_fade_states'):
             logic.light_fade_states = {}
         try:
-            duration = max(0.0, float(duration))
+            duration = max(0.0, _finite(duration))
         except (ValueError, TypeError):
             duration = 1.0
         start = float(entity.properties.get('intensity', 0.0))
@@ -364,8 +379,8 @@ def register_all_input_handlers(io_manager: IOManager):
     
     def door_set_speed(entity, param, logic):
         try:
-            entity['speed'] = float(param) if param else 128.0
-        except ValueError:
+            entity['speed'] = _finite(param) if param else 128.0
+        except (TypeError, ValueError):
             pass
     
     io_manager.register_input_handler('door', 'open', door_open)
@@ -401,10 +416,10 @@ def register_all_input_handlers(io_manager: IOManager):
         if idx < 0:
             return
         try:
-            value = max(0.0, min(1.0, float(param)))
+            value = max(0.0, min(1.0, _finite(param)))
             if idx in logic.mover_states:
                 logic.mover_states[idx]['progress'] = value
-        except ValueError:
+        except (TypeError, ValueError):
             pass
     
     def mover_enable(entity, param, logic):
@@ -415,7 +430,7 @@ def register_all_input_handlers(io_manager: IOManager):
 
     def mover_set_speed(entity, param, logic):
         try:
-            entity['speed'] = max(0.0, float(param)) if param else 64.0
+            entity['speed'] = max(0.0, _finite(param)) if param else 64.0
         except (ValueError, TypeError):
             pass
 
@@ -650,8 +665,8 @@ def register_all_input_handlers(io_manager: IOManager):
     
     def speaker_set_volume(entity, param, logic):
         try:
-            entity.properties['volume'] = max(0.0, min(1.0, float(param)))
-        except ValueError:
+            entity.properties['volume'] = max(0.0, min(1.0, _finite(param)))
+        except (TypeError, ValueError):
             pass
     
     io_manager.register_input_handler('speaker', 'playsound', speaker_play)
@@ -930,7 +945,7 @@ def register_all_input_handlers(io_manager: IOManager):
 
     def timer_set_time(entity, param, logic):
         try:
-            entity.properties['interval'] = max(0.01, float(param))
+            entity.properties['interval'] = max(0.01, _finite(param))
         except (TypeError, ValueError):
             pass
 
@@ -995,7 +1010,7 @@ def register_all_input_handlers(io_manager: IOManager):
         version of it.
         """
         try:
-            entity.properties['health'] = int(float(param))
+            entity.properties['health'] = int(_finite(param))
         except (TypeError, ValueError):
             debug_log('Error', f"Monster.SetHealth: bad parameter '{param}'")
 
@@ -1012,7 +1027,7 @@ def register_all_input_handlers(io_manager: IOManager):
         health = None
         if param:
             try:
-                health = int(float(param))
+                health = int(_finite(param))
             except (TypeError, ValueError):
                 health = None
         if health is None:
@@ -1194,7 +1209,7 @@ def register_all_input_handlers(io_manager: IOManager):
         """Override travel speed."""
         if logic.cinematic_state:
             try:
-                logic.cinematic_state['speed'] = max(1.0, float(param))
+                logic.cinematic_state['speed'] = max(1.0, _finite(param))
             except (TypeError, ValueError):
                 pass
 
@@ -1737,6 +1752,9 @@ def register_all_input_handlers(io_manager: IOManager):
         """Change the paired portal target by name."""
         if param:
             entity.properties['portal_target'] = param.strip()
+            relink = getattr(logic, '_rebuild_portal_links', None)
+            if relink is not None:
+                relink()
             name = entity.properties.get('name', 'unnamed')
             debug_log('IO', f"Portal '{name}' target set to '{param.strip()}'")
 
@@ -1748,13 +1766,13 @@ def register_all_input_handlers(io_manager: IOManager):
 
     def portal_set_width(entity, param, logic):
         try:
-            entity.properties['width'] = max(16.0, float(param))
+            entity.properties['width'] = max(16.0, _finite(param))
         except (ValueError, TypeError):
             pass
 
     def portal_set_height(entity, param, logic):
         try:
-            entity.properties['height'] = max(16.0, float(param))
+            entity.properties['height'] = max(16.0, _finite(param))
         except (ValueError, TypeError):
             pass
 

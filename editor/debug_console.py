@@ -93,6 +93,33 @@ def debug_log_raw(message: str):
     get_debug_logger().log_raw(message)
 
 
+def install_excepthook():
+    """Report exceptions that escape Qt callbacks instead of aborting.
+
+    PyQt5 calls ``qFatal`` -- ending the process -- when an exception escapes
+    a slot or a Qt virtual (``paintGL``, an event handler) and no
+    ``sys.excepthook`` is installed. One bad console argument or a paint error
+    would take the open, unsaved map with it. This prints the traceback, puts
+    it in the Debug Console, and lets the event loop carry on.
+    """
+    import sys
+    import traceback
+
+    def _report(exc_type, exc, tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        text = "".join(traceback.format_exception(exc_type, exc, tb))
+        sys.stderr.write(text)
+        try:
+            debug_log("Error", "Unhandled exception:\n" + text)
+        except Exception:
+            pass
+
+    sys.excepthook = _report
+    return _report
+
+
 class CommandInput(QLineEdit):
     """Custom line edit that keeps command history (Quake style)."""
     def __init__(self, parent=None):
