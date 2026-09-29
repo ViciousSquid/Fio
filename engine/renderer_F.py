@@ -1205,17 +1205,24 @@ class Renderer_F(BaseRenderer):
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDisable(gl.GL_BLEND)
         brush_display_mode = config.get('brush_display_mode', 'Textured')
-        if current_mode == RENDER_MODE_UNLIT:
-            self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl)
-            self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl)
-        elif current_mode == RENDER_MODE_LIT:
-            if brush_display_mode == 'Textured' or brush_display_mode == 'Solid Lit':
+        # Filled modes only: in wireframe and vertex modes the far edges and
+        # corners are part of what the editor shows.
+        self._opaque_cull_pass = (self.cull_opaque_back_faces and current_mode
+                                  in (RENDER_MODE_LIT, RENDER_MODE_UNLIT))
+        try:
+            if current_mode == RENDER_MODE_UNLIT:
                 self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl)
                 self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl)
+            elif current_mode == RENDER_MODE_LIT:
+                if brush_display_mode == 'Textured' or brush_display_mode == 'Solid Lit':
+                    self.draw_textured_brushes_optimized(projection, view, camera_pos, textured_opaque, lights, config, _tbl)
+                    self.draw_lit_brushes_optimized(projection, view, camera_pos, solid_opaque, lights, config, table=_tbl)
+                else:
+                    self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl)
             else:
                 self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl)
-        else:
-            self.draw_lit_brushes_optimized(projection, view, camera_pos, opaque_brushes, lights, config, table=_tbl)
+        finally:
+            self._opaque_cull_pass = False
         if len(glow_brushes):
             self.draw_glow_brushes(projection, view, camera_pos, glow_brushes, lights, config, table=_tbl)
         fading_model_slots = np.empty(0, dtype=np.int32)

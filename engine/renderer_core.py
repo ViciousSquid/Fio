@@ -521,6 +521,13 @@ class BaseRenderer:
         # destination portal, so the brush passes enable back-face culling for
         # this flag to hide the exposed interior faces (see the brush draws).
         self._portal_scene_pass = False
+        #: Cull the faces of opaque brushes that face away from the camera in
+        #: the main view, as the portal pass always has. A closed opaque solid
+        #: never shows its inside, so this changes no pixel; it halves what
+        #: reaches the rasteriser. Switchable so the effect can be measured.
+        self.cull_opaque_back_faces = True
+        #: True while the main view's opaque brush passes draw (render_scene).
+        self._opaque_cull_pass = False
         self._portal_mask_proj_loc = None
         self._portal_mask_view_loc = None
         self._portal_rim_proj_loc = None
@@ -4782,24 +4789,31 @@ layout (location = 10) in float iInstanceAlpha;
         while generated convex-geometry meshes are counter-clockwise-outward
         (interior == GL_BACK), so the caller says which it is drawing. No-op
         outside the portal pass, so the main scene is left untouched."""
-        if not getattr(self, '_portal_scene_pass', False):
+        if not self._culling_interiors():
             return
         gl.glEnable(gl.GL_CULL_FACE)
         gl.glCullFace(gl.GL_BACK if is_geo else gl.GL_FRONT)
 
     def _portal_set_cull(self, is_geo):
         """Switch the culled face mid-pass (cube batches vs. convex-geometry
-        meshes wind oppositely). No-op outside the portal pass."""
-        if not getattr(self, '_portal_scene_pass', False):
+        meshes wind oppositely). No-op unless interiors are being culled."""
+        if not self._culling_interiors():
             return
         gl.glCullFace(gl.GL_BACK if is_geo else gl.GL_FRONT)
 
     def _portal_end_cull(self):
-        """Restore the default (culling off, GL_BACK) after a portal brush pass."""
-        if not getattr(self, '_portal_scene_pass', False):
+        """Restore the default (culling off, GL_BACK) after a culled brush pass."""
+        if not self._culling_interiors():
             return
         gl.glDisable(gl.GL_CULL_FACE)
         gl.glCullFace(gl.GL_BACK)
+
+    def _culling_interiors(self):
+        """Whether the brush pass being drawn culls interior (away-facing)
+        faces: always inside a portal's virtual scene, and in the main view's
+        opaque passes (see :attr:`cull_opaque_back_faces`)."""
+        return (getattr(self, '_portal_scene_pass', False)
+                or getattr(self, '_opaque_cull_pass', False))
 
 
     def _portal_candidate_slots(self, table, slots, camera_pos):
