@@ -393,6 +393,28 @@ def test_skipping_a_rebuild_leaves_the_panel_usable(panel):
 # Reusing a page built earlier
 # ---------------------------------------------------------------------------
 
+def test_switching_between_props_does_not_use_a_deleted_collection_form(panel, qt_app):
+    """Rapid Prop reselection must never call into a deleted QFormLayout."""
+    host, editor = panel
+    first = Prop(pos=[0, 0, 0])
+    second = Prop(pos=[64, 0, 0])
+    host.state.things.extend([first, second])
+
+    for _ in range(3):
+        editor.set_object(first)
+        qt_app.processEvents()
+        editor.set_object(second)
+        qt_app.processEvents()
+
+    # Exercise the stale-wrapper guard directly as well.  The old form has
+    # either been parked or deleted by this point; it must be harmless to probe.
+    old_form = getattr(editor, '_prop_form', None)
+    editor.set_object(first)
+    qt_app.processEvents()
+    if old_form is not None:
+        editor._set_form_row_visible(old_form, 0, True)
+
+
 def test_switching_back_to_an_object_reuses_its_page(panel):
     host, editor = panel
     a = make_brush('a')
