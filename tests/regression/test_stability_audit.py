@@ -399,3 +399,39 @@ def test_trigger_tab_writes_the_keys_the_engine_reads(qt_app):
         assert brush["trigger_save"] == "quicksave"
     finally:
         panel.deleteLater()
+
+
+def test_a_hidden_light_does_not_light_the_running_world():
+    """Big World parks an out-of-range light by hiding it; the dense light
+    selection ignored ``hidden``, so parked lights kept lighting and kept
+    taking light and shadow slots. The editor preview still shows them."""
+    from engine.renderer_F import Renderer_F
+    lamps = [make_thing(Light, "lamp%d" % i, (i * 100.0, 64, 0)) for i in range(3)]
+    lamps[1].properties["hidden"] = True
+    table = EntityTable()
+    hidden = table.begin_frame(lamps, epoch=1)
+    config = {"entity_table": table, "thing_hidden": hidden, "play_mode": True}
+    _table, slots = Renderer_F._get_active_lights(None, None, config)
+    assert sorted(slots.tolist()) == [0, 2]
+    config["play_mode"] = False
+    _table, slots = Renderer_F._get_active_lights(None, None, config)
+    assert sorted(slots.tolist()) == [0, 1, 2]
+
+
+def test_console_hide_and_show_go_through_the_authored_writer():
+    import types
+    from editor.console_commands import ConsoleCommandHandler
+    wall = box_brush("wall", (0, 64, 200))
+    wall["name"] = "wall"
+    state = EditorState()
+    state.brushes = [wall]
+    marked = []
+    logic = types.SimpleNamespace(mark_collision_dirty=lambda: marked.append(1))
+    handler = ConsoleCommandHandler.__new__(ConsoleCommandHandler)
+    handler.editor_state = state
+    handler._logic_thread = lambda: logic
+    handler.cmd_hide("wall")
+    assert wall["hidden"] is True and marked == [1]
+    wall["_bw_parked_hidden"] = True     # parked by a streaming layer
+    handler.cmd_show("wall")
+    assert wall["_bw_parked_hidden"] is False, "Show landed on the parked value"

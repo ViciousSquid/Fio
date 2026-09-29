@@ -493,7 +493,6 @@ class BaseRenderer:
         self.vaos = {'cube': None, 'sprite': None, 'grid': None}
         self.grid_indices_count = 0
         self.sprite_textures = {}
-        self.instance_textures = {}
         self._edge_vao = None
         self._edge_vbo = None
         self._gizmo_lines_vbo = None
@@ -2733,9 +2732,6 @@ layout (location = 10) in float iInstanceAlpha;
                     gl.glUniform2f(u['tex_shift'], 0.0, 0.0)
             current_shader = shader_name
         return current_shader
-
-    def set_instance_textures(self, textures):
-        self.instance_textures = textures
 
     def _sprite_gl_ids(self, table):
         """``sprite id -> GL texture id``, for every recipe the table interned.

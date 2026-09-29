@@ -120,7 +120,6 @@ class QtGameView(QOpenGLWidget):
         self.selected_object = None
         self.show_sprites_in_play_mode = False
         # Cache keys for per-frame expensive rebuilds
-        self._instance_tex_hash   = None   # hash of last things-state snapshot
         self._io_conn_cache       = None   # last _gather_io_connections result
         self._io_conn_scene_ver   = None   # (len(brushes), len(things)) when cache was built
         self.visibility_system = None
@@ -1500,24 +1499,6 @@ class QtGameView(QOpenGLWidget):
             and render_state is not None
             and getattr(render_state, 'splitscreen_active', False)
         )
-        # The instanced pass resolves sprite textures from the EntityTable and
-        # never reads the Thing objects.  Portal and split-screen views consume
-        # the same dense table, so the presence of portals is no longer a reason
-        # to rebuild the old object-path texture map.
-        _instanced_sprites = (
-            render_state is not None
-            and self.renderer is not None
-            and self.renderer.will_instance_sprites(
-                self._render_config, _main_brush_slots)
-        )
-        if _instanced_sprites:
-            # Nothing rebuilt this frame, so the cached hash no longer
-            # describes the overrides. Clearing it makes the next frame that
-            # does need them rebuild rather than reuse a stale set.
-            self._instance_tex_hash = None
-        else:
-            self.update_instance_textures(things_to_render)
-
         # Plugin render hooks. Guarded by has_listeners so an unhooked frame
         # pays a single dict lookup and builds no payload — see the render.*
         # events in the plugin API. The manager handle is fetched once per frame.
@@ -2346,89 +2327,6 @@ class QtGameView(QOpenGLWidget):
         if self.renderer:
             self.renderer.set_sprite_textures(self.sprite_textures)
 
-    def update_instance_textures(self, things):
-        if not self.renderer:
-            return
-
-        # Build a cheap state hash: captures thing identity, monster
-        # state flags (dead/shooting), and logic gate type.
-        # If it matches the last frame we can reuse the cached result.
-        def _state_hash():
-            parts = []
-            for t in things:
-                if isinstance(t, Monster):
-                    parts.append((id(t), t.properties.get('dead', False), t.properties.get('is_shooting', False)))
-                elif isinstance(t, LogicGate):
-                    parts.append((id(t), t.properties.get('logic_type', 'and')))
-                elif isinstance(t, Prop):
-                    parts.append((id(t), t.properties.get('render_mode', 'model'), t.properties.get('sprite_path', '')))
-                else:
-                    parts.append(id(t))
-            return hash(tuple(parts))
-
-        h = _state_hash()
-        if h == self._instance_tex_hash:
-            return   # nothing changed – skip the rebuild entirely
-
-        self._instance_tex_hash = h
-        instance_textures = {}
-        for thing in things:
-            if isinstance(thing, Monster):
-                mtype = thing.properties.get('monster_type', 'human')
-                is_dead = thing.properties.get('dead', False)
-                is_shooting = thing.properties.get('is_shooting', False)
-                if is_dead:
-                    state_key = 'dead'
-                elif is_shooting:
-                    state_key = 'shooting'
-                else:
-                    state_key = 'alive'
-                sprite_path = thing.get_sprite_path()
-                tex_key = f"msprite__{sprite_path.replace('/', '__').replace('.', '_')}"
-                if tex_key not in self.sprite_textures:
-                    rel_path = sprite_path.replace('assets/', '')
-                    dirname = os.path.dirname(rel_path)
-                    filename = os.path.basename(rel_path)
-                    tid = self.load_texture(filename, dirname)
-                    if tid:
-                        self.sprite_textures[tex_key] = tid
-                if tex_key in self.sprite_textures:
-                    instance_textures[id(thing)] = self.sprite_textures[tex_key]
-                continue
-            if isinstance(thing, LogicGate):
-                l_type = thing.properties.get('logic_type', 'and').lower()
-                filename = f"logic_{l_type}.png"
-                tex_key = f"logic_{l_type}"
-                if tex_key not in self.sprite_textures:
-                    tid = self.load_texture(filename, 'sprites')
-                    if tid:
-                        self.sprite_textures[tex_key] = tid
-                if tex_key in self.sprite_textures:
-                    instance_textures[id(thing)] = self.sprite_textures[tex_key]
-            elif isinstance(thing, Prop):
-                if str(thing.properties.get('render_mode', 'model')).lower() == 'billboard':
-                    sprite_path = str(thing.properties.get('sprite_path', '') or '')
-                    if sprite_path:
-                        tex_key = f"propsprite__{sprite_path.replace('/', '__').replace('.', '_')}"
-                        if tex_key not in self.sprite_textures:
-                            rel_path = sprite_path.replace('assets/', '', 1)
-                            dirname = os.path.dirname(rel_path)
-                            filename = os.path.basename(rel_path)
-                            tid = self.load_texture(filename, dirname)
-                            if tid:
-                                self.sprite_textures[tex_key] = tid
-                        if tex_key in self.sprite_textures:
-                            instance_textures[id(thing)] = self.sprite_textures[tex_key]
-            elif isinstance(thing, LevelChanger):
-                tex_key = 'LevelChanger'
-                if tex_key in self.sprite_textures:
-                    instance_textures[id(thing)] = self.sprite_textures[tex_key]
-                else:
-                    fallback_key = 'logic_relay'
-                    if fallback_key in self.sprite_textures:
-                        instance_textures[id(thing)] = self.sprite_textures[fallback_key]
-        self.renderer.set_instance_textures(instance_textures)
-
     def toggle_play_mode(self, player_start_pos, player_start_angle, physics_enabled=True):
         self.play_mode = not self.play_mode
         if self.play_mode:
@@ -2608,7 +2506,6 @@ class QtGameView(QOpenGLWidget):
             self.renderer = cls(
                 self.load_texture, self.grid_size, self.world_size, config)
             self.renderer.set_sprite_textures(self.sprite_textures)
-            self.renderer.set_instance_textures(self.sprite_textures)
             self._sync_view_distance()
             self.grid_dirty = True
             self._renderer_mode = mode

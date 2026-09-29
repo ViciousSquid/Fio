@@ -263,7 +263,7 @@ def sprite_candidates(thing):
         return _monster_sprite_candidates(props)
 
     out = []
-    # -- the per-entity override, in update_instance_textures' own order ----
+    # -- the per-entity override, in the order the object path resolved it --
     if LogicGate is not None and isinstance(thing, LogicGate):
         ltype = str(props.get('logic_type', 'and')).lower()
         out.append(('logic_%s' % ltype, 'logic_%s.png' % ltype, 'sprites', True))
