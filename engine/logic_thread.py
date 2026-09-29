@@ -3664,12 +3664,6 @@ class LogicThread(threading.Thread):
     #: Player hit sphere for projectiles.
     PROJECTILE_PLAYER_RADIUS = 32.0
 
-    @staticmethod
-    def _monster_alive(monsters):
-        return np.fromiter(
-            (not (m.properties.get('dead', False) or m.properties.get('hidden', False))
-             for m in monsters), dtype=bool, count=len(monsters))
-
     def _projectile_monster_candidates(self, pos32, owners):
         """``(projectile, monster row)`` pairs inside a monster's hit sphere.
 

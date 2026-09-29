@@ -427,10 +427,6 @@ class RenderTable:
         self.bounds[idx] = bounds
         self.rot[idx] = rot
 
-    def _resolve_cold(self, slot, brush):
-        """Classification and material columns for one row."""
-        self._resolve_cold_rows([slot], {slot: brush})
-
     def _resolve_cold_rows(self, slots, brushes):
         """Classification and material columns for *slots*.
 

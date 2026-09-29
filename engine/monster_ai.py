@@ -167,18 +167,14 @@ class MonsterAI:
     #: reference the dense pass is tested against).
     DENSE_UPDATE = True
 
-    def _dense_ready(self):
-        """Whether this tick can run as the dense pass.
-
-        It needs the spatial grid (its batched ground and wall queries), and
-        it leaves two whole-tick modes to the per-monster path: ``notarget``
-        (a cheat, where every monster only patrols) and the F7 debug view
-        (which draws every monster's sight ray).
-        """
-        return self._fallback_reason() == 'dense'
-
     def _fallback_reason(self):
-        """``'dense'``, or why this tick runs the per-monster path (Debug Tables)."""
+        """``'dense'``, or why this tick runs the per-monster path (Debug Tables).
+
+        The dense pass needs the spatial grid (its batched ground and wall
+        queries), and it leaves two whole-tick modes to the per-monster path:
+        ``notarget`` (a cheat, where every monster only patrols) and the F7
+        debug view (which draws every monster's sight ray).
+        """
         if not self.DENSE_UPDATE:
             return 'per-monster (DENSE_UPDATE off)'
         if self._grid is None:
