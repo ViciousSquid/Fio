@@ -550,12 +550,22 @@ class LogicThread(threading.Thread):
         # every entity in the level on every AI tick.
         self._monster_things = [t for t in self.things if MonsterThing and isinstance(t, MonsterThing)]
         self._monster_by_id = {id(t): t for t in self._monster_things}
+        # AI state of monsters that have left the world: keyed by id(), so a
+        # monster spawned into a freed address would inherit it.
+        live = self._monster_by_id
+        with self._monster_lock:
+            states = self.monster_ai.monster_states
+            for key in [key for key in states if key not in live]:
+                del states[key]
 
         # PERF: the timer list, for the same reason — _update_logic_timers is
         # the one per-frame path the logic system has, and it should walk the
         # timers, not the level.
         self._timer_things = [t for t in self.things if LogicTimer and isinstance(t, LogicTimer)]
 
+        # The row sets this index describes; see _watch_world_rows.
+        self._indexed_things = tuple(self.things)
+        self._indexed_brushes = tuple(self.brushes)
         self._rebuild_portal_links()
 
     def _rebuild_portal_links(self):
@@ -1516,6 +1526,8 @@ class LogicThread(threading.Thread):
         """
         self._name_cache = {}
         self._id_cache = {}
+        self._indexed_things = ()
+        self._indexed_brushes = ()
         self._monster_by_id = {}
         self._monster_things = []
         self._timer_things = []
@@ -2124,9 +2136,41 @@ class LogicThread(threading.Thread):
                 speed *= self.EDITOR_CAMERA_FAST_MULT
             self.editor_camera.pos += move_dir * speed * delta
 
+    #: Ticks to keep comparing the world's row sets after an editor edit.
+    _ROW_WATCH_TICKS = 30
+    _indexed_things = ()
+    _indexed_brushes = ()
+    _rows_epoch = None
+    _rows_watch = 0
+
+    def _watch_world_rows(self):
+        """Re-index the session when the editor adds or removes objects.
+
+        The session indexes the world when Play starts (_build_entity_caches)
+        and the collision set with it. An object cloned, pasted, placed or
+        deleted in the editor during play otherwise had no AI, no I/O name,
+        or -- deleted -- kept being simulated and collided with. Every editor
+        edit moves ``world_epoch``, so the row sets are compared only for a
+        short while after one (tools checkpoint before they mutate): an
+        integer compare per tick otherwise.
+        """
+        epoch = getattr(self.editor_state, 'world_epoch', None)
+        if epoch != self._rows_epoch:
+            self._rows_epoch = epoch
+            self._rows_watch = self._ROW_WATCH_TICKS
+        if not self._rows_watch:
+            return
+        self._rows_watch -= 1
+        brushes_changed = tuple(self.brushes) != self._indexed_brushes
+        if brushes_changed or tuple(self.things) != self._indexed_things:
+            self._build_entity_caches()
+            if brushes_changed:
+                self.mark_collision_dirty()
+
     def _tick_play_mode(self, delta):
         if not self.player:
             return
+        self._watch_world_rows()
         
         # Update movers & doors first (for platform carrying)
         self._update_movers(delta)

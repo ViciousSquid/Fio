@@ -253,6 +253,10 @@ def _restore_plugin_state(snapshot):
     manager, enabled, auto_enabled, io_registrations = snapshot
     for plugin, was_enabled in enabled.items():
         plugin.enabled = was_enabled
+    # Written directly, so the manager's caches keyed on the enabled set (the
+    # wants_tick() answer above all) must be told it changed.
+    if hasattr(manager, "_enabled_generation"):
+        manager._enabled_generation += 1
     manager._auto_enabled.clear()
     manager._auto_enabled.update(auto_enabled)
     if hasattr(manager, "_io_registrations"):

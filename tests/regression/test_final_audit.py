@@ -444,3 +444,96 @@ def test_no_runtime_cache_outlives_its_session_or_map(map_name, restore):
         assert [i for i in ids if logic._find_entity_by_id(i)] == []
     finally:
         logic.stop()
+
+
+# ---------------------------------------------------------------------------
+# Entities added or removed during a session
+# ---------------------------------------------------------------------------
+
+def _playing(things=(), brushes=()):
+    from engine.logic_thread import LogicThread
+    from engine.player import Player
+    from engine.threaded_game_state import ThreadedGameState
+
+    state = EditorState()
+    state.brushes = list(brushes) or [box_brush("ground", (0, -16, 0), (4096, 32, 4096))]
+    state.things = list(things)
+    logic = LogicThread(ThreadedGameState(), state)
+    logic.player = Player(0.0, 0.0)
+    logic.set_play_mode(True)
+    return state, logic
+
+
+def test_plugin_despawn_and_spawn_update_the_sessions_entity_index():
+    """PluginAPI.spawn/despawn changed the thing list without telling the
+    session: a despawned monster kept being simulated (and shooting) from the
+    stale index, and a spawned one had no AI and no name for I/O."""
+    from plugins.api import RuntimeAPI
+
+    grunt = Monster(pos=[300.0, 64.0, 0.0], properties={"name": "grunt"})
+    state, logic = _playing([grunt])
+    try:
+        api = RuntimeAPI(SimpleNamespace(emit=lambda *a, **k: None, _log=print),
+                         logic, SimpleNamespace(name="test"))
+        logic.monster_ai.monster_states[id(grunt)] = {"shoot_timer": 0.0}
+
+        assert api.despawn(grunt) is True
+        assert grunt not in logic._monster_things
+        assert logic._find_entity_by_name("grunt") is None
+        assert id(grunt) not in logic.monster_ai.monster_states
+
+        spawned = api.spawn(Monster, (100.0, 64.0, 0.0), {"name": "fresh"})
+        assert spawned in logic._monster_things
+        assert logic._find_entity_by_name("fresh") is spawned
+    finally:
+        logic.stop()
+
+
+def test_console_delete_during_play_removes_the_entity_from_the_session():
+    from editor.console_commands import ConsoleCommandHandler
+
+    grunt = Monster(pos=[300.0, 64.0, 0.0], properties={"name": "grunt"})
+    wall = box_brush("wall", (200, 64, 0), (32, 128, 256))
+    ground = box_brush("ground", (0, -16, 0), (4096, 32, 4096))
+    state, logic = _playing([grunt], [ground, wall])
+    try:
+        window = SimpleNamespace(state=state,
+                                 view_3d=SimpleNamespace(logic_thread=logic,
+                                                         play_mode=True),
+                                 update_all_ui=lambda: None)
+        console = ConsoleCommandHandler(window)
+        console.cmd_delete("grunt")
+        assert grunt not in logic._monster_things
+        assert logic._find_entity_by_name("grunt") is None
+
+        console.cmd_delete("wall")
+        logic._tick(logic.TICK_DURATION)          # collision rebuilds at tick end
+        assert all(b is not wall for b in logic._collision_brushes_cache)
+    finally:
+        logic.stop()
+
+
+def test_objects_added_or_removed_in_the_editor_during_play_join_the_session():
+    """Clone/paste/place/Delete in the editor during play change the world's
+    lists with only an undo checkpoint -- taken before the change."""
+    grunt = Monster(pos=[300.0, 64.0, 0.0], properties={"name": "grunt"})
+    ground = box_brush("ground", (0, -16, 0), (4096, 32, 4096))
+    state, logic = _playing([grunt], [ground])
+    try:
+        state.save_state()                         # checkpoint, then the edit
+        logic._tick(logic.TICK_DURATION)           # a tick lands in between
+        added = Monster(pos=[0.0, 64.0, 300.0], properties={"name": "added"})
+        wall = box_brush("wall", (200, 64, 0), (32, 128, 256))
+        state.things.append(added)
+        state.brushes.append(wall)
+        logic._tick(logic.TICK_DURATION)
+        assert added in logic._monster_things
+        assert logic._find_entity_by_name("added") is added
+        assert any(b is wall for b in logic._collision_brushes_cache)
+
+        state.save_state()
+        state.things.remove(grunt)
+        logic._tick(logic.TICK_DURATION)
+        assert grunt not in logic._monster_things
+    finally:
+        logic.stop()

@@ -724,6 +724,8 @@ class RuntimeAPI:
                 things.append(ent)
             except Exception:
                 pass
+            else:
+                self._entities_changed()
         try:
             self._manager.emit("entity_spawned", logic=self.logic, entity=ent,
                                by=self._plugin.name)
@@ -738,9 +740,29 @@ class RuntimeAPI:
             return False
         try:
             things.remove(entity)
-            return True
         except ValueError:
             return False
+        self._entities_changed()
+        return True
+
+    def _entities_changed(self):
+        """Tell a running session its thing list changed.
+
+        The logic thread indexes entities (monsters for the AI, names and ids
+        for I/O) when play starts; without a rebuild a spawned monster had no
+        AI and a despawned one kept being simulated -- and shooting -- from
+        the stale index. Outside play there is no index to rebuild.
+        """
+        logic = self.logic
+        build = getattr(logic, "_build_entity_caches", None)
+        if build is None or not getattr(logic, "play_mode", False):
+            return
+        lock = getattr(logic, "_tick_lock", None)
+        if lock is None:
+            build()
+        else:
+            with lock:
+                build()
 
     # -- global store -------------------------------------------------------
     @property

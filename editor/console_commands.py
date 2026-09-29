@@ -1777,6 +1777,15 @@ entity to drive them from the I/O system.</i><br>
         else:
             if entity in self.editor_state.things:
                 self.editor_state.things.remove(entity)
+        if self._in_play_mode():
+            # The session's entity index would keep simulating (a monster,
+            # a timer) and resolving the deleted object, and its collision
+            # set would keep a deleted wall solid.
+            self._rebuild_logic_entity_caches()
+            if isinstance(entity, dict):
+                mark = getattr(self._logic_thread(), 'mark_collision_dirty', None)
+                if mark is not None:
+                    mark()
 
         debug_log("Info", f"Deleted entity: {name}")
         self.main_window.update_all_ui()
