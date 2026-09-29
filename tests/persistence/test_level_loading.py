@@ -166,3 +166,103 @@ def test_a_level_change_during_play_ends_the_session_before_the_swap(tmp_path):
     assert window.load_level_file(str(path)) is True
 
     assert window.calls == ["exit play", "replace scene", "enter play"]
+
+
+# ---------------------------------------------------------------------------
+# What the player carries through a level change
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def playing_logic():
+    """A real logic thread in play mode (not started: no tick runs)."""
+    from engine.logic_thread import LogicThread
+    from engine.player import Player
+    from engine.threaded_game_state import ThreadedGameState
+
+    logic = LogicThread(ThreadedGameState(), EditorState())
+    logic.player = Player(0.0, 0.0)
+    logic.set_play_mode(True)
+    yield logic
+    logic.set_play_mode(False)
+
+
+def _window_on(logic, starts_play=True):
+    """The window, with play stopped and started on the real logic thread."""
+    window = _Window()
+    window.view_3d.play_mode = True
+    window.view_3d.logic_thread = logic
+
+    def exit_play():
+        window.calls.append("exit play")
+        logic.set_play_mode(False)
+        window.view_3d.play_mode = False
+
+    def enter_play():
+        window.calls.append("enter play")
+        if starts_play:              # a map without a PlayerStart does not
+            logic.set_play_mode(True)
+            window.view_3d.play_mode = True
+
+    window._exit_play_mode = exit_play
+    window.enter_play_mode = enter_play
+    return window
+
+
+def _loadout(logic):
+    return (logic.active_weapon, logic.gun2_obtained, logic.player_ammo)
+
+
+def test_the_player_keeps_their_weapons_through_a_level_change(tmp_path, playing_logic):
+    """Ending play dropped the weapon and starting it again on the next map
+    cleared it, so a LevelChanger always sent the player on unarmed."""
+    path = tmp_path / "next.json"
+    path.write_text(json.dumps(LEVEL))
+    playing_logic.active_weapon = "gun2"
+    playing_logic.gun2_obtained = True
+    playing_logic.player_ammo = 5
+    window = _window_on(playing_logic)
+
+    assert window.load_level_file(str(path)) is True
+
+    assert window.calls == ["exit play", "replace scene", "enter play"]
+    assert playing_logic.play_mode
+    assert _loadout(playing_logic) == ("gun2", True, 5)
+
+
+def test_only_the_weapons_come_along(tmp_path, playing_logic):
+    path = tmp_path / "next.json"
+    path.write_text(json.dumps(LEVEL))
+    playing_logic.active_weapon = "gun1"
+    playing_logic.collected_keys.add("blue_key")
+    playing_logic.player_health = 40
+    window = _window_on(playing_logic)
+
+    window.load_level_file(str(path))
+
+    assert playing_logic.active_weapon == "gun1"
+    assert playing_logic.collected_keys == set()
+    assert playing_logic.player_health == 100
+
+
+def test_a_level_that_does_not_restart_play_hands_nothing_back(tmp_path, playing_logic):
+    """If play cannot restart (no PlayerStart), the weapons are not left
+    waiting to reappear the next time Play is pressed."""
+    path = tmp_path / "next.json"
+    path.write_text(json.dumps(LEVEL))
+    playing_logic.active_weapon = "gun1"
+    window = _window_on(playing_logic, starts_play=False)
+
+    window.load_level_file(str(path))
+    assert not playing_logic.play_mode
+    playing_logic.set_play_mode(True)
+
+    assert _loadout(playing_logic) == (None, False, 0)
+
+
+def test_stopping_and_starting_play_still_starts_unarmed(playing_logic):
+    playing_logic.active_weapon = "gun2"
+    playing_logic.gun2_obtained = True
+    playing_logic.player_ammo = 3
+    playing_logic.set_play_mode(False)
+    playing_logic.set_play_mode(True)
+    assert _loadout(playing_logic) == (None, False, 0)

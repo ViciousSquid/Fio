@@ -3985,6 +3985,12 @@ class MainWindow(QMainWindow):
             # plugins' on_play_stop) restores state by index into the world it
             # was started on, so it must run against that world, not the new one.
             was_playing = bool(getattr(self.view_3d, 'play_mode', False))
+            logic = getattr(self.view_3d, 'logic_thread', None)
+            # The player keeps their weapons through a level change: taken
+            # before the session ends (ending it drops them), handed back once
+            # play has restarted on the new level (starting it clears them).
+            loadout = (logic.carried_loadout()
+                       if was_playing and logic is not None else None)
             if was_playing:
                 self._exit_play_mode()
 
@@ -4048,6 +4054,9 @@ class MainWindow(QMainWindow):
             if was_playing:
                 print("[MainWindow] Restarting Play Mode with new level...")
                 self.enter_play_mode()
+                if (loadout is not None
+                        and getattr(self.view_3d, 'play_mode', False)):
+                    logic.restore_loadout(loadout)
 
             name = os.path.basename(file_path) if file_path else "generated level"
             print(f"[MainWindow] Successfully loaded {name}")
