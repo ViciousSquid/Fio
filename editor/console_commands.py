@@ -1,3 +1,4 @@
+import contextlib
 import os
 import json
 from PyQt5.QtWidgets import QMessageBox
@@ -10,7 +11,7 @@ from engine.spatial import set_authored_flag
 try:
     from .io_system import (
         get_connections, set_connections,
-        OutputConnection, get_output_names, get_input_names,
+        OutputConnection, add_connection, get_output_names, get_input_names,
         get_entity_type_for_io
     )
     IO_AVAILABLE = True
@@ -564,6 +565,9 @@ class ConsoleCommandHandler:
                 cam = self.main_window.view_3d.camera
                 pos = [cam.pos.x, cam.pos.y, cam.pos.z]
 
+        # Checkpoint before the change: undo restores the state before it.
+        self.editor_state.save_state()
+
         # Create portal A
         portal_a = Portal(pos=[pos[0] - 64, pos[1], pos[2]])
         portal_a.properties['name'] = name1
@@ -578,7 +582,6 @@ class ConsoleCommandHandler:
 
         self.editor_state.things.append(portal_a)
         self.editor_state.things.append(portal_b)
-        self.editor_state.save_state()
         self._rebuild_logic_entity_caches()
 
         debug_log("Info", f"Created portal pair: '{name1}' ↔ '{name2}' at ({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f})")
@@ -611,8 +614,10 @@ class ConsoleCommandHandler:
             for t in self.editor_state.things
         )
 
-        portal.properties['portal_target'] = target_name
         self.editor_state.save_state()
+        portal.properties['portal_target'] = target_name
+        touch(portal)
+        self._rebuild_logic_entity_caches()
 
         status = f"linked to '{target_name}'"
         if not target_exists:
@@ -638,19 +643,21 @@ class ConsoleCommandHandler:
             return
 
         # Find and update all matching portals
+        portals = [t for t in self.editor_state.things
+                   if isinstance(t, Portal) and t.properties.get('name') == name]
+        if portals:
+            self.editor_state.save_state()
         found = False
-        for t in self.editor_state.things:
-            if isinstance(t, Portal) and t.properties.get('name') == name:
-                t.properties['color'] = [r, g, b]
-                touch(t)
-                found = True
-                debug_log("Info", f"Portal '{name}' color set to ({r}, {g}, {b})")
+        for t in portals:
+            t.properties['color'] = [r, g, b]
+            touch(t)
+            found = True
+            debug_log("Info", f"Portal '{name}' color set to ({r}, {g}, {b})")
 
         if not found:
             debug_log("Error", f"Portal '{name}' not found")
             return
 
-        self.editor_state.save_state()
         self.main_window.update_all_ui()
 
     def cmd_portal_enable(self, args):
@@ -663,9 +670,9 @@ class ConsoleCommandHandler:
         name = args.strip()
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
+                self.editor_state.save_state()
                 t.properties['active'] = True
                 touch(t)
-                self.editor_state.save_state()
                 debug_log("Info", f"Portal '{name}' enabled")
                 self.main_window.update_all_ui()
                 return
@@ -681,9 +688,9 @@ class ConsoleCommandHandler:
         name = args.strip()
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
+                self.editor_state.save_state()
                 t.properties['active'] = False
                 touch(t)
-                self.editor_state.save_state()
                 debug_log("Info", f"Portal '{name}' disabled")
                 self.main_window.update_all_ui()
                 return
@@ -765,6 +772,7 @@ class ConsoleCommandHandler:
 
         target_name = portal.properties.get('portal_target', '')
 
+        self.editor_state.save_state()
         self.editor_state.things.remove(portal)
         deleted = [name]
 
@@ -775,7 +783,6 @@ class ConsoleCommandHandler:
                     deleted.append(target_name)
                     break
 
-        self.editor_state.save_state()
         self._rebuild_logic_entity_caches()
         debug_log("Info", f"Deleted portal(s): {', '.join(deleted)}")
         self.main_window.update_all_ui()
@@ -1419,8 +1426,9 @@ entity to drive them from the I/O system.</i><br>
                          if hasattr(entity, 'properties')
                          else entity.get('id', ''))
             try:
-                io._execute_input(entity_name, input_name, parameter,
-                                  "console", target_id=target_id)
+                with self._io_dispatch_lock():
+                    io._execute_input(entity_name, input_name, parameter,
+                                      "console", target_id=target_id)
                 debug_log("Info", f"✓ Fired input '{input_name}' on '{entity_name}'")
             except Exception as e:
                 debug_log("Error", f"ent_fire failed: {e}")
@@ -1458,7 +1466,8 @@ entity to drive them from the I/O system.</i><br>
             debug_log("Info", f"🔄 Toggling {entity_name}")
             io = self._get_io_manager()
             if io:
-                io._execute_input(entity_name, "Toggle", "", "console")
+                with self._io_dispatch_lock():
+                    io._execute_input(entity_name, "Toggle", "", "console")
             return
 
         # Generic entity fallback
@@ -1477,7 +1486,8 @@ entity to drive them from the I/O system.</i><br>
         if entity:
             io = self._get_io_manager()
             if io:
-                io._execute_input(entity_name, input_name, param, "console")
+                with self._io_dispatch_lock():
+                    io._execute_input(entity_name, input_name, param, "console")
             debug_log("Info", f"Sent input '{input_name}' to {entity_name}")
         else:
             debug_log("Error", f"Entity '{entity_name}' not found")
@@ -1499,6 +1509,7 @@ entity to drive them from the I/O system.</i><br>
             debug_log("Error", f"Entity '{name}' not found")
             return
 
+        self.editor_state.save_state()
         if isinstance(entity, dict):
             entity[key] = value
         else:
@@ -1506,7 +1517,8 @@ entity to drive them from the I/O system.</i><br>
         touch(entity)
 
         debug_log("Info", f"Set {name}.{key} = {value}")
-        self.editor_state.save_state()
+        # A name, id or portal target is indexed by the running logic thread.
+        self._rebuild_logic_entity_caches()
 
     def cmd_get_property(self, args):
         parts = args.split()
@@ -1582,32 +1594,39 @@ entity to drive them from the I/O system.</i><br>
             debug_log("Warning", f"Target '{tgt}' not found (connection will still be created)")
 
         # --- Create connection ---
+        # Aimed by UUID as well as by name when the target exists, as the
+        # editor's I/O panel does, so a later rename does not break it.
+        if target_ent is None:
+            target_id = ""
+        elif isinstance(target_ent, dict):
+            target_id = target_ent.get('id', '') or ''
+        else:
+            target_id = getattr(target_ent, 'properties', {}).get('id', '') or ''
         try:
-            conn = OutputConnection(outp, tgt, inp, param, delay, fire_once=False)
+            conn = OutputConnection(outp, tgt, inp, param, delay,
+                                    fire_once=False, target_id=target_id)
         except Exception as e:
             debug_log("Error", f"Failed to create connection: {e}")
             return
 
         # --- Attach connection safely ---
-        try:
-            if hasattr(source_ent, 'add_output_connection'):
-                source_ent.add_output_connection(conn)
-            else:
-                if not isinstance(source_ent, dict):
-                    debug_log("Error", f"Source '{src}' cannot store IO connections")
-                    return
-
-                source_ent.setdefault('_io_connections', []).append(conn)
-
-        except Exception as e:
-            debug_log("Error", f"Failed to attach connection: {e}")
+        # Thing.add_output_connection takes the connection's fields, not a
+        # connection, so passing one failed for every entity; add_connection
+        # stores it on a brush or a Thing alike and bumps the I/O revision.
+        if not isinstance(source_ent, dict) and not hasattr(source_ent, 'properties'):
+            debug_log("Error", f"Source '{src}' cannot store IO connections")
             return
-
-        # --- Persist state ---
+        # --- Checkpoint first: undo restores the state before the change ---
         try:
             self.editor_state.save_state()
         except Exception as e:
-            debug_log("Warning", f"Connection created but failed to save state: {e}")
+            debug_log("Warning", f"Could not checkpoint before connecting: {e}")
+        try:
+            add_connection(source_ent, conn)
+        except Exception as e:
+            self.editor_state.discard_last_checkpoint()
+            debug_log("Error", f"Failed to attach connection: {e}")
+            return
 
         # --- Final log ---
         debug_log(
@@ -1661,12 +1680,11 @@ entity to drive them from the I/O system.</i><br>
             debug_log("Warning", f"No matching connections on '{src}'")
             return
 
-        set_connections(source_ent, remaining)
-
         try:
             self.editor_state.save_state()
         except Exception as e:
-            debug_log("Warning", f"Disconnected but failed to save state: {e}")
+            debug_log("Warning", f"Could not checkpoint before disconnecting: {e}")
+        set_connections(source_ent, remaining)
 
         debug_log("Info", f"Removed {removed} connection(s) from '{src}'")
 
@@ -1704,26 +1722,26 @@ entity to drive them from the I/O system.</i><br>
             elif collect_type == "key":
                 new_prop.properties['sprite_path'] = new_prop.get_key_sprite_path(
                     new_prop.properties.get('collect_key_name', new_prop.DEFAULT_KEY_NAME))
+            self.editor_state.save_state()
             self.editor_state.things.append(new_prop)
             debug_log("Info", f"Spawned Prop collection: {item} (value={value}) named '{new_prop.properties['name']}'")
-            self.editor_state.save_state()
             self.main_window.update_all_ui()
 
         elif spawn_type == "light":
             new_light = Light(pos=[0, 100, 0])
             new_light.properties['name'] = f"Light_{self._spawn_counter}"
+            self.editor_state.save_state()
             self.editor_state.things.append(new_light)
             debug_log("Info", f"Spawned light at [0, 100, 0] named '{new_light.properties['name']}'")
-            self.editor_state.save_state()
             self.main_window.update_all_ui()
 
         elif spawn_type == "levelchanger":
             new_changer = LevelChanger(pos=[0, 40, 0])
             new_changer.properties['name'] = f"LevelChanger_{self._spawn_counter}"
             new_changer.properties['target_map'] = "Simple_Map_Test.json"
+            self.editor_state.save_state()
             self.editor_state.things.append(new_changer)
             debug_log("Info", f"Spawned LevelChanger at [0, 40, 0] named '{new_changer.properties['name']}'")
-            self.editor_state.save_state()
             self.main_window.update_all_ui()
 
         else:
@@ -2120,6 +2138,17 @@ entity to drive them from the I/O system.</i><br>
         view_3d = getattr(self.main_window, 'view_3d', None)
         return getattr(view_3d, 'logic_thread', None) if view_3d else None
 
+    def _io_dispatch_lock(self):
+        """The running logic thread's tick lock, for I/O sent from the console.
+
+        Console commands run on the UI thread; an input dispatched from here
+        runs its handler against the world the logic tick is advancing, so it
+        has to land between ticks, as play start/stop and save/load do.
+        """
+        logic = self._logic_thread()
+        lock = getattr(logic, '_tick_lock', None) if logic is not None else None
+        return lock if lock is not None else contextlib.nullcontext()
+
     def _rebuild_logic_entity_caches(self):
         """Tell a running logic thread that the thing list changed.
 
@@ -2131,7 +2160,15 @@ entity to drive them from the I/O system.</i><br>
         """
         logic = self._logic_thread()
         if logic is not None and hasattr(logic, '_build_entity_caches'):
-            logic._build_entity_caches()
+            # Console commands run on the UI thread. The rebuild replaces
+            # caches a tick walks (the Prop registry above all), so it must
+            # land between ticks, never inside one.
+            lock = getattr(logic, '_tick_lock', None)
+            if lock is None:
+                logic._build_entity_caches()
+            else:
+                with lock:
+                    logic._build_entity_caches()
 
     def _in_play_mode(self):
         view_3d = getattr(self.main_window, 'view_3d', None)

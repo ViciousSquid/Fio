@@ -89,3 +89,30 @@ def test_sprite_gl_cache_resolves_recipes_added_after_capacity_growth():
     second = renderer._sprite_gl_ids(table)
     assert second[1] == 102
     assert len(resolved) == 2
+
+
+@pytest.mark.gl
+def test_sprite_gl_cache_survives_the_render_buffers_alternating():
+    """Each render buffer's EntityTable interns its own recipe list and the
+    renderer sees them alternately; resolving must happen once per list, not
+    once per frame."""
+    from engine.renderer_core import BaseRenderer
+    import numpy as np
+
+    renderer = BaseRenderer.__new__(BaseRenderer)
+    renderer._sprite_recipes_seen = None
+    renderer._sprite_gl_by_id = np.zeros(0, dtype=np.int32)
+    renderer._sprite_gl_resolved = 0
+    resolved = []
+    renderer._resolve_sprite_recipe = lambda recipe: resolved.append(recipe) or 7
+
+    def table_of(recipes):
+        return type("Table", (), {"sprite_recipes": lambda self: recipes})()
+
+    front = table_of([(("idle", "idle.png", "sprites", True),)])
+    back = table_of([(("idle", "idle.png", "sprites", True),)])
+    for _ in range(10):
+        assert renderer._sprite_gl_ids(front)[0] == 7
+        assert renderer._sprite_gl_ids(back)[0] == 7
+    assert len(resolved) == 2, (
+        "%d resolutions for two recipe lists over ten frames" % len(resolved))

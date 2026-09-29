@@ -178,6 +178,33 @@ def restore_default_pixel_store():
     gl.glPixelStorei(gl.GL_UNPACK_SKIP_PIXELS, 0)
 
 
+#: Recipe lists whose GL resolution a renderer keeps parked: the two render
+#: buffers' entity tables, the editor's own, and a spare for a table replaced
+#: by a new play session.
+_PARKED_RECIPE_LISTS = 4
+
+
+def _swap_recipe_cache(parked, current, recipes, fresh):
+    """Park *current* (``(list, *state)``) and return *recipes*' state.
+
+    A renderer resolves each interned recipe list once, but the lists come
+    from several tables that take turns. Keyed by the list's identity, and
+    the entry holds the list, so a recycled ``id`` cannot alias another.
+    """
+    if current[0] is not None:
+        if len(parked) >= _PARKED_RECIPE_LISTS:
+            parked.clear()
+        parked[id(current[0])] = current
+    entry = parked.pop(id(recipes), None)
+    if entry is not None and entry[0] is recipes:
+        return entry
+    return (recipes,) + tuple(fresh)
+
+
+#: Seconds before a model path that failed to load is tried again.
+_MODEL_RETRY_S = 5.0
+
+
 class BrushGeoMesh:
     """GPU mesh for one angled (convex-geometry) brush.
 
@@ -336,6 +363,8 @@ class BaseRenderer:
     def __init__(self, texture_loader, initial_grid_size, initial_world_size, config=None):
         self.texture_manager = {}
         self.loaded_models = {}
+        #: model path -> perf_counter() of its last failed load.
+        self._failed_models = {}
 
         # Glass samples the already-rendered scene for screen-space transmission.
         # Kept lazy because most frames contain no glass at all.
@@ -524,10 +553,18 @@ class BaseRenderer:
         self._water_surface_ebo = None
         self._water_surface_index_count = 0
 
-        # Convex geometry meshes, keyed by (RenderTable generation, geometry_id).
-        # Entries are rebuilt when the dense geometry signature changes and
-        # dropped after going unused for a while (see _begin_geo_frame).
+        # Convex geometry meshes, owned by geometry signature. The signature
+        # carries the brush's geometry epoch, which every change to its shape
+        # or face mapping bumps, so it names the mesh's content exactly -- and
+        # it survives a table reconcile and is the same in both render
+        # buffers' tables. Keying by (table generation, geometry id) rebuilt
+        # every convex mesh, once per buffer, after any structural edit.
+        # Meshes are dropped after going unused for a while (_begin_geo_frame).
         self._geo_mesh_cache = {}
+        #: id(GeometryRecord) -> mesh: the per-frame lookup, which does not
+        #: hash the signature. Validated against the record's signature, so a
+        #: recycled id cannot alias; cleared with each stale-mesh sweep.
+        self._geo_mesh_by_record = {}
         self._geo_mesh_frame = 0
 
         self._shader_init_failed = False
@@ -2220,6 +2257,14 @@ layout (location = 10) in float iInstanceAlpha;
         if model is not None:
             return model
 
+        # A path that failed a moment ago is not retried every frame: every
+        # draw, cull and shadow pass asks for it, and each retry was a
+        # filesystem probe, a parse attempt and a log line. Retried after
+        # _MODEL_RETRY_S, so a model added while Fio runs still appears.
+        failed = self.__dict__.setdefault('_failed_models', {}).get(filename)
+        if failed is not None and time.perf_counter() - failed < _MODEL_RETRY_S:
+            return None
+
         # Cache miss only: normalise alternate slash/absolute-path spellings
         # so editor/package/file-dialog paths still collapse to one resource.
         original_filename = str(filename)
@@ -2244,8 +2289,7 @@ layout (location = 10) in float iInstanceAlpha;
                 full_path = original_filename
 
         if not os.path.exists(full_path):
-            print(f"Failed to load model: {filename}")
-            return None
+            return self._model_load_failed(filename)
 
         print(f"Loading model: {full_path}")
 
@@ -2269,9 +2313,17 @@ layout (location = 10) in float iInstanceAlpha;
         if model.is_loaded:
             self.loaded_models[cache_key] = model
             self.loaded_models[filename] = model
+            self.__dict__.setdefault('_failed_models', {}).pop(filename, None)
             return model
 
-        print(f"Failed to load model: {filename}")
+        return self._model_load_failed(filename)
+
+    def _model_load_failed(self, filename):
+        """Remember a failed model path; report it the first time only."""
+        failed = self.__dict__.setdefault('_failed_models', {})
+        if filename not in failed:
+            print(f"Failed to load model: {filename}")
+        failed[filename] = time.perf_counter()
         return None
 
     def get_loaded_model(self, filename):
@@ -2469,8 +2521,13 @@ layout (location = 10) in float iInstanceAlpha;
         """
         recipes = table.model_recipes()
         if recipes is not self._model_radius_recipes_seen:
-            self._model_radius_recipes_seen = recipes
-            self._model_radius_by_recipe = np.zeros(0, dtype=np.float64)
+            # As for sprites: park the other buffer's radii, do not re-measure
+            # every mesh each time the buffers alternate.
+            (self._model_radius_recipes_seen,
+             self._model_radius_by_recipe) = _swap_recipe_cache(
+                self.__dict__.setdefault('_model_radius_parked', {}),
+                (self._model_radius_recipes_seen, self._model_radius_by_recipe),
+                recipes, (np.zeros(0, dtype=np.float64),))
         radii = self._model_radius_by_recipe
         if len(radii) < len(recipes):
             grown = np.full(len(recipes), np.inf, dtype=np.float64)
@@ -2750,13 +2807,17 @@ layout (location = 10) in float iInstanceAlpha;
         """
         recipes = table.sprite_recipes()
         if recipes is not self._sprite_recipes_seen:
-            # A different projection, so a different id space -- a new play
-            # session builds a new EntityTable while the renderer outlives it.
-            # Identity of the recipe list is the cheapest way to notice, and
-            # the list outlives nothing: holding it does not keep the table.
-            self._sprite_recipes_seen = recipes
-            self._sprite_gl_by_id = np.zeros(0, dtype=np.int32)
-            self._sprite_gl_resolved = 0
+            # A different projection, so a different id space. The two render
+            # buffers' tables alternate every frame, each with its own list,
+            # so the other list's resolution is parked rather than dropped --
+            # dropping it re-resolved every recipe on every frame, retrying
+            # the file load of any sprite that is missing.
+            (self._sprite_recipes_seen, self._sprite_gl_by_id,
+             self._sprite_gl_resolved) = _swap_recipe_cache(
+                self.__dict__.setdefault('_sprite_gl_parked', {}),
+                (self._sprite_recipes_seen, self._sprite_gl_by_id,
+                 self._sprite_gl_resolved),
+                recipes, (np.zeros(0, dtype=np.int32), 0))
         cached = self._sprite_gl_by_id
         resolved = self._sprite_gl_resolved
         recipe_count = len(recipes)
@@ -5340,6 +5401,9 @@ layout (location = 10) in float iInstanceAlpha;
                  if self._geo_mesh_frame - m.frame > 240]
         for k in stale:
             self._delete_geo_mesh(self._geo_mesh_cache.pop(k))
+        # The fast index may name deleted meshes and records that no longer
+        # exist; it is only a shortcut into the cache, so rebuild it lazily.
+        self._geo_mesh_by_record.clear()
 
     @staticmethod
     def _delete_geo_mesh(mesh):
@@ -5384,24 +5448,24 @@ layout (location = 10) in float iInstanceAlpha;
         if record is None or record.convex is None or not record.convex.is_valid:
             return None
         key = record.signature
-        cache_key = ((geometry_generation, int(geometry_id))
-                     if geometry_id is not None else id(record))
-        mesh = self._geo_mesh_cache.get(cache_key)
-        if mesh is not None and mesh.key == key:
+        by_record = self._geo_mesh_by_record
+        mesh = by_record.get(id(record))
+        if mesh is not None and (mesh.key is key or mesh.key == key):
             mesh.frame = self._geo_mesh_frame
             return mesh
-        try:
-            new = self._build_geo_mesh(record, record.convex, key)
-        except Exception as e:
-            print(f"[GeoMesh] build failed: {e}")
-            new = None
-        if mesh is not None:
-            self._delete_geo_mesh(mesh)
-            self._geo_mesh_cache.pop(cache_key, None)
-        if new is not None:
-            new.frame = self._geo_mesh_frame
-            self._geo_mesh_cache[cache_key] = new
-        return new
+        mesh = self._geo_mesh_cache.get(key)
+        if mesh is None:
+            try:
+                mesh = self._build_geo_mesh(record, record.convex, key)
+            except Exception as e:
+                print(f"[GeoMesh] build failed: {e}")
+                mesh = None
+            if mesh is None:
+                return None
+            self._geo_mesh_cache[key] = mesh
+        mesh.frame = self._geo_mesh_frame
+        by_record[id(record)] = mesh
+        return mesh
 
     def _build_geo_mesh(self, record, convex, key):
         origin = record.origin
@@ -5697,6 +5761,7 @@ layout (location = 10) in float iInstanceAlpha;
         for mesh in self._geo_mesh_cache.values():
             self._delete_geo_mesh(mesh)
         self._geo_mesh_cache.clear()
+        self._geo_mesh_by_record.clear()
         # Shadow resources. These are owned by this renderer alone and nothing
         # outside it holds their names, so they have to be released here or a
         # renderer rebuild (a render-mode or shadow-quality change) strands the

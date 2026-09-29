@@ -78,7 +78,7 @@ from itertools import chain
 import glm
 import numpy as np
 
-from .change_journal import JOURNAL, OVERFLOW, STATE, is_tracked
+from .change_journal import JOURNAL, OVERFLOW, STATE, VISIBILITY, is_tracked
 from .portal_transform import basis_from_rotation
 
 # Defensive, as everywhere else in engine/: editor.things pulls in PyQt5, and
@@ -796,6 +796,7 @@ class EntityTable:
             pass
         elif changes is OVERFLOW:
             self.refresh_rows(things, range(n))
+            self._resolve_portal_links(things)
         elif changes:
             self._apply_changes(things, changes)
         if len(self._poll_slots):
@@ -856,16 +857,25 @@ class EntityTable:
         slot_of = self._slot_of_obj
         moved = []
         state = []
+        shown = []
         for oid, flags in changes.items():
             slot = slot_of.get(oid)
             if slot is None:
                 continue
             if flags & STATE:
                 state.append(slot)
-            else:
+                continue
+            if flags & VISIBILITY:
+                shown.append(slot)
+            if flags & ~VISIBILITY:
                 moved.append(slot)
         if moved:
             self._read_positions(things, moved)
+        if shown:
+            # A park or unpark: the live flag alone, nothing authored.
+            self.rows_read += len(shown)
+            self.hidden[shown] = [
+                bool(_props_of(things[s]).get('hidden', False)) for s in shown]
         if state:
             self.refresh_rows(things, state)
             # I/O can retarget or rename a portal; links are resolved by name.

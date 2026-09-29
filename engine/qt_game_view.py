@@ -401,6 +401,11 @@ class QtGameView(QOpenGLWidget):
         # Already cached?
         if clean_name in self.sound_pool:
             return self.sound_pool[clean_name]
+        # No audio device: nothing can load. Its failure was reported once
+        # when the mixer was probed; do not probe the disk and log two more
+        # lines for every sound the game asks for.
+        if not self._ensure_pygame_mixer():
+            return None
         
         # Try to load on-demand
         path = os.path.join(os.getcwd(), 'assets', 'sounds', clean_name)

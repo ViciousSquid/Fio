@@ -24,7 +24,7 @@ from .threaded_game_state import ThreadedGameState, PublishedBrushes, PublishedE
 from .player import Player
 from .camera import Camera
 from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
-from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
+from .brush_geometry import build_collision_mesh, brush_has_geometry
 from .prop_runtime import PropSession
 from .change_journal import JOURNAL, STATE, moved, touch
 from .mover_table import MoverTable
@@ -669,12 +669,18 @@ class LogicThread(threading.Thread):
             debug_log("Collision", f"Prepared mesh collision for {count} angled brush(es)")
         return count
 
-    @staticmethod
-    def _clear_brush_collision(brush):
+    #: What build_collision_mesh attaches, and all a revert may remove. The
+    #: rest of GEO_RUNTIME_KEYS is the brush's geometry identity and cache:
+    #: popping ``_geo_epoch`` gave every angled brush a new epoch behind the
+    #: render tables' back at each play start/stop, so their rows held stale
+    #: records and every convex shape was re-derived.
+    _COLLISION_KEYS = ('_collision_mode', '_mesh_triangles', '_mesh_bounds',
+                       '_mesh_planes')
+
+    @classmethod
+    def _clear_brush_collision(cls, brush):
         """Strip runtime mesh-collision keys so the brush reverts to AABB."""
-        for k in GEO_RUNTIME_KEYS:
-            if k in ('_geo_cache', '_geo_cache_sig'):
-                continue  # keep the geometry render/query cache
+        for k in cls._COLLISION_KEYS:
             brush.pop(k, None)
 
     def _clear_angled_brush_collision(self):
@@ -1292,6 +1298,7 @@ class LogicThread(threading.Thread):
 
             # Clear monster projectiles
             self._monster_projectiles.clear()
+            self._projectile_positions = _NO_PROJECTILES
 
             # Clear gunfire events
             self._gunfire_events.clear()
@@ -1376,6 +1383,7 @@ class LogicThread(threading.Thread):
 
             # Clear monster projectiles
             self._monster_projectiles.clear()
+            self._projectile_positions = _NO_PROJECTILES
 
             # Clear gunfire events
             self._gunfire_events.clear()
@@ -1511,9 +1519,11 @@ class LogicThread(threading.Thread):
             return
         if clear_dead:
             self._monster_spawn_health = {}
+        reset = []
         for thing in self.things:
             if not isinstance(thing, MonsterThing):
                 continue
+            reset.append(thing)
             if clear_dead:
                 try:
                     self._monster_spawn_health[thing.properties.get('id')] = \
@@ -1530,6 +1540,9 @@ class LogicThread(threading.Thread):
                 thing.properties['awake'] = False
             else:
                 thing.properties['awake'] = True
+        # dead and is_shooting choose the sprite: without this a monster left
+        # mid-shot, or dead, when play stopped kept that sprite in the editor.
+        JOURNAL.record_many(reset, STATE)
 
     def _start_speakers_on_spawn(self):
         """Turn on speakers authored with Start On when the player spawns.
@@ -3743,12 +3756,6 @@ class LogicThread(threading.Thread):
     #: Player hit sphere for projectiles.
     PROJECTILE_PLAYER_RADIUS = 32.0
 
-    @staticmethod
-    def _monster_alive(monsters):
-        return np.fromiter(
-            (not (m.properties.get('dead', False) or m.properties.get('hidden', False))
-             for m in monsters), dtype=bool, count=len(monsters))
-
     def _projectile_monster_candidates(self, pos32, owners):
         """``(projectile, monster row)`` pairs inside a monster's hit sphere.
 
@@ -4296,7 +4303,8 @@ class LogicThread(threading.Thread):
 
         write_state.projectiles = (
             getattr(self, '_projectile_positions', _NO_PROJECTILES)
-            if getattr(self, '_monster_projectiles', None) else _NO_PROJECTILES)
+            if self.play_mode and getattr(self, '_monster_projectiles', None)
+            else _NO_PROJECTILES)
         write_state.monster_debug_active = self.monster_ai.monster_debug_active
         write_state.monster_debug_rays = list(self.monster_ai._debug_rays)
 

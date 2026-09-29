@@ -2056,6 +2056,13 @@ class MainWindow(QMainWindow):
                 brush['textures'][face_name] = texture_name
         else:
             brush['textures'][face_name] = texture_name
+        if brush_geometry.brush_has_geometry(brush):
+            # The derived faces copied the old texture, and the GPU mesh is
+            # keyed by the geometry signature: both must move on.
+            brush_geometry.invalidate_geometry_cache(brush)
+        # The face may only be hovered, not selected, so the checkpoint above
+        # did not journal it for the render projection.
+        self.state.mark_lighting_dirty([brush])
 
         # Remember the last-textured face so the rotate-texture button / Page
         # Up-Down keys know which face to act on when nothing is hovered.
@@ -2452,10 +2459,13 @@ class MainWindow(QMainWindow):
         inspector = getattr(self, 'surface_inspector', None)
         if inspector is not None and inspector.target is not None:
             rebound = _rebind(inspector.target)
+            # Re-pointed, never re-opened: undo is not a window action.
             if rebound is None:
-                inspector.set_target(None, None, raise_window=False)
+                inspector.set_target(None, None, raise_window=False,
+                                     reveal=False)
             elif rebound is not inspector.target:
-                inspector.set_target(rebound[0], rebound[1], raise_window=False)
+                inspector.set_target(rebound[0], rebound[1],
+                                     raise_window=False, reveal=False)
             else:
                 inspector.refresh_from_face()
 

@@ -368,3 +368,56 @@ def test_resizing_the_target_between_frames_is_harmless(renderer, context):
                               brushes, things, None, config,
                               brush_slots=config["all_brush_slots"])
     gl.glViewport(0, 0, SIZE, SIZE)
+
+
+def test_a_structural_edit_does_not_rebuild_unchanged_geometry_meshes(
+        renderer, context):
+    """Both render buffers' tables, across a reconcile, share one mesh per
+    unchanged angled brush. The cache was keyed by (table generation,
+    geometry id), and every reconcile moves the generation: adding one box
+    rebuilt every convex mesh on the map, once per buffer."""
+    import numpy as np
+    from engine import brush_geometry as bg
+    from engine.render_table import RenderTable
+    from tests.helpers.worlds import box_brush
+
+    ramps = []
+    for i in range(6):
+        ramp = box_brush("ramp%d" % i, (200 * i, 32, 0), (128, 64, 128))
+        bg.clip_brush(ramp, (0.0, 1.0, 1.0), 20.0)
+        ramps.append(ramp)
+
+    built = []
+    original = renderer._build_geo_mesh
+
+    def counting(record, convex, key):
+        built.append(key)
+        return original(record, convex, key)
+
+    renderer._build_geo_mesh = counting
+    context.bind()
+    front, back = RenderTable(), RenderTable()
+    front.sync(ramps, 1)
+    back.sync(ramps, 1)
+    for table in (front, back):
+        renderer._prepare_geo_meshes(table, np.arange(table.count, dtype=np.int32))
+    assert len(built) == len(ramps), (
+        "the two buffers' tables built %d meshes for %d identical angled "
+        "brushes; each brush's mesh must be built once" % (len(built), len(ramps)))
+
+    # A structural edit: one new box. Both tables reconcile.
+    scene = ramps + [box_brush("new", (0, 500, 0))]
+    for table in (front, back):
+        generation = table.generation
+        table.sync(scene, 2, dirty_objects={id(scene[-1])})
+        assert table.generation != generation
+        renderer._prepare_geo_meshes(table, np.arange(table.count, dtype=np.int32))
+    assert len(built) == len(ramps), (
+        "adding one box rebuilt %d unchanged convex meshes"
+        % (len(built) - len(ramps)))
+
+    # A real shape change still builds a new mesh for that brush alone.
+    bg.clip_brush(ramps[0], (1.0, 0.0, 0.0), 10.0)
+    front.sync(scene, 3, dirty_objects={id(ramps[0])})
+    renderer._prepare_geo_meshes(front, np.arange(front.count, dtype=np.int32))
+    assert len(built) == len(ramps) + 1
