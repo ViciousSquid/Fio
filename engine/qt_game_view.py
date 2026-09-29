@@ -2116,6 +2116,9 @@ class QtGameView(QOpenGLWidget):
         p2_health = getattr(render_state, 'player2_health', 100)
         p2_max_health = getattr(render_state, 'player2_max_health', 100)
         p2_dead = getattr(render_state, 'player2_dead', False)
+        health_hud_alpha = max(
+            0.0, min(1.0, float(getattr(render_state, "hud_health_alpha", 0.5)))
+        )
         painter.save()
         painter.setClipRect(half, 0, half, h)
         margin = 1
