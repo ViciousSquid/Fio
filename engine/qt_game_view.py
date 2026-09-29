@@ -1947,7 +1947,7 @@ class QtGameView(QOpenGLWidget):
         painter.setOpacity(hud_alpha * health_hud_alpha)
         painter.setPen(self._hud_count_shadow_pen)
         painter.drawText(health_x + 2, health_y + 2, health_text)
-        painter.setPen(self._hud_health_orange)
+        painter.setPen(health_color)
         painter.drawText(health_x, health_y, health_text)
         painter.restore()
 
@@ -2122,9 +2122,26 @@ class QtGameView(QOpenGLWidget):
         health_font = QFont(self._hud_health_font)
         health_font.setPointSize(max(42, min(68, int(h * 0.085))))
         painter.save()
-        painter.setOpacity(hud_alpha)
+        painter.setOpacity(hud_alpha * health_hud_alpha)
         painter.setFont(health_font)
-        painter.setPen(self._hud_health_orange)
+        p2_health_ratio = max(
+            0.0,
+            min(
+                1.0,
+                float(p2_health) / float(p2_max_health)
+                if float(p2_max_health) > 0.0 else 0.0,
+            ),
+        )
+        full_r = self._hud_health_orange.red()
+        full_g = self._hud_health_orange.green()
+        full_b = self._hud_health_orange.blue()
+        low_r, low_g, low_b = 100, 0, 0
+        p2_health_color = QColor(
+            int(low_r + (full_r - low_r) * p2_health_ratio),
+            int(low_g + (full_g - low_g) * p2_health_ratio),
+            int(low_b + (full_b - low_b) * p2_health_ratio),
+        )
+        painter.setPen(p2_health_color)
         health_text = str(int(p2_health))
         metrics = QFontMetrics(health_font)
         painter.drawText(
