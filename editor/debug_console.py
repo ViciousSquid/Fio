@@ -784,10 +784,7 @@ class DebugConsole(QWidget):
                 version_text,
             )
             if version_match:
-                version_html = self._version_banner_html(
-                    version_match.group(1),
-                    include_version_word=version_text.lower().startswith("version "),
-                )
+                version_html = self._version_banner_html(version_match.group(1))
                 html = f'<span style="color: {color};">{version_html}</span><br>'
                 cursor = self.console.textCursor()
                 cursor.movePosition(QTextCursor.End)
@@ -911,7 +908,7 @@ class DebugConsole(QWidget):
         self.message_count += 1
         self.count_label.setText(f"{self.message_count} messages")
 
-    def _version_banner_html(self, version: str, include_version_word: bool = False) -> str:
+    def _version_banner_html(self, version: str) -> str:
         """Render the startup version banner without entity-filter links."""
         parts = version.split('.')
         if len(parts) != 4:
@@ -923,8 +920,6 @@ class DebugConsole(QWidget):
         version_style = 'color: #F08000; font-weight: bold;'
 
         rendered = [f'<span style="{white_style}">Fio version</span> ']
-        if include_version_word:
-            rendered.append(f'<span style="{white_style}">version</span> ')
         for index, part in enumerate(parts):
             style = version_style if index < 3 else white_style
             rendered.append(f'<span style="{style}">{part}</span>')
