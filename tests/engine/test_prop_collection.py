@@ -146,3 +146,73 @@ def test_cigarette_is_a_non_firing_weapon():
 
     assert "cig" in NON_FIRING_WEAPONS
     assert "sword" not in NON_FIRING_WEAPONS
+
+
+# ---------------------------------------------------------------------------
+# There is no "custom" collection type
+# ---------------------------------------------------------------------------
+
+def test_there_is_no_custom_collection_type():
+    assert Prop.COLLECT_TYPES == ("health", "ammo", "weapon", "key")
+
+
+def test_the_showcase_shotgun_is_a_gun_again():
+    """_SHOWCASE's gun2 pickup came out of the Pickup-to-Prop migration as
+    collect_type "custom" with the gun's sprite. Walking over it made it
+    vanish and gave the player nothing. As authored then, it must now hand
+    over the gun."""
+    prop = Prop(properties={
+        "name": "Pickup_1", "collect_enabled": True, "collect_type": "custom",
+        "collect_weapon": "gun2", "collect_activation": "walk_over",
+        "sprite_path": "assets/sprites/gun2.png", "collect_custom_sprite": "",
+    })
+    logic = _logic_for(prop)
+    session = PropSession(logic)
+    session.start()
+
+    assert session.collect_prop(prop) is True
+    assert logic.active_weapon == "gun2"
+    assert logic.gun2_obtained is True
+    assert logic.player_ammo >= 8
+
+
+@pytest.mark.parametrize("sprite, kind, field, value", [
+    ("assets/sprites/gun1.png", "weapon", "collect_weapon", "gun1"),
+    ("assets/sprites/cig.png", "weapon", "collect_weapon", "cig"),
+    ("assets/sprites/redkey.png", "key", "collect_key_name", "red_key"),
+    ("assets/sprites/ammo.png", "ammo", None, None),
+    ("assets/sprites/pickup.png", "health", None, None),
+    ("assets/sprites/some_trophy.png", "health", None, None),
+])
+def test_an_old_custom_pickup_is_read_from_its_sprite(sprite, kind, field, value):
+    prop = Prop(properties={"collect_enabled": True, "collect_type": "custom",
+                            "sprite_path": sprite})
+    assert prop.properties["collect_type"] == kind
+    if field:
+        assert prop.properties[field] == value
+
+
+def test_a_health_pickup_keeps_its_own_sprite():
+    prop = Prop(properties={"collect_enabled": True, "collect_type": "health",
+                            "collect_custom_sprite": "assets/sprites/medkit.png"})
+    assert prop.properties["collect_type"] == "health"
+    assert prop.get_collect_sprite_path() == "assets/sprites/medkit.png"
+
+
+def test_no_shipped_map_has_a_custom_pickup():
+    import json
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2] / "maps"
+    offenders = []
+    for path in root.rglob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            continue
+        things = data.get("things", []) if isinstance(data, dict) else []
+        for thing in things:
+            props = thing.get("properties", {}) if isinstance(thing, dict) else {}
+            if props.get("collect_type", "health") not in Prop.COLLECT_TYPES:
+                offenders.append("%s: %s" % (path.name, props.get("name")))
+    assert not offenders, offenders

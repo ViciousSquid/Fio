@@ -37,7 +37,48 @@ GUN_SPRITES = {
 }
 GUN_NAMES = tuple(GUN_SPRITES)
 
-COLLECT_TYPES = ('health', 'ammo', 'weapon', 'key', 'custom')
+COLLECT_TYPES = ('health', 'ammo', 'weapon', 'key')
+
+AMMO_SPRITE = 'assets/sprites/ammo.png'
+HEALTH_SPRITE = 'assets/sprites/health.png'
+
+
+def normalise_collect_type(properties):
+    """Make ``collect_type`` one of :data:`COLLECT_TYPES`, in place.
+
+    There used to be a fifth, ``custom``: a pickup that was consumed and gave
+    the player nothing. Maps still carry it -- the sample map's shotgun was
+    migrated from the old Pickup entity as ``custom`` with the gun's sprite, so
+    walking over it made it vanish and handed over no gun. A pickup's sprite
+    says what it is meant to be, so an unrecognised type is read from it: a
+    gun's sprite collects that gun, a key's that key, the ammo box ammo, and
+    anything else health.
+    """
+    kind = str(properties.get('collect_type', 'health') or 'health').lower()
+    if kind in COLLECT_TYPES:
+        properties['collect_type'] = kind
+        return kind
+    sprite = str(properties.get('collect_custom_sprite')
+                 or properties.get('sprite_path') or '').replace('\\', '/')
+    for weapon, path in GUN_SPRITES.items():
+        if sprite == path:
+            properties['collect_weapon'] = weapon
+            kind = 'weapon'
+            break
+    else:
+        for key_name, path in KEY_SPRITES.items():
+            if sprite == path:
+                properties['collect_key_name'] = key_name
+                kind = 'key'
+                break
+        else:
+            kind = 'ammo' if sprite == AMMO_SPRITE else 'health'
+    if kind != 'health':
+        # Only health pickups take a custom sprite; the rest look like what
+        # they give.
+        properties['collect_custom_sprite'] = ''
+    properties['collect_type'] = kind
+    return kind
 
 # Authored defaults. Mutable values are copied per Prop instance.
 PROP_DEFAULTS = {
@@ -124,6 +165,7 @@ class Prop(_ModelBase):
         for key, value in PROP_DEFAULTS.items():
             self.properties.setdefault(
                 key, list(value) if isinstance(value, list) else value)
+        normalise_collect_type(self.properties)
 
         if not authored_render_mode:
             self.properties['render_mode'] = self._implied_render_mode()
@@ -178,12 +220,8 @@ class Prop(_ModelBase):
                 self.properties.get('collect_weapon', 'gun1'),
                 self.GUN_SPRITES['gun1'])
         if collect_type == 'ammo':
-            return 'assets/sprites/ammo.png'
-        if collect_type == 'health':
-            return self.properties.get(
-                'collect_custom_sprite') or 'assets/sprites/health.png'
-        return self.properties.get(
-            'collect_custom_sprite') or self.get_sprite_path()
+            return AMMO_SPRITE
+        return self.properties.get('collect_custom_sprite') or HEALTH_SPRITE
 
     def get_instance_pixmap(self):
         """2D editor icon from the authored Prop sprite."""
