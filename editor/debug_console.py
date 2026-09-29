@@ -213,6 +213,7 @@ class DebugConsole(QWidget):
     _RE_ENTITY_DOT   = re.compile(r'(?<!=)\b([a-zA-Z0-9_]+)(?=\.)')
     _RE_ENTITY_TYPE  = re.compile(r'\b([a-zA-Z0-9_]+)(?=\s+\(type=)')
     _RE_ENTITY_QUOTE = re.compile(r"'([a-zA-Z0-9_]+)'")
+    _RE_HELP_QUOTE   = re.compile(r"(['\"])help\1")
     _RE_FIRE_OUTPUT  = re.compile(r'\b(fire_output)\b')
     _RE_NO_CONNS     = re.compile(r'(no connections|0 connections)')
     _RE_DELAYED      = re.compile(r'\[Delayed\]')
@@ -843,28 +844,35 @@ class DebugConsole(QWidget):
             _msg_temp
         )
 
-        # C. Entity Names: "'Name'"
+        # C. The built-in "help" command is presentation-only here; keep
+        # its bold orange styling but do not make it an entity filter link.
+        _msg_temp = self._RE_HELP_QUOTE.sub(
+            lambda m: f"{m.group(1)}<span style=\"{ENT_STYLE}\">help</span>{m.group(1)}",
+            _msg_temp
+        )
+
+        # D. Entity Names: "'Name'"
         _msg_temp = self._RE_ENTITY_QUOTE.sub(
             lambda m: f"'{get_link_html(m.group(1))}'", 
             _msg_temp
         )
 
-        # D. "fire_output" -> Green
+        # E. "fire_output" -> Green
         _msg_temp = self._RE_FIRE_OUTPUT.sub(
             f'<span style="{FIRE_STYLE}">\1</span>',
             _msg_temp
         )
 
-        # E. "no connections" -> Red/Orange
+        # F. "no connections" -> Red/Orange
         _msg_temp = self._RE_NO_CONNS.sub(
             f'<span style="{EMPTY_STYLE}">\1</span>',
             _msg_temp
         )
 
-        # F. Style [Delayed] prefix (orange)
+        # G. Style [Delayed] prefix (orange)
         _msg_temp = self._RE_DELAYED.sub('<span style="color: #FFB74D;">[Delayed]</span>', _msg_temp)
 
-        # G. Style arrow -> as green arrow character
+        # H. Style arrow -> as green arrow character
         _msg_temp = self._RE_ARROW.sub(' <span style="color: #66BB6A;">→</span> ', _msg_temp)
 
         # Restore protected HTML tags and generated external anchors.
@@ -899,21 +907,17 @@ class DebugConsole(QWidget):
         if len(parts) != 4:
             return f'<b>Fio version</b> <b>{version}</b>'
 
-        # Keep the linked major/minor/patch numbers visibly green.  Qt's
-        # rich-text serializer does not reliably preserve CSS colour on the
-        # <a> element itself, so the colour belongs on a child span inside
-        # the anchor.  The build suffix remains the familiar Fio orange.
-        link_style = 'color: #66BB6A; font-weight: bold; text-decoration: none;'
+        # Version numbers are presentation-only. Keep the established
+        # bold orange appearance, but do not make them entity-filter links.
         label_style = 'color: #F08000; font-weight: bold;'
 
         rendered = [f'<span style="{label_style}">Fio version</span> ']
         for part in parts[:3]:
             rendered.append(
-                f'<a href="filter:{part}">'
-                f'<span style="{link_style}">{part}</span></a>'
-                f'<b style="color: #F08000;">.</b>'
+                f'<span style="{label_style}">{part}</span>'
+                f'<b style="{label_style}">.</b>'
             )
-        rendered.append(f'<b style="{label_style}">{parts[3]}</b>')
+        rendered.append(f'<span style="{label_style}">{parts[3]}</span>')
         return ''.join(rendered)
     def _plugin_message_color(self, message: str) -> str:
         """Pick a colour for a 'Plugins' message based on its content.
