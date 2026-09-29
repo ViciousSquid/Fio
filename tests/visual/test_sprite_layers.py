@@ -295,3 +295,39 @@ def test_projectile_billboards_are_one_draw_and_reach_the_screen(renderer, conte
     # Nothing to draw is no draw at all.
     assert renderer.draw_billboards_instanced(
         projection, view, np.empty((0, 3), np.float32), (40.0, 40.0), red) == 0
+
+
+def test_building_the_array_leaves_the_pixel_store_as_qt_expects(renderer, context):
+    """Qt's HUD painter shares this context and uploads text glyphs assuming
+    4-byte rows. The array's uploads set alignment 1 and used to leave it
+    there, which sheared every small glyph of a ``message`` into stripes."""
+    import OpenGL.GL as gl
+
+    from engine.renderer_core import restore_default_pixel_store
+
+    red, blue = _solid((255, 0, 0)), _solid((0, 0, 255))
+    things = [_billboard(renderer, "a", (0.0, 60.0, 0.0), red),
+              _billboard(renderer, "b", (40.0, 60.0, -80.0), blue)]
+    # Rendered without the harness's readback, from the GL defaults.
+    projection, view, eye = glh.camera_matrices(aspect=1.0)
+    context.bind()
+    restore_default_pixel_store()
+    renderer.render_scene(projection, view, eye, [], things, None,
+                          glh.render_config(all_brushes=[], all_things=things),
+                          brush_slots=np.empty(0, dtype=np.int32))
+    gl.glFinish()
+    layers = renderer._sprite_layers
+    assert layers is not None and layers.count >= 2   # the array was built
+    # (PACK is not checked here: PyOpenGL's own image wrappers set it to 1
+    # on every upload. It governs readback only, never Qt's glyph uploads.)
+    assert gl.glGetIntegerv(gl.GL_UNPACK_ALIGNMENT) == 4
+
+    # And the reset the view runs before opening its painter covers any
+    # pass that leaks the state in future.
+    gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
+    gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 7)
+    gl.glPixelStorei(gl.GL_PACK_ALIGNMENT, 1)
+    restore_default_pixel_store()
+    assert gl.glGetIntegerv(gl.GL_UNPACK_ALIGNMENT) == 4
+    assert gl.glGetIntegerv(gl.GL_UNPACK_ROW_LENGTH) == 0
+    assert gl.glGetIntegerv(gl.GL_PACK_ALIGNMENT) == 4

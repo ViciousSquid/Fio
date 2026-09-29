@@ -50,6 +50,7 @@ from engine import brush_geometry
 from editor import component_edit
 from engine.threaded_game_state import ThreadedGameState, RenderState
 from engine.entity_table import EntityTable
+from engine.renderer_core import restore_default_pixel_store
 from engine.view_distance import ViewDistance
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
@@ -1697,6 +1698,7 @@ class QtGameView(QOpenGLWidget):
                        projection=self.projection_matrix, view=self.view_matrix,
                        camera_pos=camera_pos, play_mode=self.play_mode)
 
+        restore_default_pixel_store()
         painter = QPainter(self)
         if self.play_mode:
             self._draw_underwater_overlay(painter, render_state)

@@ -161,6 +161,23 @@ def timed_pass(name):
     return decorate
 
 
+def restore_default_pixel_store():
+    """Put the pixel-store state Qt's painter relies on back to GL defaults.
+
+    The renderer shares its context with the QPainter that draws the HUD,
+    and Qt uploads text glyphs into a texture assuming 4-byte row alignment
+    and no row length. Any pass that changes those for its own uploads and
+    leaves them changed shears every glyph that is not a multiple of four
+    pixels wide -- small HUD and ``message`` text came out garbled. Called
+    once before the painter opens, so no pass can leak into it.
+    """
+    gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
+    gl.glPixelStorei(gl.GL_PACK_ALIGNMENT, 4)
+    gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
+    gl.glPixelStorei(gl.GL_UNPACK_SKIP_ROWS, 0)
+    gl.glPixelStorei(gl.GL_UNPACK_SKIP_PIXELS, 0)
+
+
 class BrushGeoMesh:
     """GPU mesh for one angled (convex-geometry) brush.
 
