@@ -728,6 +728,18 @@ class DebugTablesWindow(QMainWindow):
             "render_stats", None
         )
         draw_calls = int(getattr(stats, "draw_calls", 0)) if stats else 0
+        entity_candidates = int(getattr(stats, "entity_candidates", 0)) if stats else 0
+        culled_entities = int(getattr(stats, "culled_entities", 0)) if stats else 0
+        layers = getattr(getattr(self.main_window.view_3d, "renderer", None),
+                         "_sprite_layers", None)
+        if layers is not None and layers.texture:
+            layer_bytes = int(layers.size * layers.size * 4 * layers.capacity * 4 / 3)
+            layer_line = (f"  sprite texture array  {layers.count} of {layers.capacity} layers "
+                          f"at {layers.size}x{layers.size}  (~{layer_bytes/1024/1024:.1f} MiB)")
+        elif layers is not None and layers.disabled:
+            layer_line = "  sprite texture array  DISABLED (per-texture runs in depth order)"
+        else:
+            layer_line = "  sprite texture array  not created"
         batched = int(getattr(stats, "batched_draws", 0)) if stats else 0
         tris = int(getattr(stats, "visible_tris", 0)) if stats else 0
         total = rbytes + ebytes
@@ -765,7 +777,11 @@ class DebugTablesWindow(QMainWindow):
             f"  prepare (logic thread)       {timings['prepare']:8.3f} ms\n"
             f"  paint (UI thread, total)     {timings['paint']:8.3f} ms\n"
             f"  draw calls {draw_calls:,}   batched draws {batched:,}   "
-            f"visible triangles {tris:,}\n\n"
+            f"visible triangles {tris:,}\n"
+            f"  entity rows offered {entity_candidates:,}   "
+            f"frustum-culled {culled_entities:,}   "
+            f"drawn {entity_candidates - culled_entities:,}\n"
+            + layer_line + "\n\n"
             "PASSES (inclusive)\n" + pass_lines
         )
 

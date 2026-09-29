@@ -133,11 +133,26 @@ def sort_into_runs(keys, secondary=None):
             raise ValueError("secondary key must have the same length as keys")
         order = np.lexsort((secondary, keys))
 
-    sorted_keys = keys[order]
-    boundaries = np.flatnonzero(
-        sorted_keys[1:] != sorted_keys[:-1]) + 1
+    return order, runs_in_order(keys[order])
+
+
+def runs_in_order(keys):
+    """Run boundaries of *keys* exactly as given, without reordering them.
+
+    ``sort_into_runs`` is right for a pass whose draw order is free -- opaque,
+    depth-tested geometry -- because sorting by state is what makes the runs
+    long.  A blended pass is not free: its order *is* its output, so the key
+    must not reorder it, and the runs are whatever equal-key stretches the
+    required order happens to contain.  Returns *starts* in the same form as
+    ``sort_into_runs``: one more entry than there are runs.
+    """
+    keys = np.asarray(keys)
+    count = len(keys)
+    if not count:
+        return np.zeros(1, dtype=np.int32)
+    boundaries = np.flatnonzero(keys[1:] != keys[:-1]) + 1
     starts = np.empty(len(boundaries) + 2, dtype=np.int32)
     starts[0] = 0
     starts[1:-1] = boundaries
     starts[-1] = count
-    return order, starts
+    return starts
