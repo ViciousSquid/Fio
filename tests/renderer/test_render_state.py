@@ -118,6 +118,50 @@ def test_the_batched_cull_agrees_with_the_scalar_one_everywhere(logic):
            batched[mismatch[0]], scalar[mismatch[0]]))
 
 
+@pytest.mark.parametrize("seed", range(4))
+def test_the_batched_cull_agrees_with_the_scalar_one_near_the_planes(logic, seed):
+    """Boxes crowded against every plane, from cameras looking every way.
+
+    The batched test is evaluated plane-major; the per-plane scalar loop is the
+    definition it has to reproduce, box for box, where it matters most -- on
+    the boundary.
+    """
+    thread = logic()
+    rng = np.random.default_rng(seed)
+    for _ in range(6):
+        eye = glm.vec3(*rng.uniform(-2000, 2000, 3))
+        look = glm.vec3(*rng.normal(size=3))
+        up = glm.vec3(0, 1, 0) if abs(glm.normalize(look).y) < 0.99 else glm.vec3(1, 0, 0)
+        projection = glm.perspective(glm.radians(float(rng.uniform(40, 110))),
+                                     float(rng.uniform(1.0, 2.4)), 1.0,
+                                     float(rng.uniform(1500, 6000)))
+        planes = thread._extract_frustum_planes(
+            projection * glm.lookAt(eye, eye + look, up))
+        halves = rng.uniform(1, 300, size=(1500, 3))
+        # Put each box's positive vertex within a few units of a random plane.
+        which = rng.integers(0, 6, size=1500)
+        p = np.asarray(planes)[which]
+        centers = np.asarray(eye) + rng.uniform(-6000, 6000, size=(1500, 3))
+        signed = (centers * p[:, :3]).sum(1) + (halves * np.abs(p[:, :3])).sum(1) + p[:, 3]
+        centers -= p[:, :3] * (signed - rng.uniform(-3, 3, 1500))[:, None]
+
+        batched = thread._aabb_in_frustum_batch(planes, centers, halves)
+        scalar = np.array([thread._aabb_in_frustum(planes, c, h)
+                           for c, h in zip(centers, halves)])
+        assert np.array_equal(batched, scalar)
+
+
+def test_the_batched_cull_takes_gathered_rows(logic):
+    """The cull hands it rows gathered by slot as well as the table's prefix."""
+    thread = logic()
+    planes = _frustum_looking_down_negative_z(thread)
+    bounds = np.array([[0, 0, -500, 32, 32, 32], [0, 0, 500, 32, 32, 32],
+                       [5000, 0, -100, 32, 32, 32], [0, 0, -900, 8, 8, 8]], float)
+    picked = bounds.take([3, 1, 0], axis=0)
+    assert thread._aabb_in_frustum_bounds(planes, picked).tolist() == [True, False, True]
+    assert thread._aabb_in_frustum_bounds(planes, bounds[:1]).tolist() == [True]
+
+
 def test_the_batched_cull_of_an_empty_scene_is_an_empty_result(logic):
     thread = logic()
     planes = _frustum_looking_down_negative_z(thread)
@@ -234,6 +278,7 @@ def test_a_mover_is_snapshotted_into_the_dense_render_table(logic):
     assert first.tolist() == [0.0, 0.0, -400.0]
 
     mover["pos"] = [0.0, 500.0, -400.0]
+    touch(mover)            # movers are not polled; a mover moved by hand says so
     assert table.center[slot].tolist() == first.tolist(), (
         "the dense frame projection changed before the next render-state publish")
 

@@ -62,21 +62,25 @@ def visible_xz_bounds(cam, corners, y_min, y_max,
     can see in the first.
 
     So the region is derived from the live camera instead.  *corners* are the
-    four far-plane corner points in world space; each is clipped as a segment
-    from *cam*, first to *max_dist* and then to the slab ``[y_min, y_max]`` the
-    world's geometry occupies.  The XZ bounds of what survives is the answer,
-    plus the camera's own XZ when it sits inside the slab, so nothing directly
-    beneath a first-person camera is ever dropped.
+    four far-plane corner points in world space; with *cam* they span the view
+    pyramid.  That pyramid is cut down to what lies within *max_dist* of the
+    camera, then clipped to the slab ``[y_min, y_max]`` the world's geometry
+    occupies, and the answer is the XZ bounds of what survives.
 
-    Both modes are served by the same arithmetic, and the degenerate one is the
-    safe one: at low pitch the corner rays stay inside the slab for their whole
-    length, the slab clip does nothing, and the result collapses to the
-    far-plane footprint bounded by *max_dist* -- the distance ceiling Fio culled
-    by before.  So this can be called unconditionally; it tightens the overhead
-    case and reproduces the old behaviour in first person.  It is stateless, so
-    a mid-play mode switch cannot leave it stale -- but a *caller* that caches
-    the box against the player's position can, because the box changes on a
-    switch while the player has not moved.
+    The clip is exact rather than sampled.  A convex solid cut by two parallel
+    planes has as vertices only its own vertices inside the slab and the points
+    where its edges cross the planes, so every segment between two of the five
+    points is clipped and its surviving ends collected.  Sampling only the
+    corner rays is not enough: in a level first-person view over a thin world
+    they leave the slab within a few hundred units, while the far face still
+    crosses it thousands of units to either side.
+
+    Both modes are served by the same arithmetic.  At low pitch the pyramid
+    stays in the slab and the result is its footprint out to *max_dist*; at a
+    steep pitch the slab clip dominates and the box shrinks to the patch of
+    ground below.  It is stateless, so a mid-play mode switch cannot leave it
+    stale -- but a *caller* that caches the box against the player's position
+    can, because the box changes on a switch while the player has not moved.
 
     This is a *visibility* answer, not a residency one (§15).  Big World decides
     what is resident, from the **player's** position; this decides what of that
@@ -87,74 +91,62 @@ def visible_xz_bounds(cam, corners, y_min, y_max,
     and never suppresses simulation.
 
     Returns ``(min_x, min_z, max_x, max_z)``.  Conservative by construction: the
-    bounding box of the visible volume, never smaller than it.
+    bounding box of the visible volume, never smaller than it.  (It bounds the
+    volume, not what an AABB-against-planes test accepts: that test also passes
+    some boxes near the frustum's edges that lie wholly outside it.)
 
     Pure arithmetic -- no glm, no GL -- so it is unit-testable headlessly.
     """
     cx, cy, cz = float(cam[0]), float(cam[1]), float(cam[2])
     lo_y = min(y_min, y_max) - WORLD_SLAB_MARGIN
     hi_y = max(y_min, y_max) + WORLD_SLAB_MARGIN
+    offsets = [(float(c[0]) - cx, float(c[1]) - cy, float(c[2]) - cz)
+               for c in corners]
 
-    min_x = max_x = cx
-    min_z = max_z = cz
-    if not (lo_y <= cy <= hi_y):
-        min_x = min_z = float("inf")
-        max_x = max_z = float("-inf")
+    # Everything within max_dist of the camera lies no deeper than max_dist
+    # below it along the far plane's normal, so the pyramid cut at that depth
+    # -- the far corners pulled in by depth / max_dist -- contains it.
+    scale = 1.0
+    if len(offsets) >= 3:
+        (ax, ay, az), (bx, by, bz), (qx, qy, qz) = offsets[:3]
+        ux, uy, uz = bx - ax, by - ay, bz - az
+        vx, vy, vz = qx - ax, qy - ay, qz - az
+        nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+        n_len = math.sqrt(nx * nx + ny * ny + nz * nz)
+        if n_len > 0.0:
+            depth = abs(ax * nx + ay * ny + az * nz) / n_len
+            if depth > max_dist:
+                scale = max_dist / depth
+    points = [(0.0, 0.0, 0.0)] + [(x * scale, y * scale, z * scale)
+                                  for x, y, z in offsets]
 
-    # The corner rays bound the *lateral* extent, but not the forward one: they
-    # leave the eye at the frustum's widest angle, so they are much longer than
-    # the view axis and clipping them to `max_dist` stops short of it.  At a 75
-    # degree FOV that lands the box a little over half way to the ceiling, which
-    # would wrongly cull something dead ahead -- invisible in an overhead view,
-    # where the slab clip dominates long before the ceiling does, and plainly
-    # wrong in first person.  The axis ray is what reaches furthest forward, and
-    # for a symmetric frustum it passes through the centroid of the four far
-    # corners, so sampling that alongside them bounds both extents.
-    samples = list(corners)
-    if len(samples) >= 3:
-        inv_n = 1.0 / len(samples)
-        samples.append((sum(float(c[0]) for c in samples) * inv_n,
-                        sum(float(c[1]) for c in samples) * inv_n,
-                        sum(float(c[2]) for c in samples) * inv_n))
-
-    for corner in samples:
-        dx = float(corner[0]) - cx
-        dy = float(corner[1]) - cy
-        dz = float(corner[2]) - cz
-        # Clip the ray's length to the hard ceiling first.
-        length = math.sqrt(dx * dx + dy * dy + dz * dz)
-        t_far = 1.0 if length <= max_dist or length == 0.0 else max_dist / length
-        t0, t1 = 0.0, t_far
-        # Then to the world's height slab.
-        if abs(dy) < 1e-9:
-            if not (lo_y <= cy <= hi_y):
-                continue                      # parallel to the slab and outside it
-        else:
-            ta = (lo_y - cy) / dy
-            tb = (hi_y - cy) / dy
-            if ta > tb:
-                ta, tb = tb, ta
-            t0 = max(t0, ta)
-            t1 = min(t1, tb)
-            if t0 > t1:
-                continue                      # the segment never enters the slab
-        for t in (t0, t1):
-            x = cx + dx * t
-            z = cz + dz * t
-            if x < min_x:
-                min_x = x
-            if x > max_x:
-                max_x = x
-            if z < min_z:
-                min_z = z
-            if z > max_z:
-                max_z = z
+    min_x = min_z = float("inf")
+    max_x = max_z = float("-inf")
+    dy_lo, dy_hi = lo_y - cy, hi_y - cy
+    for i, (px, py, pz) in enumerate(points):
+        if dy_lo <= py <= dy_hi:
+            min_x, max_x = min(min_x, px), max(max_x, px)
+            min_z, max_z = min(min_z, pz), max(max_z, pz)
+        for qx, qy, qz in points[i + 1:]:
+            span = qy - py
+            if span == 0.0:
+                continue
+            for plane_y in (dy_lo, dy_hi):
+                t = (plane_y - py) / span
+                if 0.0 < t < 1.0:
+                    x = px + (qx - px) * t
+                    z = pz + (qz - pz) * t
+                    min_x, max_x = min(min_x, x), max(max_x, x)
+                    min_z, max_z = min(min_z, z), max(max_z, z)
 
     if min_x > max_x:
         # Nothing in the slab is visible at all: degenerate to the camera point
         # rather than returning an inverted box a caller would misread.
         return (cx, cz, cx, cz)
-    return (min_x, min_z, max_x, max_z)
+    # The cut pyramid overshoots max_dist towards its corners; the ball is
+    # what was asked for, and its own bounding box trims that back.
+    return (cx + max(min_x, -max_dist), cz + max(min_z, -max_dist),
+            cx + min(max_x, max_dist), cz + min(max_z, max_dist))
 
 
 def pos_of(obj):

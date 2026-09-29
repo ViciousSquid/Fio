@@ -632,8 +632,9 @@ class RenderTable:
                 self.refresh_rows(brushes, state)
             if moved:
                 self.refresh_transforms(brushes, moved)
-        if len(self.dynamic_slots):
-            self.refresh_transforms(brushes, self.dynamic_slots.tolist())
+        # Movers and doors are not polled: in play the logic thread's dense
+        # MoverTable stores their positions (MoverTable.publish); anything else
+        # that moves one journals it.
         if edited:
             self.refresh_edited(brushes, edited)
         return self.hidden[:n]

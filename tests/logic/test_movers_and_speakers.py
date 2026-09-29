@@ -72,7 +72,11 @@ def test_direction_cache_in_logic_thread_is_a_float_tuple():
     """Guard the regression: a numpy _direction_np would poison brush['pos']."""
     src = read_source("engine", "logic_thread.py")
     assert "'_direction_np': (float(direction[0])" in src
-    assert "direction = (float(d[0]), float(d[1]), float(d[2]))" in src
+    # Resolved lazily on the first tick, now in the dense mover table.
+    from engine.mover_table import _unit_direction
+    direction = _unit_direction([0, 3, 4])
+    assert type(direction) is tuple and all(type(v) is float for v in direction)
+    assert direction == (0.0, 0.6, 0.8)
     # The old allocating form must be gone from the two mover/door sites.
     assert "offset = direction * distance" not in src
     assert "np.array(brush['original_pos'])" not in src

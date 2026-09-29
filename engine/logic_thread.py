@@ -26,7 +26,8 @@ from .camera import Camera
 from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
 from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
 from .prop_runtime import PropSession
-from .change_journal import touch
+from .change_journal import moved, touch
+from .mover_table import MoverTable
 from .entity_table import ENT_PROP
 from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
 from .effect_entity import Effect
@@ -315,11 +316,13 @@ class LogicThread(threading.Thread):
         self._mover_brush_list = []
         self._door_brush_list = []
         
+        # Mover and door animation state live in a dense table (self._movers());
+        # mover_states and door_states are mapping views over it.
         # Mover Animation State
         self.mover_states = {}
         
         # Door Animation State
-        self.door_states: Dict[int, Dict[str, Any]] = {}
+        self.door_states = {}
 
         # Parented lights
         self._parented_lights: list = []
@@ -1050,6 +1053,25 @@ class LogicThread(threading.Thread):
             self.player2_max_health = 100
             self.player2_dead = False
         
+    #: What the player takes with them through a level change: the weapon in
+    #: hand, whether the second gun has been picked up, and the ammunition for
+    #: it. Everything else (health, keys, the level's own state) starts afresh.
+    LOADOUT_FIELDS = ('active_weapon', 'gun2_obtained', 'player_ammo')
+
+    def carried_loadout(self) -> dict:
+        """The player's weapons, as :meth:`restore_loadout` takes them."""
+        with self._tick_lock:
+            return {name: getattr(self, name) for name in self.LOADOUT_FIELDS}
+
+    def restore_loadout(self, loadout: dict) -> None:
+        """Hand the player back the weapons they came through a level change
+        with. Called after play has restarted on the new level, whose start
+        clears them."""
+        with self._tick_lock:
+            for name in self.LOADOUT_FIELDS:
+                if name in loadout:
+                    setattr(self, name, loadout[name])
+
     def set_play_mode(self, enabled: bool):
         """Enter or leave play mode.  Called from the UI thread.
 
@@ -1691,10 +1713,37 @@ class LogicThread(threading.Thread):
     # MOVER/DOOR INITIALIZATION
     # =========================================================================
 
+    def _movers(self):
+        """The dense mover table, made on first use (also for a LogicThread
+        built without ``__init__``, as some tests do)."""
+        table = self.__dict__.get('_mover_table')
+        if table is None:
+            table = self._mover_table = MoverTable()
+        return table
+
+    @property
+    def mover_states(self):
+        """``brush index -> state`` for the linear movers: a mapping over the
+        dense mover columns, read and written as the dicts it used to hold."""
+        return self._movers().movers.states
+
+    @mover_states.setter
+    def mover_states(self, states):
+        self._movers().movers.replace_states(self.movers, states)
+
+    @property
+    def door_states(self):
+        """``brush index -> state`` for the doors; see :attr:`mover_states`."""
+        return self._movers().doors.states
+
+    @door_states.setter
+    def door_states(self, states):
+        self._movers().doors.replace_states(self.doors, states)
+
     def _init_movers(self):
-        self.mover_states = {}
         self.mover_path_states = {}
         self.movers = []
+        states = {}
         for i, brush in enumerate(self.brushes):
             if brush.get('is_mover'):
                 self.movers.append((i, brush))
@@ -1715,7 +1764,9 @@ class LogicThread(threading.Thread):
                         'wait_remaining': 0.0,
                     }
                 elif not brush.get('move_once', False):
-                    self.mover_states[i] = {'progress': 0.0, 'forward': True}
+                    states[i] = {'progress': 0.0, 'forward': True}
+        # The rows are built from self.movers, so the states go in after it.
+        self.mover_states = states
         # PERF: cache the brush-only view of self.movers — was rebuilt via a
         # list comprehension every tick in _tick_play_mode.
         self._mover_brush_list = [b for _, b in self.movers]
@@ -1725,12 +1776,13 @@ class LogicThread(threading.Thread):
         for i, brush in enumerate(self.brushes):
             if brush.get('is_mover') and 'original_pos' in brush:
                 brush['pos'] = list(brush['original_pos'])
+                moved(brush)
         self.mover_states = {}
         self._mover_brush_list = []
 
     def _init_doors(self):
-        self.door_states = {}
         self.doors = []
+        states = {}
         for i, brush in enumerate(self.brushes):
             if brush.get('is_door'):
                 # Resolve runtime parameters from editor properties without mutating the source brush
@@ -1749,7 +1801,7 @@ class LogicThread(threading.Thread):
                 # PERF: DOOR_DIRECTION_MAP entries are already unit vectors,
                 # and door direction never changes at runtime, so normalize
                 # once here instead of every tick in _update_doors.
-                self.door_states[i] = {
+                states[i] = {
                     'progress': 0.0,
                     'state': 'closed',
                     'open_timer': 0.0,
@@ -1763,6 +1815,7 @@ class LogicThread(threading.Thread):
                     '_direction_np': (float(direction[0]), float(direction[1]),
                                       float(direction[2])),
                 }
+        self.door_states = states
         # PERF: cache the brush-only view of self.doors — was rebuilt via a
         # list comprehension every tick in _tick_play_mode.
         self._door_brush_list = [b for _, b in self.doors]
@@ -1772,6 +1825,7 @@ class LogicThread(threading.Thread):
         for i, brush in enumerate(self.brushes):
             if brush.get('is_door') and 'original_pos' in brush:
                 brush['pos'] = list(brush['original_pos'])
+                moved(brush)
         self.door_states = {}
         self._door_brush_list = []
 
@@ -3093,72 +3147,13 @@ class LogicThread(threading.Thread):
     # =========================================================================
 
     def _update_movers(self, delta: float):
-        for i, brush in self.movers:
-            if brush.get('move_once', False):
-                continue
-            if not brush.get('start_on', False):
-                continue
+        """Advance every mover one tick (see :mod:`engine.mover_table`).
 
-            if i in self.mover_path_states:
-                self._update_mover_path(i, brush, delta)
-                continue
-
-            if brush.get('rotate', False):
-                speed = brush.get('speed', 45.0)
-                current = brush.get('_rot_angle', 0.0)
-                new_angle = (current + speed * delta) % 360.0
-                brush['_rot_angle'] = new_angle
-                brush['rotation_yaw'] = new_angle
-
-            if i not in self.mover_states:
-                if 'original_pos' not in brush:
-                    brush['original_pos'] = list(brush['pos'])
-                self.mover_states[i] = {'progress': 0.0, 'forward': True}
-            state = self.mover_states[i]
-            speed = brush.get('speed', 64.0)
-            distance = brush.get('distance', 128.0)
-            # PERF: mover direction is static during play — normalize once
-            # (via NumPy, for identical rounding) and cache as a plain scalar
-            # tuple so the per-tick offset maths below is pure Python and never
-            # rebuilds a small NumPy array each frame.
-            direction = state.get('_direction_np')
-            if direction is None:
-                d = np.array(brush.get('direction', [0, 1, 0]), dtype=float)
-                dir_length = np.linalg.norm(d)
-                if dir_length > 0:
-                    d = d / dir_length
-                direction = (float(d[0]), float(d[1]), float(d[2]))
-                state['_direction_np'] = direction
-            progress_delta = (speed * delta) / distance if distance > 0 else 0
-            was_at_end = state['progress'] >= 1.0
-            was_at_start = state['progress'] <= 0.0
-            if state['forward']:
-                state['progress'] += progress_delta
-                if state['progress'] >= 1.0:
-                    state['progress'] = 1.0
-                    state['forward'] = False
-                    if not was_at_end and self.io_manager:
-                        self.io_manager.fire_output(brush, 'OnFullyOpen')
-            else:
-                state['progress'] -= progress_delta
-                if state['progress'] <= 0.0:
-                    state['progress'] = 0.0
-                    state['forward'] = True
-                    if not was_at_start and self.io_manager:
-                        self.io_manager.fire_output(brush, 'OnFullyClosed')
-            t = state['progress']
-            eased = 4 * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 3) / 2
-            # PERF: scalar offset — bit-identical to the old NumPy expression
-            # (original + direction*distance*eased, which associates as
-            # (direction*distance)*eased), with no per-tick array allocation.
-            original = brush['original_pos']
-            cur = brush['pos']
-            nx = original[0] + (direction[0] * distance) * eased
-            ny = original[1] + (direction[1] * distance) * eased
-            nz = original[2] + (direction[2] * distance) * eased
-            brush['pos'] = [nx, ny, nz]
-            if self.player and self.player.ground_object == brush:
-                self.player.pos += glm.vec3(nx - cur[0], ny - cur[1], nz - cur[2])
+        One vectorised pass, taken row by row in list order wherever a row
+        fires I/O, follows a path, or is starting from nothing, so that the
+        synchronous I/O it triggers lands exactly where it used to.
+        """
+        self._movers().tick_movers(self, delta)
 
     def _update_cinematic_camera(self, delta: float):
         cs = self.cinematic_state
@@ -3362,60 +3357,8 @@ class LogicThread(threading.Thread):
                 self.player.pos += glm.vec3(float(move_delta[0]), float(move_delta[1]), float(move_delta[2]))
 
     def _update_doors(self, delta: float):
-        for i, brush in self.doors:
-            if i not in self.door_states:
-                continue
-            state = self.door_states[i]
-            # PERF: fully-closed, idle doors cost nothing until triggered.
-            if state['state'] == 'closed' and state['progress'] == 0.0:
-                continue
-            speed = state.get('speed', 128.0)
-            distance = state.get('distance', 128.0)
-            open_time = brush.get('open_time', 3.0)
-            # PERF: direction is precomputed (already unit-length) in
-            # _init_doors — no need to renormalize every tick. Cached as a
-            # scalar tuple so the offset maths below allocates no NumPy arrays.
-            direction = state.get('_direction_np')
-            if direction is None:
-                d = np.array(state.get('direction', [0, 1, 0]), dtype=float)
-                dir_length = np.linalg.norm(d)
-                if dir_length > 0:
-                    d = d / dir_length
-                direction = (float(d[0]), float(d[1]), float(d[2]))
-                state['_direction_np'] = direction
-            progress_delta = (speed * delta) / distance if distance > 0 else 0
-            if state['state'] == 'opening':
-                state['progress'] += progress_delta
-                if state['progress'] >= 1.0:
-                    state['progress'] = 1.0
-                    state['state'] = 'open'
-                    state['open_timer'] = open_time
-                    if self.io_manager:
-                        self.io_manager.fire_output(brush, 'OnFullyOpen')
-            elif state['state'] == 'open':
-                state['open_timer'] -= delta
-                if state['open_timer'] <= 0:
-                    state['state'] = 'closing'
-                    if self.io_manager:
-                        self.io_manager.fire_output(brush, 'OnClose')
-            elif state['state'] == 'closing':
-                state['progress'] -= progress_delta
-                if state['progress'] <= 0.0:
-                    state['progress'] = 0.0
-                    state['state'] = 'closed'
-                    if self.io_manager:
-                        self.io_manager.fire_output(brush, 'OnFullyClosed')
-            # PERF: scalar offset — bit-identical to the old NumPy expression
-            # (original + direction*distance*progress), no per-tick array alloc.
-            original = brush['original_pos']
-            cur = brush['pos']
-            progress = state['progress']
-            nx = original[0] + (direction[0] * distance) * progress
-            ny = original[1] + (direction[1] * distance) * progress
-            nz = original[2] + (direction[2] * distance) * progress
-            brush['pos'] = [nx, ny, nz]
-            if self.player and self.player.ground_object == brush:
-                self.player.pos += glm.vec3(nx - cur[0], ny - cur[1], nz - cur[2])
+        """Advance every door one tick (see :mod:`engine.mover_table`)."""
+        self._movers().tick_doors(self, delta)
 
     # =========================================================================
     # PARENTED LIGHTS
@@ -3915,15 +3858,22 @@ class LogicThread(threading.Thread):
 
         Positive-vertex distance for every (box, plane) pair, branch-free:
         ``dot(n, c + sign(n)*h) + d == dot([n, |n|], [c, h]) + d``. One
-        (N, 6) x (6, 6) product, one compare and one reduction: each NumPy
-        call on a big array releases and re-takes the GIL, and with the AI and
-        UI threads running every re-take can wait, so the count of calls is
-        what this is shaped by, as much as the arithmetic.
+        product, one compare and one reduction: each NumPy call on a big array
+        releases and re-takes the GIL, and with the AI and UI threads running
+        every re-take can wait, so the count of calls is what this is shaped
+        by, as much as the arithmetic.
+
+        Evaluated plane-major, ``(6, 6) x (6, N)``: the six per-plane results
+        for a box are then six rows apart, and the reduction is five
+        elementwise ANDs over contiguous rows. Box-major, ``.all(axis=1)``
+        reduced six adjacent bytes at a time, which cost three times the
+        product itself (24k rows: 0.97 ms, against 0.20 ms this way, for the
+        same answers).
         """
         p = np.asarray(planes, dtype=np.float64)        # (6, 4)
         normals = p[:, :3]
         weights = np.concatenate((normals, np.abs(normals)), axis=1)   # (6, 6)
-        return (bounds @ weights.T >= -p[:, 3]).all(axis=1)
+        return (weights @ bounds.T >= -p[:, 3:]).all(axis=0)
 
     # =========================================================================
     # RENDER STATE PREPARATION
@@ -4198,6 +4148,9 @@ class LogicThread(threading.Thread):
         table.begin_frame(
             brushes, world_epoch, dirty_objects=render_dirty, edited=edited,
             peer=peer.render_table if peer is not write_state else None)
+        if self.play_mode:
+            # Every mover and door position, as two array stores.
+            self._movers().publish(self, table)
         # The table owns its row objects; each buffer owns its table.
         refs = table.refs
         total_count = table.count
