@@ -365,8 +365,8 @@ def _play(state, ticks=240):
     pos = start.pos if start is not None else [0.0, 64.0, 0.0]
     logic.player = Player(pos[0], pos[2])
     logic.player.pos.y = pos[1]
-    logic.god_mode = True
     logic.set_play_mode(True)
+    logic.god_mode = True                      # play start resets it
     seen = {}
     for tick in range(ticks):
         game_state.set_keys([{Key_W}, {Key_W, Key_D}, set(), {Key_D}][(tick // 40) % 4])
@@ -535,5 +535,51 @@ def test_objects_added_or_removed_in_the_editor_during_play_join_the_session():
         state.things.remove(grunt)
         logic._tick(logic.TICK_DURATION)
         assert grunt not in logic._monster_things
+    finally:
+        logic.stop()
+
+
+# ---------------------------------------------------------------------------
+# Save / load: moving brushes come back where they were saved
+# ---------------------------------------------------------------------------
+
+def test_loading_a_save_puts_doors_and_movers_back_where_they_were(tmp_path):
+    """Only ``progress`` was restored, and a door or mover is repositioned from
+    it only while moving: a door saved closed but open when the save was
+    loaded stayed open -- drawn and solid in the wrong place -- and a stopped
+    mover stayed wherever it had got to. Found by a save/continue/load oracle
+    over every shipped map."""
+    door = box_brush("door", (0, 64, 300), (128, 128, 16), is_door=True,
+                     door_speed=256.0, door_distance=128.0, door_direction="up",
+                     open_time=30.0)
+    lift = box_brush("lift", (400, 16, 0), (128, 32, 128), is_mover=True,
+                     start_on=False, speed=128.0, distance=256.0,
+                     direction=[0, 1, 0])
+    state, logic = _playing(brushes=[box_brush("ground", (0, -16, 0), (4096, 32, 4096)),
+                                     door, lift])
+    try:
+        saved_door, saved_lift = list(door["pos"]), list(lift["pos"])
+        path = str(tmp_path / "s.fiosave")
+        assert logic.save_session(path)[0]
+
+        door_idx = state.brushes.index(door)
+        logic._trigger_door_open(door_idx, door)
+        lift["start_on"] = True
+        from engine.change_journal import moved
+        moved(lift)                                 # I/O Start
+        for _ in range(60):
+            logic._tick(logic.TICK_DURATION)
+        lift["start_on"] = False                    # I/O Stop, mid-travel
+        moved(lift)
+        logic._tick(logic.TICK_DURATION)
+        assert door["pos"] != saved_door and lift["pos"] != saved_lift
+
+        assert logic.load_session(path)[0]
+        for _ in range(30):                         # and it stays there
+            logic._tick(logic.TICK_DURATION)
+        assert door["pos"] == pytest.approx(saved_door)
+        assert lift["pos"] == pytest.approx(saved_lift)
+        assert logic.door_states[door_idx]["state"] == "closed"
+        assert lift["start_on"] is False
     finally:
         logic.stop()

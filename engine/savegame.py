@@ -82,7 +82,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
-from .change_journal import touch
+from .change_journal import moved, touch
 from .fileio import write_json_atomic
 from .spatial import PARKED_DISABLED_KEY, PARKED_HIDDEN_KEY
 
@@ -302,6 +302,54 @@ def _apply_player(player, data: Optional[dict]) -> None:
 # snapshot build / restore
 # ---------------------------------------------------------------------------
 
+def _capture_moving_brushes(logic) -> dict:
+    """Where every mover and door brush is, by UUID, and whether it runs.
+
+    The level record restores no brush transform (delta saves carry none at
+    all), and a mover or door is only repositioned from its restored
+    ``progress`` while it is moving: a door saved closed but open at load
+    time stayed open -- drawn and solid in the wrong place -- and a path
+    mover, whose position is not a function of any saved state, stayed
+    wherever it had got to.
+    """
+    out = {}
+    for brush in getattr(logic, "brushes", []) or []:
+        if not (brush.get("is_mover") or brush.get("is_door")):
+            continue
+        bid = brush.get("id")
+        if not bid or brush.get("pos") is None:
+            continue
+        out[str(bid)] = {
+            "pos": _vec3(brush["pos"]),
+            "rot": float(brush.get("_rot_angle") or 0.0),
+            "start_on": bool(brush.get("start_on", False)),
+        }
+    return out
+
+
+def _restore_moving_brushes(logic, saved) -> None:
+    """Put mover and door brushes back where :func:`_capture_moving_brushes`
+    found them. Journalled as moves, which is how the mover table and the
+    render tables learn of a move made outside the tick."""
+    if not saved:
+        return
+    for brush in getattr(logic, "brushes", []) or []:
+        entry = saved.get(str(brush.get("id")))
+        if not entry:
+            continue
+        try:
+            brush["pos"] = _vec3(entry["pos"])
+            rot = float(entry.get("rot", 0.0))
+            if rot or brush.get("_rot_angle"):
+                brush["_rot_angle"] = rot
+                brush["rotation_yaw"] = rot
+            if "start_on" in entry:
+                brush["start_on"] = bool(entry["start_on"])
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+        moved(brush)
+
+
 def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
     """Capture the live play session on *logic* (a ``LogicThread``) as a dict.
 
@@ -357,6 +405,10 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "timer_states": {str(k): dict(s)
                          for k, s in (getattr(logic, "timer_states", {}) or {}).items()},
         "pending_io_events": _capture_pending_events(logic),
+        "moving_brushes": _capture_moving_brushes(logic),
+        "mover_path_states": {
+            str(i): _jsonify(_public_state(s))
+            for i, s in (getattr(logic, "mover_path_states", {}) or {}).items()},
     }
 
     return {
@@ -676,6 +728,19 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
         logic.collected_keys = set(runtime.get("collected_keys", []) or [])
     except Exception:
         pass
+
+    # Mover/door brush transforms first: the states below animate from them.
+    try:
+        _restore_moving_brushes(logic, runtime.get("moving_brushes"))
+    except Exception:
+        pass
+    if "mover_path_states" in runtime:
+        try:
+            logic.mover_path_states = {
+                int(i): dict(s)
+                for i, s in (runtime.get("mover_path_states") or {}).items()}
+        except Exception:
+            pass
 
     # Door / mover animation state (keys serialize as strings → back to int).
     # _public_state drops any cached _-prefixed fields (e.g. a mover's
