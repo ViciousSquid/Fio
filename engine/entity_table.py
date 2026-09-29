@@ -299,8 +299,8 @@ def sprite_size(thing):
     """The billboard's world size, in the order ``draw_sprites`` decides it."""
     props = _props_of(thing)
     if Monster is not None and isinstance(thing, Monster):
-        return (float(props.get('sprite_width', 128)),
-                float(props.get('sprite_height', 128)))
+        return (_float_property(props.get('sprite_width', 128), 128.0),
+                _float_property(props.get('sprite_height', 128), 128.0))
     if Light is not None and isinstance(thing, Light):
         return (16.0, 16.0)
     if props.get('sprite_path'):

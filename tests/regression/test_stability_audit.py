@@ -477,3 +477,35 @@ def test_a_lease_finalizer_inside_the_swap_lock_does_not_deadlock():
     # The deferred release is folded in: the next swap is not declined.
     assert game_state.request_swap() is True
     assert game_state._read_leases == 0
+
+
+@pytest.mark.parametrize("props", [
+    {"is_water": True, "water_opacity": "abc"},
+    {"shader": "Glass", "glass_opacity": None},
+    {"shader": "Fog", "fog_density": "x"},
+    {"shader": "Glow", "glow_intensity": "bright"},
+])
+def test_a_malformed_shader_value_projects_as_its_default(props):
+    table = RenderTable()
+    table.sync([box_brush("b", **props)], epoch=1)
+    assert np.isfinite(table.water_params[0]).all()
+    assert np.isfinite(table.glass_params[0]).all()
+    assert np.isfinite(table.fog_params[0]).all()
+
+
+def test_a_frame_that_cannot_be_prepared_does_not_kill_the_logic_thread():
+    """One unprojectable value (``setprop wall size 64 a 64``) raised out of
+    _prepare_render_state and ended the logic thread: the game froze for good,
+    even after the value was put right."""
+    wall = box_brush("wall", (0, 0, 0))
+    state, game_state, logic = _editor([wall])
+    _check_frames(logic, game_state, 1)
+    published = game_state.published_frames
+    wall["size"] = [64, "a", 64]
+    touch(wall)
+    logic._step_frame(logic.TICK_DURATION)          # must not raise
+    assert logic._publish_frame() is False, "a half-built frame was published"
+    assert game_state.published_frames == published
+    wall["size"] = [64, 64, 64]
+    touch(wall)
+    _check_frames(logic, game_state, 2)

@@ -1931,6 +1931,8 @@ class LogicThread(threading.Thread):
         published: a declined swap (the renderer is mid-paint) or a catch-up
         frame running several ticks would otherwise drop them.
         """
+        if not getattr(self, '_frame_prepared', True):
+            return False
         if not self.game_state.request_swap():
             return False
         self.muzzle_flash_active = False
@@ -1962,7 +1964,22 @@ class LogicThread(threading.Thread):
                 self.tick_ms = (time.perf_counter() - started) * 1000.0
                 self._update_tps_counter()
 
-            self._prepare_render_state()
+            try:
+                self._prepare_render_state()
+                self._frame_prepared = True
+            except Exception:
+                # Same policy as a bad tick: a frame that cannot be projected
+                # (a malformed authored value, a projection bug) must not kill
+                # the thread and freeze the game for good. The half-built
+                # buffer is not published; the error is logged once per kind.
+                self._frame_prepared = False
+                import traceback
+                trace = traceback.format_exc()
+                key = trace.strip().splitlines()[-1]
+                if key != getattr(self, '_last_prepare_error', None):
+                    self._last_prepare_error = key
+                    debug_log("LogicThread",
+                              "Unhandled exception preparing a frame:\n" + trace)
         return accumulator
 
     def stop(self):
