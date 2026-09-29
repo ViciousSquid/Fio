@@ -453,3 +453,27 @@ def test_getprop_with_extra_arguments_prints_usage():
     handler = ConsoleCommandHandler.__new__(ConsoleCommandHandler)
     handler.editor_state = EditorState()
     handler.cmd_get_property("a b c")      # used to raise ValueError
+
+
+def test_a_lease_finalizer_inside_the_swap_lock_does_not_deadlock():
+    """The lease finalizer is a GC safety net, and a collection can run on a
+    thread that is inside the render-state lock (a swap allocates in there).
+    Re-taking the non-reentrant lock would hang that thread for good."""
+    import threading
+    game_state = ThreadedGameState()
+    snap = game_state.get_render_state()
+    finalizer = snap._render_lease_finalizer
+    done = threading.Event()
+
+    def collect_inside_the_lock():
+        with game_state._render_state_lock:
+            finalizer()                 # what the GC would run here
+        done.set()
+
+    worker = threading.Thread(target=collect_inside_the_lock, daemon=True)
+    worker.start()
+    worker.join(2.0)
+    assert done.is_set(), "the lease finalizer deadlocked inside the lock"
+    # The deferred release is folded in: the next swap is not declined.
+    assert game_state.request_swap() is True
+    assert game_state._read_leases == 0
