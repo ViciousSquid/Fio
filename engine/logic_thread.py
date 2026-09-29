@@ -4235,6 +4235,16 @@ class LogicThread(threading.Thread):
                 self._hud_health_alpha = 0.5
                 return self._hud_health_alpha
 
+            # Treat the exact end of the fade as a completed state before
+            # normalising the duration.  This avoids a one-ULP floating-point
+            # remainder leaving the state machine in "out" while alpha is
+            # already at the idle value.
+            if out_elapsed >= self._hud_health_fade_out_duration:
+                self._hud_health_alpha = 0.5
+                self._hud_health_fade_started = None
+                self._hud_health_fade_phase = "idle"
+                return self._hud_health_alpha
+
             t = max(
                 0.0,
                 min(
@@ -4243,10 +4253,6 @@ class LogicThread(threading.Thread):
                 ),
             )
             self._hud_health_alpha = 1.0 - (0.5 * t)
-            if t >= 1.0:
-                self._hud_health_alpha = 0.5
-                self._hud_health_fade_started = None
-                self._hud_health_fade_phase = "idle"
             return self._hud_health_alpha
 
         health = self.player_health
