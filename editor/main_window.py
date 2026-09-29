@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import QShortcut
 from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal
 from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor, QIcon
 
-from editor.things import Light, PlayerStart, Model, update_all_counters_from_entities
+from editor.things import Light, PlayerStart, Prop, update_all_counters_from_entities
 from editor.SettingsWindow import SettingsWindow
 from editor.ui import LAYOUT_VERSION, Ui_MainWindow
 from editor.tooltips import set_tooltips_enabled
@@ -1203,10 +1203,10 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        # FIX: Initialize with only 'pos', then set properties
-        new_model = Model(pos=[0, 0, 0])
-        new_model.properties['model_path'] = filepath.replace('\\', '/') # Ensure forward slashes
-        new_model.properties['rotation'] = rotation
+        # Every model is a Prop: the Asset Browser places one as scenery
+        # (solid, not carryable), exactly what the old Model entity was.
+        new_model = Prop.for_model(filepath, pos=[0, 0, 0],
+                                   properties={'rotation': rotation})
 
         # Downloaded OBJs are commonly authored in real-world units and can be
         # only a few Fio units across. Fio's world is much larger (TILE_SIZE is

@@ -14,7 +14,7 @@ import os
 
 from PyQt5.QtWidgets import QMessageBox
 
-from editor.things import Light, Model, Monster, Portal
+from editor.things import Light, Monster, Portal, Prop
 
 try:
     from editor.io_system import get_connections
@@ -69,7 +69,9 @@ def collect_project_stats(state, file_path=None) -> dict:
         'triggers': sum(1 for b in brushes if b.get('is_trigger', False)),
         'lights': sum(1 for t in things if isinstance(t, Light)),
         'dynamic_lights': sum(1 for t in things if _casts_shadows(t)),
-        'models': sum(1 for t in things if isinstance(t, Model)),
+        'models': sum(1 for t in things
+                      if isinstance(t, Prop)
+                      and str(t.properties.get('render_mode', '')).lower() == 'model'),
         'monsters': sum(1 for t in things if isinstance(t, Monster)),
         'portals': sum(1 for t in things if isinstance(t, Portal)),
         'connections': connections,

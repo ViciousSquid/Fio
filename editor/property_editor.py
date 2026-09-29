@@ -9,7 +9,7 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5 import sip
 from engine.prop_entity import normalise_collect_type
-from editor.things import (Thing, Light, Effect, Prop, Monster, Model, Speaker,
+from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
                            LogicState)
 from editor import state_values as _sv
@@ -1751,7 +1751,7 @@ class PropertyEditor(QWidget):
         form = QFormLayout()
         tab_layout.addLayout(form)
 
-        if isinstance(thing, Model):
+        if isinstance(thing, Prop):
             model_mode = True
             is_prop = isinstance(thing, Prop)
             mode_combo = None
@@ -1904,68 +1904,7 @@ class PropertyEditor(QWidget):
                 # is further narrowed by _refresh_prop_collection_appearance().
                 self._refresh_prop_collection_appearance(thing)
 
-            # Prop owns its physical state on its dedicated Physics tab.
-            # Ordinary Model entities retain their collision controls.
-            if not isinstance(thing, Prop):
-                # Collision toggle for this model entity
-                no_collision = thing.properties.get('no_collision', False)
-                collision_cb = _make_checkbox(
-                    "Disable collision for this model",
-                    no_collision,
-                    lambda c: self.update_object_prop('no_collision', c),
-                    _Style.CHECKBOX,
-                )
-                collision_cb.setToolTip(
-                    "If checked, player and monsters will pass through this model"
-                )
-                form.addRow("", collision_cb)
-                self._widgets['model_no_collision_cb'] = collision_cb
-
-                # Collision shape selection uses the same Automatic /
-                # AABB / Mesh modes as Prop.
-                shape_mode = str(
-                    thing.properties.get('collision_shape', 'auto')
-                ).lower()
-                shape_labels = {
-                    'auto': 'Automatic',
-                    'aabb': 'AABB',
-                    'mesh': 'Mesh',
-                }
-                shape_combo = _make_combo(
-                    list(shape_labels.values()),
-                    shape_labels.get(shape_mode, 'Automatic'),
-                    None,
-                    tooltip=(
-                        "Automatic uses mesh collision where supported and "
-                        "otherwise uses the model bounds. AABB always uses a "
-                        "box around the model. Mesh uses triangle collision "
-                        "where supported."
-                    ),
-                )
-                reverse_shape_labels = {
-                    label: value for value, label in shape_labels.items()
-                }
-                shape_combo.currentTextChanged.connect(
-                    lambda label: self.update_object_prop(
-                        'collision_shape',
-                        reverse_shape_labels.get(label, 'auto'),
-                    )
-                )
-                form.addRow("Collision Shape:", shape_combo)
-                self._widgets['model_collision_shape_combo'] = shape_combo
-
-                # Collision size override
-                collision_size = thing.properties.get('collision_size')
-                cs_widget, cs_inputs = self._vec3_row(
-                    collision_size if collision_size else [0, 0, 0],
-                    lambda v: self._on_collision_size_changed(v, thing)
-                )
-                cs_label = QLabel("Collision Size:")
-                cs_label.setToolTip(
-                    "Custom collision box size (0,0,0 = auto from scale)"
-                )
-                form.addRow(cs_label, cs_widget)
-                self._widgets['model_collision_size_inputs'] = cs_inputs
+            # Collision lives on the Prop's dedicated Physics tab.
 
             if IO_AVAILABLE:
                 note = QLabel("💡 Use the I/O tab for advanced targeting")
@@ -3113,7 +3052,7 @@ class PropertyEditor(QWidget):
             ):
                 continue
 
-            if isinstance(thing, Model) and key in (
+            if isinstance(thing, Prop) and key in (
                 'model_path',
                 'scale',
                 'rotation',

@@ -99,7 +99,9 @@ Radiant-style Surface Inspector for per-face texture mapping. Edits shift, scale
 Terrain parameter editor for noise seed, scale, amplitude and texturing/chunk settings.
 
 ### `things.py`
-Definitions for placeable entities including `PlayerStart`, `Light`, `Model`, `Speaker`, `Prop`, `Monster`, `PathNode`, `Portal`, `LevelChanger`, `LogicGate`, `LogicRelay`, `LogicTimer`, `LogicCommand`, `LogicSpawner`, `LogicCamera`, `LogicState` and `TriggerBrush`.
+Definitions for placeable entities including `PlayerStart`, `Light`, `Speaker`, `Prop`, `Monster`, `PathNode`, `Portal`, `LevelChanger`, `LogicGate`, `LogicRelay`, `LogicTimer`, `LogicCommand`, `LogicSpawner`, `LogicCamera`, `LogicState` and `TriggerBrush`.
+
+Every 3D model is a `Prop` with `render_mode='model'`: the Asset Browser and the 2D view place models as Props (solid, not carryable), and a map's old `model` records load as such.
 
 Entity classes provide defaults and I/O registration. `LogicState` is the persistent typed-state primitive shared by maps and plugins. `LogicCommand` provides a deliberate bridge from declarative I/O into an explicitly requested debug/play command rather than becoming a general-purpose scripting runtime.
 

@@ -1131,8 +1131,9 @@ class LogicThread(threading.Thread):
             self.collected_keys.clear()
             for thing in self.things:
                 if PropThing and isinstance(thing, PropThing):
-                    thing.properties['collect_collected'] = False
-                    thing.properties['carry_enabled'] = True
+                    # Restores what the author set; forcing carry on here made
+                    # every Prop -- scenery models included -- carryable.
+                    thing.reset_collection()
             if self._props is not None:
                 self._props.start()
             

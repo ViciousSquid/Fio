@@ -947,32 +947,6 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('logic_timer', 'settime', timer_set_time)
     io_manager.register_input_handler('logic_timer', 'resettimer', timer_reset)
     
-    # ==========================================================================
-    # MODEL INPUTS
-    # ==========================================================================
-    
-    def model_enable(entity, param, logic):
-        entity.properties['hidden'] = False
-
-    def model_disable(entity, param, logic):
-        entity.properties['hidden'] = True
-
-    def model_set_skin(entity, param, logic):
-        """Record the requested skin index (read by the model renderer)."""
-        try:
-            entity.properties['skin'] = int(param)
-        except (ValueError, TypeError):
-            pass
-
-    def model_set_animation(entity, param, logic):
-        """Record the requested animation name (read by the model renderer)."""
-        if param:
-            entity.properties['animation'] = param.strip()
-
-    io_manager.register_input_handler('model', 'enable', model_enable)
-    io_manager.register_input_handler('model', 'disable', model_disable)
-    io_manager.register_input_handler('model', 'setskin', model_set_skin)
-    io_manager.register_input_handler('model', 'setanimation', model_set_animation)
 
     # ==========================================================================
     # PATH NODE INPUTS
@@ -1157,7 +1131,7 @@ def register_all_input_handlers(io_manager: IOManager):
         debug_log('IO', f"Entity '{name}' toggled → {state}")
 
     # Register for every thing-based type that declares Hide/Show
-    for ttype in ('monster', 'light', 'speaker', 'model', 'prop'):
+    for ttype in ('monster', 'light', 'speaker', 'prop'):
         io_manager.register_input_handler(ttype, 'hide', thing_hide)
         io_manager.register_input_handler(ttype, 'show', thing_show)
         io_manager.register_input_handler(ttype, 'togglevisibility', thing_toggle_vis)
