@@ -2,7 +2,9 @@
 
 Loaded only when Tools -> Debug Tables is invoked. The window reads the
 published render-state snapshot; it does not add a second world representation
-or alter the logic/render hot path.
+or alter the logic/render hot path. In play mode it also copies the monster
+AI's MonsterTable, taken only when the monster lock is free so the instrument
+never makes the AI wait.
 """
 from __future__ import annotations
 
@@ -21,6 +23,7 @@ from PyQt5.QtWidgets import (
     QTabWidget, QTableView, QTextBrowser, QVBoxLayout, QWidget,
 )
 
+from engine import monster_table
 from engine import render_table as rt
 from engine.render_keys import KeyLayout, sort_into_runs
 
@@ -53,11 +56,21 @@ class FrozenTable:
         self.fields = {}
         for name in _slot_names(type(table)):
             value = getattr(table, name, None)
-            if isinstance(value, np.ndarray):
+            # Object columns (``refs``) hold the live objects, not numbers:
+            # copying them would keep objects alive from the instrument, and
+            # ``np.save`` refuses them, which failed every Export.
+            if isinstance(value, np.ndarray) and value.dtype != object:
                 self.fields[name] = value.copy()
         self.count = int(getattr(table, "count", 0))
         self.slot_of_id = dict(getattr(table, "slot_of_id", {}))
         self.rows_read = int(getattr(table, "rows_read", 0))
+        # MonsterTable's per-tick counters; absent (and unused) elsewhere.
+        self.rays_cast = int(getattr(table, "rays_cast", 0))
+        self.python_rows = int(getattr(table, "python_rows", 0))
+        self.phase_ms = dict(getattr(table, "phase_ms", {}) or {})
+        self.team_names = list(getattr(table, "team_names", ()))
+        self.path = str(getattr(table, "path", ""))
+        self.generation = int(getattr(table, "generation", 0))
 
     #: Columns a table exposes as views of another: RenderTable's centre and
     #: half-extent live in its ``bounds`` block.
@@ -290,6 +303,8 @@ class DebugTablesWindow(QMainWindow):
         self.snapshot = None
         self.render = None
         self.entities = None
+        self.monsters = None
+        self.monster_copied_at = 0.0
         self.follow = QCheckBox("FOLLOW SELECTION")
         self.follow.setChecked(True)
         self.always_top = QCheckBox("ALWAYS ON TOP")
@@ -310,8 +325,10 @@ class DebugTablesWindow(QMainWindow):
 
         self.render_raw = RawTable("RENDERTABLE", self)
         self.entity_raw = RawTable("ENTITYTABLE", self)
+        self.monster_raw = RawTable("MONSTERTABLE", self)
         tabs.addTab(self.render_raw, "RENDERTABLE")
         tabs.addTab(self.entity_raw, "ENTITYTABLE")
+        tabs.addTab(self.monster_raw, "MONSTERTABLE")
 
         self.keys_text = QTextBrowser()
         tabs.addTab(self.keys_text, "KEY MICROSCOPE")
@@ -454,8 +471,11 @@ class DebugTablesWindow(QMainWindow):
             key_id = int(self.entities.sprite_key_id[int(eslot)])
             if key_id >= 0:
                 lines.append(f"sprite-key={key_id}")
-        if rslot is None and eslot is None:
-            lines.append("ID NOT PRESENT IN RENDERTABLE OR ENTITYTABLE")
+        mslot = self.monsters.slot_of_id.get(ident) if self.monsters is not None else None
+        if mslot is not None:
+            lines.append(f"monster-row={int(mslot)}")
+        if rslot is None and eslot is None and mslot is None:
+            lines.append("ID NOT PRESENT IN RENDERTABLE, ENTITYTABLE OR MONSTERTABLE")
         return "FOLLOW SELECTION\n\n" + " -> ".join(lines)
 
     def export_snapshot(self):
@@ -497,6 +517,19 @@ class DebugTablesWindow(QMainWindow):
             "render_dense_bytes": int(_num_bytes(self.render)[0]),
             "entity_dense_bytes": int(_num_bytes(self.entities)[0]),
         }
+        if self.monsters is not None:
+            m = self.monsters
+            pipeline.update({
+                "monster_pass": m.path,
+                "monster_rows": int(m.count),
+                "monster_capacity": int(len(m.pos)),
+                "monster_mode_names": list(monster_table.MODE_NAMES),
+                "monster_rays_cast": int(m.rays_cast),
+                "monster_python_rows": int(m.python_rows),
+                "monster_phase_ms": dict(m.phase_ms),
+                "monster_team_names": list(m.team_names),
+                "monster_dense_bytes": int(_num_bytes(m)[0]),
+            })
 
         key_data = self._key_snapshot()
         key_manifest = {
@@ -512,9 +545,7 @@ class DebugTablesWindow(QMainWindow):
         }
 
         memory = {"tables": {}}
-        for label, table in (
-            ("RenderTable", self.render), ("EntityTable", self.entities)
-        ):
+        for label, table in self._tables():
             count = int(table.count)
             memory["tables"][label] = {
                 "count": count,
@@ -535,6 +566,7 @@ class DebugTablesWindow(QMainWindow):
                 "pipeline.txt",
                 "RenderTable/*.npy",
                 "EntityTable/*.npy",
+                "MonsterTable/*.npy (play mode)",
                 "visible_brush_slots.npy",
                 "KeyMicroscope/*.npy",
                 "key_microscope.json",
@@ -550,8 +582,6 @@ class DebugTablesWindow(QMainWindow):
             ),
         }
 
-        render_arrays = self._table_arrays(self.render)
-        entity_arrays = self._table_arrays(self.entities)
         pipeline_text = self.dashboard.toPlainText()
         memory_text = self.memory_text.toPlainText()
         key_text = self.keys_text.toPlainText()
@@ -581,11 +611,8 @@ class DebugTablesWindow(QMainWindow):
                 archive.writestr("key_microscope.txt", key_text)
                 archive.writestr("follow_selection.txt", follow_text)
 
-                for label, arrays in (
-                    ("RenderTable", render_arrays),
-                    ("EntityTable", entity_arrays),
-                ):
-                    for name, value in arrays.items():
+                for label, table in self._tables():
+                    for name, value in self._table_arrays(table).items():
                         buffer = io.BytesIO()
                         np.save(buffer, value, allow_pickle=False)
                         archive.writestr(
@@ -655,6 +682,7 @@ class DebugTablesWindow(QMainWindow):
             )
         finally:
             game_state.release_render_state(snap)
+        self._copy_monster_table()
 
         self._update_raw_tables()
         self._update_dashboard(started)
@@ -662,11 +690,48 @@ class DebugTablesWindow(QMainWindow):
         self._update_memory()
         self._update_follow()
 
+    def _monster_ai(self):
+        view = getattr(self.main_window, "view_3d", None)
+        logic = getattr(view, "logic_thread", None)
+        return logic, getattr(logic, "monster_ai", None)
+
+    def _copy_monster_table(self):
+        """Copy the AI's MonsterTable, without ever making the AI wait.
+
+        The AI thread writes the table while it holds the monster lock, so
+        the copy is taken under that lock -- but only if it is free right now.
+        Blocking on it would put the instrument inside the contention it is
+        there to measure; when it is busy the previous copy is kept and its
+        age shows on the dashboard.
+        """
+        logic, ai = self._monster_ai()
+        table = getattr(ai, "table", None)
+        lock = getattr(logic, "_monster_lock", None)
+        if table is None or lock is None:
+            return
+        if not lock.acquire(blocking=False):
+            return
+        try:
+            self.monsters = FrozenTable(table)
+        finally:
+            lock.release()
+        self.monster_copied_at = time.perf_counter()
+
+    def _tables(self):
+        """``(label, table)`` for every dense table this refresh copied."""
+        tables = [("RenderTable", self.render), ("EntityTable", self.entities)]
+        if self.monsters is not None:
+            tables.append(("MonsterTable", self.monsters))
+        return tables
+
     def _update_raw_tables(self):
         """Refresh raw models only when their selected array actually changed."""
         for raw, table in (
-            (self.render_raw, self.render), (self.entity_raw, self.entities)
+            (self.render_raw, self.render), (self.entity_raw, self.entities),
+            (self.monster_raw, self.monsters),
         ):
+            if table is None:
+                continue
             name = raw.selector.currentText()
             value = getattr(table, name, None) if name else None
             count = int(getattr(table, "count", 0))
@@ -709,6 +774,8 @@ class DebugTablesWindow(QMainWindow):
         return {
             "tick": float(getattr(logic, "tick_ms", 0.0)),
             "ai": float(getattr(ai, "update_ms", 0.0)) if ai is not None else 0.0,
+            "ai_lock_wait": (float(getattr(ai, "lock_wait_ms", 0.0))
+                             if ai is not None else 0.0),
             "prepare": float(getattr(self.snapshot, "prepare_ms", 0.0)),
             "paint": float(getattr(view, "paint_ms", 0.0)),
             "passes": dict(getattr(stats, "pass_ms", {}) or {}),
@@ -782,8 +849,43 @@ class DebugTablesWindow(QMainWindow):
             f"frustum-culled {culled_entities:,}   "
             f"drawn {entity_candidates - culled_entities:,}\n"
             + layer_line + "\n\n"
+            + self._monster_lines(timings) +
             "PASSES (inclusive)\n" + pass_lines
         )
+
+    def _monster_lines(self, timings):
+        """The MONSTER AI section of the dashboard: what the dense pass did."""
+        m = self.monsters
+        if m is None:
+            return "MONSTER AI\n  (no MonsterTable — not in play mode)\n\n"
+        n = int(m.count)
+        age = (time.perf_counter() - self.monster_copied_at) * 1000.0
+        mbytes, _ = _num_bytes(m)
+        lines = [
+            "MONSTER AI (MonsterTable)",
+            f"  pass                 {m.path or 'not run'}",
+            f"  rows={n:,}  capacity={len(m.pos):,}  dense bytes={mbytes:,}  "
+            f"rows read last tick={int(m.rows_read):,}  "
+            f"copy age {age:.0f} ms",
+            f"  update (AI thread)   {timings['ai']:8.3f} ms   "
+            f"of which waiting for the monster lock "
+            f"{timings['ai_lock_wait']:8.3f} ms",
+        ]
+        if n:
+            counts = np.bincount(m.mode[:n], minlength=len(monster_table.MODE_NAMES))
+            lines.append("  modes  " + "  ".join(
+                f"{name} {int(c):,}" for name, c in
+                zip(monster_table.MODE_NAMES, counts) if c))
+            teams = ", ".join(m.team_names) or "(none)"
+            lines.append(
+                f"  line-of-sight rays {int(m.rays_cast):,}   "
+                f"shots fired {int(m.fired[:n].sum()):,}   "
+                f"rows through Python {int(m.python_rows):,}   teams {teams}")
+        if m.phase_ms:
+            total = sum(m.phase_ms.values())
+            lines.append(f"  dense phases (ms, total {total:.3f})  " + "  ".join(
+                f"{name} {ms:.3f}" for name, ms in m.phase_ms.items()))
+        return "\n".join(lines) + "\n\n"
 
     def _update_keys(self):
         t = self.render
@@ -855,9 +957,7 @@ class DebugTablesWindow(QMainWindow):
             "DENSE MEMORY MAP", "",
             "TABLE / FIELD                         SHAPE                 DTYPE       BYTES"
         ]
-        for label, table in (
-            ("RenderTable", self.render), ("EntityTable", self.entities)
-        ):
+        for label, table in self._tables():
             lines.append("")
             lines.append(label)
             count = int(table.count)
@@ -897,7 +997,8 @@ class DebugTablesWindow(QMainWindow):
             return
         rslot = self.render.slot_of_id.get(ident) if self.render is not None else None
         eslot = self.entities.slot_of_id.get(ident) if self.entities is not None else None
-        if rslot is None and eslot is None:
+        mslot = self.monsters.slot_of_id.get(ident) if self.monsters is not None else None
+        if rslot is None and eslot is None and mslot is None:
             return
         chain = [f"FOLLOW id={ident}"]
         if rslot is not None:
@@ -945,6 +1046,17 @@ class DebugTablesWindow(QMainWindow):
             key_id = int(self.entities.sprite_key_id[int(eslot)])
             if key_id >= 0:
                 chain.append(f"sprite-key={key_id}")
+        if mslot is not None and int(mslot) < int(self.monsters.count):
+            row = int(mslot)
+            mode = int(self.monsters.mode[row])
+            name = (monster_table.MODE_NAMES[mode]
+                    if mode < len(monster_table.MODE_NAMES) else str(mode))
+            chain.append(f"monster-row={row} mode={name}")
+            target = int(self.monsters.target[row])
+            if target == monster_table.TARGET_PLAYER:
+                chain.append("target=player")
+            elif target >= 0:
+                chain.append(f"target=monster-row {target}")
         follow_text = " -> ".join(chain)
         if follow_text != self._last_follow_text:
             self.status.setText(
