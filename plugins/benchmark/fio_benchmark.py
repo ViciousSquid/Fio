@@ -367,6 +367,56 @@ def _generate_procedural_map(monsters=0, relay_count=32, seed=BENCHMARK_MAP_SEED
     return data
 
 
+MODEL_STRESS_MESH = "assets/models/Oil_Drum.obj"
+
+
+def make_model_stress_world(count=500, shadow_lights=4, spacing=72.0,
+                            seed=BENCHMARK_MAP_SEED, yield_hook=None):
+    """A procedural map dressed with model Props and shadow-casting lights.
+
+    No other benchmark world contains a model or a shadowed light, so neither
+    the instanced model pass, its frustum cull, nor the shadow pass's model
+    casters were ever measured. Every model is a Prop, so this places exactly
+    what the Asset Browser places (:meth:`engine.prop_entity.Prop.for_model`):
+    a square grid of *count* scenery drums centred on the PlayerStart, and the
+    *shadow_lights* room lights nearest it switched to cast shadows.
+    """
+    from engine.prop_entity import LEGACY_MODEL_DEFAULTS
+
+    data = _generate_procedural_map(monsters=0, relay_count=0, seed=seed,
+                                    live_monster=True, yield_hook=yield_hook)
+    things = data["things"]
+    start = next((t for t in things
+                  if str(t.get("type", "")).lower() == "playerstart"), None)
+    sx, sy, sz = [float(v) for v in (start or {}).get("pos", [0.0, 0.0, 0.0])]
+
+    side = max(1, int(math.ceil(math.sqrt(count))))
+    half = (side - 1) * spacing * 0.5
+    for i in range(int(count)):
+        if yield_hook is not None and i % 100 == 0:
+            yield_hook()
+        row, col = divmod(i, side)
+        props = dict(LEGACY_MODEL_DEFAULTS)
+        props.update({
+            "type": "prop",
+            "name": "BenchmarkModel_%d" % i,
+            "id": "benchmark_model_%d" % i,
+            "model_path": MODEL_STRESS_MESH,
+        })
+        things.append({
+            "type": "prop",
+            "pos": [sx - half + col * spacing, sy, sz - half + row * spacing],
+            "properties": props,
+            "io_connections": [],
+        })
+
+    lights = [t for t in things if str(t.get("type", "")).lower() == "light"]
+    lights.sort(key=lambda t: (t["pos"][0] - sx) ** 2 + (t["pos"][2] - sz) ** 2)
+    for light in lights[:int(shadow_lights)]:
+        light["properties"]["casts_shadows"] = True
+    return data
+
+
 # Live benchmark loader deliberately accepts yield_hook so large worlds can be built cooperatively.
 def load_live_benchmark_world(window, data, yield_hook=None):
     """Load benchmark data through the normal live Fio editor machinery.

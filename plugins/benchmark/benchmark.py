@@ -527,6 +527,7 @@ class BenchmarkRunner:
             self.brush_1000,
             self.brush_10000,
             self.brush_100000,
+            self.models_500,
             self.io_chain_1000,
             self.monster_chaos_witness,
             self.borderless_window,
@@ -1373,6 +1374,8 @@ class BenchmarkRunner:
                 self._queue.append(("live_10000_brushes", 10000))
             if self.brush_100000.isChecked():
                 self._queue.append(("live_100000_brushes", 100000))
+            if self.models_500.isChecked():
+                self._queue.append(("live_500_models", 500))
             if self.monster_chaos_witness.isChecked():
                 self._queue.append(("monster_chaos_witness", 40))
     
@@ -1641,6 +1644,7 @@ class BenchmarkRunner:
 
             if self._current and self._current[0] in (
                 "live_1000_brushes", "live_10000_brushes", "live_100000_brushes",
+                "live_500_models",
             ):
                 self._advance_player_area_sweep()
 
@@ -2636,6 +2640,7 @@ class _BenchmarkDialogProxy:
         self.additional_tests = _HeadlessCheckBox()
         self.brush_1000 = _HeadlessCheckBox()
         self.brush_10000 = _HeadlessCheckBox()
+        self.models_500 = _HeadlessCheckBox()
         self.brush_100000 = _HeadlessCheckBox()
         self.io_chain_1000 = _HeadlessCheckBox()
         self.monster_chaos_witness = _HeadlessCheckBox()
@@ -2661,6 +2666,7 @@ class _BenchmarkDialogProxy:
             "brush_1000",
             "brush_10000",
             "brush_100000",
+            "models_500",
             "io_chain_1000",
             "monster_chaos_witness",
             "borderless_window",
@@ -2676,6 +2682,7 @@ class _BenchmarkDialogProxy:
         self.brush_1000.setChecked("live_1000_brushes" in selected)
         self.brush_10000.setChecked("live_10000_brushes" in selected)
         self.brush_100000.setChecked("live_100000_brushes" in selected)
+        self.models_500.setChecked("live_500_models" in selected)
         self.io_chain_1000.setChecked("live_io_1000" in selected)
         self.monster_chaos_witness.setChecked("monster_chaos_witness" in selected)
         self.borderless_window.setChecked("borderless_window" in selected)
