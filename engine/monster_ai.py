@@ -114,6 +114,26 @@ class MonsterAI:
         """Called by LogicThread after populating the grid."""
         self._grid = grid
 
+    def forget_monsters(self):
+        """Drop every reference a finished session left to its monsters.
+
+        The dense table and the nearest-enemy batch hold the monster objects
+        (and their property dicts) until the next tick rebuilds them -- which,
+        after Stop, is the next Play, possibly on another map. Debug Tables
+        also showed that stale table as if it were live.
+        """
+        self.monster_states = {}
+        self.table.gather(())
+        self.table.path = 'not run'
+        self.table.phase_ms = {}
+        self.table.rays_cast = self.table.python_rows = 0
+        self._enemy_rows = {}
+        self._enemy_monsters = ()
+        self._enemy_teams = ()
+        self._enemy_nearest = None
+        self._enemy_ready = False
+        self._debug_rays.clear()
+
     # -------------------------------------------------------------------------
     # Main update entry point
     # -------------------------------------------------------------------------

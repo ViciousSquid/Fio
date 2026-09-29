@@ -80,6 +80,7 @@ import numpy as np
 
 from .change_journal import JOURNAL, OVERFLOW, STATE, VISIBILITY, is_tracked
 from .portal_transform import basis_from_rotation
+from .render_table import _can_adopt
 
 # Defensive, as everywhere else in engine/: editor.things pulls in PyQt5, and
 # the standalone player tier does not have it.  A tier without the classes
@@ -761,7 +762,7 @@ class EntityTable:
         return tuple(things) != self._row_tuple
 
     def begin_frame(self, things, epoch=None, dirty_objects=None,
-                    effect_runtime=False, peer=None):
+                    effect_runtime=False, peer=None, peer_dirty=None):
         """Bring the table into line with *things*; return the ``hidden`` mask.
 
         Nothing here visits an entity that has not changed. The row set is
@@ -782,11 +783,14 @@ class EntityTable:
         if self.needs_reconcile(things, epoch):
             if self._refresh_in_place(things, epoch, dirty_objects):
                 pass
-            elif (peer is not None and dirty_objects is None and epoch is not None
-                    and peer._epoch == epoch and peer._row_tuple == things):
+            elif _can_adopt(peer, things, epoch, dirty_objects, peer_dirty):
                 # The other buffer's table already resolved exactly these
-                # rows at this epoch: copy rather than re-derive.
+                # rows, at this epoch or a precisely journalled edit or two
+                # behind it: copy rather than re-derive, then catch up.
                 self.adopt(peer)
+                if (peer_dirty and not self._refresh_in_place(
+                        things, epoch, peer_dirty)):
+                    self._reconcile(things, dirty_objects=peer_dirty)
             else:
                 resolved_all = self._reconcile(things, dirty_objects=dirty_objects)
             self._epoch = epoch
