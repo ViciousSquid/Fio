@@ -26,7 +26,7 @@ from .camera import Camera
 from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
 from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
 from .prop_runtime import PropSession
-from .change_journal import moved, touch
+from .change_journal import JOURNAL, STATE, moved, touch
 from .mover_table import MoverTable
 from .entity_table import ENT_PROP
 from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
@@ -123,6 +123,9 @@ _PORTAL_PLAYER_EXIT_EPSILON = 0.05
 # 1.0 = heard out to the full sensory radius (gunshots); water splashes are
 # quieter, so a monster has to be closer to notice the player entering/leaving.
 _GUNFIRE_LOUDNESS = 1.0
+#: Shared, read-only "no projectiles" array for published frames.
+_NO_PROJECTILES = np.empty((0, 3), dtype=np.float32)
+_NO_PROJECTILES.setflags(write=False)
 _WATER_LOUDNESS = 0.7
 
 
@@ -414,6 +417,9 @@ class LogicThread(threading.Thread):
 
         # Monster projectiles (flying monster ranged attacks)
         self._monster_projectiles: list = []
+        #: Their positions after the last tick, as the (N, 3) float32 array
+        #: every published frame carries (see _prepare_render_state).
+        self._projectile_positions = _NO_PROJECTILES
 
         # Gunfire sound events for AI hearing (list of dicts with pos, time, source)
         self._gunfire_events: list = []
@@ -1239,6 +1245,7 @@ class LogicThread(threading.Thread):
 
             # Clear monster projectiles
             self._monster_projectiles.clear()
+            self._projectile_positions = _NO_PROJECTILES
 
             # Clear gunfire events
             self._gunfire_events.clear()
@@ -1323,6 +1330,7 @@ class LogicThread(threading.Thread):
 
             # Clear monster projectiles
             self._monster_projectiles.clear()
+            self._projectile_positions = _NO_PROJECTILES
 
             # Clear gunfire events
             self._gunfire_events.clear()
@@ -1458,9 +1466,11 @@ class LogicThread(threading.Thread):
             return
         if clear_dead:
             self._monster_spawn_health = {}
+        reset = []
         for thing in self.things:
             if not isinstance(thing, MonsterThing):
                 continue
+            reset.append(thing)
             if clear_dead:
                 try:
                     self._monster_spawn_health[thing.properties.get('id')] = \
@@ -1477,6 +1487,9 @@ class LogicThread(threading.Thread):
                 thing.properties['awake'] = False
             else:
                 thing.properties['awake'] = True
+        # dead and is_shooting choose the sprite: without this a monster left
+        # mid-shot, or dead, when play stopped kept that sprite in the editor.
+        JOURNAL.record_many(reset, STATE)
 
     def _start_speakers_on_spawn(self):
         """Turn on speakers authored with Start On when the player spawns.
@@ -3755,11 +3768,10 @@ class LogicThread(threading.Thread):
         """
         if not hasattr(self, '_monster_projectiles'):
             return
-        write_state = self.game_state.get_write_state()
         projectiles = self._monster_projectiles
         if not projectiles:
             self._monster_projectiles = []
-            write_state.projectiles = np.empty((0, 3), dtype=np.float32)
+            self._projectile_positions = _NO_PROJECTILES
             return
 
         count = len(projectiles)
@@ -3870,9 +3882,11 @@ class LogicThread(threading.Thread):
                 survivors.append(i)
 
         self._monster_projectiles = [projectiles[i] for i in survivors]
-        # Published as one dense array: the renderer draws them in one call.
-        write_state.projectiles = (pos32[survivors] if survivors
-                                   else np.empty((0, 3), dtype=np.float32))
+        # Kept here and published by _prepare_render_state as one dense
+        # array. Writing the write buffer from the tick lost them on every
+        # frame that ran no tick: that buffer had just been reset by a swap.
+        self._projectile_positions = (pos32[survivors] if survivors
+                                      else _NO_PROJECTILES)
 
 
     # =========================================================================
@@ -4196,6 +4210,8 @@ class LogicThread(threading.Thread):
             write_state.shot_ready = False
         write_state.camera_transition_active = bool(self.camera_transition)
 
+        write_state.projectiles = (self._projectile_positions
+                                   if self.play_mode else _NO_PROJECTILES)
         write_state.monster_debug_active = self.monster_ai.monster_debug_active
         write_state.monster_debug_rays = list(self.monster_ai._debug_rays)
 

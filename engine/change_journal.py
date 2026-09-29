@@ -16,6 +16,8 @@ So the objects say when they change. There are two kinds of change:
   renderer reads (``hidden``, ``dead``, a light's ``state``, a brush's tint),
   or runtime render state (a carried prop's yaw, a respawn fade, an effect
   being triggered). Whoever writes such a value calls :func:`touch`.
+* :data:`VISIBILITY` -- only the live ``hidden`` flag, written by a streaming
+  layer that parks the object; ``touch(obj, VISIBILITY)``.
 
 Editor transactions still go through
 :meth:`editor.editor_state.EditorState.mark_world_changed`; this journal is
@@ -39,10 +41,22 @@ import weakref
 MOVED = 1
 #: Something other than the transform that a row is resolved from changed.
 STATE = 2
+#: Only the live ``hidden`` flag changed -- a streaming layer parking or
+#: unparking the object, which leaves everything *authored* about it alone.
+#: Tables re-read that one warm value instead of re-resolving the row: a Big
+#: World cell crossing parks thousands of rows at once, and resolving each
+#: row's textures, class and materials again cost ~180 ms per 10 000 rows, per
+#: render buffer.
+VISIBILITY = 4
 
 #: Pending entries a subscriber may accumulate before it is told to refresh
-#: every row instead.
-PENDING_LIMIT = 8192
+#: every row instead. This only bounds the memory of a subscriber that stopped
+#: draining: a pending set holds at most one entry per distinct object, and
+#: refreshing every row costs far more than applying even a large precise set
+#: (at 10 000 moving monsters, 120 ms a frame against 7 ms). A low limit made
+#: a large battle -- or a slow paint holding one buffer's table undrained for
+#: several logic frames -- fall off that cliff every frame.
+PENDING_LIMIT = 1 << 17
 
 
 class _Overflow:

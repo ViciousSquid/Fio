@@ -81,7 +81,7 @@ class MonsterTable:
     __slots__ = tuple(name for name, *_ in _COLUMNS) + (
         'count', 'generation', 'monsters', 'props', 'row_of', 'slot_of_id',
         'team_names', 'rows_read', 'rays_cast', 'python_rows', 'phase_ms',
-        'path', '_live', '_list_key')
+        'path', '_live')
 
     def __init__(self):
         self.count = 0
@@ -106,7 +106,6 @@ class MonsterTable:
         self.path = 'not run'
         #: Who crossfire may hit this tick; read on the first shot of a tick.
         self._live = None
-        self._list_key = None
         for name, shape, dtype, fill in _COLUMNS:
             setattr(self, name, np.full((0,) + shape, fill, dtype=dtype))
 
@@ -146,10 +145,16 @@ class MonsterTable:
         change between ticks -- flags written by I/O, teams set by a plugin,
         positions moved by physics or the editor -- is read here, fresh.
         """
-        key = (id(monsters), len(monsters))
-        if key != self._list_key or len(monsters) != self.count:
+        # The rows are compared by identity, element by element (one C loop:
+        # Monster defines no __eq__). Keying on (id(list), len) was not enough:
+        # the logic thread rebuilds its monster list as a new list, CPython
+        # readily gives a new list a freed one's address, and two rebuilds
+        # between ticks with the same count left the AI driving -- and
+        # scattering results onto -- the previous monster objects.
+        if type(monsters) is not list:
+            monsters = list(monsters)
+        if len(monsters) != self.count or monsters != self.monsters:
             self._reconcile(monsters)
-            self._list_key = key
         n = self.count
         monsters = self.monsters
         props = self.props = [m.properties for m in monsters]

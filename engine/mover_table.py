@@ -747,8 +747,11 @@ class MoverTable:
     def __init__(self):
         self.movers = LinearMovers()
         self.doors = Doors()
-        # (render table, its generation, mover version, door version) -> slots
-        self._slot_cache = (None, None, None, None, None, None)
+        # id(render table) -> (table, its generation, mover version, door
+        # version, mover map, door map). One entry per render buffer: the two
+        # buffers' tables alternate every frame, and a single entry was
+        # rebuilt -- a Python pass over every mover and door -- each time.
+        self._slot_cache = {}
         JOURNAL.subscribe(self)
 
     def sync(self):
@@ -812,7 +815,8 @@ class MoverTable:
         if not (len(movers.index) or len(doors.index)):
             return
         key = (table, table.generation, movers.version, doors.version)
-        if self._slot_cache[:4] != key:
+        cached = self._slot_cache.get(id(table))
+        if cached is None or cached[0] is not table or cached[1:4] != key[1:]:
             slot_of = table._slot_of_obj
             maps = []
             for group in (movers, doors):
@@ -820,8 +824,10 @@ class MoverTable:
                 slots = np.asarray(slots, dtype=np.intp)
                 ok = slots >= 0
                 maps.append((np.flatnonzero(ok), slots[ok]))
-            self._slot_cache = key + tuple(maps)
-        (mover_rows, mover_slots), (door_rows, door_slots) = self._slot_cache[4:]
+            if len(self._slot_cache) >= 4:
+                self._slot_cache.clear()
+            cached = self._slot_cache[id(table)] = key + tuple(maps)
+        (mover_rows, mover_slots), (door_rows, door_slots) = cached[4:]
         if len(mover_rows):
             table.bounds[mover_slots, :3] = movers.pos[mover_rows]
             angle = movers.rot_angle[mover_rows]

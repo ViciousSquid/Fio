@@ -809,9 +809,17 @@ class RenderTable:
         return not survivors
 
     def refresh_transforms(self, brushes, slots):
-        """Re-read the warm columns for *slots* (movers and doors, per tick)."""
-        for slot in slots:
-            self._resolve_warm(slot, brushes[slot])
+        """Re-read the warm columns for *slots*: transform and ``hidden``.
+
+        What a journalled move or a streaming park/unpark changes. A few rows
+        are read one at a time; a batch (a Big World cell crossing parks
+        thousands) is read with one column store each.
+        """
+        if len(slots) > 16:
+            self._resolve_warm_rows(slots, brushes)
+        else:
+            for slot in slots:
+                self._resolve_warm(slot, brushes[slot])
         self.rows_read += len(slots)
 
     def refresh_rows(self, brushes, slots):

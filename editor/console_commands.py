@@ -1,3 +1,4 @@
+import contextlib
 import os
 import json
 from PyQt5.QtWidgets import QMessageBox
@@ -606,7 +607,9 @@ class ConsoleCommandHandler:
         )
 
         portal.properties['portal_target'] = target_name
+        touch(portal)
         self.editor_state.save_state()
+        self._rebuild_logic_entity_caches()
 
         status = f"linked to '{target_name}'"
         if not target_exists:
@@ -1413,8 +1416,9 @@ entity to drive them from the I/O system.</i><br>
                          if hasattr(entity, 'properties')
                          else entity.get('id', ''))
             try:
-                io._execute_input(entity_name, input_name, parameter,
-                                  "console", target_id=target_id)
+                with self._io_dispatch_lock():
+                    io._execute_input(entity_name, input_name, parameter,
+                                      "console", target_id=target_id)
                 debug_log("Info", f"✓ Fired input '{input_name}' on '{entity_name}'")
             except Exception as e:
                 debug_log("Error", f"ent_fire failed: {e}")
@@ -1452,7 +1456,8 @@ entity to drive them from the I/O system.</i><br>
             debug_log("Info", f"🔄 Toggling {entity_name}")
             io = self._get_io_manager()
             if io:
-                io._execute_input(entity_name, "Toggle", "", "console")
+                with self._io_dispatch_lock():
+                    io._execute_input(entity_name, "Toggle", "", "console")
             return
 
         # Generic entity fallback
@@ -1471,7 +1476,8 @@ entity to drive them from the I/O system.</i><br>
         if entity:
             io = self._get_io_manager()
             if io:
-                io._execute_input(entity_name, input_name, param, "console")
+                with self._io_dispatch_lock():
+                    io._execute_input(entity_name, input_name, param, "console")
             debug_log("Info", f"Sent input '{input_name}' to {entity_name}")
         else:
             debug_log("Error", f"Entity '{entity_name}' not found")
@@ -1501,6 +1507,8 @@ entity to drive them from the I/O system.</i><br>
 
         debug_log("Info", f"Set {name}.{key} = {value}")
         self.editor_state.save_state()
+        # A name, id or portal target is indexed by the running logic thread.
+        self._rebuild_logic_entity_caches()
 
     def cmd_get_property(self, args):
         parts = args.split()
@@ -2114,6 +2122,17 @@ entity to drive them from the I/O system.</i><br>
         view_3d = getattr(self.main_window, 'view_3d', None)
         return getattr(view_3d, 'logic_thread', None) if view_3d else None
 
+    def _io_dispatch_lock(self):
+        """The running logic thread's tick lock, for I/O sent from the console.
+
+        Console commands run on the UI thread; an input dispatched from here
+        runs its handler against the world the logic tick is advancing, so it
+        has to land between ticks, as play start/stop and save/load do.
+        """
+        logic = self._logic_thread()
+        lock = getattr(logic, '_tick_lock', None) if logic is not None else None
+        return lock if lock is not None else contextlib.nullcontext()
+
     def _rebuild_logic_entity_caches(self):
         """Tell a running logic thread that the thing list changed.
 
@@ -2125,7 +2144,15 @@ entity to drive them from the I/O system.</i><br>
         """
         logic = self._logic_thread()
         if logic is not None and hasattr(logic, '_build_entity_caches'):
-            logic._build_entity_caches()
+            # Console commands run on the UI thread. The rebuild replaces
+            # caches a tick walks (the Prop registry above all), so it must
+            # land between ticks, never inside one.
+            lock = getattr(logic, '_tick_lock', None)
+            if lock is None:
+                logic._build_entity_caches()
+            else:
+                with lock:
+                    logic._build_entity_caches()
 
     def _in_play_mode(self):
         view_3d = getattr(self.main_window, 'view_3d', None)

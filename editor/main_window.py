@@ -2054,6 +2054,13 @@ class MainWindow(QMainWindow):
                 brush['textures'][face_name] = texture_name
         else:
             brush['textures'][face_name] = texture_name
+        if brush_geometry.brush_has_geometry(brush):
+            # The derived faces copied the old texture, and the GPU mesh is
+            # keyed by the geometry signature: both must move on.
+            brush_geometry.invalidate_geometry_cache(brush)
+        # The face may only be hovered, not selected, so the checkpoint above
+        # did not journal it for the render projection.
+        self.state.mark_lighting_dirty([brush])
 
         # Remember the last-textured face so the rotate-texture button / Page
         # Up-Down keys know which face to act on when nothing is hovered.

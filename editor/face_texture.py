@@ -160,12 +160,17 @@ def set_transform(brush, face_key, shift=None, scale=None, angle=None,
         # winding that copied the old one has to be dropped.
         if plane is not None:
             plane['texture'] = texture
-            bg.invalidate_geometry_cache(brush)
     if natural is not None:
         if natural:
             brush.setdefault('uv_natural', {})[face_key] = True
         else:
             brush.get('uv_natural', {}).pop(face_key, None)
+    if plane is not None:
+        # The GPU mesh of an angled brush bakes every face's mapping (texture,
+        # scale, shift, angle, Natural) into its runs, and is keyed by the
+        # brush's geometry signature -- so any mapping edit to a tagged face
+        # of such a brush has to move that signature, not just a retexture.
+        bg.invalidate_geometry_cache(brush)
 
 
 def face_keys(brush):
