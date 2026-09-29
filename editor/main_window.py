@@ -27,7 +27,7 @@ from editor.ui import LAYOUT_VERSION, Ui_MainWindow
 from editor.tooltips import set_tooltips_enabled
 from engine.constants import TILE_SIZE
 from engine import brush_geometry
-from engine.change_journal import touch
+from engine.change_journal import moved, touch
 from engine.fileio import write_json_atomic
 from editor.view_2d import View2D
 from editor.editor_state import EditorState
@@ -1635,6 +1635,7 @@ class MainWindow(QMainWindow):
                             self.preview_data['obj']['pos'] = [0, 0, 0]
                 else:
                     self.preview_data['obj']['pos'] = self.preview_data['original_pos']
+                moved(self.preview_data['obj'])
                 self.preview_data = {}
                 self.update_views()
 
@@ -1653,6 +1654,16 @@ class MainWindow(QMainWindow):
                     d_btn.blockSignals(False)
 
     def update_mover_preview(self):
+        """One preview step. The brush is written in place, so it is journalled
+        for the render tables, which no longer poll movers every frame."""
+        brush = self.preview_data.get('obj') if self.preview_data else None
+        try:
+            self._advance_mover_preview()
+        finally:
+            if brush is not None:
+                moved(brush)
+
+    def _advance_mover_preview(self):
         if not self.preview_data:
             return
 

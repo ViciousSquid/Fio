@@ -85,10 +85,14 @@ def test_only_dynamic_rows_are_refreshed_each_frame(logic):
         table = thread._render_table
         static_row = table.center[0].copy()
 
-        # Move both brushes behind the projection's back.  Only the mover's row
-        # is meant to follow, because only movers are refreshed per frame.
+        # Move both brushes. The static one behind the projection's back: its
+        # row must not follow, because nothing re-reads static rows per frame.
+        # The mover as anything outside the tick must, through the journal:
+        # its row comes from the dense mover table, not a per-frame re-read.
+        from engine.change_journal import moved
         static["pos"] = [9999.0, 0.0, -400.0]
         mover["pos"] = [8888.0, 0.0, -400.0]
+        moved(mover)
         thread._prepare_render_state()
 
         assert np.array_equal(table.center[0], static_row), (

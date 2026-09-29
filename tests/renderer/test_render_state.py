@@ -278,6 +278,7 @@ def test_a_mover_is_snapshotted_into_the_dense_render_table(logic):
     assert first.tolist() == [0.0, 0.0, -400.0]
 
     mover["pos"] = [0.0, 500.0, -400.0]
+    touch(mover)            # movers are not polled; a mover moved by hand says so
     assert table.center[slot].tolist() == first.tolist(), (
         "the dense frame projection changed before the next render-state publish")
 
