@@ -324,3 +324,49 @@ def test_resetting_monsters_for_play_journals_their_sprite_state(logic):
     sprite = table.sprite_recipes()[table.sprite_key_id[0]]
     assert sprite != dead_sprite
     assert any(c[1] == 'idle.png' for c in sprite), sprite
+
+
+# ---------------------------------------------------------------------------
+# Found by the Debug Tables oracle (rebuild-from-world vs published columns)
+# ---------------------------------------------------------------------------
+
+def test_play_start_and_stop_keep_an_angled_brushs_geometry_epoch(logic):
+    """Reverting mesh collision stripped every GEO_RUNTIME_KEYS entry but the
+    convex cache -- including _geo_epoch, the brush's geometry identity. Each
+    angled brush then got a new epoch behind the render tables' back."""
+    from engine import brush_geometry as bg
+    from tests.helpers.worlds import box_brush
+
+    solid = box_brush("ramp", (0, 32, 0), (128, 64, 128))
+    bg.clip_brush(solid, (0.0, 1.0, 1.0), 20.0)
+    water = box_brush("pool", (400, 32, 0), (128, 64, 128), shader="Water")
+    bg.clip_brush(water, (0.0, 1.0, 1.0), 20.0)
+    thread = logic(brushes=[solid, water])
+    before = [bg.geometry_signature(b) for b in (solid, water)]
+
+    thread._prepare_angled_brush_collision()     # play start
+    assert solid.get('_collision_mode') == 'mesh'
+    thread._clear_angled_brush_collision()       # play stop
+
+    assert '_collision_mode' not in solid
+    assert [bg.geometry_signature(b) for b in (solid, water)] == before
+
+
+def test_a_row_that_is_not_a_light_carries_no_light_columns():
+    """A reconcile that moves a non-light entity into a light's old slot left
+    the light's colour, intensity and on/off in that row."""
+    from editor.things import Light, Prop
+    from engine.entity_table import EntityTable
+
+    light = Light(pos=[0.0, 0.0, 0.0])
+    light.properties.update(id='l', colour=[255, 0, 0])
+    prop = Prop(pos=[5.0, 0.0, 0.0])
+    prop.properties['id'] = 'p'
+    table = EntityTable()
+    table.begin_frame([light, prop], 1)
+    assert table.light_enabled[0]
+
+    table.begin_frame([prop, light], 2, dirty_objects={id(prop)})
+    assert not table.light_enabled[0]
+    assert table.light_color[0].tolist() == [0.0, 0.0, 0.0]
+    assert table.light_params[0].tolist() == [0.0, 0.0]

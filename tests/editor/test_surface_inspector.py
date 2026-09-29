@@ -1081,3 +1081,46 @@ def test_a_closed_panel_is_not_woken_by_a_selection(qt_app):
     host.sync_surface_inspector()
 
     assert host.surface_inspector is None
+
+
+def test_undo_re_points_a_closed_inspector_without_reopening_it(inspector):
+    """Closing the panel is not an undoable action. Undo re-points the
+    inspector at the rebuilt brush, and that re-bind used to show() it."""
+    from editor.main_window import MainWindow
+
+    host, panel, brush = inspector
+    brush['id'] = 'box-1'
+    panel.hide()
+    assert not panel.isVisible()
+
+    # What undo leaves behind: the scene rebuilt from JSON, a new dict with
+    # the same stable id.
+    rebuilt = dict(brush)
+    host.state.brushes[:] = [rebuilt]
+    host.surface_inspector = panel
+    host.face_texture_target = None
+    MainWindow._rebind_face_targets(host)
+
+    assert not panel.isVisible(), "undo re-opened the closed Surface Inspector"
+    assert panel.target[0] is rebuilt, "the closed panel was not re-pointed"
+
+    # A brush that no longer exists unbinds it -- still without opening it.
+    host.state.brushes[:] = []
+    MainWindow._rebind_face_targets(host)
+    assert not panel.isVisible()
+    assert panel.target is None
+
+
+def test_undo_keeps_an_open_inspector_open(inspector):
+    from editor.main_window import MainWindow
+
+    host, panel, brush = inspector
+    brush['id'] = 'box-1'
+    panel.show()
+    rebuilt = dict(brush)
+    host.state.brushes[:] = [rebuilt]
+    host.surface_inspector = panel
+    host.face_texture_target = None
+    MainWindow._rebind_face_targets(host)
+    assert panel.isVisible()
+    assert panel.target[0] is rebuilt

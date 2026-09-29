@@ -2415,10 +2415,13 @@ class MainWindow(QMainWindow):
         inspector = getattr(self, 'surface_inspector', None)
         if inspector is not None and inspector.target is not None:
             rebound = _rebind(inspector.target)
+            # Re-pointed, never re-opened: undo is not a window action.
             if rebound is None:
-                inspector.set_target(None, None, raise_window=False)
+                inspector.set_target(None, None, raise_window=False,
+                                     reveal=False)
             elif rebound is not inspector.target:
-                inspector.set_target(rebound[0], rebound[1], raise_window=False)
+                inspector.set_target(rebound[0], rebound[1],
+                                     raise_window=False, reveal=False)
             else:
                 inspector.refresh_from_face()
 

@@ -1219,15 +1219,32 @@ class EntityTable:
             self.model_normal_matrix[slot, 5] = 1.0
             self.model_normal_matrix[slot, 10] = 1.0
 
-        if (self.class_bits[slot] & (ENT_LIGHT | ENT_EFFECT)) == ENT_LIGHT:
+        light_bits = self.class_bits[slot] & (ENT_LIGHT | ENT_EFFECT)
+        if light_bits == ENT_LIGHT:
             self.light_color[slot] = _light_color_of(thing)
             self.light_params[slot] = (_light_float(thing, 'intensity', 1.0),
                                        _light_float(thing, 'radius', 512.0))
             self.light_enabled[slot] = _light_bool(thing, 'state', True)
             self.light_casts_shadows[slot] = _light_bool(
                 thing, 'casts_shadows', False)
+        elif not light_bits:
+            # A row that is no light must not keep the light columns of the
+            # row a reconcile moved out of this slot: rebuilding the table
+            # from the world has to give identical bits.
+            self.light_color[slot] = 0.0
+            self.light_params[slot] = 0.0
+            self.light_enabled[slot] = False
+            self.light_casts_shadows[slot] = False
 
-        if self.class_bits[slot] & ENT_PORTAL:
+        if not self.class_bits[slot] & ENT_PORTAL:
+            self.portal_active[slot] = False
+            self.portal_direction[slot] = 0
+            self.portal_width_height[slot] = 0.0
+            self.portal_basis[slot] = 0.0
+            self.portal_fade[slot] = 0.0
+            self.portal_color[slot] = 1.0
+            self.portal_show_rim[slot] = False
+        else:
             self.portal_active[slot] = _bool_property(
                 props.get('active', True), True)
             self.portal_fade[slot] = max(0.0, min(1.0, _float_property(

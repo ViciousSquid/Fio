@@ -24,7 +24,7 @@ from .threaded_game_state import ThreadedGameState, PublishedBrushes, PublishedE
 from .player import Player
 from .camera import Camera
 from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
-from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
+from .brush_geometry import build_collision_mesh, brush_has_geometry
 from .prop_runtime import PropSession
 from .change_journal import JOURNAL, STATE, moved, touch
 from .mover_table import MoverTable
@@ -622,12 +622,18 @@ class LogicThread(threading.Thread):
             debug_log("Collision", f"Prepared mesh collision for {count} angled brush(es)")
         return count
 
-    @staticmethod
-    def _clear_brush_collision(brush):
+    #: What build_collision_mesh attaches, and all a revert may remove. The
+    #: rest of GEO_RUNTIME_KEYS is the brush's geometry identity and cache:
+    #: popping ``_geo_epoch`` gave every angled brush a new epoch behind the
+    #: render tables' back at each play start/stop, so their rows held stale
+    #: records and every convex shape was re-derived.
+    _COLLISION_KEYS = ('_collision_mode', '_mesh_triangles', '_mesh_bounds',
+                       '_mesh_planes')
+
+    @classmethod
+    def _clear_brush_collision(cls, brush):
         """Strip runtime mesh-collision keys so the brush reverts to AABB."""
-        for k in GEO_RUNTIME_KEYS:
-            if k in ('_geo_cache', '_geo_cache_sig'):
-                continue  # keep the geometry render/query cache
+        for k in cls._COLLISION_KEYS:
             brush.pop(k, None)
 
     def _clear_angled_brush_collision(self):
