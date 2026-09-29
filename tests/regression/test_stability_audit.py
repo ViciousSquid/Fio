@@ -509,3 +509,20 @@ def test_a_frame_that_cannot_be_prepared_does_not_kill_the_logic_thread():
     wall["size"] = [64, 64, 64]
     touch(wall)
     _check_frames(logic, game_state, 2)
+
+
+def test_an_exception_in_a_qt_callback_is_reported_not_fatal(qt_app, monkeypatch):
+    """PyQt5 aborts the process when an exception escapes a slot unless an
+    excepthook is installed; main.py installs this one."""
+    import sys
+    from editor import debug_console
+    logged = []
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    monkeypatch.setattr(debug_console, "debug_log", lambda c, m: logged.append((c, m)))
+    hook = debug_console.install_excepthook()
+    assert sys.excepthook is hook
+    try:
+        raise ValueError("boom in a slot")
+    except ValueError:
+        hook(*sys.exc_info())
+    assert logged and logged[0][0] == "Error" and "boom in a slot" in logged[0][1]
