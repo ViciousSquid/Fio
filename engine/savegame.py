@@ -655,11 +655,14 @@ def _drop_absent_keys(live_props: dict, saved_props: dict) -> None:
         del live_props[key]
 
 
-def _overlay_entities(logic, level: dict) -> None:
+def _overlay_entities(logic, level: dict, *, complete: bool = False) -> None:
     """Restore live entity state (position + properties) from a saved level.
 
     Matches by stable UUID so it survives a full scene reload; entities present
     in the save but not the live scene (or vice-versa) are skipped quietly.
+    *complete* says each thing record is the object's whole property dict (a
+    save's level, a delta's records, the base map), so what a record lacks is
+    removed (:func:`_drop_absent_keys`); otherwise records are merged.
     """
     if not level:
         return
@@ -690,7 +693,8 @@ def _overlay_entities(logic, level: dict) -> None:
                 if k == "_io_connections" or k in _PARKABLE_KEYS:
                     continue
                 live.properties[k] = v
-            _drop_absent_keys(live.properties, props)
+            if complete:
+                _drop_absent_keys(live.properties, props)
             # hidden/disabled last, and through the parking-aware writer: they
             # are the two flags a streaming layer borrows, and the two a stale
             # restore leaves visibly wrong.
@@ -874,7 +878,7 @@ def restore_snapshot(logic, data: dict) -> None:
     if not isinstance(data, dict) or not data.get(_MAGIC):
         raise ValueError("not a Fio save file")
     # Live entity state first, so anything derived from it below is consistent.
-    _overlay_entities(logic, data.get("level", {}) or {})
+    _overlay_entities(logic, data.get("level", {}) or {}, complete=True)
     _restore_runtime_and_players(logic, data)
 
 
@@ -903,8 +907,8 @@ def restore_delta(logic, data: dict, base_level: Optional[dict] = None) -> None:
                        if (t.get("properties") or {}).get("id") not in in_delta],
             "brushes": [b for b in base_level.get("brushes", [])
                         if b.get("id") not in in_delta_brushes],
-        })
-    _overlay_entities(logic, delta_level)
+        }, complete=True)
+    _overlay_entities(logic, delta_level, complete=True)
     _restore_runtime_and_players(logic, data)
 
 
