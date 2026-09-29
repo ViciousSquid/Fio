@@ -917,17 +917,19 @@ class DebugConsole(QWidget):
         if len(parts) != 4:
             return f'<b>Fio version</b> <b>{version}</b>'
 
-        # Version numbers are presentation-only. Keep the established
-        # bold orange appearance, but do not make them entity-filter links.
-        label_style = 'color: #F08000; font-weight: bold;'
+        # The banner itself is white. Only major/minor/patch are orange;
+        # dots, the build number, and the surrounding label remain white.
+        white_style = 'color: #FFFFFF; font-weight: bold;'
+        version_style = 'color: #F08000; font-weight: bold;'
 
-        rendered = [f'<span style="{label_style}">Fio version</span> ']
+        rendered = [f'<span style="{white_style}">Fio version</span> ']
         if include_version_word:
-            rendered.append(f'<span style="{label_style}">version</span> ')
+            rendered.append(f'<span style="{white_style}">version</span> ')
         for index, part in enumerate(parts):
-            rendered.append(f'<span style="{label_style}">{part}</span>')
+            style = version_style if index < 3 else white_style
+            rendered.append(f'<span style="{style}">{part}</span>')
             if index < len(parts) - 1:
-                rendered.append(f'<b style="{label_style}">.</b>')
+                rendered.append(f'<span style="{white_style}">.</span>')
         return ''.join(rendered)
     def _plugin_message_color(self, message: str) -> str:
         """Pick a colour for a 'Plugins' message based on its content.
