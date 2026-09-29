@@ -861,17 +861,6 @@ class Renderer_F(BaseRenderer):
         # are filtered numerically; no Thing objects are materialised.
         if etable is not None and thing_hidden is not None:
             thing_slots = np.arange(etable.count, dtype=np.int32)
-            if len(thing_slots):
-                entity_planes = planes
-                centres = etable.pos[thing_slots]
-                distances = centres @ entity_planes[:, :3].T + entity_planes[:, 3]
-                radii = np.maximum(
-                    etable.sprite_size[thing_slots].max(axis=1) * 0.5, 1.0)
-                model_rows = etable.model_recipe_id[thing_slots] >= 0
-                radii[model_rows] = np.maximum(radii[model_rows], 128.0)
-                entity_visible = np.all(
-                    distances >= -radii[:, None], axis=1)
-                thing_slots = thing_slots[entity_visible]
             model_slots, sprite_slots = entity_projection.classify_slots(
                 etable,
                 thing_slots,
@@ -879,6 +868,11 @@ class Renderer_F(BaseRenderer):
                 config.get('play_mode', False),
                 config.get('show_sprites_in_play_mode', False),
             )
+            # The same exact-conservative bounds the main view uses: a
+            # billboard's half-diagonal, a mesh's measured radius.
+            sprite_slots = self._cull_entity_rows(etable, sprite_slots, planes)
+            model_slots = self._cull_entity_rows(
+                etable, model_slots, planes, models=True)
             effect_slots = thing_slots[
                 (etable.class_bits[thing_slots] & entity_projection.ENT_EFFECT) != 0
             ]
@@ -1003,6 +997,19 @@ class Renderer_F(BaseRenderer):
             etable, tslots, thing_hidden,
             config.get('play_mode', False),
             config.get('show_sprites_in_play_mode', False))
+        # Frustum, against this view's own camera. The logic thread publishes
+        # every entity row, because lights, portals and effects need them all;
+        # the sprite and model passes only need what this camera can see, and
+        # every row they skip is a quad or a mesh instance never packed,
+        # uploaded or rasterised.
+        entity_planes = self._frustum_planes(projection * view)
+        candidates = len(sprite_slots) + len(numeric_model_slots)
+        sprite_slots = self._cull_entity_rows(etable, sprite_slots, entity_planes)
+        numeric_model_slots = self._cull_entity_rows(
+            etable, numeric_model_slots, entity_planes, models=True)
+        self.render_stats.entity_candidates = candidates
+        self.render_stats.culled_entities = candidates - (
+            len(sprite_slots) + len(numeric_model_slots))
         # Effects own a dedicated dense slot vector. Do not derive this
         # transient render pass from the generic Thing classification; a newly
         # authored Effect must become visible as soon as the EntityTable row exists.

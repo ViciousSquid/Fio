@@ -35,6 +35,8 @@ def make_session(props=(), physics=None):
 
 
 def prop_at(x, y, z, **props):
+    # These are Props the player carries; carrying is opt-in on a Prop.
+    props.setdefault('carry_enabled', True)
     return Prop(pos=[float(x), float(y), float(z)], properties=dict(props))
 
 
@@ -43,7 +45,7 @@ def brute_force_carry(session, eye, forward):
     best, best_d = None, None
     for prop in session.props:
         p = prop.properties
-        if p.get("disabled") or not p.get("carry_enabled", True):
+        if p.get("disabled") or not p.get("carry_enabled", False):
             continue
         d = [float(prop.pos[i]) - eye[i] for i in range(3)]
         distance = math.sqrt(sum(v * v for v in d))

@@ -8,7 +8,8 @@ from editor.things import Thing, Prop
 def test_prop_has_serializable_carry_and_physics_defaults():
     prop = Prop(pos=[1, 2, 3])
     assert prop.properties['type'] == 'prop'
-    assert prop.properties['carry_enabled'] is True
+    # Scenery by default: neither carryable nor solid.
+    assert prop.properties['carry_enabled'] is False
     # A bare Prop has no model_path, so its representation follows the one
     # asset it does have. See test_a_bare_prop_is_drawable.
     assert prop.properties['render_mode'] == 'billboard'
@@ -127,3 +128,10 @@ def test_neither_asset_present_invents_nothing():
 
     prop = Prop(pos=[0, 0, 0], properties={'sprite_path': ''})
     assert prop.properties['render_mode'] == PROP_DEFAULTS['render_mode']
+
+
+def test_a_new_prop_is_neither_carryable_nor_solid():
+    """Both are opt-in, for a model Prop from the Asset Browser too."""
+    for prop in (Prop(), Prop.for_model('assets/models/Oil_Drum.obj')):
+        assert prop.properties['carry_enabled'] is False
+        assert prop.properties['no_collision'] is True

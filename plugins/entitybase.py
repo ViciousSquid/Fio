@@ -1,13 +1,13 @@
 """
 A PyQt-free fallback base for plugin entities.
 
-Plugin entity classes normally subclass ``editor.things.Model`` / ``Thing`` so
-they slot into the editor's palette, property panel and serializer. But the
-editor package pulls in PyQt5, which is intentionally absent from the
-standalone ``.fiopak`` player and its Android build. When ``editor.things``
-can't be imported, plugins fall back to the tiny, dependency-free ``Thing`` /
-``Model`` defined here so their entities still construct and their gameplay
-still runs.
+Plugin entity classes normally subclass ``editor.things.Thing`` so they slot
+into the editor's palette, property panel and serializer. But the editor
+package pulls in PyQt5, which is intentionally absent from the standalone
+``.fiopak`` player and its Android build. When ``editor.things`` can't be
+imported, plugins fall back to the tiny, dependency-free ``Thing`` defined here
+so their entities still construct and their gameplay still runs.  (There is
+no ``Model`` base: a model is a Prop, or any Thing with a ``model_path``.)
 
 The surface mirrors just enough of ``editor.things`` for runtime use: a
 ``properties`` dict, ``pos``, a ``name`` accessor, ``type`` handling and simple
@@ -75,6 +75,12 @@ class Thing:
         if not ttype:
             return None
         target = str(ttype).replace("_", "").lower()
+        properties = dict(data.get("properties", {}))
+        if target == "model":
+            # A model is a Prop; see engine.prop_entity.legacy_model_properties.
+            from engine.prop_entity import legacy_model_properties
+            properties = legacy_model_properties(properties)
+            target = "prop"
 
         def _walk(c):
             for sub in c.__subclasses__():
@@ -83,30 +89,23 @@ class Thing:
 
         for sub in _walk(Thing):
             if sub.__name__.lower() == target:
-                return sub(pos=data.get("pos"), properties=dict(data.get("properties", {})))
+                return sub(pos=data.get("pos"), properties=properties)
         return None
-
-
-class Model(Thing):
-    """Fallback for a model-carrying entity."""
-
-    pixmap_path = None
-
-    def __init__(self, pos=None, properties=None):
-        super().__init__(pos, properties)
-        self.properties.setdefault("type", "model")
-        self.properties.setdefault("model_path", "")
-        self.properties.setdefault("rotation", [0, 0, 0])
-        self.properties.setdefault("scale", [1, 1, 1])
 
 
 def __getattr__(name):
     """``plugins.entitybase.Prop`` is an alias, not a second implementation.
 
     Prop is a core engine primitive defined once in :mod:`engine.prop_entity`
-    (on this module's Model when the editor tier is absent). Resolved lazily
+    (on this module's Thing when the editor tier is absent). Resolved lazily
     because that module imports this one.
     """
+    if name == 'Model':
+        import warnings
+        warnings.warn("plugins.entitybase.Model is gone: subclass Thing (or "
+                      "use a Prop) and set model_path", DeprecationWarning,
+                      stacklevel=2)
+        return Thing
     if name == 'Prop':
         from engine.prop_entity import Prop
         globals()['Prop'] = Prop

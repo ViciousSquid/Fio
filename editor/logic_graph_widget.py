@@ -99,7 +99,6 @@ TYPE_HDR: Dict[str, QColor] = {
     'prop':         QColor( 75, 185,  75),
     'playerstart':  QColor( 50, 195, 195),
     'levelchanger': QColor(205,  75, 160),
-    'model':        QColor(115, 115, 115),
     'brush':        QColor( 95, 115, 130),
     'portal':       QColor(120,  60, 200),
     'path_node':    QColor( 60, 150, 140),

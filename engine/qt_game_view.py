@@ -50,6 +50,7 @@ from engine import brush_geometry
 from editor import component_edit
 from engine.threaded_game_state import ThreadedGameState, RenderState
 from engine.entity_table import EntityTable
+from engine.renderer_core import restore_default_pixel_store
 from engine.view_distance import ViewDistance
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
@@ -1236,35 +1237,20 @@ class QtGameView(QOpenGLWidget):
         gl.glDisable(gl.GL_DEPTH_TEST)
 
     def _render_projectiles(self, projectiles, proj_matrix, view_matrix):
-        if not projectiles or 'sprite' not in self.renderer.shaders:
+        if not len(projectiles) or 'sprite_instanced' not in self.renderer.shaders:
             return
         tex_id = (self.sprite_textures.get('projectile') or
                   self.sprite_textures.get('Monster'))
         if not tex_id:
             return
         from engine.monster_constants import MONSTER_PROJECTILE_SPRITE_SIZE
-        pw, ph = MONSTER_PROJECTILE_SPRITE_SIZE
-        shader = self.renderer.shaders['sprite']
-        uniforms = self.renderer.uniforms['sprite']
-        gl.glUseProgram(shader)
-        proj_ptr = glm.value_ptr(proj_matrix)
-        view_ptr = glm.value_ptr(view_matrix)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, proj_ptr)
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, view_ptr)
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glUniform1i(uniforms['sprite_texture'], 0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-        gl.glBindVertexArray(self.renderer.vaos['sprite'])
+        # Every projectile shares one texture and size, so the lot is one
+        # instanced draw of the published position array.
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-        pos_loc = uniforms['sprite_pos_world']
-        size_loc = uniforms['sprite_size']
-        for proj in projectiles:
-            pos = proj['pos']
-            gl.glUniform3f(pos_loc, pos[0], pos[1], pos[2])
-            gl.glUniform2f(size_loc, pw, ph)
-            gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
-        gl.glBindVertexArray(0)
+        self.renderer.draw_billboards_instanced(
+            proj_matrix, view_matrix, projectiles, MONSTER_PROJECTILE_SPRITE_SIZE,
+            tex_id)
         gl.glDisable(gl.GL_BLEND)
 
     def _render_monster_debug_rays(self, rays, proj_matrix, view_matrix):
@@ -1375,7 +1361,7 @@ class QtGameView(QOpenGLWidget):
             self._cached_player_dead = getattr(render_state, 'player_dead', False)
             self._cached_monster_debug = getattr(render_state, 'monster_debug_active', False)
             self._cached_bullet_marks = list(getattr(render_state, 'bullet_marks', []))
-            self._cached_projectiles = list(getattr(render_state, 'projectiles', []))
+            self._cached_projectiles = np.array(getattr(render_state, 'projectiles', ()), dtype=np.float32).reshape(-1, 3)
             self._cached_monster_rays = list(getattr(render_state, 'monster_debug_rays', []))
             self._cached_level_complete_ui = getattr(render_state, 'level_complete_ui', None)
             self._cached_underwater = getattr(render_state, 'player_underwater', False)
@@ -1570,7 +1556,7 @@ class QtGameView(QOpenGLWidget):
 
             if render_state and hasattr(render_state, 'bullet_marks'):
                 self._render_bullet_marks(render_state.bullet_marks, _split_proj, self.view_matrix)
-            if render_state and hasattr(render_state, 'projectiles') and render_state.projectiles:
+            if render_state is not None and len(getattr(render_state, 'projectiles', ())):
                 self._render_projectiles(render_state.projectiles, _split_proj, self.view_matrix)
             if render_state and getattr(render_state, 'monster_debug_active', False):
                 self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
@@ -1610,7 +1596,7 @@ class QtGameView(QOpenGLWidget):
 
             if render_state and hasattr(render_state, 'bullet_marks'):
                 self._render_bullet_marks(render_state.bullet_marks, _split_proj, _p2_view)
-            if render_state and hasattr(render_state, 'projectiles') and render_state.projectiles:
+            if render_state is not None and len(getattr(render_state, 'projectiles', ())):
                 self._render_projectiles(render_state.projectiles, _split_proj, _p2_view)
             if render_state and getattr(render_state, 'monster_debug_active', False):
                 self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
@@ -1664,7 +1650,7 @@ class QtGameView(QOpenGLWidget):
                         )
             if render_state and hasattr(render_state, 'bullet_marks'):
                 self._render_bullet_marks(render_state.bullet_marks, self.projection_matrix, self.view_matrix)
-            if render_state and hasattr(render_state, 'projectiles') and render_state.projectiles:
+            if render_state is not None and len(getattr(render_state, 'projectiles', ())):
                 self._render_projectiles(render_state.projectiles, self.projection_matrix, self.view_matrix)
             if render_state and getattr(render_state, 'monster_debug_active', False):
                 self._render_monster_debug_rays(getattr(render_state, 'monster_debug_rays', []),
@@ -1712,6 +1698,7 @@ class QtGameView(QOpenGLWidget):
                        projection=self.projection_matrix, view=self.view_matrix,
                        camera_pos=camera_pos, play_mode=self.play_mode)
 
+        restore_default_pixel_store()
         painter = QPainter(self)
         if self.play_mode:
             self._draw_underwater_overlay(painter, render_state)

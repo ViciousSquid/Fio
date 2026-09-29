@@ -985,20 +985,6 @@ def register_default_io():
         ]
     )
 
-    # === MODEL ===
-    register_io('model',
-        inputs=[
-            IODef('Enable', 'Show model'),
-            IODef('Disable', 'Hide model'),
-            IODef('SetSkin', 'Set model skin', 'int'),
-            IODef('SetAnimation', 'Play animation', 'string'),
-            IODef('Hide', 'Hide this model'),
-            IODef('Show', 'Show this model'),
-            IODef('ToggleVisibility', 'Toggle visibility'),
-        ],
-        outputs=[]
-    )
-
     # === LEVEL CHANGER ===
     register_io('levelchanger',
         inputs=[
@@ -1719,6 +1705,46 @@ def remove_connection(entity, connection: OutputConnection):
     if connection in connections:
         connections.remove(connection)
         bump_io_revision()
+
+
+#: What the old Model entity's inputs did, as the Prop inputs that do it. A
+#: Model's Enable/Disable showed and hid it; a Prop's toggle its gameplay, so a
+#: map written against a Model is re-aimed at Show/Hide when it loads. SetSkin
+#: and SetAnimation only ever recorded a value nothing read, and are left as
+#: authored.
+LEGACY_MODEL_INPUTS = {'enable': 'Show', 'disable': 'Hide'}
+
+
+def retarget_legacy_model_inputs(entities, models) -> int:
+    """Re-aim connections into loaded legacy models at the Prop inputs.
+
+    *entities* is every brush and Thing that can carry outputs; *models* the
+    Things that were read from an old ``model`` record. Returns how many
+    connections changed.
+    """
+    ids = {m.properties.get('id') for m in models if m.properties.get('id')}
+    names = {m.properties.get('name') for m in models if m.properties.get('name')}
+    if not ids and not names:
+        return 0
+    changed = 0
+    for entity in entities:
+        for conn in get_connections(entity):
+            is_dict = isinstance(conn, dict)
+            target_id = conn.get('target_id', '') if is_dict else conn.target_id
+            target_name = conn.get('target', '') if is_dict else conn.target_name
+            if not (target_id in ids if target_id else target_name in names):
+                continue
+            key = 'input' if is_dict else 'input_name'
+            current = conn.get(key, '') if is_dict else conn.input_name
+            replacement = LEGACY_MODEL_INPUTS.get(str(current).lower())
+            if replacement is None:
+                continue
+            if is_dict:
+                conn[key] = replacement
+            else:
+                conn.input_name = replacement
+            changed += 1
+    return changed
 
 
 def get_connections(entity) -> List[OutputConnection]:

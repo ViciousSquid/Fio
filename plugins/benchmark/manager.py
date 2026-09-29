@@ -42,6 +42,7 @@ TESTS = (
     ("live_1000_brushes", "Renderer: 1,000 brushes / live camera sweep"),
     ("live_10000_brushes", "Renderer: 10,000 brushes / live camera sweep"),
     ("live_100000_brushes", "Renderer: 100,000 brushes / live camera sweep"),
+    ("live_500_models", "Renderer: 500 model Props + 4 shadowed lights / live camera sweep"),
     ("monster_chaos_witness", "Monster AI: 40 monsters / 5-second decision-rate witness"),
     ("borderless_window", "Window mode: borderless maximized"),
     ("fullscreen_window", "Window mode: true fullscreen"),

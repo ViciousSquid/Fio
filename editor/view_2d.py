@@ -5,7 +5,7 @@ import os
 from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog, QApplication
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
-from editor.things import (Thing, Light, PlayerStart, Speaker, Model, Prop, Monster,
+from editor.things import (Thing, Light, PlayerStart, Speaker, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
                           LogicCamera, LogicSpawner, Portal, LogicState, Effect)
 from engine import brush_geometry as bg  # convex/angled-brush geometry
@@ -3902,8 +3902,7 @@ class View2D(QWidget):
                 except Exception:
                     rel_path = filepath
                 
-                new_thing = Model(pos=pos_3d)
-                new_thing.properties['model_path'] = rel_path
+                new_thing = Prop.for_model(rel_path, pos=pos_3d)
 
         # Finalize Creation
         if new_thing:

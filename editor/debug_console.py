@@ -2,7 +2,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextBrowser, QPushButton, 
     QLabel, QCheckBox, QComboBox, QFrame, QLineEdit, QSplitter, QScrollArea
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QObject, QUrl
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QUrl, QTimer
 from PyQt5 import sip
 from PyQt5.QtGui import QFont, QTextCursor, QPainter, QPixmap, QDesktopServices
 from collections import deque
@@ -244,6 +244,14 @@ class DebugConsole(QWidget):
 
         # Message count
         self.message_count = 0
+        #: Lines currently in the document (bounded; see MAX_DOCUMENT_LINES).
+        self._document_lines = 0
+        #: Logged messages not inserted yet; see FLUSH_INTERVAL_MS.
+        self._pending = []
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setSingleShot(True)
+        self._flush_timer.setInterval(self.FLUSH_INTERVAL_MS)
+        self._flush_timer.timeout.connect(self._flush_pending)
 
         # Current Entity Filter (None means show all)
         self.active_entity_filter = None
@@ -626,12 +634,23 @@ class DebugConsole(QWidget):
     def _load_buffer(self):
         """Load any buffered messages that were logged before the console opened."""
         logger = get_debug_logger()
-        for category, message in logger.get_buffer():
-            self._append_message(category, message)
+        lines = [self._format_message(category, message)
+                 for category, message in logger.get_buffer()]
+        self._insert_lines([line for line in lines if line is not None])
 
     def _on_message(self, category: str, message: str):
-        """Handle a new log message."""
+        """Show a message: at once when the console is idle, batched in a burst.
+
+        An isolated line -- a command's reply, a load message -- appears
+        immediately and opens a short window; lines arriving inside it are
+        queued and inserted together when it closes, and a flush that finds
+        more queued keeps the window open for as long as the burst lasts.
+        """
+        if self._flush_timer.isActive():
+            self._pending.append((category, message))
+            return
         self._append_message(category, message)
+        self._flush_timer.start()
 
     def _on_command_entered(self):
         """Handle command submission from the input line."""
@@ -705,8 +724,63 @@ class DebugConsole(QWidget):
 
         self._refresh_console()
 
+    #: Messages logged from the logic and AI threads arrive as queued signals,
+    #: hundreds a second in a monster fight with I/O logging on. Formatting
+    #: and inserting each one as it came could not keep up -- the GUI thread
+    #: fell further behind every frame and the editor froze -- so they are
+    #: queued and inserted as one block per interval.
+    FLUSH_INTERVAL_MS = 100
+    #: Most lines one flush inserts; a burst beyond it shows its newest lines
+    #: and says how many it skipped (the log buffer still holds them).
+    MAX_LINES_PER_FLUSH = 200
+    #: The document is rebuilt from the log buffer past this many lines, so
+    #: it cannot grow without bound during a long session.
+    MAX_DOCUMENT_LINES = 5000
+
     def _append_message(self, category: str, message: str):
-        """Append a message to the console with highlighting."""
+        """Append a message to the console with highlighting, now."""
+        html = self._format_message(category, message)
+        if html is not None:
+            self._insert_lines([html])
+
+    def _insert_lines(self, lines):
+        """Insert formatted lines at the end in one edit, and scroll once."""
+        if not lines:
+            return
+        cursor = self.console.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertHtml(''.join(lines))
+        if self.auto_scroll:
+            self.console.setTextCursor(cursor)
+            self.console.ensureCursorVisible()
+        self.message_count += len(lines)
+        self._document_lines += len(lines)
+        self.count_label.setText(f"{self.message_count} messages")
+        if self._document_lines > self.MAX_DOCUMENT_LINES:
+            self._refresh_console()
+
+    def _flush_pending(self):
+        """Format and insert every message queued since the last flush."""
+        pending = self._pending
+        if not pending:
+            return                       # the burst is over; next line is immediate
+        self._pending = []
+        self._flush_timer.start()        # still bursting: keep batching
+        skipped = max(0, len(pending) - self.MAX_LINES_PER_FLUSH)
+        lines = []
+        if skipped:
+            pending = pending[skipped:]
+            lines.append('<span style="color: #888888;">&#8230; %d messages '
+                         'not shown (still in the log buffer)</span><br>'
+                         % skipped)
+        for category, message in pending:
+            html = self._format_message(category, message)
+            if html is not None:
+                lines.append(html)
+        self._insert_lines(lines)
+
+    def _format_message(self, category: str, message: str):
+        """One message as a highlighted HTML line, or ``None`` if filtered out."""
 
         # 1. Check Category Filter vs Entity Filter
         current_combo_text = self.filter_combo.currentText()
@@ -785,16 +859,7 @@ class DebugConsole(QWidget):
             )
             if version_match:
                 version_html = self._version_banner_html(version_match.group(1))
-                html = f'<span style="color: {color};">{version_html}</span><br>'
-                cursor = self.console.textCursor()
-                cursor.movePosition(QTextCursor.End)
-                cursor.insertHtml(html)
-                if self.auto_scroll:
-                    self.console.setTextCursor(cursor)
-                    self.console.ensureCursorVisible()
-                self.message_count += 1
-                self.count_label.setText(f"{self.message_count} messages")
-                return
+                return f'<span style="color: {color};">{version_html}</span><br>'
 
         # Protect any pre-existing HTML tags in the message so our regexes
         # don't corrupt entity links / colours injected by MonsterAI.
@@ -892,21 +957,7 @@ class DebugConsole(QWidget):
         # ---------------------------
 
         # Format with HTML coloring for the main message body
-        html = f'<span style="color: {color};">{message}</span><br>'
-
-        # Append to console
-        cursor = self.console.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        cursor.insertHtml(html)
-
-        # Auto-scroll if enabled
-        if self.auto_scroll:
-            self.console.setTextCursor(cursor)
-            self.console.ensureCursorVisible()
-
-        # Update count
-        self.message_count += 1
-        self.count_label.setText(f"{self.message_count} messages")
+        return f'<span style="color: {color};">{message}</span><br>'
 
     def _version_banner_html(self, version: str) -> str:
         """Render the startup version banner without entity-filter links."""
@@ -944,10 +995,14 @@ class DebugConsole(QWidget):
         """Reload console messages from buffer (triggered by filters or font size change)."""
         self.console.clear()
         self.message_count = 0
+        self._document_lines = 0
+        # Anything still queued is already in the buffer being reloaded.
+        self._pending = []
 
         logger = get_debug_logger()
-        for category, message in logger.get_buffer():
-            self._append_message(category, message)
+        lines = [self._format_message(category, message)
+                 for category, message in logger.get_buffer()]
+        self._insert_lines([line for line in lines if line is not None])
 
     def _on_auto_scroll_toggled(self, checked: bool):
         """Handle auto-scroll toggle."""
@@ -957,6 +1012,8 @@ class DebugConsole(QWidget):
         """Clear the console and buffer."""
         self.console.clear()
         self.message_count = 0
+        self._document_lines = 0
+        self._pending = []
         self.count_label.setText("0 messages")
         get_debug_logger().clear_buffer()
 

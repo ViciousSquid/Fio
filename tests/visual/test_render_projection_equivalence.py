@@ -414,7 +414,9 @@ def test_numeric_sprite_submission_is_one_draw_per_texture(renderer, context):
 
     brushes = [box_brush("floor", (0, -16, 0), (1024, 32, 1024))]
     things = [
-        make_thing(Prop, "p%d" % i, (i * 40 - 400, 48, 0),
+        # All inside the view (it is about +-306 units wide at this depth), so
+        # the entity frustum cull keeps every one and the count is the run's.
+        make_thing(Prop, "p%d" % i, (i * 28 - 266, 48, 0),
                    collect_enabled=True, collect_type="health")
         for i in range(20)
     ]

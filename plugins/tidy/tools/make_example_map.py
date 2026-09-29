@@ -95,6 +95,9 @@ def main():
                     "name": f"Book_{idx+1}",
                     "tidy_category": "book",
                     "model_path": "plugins/tidy/assets/book.obj",
+                    # Props are not carryable by default; a Tidy object is
+                    # one the player carries to a receptacle.
+                    "carry_enabled": True,
                 },
             )
             things.append(obj.to_dict())

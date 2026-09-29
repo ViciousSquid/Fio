@@ -346,6 +346,14 @@ class Thing:
         thing = None
         token = thing_type.replace('_', '').lower()
         _load_core_entity_types()
+        legacy_model = token == 'model'
+        if legacy_model:
+            # There is no Model entity: every model is a Prop. A map written
+            # before that keeps what its models were -- solid scenery the
+            # player does not pick up -- under whatever the record authors.
+            from engine.prop_entity import legacy_model_properties
+            properties = legacy_model_properties(properties)
+            token = 'prop'
         subclasses = find_subclasses(Thing)
         match = next((c for c in subclasses
                       if token == getattr(c, 'map_type', c.__name__.lower())), None)
@@ -354,6 +362,10 @@ class Thing:
         if match is not None:
             thing = match(pos=data.get('pos'),
                           properties=_heal_legacy_strings(match, properties))
+            if legacy_model:
+                # Transient: lets the map loader re-aim I/O written against the
+                # old Model inputs (see io_system.retarget_legacy_model_inputs).
+                thing._legacy_model = True
 
         if thing is None:
             # Never drop an entity: a later save would erase it for good.
@@ -827,26 +839,6 @@ class Trigger(Thing):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'trigger')
         self.properties.setdefault('action', 'on_enter')
-
-
-class Model(Thing):
-    """Represents a 3D model placed in the world."""
-    pixmap_path = "assets/sprites/pickup.png"
-    EDITOR_PRIMARY_PROPERTIES = (
-        'model_path',
-        'scale',
-        'rotation',
-        'no_collision',
-        'collision_size',
-    )
-    
-    def __init__(self, pos=None, properties=None):
-        super().__init__(pos, properties)
-        self.properties.setdefault('type', 'model')
-        self.properties.setdefault('model_path', "")
-        self.properties.setdefault('rotation', [0, 0, 0])
-        self.properties.setdefault('scale', [1, 1, 1])
-        self.properties.setdefault('collision_shape', 'auto')
 
 
 # Prop is a core engine primitive shared with the headless player, so it is
@@ -1959,7 +1951,6 @@ ENTITY_TYPES = {
     'Light': Light,
     'Speaker': Speaker,
     'Monster': Monster,
-    'Model': Model,
     'LogicRelay': LogicRelay,
     'LogicGate': LogicGate,
     'LogicTimer': LogicTimer,
@@ -1984,7 +1975,7 @@ if _effect_class is not None:
 # Categories for editor UI
 ENTITY_CATEGORIES = {
     'Gameplay': ['PlayerStart', 'Monster', 'Prop', 'LevelChanger'],
-    'Environment': ['Light', 'Effect', 'Speaker', 'Model', 'Portal'],
+    'Environment': ['Light', 'Effect', 'Speaker', 'Portal'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicState'],
     'AI': ['PathNode'],
 }
@@ -1995,7 +1986,7 @@ ENTITY_CATEGORIES = {
 # =============================================================================
 #
 # Core primitives that the headless player also needs (currently Prop) live in
-# engine/, subclassing this module's Model when the editor tier is present.
+# engine/, subclassing this module's Thing when the editor tier is present.
 # They cannot be imported at the top of this file (they import it), so they are
 # loaded on first use: by name via __getattr__ (``from editor.things import
 # Prop``), and before map deserialization via _load_core_entity_types() so the
@@ -2014,6 +2005,16 @@ def _load_core_entity_types():
 
 
 def __getattr__(name):
+    if name == 'Model':
+        # There is no Model entity any more: a model is a Prop with
+        # render_mode='model'. Plugins written against the old base still
+        # import; they get the plain Thing base, which is what a non-Prop
+        # entity carrying a model_path always needed.
+        import warnings
+        warnings.warn("editor.things.Model is gone: subclass Thing (or use a "
+                      "Prop) and set model_path", DeprecationWarning,
+                      stacklevel=2)
+        return Thing
     module_name = _CORE_ENTITY_MODULES.get(name)
     if module_name is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

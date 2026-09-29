@@ -525,6 +525,14 @@ class EditorState:
             if thing is not None:
                 new_things.append(thing)
 
+        legacy_models = [t for t in new_things if getattr(t, '_legacy_model', False)]
+        if legacy_models:
+            try:
+                from editor.io_system import retarget_legacy_model_inputs
+                retarget_legacy_model_inputs(new_brushes + new_things, legacy_models)
+            except ImportError:
+                pass
+
         self._invalidate_entity_caches()
         self.brushes = new_brushes
         self.things = new_things

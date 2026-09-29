@@ -39,8 +39,7 @@ ENTITY_CLASSNAMES = {
     'PlayerStart': 'info_player_start',
     'Light': 'light',
     'Monster': 'monster_army',  # Generic; subtype determines specific class
-    'Prop': 'info_null',       # Collectible Props are resolved below
-    'Model': 'misc_model',
+    'Prop': 'info_null',       # Collectible and model Props are resolved below
     'Portal': 'misc_teleporter',
     'PathNode': 'path_corner',
     'LogicRelay': 'trigger_relay',
@@ -419,6 +418,14 @@ def convert_fio_entity(fio_thing: Dict[str, Any]) -> Optional[MapEntity]:
         classname = COLLECT_CLASSNAMES.get(
             collect_class, COLLECT_CLASSNAMES['default'])
     
+    elif (str(entity_type).lower() == 'model'
+          or (str(entity_type).lower() == 'prop'
+              and str(props.get('render_mode', '')).lower() == 'model'
+              and props.get('model_path'))):
+        # A model is a Prop showing a mesh; maps written before that say
+        # 'model'. Either way it is Quake's misc_model.
+        classname = 'misc_model'
+
     elif entity_type == 'Light':
         classname = 'light'
     
