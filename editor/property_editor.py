@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QTableWidget, QTableWidgetItem)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
+from PyQt5 import sip
 from engine.prop_entity import normalise_collect_type
 from editor.things import (Thing, Light, Effect, Prop, Monster, Model, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
@@ -483,6 +484,7 @@ class PropertyEditor(QWidget):
         """Attach this page's Prop-specific widget handles for cache restore."""
         names = (
             '_prop_form',
+            '_prop_collection_form',
             '_prop_collection_rows',
             '_prop_collectible_cb',
             '_prop_collect_type_combo',
@@ -2645,6 +2647,7 @@ class PropertyEditor(QWidget):
         controls only when they matter.
         """
         self._prop_form = form
+        self._prop_collection_form = form
 
         # Interaction -----------------------------------------------------
         form.addRow(self._section("Interaction"))
@@ -2845,15 +2848,38 @@ class PropertyEditor(QWidget):
 
         self._refresh_prop_collection_ui(thing)
 
+    @staticmethod
+    def _qt_object_alive(obj):
+        """Whether a PyQt wrapper still has a live underlying C++ object."""
+        if obj is None:
+            return False
+        try:
+            return not sip.isdeleted(obj)
+        except (RuntimeError, TypeError):
+            return False
+
     def _set_form_row_visible(self, form, row, visible):
-        """Show/hide a QFormLayout row without rebuilding the page."""
-        for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
-            item = form.itemAt(row, role)
-            if item is None:
-                continue
-            widget = item.widget()
-            if widget is not None:
-                widget.setVisible(bool(visible))
+        """Show/hide a QFormLayout row without touching a deleted Qt object."""
+        if not self._qt_object_alive(form):
+            return False
+        try:
+            row_count = form.rowCount()
+            if row < 0 or row >= row_count:
+                return False
+            for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
+                item = form.itemAt(row, role)
+                if item is None:
+                    continue
+                widget = item.widget()
+                if widget is not None and self._qt_object_alive(widget):
+                    widget.setVisible(bool(visible))
+            return True
+        except RuntimeError:
+            # A parked page can be deleted by Qt between the lifetime check
+            # and the actual access (deleteLater / cache eviction). Treat the
+            # stale callback as a no-op instead of allowing a Qt wrapper
+            # RuntimeError to escape from a selection click.
+            return False
 
     def _refresh_prop_collection_ui(self, thing):
         """Reconcile collection controls with the current Prop kind."""
@@ -2864,14 +2890,7 @@ class PropertyEditor(QWidget):
         kind = normalise_collect_type(thing.properties)
 
         rows = getattr(self, '_prop_collection_rows', {})
-        form = getattr(self, '_prop_collection_form', None)
-        if form is None:
-            # The collection controls are on the form owned by the current page.
-            # Recover it once from any labelled row widget.
-            form = self._find_prop_collection_form()
-            if form is not None:
-                self._prop_collection_form = form
-
+        form = self._find_prop_collection_form()
         if form is None:
             return
 
@@ -2941,10 +2960,33 @@ class PropertyEditor(QWidget):
         self._prop_sprite_path.setText(display_sprite)
 
     def _find_prop_collection_form(self):
-        """Find the QFormLayout owning the current Prop collection controls."""
-        # QFormLayout is the same object passed to _build_collect_ui; retain it
-        # explicitly on new pages. This fallback keeps cached/older pages safe.
-        return getattr(self, '_prop_form', None)
+        """Find the live QFormLayout owning the current Prop collection controls."""
+        form = getattr(self, '_prop_collection_form', None)
+        if self._qt_object_alive(form):
+            return form
+
+        page = getattr(self, '_page', None)
+        if page is None or not self._qt_object_alive(page):
+            return None
+
+        # Recover from the live page rather than trusting a cached layout
+        # wrapper. The collection form always contains the user-facing
+        # "Collect as:" label.
+        for candidate in page.findChildren(QFormLayout):
+            if not self._qt_object_alive(candidate):
+                continue
+            try:
+                for row in range(candidate.rowCount()):
+                    label_item = candidate.itemAt(row, QFormLayout.LabelRole)
+                    label = label_item.widget() if label_item is not None else None
+                    if label is not None and self._qt_object_alive(label) \\
+                            and label.text() == "Collect as:":
+                        self._prop_collection_form = candidate
+                        self._prop_form = candidate
+                        return candidate
+            except RuntimeError:
+                continue
+        return None
 
     def _refresh_prop_collection_appearance(self, thing):
         """Hide derived sprite-path controls when collection chooses the asset."""
