@@ -435,3 +435,21 @@ def test_console_hide_and_show_go_through_the_authored_writer():
     wall["_bw_parked_hidden"] = True     # parked by a streaming layer
     handler.cmd_show("wall")
     assert wall["_bw_parked_hidden"] is False, "Show landed on the parked value"
+
+
+def test_a_nan_view_distance_is_ignored():
+    """``r_viewdistance nan`` reached the shared model (NaN passes any clamp),
+    giving every view a NaN far plane before the UI raised."""
+    from engine.view_distance import ViewDistance
+    vd = ViewDistance(4000.0)
+    vd.distance = float("nan")
+    assert vd.distance == 4000.0
+    vd.fog_color = (float("nan"), 0.5, 2.0)
+    assert vd.fog_color == (0.0, 0.5, 1.0)
+
+
+def test_getprop_with_extra_arguments_prints_usage():
+    from editor.console_commands import ConsoleCommandHandler
+    handler = ConsoleCommandHandler.__new__(ConsoleCommandHandler)
+    handler.editor_state = EditorState()
+    handler.cmd_get_property("a b c")      # used to raise ValueError

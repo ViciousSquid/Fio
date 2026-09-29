@@ -1510,7 +1510,7 @@ entity to drive them from the I/O system.</i><br>
 
     def cmd_get_property(self, args):
         parts = args.split()
-        if len(parts) < 2:
+        if len(parts) != 2:
             debug_log("Error", "Usage: getprop <entity> <key>")
             return
         name, key = parts
