@@ -363,7 +363,7 @@ class PropSession:
             return False
 
         collect_label = str(
-            best.properties.get("collect_type", "custom")
+            best.properties.get("collect_type", "health")
         ).replace("_", " ").title()
         self.logic.current_hud_message = f"[E] Collect {collect_label}"
         self._collect(best)
@@ -371,7 +371,7 @@ class PropSession:
 
     def _collect(self, prop):
         p = prop.properties
-        collect_type = p.get("collect_type", "custom")
+        collect_type = p.get("collect_type", "health")
         value = p.get("collect_value", 25)
 
         try:

@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QTableWidget, QTableWidgetItem)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
+from engine.prop_entity import normalise_collect_type
 from editor.things import (Thing, Light, Effect, Prop, Monster, Model, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
                            LogicState)
@@ -2675,18 +2676,13 @@ class PropertyEditor(QWidget):
         # Collection ------------------------------------------------------
         form.addRow(self._section("Collection"))
 
-        collect_type = str(
-            thing.properties.get('collect_type', 'health') or 'health'
-        ).lower()
-        if collect_type not in Prop.COLLECT_TYPES:
-            collect_type = 'custom'
+        collect_type = normalise_collect_type(thing.properties)
 
         type_values = (
             ('Health', 'health'),
             ('Ammo', 'ammo'),
             ('Weapon', 'weapon'),
             ('Key', 'key'),
-            ('Custom', 'custom'),
         )
         type_labels = [label for label, _ in type_values]
         value_for_label = {label: value for label, value in type_values}
@@ -2763,8 +2759,7 @@ class PropertyEditor(QWidget):
         form.addRow(value_label, value_spin)
 
         # The visual asset is normally a consequence of the collection type.
-        # Only expose a picker when the user is actually authoring a custom/
-        # generic sprite.
+        # Health is the one kind that may wear a sprite of the author's own.
         sprite_label = QLabel("Sprite:")
         sprite_widget = QWidget(self.tab_widget)
         sprite_layout = QHBoxLayout(sprite_widget)
@@ -2866,9 +2861,7 @@ class PropertyEditor(QWidget):
             return
 
         enabled = bool(thing.properties.get('collect_enabled', False))
-        kind = str(thing.properties.get('collect_type', 'health') or 'health').lower()
-        if kind not in Prop.COLLECT_TYPES:
-            kind = 'custom'
+        kind = normalise_collect_type(thing.properties)
 
         rows = getattr(self, '_prop_collection_rows', {})
         form = getattr(self, '_prop_collection_form', None)
@@ -2898,19 +2891,15 @@ class PropertyEditor(QWidget):
         self._set_form_row_visible(
             form,
             rows['value'],
-            enabled and kind in ('health', 'custom'),
+            enabled and kind == 'health',
         )
         self._set_form_row_visible(
             form,
             rows['sprite'],
-            enabled and kind == 'custom',
+            enabled and kind == 'health',
         )
         self._set_form_row_visible(form, rows['respawn'], enabled)
-
-        if kind == 'custom':
-            self._prop_value_label.setText("Value:")
-        else:
-            self._prop_value_label.setText("Amount:")
+        self._prop_value_label.setText("Amount:")
 
         self._prop_activation_combo.setCurrentText(
             'Walk over'
@@ -4588,7 +4577,6 @@ class PropertyEditor(QWidget):
             if not rel:
                 return
             self.update_object_prop('collect_enabled', True)
-            self.update_object_prop('collect_type', 'custom')
             self.update_object_prop('collect_custom_sprite', rel)
             self.update_object_prop('sprite_path', rel)
             if hasattr(self, '_prop_sprite_path'):
@@ -4607,7 +4595,7 @@ class PropertyEditor(QWidget):
             return
         thing = self.current_object
         self.update_object_prop('collect_custom_sprite', '')
-        kind = str(thing.properties.get('collect_type', 'custom')).lower()
+        kind = normalise_collect_type(thing.properties)
         if kind == 'weapon':
             self._set_prop_weapon_sprite(
                 thing.properties.get('collect_weapon', 'gun1')
@@ -4619,14 +4607,10 @@ class PropertyEditor(QWidget):
                     Prop.DEFAULT_KEY_NAME,
                 )
             )
-        elif kind == 'health':
-            self.update_object_prop('sprite_path', 'assets/sprites/health.png')
         elif kind == 'ammo':
             self.update_object_prop('sprite_path', 'assets/sprites/ammo.png')
         else:
-            # There is no stock sprite for arbitrary Custom Props; leave
-            # the authored path empty and let the renderer fall back normally.
-            self.update_object_prop('sprite_path', '')
+            self.update_object_prop('sprite_path', 'assets/sprites/health.png')
         if hasattr(self, '_prop_sprite_path'):
             self._prop_sprite_path.setText(
                 thing.properties.get('sprite_path', '')
@@ -4668,7 +4652,7 @@ class PropertyEditor(QWidget):
 
         collect_type = str(collect_type or 'health').lower()
         if collect_type not in Prop.COLLECT_TYPES:
-            collect_type = 'custom'
+            collect_type = 'health'
 
         self.update_object_prop('collect_enabled', True)
         self.update_object_prop('collect_type', collect_type)

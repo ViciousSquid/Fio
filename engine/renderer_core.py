@@ -3134,6 +3134,15 @@ layout (location = 10) in float iInstanceAlpha;
         object_color_loc = uniforms['object_color']
         alpha_loc = uniforms['alpha']
 
+        # A fog volume's faces usually lie exactly on the floor, walls and
+        # ceiling that bound it. Pulled a hair towards the camera, they win
+        # that depth tie instead of fighting it pixel by pixel; a surface
+        # really in front of a face still hides it.
+        offset = getattr(self, 'fog_face_offset', True)
+        if offset:
+            gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
+            gl.glPolygonOffset(-1.0, -1.0)
+
         models, _ = render_table.model_matrices(table, brushes)
         # model_matrices is column-major for GL; transpose into conventional
         # matrices, invert the batch, then transpose back for glUniform.
@@ -3161,12 +3170,16 @@ layout (location = 10) in float iInstanceAlpha;
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
                 gl.glBindVertexArray(self.vaos['cube'])
             else:
+                # All six faces. The bottom used to be left out (a pattern
+                # copied from the water pass, where the floor hides it), so
+                # from inside a fog volume nothing covered the floor and it
+                # showed through unfogged while the walls and ceiling fogged.
                 gl.glCullFace(gl.GL_FRONT)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
                 gl.glCullFace(gl.GL_BACK)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+        if offset:
+            gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
         gl.glDisable(gl.GL_CULL_FACE)
         gl.glBindVertexArray(0)
         gl.glActiveTexture(gl.GL_TEXTURE0)

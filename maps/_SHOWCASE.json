@@ -3729,7 +3729,7 @@
                 "disabled": false,
                 "carry_enabled": true,
                 "collect_enabled": true,
-                "collect_type": "custom",
+                "collect_type": "weapon",
                 "collect_value": 25,
                 "collect_activation": "walk_over",
                 "collect_collected": false,
