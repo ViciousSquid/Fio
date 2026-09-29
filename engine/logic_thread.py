@@ -1483,7 +1483,8 @@ class LogicThread(threading.Thread):
         except Exception as exc:
             return False, f"Save failed: {exc}"
 
-    def load_session(self, path: str, *, map_name: str = ""):
+    def load_session(self, path: str, *, map_name: str = "",
+                     base_level: dict = None):
         """Restore a saved play session from *path* as an overlay on the live
         session. Returns ``(ok, message)``.
 
@@ -1495,7 +1496,9 @@ class LogicThread(threading.Thread):
 
         The save mode (full / delta / both / legacy) is auto-detected from the
         file's metadata; *map_name* is the currently-loaded map, used to validate
-        a delta's base map. Loading never prompts unless recovery is impossible.
+        a delta's base map, and *base_level* that map as loaded (see
+        :func:`engine.savegame.restore_delta`). Loading never prompts unless
+        recovery is impossible.
         """
         if not self.play_mode:
             return False, "Enter play mode before loading a session."
@@ -1503,7 +1506,8 @@ class LogicThread(threading.Thread):
             from engine import savegame
             data = savegame.read(path)
             with self._tick_lock:
-                report = savegame.restore_auto(self, data, current_map_name=map_name)
+                report = savegame.restore_auto(self, data, current_map_name=map_name,
+                                               base_level=base_level)
             msg = f"Loaded play session from '{os.path.basename(path)}'"
             warning = report.get("warning")
             if warning:

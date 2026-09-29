@@ -366,6 +366,7 @@ def _play(state, ticks=240):
     logic.player = Player(pos[0], pos[2])
     logic.player.pos.y = pos[1]
     logic.set_play_mode(True)
+    logic._stop_monster_ai()                   # this test drives the AI itself
     logic.god_mode = True                      # play start resets it
     seen = {}
     for tick in range(ticks):
@@ -461,6 +462,7 @@ def _playing(things=(), brushes=()):
     logic = LogicThread(ThreadedGameState(), state)
     logic.player = Player(0.0, 0.0)
     logic.set_play_mode(True)
+    logic._stop_monster_ai()                   # deterministic: no AI thread
     return state, logic
 
 
@@ -583,3 +585,33 @@ def test_loading_a_save_puts_doors_and_movers_back_where_they_were(tmp_path):
         assert lift["start_on"] is False
     finally:
         logic.stop()
+
+
+def _kill_after_save_then_load(tmp_path, save_mode):
+    from engine import savegame
+
+    alive = Monster(pos=[300.0, 64.0, 0.0],
+                    properties={"name": "alive", "id": "alive-id", "health": 50})
+    state, logic = _playing([alive])
+    try:
+        base = savegame.normalize_base_level(state.get_level_data())
+        path = str(tmp_path / "s.fiosave")
+        assert logic.save_session(path, save_mode=save_mode, base_level=base)[0]
+
+        alive.properties.update(dead=True, health=0, _aggro_target=123)
+        ok, msg = logic.load_session(path, base_level=base)
+        assert ok, msg
+        return alive
+    finally:
+        logic.stop()
+
+
+@pytest.mark.parametrize("save_mode", ["full", "delta", "both"])
+def test_loading_a_save_revives_a_monster_killed_after_it(tmp_path, save_mode):
+    """The overlay wrote the saved properties but kept any the object gained
+    later, so a monster killed after the save stayed dead through loading it;
+    a delta (which omits what matched the base map) never revisited it."""
+    monster = _kill_after_save_then_load(tmp_path, save_mode)
+    assert not monster.properties.get("dead", False)
+    assert monster.properties["health"] == 50
+    assert "_aggro_target" not in monster.properties

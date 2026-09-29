@@ -2283,7 +2283,8 @@ entity to drive them from the I/O system.</i><br>
             if lt is None:
                 debug_log("Error", "load: no active play session.")
                 return
-            ok, msg = lt.load_session(path, map_name=self._current_map_name())
+            ok, msg = lt.load_session(path, map_name=self._current_map_name(),
+                                       base_level=self._base_level())
             debug_log("Info" if ok else "Error", msg)
             if ok:
                 self.main_window.show_toast(f"Loaded: {os.path.basename(path)}")
@@ -2334,7 +2335,8 @@ entity to drive them from the I/O system.</i><br>
         if lt is None:
             debug_log("Error", "load: no active play session after entering play.")
             return
-        ok, msg = lt.load_session(path, map_name=self._current_map_name())
+        ok, msg = lt.load_session(path, map_name=self._current_map_name(),
+                                  base_level=self._base_level())
         if not ok and 'different base map' in (msg or ''):
             # Genuinely ambiguous: a delta whose base map we couldn't reconcile.
             # This is the one case where automatic recovery isn't safe — ask.
@@ -2342,7 +2344,10 @@ entity to drive them from the I/O system.</i><br>
                 from engine import savegame
                 try:
                     data = savegame.read(path)
-                    savegame.restore_delta(lt, data)
+                    # Under the tick lock, as load_session applies a save: a
+                    # tick must not run against a half-restored world.
+                    with self._io_dispatch_lock():
+                        savegame.restore_delta(lt, data)
                     ok, msg = True, (f"Loaded play session from "
                                      f"'{os.path.basename(path)}' — forced delta "
                                      f"onto the current map (missing entities skipped)")

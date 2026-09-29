@@ -632,6 +632,29 @@ def build_snapshot(logic, *, map_name: str = "",
     return common
 
 
+#: Runtime-only monster keys a restored record may lack: the AI's aggro
+#: target (an ``id()``), a corpse's fall velocity, a pending kill input.
+_TRANSIENT_THING_KEYS = frozenset({"_aggro_target", "_vel_y", "_kill"})
+
+
+def _drop_absent_keys(live_props: dict, saved_props: dict) -> None:
+    """Remove what the object gained after the record was taken.
+
+    A restored record is the object's whole property dict, so a public key
+    it lacks did not exist then: a monster killed after a save stayed
+    ``dead`` through loading it. Other underscore keys are engine runtime
+    state set when play started (a parented light's ``_original_pos``) and
+    are left alone, as are connections and the streaming layer's marks.
+    """
+    for key in [k for k in live_props if k not in saved_props]:
+        name = str(key)
+        if key == "_io_connections" or key in _PARKABLE_KEYS:
+            continue
+        if name.startswith("_") and key not in _TRANSIENT_THING_KEYS:
+            continue
+        del live_props[key]
+
+
 def _overlay_entities(logic, level: dict) -> None:
     """Restore live entity state (position + properties) from a saved level.
 
@@ -667,6 +690,7 @@ def _overlay_entities(logic, level: dict) -> None:
                 if k == "_io_connections" or k in _PARKABLE_KEYS:
                     continue
                 live.properties[k] = v
+            _drop_absent_keys(live.properties, props)
             # hidden/disabled last, and through the parking-aware writer: they
             # are the two flags a streaming layer borrows, and the two a stale
             # restore leaves visibly wrong.
@@ -854,16 +878,32 @@ def restore_snapshot(logic, data: dict) -> None:
     _restore_runtime_and_players(logic, data)
 
 
-def restore_delta(logic, data: dict) -> None:
+def restore_delta(logic, data: dict, base_level: Optional[dict] = None) -> None:
     """Apply a delta save onto a *freshly-loaded base map* live session.
 
     The delta's partial level (only the changed entities/brushes) is fed to the
     very same UUID overlay a full restore uses; entities the base map doesn't
     have are skipped safely. Player/runtime state is then restored as usual.
+
+    A delta holds only what differed from the base map, so applied to a
+    session that has moved on since (a quickload in play) everything it does
+    not mention keeps its later state: a monster alive at the save and killed
+    since stayed dead. Given *base_level* (the normalized base map), those
+    entities are first put back to the base.
     """
     if not isinstance(data, dict) or not data.get(_MAGIC):
         raise ValueError("not a Fio save file")
     delta_level = ((data.get("delta") or {}).get("level")) or {}
+    if base_level:
+        in_delta = {(t.get("properties") or {}).get("id")
+                    for t in delta_level.get("things", [])}
+        in_delta_brushes = {b.get("id") for b in delta_level.get("brushes", [])}
+        _overlay_entities(logic, {
+            "things": [t for t in base_level.get("things", [])
+                       if (t.get("properties") or {}).get("id") not in in_delta],
+            "brushes": [b for b in base_level.get("brushes", [])
+                        if b.get("id") not in in_delta_brushes],
+        })
     _overlay_entities(logic, delta_level)
     _restore_runtime_and_players(logic, data)
 
@@ -930,7 +970,8 @@ def classify_base_map(data: dict, current_level: dict,
     return BASE_INCOMPATIBLE
 
 
-def restore_auto(logic, data: dict, *, current_map_name: str = "") -> dict:
+def restore_auto(logic, data: dict, *, current_map_name: str = "",
+                 base_level: Optional[dict] = None) -> dict:
     """Restore *data* automatically, choosing the path from its ``save_mode``.
 
     Returns a small report ``{"mode": <mode actually used>, "warning": str}``.
@@ -956,10 +997,15 @@ def restore_auto(logic, data: dict, *, current_map_name: str = "") -> dict:
         return {"mode": SAVE_MODE_FULL, "warning": ""}
 
     # delta / both both need the current map assessed against the base identity.
-    try:
-        current_level = logic.editor_state.get_level_data()
-    except Exception:
-        current_level = {}
+    # The map as loaded (*base_level*) when known: mid-session the live level
+    # has moved on, which is not the map having changed.
+    if base_level:
+        current_level = base_level
+    else:
+        try:
+            current_level = logic.editor_state.get_level_data()
+        except Exception:
+            current_level = {}
     cls = classify_base_map(data, current_level, current_map_name)
 
     if mode == SAVE_MODE_DELTA:
@@ -969,7 +1015,7 @@ def restore_auto(logic, data: dict, *, current_map_name: str = "") -> dict:
                 f"('{(data.get('base_map') or {}).get('name', '?')}'); "
                 "load that map first, or use a full/both save"
             )
-        restore_delta(logic, data)
+        restore_delta(logic, data, base_level)
         warning = ""
         if cls == BASE_RELATED:
             warning = ("base map has changed since this delta was saved; "
@@ -979,7 +1025,7 @@ def restore_auto(logic, data: dict, *, current_map_name: str = "") -> dict:
     if mode == SAVE_MODE_BOTH:
         if cls in (BASE_EXACT, BASE_RELATED):
             try:
-                restore_delta(logic, data)
+                restore_delta(logic, data, base_level)
                 warning = ("" if cls == BASE_EXACT else
                            "base map changed; applied delta by UUID, missing "
                            "entities skipped")
