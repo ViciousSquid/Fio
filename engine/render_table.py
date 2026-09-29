@@ -470,93 +470,75 @@ class RenderTable:
         slots = [int(slot) for slot in slots]
         if not slots:
             return
-        # Rows are gathered as Python lists and converted once per column: a
-        # NumPy row store costs as much as building the row, and a full
-        # reconcile (a load, leaving play) does ten of them per brush.
-        bits = []
-        tex = []
-        uv_scale = []
-        uv_angle = []
-        uv_shift = []
-        uv_natural = []
-        uv_has = []
-        colour = []
-        glow = []
-        geo_epoch = []
-        special = []                     # (slot, brush, class bits)
+        count = len(slots)
+        bits = np.empty(count, dtype=np.uint16)
+        tex = np.empty((count, 6), dtype=np.int32)
+        uv_scale = np.empty((count, 6, 2), dtype=np.float32)
+        uv_angle = np.empty((count, 6), dtype=np.float32)
+        uv_shift = np.empty((count, 6, 2), dtype=np.float32)
+        uv_natural = np.empty((count, 6), dtype=bool)
+        uv_has = np.empty((count, 6), dtype=bool)
+        colour = np.empty((count, 3), dtype=np.float32)
+        glow = np.empty((count, 3), dtype=np.float32)
+        geo_epoch = np.empty(count, dtype=np.int64)
+        special = []                     # (row, slot, brush, class bits)
         intern = self.intern_texture
         natural_scale = brush_geometry.face_uses_natural_scale
-        faces = CUBE_FACE_KEYS
-        # The untouched material every face of a fresh brush has: no scale,
-        # no shift, no angle. Shared, since the lists are only read.
-        no_scale = [(1.0, 1.0)] * 6
-        no_has = [False] * 6
-        no_shift = [(0.0, 0.0)] * 6
-        no_angle = [0.0] * 6
 
-        for slot in slots:
+        for row, slot in enumerate(slots):
             brush = brushes[slot]
             b = _brush_class_bits(brush)
-            bits.append(b)
+            bits[row] = b
             textures = brush.get('textures') or {}
             scales = brush.get('uv_scale') or {}
             angles = brush.get('uv_angle') or {}
             shifts = brush.get('uv_shift') or {}
-            tex.append([intern(textures.get(face, TEX_DEFAULT))
-                        for face in faces])
-            if scales:
-                row_scale = []
-                row_has = []
-                for face in faces:
-                    scale = scales.get(face)
-                    row_has.append(scale is not None)
-                    row_scale.append((1.0, 1.0) if scale is None
-                                     else (scale[0], scale[1]))
-                uv_scale.append(row_scale)
-                uv_has.append(row_has)
-            else:
-                uv_scale.append(no_scale)
-                uv_has.append(no_has)
-            if shifts:
-                row_shift = []
-                for face in faces:
-                    shift = shifts.get(face) or (0.0, 0.0)
-                    row_shift.append((shift[0], shift[1]))
-                uv_shift.append(row_shift)
-            else:
-                uv_shift.append(no_shift)
-            uv_angle.append([angles.get(face, 0.0) for face in faces]
-                            if angles else no_angle)
-            uv_natural.append([natural_scale(brush, face) for face in faces])
+            tex[row] = [intern(textures.get(face, TEX_DEFAULT))
+                        for face in CUBE_FACE_KEYS]
+            row_scale = []
+            row_has = []
+            row_shift = []
+            for face in CUBE_FACE_KEYS:
+                scale = scales.get(face)
+                row_has.append(scale is not None)
+                row_scale.append((1.0, 1.0) if scale is None
+                                 else (scale[0], scale[1]))
+                shift = shifts.get(face) or (0.0, 0.0)
+                row_shift.append((shift[0], shift[1]))
+            uv_scale[row] = row_scale
+            uv_has[row] = row_has
+            uv_shift[row] = row_shift
+            uv_angle[row] = [angles.get(face, 0.0) for face in CUBE_FACE_KEYS]
+            uv_natural[row] = [natural_scale(brush, face) for face in CUBE_FACE_KEYS]
 
             tint = brush.get('tint')
-            colour.append(normalize_color(tint) if tint
-                          else normalize_color(brush.get('colour')))
+            colour[row] = (normalize_color(tint) if tint
+                           else normalize_color(brush.get('colour')))
             intensity = _num(brush.get('glow_intensity'), 10.0)
             glow_base = normalize_color(tint or brush.get('colour'),
                                         default=[1.0, 1.0, 1.0])
-            glow.append([min(c * intensity, 10.0) for c in glow_base])
+            glow[row] = [min(c * intensity, 10.0) for c in glow_base]
 
             # The brush's own geometry epoch, which every change to its shape
             # bumps (brush_geometry._invalidate) whether or not anything marks
             # the world changed; see refresh_edited. Not assigned for a box.
-            geo_epoch.append(brush_geometry._brush_epoch(brush)
-                             if b & CLASS_HAS_GEOMETRY
-                             else brush.get('_geo_epoch') or 0)
+            geo_epoch[row] = (brush_geometry._brush_epoch(brush)
+                              if b & CLASS_HAS_GEOMETRY
+                              else brush.get('_geo_epoch') or 0)
             if b & (CLASS_WATER | CLASS_GLASS | CLASS_FOG):
                 special.append((slot, brush, b))
 
         idx = np.asarray(slots, dtype=np.intp)
-        self.class_bits[idx] = np.array(bits, dtype=np.uint16)
-        self.tex_name_id[idx] = np.array(tex, dtype=np.int32)
-        self.uv_scale[idx] = np.array(uv_scale, dtype=np.float32)
-        self.uv_angle[idx] = np.array(uv_angle, dtype=np.float32)
-        self.uv_shift[idx] = np.array(uv_shift, dtype=np.float32)
-        self.uv_natural[idx] = np.array(uv_natural, dtype=bool)
-        self.uv_has_scale[idx] = np.array(uv_has, dtype=bool)
-        self.colour[idx] = np.array(colour, dtype=np.float32)
-        self.glow_colour[idx] = np.array(glow, dtype=np.float32)
-        self.geo_epoch[idx] = np.array(geo_epoch, dtype=np.int64)
+        self.class_bits[idx] = bits
+        self.tex_name_id[idx] = tex
+        self.uv_scale[idx] = uv_scale
+        self.uv_angle[idx] = uv_angle
+        self.uv_shift[idx] = uv_shift
+        self.uv_natural[idx] = uv_natural
+        self.uv_has_scale[idx] = uv_has
+        self.colour[idx] = colour
+        self.glow_colour[idx] = glow
+        self.geo_epoch[idx] = geo_epoch
         self._resolve_special_rows(idx, special)
 
     #: The special-shader columns, and the fill a row of no special class
