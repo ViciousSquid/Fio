@@ -57,13 +57,19 @@ def test_version_banner_is_rendered_once(qt_app):
     html = console.console.toHtml()
 
     assert "Fio version" in html
-    assert 'href="filter:2"' in html
-    assert 'href="filter:5"' in html
-    assert 'href="filter:8"' in html
-    assert "#66BB6A" in html or "#66bb6a" in html
+    assert 'href="filter:2"' not in html
+    assert 'href="filter:5"' not in html
+    assert 'href="filter:8"' not in html
     assert "#F08000" in html or "#f08000" in html
+    assert "#FFFFFF" in html or "#ffffff" in html
     assert "Click to filter by" not in html
     assert "filter:version" not in html
+
+    # The first three numeric components are orange; the periods and build
+    # component remain white, and the version components are presentation-only.
+    assert '<span style="color:#f08000;">2</span>' in html or 'color:#f08000;">2</span>' in html
+    assert '<span style="color:#f08000;">5</span>' in html or 'color:#f08000;">5</span>' in html
+    assert '<span style="color:#f08000;">8</span>' in html or 'color:#f08000;">8</span>' in html
 
     console.deleteLater()
 
