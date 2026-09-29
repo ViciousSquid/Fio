@@ -546,6 +546,10 @@ class IOManager:
                 and self._find_entity_by_id):
             self._activator_entity = self._find_entity_by_id(self._activator_id)
 
+        # A brush's authored visibility is what the collision grid is built
+        # from; the logic thread rebuilds it if an input changes it.
+        was_hidden = (authored_flag(target, 'hidden')
+                      if isinstance(target, dict) else None)
         try:
             if handler:
                 try:
@@ -561,6 +565,11 @@ class IOManager:
             # render projection re-resolves that one row -- including when a
             # handler failed part-way through its writes.
             touch(target)
+            if (was_hidden is not None
+                    and authored_flag(target, 'hidden') != was_hidden):
+                mark = getattr(self._logic_thread, 'mark_collision_dirty', None)
+                if mark is not None:
+                    mark()
             (self._source_entity, self._source_id,
              self._activator_entity, self._activator_id) = previous
     
@@ -598,11 +607,14 @@ class IOManager:
             set_authored_flag(entity, 'disabled', True)
 
         elif input_lower == 'kill':
-            # Mark for removal (handled by logic thread)
-            if isinstance(entity, dict):
-                entity['_kill'] = True
-            elif hasattr(entity, 'properties'):
-                entity.properties['_kill'] = True
+            # Remove from the running world: nothing draws or collides with a
+            # hidden, disabled object. (Monsters have their own Kill handler.)
+            # Deleting it from the scene lists instead would destroy authored
+            # data the editor is showing, and the `_kill` marker this used to
+            # set was read by nothing but the monster AI, so a killed brush
+            # stayed solid and visible.
+            set_authored_flag(entity, 'hidden', True)
+            set_authored_flag(entity, 'disabled', True)
 
         # ---- Generic Hide / Show / ToggleVisibility --------------------------
         elif input_lower == 'hide':

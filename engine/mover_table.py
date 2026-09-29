@@ -38,6 +38,7 @@ parented lights and portals, and saved games all read ``brush['pos']``.
 
 from __future__ import annotations
 
+import weakref
 from collections.abc import MutableMapping
 
 import numpy as np
@@ -747,11 +748,10 @@ class MoverTable:
     def __init__(self):
         self.movers = LinearMovers()
         self.doors = Doors()
-        # id(render table) -> (table, its generation, mover version, door
-        # version, mover map, door map). One entry per render buffer: the two
-        # buffers' tables alternate every frame, and a single entry was
-        # rebuilt -- a Python pass over every mover and door -- each time.
-        self._slot_cache = {}
+        # render table -> ((its generation, mover version, door version),
+        # slots). One entry per table: frames alternate between the two render
+        # buffers' tables, so a single entry would miss on every frame.
+        self._slot_cache = weakref.WeakKeyDictionary()
         JOURNAL.subscribe(self)
 
     def sync(self):
@@ -814,9 +814,9 @@ class MoverTable:
         movers, doors = self.movers, self.doors
         if not (len(movers.index) or len(doors.index)):
             return
-        key = (table, table.generation, movers.version, doors.version)
-        cached = self._slot_cache.get(id(table))
-        if cached is None or cached[0] is not table or cached[1:4] != key[1:]:
+        key = (table.generation, movers.version, doors.version)
+        cached = self._slot_cache.get(table)
+        if cached is None or cached[0] != key:
             slot_of = table._slot_of_obj
             maps = []
             for group in (movers, doors):
@@ -824,10 +824,9 @@ class MoverTable:
                 slots = np.asarray(slots, dtype=np.intp)
                 ok = slots >= 0
                 maps.append((np.flatnonzero(ok), slots[ok]))
-            if len(self._slot_cache) >= 4:
-                self._slot_cache.clear()
-            cached = self._slot_cache[id(table)] = key + tuple(maps)
-        (mover_rows, mover_slots), (door_rows, door_slots) = cached[4:]
+            cached = (key, tuple(maps))
+            self._slot_cache[table] = cached
+        (mover_rows, mover_slots), (door_rows, door_slots) = cached[1]
         if len(mover_rows):
             table.bounds[mover_slots, :3] = movers.pos[mover_rows]
             angle = movers.rot_angle[mover_rows]

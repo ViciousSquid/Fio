@@ -148,6 +148,8 @@ class MainWindow(QMainWindow):
         self.load_key_bindings()
 
         self.unsaved_changes = False
+        #: The world as Play started, when Stop is set to restore it.
+        self._pre_play_world = None
         self.file_path = None
         self.recent_files = []
         self.load_level_signal.connect(self.load_level_file)
@@ -2208,6 +2210,7 @@ class MainWindow(QMainWindow):
                 }
             """)
 
+        self._capture_pre_play_world()
         physics_enabled = self.config.getboolean('Settings', 'physics', fallback=True)
         self.view_3d.toggle_play_mode(player_start.pos, player_start.get_angle(), physics_enabled)
         self.view_3d.setFocus()
@@ -2218,11 +2221,52 @@ class MainWindow(QMainWindow):
         #self.ui.notification_label.setText("ESC = EXIT PLAY MODE  |  F12 = FULLSCREEN")
 
 
+    def _capture_pre_play_world(self):
+        """Remember the world as Play starts, if Stop is to put it back.
+
+        Optional (Settings -> Play Modes -> "Restore the world when leaving
+        Play"). By default the editor keeps showing what happened in play --
+        dead monsters, killed or hidden objects -- as it always has.
+        """
+        self._pre_play_world = None
+        if not self.config.getboolean('Settings', 'restore_world_on_stop',
+                                      fallback=False):
+            return
+        self._pre_play_world = (
+            self.state.snapshot(),
+            list(self.state.undo_stack),
+            list(self.state.redo_stack),
+            self.unsaved_changes,
+        )
+
+    def _restore_pre_play_world(self):
+        """Put back the world captured by :meth:`_capture_pre_play_world`.
+
+        Runs once the session has fully stopped. The same object replacement
+        undo uses, so everything holding a reference is re-pointed the same
+        way; the history and the unsaved flag go back too, so a restored
+        session leaves no trace.
+        """
+        captured = getattr(self, '_pre_play_world', None)
+        self._pre_play_world = None
+        if captured is None:
+            return
+        world, undo, redo, unsaved = captured
+        self.state.restore_state(world)
+        self.state.undo_stack.clear()
+        self.state.undo_stack.extend(undo)
+        self.state.redo_stack = redo
+        self._resync_components_after_history()
+        self.unsaved_changes = unsaved
+        self.update_title()
+        self.update_all_ui()
+
     def _exit_play_mode(self):
         """Exit play mode and return to editor."""
         if hasattr(self.view_3d, 'play_mode') and self.view_3d.play_mode:
             self.view_3d.toggle_play_mode(None, None)
             self.view_3d.play_mode = False  # Force state change before UI update
+            self._restore_pre_play_world()
 
         self.ui.notification_label.setText("")
         self._restore_properties_tab()
@@ -4002,6 +4046,8 @@ class MainWindow(QMainWindow):
             loadout = (logic.carried_loadout()
                        if was_playing and logic is not None else None)
             if was_playing:
+                # The world captured at Play belongs to the map being left.
+                self._pre_play_world = None
                 self._exit_play_mode()
 
             # From here the scene is being replaced.  Until it has been, it

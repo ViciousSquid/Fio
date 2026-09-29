@@ -617,12 +617,6 @@ class BenchmarkRunner:
         # Drop benchmark-visible caches that are keyed to the previous scene.
         view._io_conn_cache = None
         view._io_conn_scene_ver = None
-        view._instance_tex_hash = None
-        if getattr(view, "renderer", None) is not None:
-            try:
-                view.renderer.set_instance_textures({})
-            except Exception:
-                pass
 
         logic = getattr(view, "logic_thread", None)
         if logic is not None:

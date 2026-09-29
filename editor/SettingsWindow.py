@@ -311,6 +311,16 @@ class SettingsWindow(QDialog):
         )
         gameplay_layout.addWidget(self.show_glasses_checkbox)
 
+        self.restore_world_checkbox = QCheckBox("Restore the world when leaving Play")
+        self.restore_world_checkbox.setToolTip(
+            "When on, Stop puts every brush and entity back exactly as it was "
+            "when Play started: anything killed, hidden, moved or collected "
+            "during the session is undone.\n"
+            "When off, the editor keeps showing what happened in play "
+            "(dead monsters, killed or hidden objects) until the next Play."
+        )
+        gameplay_layout.addWidget(self.restore_world_checkbox)
+
         gameplay_group.setLayout(gameplay_layout)
         layout.addWidget(gameplay_group)
 
@@ -511,6 +521,8 @@ class SettingsWindow(QDialog):
         self.shadows_enabled_checkbox.setChecked(self.config.getboolean('Renderer', 'shadows_enabled', fallback=default_shadows))
 
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
+        self.restore_world_checkbox.setChecked(
+            self.config.getboolean('Settings', 'restore_world_on_stop', fallback=False))
         self.show_hud_checkbox.setChecked(self.config.getboolean('Display', 'show_hud', fallback=True))
         self.show_glasses_checkbox.setChecked(
             self.config.getboolean('Display', 'show_glasses', fallback=True)
@@ -629,6 +641,8 @@ class SettingsWindow(QDialog):
         if not self.config.has_section('Settings'):
             self.config.add_section('Settings')
         self.config.set('Settings', 'physics', str(self.physics_checkbox.isChecked()))
+        self.config.set('Settings', 'restore_world_on_stop',
+                        str(self.restore_world_checkbox.isChecked()))
         self.config.set('Settings', 'save_mode',
                         self.save_mode_combo.currentData() or 'full')
 

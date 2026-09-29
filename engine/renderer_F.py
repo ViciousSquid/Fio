@@ -97,9 +97,6 @@ class Renderer_F(BaseRenderer):
     def set_sprite_textures(self, textures):
         self.sprite_textures = textures
 
-    def set_instance_textures(self, textures):
-        self.instance_textures = textures
-
     @staticmethod
     def _selected_slot(table, config):
         """The slot of the selected brush, or -1.
@@ -795,7 +792,14 @@ class Renderer_F(BaseRenderer):
             raise RuntimeError("dense EntityTable is required for light rendering")
         slots = table.light_slots
         if len(slots):
-            slots = slots[table.light_enabled[slots]]
+            keep = table.light_enabled[slots]
+            hidden = config.get('thing_hidden')
+            if config.get('play_mode', False) and hidden is not None:
+                # A hidden light is out of the running world -- Big World
+                # parks out-of-range lights exactly this way, and they must
+                # not keep lighting (or take light and shadow slots).
+                keep = keep & ~np.asarray(hidden)[slots]
+            slots = slots[keep]
         return (table, slots)
 
     def entities_are_numeric(self, config, brush_slots=None):

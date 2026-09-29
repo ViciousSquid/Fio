@@ -263,7 +263,7 @@ def sprite_candidates(thing):
         return _monster_sprite_candidates(props)
 
     out = []
-    # -- the per-entity override, in update_instance_textures' own order ----
+    # -- the per-entity override, in the order the object path resolved it --
     if LogicGate is not None and isinstance(thing, LogicGate):
         ltype = str(props.get('logic_type', 'and')).lower()
         out.append(('logic_%s' % ltype, 'logic_%s.png' % ltype, 'sprites', True))
@@ -299,8 +299,8 @@ def sprite_size(thing):
     """The billboard's world size, in the order ``draw_sprites`` decides it."""
     props = _props_of(thing)
     if Monster is not None and isinstance(thing, Monster):
-        return (float(props.get('sprite_width', 128)),
-                float(props.get('sprite_height', 128)))
+        return (_float_property(props.get('sprite_width', 128), 128.0),
+                _float_property(props.get('sprite_height', 128), 128.0))
     if Light is not None and isinstance(thing, Light):
         return (16.0, 16.0)
     if props.get('sprite_path'):
@@ -878,10 +878,9 @@ class EntityTable:
                 bool(_props_of(things[s]).get('hidden', False)) for s in shown]
         if state:
             self.refresh_rows(things, state)
-            if any(self.class_bits[slot] & ENT_PORTAL for slot in state):
-                # A portal's name or target may be what changed (the console's
-                # portal_link / setprop, an I/O input); links are resolved at
-                # the row set's boundary, so resolve them again.
+            # I/O can retarget or rename a portal; links are resolved by name.
+            if (len(self.portal_slots)
+                    and (self.class_bits[state] & ENT_PORTAL).any()):
                 self._resolve_portal_links(things)
 
     def _read_positions(self, things, slots):
@@ -1219,32 +1218,21 @@ class EntityTable:
             self.model_normal_matrix[slot, 5] = 1.0
             self.model_normal_matrix[slot, 10] = 1.0
 
-        light_bits = self.class_bits[slot] & (ENT_LIGHT | ENT_EFFECT)
-        if light_bits == ENT_LIGHT:
+        if (self.class_bits[slot] & (ENT_LIGHT | ENT_EFFECT)) == ENT_LIGHT:
             self.light_color[slot] = _light_color_of(thing)
             self.light_params[slot] = (_light_float(thing, 'intensity', 1.0),
                                        _light_float(thing, 'radius', 512.0))
             self.light_enabled[slot] = _light_bool(thing, 'state', True)
             self.light_casts_shadows[slot] = _light_bool(
                 thing, 'casts_shadows', False)
-        elif not light_bits:
-            # A row that is no light must not keep the light columns of the
-            # row a reconcile moved out of this slot: rebuilding the table
-            # from the world has to give identical bits.
+        elif not (self.class_bits[slot] & ENT_EFFECT):
+            # A reused slot must not keep its previous occupant's light.
             self.light_color[slot] = 0.0
             self.light_params[slot] = 0.0
             self.light_enabled[slot] = False
             self.light_casts_shadows[slot] = False
 
-        if not self.class_bits[slot] & ENT_PORTAL:
-            self.portal_active[slot] = False
-            self.portal_direction[slot] = 0
-            self.portal_width_height[slot] = 0.0
-            self.portal_basis[slot] = 0.0
-            self.portal_fade[slot] = 0.0
-            self.portal_color[slot] = 1.0
-            self.portal_show_rim[slot] = False
-        else:
+        if self.class_bits[slot] & ENT_PORTAL:
             self.portal_active[slot] = _bool_property(
                 props.get('active', True), True)
             self.portal_fade[slot] = max(0.0, min(1.0, _float_property(
@@ -1269,6 +1257,14 @@ class EntityTable:
                 basis_from_rotation(props.get(
                     'rotation', [props.get('angle', 0.0), 0.0, 0.0])),
                 dtype=np.float64)
+        else:
+            self.portal_active[slot] = False
+            self.portal_fade[slot] = 0.0
+            self.portal_direction[slot] = 0
+            self.portal_width_height[slot] = 0.0
+            self.portal_color[slot] = 1.0
+            self.portal_show_rim[slot] = False
+            self.portal_basis[slot] = 0.0
 
     def refresh_rows(self, things, slots):
         """Re-resolve every column of *slots* from their entities."""

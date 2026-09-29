@@ -65,6 +65,8 @@ the count (``rows read last frame``).
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from engine.constants import is_water_brush, normalize_color
@@ -144,6 +146,20 @@ TEX_NONE = -1
 TEX_ID_DEFAULT = 0
 TEX_ID_SKIP = 1
 TEX_ID_NODRAW = 2
+
+
+def _num(value, default):
+    """An authored number as a finite float, or *default* if it is not one.
+
+    Shader parameters are free-form in the property editor, the console's
+    setprop and hand-edited maps; one ``"abc"`` must fall back to the value the
+    shader would have used, not take the frame (and the logic thread) down.
+    """
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    return value if math.isfinite(value) else float(default)
 
 
 def _brush_class_bits(brush) -> int:
@@ -484,7 +500,7 @@ class RenderTable:
             tint = brush.get('tint')
             colour[row] = (normalize_color(tint) if tint
                            else normalize_color(brush.get('colour')))
-            intensity = float(brush.get('glow_intensity', 10.0))
+            intensity = _num(brush.get('glow_intensity'), 10.0)
             glow_base = normalize_color(tint or brush.get('colour'),
                                         default=[1.0, 1.0, 1.0])
             glow[row] = [min(c * intensity, 10.0) for c in glow_base]
@@ -529,32 +545,31 @@ class RenderTable:
                 self.water_tint[slot] = normalize_color(
                     brush.get('water_tint', [0.0, 0.4, 0.6]))
                 self.water_params[slot] = (
-                    float(brush.get('water_opacity', 0.5)),
-                    float(brush.get('water_fresnel',
-                                    brush.get('water_reflectivity', 0.5))),
-                    float(brush.get('water_wave_height', 0.5)),
+                    _num(brush.get('water_opacity'), 0.5),
+                    _num(brush.get('water_fresnel', brush.get('water_reflectivity', 0.5)), 0.5),
+                    _num(brush.get('water_wave_height'), 0.5),
                     1.0 if brush.get('water_wave_enabled', True) else 0.0,
-                    float(brush.get('water_distortion', 0.5)),
-                    float(brush.get('water_refraction', 1.333)),
-                    float(brush.get('water_roughness', 0.0)),
+                    _num(brush.get('water_distortion'), 0.5),
+                    _num(brush.get('water_refraction'), 1.333),
+                    _num(brush.get('water_roughness'), 0.0),
                 )
                 self.water_plane[slot] = bool(brush.get('water_plane', False))
             if b & CLASS_GLASS:
                 self.glass_color[slot] = normalize_color(
                     brush.get('glass_color', [0.7, 0.85, 0.95]))
                 self.glass_params[slot] = (
-                    float(brush.get('glass_opacity', 0.3)),
-                    float(brush.get('glass_distortion', 0.5)),
-                    float(brush.get('glass_refraction', 1.5)),
-                    float(brush.get('glass_roughness', 0.0)),
-                    float(brush.get('glass_fresnel', 0.5)),
+                    _num(brush.get('glass_opacity'), 0.3),
+                    _num(brush.get('glass_distortion'), 0.5),
+                    _num(brush.get('glass_refraction'), 1.5),
+                    _num(brush.get('glass_roughness'), 0.0),
+                    _num(brush.get('glass_fresnel'), 0.5),
                 )
             if b & CLASS_FOG:
                 self.fog_color[slot] = normalize_color(
                     brush.get('fog_color', [0.5, 0.6, 0.7]))
                 self.fog_params[slot] = (
-                    float(brush.get('fog_density', 0.01)),
-                    float(brush.get('fog_noise_scale', 0.01)),
+                    _num(brush.get('fog_density'), 0.01),
+                    _num(brush.get('fog_noise_scale'), 0.01),
                 )
 
     # -- synchronisation ---------------------------------------------------

@@ -657,10 +657,40 @@ class BigWorldSession:
         if cell is None:
             return
         live = normalize_streaming_state(self._cell_live_level(cell))
-        sub = build_cell_delta_registry(self._base_level, live, self.manager.cell_size)
+        sub = build_cell_delta_registry(
+            self._base_subset(live), live, self.manager.cell_size)
         for k, entry in sub.items():
             if entry.get("things") or entry.get("brushes"):
                 self.registry[k] = entry
+
+    def _base_subset(self, live: dict) -> dict:
+        """The base records that share an id with *live*'s.
+
+        The delta only ever looks base records up by the ids *live* holds, so
+        diffing one cell against this subset gives the same result as diffing
+        it against the whole base world -- at the cost of the cell, not of the
+        world, for every cell committed on unload. The id index is built once
+        per captured base.
+        """
+        base = self._base_level or {}
+        index = getattr(self, "_base_index", None)
+        if index is None or index[0] is not base:
+            things = {}
+            for t in base.get("things", []) or []:
+                tid = (t.get("properties") or {}).get("id")
+                if tid:
+                    things[tid] = t
+            brushes = {b.get("id"): b for b in base.get("brushes", []) or []
+                       if isinstance(b, dict) and b.get("id")}
+            index = self._base_index = (base, things, brushes)
+        _base, things, brushes = index
+        sub_things = [things[tid] for tid in (
+            (t.get("properties") or {}).get("id") for t in live.get("things", []))
+            if tid in things]
+        sub_brushes = [brushes[bid] for bid in (
+            b.get("id") for b in live.get("brushes", []) if isinstance(b, dict))
+            if bid in brushes]
+        return {"things": sub_things, "brushes": sub_brushes}
 
     def commit_all(self) -> dict:
         """Flush every cell's current state into the registry and return it.
