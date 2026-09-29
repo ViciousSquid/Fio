@@ -231,7 +231,8 @@ class RenderState:
         self.hud_message = ""
         self.hud_prompt_key = None
         self.bullet_marks = []
-        self.projectiles = []
+        #: Live monster projectiles, as an ``(N, 3)`` float32 array of positions.
+        self.projectiles = np.empty((0, 3), dtype=np.float32)
         self.muzzle_flash_active = False
         self.camera_transition_active = False
         self.cinematic_camera_active = False

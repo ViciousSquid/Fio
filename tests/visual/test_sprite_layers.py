@@ -261,3 +261,37 @@ def test_model_rows_are_culled_by_their_measured_mesh_radius(renderer, context):
     assert stats.culled_entities == 1
     radii = renderer._model_radius_by_recipe
     assert len(radii) and np.isfinite(radii).all() and (radii > 0).all()
+
+
+def test_projectile_billboards_are_one_draw_and_reach_the_screen(renderer, context):
+    """Monster projectiles: an (N, 3) array, one instanced draw, visible."""
+    import OpenGL.GL as gl
+
+    import engine.renderer_core as rc
+
+    red = _solid((255, 0, 0))
+    projection, view, _ = glh.camera_matrices(aspect=1.0)
+    positions = np.array([[-60.0, 60.0, 0.0], [0.0, 60.0, 0.0],
+                          [60.0, 60.0, 0.0]], dtype=np.float32)
+    draws = []
+    real = rc.gl.glDrawArraysInstanced
+    rc.gl.glDrawArraysInstanced = lambda mode, first, count, n, *a: (
+        draws.append(int(n)), real(mode, first, count, n, *a))[1]
+    try:
+        context.bind()
+        gl.glClearColor(0.0, 0.0, 0.0, 1.0)
+        gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+        gl.glDisable(gl.GL_DEPTH_TEST)
+        drawn = renderer.draw_billboards_instanced(
+            projection, view, positions, (40.0, 40.0), red)
+        gl.glFinish()
+        pixels = context.read_pixels()
+    finally:
+        rc.gl.glDrawArraysInstanced = real
+
+    assert drawn == 3 and draws == [3]
+    reddish = (pixels[..., 0] > 128) & (pixels[..., 1] < 64)
+    assert reddish.sum() > 100
+    # Nothing to draw is no draw at all.
+    assert renderer.draw_billboards_instanced(
+        projection, view, np.empty((0, 3), np.float32), (40.0, 40.0), red) == 0

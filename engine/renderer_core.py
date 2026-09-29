@@ -2976,6 +2976,46 @@ layout (location = 10) in float iInstanceAlpha;
         gl.glBindVertexArray(0)
         return count
 
+    def draw_billboards_instanced(self, projection, view, positions, size, tex_id):
+        """Camera-facing billboards sharing one texture and size: one draw.
+
+        For the dense runtime populations that are not entities -- monster
+        projectiles -- which used to cost three GL calls each per frame.
+        """
+        positions = np.asarray(positions, dtype=np.float32).reshape(-1, 3)
+        count = len(positions)
+        if not count or 'sprite_instanced' not in self.shaders or not tex_id:
+            return 0
+        self._ensure_sprite_instance_buffer(count)
+        data = self._sprite_instance_data[:count]
+        data[:, 0:3] = positions
+        data[:, 3] = float(size[0])
+        data[:, 4] = float(size[1])
+        data[:, 5] = -10000.0
+        data[:, 6] = 1.0
+        data[:, 7] = 0.0
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+        shader, uniforms = (self.shaders['sprite_instanced'],
+                            self.uniforms['sprite_instanced'])
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        self._upload_env_uniforms('sprite_instanced')
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
+                              glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
+                              glm.value_ptr(view))
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['sprite_texture'], 0)
+        gl.glUniform1i(uniforms['use_fixed_facing'], 0)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, int(tex_id))
+        gl.glBindVertexArray(self._ensure_sprite_instance_vao())
+        self._point_sprite_instances_at(0)
+        gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, count)
+        gl.glBindVertexArray(0)
+        self.render_stats.draw_calls += 1
+        return count
+
     def _sprite_layer_array(self):
         """The entity sprite texture array, created on first use."""
         if self._sprite_layers is None:

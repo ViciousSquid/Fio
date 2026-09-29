@@ -1,4 +1,4 @@
-"""Monster projectiles against monsters, tested as one batch per projectile.
+"""Monster projectiles against monsters, tested as one batch per tick.
 
 The per-projectile walk over every Thing was 140 ms of a 147 ms logic tick
 with 500 monsters fighting (and ran inside the monster lock). The batched test
@@ -28,9 +28,10 @@ class _Host:
 
     PROJECTILE_MONSTER_LIFT = LogicThread.PROJECTILE_MONSTER_LIFT
     PROJECTILE_MONSTER_RADIUS = LogicThread.PROJECTILE_MONSTER_RADIUS
+    PROJECTILE_PLAYER_RADIUS = LogicThread.PROJECTILE_PLAYER_RADIUS
     _update_monster_projectiles = LogicThread._update_monster_projectiles
-    _projectile_targets = LogicThread._projectile_targets
-    _monster_alive = staticmethod(LogicThread.__dict__['_monster_alive'].__func__)
+    _projectile_monster_candidates = LogicThread._projectile_monster_candidates
+    _projectile_wall_candidates = LogicThread._projectile_wall_candidates
 
     def __init__(self, things, projectiles):
         self.things = things
