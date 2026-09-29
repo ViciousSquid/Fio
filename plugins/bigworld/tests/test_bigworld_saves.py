@@ -499,3 +499,26 @@ def test_play_stop_returns_a_restored_dormant_world_to_its_saved_state():
     assert a_mon.properties.get("disabled") is True
     assert "_bw_parked_hidden" not in a_mon.properties, (
         "play-stop left a parking marker behind")
+
+
+def test_committing_one_cell_diffs_only_that_cells_base_records():
+    """commit_cell used to diff every unloaded cell against the whole base
+    world (O(world) per cell, ~5 ms a crossing on a 2300-brush world). The
+    base subset it now uses must give exactly the whole-world answer."""
+    things, brushes = make_world()
+    logic = FakeLogic(things, brushes, A_POS)
+    s = new_session(logic)
+    s.start(player_pos=A_POS)
+    things[0].properties["dead"] = True
+    things[2].properties["on"] = False
+    brushes[0]["hidden"] = True
+    for coord, cell in s.manager.cells.items():
+        live = persistence.normalize_streaming_state(s._cell_live_level(cell))
+        whole = persistence.build_cell_delta_registry(
+            s._base_level, live, s.manager.cell_size)
+        subset = persistence.build_cell_delta_registry(
+            s._base_subset(live), live, s.manager.cell_size)
+        assert subset == whole, coord
+    s.tick(player_pos=B_POS)
+    assert {t["properties"]["id"] for t in s.registry["0,0"]["things"]} == \
+        {"A-mon", "A-light"}
