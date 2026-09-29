@@ -26,7 +26,7 @@ from .camera import Camera
 from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
 from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
 from .prop_runtime import PropSession
-from .change_journal import moved, touch
+from .change_journal import JOURNAL, STATE, moved, touch
 from .mover_table import MoverTable
 from .entity_table import ENT_PROP
 from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
@@ -124,6 +124,45 @@ _PORTAL_PLAYER_EXIT_EPSILON = 0.05
 # quieter, so a monster has to be closer to notice the player entering/leaving.
 _GUNFIRE_LOUDNESS = 1.0
 _WATER_LOUDNESS = 0.7
+
+
+def _trigger_is_once(brush) -> bool:
+    """Whether a trigger brush fires only once ('Once', any case)."""
+    return str(brush.get('trigger_type', 'multiple')).strip().lower() == 'once'
+
+
+def _trigger_activation(brush) -> str:
+    """'touch' or 'use'. Older editor builds wrote the setting under
+    ``trigger_collect_activation``; it is honoured when the real key is absent."""
+    value = brush.get('trigger_activation')
+    if value is None:
+        value = brush.get('trigger_collect_activation', 'touch')
+    return str(value or 'touch').strip().lower()
+
+
+def _trigger_damage(brush):
+    """A hurt trigger's damage: the editor's ``hurt_amount``, else ``damage``."""
+    value = brush.get('hurt_amount', brush.get('damage', 10))
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 10
+
+
+#: ``trigger_save`` values a trigger may request, and the console command each
+#: runs. Anything else (including the default, 'none') does nothing.
+_TRIGGER_SAVE_COMMANDS = {'quicksave': 'quicksave', 'quickload': 'quickload'}
+
+
+def _trigger_save(brush):
+    """The console command a trigger's optional save action asks for, or None."""
+    return _TRIGGER_SAVE_COMMANDS.get(
+        str(brush.get('trigger_save', 'none') or 'none').strip().lower())
+
+
+#: Shared, read-only "no projectiles" array for the published frame.
+_NO_PROJECTILES = np.empty((0, 3), dtype=np.float32)
+_NO_PROJECTILES.flags.writeable = False
 
 
 class LogicThread(threading.Thread):
@@ -232,6 +271,9 @@ class LogicThread(threading.Thread):
         write_state = self.game_state.get_write_state()
         self._render_table = write_state.render_table
         self._entity_table = write_state.entity_table
+        #: ``id -> object`` of the editor selection the last frame re-read as
+        #: edited; see _prepare_render_state.
+        self._last_edited = {}
 
         # Editor camera
         self.editor_camera = Camera()
@@ -414,6 +456,8 @@ class LogicThread(threading.Thread):
 
         # Monster projectiles (flying monster ranged attacks)
         self._monster_projectiles: list = []
+        #: Their positions as the ``(N, 3)`` float32 array each frame publishes.
+        self._projectile_positions = _NO_PROJECTILES
 
         # Gunfire sound events for AI hearing (list of dicts with pos, time, source)
         self._gunfire_events: list = []
@@ -512,6 +556,15 @@ class LogicThread(threading.Thread):
         # timers, not the level.
         self._timer_things = [t for t in self.things if LogicTimer and isinstance(t, LogicTimer)]
 
+        self._rebuild_portal_links()
+
+    def _rebuild_portal_links(self):
+        """Resolve every portal's ``portal_target`` name to its paired portal.
+
+        Part of :meth:`_build_entity_caches`, and called on its own by the
+        portal SetTarget input: transit reads these lists, so a retargeted
+        portal kept sending the player to its old partner.
+        """
         # PERF: portals, for the same reason again.  _update_portals ticks every
         # portal's fade every frame, but the traversal relation itself is also
         # cached numerically.  The slot space is exactly enumerate(self.things),
@@ -1927,8 +1980,30 @@ class LogicThread(threading.Thread):
     def _tick(self, delta: float):
         if self.play_mode:
             self._tick_play_mode(delta)
+            if self._collision_dirty:
+                self._rebuild_collision_for_authored_change()
         else:
             self._tick_editor_mode(delta)
+
+    #: Set when an I/O input changed a brush's authored ``hidden`` during play;
+    #: see :meth:`mark_collision_dirty`.
+    _collision_dirty = False
+
+    def mark_collision_dirty(self):
+        """A brush's authored visibility changed at runtime (I/O Show/Hide/Kill).
+
+        The collision grid files brushes by their authored ``hidden`` once, so
+        a wall revealed by ``Show`` was drawn but walked through, and a hidden
+        one still blocked monsters' sight. Callable from any thread: the rebuild
+        itself runs once, at the end of the tick, on the logic thread.
+        """
+        self._collision_dirty = True
+
+    def _rebuild_collision_for_authored_change(self):
+        self._collision_dirty = False
+        # The monster AI thread queries the grid while populate() refills it.
+        with self._monster_lock:
+            self.notify_authored_visibility_changed()
 
     def _tick_editor_mode(self, delta: float):
         dx, dy = self.game_state.consume_mouse_delta()
@@ -2490,7 +2565,7 @@ class LogicThread(threading.Thread):
         # runs during construction, ahead of the first cache build.
         self._use_trigger_entries = [
             (bid, brush) for bid, brush in getattr(self, '_trigger_brushes', ())
-            if str(brush.get('trigger_activation', 'touch')).lower() == 'use'
+            if _trigger_activation(brush) == 'use'
         ]
 
     def _use_prompt_candidates(self):
@@ -2503,8 +2578,7 @@ class LogicThread(threading.Thread):
             # A spent 'once' trigger does nothing, so it must not keep
             # advertising itself -- 2.4.2 suppressed the prompt for exactly
             # this case and the rewrite dropped the check.
-            if (str(brush.get('trigger_type', 'multiple')).lower() == 'once'
-                    and bid in self.fired_once_triggers):
+            if _trigger_is_once(brush) and bid in self.fired_once_triggers:
                 continue
             centre = brush.get('pos', (0.0, 0.0, 0.0))
             yield (bid, brush,
@@ -2606,7 +2680,7 @@ class LogicThread(threading.Thread):
             if brush.get('disabled', False):
                 continue
 
-            activation = brush.get('trigger_activation', 'touch').lower()
+            activation = _trigger_activation(brush)
             if activation == 'use':
                 center = brush.get('pos', (0.0, 0.0, 0.0))
                 radius = float(brush.get('use_radius', 96.0))
@@ -2750,7 +2824,7 @@ class LogicThread(threading.Thread):
                             # touch-state-driven; their broad-phase contact is
                             # handled below, but it must not fire OnStartTouch
                             # merely because the player entered its AABB.
-                            if brush.get('trigger_activation', 'touch').lower() != 'use':
+                            if _trigger_activation(brush) != 'use':
                                 self._on_trigger_enter(
                                     brush,
                                     bid,
@@ -2771,7 +2845,7 @@ class LogicThread(threading.Thread):
                             activator = self._monster_by_id.get(entity_id)
 
                         if activator is not None:
-                            if brush.get('trigger_activation', 'touch').lower() != 'use':
+                            if _trigger_activation(brush) != 'use':
                                 self._on_trigger_exit(
                                     brush,
                                     bid,
@@ -2840,8 +2914,7 @@ class LogicThread(threading.Thread):
                 if float(np.dot(p_forward, to_trigger)) <= 0.5:
                     continue
 
-            trigger_type = brush.get('trigger_type', 'multiple').lower()
-            if trigger_type == 'once' and bid in self.fired_once_triggers:
+            if _trigger_is_once(brush) and bid in self.fired_once_triggers:
                 continue
 
             self._on_trigger_enter(
@@ -2862,7 +2935,7 @@ class LogicThread(threading.Thread):
             if (
                 brush
                 and brush.get('trigger_action') == 'hurt'
-                and brush.get('trigger_activation', 'touch').lower() != 'use'
+                and _trigger_activation(brush) != 'use'
             ):
                 self._process_hurt_trigger(
                     brush,
@@ -2967,8 +3040,10 @@ class LogicThread(threading.Thread):
         activator_type='player',
         activator_entity=None,
     ):
-        trigger_type = brush.get('trigger_type', 'multiple')
-        if trigger_type == 'once' and trigger_id in self.fired_once_triggers:
+        # Authored as 'Once'/'Multiple' by the editor and the shipped maps; the
+        # raw compare against 'once' made every Once trigger fire on each entry.
+        once = _trigger_is_once(brush)
+        if once and trigger_id in self.fired_once_triggers:
             return
 
         action = brush.get('trigger_action', 'target')
@@ -3003,7 +3078,7 @@ class LogicThread(threading.Thread):
         elif action == 'hurt':
             # Only the player has damage/health semantics at present.
             if activator_type == 'player':
-                damage = brush.get('damage', 10)
+                damage = _trigger_damage(brush)
                 self._apply_player_damage(damage)
                 self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
 
@@ -3016,6 +3091,12 @@ class LogicThread(threading.Thread):
                     brush, 'OnTrigger', activator_entity=activator_entity
                 )
 
+        # Optional checkpoint: the save/load runs on the UI thread, where the
+        # console's quicksave/quickload own the save slot, one frame later.
+        save = _trigger_save(brush)
+        if save:
+            self.game_state.queue_console_command(save)
+
         self._plugin_emit(
             "trigger_enter",
             trigger=brush,
@@ -3023,7 +3104,7 @@ class LogicThread(threading.Thread):
             trigger_id=trigger_id,
             activator_type=activator_type,
         )
-        if trigger_type == 'once':
+        if once:
             self.fired_once_triggers.add(trigger_id)
 
     def _on_trigger_exit(
@@ -3048,7 +3129,7 @@ class LogicThread(threading.Thread):
         if trigger_id in self.hurt_trigger_timers:
             self.hurt_trigger_timers[trigger_id] -= float(poll_interval)
             if self.hurt_trigger_timers[trigger_id] <= 0:
-                damage = brush.get('damage', 10)
+                damage = _trigger_damage(brush)
                 self._apply_player_damage(damage)
                 self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
 
@@ -3755,11 +3836,10 @@ class LogicThread(threading.Thread):
         """
         if not hasattr(self, '_monster_projectiles'):
             return
-        write_state = self.game_state.get_write_state()
         projectiles = self._monster_projectiles
         if not projectiles:
             self._monster_projectiles = []
-            write_state.projectiles = np.empty((0, 3), dtype=np.float32)
+            self._projectile_positions = _NO_PROJECTILES
             return
 
         count = len(projectiles)
@@ -3870,9 +3950,10 @@ class LogicThread(threading.Thread):
                 survivors.append(i)
 
         self._monster_projectiles = [projectiles[i] for i in survivors]
-        # Published as one dense array: the renderer draws them in one call.
-        write_state.projectiles = (pos32[survivors] if survivors
-                                   else np.empty((0, 3), dtype=np.float32))
+        # Published as one dense array by _prepare_render_state, every frame:
+        # a frame that runs no tick must still carry the projectiles.
+        self._projectile_positions = (pos32[survivors] if survivors
+                                      else _NO_PROJECTILES)
 
 
     # =========================================================================
@@ -4196,6 +4277,9 @@ class LogicThread(threading.Thread):
             write_state.shot_ready = False
         write_state.camera_transition_active = bool(self.camera_transition)
 
+        write_state.projectiles = (
+            getattr(self, '_projectile_positions', _NO_PROJECTILES)
+            if getattr(self, '_monster_projectiles', None) else _NO_PROJECTILES)
         write_state.monster_debug_active = self.monster_ai.monster_debug_active
         write_state.monster_debug_rays = list(self.monster_ai._debug_rays)
 
@@ -4247,6 +4331,17 @@ class LogicThread(threading.Thread):
         # only ones re-read every frame. Everything else changes through a
         # journal (see RenderTable.begin_frame).
         edited = () if self.play_mode else self.editor_state.edited_objects()
+        # An edited row is re-read only by the buffer being written, so when an
+        # object leaves the edited set (a deselect after a drag, entering
+        # play) the other buffer still holds whatever it last saw and the two
+        # published frames would alternate between old and new transforms.
+        # Journal the leavers: every table drains its own copy of the journal.
+        edited_ids = {id(obj): obj for obj in edited}
+        left = [obj for oid, obj in getattr(self, '_last_edited', {}).items()
+                if oid not in edited_ids]
+        if left:
+            JOURNAL.record_many(left, STATE)
+        self._last_edited = edited_ids
         peer = self.game_state.peer_state()
         table.begin_frame(
             brushes, world_epoch, dirty_objects=render_dirty, edited=edited,

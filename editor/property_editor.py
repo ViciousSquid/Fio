@@ -1030,9 +1030,13 @@ class PropertyEditor(QWidget):
         self._widgets['trigger_type_combo'] = type_combo
 
         # Activation mode: touch fires on entry; use requires E press.
+        # `trigger_activation` is the key the engine and the maps use; older
+        # builds of this tab wrote `trigger_collect_activation`, which nothing
+        # read, so it is only a fallback for showing what was chosen.
         collect_activation_combo = _make_combo(
             ['touch', 'use'],
-            brush.get('trigger_collect_activation', 'touch'),
+            brush.get('trigger_activation',
+                      brush.get('trigger_collect_activation', 'touch')),
             tooltip=(
                 "touch — fires when player walks inside\n"
                 "use — fires when player presses E while inside"
@@ -1078,7 +1082,9 @@ class PropertyEditor(QWidget):
             )
         )
 
-        is_use_mode = brush.get('trigger_collect_activation', 'touch') == 'use'
+        is_use_mode = brush.get(
+            'trigger_activation',
+            brush.get('trigger_collect_activation', 'touch')) == 'use'
         use_label_lbl.setVisible(is_use_mode)
         use_label_input.setVisible(is_use_mode)
 
@@ -1087,7 +1093,7 @@ class PropertyEditor(QWidget):
         self._widgets['trigger_use_label_input'] = use_label_input
 
         def _on_collect_activation_changed(val):
-            self.update_object_prop('trigger_collect_activation', val)
+            self.update_object_prop('trigger_activation', val)
             show = (val == 'use')
             use_label_lbl.setVisible(show)
             use_label_input.setVisible(show)
@@ -1133,6 +1139,21 @@ class PropertyEditor(QWidget):
         )
         form.addRow("Action:", action_combo)
         self._widgets['trigger_action_combo'] = action_combo
+
+        # Optional checkpoint, independent of the action: the trigger also
+        # quicksaves (or quickloads) the play session when it fires.
+        save_combo = _make_combo(
+            ['none', 'quicksave', 'quickload'],
+            brush.get('trigger_save', 'none'),
+            lambda t: self.update_object_prop('trigger_save', t),
+            tooltip=(
+                "none — no save action\n"
+                "quicksave — save the session to the quicksave slot when fired\n"
+                "quickload — load the quicksave slot when fired"
+            )
+        )
+        form.addRow("Save:", save_combo)
+        self._widgets['trigger_save_combo'] = save_combo
 
         # Target node (teleport only)
         node_lbl = QLabel("Target Node:")

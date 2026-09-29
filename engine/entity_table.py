@@ -868,6 +868,10 @@ class EntityTable:
             self._read_positions(things, moved)
         if state:
             self.refresh_rows(things, state)
+            # I/O can retarget or rename a portal; links are resolved by name.
+            if (len(self.portal_slots)
+                    and (self.class_bits[state] & ENT_PORTAL).any()):
+                self._resolve_portal_links(things)
 
     def _read_positions(self, things, slots):
         self.rows_read += len(slots)
@@ -1211,6 +1215,12 @@ class EntityTable:
             self.light_enabled[slot] = _light_bool(thing, 'state', True)
             self.light_casts_shadows[slot] = _light_bool(
                 thing, 'casts_shadows', False)
+        elif not (self.class_bits[slot] & ENT_EFFECT):
+            # A reused slot must not keep its previous occupant's light.
+            self.light_color[slot] = 0.0
+            self.light_params[slot] = 0.0
+            self.light_enabled[slot] = False
+            self.light_casts_shadows[slot] = False
 
         if self.class_bits[slot] & ENT_PORTAL:
             self.portal_active[slot] = _bool_property(
@@ -1237,6 +1247,14 @@ class EntityTable:
                 basis_from_rotation(props.get(
                     'rotation', [props.get('angle', 0.0), 0.0, 0.0])),
                 dtype=np.float64)
+        else:
+            self.portal_active[slot] = False
+            self.portal_fade[slot] = 0.0
+            self.portal_direction[slot] = 0
+            self.portal_width_height[slot] = 0.0
+            self.portal_color[slot] = 1.0
+            self.portal_show_rim[slot] = False
+            self.portal_basis[slot] = 0.0
 
     def refresh_rows(self, things, slots):
         """Re-resolve every column of *slots* from their entities."""
