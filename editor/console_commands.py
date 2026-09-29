@@ -361,12 +361,7 @@ class ConsoleCommandHandler:
 
         # If in play mode, clear this monster's stale AI state so it doesn't
         # inherit a near-zero shoot timer from before it died.
-        try:
-            if hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.logic_thread:
-                lt = self.main_window.view_3d.logic_thread
-                lt.monster_states.pop(id(entity), None)
-        except Exception as e:
-            debug_log("Warning", f"Could not reset monster AI state: {e}")
+        self._reset_monster_ai_states([entity])
 
         debug_log("Info", f"Monster '{name}' revived")
         self.main_window.update_all_ui()
@@ -387,17 +382,33 @@ class ConsoleCommandHandler:
         for monster in monsters:
             self._revive_monster(monster)
 
-        # If we're in play mode, clear the entire monster AI state dict so no
-        # monster inherits a stale shoot timer or animation state from before death.
-        try:
-            if hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.logic_thread:
-                lt = self.main_window.view_3d.logic_thread
-                lt.monster_states = {}
-        except Exception as e:
-            debug_log("Warning", f"Could not reset monster AI states: {e}")
+        # If we're in play mode, clear the monster AI state so no monster
+        # inherits a stale shoot timer or animation state from before death.
+        self._reset_monster_ai_states(None)
 
         debug_log("Info", f"Revived {len(monsters)} monster(s)")
         self.main_window.update_all_ui()
+
+    def _reset_monster_ai_states(self, monsters):
+        """Drop the AI's per-monster state for *monsters* (``None``: all).
+
+        The state lives on the MonsterAI, not the LogicThread, and the AI
+        thread iterates it, so it is changed under the monster lock.
+        """
+        lt = self._logic_thread()
+        ai = getattr(lt, 'monster_ai', None)
+        states = getattr(ai, 'monster_states', None)
+        if states is None:
+            return
+        lock = getattr(lt, '_monster_lock', None)
+        if lock is None:
+            lock = contextlib.nullcontext()
+        with lock:
+            if monsters is None:
+                states.clear()
+            else:
+                for monster in monsters:
+                    states.pop(id(monster), None)
 
     def _revive_monster(self, entity):
         """
@@ -415,7 +426,9 @@ class ConsoleCommandHandler:
         restored_health = current_health if current_health > 0 else 100
         entity.properties['health']      = restored_health
         entity.properties['dead']        = False
-        entity.properties['hidden']      = False
+        # Through the parking-aware writer, as `show` does: a direct write to
+        # a Big World-parked monster would be undone when its cell returns.
+        set_authored_flag(entity, 'hidden', False)
         # Reset awake so triggered/sight-gated monsters go dormant again —
         # wake logic will re-apply correctly on next play mode start.
         entity.properties['awake']       = False
@@ -1764,6 +1777,15 @@ entity to drive them from the I/O system.</i><br>
         else:
             if entity in self.editor_state.things:
                 self.editor_state.things.remove(entity)
+        if self._in_play_mode():
+            # The session's entity index would keep simulating (a monster,
+            # a timer) and resolving the deleted object, and its collision
+            # set would keep a deleted wall solid.
+            self._rebuild_logic_entity_caches()
+            if isinstance(entity, dict):
+                mark = getattr(self._logic_thread(), 'mark_collision_dirty', None)
+                if mark is not None:
+                    mark()
 
         debug_log("Info", f"Deleted entity: {name}")
         self.main_window.update_all_ui()
@@ -2261,7 +2283,8 @@ entity to drive them from the I/O system.</i><br>
             if lt is None:
                 debug_log("Error", "load: no active play session.")
                 return
-            ok, msg = lt.load_session(path, map_name=self._current_map_name())
+            ok, msg = lt.load_session(path, map_name=self._current_map_name(),
+                                       base_level=self._base_level())
             debug_log("Info" if ok else "Error", msg)
             if ok:
                 self.main_window.show_toast(f"Loaded: {os.path.basename(path)}")
@@ -2312,7 +2335,8 @@ entity to drive them from the I/O system.</i><br>
         if lt is None:
             debug_log("Error", "load: no active play session after entering play.")
             return
-        ok, msg = lt.load_session(path, map_name=self._current_map_name())
+        ok, msg = lt.load_session(path, map_name=self._current_map_name(),
+                                  base_level=self._base_level())
         if not ok and 'different base map' in (msg or ''):
             # Genuinely ambiguous: a delta whose base map we couldn't reconcile.
             # This is the one case where automatic recovery isn't safe — ask.
@@ -2320,7 +2344,10 @@ entity to drive them from the I/O system.</i><br>
                 from engine import savegame
                 try:
                     data = savegame.read(path)
-                    savegame.restore_delta(lt, data)
+                    # Under the tick lock, as load_session applies a save: a
+                    # tick must not run against a half-restored world.
+                    with self._io_dispatch_lock():
+                        savegame.restore_delta(lt, data)
                     ok, msg = True, (f"Loaded play session from "
                                      f"'{os.path.basename(path)}' — forced delta "
                                      f"onto the current map (missing entities skipped)")

@@ -265,6 +265,20 @@ _COLUMNS = (
 )
 
 
+def _can_adopt(peer, rows, epoch, dirty_objects, peer_dirty):
+    """Whether a table that must re-resolve every row can copy *peer* instead.
+
+    The peer must hold exactly *rows*, and be either at *epoch* or behind it by
+    a precisely journalled set of objects (*peer_dirty*, from the editor's
+    render-dirty history since the peer's epoch).
+    """
+    if peer is None or dirty_objects is not None or epoch is None:
+        return False
+    if peer._epoch is None or peer._row_tuple != rows:
+        return False
+    return peer._epoch == epoch or peer_dirty is not None
+
+
 class RenderTable:
     """A dense projection of a brush list, kept current by change, not polling.
 
@@ -586,7 +600,7 @@ class RenderTable:
         return tuple(brushes) != self._row_tuple
 
     def begin_frame(self, brushes, epoch=None, dirty_objects=None,
-                    edited=(), peer=None):
+                    edited=(), peer=None, peer_dirty=None):
         """Bring the table into line with *brushes*; return the ``hidden`` mask.
 
         Nothing here visits a brush that has not changed:
@@ -611,6 +625,11 @@ class RenderTable:
         re-resolve every row and the peer already holds exactly this row set
         at this epoch -- the frame after a load, an undo, any global
         invalidation -- its columns are copied instead of re-derived.
+        *peer_dirty* is what the editor journal says changed since the peer's
+        own epoch, when it can say so precisely: the peer is then adopted even
+        though it is an edit or two behind, and just those rows re-resolved.
+        Without it, one checkpoint landing between the two buffers' frames
+        made the second buffer rebuild every row as well.
         """
         brushes = tuple(brushes)
         n = len(brushes)
@@ -621,9 +640,11 @@ class RenderTable:
             cold_dirty = epoch is None or epoch != self._epoch
             if self._refresh_in_place(brushes, n, epoch, dirty_objects):
                 pass
-            elif (peer is not None and dirty_objects is None and epoch is not None
-                    and peer._epoch == epoch and peer._row_tuple == brushes):
+            elif _can_adopt(peer, brushes, epoch, dirty_objects, peer_dirty):
                 self.adopt(peer)
+                if (peer_dirty and not self._refresh_in_place(
+                        brushes, n, epoch, peer_dirty)):
+                    self._reconcile(brushes, True, peer_dirty)
             else:
                 resolved_all = self._reconcile(brushes, cold_dirty, dirty_objects)
             self._epoch = epoch

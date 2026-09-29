@@ -550,12 +550,22 @@ class LogicThread(threading.Thread):
         # every entity in the level on every AI tick.
         self._monster_things = [t for t in self.things if MonsterThing and isinstance(t, MonsterThing)]
         self._monster_by_id = {id(t): t for t in self._monster_things}
+        # AI state of monsters that have left the world: keyed by id(), so a
+        # monster spawned into a freed address would inherit it.
+        live = self._monster_by_id
+        with self._monster_lock:
+            states = self.monster_ai.monster_states
+            for key in [key for key in states if key not in live]:
+                del states[key]
 
         # PERF: the timer list, for the same reason — _update_logic_timers is
         # the one per-frame path the logic system has, and it should walk the
         # timers, not the level.
         self._timer_things = [t for t in self.things if LogicTimer and isinstance(t, LogicTimer)]
 
+        # The row sets this index describes; see _watch_world_rows.
+        self._indexed_things = tuple(self.things)
+        self._indexed_brushes = tuple(self.brushes)
         self._rebuild_portal_links()
 
     def _rebuild_portal_links(self):
@@ -599,12 +609,35 @@ class LogicThread(threading.Thread):
     def _find_entity_by_name(self, name: str):
         if not name:
             return None
+        if not self.play_mode:
+            return self._scan_entity('name', name)
         return self._name_cache.get(name)
 
     def _find_entity_by_id(self, entity_id: str):
         if not entity_id:
             return None
+        if not self.play_mode:
+            return self._scan_entity('id', entity_id)
         return self._id_cache.get(entity_id)
+
+    def _scan_entity(self, key, value):
+        """Look an entity up in the live world, outside a play session.
+
+        The caches are built when Play starts. The console's ``ent_fire``,
+        ``send`` and ``trigger`` dispatch through the same I/O manager in the
+        editor, where the caches are empty (never played) or hold the objects
+        of the last session -- replaced by a restore or a map load -- so an
+        input either failed with "not found" or landed on an object no longer
+        in the world. Same precedence as the cache build: last one wins,
+        entities over brushes.
+        """
+        for thing in reversed(self.things):
+            if thing.properties.get(key) == value:
+                return thing
+        for brush in reversed(self.brushes):
+            if brush.get(key) == value:
+                return brush
+        return None
 
     def _find_path_node_by_name(self, name: str):
         """Return PathNode thing with given name, or None."""
@@ -1324,9 +1357,6 @@ class LogicThread(threading.Thread):
             self._reset_parented_lights()
             self._reset_parented_portals()
             self._clear_angled_brush_collision()
-            self._model_collision_brushes = []
-            self._physics_body_brushes = []
-            self._refresh_collision_brushes_cache()
             self.current_hud_message = ""
             self.current_hud_key_name = None
             self.gate_inputs = {}
@@ -1390,6 +1420,7 @@ class LogicThread(threading.Thread):
 
             # Reset monster AI state
             self._reset_all_monsters(clear_dead=False)
+            self._release_session_caches()
 
         # Plugin play lifecycle: initialise per-session state on entering play,
         # tear it down on leaving. Runs after the core reset above so plugins
@@ -1452,7 +1483,8 @@ class LogicThread(threading.Thread):
         except Exception as exc:
             return False, f"Save failed: {exc}"
 
-    def load_session(self, path: str, *, map_name: str = ""):
+    def load_session(self, path: str, *, map_name: str = "",
+                     base_level: dict = None):
         """Restore a saved play session from *path* as an overlay on the live
         session. Returns ``(ok, message)``.
 
@@ -1464,7 +1496,9 @@ class LogicThread(threading.Thread):
 
         The save mode (full / delta / both / legacy) is auto-detected from the
         file's metadata; *map_name* is the currently-loaded map, used to validate
-        a delta's base map. Loading never prompts unless recovery is impossible.
+        a delta's base map, and *base_level* that map as loaded (see
+        :func:`engine.savegame.restore_delta`). Loading never prompts unless
+        recovery is impossible.
         """
         if not self.play_mode:
             return False, "Enter play mode before loading a session."
@@ -1472,7 +1506,8 @@ class LogicThread(threading.Thread):
             from engine import savegame
             data = savegame.read(path)
             with self._tick_lock:
-                report = savegame.restore_auto(self, data, current_map_name=map_name)
+                report = savegame.restore_auto(self, data, current_map_name=map_name,
+                                               base_level=base_level)
             msg = f"Loaded play session from '{os.path.basename(path)}'"
             warning = report.get("warning")
             if warning:
@@ -1482,6 +1517,45 @@ class LogicThread(threading.Thread):
             return False, f"Save file not found: {path}"
         except Exception as exc:
             return False, f"Load failed: {exc}"
+
+    def _release_session_caches(self):
+        """Drop every reference the finished session's caches hold.
+
+        Everything here is rebuilt when Play starts (_build_entity_caches,
+        _init_movers/_init_doors, the collision set). Kept past Stop, these
+        lists pinned the session's objects -- after a restore-on-stop or a map
+        load, objects no longer in the world -- and anything resolving through
+        them reached those instead of the live ones. Outside play the entity
+        finders read the live world (see :meth:`_scan_entity`).
+        """
+        self._name_cache = {}
+        self._id_cache = {}
+        self._indexed_things = ()
+        self._indexed_brushes = ()
+        self._monster_by_id = {}
+        self._monster_things = []
+        self._timer_things = []
+        self._levelchanger_things = []
+        self._trigger_brushes = []
+        self._trigger_brush_by_bid = {}
+        self._use_trigger_entries = []
+        self._portal_things = []
+        self._portal_target_things = []
+        self._portal_slots = np.empty(0, dtype=np.int32)
+        self._portal_target_slots = np.empty(0, dtype=np.int32)
+        self._collision_brushes_cache = []
+        self._model_collision_brushes = []
+        self._physics_body_brushes = []
+        self._mover_brush_list = []
+        self._door_brush_list = []
+        self._monster_spawn_health = {}
+        if self.io_manager is not None:
+            # Delayed events hold their connection; outputs queued from other
+            # threads hold their source entity.
+            self.io_manager.reset()
+        for player in (self.player, getattr(self, 'player2', None)):
+            if player is not None:
+                player.ground_object = None
 
     def _start_monster_ai(self):
         """Start the monster AI processing thread."""
@@ -1514,7 +1588,8 @@ class LogicThread(threading.Thread):
         map authored is gone.  One dict filled during a pass that already walks
         every monster — no extra scan, and nothing new on the entity itself.
         """
-        self.monster_ai.monster_states = {}
+        with self._monster_lock:
+            self.monster_ai.forget_monsters()
         if not MonsterThing:
             return
         if clear_dead:
@@ -2065,9 +2140,41 @@ class LogicThread(threading.Thread):
                 speed *= self.EDITOR_CAMERA_FAST_MULT
             self.editor_camera.pos += move_dir * speed * delta
 
+    #: Ticks to keep comparing the world's row sets after an editor edit.
+    _ROW_WATCH_TICKS = 30
+    _indexed_things = ()
+    _indexed_brushes = ()
+    _rows_epoch = None
+    _rows_watch = 0
+
+    def _watch_world_rows(self):
+        """Re-index the session when the editor adds or removes objects.
+
+        The session indexes the world when Play starts (_build_entity_caches)
+        and the collision set with it. An object cloned, pasted, placed or
+        deleted in the editor during play otherwise had no AI, no I/O name,
+        or -- deleted -- kept being simulated and collided with. Every editor
+        edit moves ``world_epoch``, so the row sets are compared only for a
+        short while after one (tools checkpoint before they mutate): an
+        integer compare per tick otherwise.
+        """
+        epoch = getattr(self.editor_state, 'world_epoch', None)
+        if epoch != self._rows_epoch:
+            self._rows_epoch = epoch
+            self._rows_watch = self._ROW_WATCH_TICKS
+        if not self._rows_watch:
+            return
+        self._rows_watch -= 1
+        brushes_changed = tuple(self.brushes) != self._indexed_brushes
+        if brushes_changed or tuple(self.things) != self._indexed_things:
+            self._build_entity_caches()
+            if brushes_changed:
+                self.mark_collision_dirty()
+
     def _tick_play_mode(self, delta):
         if not self.player:
             return
+        self._watch_world_rows()
         
         # Update movers & doors first (for platform carrying)
         self._update_movers(delta)
@@ -4164,6 +4271,20 @@ class LogicThread(threading.Thread):
 
         return _sample(now)
 
+    def _peer_render_dirty(self, own_dirty, peer_table, snapshot_epoch):
+        """What changed since *peer_table*'s epoch, when a table must rebuild.
+
+        Only asked when this buffer's own journal replay is a global rebuild
+        (``own_dirty is None``); ``None`` when the peer is no help either.
+        """
+        if own_dirty is not None or peer_table is None:
+            return None
+        peer_epoch = getattr(peer_table, '_epoch', None)
+        if peer_epoch is None:
+            return None
+        return self.editor_state.render_dirty_since(
+            peer_epoch, through_epoch=snapshot_epoch)[1]
+
     def _prepare_render_state(self):
         started = time.perf_counter()
         write_state = self.game_state.get_write_state()
@@ -4368,9 +4489,12 @@ class LogicThread(threading.Thread):
             JOURNAL.record_many(left, STATE)
         self._last_edited = edited_ids
         peer = self.game_state.peer_state()
+        peer_table = peer.render_table if peer is not write_state else None
         table.begin_frame(
             brushes, world_epoch, dirty_objects=render_dirty, edited=edited,
-            peer=peer.render_table if peer is not write_state else None)
+            peer=peer_table,
+            peer_dirty=self._peer_render_dirty(
+                render_dirty, peer_table, snapshot_epoch))
         if self.play_mode:
             # Every mover and door position, as two array stores.
             self._movers().publish(self, table)
@@ -4418,12 +4542,15 @@ class LogicThread(threading.Thread):
         # only EntityTable touched until request_swap publishes this frame.
         etable = write_state.entity_table
         self._entity_table = etable
+        peer_etable = peer.entity_table if peer is not write_state else None
         thing_hidden = etable.begin_frame(
             things,
             world_epoch,
             dirty_objects=render_dirty,
             effect_runtime=self.play_mode,
-            peer=peer.entity_table if peer is not write_state else None,
+            peer=peer_etable,
+            peer_dirty=self._peer_render_dirty(
+                render_dirty, peer_etable, snapshot_epoch),
         )
         erefs = etable.refs
         entity_things = etable.things
