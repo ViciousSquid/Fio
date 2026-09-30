@@ -44,7 +44,7 @@ from .manager import (BigWorldManager, DEFAULT_ACTIVATION_RADIUS,
                       DEFAULT_DEACTIVATION_RADIUS)
 from .persistence import (build_cell_delta_registry, flatten_cell_delta_registry,
                           normalize_streaming_state)
-from .config import effective_streaming_radii
+from .config import bound_view_horizon, effective_streaming_radii
 
 # Marker keys the session writes onto objects it parks, so it can restore the
 # exact prior value and never clobber a user's own hidden/disabled state.
@@ -153,6 +153,9 @@ class BigWorldSession:
         self._started = False
         #: Last camera horizon applied to residency.
         self._visual_horizon = None
+        #: Undoes the camera-horizon limit start() places (see
+        #: :func:`~plugins.bigworld.config.bound_view_horizon`).
+        self._release_view_horizon = None
         # Prior terrain config captured on start(), restored verbatim on stop()
         # so the editor/authored terrain is returned exactly as it was.
         self._terrain = None
@@ -227,6 +230,12 @@ class BigWorldSession:
         not in the per-frame path. After this, everything is inactive except the
         cells inside the activation radius of ``player_pos``.
         """
+        # Fade the camera out at the activation radius before reading its
+        # horizon, so residency is the authored radius rather than whatever
+        # the view distance happens to reach.
+        if self._release_view_horizon is None:
+            self._release_view_horizon = bound_view_horizon(
+                self.logic, self._authored_activation_radius)
         self._sync_visual_horizon()
         brushes = list(getattr(self.logic, "brushes", None) or [])
         things = list(getattr(self.logic, "things", None) or [])
@@ -323,6 +332,9 @@ class BigWorldSession:
         self._clear_transient_markers()   # includes every tier stamp
         self.tiers.clear(())
         self._restore_terrain()
+        if self._release_view_horizon is not None:
+            self._release_view_horizon()
+            self._release_view_horizon = None
         self._started = False
 
     def _clear_transient_markers(self) -> None:

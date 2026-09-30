@@ -1028,7 +1028,12 @@ class Renderer_F(BaseRenderer):
 
         terrain = config.get('terrain', None)
         if terrain and terrain.enabled:
-            self.render_terrain(projection, view, camera_pos, terrain, lights)
+            # The same planes the entity passes cull against. Their far plane
+            # is the view distance, so terrain beyond it is never submitted --
+            # without them every resident chunk was drawn, and pulling the
+            # view distance in did nothing for the terrain's cost.
+            self.render_terrain(projection, view, camera_pos, terrain, lights,
+                                frustum_planes=entity_planes)
         if (config.get('play_mode', False)
                 and self._portal_gl_ready):
             # Portal discovery is a numeric EntityTable selection. No Thing

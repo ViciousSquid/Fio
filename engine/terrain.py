@@ -395,7 +395,8 @@ class TerrainChunk:
 class Terrain:
     # Terrain inside this radius is a protected high-detail zone. A chunk is
     # never allowed to change LOD while any part of it lies within 4096 world
-    # units of the camera.
+    # units of the camera -- or within the stream radius, if streaming keeps
+    # less than that resident (see _near_detail_radius).
     NEAR_DETAIL_RADIUS = 4096.0
     NEAR_DETAIL_RADIUS_SQ = NEAR_DETAIL_RADIUS ** 2
     LOD_DISTANCES_SQ = [4608**2, 6144**2, 8192**2, 12288**2]
@@ -1175,11 +1176,32 @@ class Terrain:
         dz = nz - float(camera_pos.z)
         return dx * dx + dz * dz
     
+    def _near_detail_radius(self) -> float:
+        """Radius of the protected full-detail zone for this frame.
+
+        :data:`NEAR_DETAIL_RADIUS` normally, but never wider than the stream
+        radius while streaming: a chunk outside the stream radius is evicted,
+        so protecting it only forced chunks to be resident that the streamer
+        was told not to keep.
+        """
+        if self.streaming and self.stream_radius > 0.0:
+            return min(self.NEAR_DETAIL_RADIUS, float(self.stream_radius))
+        return self.NEAR_DETAIL_RADIUS
+
     def _is_chunk_visible(self, chunk: TerrainChunk, frustum_planes) -> bool:
         if frustum_planes is None: return True
         half_size = chunk.size / 2
-        cx, cy, cz = chunk.center
-        half_y = (chunk.max_y - chunk.min_y) / 2 + 10
+        if chunk.is_uploaded:
+            cx, cy, cz = chunk.center
+            half_y = (chunk.max_y - chunk.min_y) / 2 + 10
+        else:
+            # No mesh yet, so no measured centre or height span: the defaults
+            # sit at the world origin. Test the chunk's true XZ footprint with
+            # an unbounded height, which can only err towards visible.
+            cx = chunk.world_x + half_size
+            cz = chunk.world_z + half_size
+            cy = 0.0
+            half_y = 1.0e6
         for plane in frustum_planes:
             a, b, c, d = plane
             px = cx + half_size if a >= 0 else cx - half_size
@@ -1258,13 +1280,12 @@ class Terrain:
             self._pending_prune = False
 
         if self.streaming:
-            # Keep at least one complete chunk ring beyond the protected zone
-            # resident. This prevents a chunk from being created/evicted as its
-            # edge crosses the 4096-unit gameplay radius.
-            self.stream_radius = max(
-                self.stream_radius,
-                self.NEAR_DETAIL_RADIUS + self.chunk_size,
-            )
+            # The stream radius is the caller's to set (Big World derives it
+            # from its activation radius) and is not inflated here. It used to
+            # be raised to the 4096-unit protected zone plus a chunk every
+            # frame, which on a Big World map meant ~1000 resident full-detail
+            # chunks whatever the map asked for. The protected zone shrinks to
+            # the stream radius instead -- see _near_detail_radius().
             self._stream_chunks(camera_pos)
         else:
             for cz in range(self.min_chunk_z, self.max_chunk_z + 1):
@@ -1336,21 +1357,24 @@ class Terrain:
         gl.glActiveTexture(gl.GL_TEXTURE0)
         
         lod_level_loc = self.uniforms.get('lod_level', -1)
+        near_detail_radius = self._near_detail_radius()
 
         if self.wireframe: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
         chunks_to_update = []
         for key, chunk in self.chunks.items():
-            if not self._is_chunk_visible(chunk, frustum_planes):
-                self.culled_chunks += 1
-                continue
+            # Frustum (far plane included, so the view distance applies) only
+            # decides what is *drawn*. Mesh upkeep below still runs for every
+            # resident chunk, so turning round never exposes a chunk that was
+            # skipped while it was behind the camera.
+            visible = self._is_chunk_visible(chunk, frustum_planes)
             # Use nearest chunk-point distance so an edge cannot drop LOD
             # while it is still inside the protected radius.
             dist_sq = self._chunk_nearest_dist_sq(chunk, camera_pos)
             # Pre-promote an entire one-chunk ring around the protected zone.
             # That means a chunk is already at full resolution before its edge
-            # can enter the 4096-unit radius; there is no visible LOD upgrade
+            # can enter the protected radius; there is no visible LOD upgrade
             # as the player crosses the boundary.
-            prewarm_radius = self.NEAR_DETAIL_RADIUS + chunk.size
+            prewarm_radius = near_detail_radius + chunk.size
             protected = dist_sq <= prewarm_radius * prewarm_radius
             target_resolution = (
                 self.LOD_RESOLUTIONS[0]
@@ -1375,7 +1399,10 @@ class Terrain:
                         needs_update = True
                         chunk.lod_stable_frames = 0
             if needs_update:
-                chunks_to_update.append((key, target_resolution, dist_sq))
+                chunks_to_update.append((key, target_resolution, dist_sq, visible))
+            if not visible:
+                self.culled_chunks += 1
+                continue
             if chunk.vao and chunk.vertex_count > 0:
                 # Upload the chunk's current LOD level so the fragment shader
                 # can choose the appropriate shading path.
@@ -1387,8 +1414,10 @@ class Terrain:
                 self.total_triangles += chunk.vertex_count // 3
         gl.glBindVertexArray(0)
         if self.wireframe: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        chunks_to_update.sort(key=lambda x: (not self.chunks[x[0]].is_dirty, x[2]))
-        for i, (key, resolution, _) in enumerate(chunks_to_update[:self.MAX_UPDATES_PER_FRAME]):
+        # Dirty meshes first, then what the camera can see, nearest first.
+        chunks_to_update.sort(
+            key=lambda x: (not self.chunks[x[0]].is_dirty, not x[3], x[2]))
+        for i, (key, resolution, _, _) in enumerate(chunks_to_update[:self.MAX_UPDATES_PER_FRAME]):
             chunk = self.chunks[key]
             self._upload_chunk(chunk, resolution)
 
