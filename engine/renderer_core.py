@@ -321,6 +321,14 @@ class BaseRenderer:
         self._glass_scene_texture = 0
         self._glass_scene_size = (0, 0)
         self._glass_scene_texture_unit = 2
+        # Water also samples the scene's depth (copied the same way) for
+        # depth absorption, soft shores, caustics and screen-space
+        # reflections. ``water_ssr`` turns the reflection trace off on
+        # hardware that cannot afford it.
+        self._water_depth_texture = 0
+        self._water_depth_size = (0, 0)
+        self._water_depth_texture_unit = 3
+        self.water_ssr = True
 
 
         self.load_texture_callback = texture_loader
@@ -1682,7 +1690,8 @@ layout (location = 10) in float iInstanceAlpha;
             'screenSize', 'waterOpacity', 'waterReflectivity',
             'waterTint', 'distortionStrength', 'refractionIndex',
             'roughness', 'fresnelIntensity', 'normalMatrix',
-            'waveAmp', 'brushSize'
+            'waveAmp', 'brushSize',
+            'sceneDepth', 'hasSceneDepth', 'ssrEnabled', 'invProjection',
         ])
         uniforms.preload(self.ENV_UNIFORMS)
 
@@ -2878,6 +2887,20 @@ layout (location = 10) in float iInstanceAlpha;
                 max(int(viewport[3]), 1),
             )
         scene_width, scene_height = scene_size
+        has_depth = self._capture_scene_depth()
+        depth_unit = self._water_depth_texture_unit
+        gl.glActiveTexture(gl.GL_TEXTURE0 + depth_unit)
+        gl.glBindTexture(gl.GL_TEXTURE_2D,
+                         self._water_depth_texture if has_depth else 0)
+        gl.glUniform1i(uniforms['sceneDepth'], depth_unit)
+        gl.glUniform1i(uniforms['hasSceneDepth'], 1 if has_depth else 0)
+        gl.glUniform1i(uniforms['ssrEnabled'],
+                       1 if getattr(self, 'water_ssr', True) else 0)
+        # Keep the inverse alive: value_ptr() only borrows its storage.
+        inv_projection = glm.inverse(projection)
+        gl.glUniformMatrix4fv(
+            uniforms['invProjection'], 1, gl.GL_FALSE,
+            glm.value_ptr(inv_projection))
 
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self.water_normal_id)
@@ -3033,6 +3056,62 @@ layout (location = 10) in float iInstanceAlpha;
         gl.glCopyTexSubImage2D(
             gl.GL_TEXTURE_2D, 0, 0, 0, x, y, width, height)
         return width, height
+
+    def _read_framebuffer_has_depth(self):
+        """Whether the bound read framebuffer has a single-sampled depth buffer.
+
+        Asked up front rather than by provoking a GL error, so an unrelated
+        error already queued by an earlier pass is never swallowed here.
+        """
+        try:
+            if int(gl.glGetIntegerv(gl.GL_SAMPLE_BUFFERS)) != 0:
+                return False
+            fbo = int(gl.glGetIntegerv(gl.GL_READ_FRAMEBUFFER_BINDING))
+            attachment = gl.GL_DEPTH if fbo == 0 else gl.GL_DEPTH_ATTACHMENT
+            kind = gl.glGetFramebufferAttachmentParameteriv(
+                gl.GL_READ_FRAMEBUFFER, attachment,
+                gl.GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE)
+            if int(kind) == gl.GL_NONE:
+                return False
+            bits = gl.glGetFramebufferAttachmentParameteriv(
+                gl.GL_READ_FRAMEBUFFER, attachment,
+                gl.GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE)
+            return int(bits) > 0
+        except Exception:
+            return False
+
+    def _capture_scene_depth(self):
+        """Copy the current depth buffer into the water depth texture.
+
+        Plain GL 3.3 core: one ``glCopyTexSubImage2D`` into a depth texture,
+        like the colour copy in :meth:`_capture_glass_scene`. Returns False
+        (and the water keeps its depth-less look) when there is no
+        single-sampled depth buffer to copy from.
+        """
+        viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+        if viewport is None or len(viewport) < 4:
+            return False
+        x, y, width, height = (int(viewport[0]), int(viewport[1]),
+                               int(viewport[2]), int(viewport[3]))
+        if width <= 0 or height <= 0 or not self._read_framebuffer_has_depth():
+            return False
+
+        if not self._water_depth_texture:
+            self._water_depth_texture = int(gl.glGenTextures(1))
+        gl.glActiveTexture(gl.GL_TEXTURE0 + self._water_depth_texture_unit)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._water_depth_texture)
+        if self._water_depth_size != (width, height):
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_COMPARE_MODE, gl.GL_NONE)
+            gl.glTexImage2D(
+                gl.GL_TEXTURE_2D, 0, gl.GL_DEPTH_COMPONENT24, width, height, 0,
+                gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
+            self._water_depth_size = (width, height)
+        gl.glCopyTexSubImage2D(gl.GL_TEXTURE_2D, 0, 0, 0, x, y, width, height)
+        return True
 
     @timed_pass('glass')
     def draw_glass_brushes(self, projection, view, camera_pos, brushes, lights, config,
@@ -5487,6 +5566,13 @@ layout (location = 10) in float iInstanceAlpha;
             gl.glDeleteVertexArrays(1, [self.face_highlight_vao])
         if self.face_highlight_vbo:
             gl.glDeleteBuffers(1, [self.face_highlight_vbo])
+        for attr in ('_glass_scene_texture', '_water_depth_texture'):
+            tex = getattr(self, attr, 0)
+            if tex:
+                gl.glDeleteTextures([tex])
+                setattr(self, attr, 0)
+        self._glass_scene_size = (0, 0)
+        self._water_depth_size = (0, 0)
         for mesh in self._geo_mesh_cache.values():
             self._delete_geo_mesh(mesh)
         self._geo_mesh_cache.clear()

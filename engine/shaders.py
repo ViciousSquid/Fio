@@ -801,7 +801,17 @@ uniform float refractionIndex;
 uniform float roughness;
 uniform float fresnelIntensity;
 uniform vec2 screenSize;
-uniform vec3 waterTint;""" + FOG_GLSL + """
+uniform vec3 waterTint;
+
+// Scene depth, copied once per water pass alongside sceneColor. With it the
+// water knows how much of it lies in front of the bed: colour absorption by
+// depth, soft foamy shorelines, caustics and screen-space reflections. With
+// hasSceneDepth == 0 (no depth buffer to copy) the shader falls back to the
+// depth-less look.
+uniform sampler2D sceneDepth;
+uniform int hasSceneDepth;
+uniform int ssrEnabled;
+uniform mat4 invProjection;""" + FOG_GLSL + """
 
 const vec3 SUN_DIR   = vec3(0.4767, 0.6555, 0.5859);  // pre-normalized
 const vec3 SUN_COLOR = vec3(1.00, 0.95, 0.82);
@@ -818,6 +828,53 @@ highp float vnoise(highp vec2 p) {
     float c = hash21(i + vec2(0.0, 1.0));
     float d = hash21(i + vec2(1.0, 1.0));
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+highp vec3 viewPosFromDepth(highp vec2 uv, highp float depth) {
+    highp vec4 p = invProjection * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+    return p.xyz / p.w;
+}
+
+highp vec2 viewToUV(highp vec3 p) {
+    highp vec4 c = projection * vec4(p, 1.0);
+    return c.xy / c.w * 0.5 + 0.5;
+}
+
+// Screen-space reflection: march the reflected ray through the copied depth
+// buffer and return the scene colour it hits (rgb) and a confidence (a).
+// 20 linear steps with a growing stride, then a short binary refinement.
+vec4 traceReflection(highp vec3 originView, highp vec3 dirView) {
+    highp float stride = max(2.0, -originView.z * 0.02);
+    highp vec3 p = originView;
+    highp vec3 prev = p;
+    for (int i = 0; i < 20; i++) {
+        prev = p;
+        p += dirView * stride;
+        stride *= 1.22;
+        if (p.z > -0.5) break;
+        highp vec2 uv = viewToUV(p);
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
+        highp float d = texture(sceneDepth, uv).r;
+        if (d >= 0.99999) continue;
+        highp float sceneZ = viewPosFromDepth(uv, d).z;
+        highp float gap = sceneZ - p.z;
+        if (gap > 0.0 && gap < stride * 2.5) {
+            highp vec3 lo = prev;
+            highp vec3 hi = p;
+            for (int j = 0; j < 5; j++) {
+                highp vec3 mid = (lo + hi) * 0.5;
+                highp vec2 muv = viewToUV(mid);
+                highp float mz = viewPosFromDepth(muv, texture(sceneDepth, muv).r).z;
+                if (mz > mid.z) hi = mid; else lo = mid;
+            }
+            highp vec2 huv = viewToUV(hi);
+            vec2 edge = smoothstep(vec2(0.0), vec2(0.08), huv)
+                      * smoothstep(vec2(0.0), vec2(0.08), vec2(1.0) - huv);
+            float fade = edge.x * edge.y * (1.0 - float(i) / 20.0);
+            return vec4(texture(sceneColor, huv).rgb, fade);
+        }
+    }
+    return vec4(0.0);
 }
 
 // Procedural sky remains the zero-cost fallback when reflections are disabled.
@@ -931,6 +988,31 @@ void main()
         vec2(0.999)
     );
 
+    // How much water the view ray crosses before it reaches the bed, and
+    // where that bed is (for caustics). Refracted samples of anything in
+    // front of the water - a bank, a wading monster - would smear it into
+    // the surface, so those fall back to the unrefracted pixel.
+    bool haveDepth = hasSceneDepth == 1 && !backside;
+    highp vec3 surfaceView = (view * vec4(FragPos, 1.0)).xyz;
+    highp float thickness = 1.0e4;
+    highp float bedDepth = 1.0e4;       // vertical depth of the bed below the surface
+    highp vec3 bedWorld = FragPos - vec3(0.0, 1.0e4, 0.0);
+    bool bedVisible = false;
+    if (haveDepth) {
+        highp float dRefract = texture(sceneDepth, refractUV).r;
+        if (viewPosFromDepth(refractUV, dRefract).z > surfaceView.z) {
+            refractUV = clamp(screenUV, vec2(0.001), vec2(0.999));
+        }
+        highp float dBed = texture(sceneDepth, refractUV).r;
+        if (dBed < 0.99999) {
+            highp vec3 bedView = viewPosFromDepth(refractUV, dBed);
+            thickness = max(length(bedView) - length(surfaceView), 0.0);
+            bedWorld = viewPos - viewDir * length(bedView);
+            bedDepth = max(FragPos.y - bedWorld.y, 0.0);
+            bedVisible = true;
+        }
+    }
+
     vec3 transmitted = texture(sceneColor, refractUV).rgb;
     if (roughness > 0.001) {
         highp vec2 blurStep = roughness * 4.0 / max(screenSize, vec2(1.0));
@@ -979,13 +1061,33 @@ void main()
     bodyCol *=
         0.45 + 0.55 * max(dot(N, SUN_DIR), 0.0);
 
-    // Mix the refracted scene with the water's own body colour so shallow
-    // geometry remains visible instead of replacing the water with a flat
-    // post-process image.
-    vec3 transmittedTinted =
-        transmitted * mix(vec3(1.0), waterTint, 0.35);
-    vec3 transmission =
-        mix(transmittedTinted, bodyCol, 0.45);
+    vec3 transmission;
+    if (haveDepth) {
+        // Caustics: light focused by the ripples dances over the bed,
+        // strongest in the shallows.
+        if (bedVisible && topFace > 0.5) {
+            highp vec2 cuv = bedWorld.xz * 0.03;
+            float c1 = texture(normalMap, cuv + time * vec2(0.031, 0.022)).x;
+            float c2 = texture(normalMap, cuv * 1.37 - time * vec2(0.024, 0.037)).y;
+            float caustic = pow(1.0 - abs(c1 + c2 - 1.0), 10.0);
+            transmitted *= 1.0 + caustic * 0.55 * exp(-bedDepth * 0.03) * detailFade;
+        }
+        // Beer-Lambert absorption: red goes first, so the shallows stay clear
+        // and deeper water turns to the tint colour.
+        // Authored opacity sets how murky the water is: 0.5 is the default.
+        vec3 absorb = ((vec3(1.0) - clamp(waterTint, 0.0, 1.0)) * 0.018 + 0.002)
+                    * clamp(waterOpacity, 0.05, 1.0) * 2.0;
+        vec3 extinction = exp(-absorb * thickness);
+        transmission = transmitted * extinction + bodyCol * (vec3(1.0) - extinction);
+    } else {
+        // Mix the refracted scene with the water's own body colour so shallow
+        // geometry remains visible instead of replacing the water with a flat
+        // post-process image.
+        vec3 transmittedTinted =
+            transmitted * mix(vec3(1.0), waterTint, 0.35);
+        transmission =
+            mix(transmittedTinted, bodyCol, 0.45);
+    }
 
     // ------------------------------------------------------------------
     // Fresnel: physical R0 for water (~0.0204), multiplied by the authored
@@ -1001,6 +1103,12 @@ void main()
 
     vec3 R = reflect(-viewDir, N);
     vec3 reflection = skyColor(R);
+    if (haveDepth && ssrEnabled == 1 && topFace > 0.5) {
+        // Reflect the scene itself where the ray finds it on screen; the sky
+        // fills in everywhere else. Rougher water blurs towards the sky.
+        vec4 ssr = traceReflection(surfaceView, normalize(mat3(view) * R));
+        reflection = mix(reflection, ssr.rgb, ssr.a * (1.0 - roughness * 0.6));
+    }
 
     // Keep authored reflectivity visible at normal viewing angles. Physical
     // water Fresnel starts around 2%, which is too weak to make the optional
@@ -1064,6 +1172,16 @@ void main()
         (1.0 - smoothstep(2.0, 26.0, ShoreDist)) *
         (0.30 + 0.70 * shoreWave) *
         smoothstep(0.25, 0.60, foamNoise + 0.15);
+    if (haveDepth) {
+        // Foam along the line where the water touches anything, not only at
+        // the brush edges. Measured vertically, so a shallow flat stays clear
+        // and only the waterline itself foams.
+        float contact = 1.0 - smoothstep(0.0, 2.5, bedDepth);
+        float lapping = 0.5 + 0.5 * sin(bedDepth * 2.5 - time * 2.2);
+        shoreFoam = max(shoreFoam,
+                        contact * (0.35 + 0.65 * lapping) *
+                        smoothstep(0.2, 0.55, foamNoise + 0.1));
+    }
     float foam =
         clamp(crestFoam + shoreFoam, 0.0, 1.0) *
         topFace;
@@ -1086,6 +1204,14 @@ void main()
         0.05,
         1.0
     );
+
+    if (haveDepth && topFace > 0.5) {
+        // The refracted, absorbed scene is already in the colour, so the
+        // surface is opaque - blending it over the scene again would let the
+        // unabsorbed bed show through. It only fades out where the water
+        // meets the shore, so there is no hard seam.
+        alpha = smoothstep(0.0, 1.5, bedDepth);
+    }
 
     if (backside) {
         color = mix(
