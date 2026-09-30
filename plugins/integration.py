@@ -782,7 +782,11 @@ def _render_schema_rows(editor_self, form, thing, specs):
     from editor.property_editor import _make_spin, _make_checkbox
     from PyQt5.QtWidgets import QLineEdit
 
-    _HIDDEN = ("name", "id", "type", "_io_connections")
+    # An entity class can keep plumbing out of its panel -- e.g. the marker
+    # sprite a settings entity draws with -- by listing the keys in
+    # EDITOR_HIDDEN_PROPERTIES. They are still stored and saved as usual.
+    _HIDDEN = ("name", "id", "type", "_io_connections") + tuple(
+        getattr(thing, "EDITOR_HIDDEN_PROPERTIES", ()) or ())
     covered = set()
     current_group = None
 

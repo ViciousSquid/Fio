@@ -48,6 +48,10 @@ class BigWorldSettings(Thing):
     # the same field table instead of maintaining a second list of keys.
     EDITOR_PRIMARY_PROPERTIES = tuple(field.key for field in FIELDS)
 
+    #: The marker sprite is how the entity is drawn, not something a mapper
+    #: configures, so it stays out of the property panel.
+    EDITOR_HIDDEN_PROPERTIES = ("sprite_path", "sprite_size")
+
     #: 2D-view sprite. Without this the entity draws nothing and is invisible /
     #: unselectable in the top/front/side views; the plugin ships its own icon
     #: (project-root-relative, like every other plugin entity's ``pixmap_path``).
