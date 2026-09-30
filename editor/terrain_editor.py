@@ -8,7 +8,9 @@ from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor, QPainter, QLinearGradient, QPen
 
 from engine.terrain import (Terrain, BIOMES, DEFAULT_BIOME, DEFAULT_USE_TEXTURES,
+                            DEFAULT_GRASS_ENABLED,
                             biome_key_for_name)
+from engine import terrain_style
 
 
 class GradientPreview(QWidget):
@@ -341,6 +343,9 @@ class TerrainEditorPanel(QWidget):
         
         biome_layout.addStretch()
         tabs.addTab(biome_tab, "Biome")
+
+        # === APPEARANCE TAB ===
+        self._build_appearance_tab(tabs)
         
         # === FEATURES TAB ===
         # The terrain editor already has one vertical scroll area around all
@@ -489,15 +494,63 @@ class TerrainEditorPanel(QWidget):
         density_row.addWidget(self.grass_density_value)
         grass_layout.addRow("Density:", density_row)
 
-        self.grass_color_btn = QPushButton("Grass Colour")
+        self.grass_color_btn = QPushButton("Blade Colour")
         self.grass_color_btn.clicked.connect(self.choose_grass_color)
         self.grass_color_preview = QFrame()
         self.grass_color_preview.setFixedSize(28, 28)
         color_row = QHBoxLayout()
         color_row.addWidget(self.grass_color_btn)
         color_row.addWidget(self.grass_color_preview)
+        self.grass_ground_label = QLabel("Matches the ground")
+        self.grass_ground_label.setStyleSheet("color: #aaa; font-style: italic;")
+        color_row.addWidget(self.grass_ground_label)
+        self.grass_ground_btn = QPushButton("Match Ground")
+        self.grass_ground_btn.setToolTip(
+            "Give each blade the colour of the terrain it grows on")
+        self.grass_ground_btn.clicked.connect(self.match_grass_to_ground)
+        color_row.addWidget(self.grass_ground_btn)
         color_row.addStretch()
         grass_layout.addRow("Colour:", color_row)
+
+        # The blades fade from the blade colour to this at their tips.
+        self.grass_tip_btn = QPushButton("Tip Colour")
+        self.grass_tip_btn.clicked.connect(self.choose_grass_tip_color)
+        self.grass_tip_preview = QFrame()
+        self.grass_tip_preview.setFixedSize(28, 28)
+        self.grass_tip_auto_btn = QPushButton("Auto")
+        self.grass_tip_auto_btn.setToolTip(
+            "Derive the tips from the blade colour (a sun-bleached shade)")
+        self.grass_tip_auto_btn.clicked.connect(self.reset_grass_tip_color)
+        tip_row = QHBoxLayout()
+        tip_row.addWidget(self.grass_tip_btn)
+        tip_row.addWidget(self.grass_tip_preview)
+        tip_row.addWidget(self.grass_tip_auto_btn)
+        tip_row.addStretch()
+        grass_layout.addRow("Tips:", tip_row)
+
+        # Where the grass grows, as % of the terrain's height: by default the
+        # grass texture layer (so no grass on high rock/snow or low sand).
+        self.grass_height_sliders = []
+        for label in ("Lowest:", "Highest:"):
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(0, 100)
+            value_label = QLabel("0%")
+            value_label.setMinimumWidth(36)
+            slider.valueChanged.connect(self.on_grass_height_changed)
+            row = QHBoxLayout()
+            row.addWidget(slider, 1)
+            row.addWidget(value_label)
+            grass_layout.addRow(label, row)
+            self.grass_height_sliders.append((slider, value_label))
+        self.grass_height_sliders[0][0].setToolTip(
+            "Lowest height grass grows at (% of the terrain's height range)")
+        self.grass_height_sliders[1][0].setToolTip(
+            "Highest height grass grows at (% of the terrain's height range)")
+        self.grass_follow_btn = QPushButton("Follow Texture Layers")
+        self.grass_follow_btn.setToolTip(
+            "Grow grass exactly where the grass texture layer is")
+        self.grass_follow_btn.clicked.connect(self.reset_grass_height_range)
+        grass_layout.addRow(self.grass_follow_btn)
 
         features_layout.addWidget(grass_group)
 
@@ -1001,10 +1054,299 @@ class TerrainEditorPanel(QWidget):
 
         self._building_ui = False
 
+    # ------------------------------------------------------------------
+    # Appearance tab
+    # ------------------------------------------------------------------
+    def _build_appearance_tab(self, tabs):
+        """Look options: preset, terracing, colours, texture layers, details.
+
+        Every control drives exactly one ``TerrainAppearance`` option, so the
+        presets are only starting points - any option can be changed after.
+        """
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(12)
+        layout.setContentsMargins(8, 8, 8, 8)
+        # option name -> (widget, kind); kinds: combo, check, spin, pct, color
+        self._appearance_widgets = {}
+
+        def group(title):
+            box = QGroupBox(title)
+            form = QFormLayout(box)
+            form.setSpacing(8)
+            form.setContentsMargins(12, 20, 12, 12)
+            layout.addWidget(box)
+            return form
+
+        def combo(option, items):
+            w = QComboBox()
+            for key, label in items:
+                w.addItem(label, key)
+            w.currentIndexChanged.connect(
+                lambda _i, o=option, w=w: self._set_appearance(o, w.currentData()))
+            self._appearance_widgets[option] = (w, 'combo')
+            return w
+
+        def check(option, text):
+            w = QCheckBox(text)
+            w.toggled.connect(lambda v, o=option: self._set_appearance(o, bool(v)))
+            self._appearance_widgets[option] = (w, 'check')
+            return w
+
+        def spin(option, lo, hi, step, decimals=1, integer=False, tip=None):
+            w = QSpinBox() if integer else QDoubleSpinBox()
+            w.setRange(lo, hi)
+            w.setSingleStep(step)
+            if not integer:
+                w.setDecimals(decimals)
+            if tip:
+                w.setToolTip(tip)
+            w.valueChanged.connect(lambda v, o=option: self._set_appearance(o, v))
+            self._appearance_widgets[option] = (w, 'spin')
+            return w
+
+        def pct(option, tip=None):
+            """0..1 option on a 0..100 slider with a live % readout."""
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(0, 100)
+            label = QLabel("0%")
+            label.setMinimumWidth(36)
+            if tip:
+                slider.setToolTip(tip)
+
+            def changed(v, o=option, label=label):
+                label.setText(f"{v}%")
+                self._set_appearance(o, v / 100.0)
+            slider.valueChanged.connect(changed)
+            row = QHBoxLayout()
+            row.addWidget(slider, 1)
+            row.addWidget(label)
+            self._appearance_widgets[option] = ((slider, label), 'pct')
+            return row
+
+        def color(option, title):
+            btn = QPushButton("Choose...")
+            swatch = QFrame()
+            swatch.setFixedSize(28, 28)
+            btn.clicked.connect(lambda _c=False, o=option, t=title: self._choose_appearance_color(o, t))
+            row = QHBoxLayout()
+            row.addWidget(btn)
+            row.addWidget(swatch)
+            row.addStretch()
+            self._appearance_widgets[option] = (swatch, 'color')
+            return row
+
+        # -- Look preset -------------------------------------------------
+        form = group("Look")
+        self.appearance_preset_combo = QComboBox()
+        self.appearance_preset_combo.setMinimumHeight(32)
+        for key, label in terrain_style.PRESET_LABELS.items():
+            self.appearance_preset_combo.addItem(label, key)
+        self.appearance_preset_combo.addItem("Custom", 'custom')
+        self.appearance_preset_combo.currentIndexChanged.connect(self.on_appearance_preset_changed)
+        form.addRow("Preset:", self.appearance_preset_combo)
+        hint = QLabel("A preset sets every option below; each can then be changed on its own.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #aaa; font-style: italic;")
+        form.addRow(hint)
+
+        # -- Shape -------------------------------------------------------
+        form = group("Shape")
+        form.addRow("Terracing:", combo('terrace_mode', terrain_style.TERRACE_MODE_LABELS.items()))
+        form.addRow("Step Height:", spin('terrace_step', 1.0, 200.0, 1.0,
+                                         tip="Height of one terrace step or block level"))
+        form.addRow("Riser Share:", pct('terrace_ramp',
+                                        "How much of each step is slope rather than flat ground"))
+        form.addRow("Block Size:", spin('block_size', 2.0, 128.0, 2.0,
+                                        tip="Footprint of one column in Blocks mode"))
+        form.addRow(check('skirt', "Solid sides at the terrain edge (Blocks)"))
+
+        # -- Colour ------------------------------------------------------
+        form = group("Colour")
+        form.addRow("Colour Source:", combo('color_mode', terrain_style.COLOR_MODE_LABELS.items()))
+        form.addRow("Palette:", combo('palette', terrain_style.PALETTE_LABELS.items()))
+        # One swatch per palette colour: the strata bands in the order they
+        # repeat, or the height steps from low to high. Editing one turns
+        # the palette into a custom copy.
+        swatch_row = QHBoxLayout()
+        swatch_row.setSpacing(4)
+        self.palette_swatches = []
+        for i in range(terrain_style.MAX_PALETTE):
+            btn = QPushButton()
+            btn.setFixedSize(26, 26)
+            btn.setToolTip(f"Colour {i + 1}: click to change")
+            btn.clicked.connect(lambda _c=False, i=i: self.choose_palette_color(i))
+            swatch_row.addWidget(btn)
+            self.palette_swatches.append(btn)
+        self.palette_remove_btn = QPushButton("−")
+        self.palette_remove_btn.setFixedSize(26, 26)
+        self.palette_remove_btn.setToolTip("One colour fewer")
+        self.palette_remove_btn.clicked.connect(lambda: self.change_palette_size(-1))
+        self.palette_add_btn = QPushButton("+")
+        self.palette_add_btn.setFixedSize(26, 26)
+        self.palette_add_btn.setToolTip("One colour more")
+        self.palette_add_btn.clicked.connect(lambda: self.change_palette_size(1))
+        swatch_row.addWidget(self.palette_remove_btn)
+        swatch_row.addWidget(self.palette_add_btn)
+        swatch_row.addStretch()
+        form.addRow("Colours:", swatch_row)
+        form.addRow("Band Height:", spin('band_height', 1.0, 200.0, 1.0,
+                                         tip="Height of each colour band and contour interval"))
+
+        # -- Texture layers ----------------------------------------------
+        form = group("Texture Height Layers")
+        note = QLabel("With Use Textures on, sand, grass, rock and snow are blended by height. "
+                      "Grass blades also grow only in the grass layer.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #aaa; font-style: italic;")
+        form.addRow(note)
+        self.layer_sliders = []
+        for label in ("Sand → Grass:", "Grass → Rock:", "Rock → Snow:"):
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(0, 100)
+            value_label = QLabel("0%")
+            value_label.setMinimumWidth(36)
+            slider.valueChanged.connect(self.on_layer_height_changed)
+            row = QHBoxLayout()
+            row.addWidget(slider, 1)
+            row.addWidget(value_label)
+            form.addRow(label, row)
+            self.layer_sliders.append((slider, value_label))
+        form.addRow("Blend Width:", spin('layer_blend', 0.005, 0.3, 0.005, decimals=3))
+        form.addRow("Rock on Slopes:", pct('slope_rock'))
+        reset_layers = QPushButton("Biome Defaults")
+        reset_layers.clicked.connect(lambda: self._set_appearance('layer_heights', None))
+        form.addRow(reset_layers)
+
+        # -- Surface detail ------------------------------------------------
+        form = group("Surface Detail")
+        form.addRow("Contour Lines:", pct('contour_lines'))
+        form.addRow("Line Width (px):", spin('contour_width', 0.5, 6.0, 0.5))
+        form.addRow("Tile Grid:", pct('grid_lines'))
+        form.addRow("Tile Size:", spin('grid_size', 1.0, 256.0, 1.0))
+        form.addRow("Tile Variation:", pct('cell_variation'))
+        form.addRow("Cliff Colour:", color('wall_color', "Cliff Colour"))
+        form.addRow("Cliff Tint:", pct('wall_amount'))
+        form.addRow("Cliff Stripes:", pct('wall_stripes'))
+        form.addRow("Shrub Colour:", color('speckle_color', "Shrub Colour"))
+        form.addRow("Shrub Dots:", pct('speckle_amount'))
+        form.addRow("Patch Colour:", color('patch_color', "Patch Colour"))
+        form.addRow("Ground Patches:", pct('patch_amount'))
+
+        # -- Shading -------------------------------------------------------
+        form = group("Shading")
+        form.addRow(check('smooth_shading', "Smooth shading"))
+        form.addRow("Light Bands:", spin('light_steps', 0, 8, 1, integer=True,
+                                         tip="0 = continuous lighting"))
+        form.addRow("Colour Depth:", spin('dither_levels', 0, 32, 1, integer=True,
+                                          tip="Dithered colour levels per channel, 0 = off"))
+
+        layout.addStretch()
+        tabs.addTab(tab, "Appearance")
+
+    def _set_appearance(self, option, value):
+        if self._building_ui:
+            return
+        self.terrain.set_appearance(**{option: value})
+        self._load_appearance_ui()
+        self.terrain_changed.emit()
+
+    def on_appearance_preset_changed(self, index):
+        if self._building_ui:
+            return
+        key = self.appearance_preset_combo.itemData(index)
+        if key in terrain_style.PRESETS:
+            self.terrain.apply_appearance_preset(key)
+            self._load_appearance_ui()
+            self.terrain_changed.emit()
+
+    def choose_palette_color(self, index):
+        colors = terrain_style.palette_colors(self.terrain.appearance)
+        if index >= len(colors):
+            return
+        chosen = QColorDialog.getColor(QColor.fromRgbF(*colors[index]), self,
+                                       f"Palette Colour {index + 1}")
+        if not chosen.isValid():
+            return
+        self.terrain.set_palette_color(
+            index, (chosen.redF(), chosen.greenF(), chosen.blueF()))
+        self._load_appearance_ui()
+        self.terrain_changed.emit()
+
+    def change_palette_size(self, delta):
+        count = len(terrain_style.palette_colors(self.terrain.appearance)) + delta
+        self.terrain.resize_palette(count)
+        self._load_appearance_ui()
+        self.terrain_changed.emit()
+
+    def on_layer_height_changed(self, _value=None):
+        for slider, label in self.layer_sliders:
+            label.setText(f"{slider.value()}%")
+        if self._building_ui:
+            return
+        values = tuple(slider.value() / 100.0 for slider, _ in self.layer_sliders)
+        self._set_appearance('layer_heights', values)
+
+    def _choose_appearance_color(self, option, title):
+        current = QColor.fromRgbF(*getattr(self.terrain.appearance, option))
+        chosen = QColorDialog.getColor(current, self, title)
+        if chosen.isValid():
+            self._set_appearance(option, (chosen.redF(), chosen.greenF(), chosen.blueF()))
+
+    def _load_appearance_ui(self):
+        """Show the terrain's current appearance options in the tab."""
+        if not hasattr(self, '_appearance_widgets'):
+            return
+        from PyQt5.QtGui import QPalette
+        a = self.terrain.appearance
+        was_building = self._building_ui
+        self._building_ui = True
+        try:
+            idx = self.appearance_preset_combo.findData(a.preset)
+            if idx < 0:
+                idx = self.appearance_preset_combo.findData('custom')
+            self.appearance_preset_combo.setCurrentIndex(idx)
+            for option, (widget, kind) in self._appearance_widgets.items():
+                value = getattr(a, option)
+                if kind == 'combo':
+                    i = widget.findData(value)
+                    if i >= 0:
+                        widget.setCurrentIndex(i)
+                elif kind == 'check':
+                    widget.setChecked(bool(value))
+                elif kind == 'spin':
+                    widget.setValue(value)
+                elif kind == 'pct':
+                    slider, label = widget
+                    slider.setValue(int(round(value * 100)))
+                    label.setText(f"{slider.value()}%")
+                elif kind == 'color':
+                    palette = widget.palette()
+                    palette.setColor(QPalette.Window, QColor.fromRgbF(*value))
+                    widget.setAutoFillBackground(True)
+                    widget.setPalette(palette)
+            colors = terrain_style.palette_colors(a)
+            for i, btn in enumerate(self.palette_swatches):
+                if i < len(colors):
+                    r, g, b = (int(round(c * 255)) for c in colors[i])
+                    btn.setStyleSheet(
+                        f"background-color: rgb({r}, {g}, {b}); border: 1px solid #222;")
+                    btn.show()
+                else:
+                    btn.hide()
+            self.palette_remove_btn.setEnabled(len(colors) > terrain_style.MIN_PALETTE)
+            self.palette_add_btn.setEnabled(len(colors) < terrain_style.MAX_PALETTE)
+            self._update_grass_height_ui()
+            for (slider, label), v in zip(self.layer_sliders, self.terrain._layer_heights()):
+                slider.setValue(int(round(v * 100)))
+                label.setText(f"{slider.value()}%")
+        finally:
+            self._building_ui = was_building
+
     def on_textures_changed(self, enabled):
         if self._building_ui:
             return
-        self.terrain.use_textures = enabled
+        self.terrain.set_use_textures(enabled)
         self.terrain_changed.emit()
     
     def load_from_terrain(self):
@@ -1094,6 +1436,8 @@ class TerrainEditorPanel(QWidget):
         self._update_sculpt_info()
         self.set_sculpt_mode(self.sculpt_mode_combo.currentData() or "raise")
 
+        self._load_appearance_ui()
+
         self._building_ui = False
     
     def update_gradient_preview(self):
@@ -1172,6 +1516,67 @@ class TerrainEditorPanel(QWidget):
         self._update_grass_color_preview()
         self.terrain_changed.emit()
 
+    def match_grass_to_ground(self):
+        self.terrain.set_grass(enabled=self.grass_checkbox.isChecked(), color='ground')
+        self._update_grass_color_preview()
+        self.terrain_changed.emit()
+
+    def choose_grass_tip_color(self):
+        current = QColor.fromRgbF(*self.terrain.grass_tip_colour())
+        color = QColorDialog.getColor(current, self, "Grass Tip Colour")
+        if not color.isValid():
+            return
+        self.terrain.set_grass(
+            enabled=self.grass_checkbox.isChecked(),
+            tip_color=(color.redF(), color.greenF(), color.blueF()),
+        )
+        self._update_grass_color_preview()
+        self.terrain_changed.emit()
+
+    def reset_grass_tip_color(self):
+        self.terrain.set_grass(enabled=self.grass_checkbox.isChecked(), tip_color='auto')
+        self._update_grass_color_preview()
+        self.terrain_changed.emit()
+
+    def on_grass_height_changed(self, _value=None):
+        for slider, label in self.grass_height_sliders:
+            label.setText(f"{slider.value()}%")
+        if self._building_ui:
+            return
+        low = self.grass_height_sliders[0][0].value() / 100.0
+        high = self.grass_height_sliders[1][0].value() / 100.0
+        self.terrain.set_grass(enabled=self.grass_checkbox.isChecked(),
+                               height_range=(low, high))
+        self._update_grass_height_ui()
+        self.terrain_changed.emit()
+
+    def reset_grass_height_range(self):
+        self.terrain.set_grass(enabled=self.grass_checkbox.isChecked(),
+                               height_range='auto')
+        self._update_grass_height_ui()
+        self.terrain_changed.emit()
+
+    def _update_grass_height_ui(self):
+        """Show the grass height range (following the layers or its own)."""
+        if not hasattr(self, 'grass_height_sliders'):
+            return
+        was_building = self._building_ui
+        self._building_ui = True
+        try:
+            bounds = self.terrain.grass_height_bounds()
+            (lo_s, lo_l), (hi_s, hi_l) = self.grass_height_sliders
+            # Sliders never cross: the lowest stays at or below the highest.
+            lo_v = int(round(min(bounds) * 100))
+            hi_v = int(round(max(bounds) * 100))
+            lo_s.setValue(lo_v)
+            hi_s.setValue(hi_v)
+            lo_l.setText(f"{lo_v}%")
+            hi_l.setText(f"{hi_v}%")
+            self.grass_follow_btn.setEnabled(
+                getattr(self.terrain, 'grass_height_range', None) is not None)
+        finally:
+            self._building_ui = was_building
+
     def _update_grass_color_preview(self):
         r, g, b = self.terrain.grass_color
         # Use the palette for the colour swatch rather than injecting a
@@ -1182,6 +1587,23 @@ class TerrainEditorPanel(QWidget):
         palette.setColor(QPalette.Window, QColor.fromRgbF(r, g, b))
         self.grass_color_preview.setAutoFillBackground(True)
         self.grass_color_preview.setPalette(palette)
+        matching = not getattr(self.terrain, 'grass_color_custom', False)
+        if hasattr(self, 'grass_ground_label'):
+            self.grass_color_preview.setVisible(not matching)
+            self.grass_ground_label.setVisible(matching)
+            self.grass_ground_btn.setEnabled(not matching)
+        if hasattr(self, 'grass_tip_preview'):
+            palette = self.grass_tip_preview.palette()
+            palette.setColor(QPalette.Window,
+                             QColor.fromRgbF(*self.terrain.grass_tip_colour()))
+            self.grass_tip_preview.setAutoFillBackground(True)
+            self.grass_tip_preview.setPalette(palette)
+            auto = getattr(self.terrain, 'grass_tip_color', None) is None
+            self.grass_tip_auto_btn.setEnabled(not auto)
+            # An automatic tip derives from each blade's own colour; with
+            # ground-coloured blades there is no single colour to show.
+            self.grass_tip_preview.setVisible(not (auto and matching))
+        self._update_grass_height_ui()
 
     def on_wireframe_changed(self, enabled):
         if self._building_ui:
@@ -1232,6 +1654,8 @@ class TerrainEditorPanel(QWidget):
             self.plateaus_intensity_spin.setValue(self.terrain.biome.plateaus_intensity)
             self.plateaus_flatness_spin.setValue(self.terrain.biome.plateaus_flatness)
             self._building_ui = False
+            # The biome brings its own texture layer heights.
+            self._load_appearance_ui()
             
             self.update_gradient_preview()
             self.terrain_changed.emit()
@@ -1551,7 +1975,9 @@ class TerrainEditorPanel(QWidget):
         default_index = max(0, self.biome_combo.findData(DEFAULT_BIOME))
         self.biome_combo.setCurrentIndex(default_index)
         self.textures_checkbox.setChecked(DEFAULT_USE_TEXTURES)
-        self.terrain.use_textures = DEFAULT_USE_TEXTURES
+        self.terrain.set_use_textures(DEFAULT_USE_TEXTURES)
+        self.grass_checkbox.setChecked(DEFAULT_GRASS_ENABLED)
+        self.terrain.set_grass(DEFAULT_GRASS_ENABLED)
         self.seed_spin.setValue(42)
         self.chunk_size_spin.setValue(16)
         self.min_x_spin.setValue(-2)

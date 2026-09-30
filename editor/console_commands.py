@@ -117,6 +117,7 @@ class ConsoleCommandHandler:
             'r_shadows': self.cmd_render_shadows,
             'r_fog': self.cmd_render_fog,
             'r_water': self.cmd_render_water,
+            'r_waterquality': self.cmd_water_quality,
             'r_glass': self.cmd_render_glass,
             'r_lighting': self.cmd_render_lighting,
             'r_deferred': self.cmd_render_deferred,
@@ -145,6 +146,7 @@ class ConsoleCommandHandler:
             'shadows': self.cmd_render_shadows,
             'fog': self.cmd_render_fog,
             'water': self.cmd_render_water,
+            'waterquality': self.cmd_water_quality,
             'glass': self.cmd_render_glass,
             'lighting': self.cmd_render_lighting,
             'deferred': self.cmd_render_deferred,
@@ -895,6 +897,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">r_wireframe</b>{sep}<b style="color:orange;">wireframe</b> — Toggle wireframe mode<br>
 <b style="color:orange;">r_shadows</b>{sep}<b style="color:orange;">shadows</b> — Toggle shadows<br>
 <b style="color:orange;">r_fog</b>{sep}<b style="color:orange;">fog</b> — Toggle volumetric fog (fog brushes)<br>
+<b style="color:orange;">r_waterquality</b>{sep}<b style="color:orange;">waterquality</b> [cheap|expensive] — Water detail tier<br>
 <b style="color:orange;">r_lighting</b>{sep}<b style="color:orange;">lighting</b> — Toggle real-time lighting<br>
 <b style="color:orange;">r_clearcolor</b> r g b — Set background colour<br>
 <b style="color:cyan;">=== View Distance &amp; Far-Plane Fog ===</b><br>
@@ -988,6 +991,7 @@ entity to drive them from the I/O system.</i><br>
 
         add_line("Wireframe", "ON" if getattr(renderer, 'wireframe', False) else "OFF")
         add_line("Shadows", "ON" if getattr(renderer, 'shadows_enabled', False) else "OFF")
+        add_line("Water quality", getattr(renderer, 'water_quality', 'expensive'))
         add_line("Volumetric Fog", "ON" if getattr(renderer, 'fog_enabled', True) else "OFF")
         add_line("Water Shader", "ON" if getattr(renderer, 'water_enabled', True) else "OFF")
         add_line("Glass Shader", "ON" if getattr(renderer, 'glass_enabled', True) else "OFF")
@@ -1039,6 +1043,21 @@ entity to drive them from the I/O system.</i><br>
         if not renderer: return
         renderer.water_enabled = not getattr(renderer, 'water_enabled', True)
         debug_log("Info", f"Water shader: {'ON' if renderer.water_enabled else 'OFF'}")
+
+    def cmd_water_quality(self, args):
+        """Show or set the water tier: cheap / expensive (no argument toggles)."""
+        renderer = self._get_renderer()
+        if not renderer: return
+        current = getattr(renderer, 'water_quality', 'expensive')
+        if args:
+            wanted = str(args[0]).strip().lower()
+            if wanted not in renderer.WATER_QUALITIES:
+                debug_log("Warning", "Usage: waterquality [cheap|expensive]")
+                return
+        else:
+            wanted = 'cheap' if current == 'expensive' else 'expensive'
+        renderer.water_quality = wanted
+        debug_log("Info", f"Water quality: {wanted}")
 
     def cmd_render_glass(self, args):
         renderer = self._get_renderer()
