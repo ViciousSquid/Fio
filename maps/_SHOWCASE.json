@@ -3489,15 +3489,6 @@
                 },
                 {
                     "output": "OnPlayerSpawn",
-                    "target": "intro_messages",
-                    "input": "Trigger",
-                    "parameter": "",
-                    "delay": 0.0,
-                    "fire_once": false,
-                    "target_id": "2a7d4c35-0543-4c0d-92e9-4edbb1e3484f"
-                },
-                {
-                    "output": "OnPlayerSpawn",
                     "target": "door01a",
                     "input": "Show",
                     "parameter": "",
