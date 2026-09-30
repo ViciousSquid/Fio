@@ -4002,13 +4002,14 @@ class View2D(QWidget):
                 pos[i1] += d1
                 pos[i2] += d2
         else:
-            pos = obj.pos
-            if not isinstance(pos, list):
-                # glm vector or tuple — copy to a list so it stays serialisable.
-                pos = [pos[0], pos[1], pos[2]]
-                obj.pos = pos
+            # Assign a new list rather than editing obj.pos in place: the
+            # assignment is what journals the move (TrackedPosition), and
+            # without it the 3D view's entity table keeps drawing the sprite
+            # at its old position until something else forces a refresh.
+            pos = [float(obj.pos[0]), float(obj.pos[1]), float(obj.pos[2])]
             pos[i1] += d1
             pos[i2] += d2
+            obj.pos = pos
 
     def select_brushes_inside(self, container_brush):
         """Select every brush and entity enclosed by the drawn box, then delete

@@ -552,7 +552,8 @@ class TerrainEditorPanel(QWidget):
         self.grass_follow_btn.clicked.connect(self.reset_grass_height_range)
         grass_layout.addRow(self.grass_follow_btn)
 
-        features_layout.addWidget(grass_group)
+        # Grass is the feature people reach for most, so it heads the tab.
+        features_layout.insertWidget(0, grass_group)
 
         features_layout.addStretch()
         tabs.addTab(features_tab, "Features")

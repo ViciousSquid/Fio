@@ -1353,6 +1353,28 @@ def test_a_nudge_burst_is_one_undo_step(editor):
     assert a['pos'][0] == pytest.approx(80.0)
 
 
+def test_every_nudge_of_a_sprite_reaches_the_3d_entity_table(editor):
+    """A nudge burst bumps the world epoch only once (its one save_state), so
+    the later nudges reach the 3D view only through the change journal.
+    Editing ``thing.pos`` in place skipped the journal, and the sprite stayed
+    put in the 3D view while the gizmo moved, until the camera moved."""
+    from engine.entity_table import EntityTable
+    from engine.prop_entity import Prop
+
+    host, view = editor
+    sprite = Prop(pos=[0.0, 0.0, 0.0], properties={
+        'sprite_path': 'assets/sprites/health.png'})
+    host.state.things.append(sprite)
+    host.set_selected_object(sprite)
+
+    table = EntityTable()
+    for expected_x in (16.0, 32.0, 48.0):
+        arrow(view, Qt.Key_Right)
+        table.begin_frame([sprite], host.state.world_epoch)
+        assert sprite.pos[0] == pytest.approx(expected_x)
+        assert table.pos[0][0] == pytest.approx(expected_x)
+
+
 # ---------------------------------------------------------------------------
 # Round trips through history (Fio 2.4 hardening)
 # ---------------------------------------------------------------------------
