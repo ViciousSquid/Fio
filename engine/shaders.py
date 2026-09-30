@@ -1502,7 +1502,11 @@ void main() {
             sand_col.rgb  * splat.b +
             snow_col.rgb  * splat.a
         );
-        texColor = splatColor * VertexColor * 1.1;
+        // The splat textures are the surface colour. (They used to be
+        // multiplied by the biome vertex colour as well, which roughly
+        // squared the darkness -- green grass times green vertex colour --
+        // and carried the vertex colour's per-chunk seams into textured mode.)
+        texColor = splatColor * 1.1;
     } else {
         texColor = VertexColor * 1.1;
     }

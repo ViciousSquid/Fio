@@ -338,7 +338,11 @@ class Terrain:
         'uHeights', 'uChunkI', 'uChunkX', 'uChunkY', 'uTiling', 'uFlatMode',
         'uGradCount', 'uGradH', 'uGradC', 'uGradW', 'uGradD',
     )
-    TILING_SCALE = 20.0
+    #: World units per repeat of the terrain textures (they are 1024 px).
+    #: At 20 a tile was half a player-height across, so at any ordinary
+    #: viewing distance the texture was minified to its average colour and
+    #: textured terrain looked untextured.
+    TILING_SCALE = 64.0
     # Physical mesh scale is a true uniform terrain scale. It changes the
     # world-space footprint and vertical relief together; procedural sampling
     # remains in terrain-space so enlarging the mesh cannot flatten it.
