@@ -2419,6 +2419,16 @@ class LogicThread(threading.Thread):
     # PORTAL TRANSIT
     # =========================================================================
 
+    def note_player_teleported(self):
+        """The player moved without travelling there (a teleport, a load).
+
+        Portal transit tests the segment from last tick's position to this
+        one, so a teleport whose straight line happened to cross an aperture
+        was read as walking through it: the player arrived at the paired
+        portal instead of the destination.
+        """
+        self._portal_prev_player_pos = None
+
     def _update_portals(self, delta: float):
         """
         Detect and execute player transit through active portal pairs.
@@ -3246,6 +3256,7 @@ class LogicThread(threading.Thread):
                     if activator is self.player:
                         self.player.pos = dest
                         self.player.velocity = glm.vec3(0, 0, 0)
+                        self.note_player_teleported()
                     else:
                         activator.pos = [dest.x, dest.y, dest.z]
                         physics_world = getattr(self, '_physics_world', None)

@@ -2077,6 +2077,10 @@ entity to drive them from the I/O system.</i><br>
             with self._io_dispatch_lock():
                 player.pos = glm.vec3(x, y, z)
                 player.velocity = glm.vec3(0, 0, 0)
+                teleported = getattr(self._logic_thread(),
+                                     'note_player_teleported', None)
+                if teleported is not None:
+                    teleported()
             debug_log("Info", f"Player teleported to [{x:.1f}, {y:.1f}, {z:.1f}]")
             self.main_window.show_toast(f"Teleported to {x:.1f}, {y:.1f}, {z:.1f}")
         except Exception:

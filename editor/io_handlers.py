@@ -557,6 +557,9 @@ def register_all_input_handlers(io_manager: IOManager):
         logic.player.pos = dest
         # Zero velocity to prevent carry-over momentum
         logic.player.velocity = glm.vec3(0, 0, 0)
+        teleported = getattr(logic, 'note_player_teleported', None)
+        if teleported is not None:
+            teleported()
         if logic.io_manager:
             logic.io_manager.fire_output(entity, 'OnTeleport')
         debug_log("IO", f"Trigger teleported player → '{target_name}' ({dest.x:.0f}, {dest.y:.0f}, {dest.z:.0f})")

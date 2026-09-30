@@ -475,3 +475,111 @@ def test_bind_with_no_arguments_opens_the_dialog(qt_app, monkeypatch, accept):
             assert ("Error", "No key selected") in logged
     finally:
         sip.delete(host)
+
+
+# ---------------------------------------------------------------------------
+# Teleports near a portal
+# ---------------------------------------------------------------------------
+
+def _portal_session():
+    """Portal_Test.json in play, player physics off so positions are exact."""
+    import os
+
+    from editor.editor_state import EditorState
+    from editor.things import PlayerStart, Portal
+    from engine.logic_thread import LogicThread
+    from engine.player import Player
+    from engine.threaded_game_state import ThreadedGameState
+    from tests.helpers.paths import REPO_ROOT
+
+    state = EditorState()
+    with open(os.path.join(REPO_ROOT, "maps", "Portal_Test.json"),
+              encoding="utf-8") as f:
+        state.load_from_data(json.load(f), save_undo=False)
+    logic = LogicThread(ThreadedGameState(), state)
+    start = next(t for t in state.things if isinstance(t, PlayerStart))
+    logic.player = Player(start.pos[0], start.pos[2])
+    logic.set_play_mode(True)
+    logic._stop_monster_ai()
+    logic.player.physics_enabled = False
+    portal = next(t for t in state.things
+                  if isinstance(t, Portal) and t.properties["name"] == "Portal_1")
+    n, o = portal.get_normal(), portal.pos
+    front = (o[0] + n[0] * 300, o[1] - 60, o[2] + n[2] * 300)
+    back = (o[0] - n[0] * 300, o[1] - 60, o[2] - n[2] * 300)
+    return state, logic, front, back
+
+
+def _put(logic, where):
+    import glm
+    logic.player.pos = glm.vec3(*where)
+    logic.player.velocity = glm.vec3(0.0, 0.0, 0.0)
+
+
+def _at(logic, where):
+    return all(abs(a - b) < 1.0 for a, b in zip(logic.player.pos, where))
+
+
+def test_walking_through_a_portal_still_transits():
+    state, logic, front, back = _portal_session()
+    try:
+        _put(logic, front)
+        logic._tick(logic.TICK_DURATION)
+        transited = False
+        for k in range(1, 13):                     # 50 units a tick
+            f = k / 12.0
+            step = tuple(a + (b - a) * f for a, b in zip(front, back))
+            _put(logic, step)
+            logic._tick(logic.TICK_DURATION)
+            if not _at(logic, step):               # the portal moved us
+                transited = True
+                break
+        assert transited, "walking through the portal did not transit"
+    finally:
+        logic.stop()
+
+
+@pytest.mark.parametrize("route", ["setpos", "trigger_input", "quickload"])
+def test_a_teleport_across_a_portal_does_not_transit(route, tmp_path):
+    """Portal transit tests the segment from last tick's position to this
+    one; a teleport whose straight line crossed an aperture was read as a
+    walk through it. `setpos` just behind Portal_1 left the player beside
+    Portal_2, and a Teleport trigger or a quickload would do the same."""
+    import glm
+
+    from editor.things import PathNode
+
+    state, logic, front, back = _portal_session()
+    try:
+        if route == "quickload":
+            _put(logic, back)
+            logic._portal_prev_player_pos = None
+            logic._tick(logic.TICK_DURATION)
+            ok, msg = logic.save_session(str(tmp_path / "s.fiosave"),
+                                         map_name="Portal_Test.json")
+            assert ok, msg
+        _put(logic, front)
+        logic._portal_prev_player_pos = None
+        logic._tick(logic.TICK_DURATION)
+        assert _at(logic, front)
+
+        if route == "setpos":
+            _setpos_console(logic).handle_command("setpos %f %f %f" % back)
+        elif route == "trigger_input":
+            node = PathNode(pos=list(back), properties={"name": "behind"})
+            state.things.append(node)
+            logic._build_entity_caches()
+            from editor.io_handlers import register_all_input_handlers  # noqa: F401
+            handler = logic.io_manager._input_handlers[("trigger", "teleport")]
+            handler({"name": "tele", "target_node": "behind"}, "behind", logic)
+        else:
+            ok, msg = logic.load_session(str(tmp_path / "s.fiosave"),
+                                         map_name="Portal_Test.json")
+            assert ok, msg
+        logic._tick(logic.TICK_DURATION)
+
+        assert _at(logic, back), (
+            "a %s just behind Portal_1 sent the player through it, to %s"
+            % (route, [round(c) for c in logic.player.pos]))
+    finally:
+        logic.stop()
