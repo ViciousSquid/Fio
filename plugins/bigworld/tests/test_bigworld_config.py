@@ -77,7 +77,7 @@ def test_bigworld_settings_exposes_schema_fields_to_the_property_editor():
     assert BigWorldSettings.EDITOR_PRIMARY_PROPERTIES == tuple(config.BY_KEY)
 
 
-def test_the_marker_sprite_is_not_shown_in_the_property_panel(qt_app):
+def test_marker_and_io_plumbing_is_not_shown_in_the_property_panel(qt_app):
     from PyQt5.QtWidgets import QFormLayout, QLabel
     from plugins.integration import _render_schema_rows
 
@@ -94,8 +94,9 @@ def test_the_marker_sprite_is_not_shown_in_the_property_panel(qt_app):
               and isinstance(form.itemAt(row, QFormLayout.LabelRole).widget(),
                              QLabel)]
     assert "Activation radius:" in labels
-    assert "Sprite Path:" not in labels
-    assert "Sprite Size:" not in labels
+    for hidden in ("Render Mode:", "Sprite Path:", "Sprite Size:",
+                   "Io Enabled:"):
+        assert hidden not in labels
 
 
 def test_the_entity_the_schema_and_the_coercer_describe_the_same_keys():
