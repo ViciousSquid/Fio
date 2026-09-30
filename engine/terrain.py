@@ -284,13 +284,13 @@ class BiomeConfig:
         return instance
 
 BIOMES = {
-    'grassy_hills': BiomeConfig(name='Grassy Hills 🌿', height_scale=200, hills_scale=0.005, hills_intensity=1.2, blend_weights=(1.5, 0.5, 0.1, 0.0), terrain_height_scale=1.0/300.0, trees_enabled=True, tree_density=0.2),
+    'grassy_hills': BiomeConfig(name='Grassy Hills', height_scale=200, hills_scale=0.005, hills_intensity=1.2, blend_weights=(1.5, 0.5, 0.1, 0.0), terrain_height_scale=1.0/300.0, trees_enabled=True, tree_density=0.2),
     'low_poly_valley': BiomeConfig(name='Low Poly Valley', base_height=10.0, height_scale=250.0, hills_scale=0.004, hills_intensity=0.8, mountains_enabled=True, mountains_scale=0.006, mountains_intensity=1.2, mountains_sharpness=0.2, valleys_enabled=True, valleys_depth=0.2, color_gradient=[(0.0, (0.38, 0.60, 0.25)), (0.25, (0.35, 0.55, 0.22)), (0.28, (0.55, 0.40, 0.25)), (1.0, (0.65, 0.45, 0.30))], blend_weights=(1.0, 0.0, 0.0, 0.0), trees_enabled=True, tree_density=0.15),
     'dark_cliffs': BiomeConfig(name='Dark Cliffs', base_height=0.0, height_scale=350.0, hills_scale=0.008, hills_intensity=0.5, mountains_enabled=True, mountains_scale=0.005, mountains_intensity=1.8, mountains_sharpness=0.9, plateaus_enabled=True, plateaus_scale=0.01, plateaus_intensity=0.5, color_gradient=[(0.0, (0.15, 0.15, 0.18)), (0.4, (0.25, 0.25, 0.28)), (0.7, (0.10, 0.10, 0.12)), (0.95, (0.28, 0.35, 0.25))], trees_enabled=False),
     'desert_canyon': BiomeConfig(name='Desert Canyon', base_height=20.0, height_scale=200.0, hills_scale=0.002, hills_intensity=0.3, mountains_enabled=False, plateaus_enabled=True, plateaus_scale=0.005, plateaus_intensity=1.5, plateaus_flatness=0.95, valleys_enabled=True, valleys_scale=0.004, valleys_depth=0.4, color_gradient=[(0.0, (0.60, 0.40, 0.25)), (0.2, (0.60, 0.40, 0.25)), (0.21, (0.50, 0.30, 0.15)), (0.4, (0.50, 0.30, 0.15)), (0.41, (0.70, 0.50, 0.35)), (0.6, (0.70, 0.50, 0.35)), (0.61, (0.45, 0.25, 0.15)), (1.0, (0.45, 0.25, 0.15))], trees_enabled=False),
     'jagged_peaks': BiomeConfig(name='Jagged Peaks', base_height=50.0, height_scale=500.0, hills_scale=0.005, hills_intensity=0.2, mountains_enabled=True, mountains_scale=0.004, mountains_intensity=1.5, mountains_sharpness=1.0, valleys_enabled=True, valleys_scale=0.002, valleys_depth=0.3, color_gradient=[(0.0, (0.25, 0.30, 0.20)), (0.15, (0.35, 0.35, 0.35)), (0.6, (0.50, 0.50, 0.55)), (0.8, (0.90, 0.90, 0.95))], trees_enabled=False),
-    'desert': BiomeConfig(name='Desert 🏜️', height_scale=100, hills_scale=0.008, hills_intensity=0.8, blend_weights=(0.2, 0.3, 1.2, 0.0), terrain_height_scale=1.0/150.0, trees_enabled=False, tree_density=0.0),
-    'mountains': BiomeConfig(name='Mountains ⛰️', height_scale=500, mountains_enabled=True, mountains_intensity=1.5, blend_weights=(0.0, 1.0, 0.0, 0.6), terrain_height_scale=1.0/700.0, trees_enabled=True, tree_density=0.15),
+    'desert': BiomeConfig(name='Desert', height_scale=100, hills_scale=0.008, hills_intensity=0.8, blend_weights=(0.2, 0.3, 1.2, 0.0), terrain_height_scale=1.0/150.0, trees_enabled=False, tree_density=0.0),
+    'mountains': BiomeConfig(name='Mountains', height_scale=500, mountains_enabled=True, mountains_intensity=1.5, blend_weights=(0.0, 1.0, 0.0, 0.6), terrain_height_scale=1.0/700.0, trees_enabled=True, tree_density=0.15),
     'gentle_meadow': BiomeConfig(name='Gentle Meadow', base_height=0.0, height_scale=80.0, hills_scale=0.003, hills_intensity=0.8, mountains_enabled=False, valleys_enabled=True, valleys_scale=0.002, valleys_depth=0.15, plateaus_enabled=False, color_gradient=[(0.0, (0.30, 0.50, 0.22)), (0.2, (0.38, 0.58, 0.28)), (0.5, (0.45, 0.62, 0.32)), (0.7, (0.50, 0.65, 0.35)), (1.0, (0.55, 0.68, 0.38))], blend_weights=(1.2, 0.2, 0.1, 0.0), terrain_height_scale=1.0/120.0, trees_enabled=True, tree_density=0.4),
     'rolling_highlands': BiomeConfig(name='Rolling Highlands', base_height=20.0, height_scale=150.0, hills_scale=0.004, hills_intensity=0.7, mountains_enabled=True, mountains_scale=0.006, mountains_intensity=0.5, mountains_sharpness=0.3, valleys_enabled=True, valleys_scale=0.003, valleys_depth=0.25, plateaus_enabled=False, color_gradient=[(0.0, (0.28, 0.48, 0.20)), (0.25, (0.38, 0.55, 0.28)), (0.5, (0.45, 0.60, 0.32)), (0.7, (0.50, 0.55, 0.38)), (0.85, (0.55, 0.52, 0.42)), (1.0, (0.65, 0.62, 0.55))], blend_weights=(1.0, 0.4, 0.2, 0.1), terrain_height_scale=1.0/225.0, trees_enabled=True, tree_density=0.3),
     'rocky_mountains': BiomeConfig(name='Rocky Mountains', base_height=50.0, height_scale=300.0, hills_scale=0.003, hills_intensity=0.4, mountains_enabled=True, mountains_scale=0.008, mountains_intensity=1.0, mountains_sharpness=0.6, valleys_enabled=True, valleys_scale=0.004, valleys_depth=0.35, plateaus_enabled=False, color_gradient=[(0.0, (0.30, 0.45, 0.22)), (0.15, (0.38, 0.52, 0.28)), (0.3, (0.42, 0.40, 0.32)), (0.5, (0.50, 0.45, 0.38)), (0.7, (0.58, 0.52, 0.45)), (0.85, (0.68, 0.65, 0.58)), (1.0, (0.88, 0.86, 0.82))], blend_weights=(0.1, 1.2, 0.0, 0.5), terrain_height_scale=1.0/450.0, trees_enabled=True, tree_density=0.15),
@@ -298,6 +298,26 @@ BIOMES = {
     'alpine_forest': BiomeConfig(name='Alpine Forest', base_height=30.0, height_scale=220.0, hills_scale=0.004, hills_intensity=0.6, mountains_enabled=True, mountains_scale=0.007, mountains_intensity=0.8, mountains_sharpness=0.45, valleys_enabled=True, valleys_scale=0.003, valleys_depth=0.3, plateaus_enabled=False, color_gradient=[(0.0, (0.18, 0.35, 0.15)), (0.2, (0.25, 0.45, 0.20)), (0.4, (0.35, 0.52, 0.28)), (0.55, (0.42, 0.48, 0.32)), (0.7, (0.52, 0.50, 0.45)), (0.85, (0.65, 0.63, 0.58)), (1.0, (0.92, 0.94, 0.96))], blend_weights=(0.8, 0.6, 0.0, 0.4), terrain_height_scale=1.0/330.0, trees_enabled=True, tree_density=0.8),
     'coastal_cliffs': BiomeConfig(name='Coastal Cliffs', base_height=0.0, height_scale=120.0, hills_scale=0.005, hills_intensity=0.5, mountains_enabled=True, mountains_scale=0.01, mountains_intensity=0.6, mountains_sharpness=0.7, valleys_enabled=False, plateaus_enabled=True, plateaus_scale=0.008, plateaus_intensity=0.4, plateaus_flatness=0.6, color_gradient=[(0.0, (0.25, 0.45, 0.20)), (0.2, (0.35, 0.52, 0.28)), (0.4, (0.40, 0.38, 0.30)), (0.6, (0.48, 0.44, 0.38)), (0.8, (0.55, 0.50, 0.42)), (1.0, (0.62, 0.58, 0.48))], blend_weights=(0.3, 0.8, 0.2, 0.0), terrain_height_scale=1.0/180.0, trees_enabled=True, tree_density=0.1),
 }
+
+def biome_display_name(name) -> str:
+    """A biome name without decoration: printable ASCII, trimmed.
+
+    The built-in names used to carry emoji ("Grassy Hills 🌿"), and maps saved
+    then still do; this is the name those maps mean.
+    """
+    return ''.join(ch for ch in str(name) if ' ' <= ch <= '~').strip()
+
+
+def biome_key_for_name(name) -> str:
+    """The BIOMES key a biome display name refers to ("Low Poly Valley" ->
+    "low_poly_valley"), ignoring any decoration an older map saved with it."""
+    return biome_display_name(name).lower().replace(' ', '_')
+
+
+#: What a newly created terrain starts as. A map that saves its terrain keeps
+#: whatever it saved; these apply to terrain created fresh in the editor.
+DEFAULT_BIOME = 'low_poly_valley'
+DEFAULT_USE_TEXTURES = True
 
 # ============================================================================
 # MAIN TERRAIN CLASS
@@ -346,15 +366,15 @@ class Terrain:
         self.seed = seed
         self.noise = PerlinNoise(seed)
         self.features = TerrainFeatures(self.noise, seed)
-        self.biome: BiomeConfig = BIOMES['grassy_hills']
+        self.biome: BiomeConfig = BIOMES[DEFAULT_BIOME]
         self.chunk_size: float = self.DEFAULT_CHUNK_SIZE
         self.mesh_scale: float = 1.0
         self.base_resolution: int = 48
         self.offset_x: float = 0.0
         self.offset_z: float = 0.0
         self.offset_y: float = 0.0
-        # Terrain starts in vertex-colour mode; texture blending is opt-in.
-        self.use_textures: bool = False
+        # New terrain starts textured; maps that saved use_textures keep it.
+        self.use_textures: bool = DEFAULT_USE_TEXTURES
         self.flat_mode: bool = False
         #: Dense per-chunk state (residency, LOD, the one heightfield both
         #: rendering and collision read). See engine.terrain_table.
@@ -1795,7 +1815,9 @@ class Terrain:
         else:
             self.grass_color = tuple(self.biome.color_gradient[0][1])
         self.grass_color_custom = bool(data.get('grass_color_custom', saved_grass_color is not None))
-        if 'custom_biome' in data: self.biome = BiomeConfig.from_dict(data['custom_biome'])
+        if 'custom_biome' in data:
+            self.biome = BiomeConfig.from_dict(data['custom_biome'])
+            self.biome.name = biome_display_name(self.biome.name)
         # Sculpt offsets
         self.sculpt_offsets = {}
         self._touch_sculpt()
