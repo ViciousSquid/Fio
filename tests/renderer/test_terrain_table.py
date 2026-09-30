@@ -186,27 +186,33 @@ def terrain():
     return t
 
 
-@pytest.mark.parametrize("cx,cz,res,flat", [
-    (0, -2, 48, False),     # sculpted
-    (5, 7, 32, False),
-    (-3, 1, 16, True),      # flat mode
-    (20, 20, 8, False),
+@pytest.mark.parametrize("cx,cz,res", [
+    (0, -2, 48),     # sculpted
+    (5, 7, 32),
+    (-3, 1, 16),
+    (20, 20, 8),
 ])
-def test_the_mesh_built_from_the_table_heights_is_bit_identical(terrain, cx, cz, res, flat):
-    terrain.flat_mode = flat
-    try:
-        slot = terrain.table.ensure(cx, cz, terrain.chunk_size,
-                                    terrain.offset_x, terrain.offset_z)
-        heights = terrain._chunk_heights(slot, res)
-        mesh = terrain._mesh_from_heights(slot, res, heights).reshape(-1, 14)
-        ref, lo, hi = reference_chunk_mesh(
-            terrain, float(terrain.table.world[slot, 0]),
-            float(terrain.table.world[slot, 1]), float(terrain.table.size[slot]), res)
-        assert np.array_equal(mesh, ref)
-        terrain.table.store(slot, res, RES.index(res), heights)
-        assert terrain.table.min_y[slot] == lo and terrain.table.max_y[slot] == hi
-    finally:
-        terrain.flat_mode = False
+def test_the_table_heights_are_the_ones_the_old_mesh_was_built_from(terrain, cx, cz, res):
+    """Every vertex height of the frozen CPU mesh is a table height, bit for bit.
+
+    The rest of each vertex (normal, colour, UV, smooth normal) is rebuilt on
+    the GPU from these heights; that half of the parity is proven in
+    tests/visual/test_terrain_heightfield_parity.py.
+    """
+    slot = terrain.table.ensure(cx, cz, terrain.chunk_size,
+                                terrain.offset_x, terrain.offset_z)
+    heights = terrain._chunk_heights(slot, res)
+    terrain.table.store(slot, res, RES.index(res), heights)
+    ref, lo, hi = reference_chunk_mesh(
+        terrain, float(terrain.table.world[slot, 0]),
+        float(terrain.table.world[slot, 1]), float(terrain.table.size[slot]), res)
+    q = np.arange(res * res)
+    i, k = q // res, q % res
+    corners = ((0, 0), (1, 0), (0, 1), (1, 0), (1, 1), (0, 1))
+    stored = terrain.table.heights[slot]
+    for c, (di, dk) in enumerate(corners):
+        assert np.array_equal(ref[c::6, 1], stored[i + di, k + dk])
+    assert terrain.table.min_y[slot] == lo and terrain.table.max_y[slot] == hi
 
 
 def surface_height(mesh, res, x, z, world_x, world_z, size):

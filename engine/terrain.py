@@ -320,10 +320,6 @@ class Terrain:
     #: Two builds back to back in one frame were the hitch felt when walking
     #: into new terrain.
     UPDATE_BUDGET_MS = 4.0
-    #: Draw chunks from their height grid on the GPU (a texture layer per
-    #: chunk, every vertex attribute rebuilt in the vertex shader) rather than
-    #: from a 14-float CPU vertex buffer. Same triangles, same attributes.
-    gpu_heightfield = True
     #: Largest colour gradient the heightfield shader holds (MAX_GRADIENT_STOPS).
     MAX_GRADIENT_STOPS = 32
     #: Texture layers per height-grid page; clamped to the driver's limit.
@@ -333,8 +329,6 @@ class Terrain:
         'projection', 'view', 'active_lights', 'use_textures', 'lod_level',
         'texGrass', 'texRock', 'texSand', 'texSnow', 'biomeWeights',
         'terrainHeightScale',
-    )
-    _HEIGHTFIELD_UNIFORM_NAMES = (
         'uHeights', 'uChunkI', 'uChunkX', 'uChunkY', 'uTiling', 'uFlatMode',
         'uGradCount', 'uGradH', 'uGradC', 'uGradW', 'uGradD',
     )
@@ -367,9 +361,6 @@ class Terrain:
         self.table = TerrainTable()
         # GL objects per table slot. The table is GL-free; these arrays are
         # the terrain renderer's half, indexed by the same slot.
-        self._mesh_vao = np.zeros(0, dtype=np.int64)
-        self._mesh_vbo = np.zeros(0, dtype=np.int64)
-        self._vertex_count = np.zeros(0, dtype=np.int64)
         self._grass_vao = np.zeros(0, dtype=np.int64)
         self._grass_vbo = np.zeros(0, dtype=np.int64)
         self._grass_count = np.zeros(0, dtype=np.int64)
@@ -384,9 +375,6 @@ class Terrain:
         self.culled_chunks: int = 0
         self.shader_program: int = 0
         self.uniforms: Dict[str, int] = {}
-        #: The heightfield program and its uniform table (gpu_heightfield).
-        self.heightfield_program: int = 0
-        self.hf_uniforms: Dict[str, int] = {}
         # Height-grid texture pages (GL_TEXTURE_2D_ARRAY, R32F), slot ->
         # (page, layer); the table version each slot was last uploaded at;
         # the empty VAO an attribute-less draw needs in a core profile.
@@ -482,10 +470,8 @@ class Terrain:
         self.shader_program = self._compile_program('terrain.vert')
         if not self.shader_program:
             return
-        self.heightfield_program = self._compile_program('terrain_heightfield.vert')
         self._init_grass_shader()
         self.uniforms = {}
-        self.hf_uniforms = {}
 
     def _init_grass_shader(self):
         try:
@@ -740,8 +726,7 @@ class Terrain:
         cap = self.table.capacity
         if len(getattr(self, '_grass_count', ())) >= cap:
             return
-        for name in ('_mesh_vao', '_mesh_vbo', '_vertex_count',
-                     '_grass_vao', '_grass_vbo', '_grass_count', '_gpu_version'):
+        for name in ('_grass_vao', '_grass_vbo', '_grass_count', '_gpu_version'):
             old = getattr(self, name, np.zeros(0, dtype=np.int64))
             new = np.zeros(cap, dtype=np.int64)
             new[:len(old)] = old
@@ -753,16 +738,10 @@ class Terrain:
             return
         self._sync_gl_columns()
         for slot in slots:
-            if self._mesh_vao[slot]:
-                gl.glDeleteVertexArrays(1, [int(self._mesh_vao[slot])])
-            if self._mesh_vbo[slot]:
-                gl.glDeleteBuffers(1, [int(self._mesh_vbo[slot])])
             if self._grass_vao[slot]:
                 gl.glDeleteVertexArrays(1, [int(self._grass_vao[slot])])
             if self._grass_vbo[slot]:
                 gl.glDeleteBuffers(1, [int(self._grass_vbo[slot])])
-            self._mesh_vao[slot] = self._mesh_vbo[slot] = 0
-            self._vertex_count[slot] = 0
             self._grass_vao[slot] = self._grass_vbo[slot] = 0
             self._grass_count[slot] = 0
 
@@ -839,142 +818,17 @@ class Terrain:
         heights_flat = self._get_heights_batch(wx_flat, wz_flat)
         return heights_flat.reshape((resolution + 1, resolution + 1))
 
-    def _mesh_from_heights(self, slot: int, resolution: int,
-                           heights: np.ndarray) -> np.ndarray:
-        """The CPU mesh for a slot's height grid: 6 vertices x 14 floats a quad."""
-        table = self.table
-        step = float(table.size[slot]) / resolution
-        base_x = float(table.world[slot, 0])
-        base_z = float(table.world[slot, 1])
-
-        grad_x, grad_z = np.gradient(heights, step)
-        sn_x = -grad_x
-        sn_y = np.ones_like(grad_x)
-        sn_z = -grad_z
-        len_sn = np.sqrt(sn_x**2 + sn_y**2 + sn_z**2)
-        sn_x /= len_sn
-        sn_y /= len_sn
-        sn_z /= len_sn
-        smooth_normals = np.stack([sn_x, sn_y, sn_z], axis=-1)
-        
-        min_height = float(heights.min())
-        max_height = float(heights.max())
-        height_range = max_height - min_height if max_height > min_height else 1.0
-        
-        y00 = heights[:-1, :-1]
-        y10 = heights[1:, :-1]
-        y01 = heights[:-1, 1:]
-        y11 = heights[1:, 1:]
-        
-        sn00 = smooth_normals[:-1, :-1]
-        sn10 = smooth_normals[1:, :-1]
-        sn01 = smooth_normals[:-1, 1:]
-        sn11 = smooth_normals[1:, 1:]
-        
-        ix_q = np.arange(resolution, dtype=np.float32)
-        iz_q = np.arange(resolution, dtype=np.float32)
-        ix_qg, iz_qg = np.meshgrid(ix_q, iz_q, indexing='ij')
-        
-        x0_grid = base_x + ix_qg * step
-        x1_grid = base_x + (ix_qg + 1) * step
-        z0_grid = base_z + iz_qg * step
-        z1_grid = base_z + (iz_qg + 1) * step
-        
-        num_quads = resolution * resolution
-        
-        t1_v0 = np.stack([x0_grid, y00, z0_grid], axis=-1).reshape(-1, 3)
-        t1_v1 = np.stack([x1_grid, y10, z0_grid], axis=-1).reshape(-1, 3)
-        t1_v2 = np.stack([x0_grid, y01, z1_grid], axis=-1).reshape(-1, 3)
-        t1_sn0 = sn00.reshape(-1, 3)
-        t1_sn1 = sn10.reshape(-1, 3)
-        t1_sn2 = sn01.reshape(-1, 3)
-        
-        edge1_t1 = t1_v1 - t1_v0
-        edge2_t1 = t1_v2 - t1_v0
-        n1 = np.cross(edge1_t1, edge2_t1)
-        n1_len = np.linalg.norm(n1, axis=1, keepdims=True)
-        n1_len[n1_len == 0] = 1
-        n1 = n1 / n1_len
-        
-        if self.flat_mode:
-            colors1 = np.full((num_quads, 3), 0.7, dtype=np.float32)
-        else:
-            centroid_y1 = (y00 + y10 + y01).flatten() / 3.0
-            norm_h1 = (centroid_y1 - min_height) / height_range
-            colors1 = self._get_colors_batch(centroid_y1, norm_h1)
-            var_seed1 = (ix_qg.flatten() * 1000 + iz_qg.flatten()) % 100
-            variation1 = (var_seed1 / 100.0 - 0.5) * 0.08
-            colors1 = np.clip(colors1 + variation1[:, np.newaxis], 0, 1)
-        
-        t2_v0 = np.stack([x1_grid, y10, z0_grid], axis=-1).reshape(-1, 3)
-        t2_v1 = np.stack([x1_grid, y11, z1_grid], axis=-1).reshape(-1, 3)
-        t2_v2 = np.stack([x0_grid, y01, z1_grid], axis=-1).reshape(-1, 3)
-        t2_sn0 = sn10.reshape(-1, 3)
-        t2_sn1 = sn11.reshape(-1, 3)
-        t2_sn2 = sn01.reshape(-1, 3)
-        
-        edge1_t2 = t2_v1 - t2_v0
-        edge2_t2 = t2_v2 - t2_v0
-        n2 = np.cross(edge1_t2, edge2_t2)
-        n2_len = np.linalg.norm(n2, axis=1, keepdims=True)
-        n2_len[n2_len == 0] = 1
-        n2 = n2 / n2_len
-        
-        if self.flat_mode:
-            colors2 = np.full((num_quads, 3), 0.7, dtype=np.float32)
-        else:
-            centroid_y2 = (y10 + y11 + y01).flatten() / 3.0
-            norm_h2 = (centroid_y2 - min_height) / height_range
-            colors2 = self._get_colors_batch(centroid_y2, norm_h2)
-            var_seed2 = ((ix_qg.flatten() + 1000) * 1000 + iz_qg.flatten() + 1000) % 100
-            variation2 = (var_seed2 / 100.0 - 0.5) * 0.08
-            colors2 = np.clip(colors2 + variation2[:, np.newaxis], 0, 1)
-        
-        ux0 = x0_grid.flatten() / self.TILING_SCALE
-        uz0 = z0_grid.flatten() / self.TILING_SCALE
-        ux1 = x1_grid.flatten() / self.TILING_SCALE
-        uz1 = z1_grid.flatten() / self.TILING_SCALE
-        
-        vertices = np.zeros((num_quads * 6, 14), dtype=np.float32)
-        vertices[0::6, 0:3] = t1_v0;  vertices[0::6, 3:6] = n1;  vertices[0::6, 6:9] = colors1;  vertices[0::6, 9:11] = np.stack([ux0, uz0], axis=1); vertices[0::6, 11:14] = t1_sn0
-        vertices[1::6, 0:3] = t1_v1;  vertices[1::6, 3:6] = n1;  vertices[1::6, 6:9] = colors1;  vertices[1::6, 9:11] = np.stack([ux1, uz0], axis=1); vertices[1::6, 11:14] = t1_sn1
-        vertices[2::6, 0:3] = t1_v2;  vertices[2::6, 3:6] = n1;  vertices[2::6, 6:9] = colors1;  vertices[2::6, 9:11] = np.stack([ux0, uz1], axis=1); vertices[2::6, 11:14] = t1_sn2
-        vertices[3::6, 0:3] = t2_v0;  vertices[3::6, 3:6] = n2;  vertices[3::6, 6:9] = colors2;  vertices[3::6, 9:11] = np.stack([ux1, uz0], axis=1); vertices[3::6, 11:14] = t2_sn0
-        vertices[4::6, 0:3] = t2_v1;  vertices[4::6, 3:6] = n2;  vertices[4::6, 6:9] = colors2;  vertices[4::6, 9:11] = np.stack([ux1, uz1], axis=1); vertices[4::6, 11:14] = t2_sn1
-        vertices[5::6, 0:3] = t2_v2;  vertices[5::6, 3:6] = n2;  vertices[5::6, 6:9] = colors2;  vertices[5::6, 9:11] = np.stack([ux0, uz1], axis=1); vertices[5::6, 11:14] = t2_sn2
-        
-        return vertices.flatten()
-
     def _upload_chunk(self, slot: int, resolution: int):
-        """Build one chunk at *resolution*: its heights, then its GPU copy."""
+        """Build one chunk at *resolution*: its heights, then its GPU copy.
+
+        The height grid is the whole of a chunk: the vertex shader rebuilds
+        position, normals, colour and UVs from it (see terrain.vert).
+        """
         heights = self._chunk_heights(slot, resolution)
         lod_index = (self.LOD_RESOLUTIONS.index(resolution)
                      if resolution in self.LOD_RESOLUTIONS else 0)
         self.table.store(slot, resolution, lod_index, heights)
-        if self.gpu_heightfield:
-            self._upload_heightfield(slot)
-            return
-        vertex_data = self._mesh_from_heights(slot, resolution, heights)
-        self._sync_gl_columns()
-        self._vertex_count[slot] = len(vertex_data) // 14
-        if not self._mesh_vao[slot]:
-            self._mesh_vao[slot] = int(gl.glGenVertexArrays(1))
-            self._mesh_vbo[slot] = int(gl.glGenBuffers(1))
-        gl.glBindVertexArray(int(self._mesh_vao[slot]))
-        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, int(self._mesh_vbo[slot]))
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, vertex_data.nbytes, vertex_data, gl.GL_STATIC_DRAW)
-        stride = 14 * 4
-        gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(0))
-        gl.glEnableVertexAttribArray(0)
-        gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(12))
-        gl.glEnableVertexAttribArray(1)
-        gl.glVertexAttribPointer(2, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(24))
-        gl.glEnableVertexAttribArray(2)
-        gl.glVertexAttribPointer(3, 2, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(36))
-        gl.glEnableVertexAttribArray(3)
-        gl.glVertexAttribPointer(4, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(44))
-        gl.glEnableVertexAttribArray(4)
-        gl.glBindVertexArray(0)
+        self._upload_heightfield(slot)
 
     # -- GPU heightfield --------------------------------------------------
 
@@ -1270,13 +1124,12 @@ class Terrain:
                           shadow_cubemaps=None, shadow_index_map=None, shadow_unit_base=4,
                           env_uniforms=None):
         if not self.enabled: return
-        gpu = bool(self.gpu_heightfield)
-        if not (self.heightfield_program if gpu else self.shader_program):
+        if not self.shader_program:
             self._init_shader()
-        prog = self.heightfield_program if gpu else self.shader_program
+        prog = self.shader_program
         if not prog:
             return
-        u = self.hf_uniforms if gpu else self.uniforms
+        u = self.uniforms
 
         # Terrain can be constructed before the GL context exists. In that
         # case _init_shader() cannot create the grass program either, and the
@@ -1294,8 +1147,7 @@ class Terrain:
         # defaults to texture unit 0, collides with the ``sampler2D`` terrain
         # textures bound there, and makes glDrawArrays raise
         # GL_INVALID_OPERATION.
-        names = self._UNIFORM_NAMES + (self._HEIGHTFIELD_UNIFORM_NAMES if gpu else ())
-        names += tuple(env_uniforms or ())
+        names = self._UNIFORM_NAMES + tuple(env_uniforms or ())
         names += tuple(f'shadowMaps[{i}]' for i in range(shaders.MAX_SHADOW_LIGHTS))
         for name in names:
             if name not in u:
@@ -1408,22 +1260,12 @@ class Terrain:
         self.culled_chunks = int(len(slots) - np.count_nonzero(visible))
 
         if self.wireframe: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
-        if gpu:
-            unit = shadow_unit_base + shaders.MAX_SHADOW_LIGHTS
-            self.set_heightfield_frame_uniforms(u, unit)
-            drawn = slots[visible & table.built[slots]]
-            self.total_triangles = self.draw_heightfield_slots(
-                u, drawn, unit, lod_level_loc)
-        else:
-            drawn = slots[visible]
-            drawn = drawn[(self._mesh_vao[drawn] != 0) & (self._vertex_count[drawn] > 0)]
-            for slot in drawn:
-                if lod_level_loc != -1:
-                    gl.glUniform1i(lod_level_loc, int(table.lod[slot]))
-                gl.glBindVertexArray(int(self._mesh_vao[slot]))
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, int(self._vertex_count[slot]))
-            self.total_triangles = int((self._vertex_count[drawn] // 3).sum())
-            gl.glBindVertexArray(0)
+        # The height grids live in texture units above the shadow cube-maps.
+        unit = shadow_unit_base + shaders.MAX_SHADOW_LIGHTS
+        self.set_heightfield_frame_uniforms(u, unit)
+        drawn = slots[visible & table.built[slots]]
+        self.total_triangles = self.draw_heightfield_slots(
+            u, drawn, unit, lod_level_loc)
         self.visible_chunks = int(len(drawn))
         #: The slots drawn this frame, in draw order (tests, Debug Tables).
         self.drawn_slots = drawn

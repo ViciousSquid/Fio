@@ -96,7 +96,7 @@ class Capture:
         from OpenGL.GL.shaders import compileShader
         from engine import shaders
         from engine.terrain import Terrain
-        vs = compileShader(shaders.DEFAULT_SHADERS['terrain_heightfield.vert'],
+        vs = compileShader(shaders.DEFAULT_SHADERS['terrain.vert'],
                            gl.GL_VERTEX_SHADER)
         self.program = gl.glCreateProgram()
         gl.glAttachShader(self.program, vs)
@@ -109,7 +109,7 @@ class Capture:
         assert gl.glGetProgramiv(self.program, gl.GL_LINK_STATUS), \
             gl.glGetProgramInfoLog(self.program)
         self.u = {n: gl.glGetUniformLocation(self.program, n)
-                  for n in Terrain._UNIFORM_NAMES + Terrain._HEIGHTFIELD_UNIFORM_NAMES}
+                  for n in Terrain._UNIFORM_NAMES}
         self.vao = gl.glGenVertexArrays(1)
         self.buffer = gl.glGenBuffers(1)
 
@@ -332,7 +332,7 @@ def render_pair(context, t, eye, target, far, lights=True):
 
     # Reference: identical uniform state, the frozen meshes, the old shader.
     ref = ReferenceDraw()
-    ref.copy_uniforms_from(t.heightfield_program)
+    ref.copy_uniforms_from(t.shader_program)
     context.bind()
     gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
     gl.glUseProgram(ref.program)
