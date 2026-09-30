@@ -270,6 +270,9 @@ class ThreadedGameState:
     """
     Thread-safe container for communication between UI/Input and Logic threads.
     """
+
+    #: Pending sound requests kept while the UI is not draining them.
+    SOUND_QUEUE_LIMIT = 256
     def __init__(self):
         self._render_state_lock = _OwnedLock()
         #: Lease releases a finalizer could not take the lock for (it ran on
@@ -324,9 +327,13 @@ class ThreadedGameState:
             'jump': False, 'crouch': False,
         }
 
-        # Sound queue — thread-safe, accessed from logic and render threads
+        # Sound queue — thread-safe, accessed from logic and render threads.
+        # Bounded: the UI drains it every frame, so it only fills while the UI
+        # is stalled (a modal dialog, a long hitch), and then the oldest
+        # requests are stale; unbounded, a 1000-monster fight queued ~25 a
+        # second to play all at once when the UI came back.
         self._sound_lock = threading.Lock()
-        self.sound_queue = deque()
+        self.sound_queue = deque(maxlen=self.SOUND_QUEUE_LIMIT)
 
         # Console command queue — thread-safe. The I/O system (logic thread)
         # enqueues command strings (e.g. from a logic_command entity fired by a

@@ -172,3 +172,14 @@ def test_export_writes_every_table_of_a_real_frame(window, tmp_path):
     with zipfile.ZipFile(path) as archive:
         tables = {n.split("/")[0] for n in archive.namelist() if n.endswith(".npy")}
     assert {"RenderTable", "EntityTable"} <= tables
+
+
+def test_follow_selection_names_the_render_row_key_and_run(window):
+    instrument, game_state = window
+    brush = game_state._read_state.render_table.brushes[0]
+    instrument.main_window.state = SimpleNamespace(
+        selected_object=brush, selected_objects=[brush])
+    instrument.refresh()
+    status = instrument.status.text()
+    assert "FOLLOW id=%s" % brush["id"] in status
+    assert "render-row=0" in status and "key=0x" in status and "run=0" in status

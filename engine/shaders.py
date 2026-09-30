@@ -3,7 +3,6 @@ import platform
 import re
 import sys
 
-SHADER_DIR = os.path.join(os.path.dirname(__file__), 'shaders')
 
 
 # ==============================================================================
@@ -1719,16 +1718,3 @@ SHADER_MAP = {
     # Procedural is available but not yet integrated into the main render loop
     'procedural':    ('procedural_vert.glsl', 'procedural_frag.glsl'),
 }
-
-def load_shader_source(filename):
-    """Loads a shader source string from the shader directory."""
-    filepath = os.path.join(SHADER_DIR, filename)
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            return f.read()
-    except FileNotFoundError:
-        print(f"FATAL: Shader file not found: {filepath}")
-        return ""
-    except Exception as e:
-        print(f"FATAL: Error reading shader file {filepath}: {e}")
-        return ""

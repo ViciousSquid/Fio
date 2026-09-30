@@ -994,16 +994,11 @@ class LevelChanger(Thing):
         self.properties.setdefault('radius', 128.0)
         self.properties.setdefault('usable', False)
         
-        # Store direct reference to MainWindow for reliable level changing
+        # An explicit window to signal (tests set one). Otherwise it is found
+        # when the level change fires: an entity holding the MainWindow could
+        # not be cloned or copied (deepcopy reached the window), and kept the
+        # window alive from the world.
         self._main_window = None
-        try:
-            from PyQt5.QtWidgets import QApplication
-            for widget in QApplication.topLevelWidgets():
-                if widget.__class__.__name__ == 'MainWindow':
-                    self._main_window = widget
-                    break
-        except Exception:
-            pass
 
     def on_input(self, input_name: str, parameter: str = ""):
         """Called by I/O system and by ent_fire."""
@@ -1053,7 +1048,6 @@ class LevelChanger(Thing):
                 for w in QApplication.topLevelWidgets():
                     if w.__class__.__name__ == 'MainWindow':
                         main_window = w
-                        self._main_window = w
                         break
             except Exception as e:
                 debug_log("Error", f"LevelChanger QApplication lookup failed: {e}")

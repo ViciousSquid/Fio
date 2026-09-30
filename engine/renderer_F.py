@@ -810,19 +810,6 @@ class Renderer_F(BaseRenderer):
         return (etable is not None and thing_slots is not None
                 and thing_hidden is not None and len(thing_hidden) >= etable.count)
 
-    def will_instance_sprites(self, config, brush_slots):
-        """Whether the billboard pass will read columns rather than objects.
-
-        Keep this predicate identical to the renderer's actual sprite-path
-        requirements. The Qt view uses it to avoid rebuilding per-entity
-        texture overrides when the dense EntityTable path will resolve its own
-        textures. A missing predicate here must never force an object-based sprite
-        path back into the frame; dense EntityTable instancing is the only
-        supported renderer path.
-        """
-        return (self.entities_are_numeric(config, brush_slots)
-                and 'sprite_instanced' in self.shaders)
-
     def _portal_numeric_scene_inputs(self, projection, view, config):
         """Resolve a portal virtual scene entirely from the dense projections.
 
