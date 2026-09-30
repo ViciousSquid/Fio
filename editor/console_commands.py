@@ -1,6 +1,9 @@
 import contextlib
+import math
 import os
 import json
+
+import glm
 from PyQt5.QtWidgets import QMessageBox
 
 from editor.debug_console import debug_log
@@ -1522,11 +1525,22 @@ entity to drive them from the I/O system.</i><br>
             debug_log("Error", f"Entity '{name}' not found")
             return
 
+        props = entity if isinstance(entity, dict) else entity.properties
+        # The console hands over text, and every flag is read as bool(value):
+        # stored as the string "false", `setprop door hidden false` hid it.
+        current = props.get(key)
+        if (current is None or isinstance(current, bool)) and \
+                value.strip().lower() in ('true', 'false'):
+            value = value.strip().lower() == 'true'
+
         self.editor_state.save_state()
-        if isinstance(entity, dict):
-            entity[key] = value
+        if key == 'hidden' and isinstance(value, bool):
+            # As hide/show: parking-aware, and a brush's collision follows.
+            self._set_hidden(entity, value)
+        elif key == 'disabled' and isinstance(value, bool):
+            set_authored_flag(entity, 'disabled', value)
         else:
-            entity.properties[key] = value
+            props[key] = value
         touch(entity)
 
         debug_log("Info", f"Set {name}.{key} = {value}")
@@ -2053,8 +2067,15 @@ entity to drive them from the I/O system.</i><br>
             x = float(parts[0])
             y = float(parts[1])
             z = float(parts[2])
+            if not all(math.isfinite(c) for c in (x, y, z)):
+                raise ValueError
 
-            self.main_window.view_3d.player.position = [x, y, z]
+            # As a Teleport trigger does. ``player.position`` is no attribute
+            # of Player: the command reported a teleport and moved nothing.
+            player = self.main_window.view_3d.player
+            with self._io_dispatch_lock():
+                player.pos = glm.vec3(x, y, z)
+                player.velocity = glm.vec3(0, 0, 0)
             debug_log("Info", f"Player teleported to [{x:.1f}, {y:.1f}, {z:.1f}]")
             self.main_window.show_toast(f"Teleported to {x:.1f}, {y:.1f}, {z:.1f}")
         except Exception:

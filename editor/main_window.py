@@ -476,10 +476,12 @@ class MainWindow(QMainWindow):
         if not hasattr(self, 'recent_menu'):
             return
         
+        # Actions are parented to the menu: clear() deletes only the actions
+        # it owns, so window-owned ones piled up on every map load.
         self.recent_menu.clear()
         
         if not self.recent_files:
-            dummy = QAction("No recent files", self)
+            dummy = QAction("No recent files", self.recent_menu)
             dummy.setEnabled(False)
             self.recent_menu.addAction(dummy)
             return
@@ -490,7 +492,7 @@ class MainWindow(QMainWindow):
                 continue
                 
             fname = os.path.basename(path)
-            action = QAction(fname, self)
+            action = QAction(fname, self.recent_menu)
             action.setToolTip(path)
             # Use lambda with default arg to capture variable in loop
             action.triggered.connect(lambda checked, p=path: self.load_level_file(p))
@@ -3983,13 +3985,19 @@ class MainWindow(QMainWindow):
         """
         # Refuse a malformed document before the current scene is cleared.
         self.state.validate_level_data(level_data)
-        self.state.clear_scene()
+        # load_from_data parses the whole map before it replaces the scene
+        # (and does everything clear_scene did but mark lighting dirty), so a
+        # map that fails to parse leaves the open level as it was. Clearing
+        # first emptied the scene for any map that got past the shape check.
+        self.state.load_from_data(level_data)
+        self.state.mark_lighting_dirty()
 
-        # Clear existing terrain BEFORE loading new data
+        # Drop the previous map's terrain; this also clears terrain_data,
+        # so keep the one the new map just brought.
+        terrain_data = self.state.terrain_data
         self._clear_terrain()
         self.view_3d.terrain = None
-
-        self.state.load_from_data(level_data)
+        self.state.terrain_data = terrain_data
 
         # Re-initialize terrain if present in the new map
         if getattr(self.state, 'terrain_data', None):
@@ -4033,6 +4041,7 @@ class MainWindow(QMainWindow):
             return False
 
         loaded = False
+        open_level = None
         try:
             # A level change during play: end the running session *before*
             # the scene is replaced.  Its teardown (movers, doors, Props, the
@@ -4053,6 +4062,9 @@ class MainWindow(QMainWindow):
             # From here the scene is being replaced.  Until it has been, it
             # belongs to no file: a failure part-way must never leave the
             # previous map's path on a half-built scene for Ctrl+S to write.
+            open_level = (self.file_path, self.unsaved_changes,
+                          getattr(self.state, 'brushes', None),
+                          getattr(self.state, 'things', None))
             self.file_path = None
             self._apply_level_data(level_data)
 
@@ -4124,7 +4136,15 @@ class MainWindow(QMainWindow):
             return True
 
         except Exception as e:
-            if not loaded:
+            if (not loaded and open_level is not None
+                    and open_level[2] is not None and open_level[3] is not None
+                    and getattr(self.state, 'brushes', None) is open_level[2]
+                    and getattr(self.state, 'things', None) is open_level[3]):
+                # The map failed to parse: the open level was never replaced,
+                # so it keeps its file.
+                self.file_path, self.unsaved_changes = open_level[:2]
+                self.update_title()
+            elif not loaded:
                 # Whatever made it into the scene is unsaved work of no file.
                 self.unsaved_changes = True
                 self.update_title()
@@ -4680,11 +4700,20 @@ class MainWindow(QMainWindow):
         problems = validation['problems']
         total = validation['total']
 
+        def _name(entity):
+            if hasattr(entity, 'properties'):
+                return entity.properties.get('name', '?')
+            return entity.get('name', '?')
+
         # Format validation problems.  I/O and PathNode problems use the
         # same four-item tuple shape, but their connection objects differ.
+        # Missing targets first: a connection pointing at nothing is a broken
+        # map, while an unknown input is usually a typo in an otherwise sound one.
+        ordered = sorted(problems,
+                         key=lambda p: 0 if p[2] == PROBLEM_MISSING_TARGET else 1)
         lines = []
 
-        for entity, connection, code, message in problems:
+        for entity, connection, code, message in ordered:
             if code in (
                 "missing_pathnode_target",
                 "invalid_pathnode_target",
@@ -4700,8 +4729,11 @@ class MainWindow(QMainWindow):
                     "PathNode '%s': %s" % (name, message)
                 )
             else:
-                # Existing I/O validation message.
-                lines.append(message)
+                # An I/O message names the target, not the connection's
+                # owner: say which entity and output it is.
+                lines.append("  %s.%s %s" % (
+                    _name(entity), getattr(connection, 'output_name', '?'),
+                    message))
 
         QMessageBox.warning(
             self,
@@ -4712,26 +4744,6 @@ class MainWindow(QMainWindow):
                 total,
                 "\n".join(lines),
             ),
-        )
-        return
-
-        def _name(entity):
-            if hasattr(entity, 'properties'):
-                return entity.properties.get('name', '?')
-            return entity.get('name', '?')
-
-        # Missing targets first: a connection pointing at nothing is a broken
-        # map, while an unknown input is usually a typo in an otherwise sound one.
-        ordered = sorted(problems,
-                         key=lambda p: 0 if p[2] == PROBLEM_MISSING_TARGET else 1)
-        lines = [
-            "  %s.%s %s" % (_name(entity), conn.output_name, message)
-            for entity, conn, _code, message in ordered
-        ]
-        QMessageBox.warning(
-            self, "Validate Connections",
-            "%d of %d connection(s) have problems:\n\n%s"
-            % (len(problems), total, "\n".join(lines))
         )
 
     def closeEvent(self, event):

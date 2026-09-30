@@ -1220,24 +1220,6 @@ class MonsterAI:
             found = distance[np.arange(len(rows)), best] <= limit
             nearest[rows] = np.where(found, cols[best], -1)
         return nearest
-        limit = np.float32(max_range) * np.float32(max_range)
-        targets = alive & (team_id >= 0)       # who can be anybody's enemy
-        for code in np.unique(team_id):
-            rows = np.flatnonzero(team_id == code)
-            cols = np.flatnonzero(targets & (team_id != code))
-            if not len(cols):
-                continue
-            a = p[rows]
-            b = p[cols]
-            dx = a[:, None, 0] - b[None, :, 0]
-            dy = a[:, None, 1] - b[None, :, 1]
-            dz = a[:, None, 2] - b[None, :, 2]
-            distance = dx * dx + dy * dy + dz * dz
-            distance[distance > limit] = np.float32(np.inf)
-            best = np.argmin(distance, axis=1)
-            found = np.isfinite(distance[np.arange(len(rows)), best])
-            nearest[rows] = np.where(found, cols[best], -1)
-        return nearest
 
     def _find_closest_enemy_scalar(self, thing, my_team: str, max_range: float):
         """The per-monster walk: the batch's reference, and its fallback."""

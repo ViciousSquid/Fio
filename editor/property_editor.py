@@ -425,7 +425,12 @@ class PropertyEditor(QWidget):
             kind = type(obj).__name__
 
         fields = []
-        for key, value in source.items():
+        # A snapshot, taken in one step: the logic thread adds its cache keys
+        # (_geo_epoch, _geo_cache, _aabb_*) to a brush dict the first time it
+        # projects it -- a brush undo/redo/paste has just created is being
+        # read here at that moment -- and iterating the live dict raised
+        # "dictionary changed size during iteration" out of the UI refresh.
+        for key, value in list(source.items()):
             if key in self._SIGNATURE_IGNORED or key.startswith('_geo_cache') \
                     or key.startswith('_box_shape') or key.startswith('_mesh_') \
                     or key.startswith('_mat_') or key.startswith('_nmat_') \
