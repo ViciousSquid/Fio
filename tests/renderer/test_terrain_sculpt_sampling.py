@@ -19,12 +19,13 @@ pytest.importorskip("glm")
 pytest.importorskip("OpenGL")
 
 from engine.terrain import Terrain  # noqa: E402
+from engine.terrain_table import TerrainTable  # noqa: E402
 
 
 def sculpted_terrain(seed=0):
     t = object.__new__(Terrain)
     t.sculpt_grid_resolution = 4.0
-    t.chunks = {}
+    t.table = TerrainTable()
     rng = np.random.default_rng(seed)
     t.sculpt_offsets = {
         (int(gx), int(gz)): float(rng.uniform(-40, 40))

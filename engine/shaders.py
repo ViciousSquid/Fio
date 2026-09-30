@@ -1284,12 +1284,18 @@ void main() {
 
     'terrain.vert': """#version 330 core
 precision highp float;
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-layout (location = 2) in vec3 aColor;
-layout (location = 3) in vec2 aTexCoord;
-layout (location = 4) in vec3 aSmoothNormal;
-
+precision highp int;
+// Terrain drawn from a heightfield: no vertex buffer at all.
+//
+// Each chunk is drawn as 6 vertices per quad, in exactly the order the CPU
+// mesh used -- quad q = ix * res + iz, triangle 1 at (ix,iz)(ix+1,iz)(ix,iz+1)
+// and triangle 2 at (ix+1,iz)(ix+1,iz+1)(ix,iz+1) -- and every attribute the
+// 14-float vertex carried is rebuilt here from the chunk's height grid:
+// position, the flat face normal, the per-triangle colour, the UV and the
+// smooth normal. The arithmetic follows the old NumPy builder step by step
+// (float32 throughout), including its quirks, which are preserved on purpose:
+// the face normal points down (cross(+x, +z) = -y), colour is normalised by
+// the chunk's own height range, and the "variation" seed reduces to iz.
 out vec3 FragPos;
 out mediump vec3 Normal;
 out mediump vec3 VertexColor;
@@ -1299,13 +1305,100 @@ out mediump vec3 SmoothNormal;
 uniform mat4 projection;
 uniform mat4 view;
 
+// Height grid of the chunk: texel (x = k, y = i) holds grid point (i, k).
+uniform highp sampler2DArray uHeights;
+uniform ivec2 uChunkI;     // (quads per side, texture layer)
+uniform vec3  uChunkX;     // (world x, world z, grid step), as float32
+uniform vec2  uChunkY;     // (chunk min height, height range; 1 when flat)
+uniform float uTiling;     // Terrain.TILING_SCALE
+uniform int   uFlatMode;
+
+// The biome colour gradient, pre-cast exactly as the CPU cast it: stop
+// heights and colours, and per segment the float32 width (h1 - h0, or 0 when
+// h1 <= h0) and colour delta (c1 - c0).
+#define MAX_GRADIENT_STOPS 32
+uniform int   uGradCount;
+uniform float uGradH[MAX_GRADIENT_STOPS];
+uniform vec3  uGradC[MAX_GRADIENT_STOPS];
+uniform float uGradW[MAX_GRADIENT_STOPS];
+uniform vec3  uGradD[MAX_GRADIENT_STOPS];
+
+float heightAt(int i, int k) {
+    return texelFetch(uHeights, ivec3(k, i, uChunkI.y), 0).r;
+}
+
+vec3 gridPoint(ivec2 p) {
+    return vec3(uChunkX.x + float(p.x) * uChunkX.z,
+                heightAt(p.x, p.y),
+                uChunkX.y + float(p.y) * uChunkX.z);
+}
+
+// np.gradient(heights, step): central differences inside, one-sided at the
+// chunk edge (edge_order=1).
+float gradientAlong(int i, int k, int res, bool alongX) {
+    int lo = (alongX ? i : k) == 0 ? 0 : -1;
+    int hi = (alongX ? i : k) == res ? 0 : 1;
+    ivec2 a = alongX ? ivec2(i + lo, k) : ivec2(i, k + lo);
+    ivec2 b = alongX ? ivec2(i + hi, k) : ivec2(i, k + hi);
+    float span = (hi - lo) == 2 ? 2.0 * uChunkX.z : uChunkX.z;
+    return (heightAt(b.x, b.y) - heightAt(a.x, a.y)) / span;
+}
+
+vec3 gradientColour(float h) {
+    if (uGradCount == 0) return vec3(0.5);
+    vec3 result = vec3(0.0);
+    for (int s = 0; s < uGradCount - 1; ++s) {
+        if (h >= uGradH[s] && h <= uGradH[s + 1]) {
+            float t = uGradW[s] > 0.0 ? (h - uGradH[s]) / uGradW[s] : 0.0;
+            result = uGradC[s] + t * uGradD[s];
+        }
+    }
+    if (h > uGradH[uGradCount - 1]) result = uGradC[uGradCount - 1];
+    return result;
+}
+
 void main() {
-    FragPos      = aPos;
-    Normal       = aNormal;
-    VertexColor  = aColor;
-    TexCoords    = aTexCoord;
-    SmoothNormal = aSmoothNormal;
-    gl_Position  = projection * view * vec4(aPos, 1.0);
+    int res = uChunkI.x;
+    int quad = gl_VertexID / 6;
+    int corner = gl_VertexID - quad * 6;
+    int ix = quad / res;
+    int iz = quad - ix * res;
+    bool second = corner >= 3;
+
+    ivec2 a = second ? ivec2(ix + 1, iz)     : ivec2(ix, iz);
+    ivec2 b = second ? ivec2(ix + 1, iz + 1) : ivec2(ix + 1, iz);
+    ivec2 c = ivec2(ix, iz + 1);
+    int own = second ? corner - 3 : corner;
+    ivec2 me = own == 0 ? a : (own == 1 ? b : c);
+
+    vec3 pa = gridPoint(a);
+    vec3 pb = gridPoint(b);
+    vec3 pc = gridPoint(c);
+    vec3 p  = own == 0 ? pa : (own == 1 ? pb : pc);
+
+    // Flat face normal: cross(v1 - v0, v2 - v0) / |.|, as stored.
+    vec3 n = cross(pb - pa, pc - pa);
+    float nlen = sqrt(dot(n, n));
+    Normal = nlen == 0.0 ? n : n / nlen;
+
+    if (uFlatMode != 0) {
+        VertexColor = vec3(0.7);
+    } else {
+        float meanHeight = (pa.y + pb.y + pc.y) / 3.0;   // "centroid" is reserved
+        float norm = clamp((meanHeight - uChunkY.x) / uChunkY.y, 0.0, 1.0);
+        int seed = second ? ((ix + 1000) * 1000 + iz + 1000) % 100
+                          : (ix * 1000 + iz) % 100;
+        float variation = (float(seed) / 100.0 - 0.5) * 0.08;
+        VertexColor = clamp(gradientColour(norm) + variation, 0.0, 1.0);
+    }
+
+    float gx = gradientAlong(me.x, me.y, res, true);
+    float gz = gradientAlong(me.x, me.y, res, false);
+    SmoothNormal = vec3(-gx, 1.0, -gz) / sqrt(gx * gx + 1.0 + gz * gz);
+
+    TexCoords = p.xz / uTiling;
+    FragPos = p;
+    gl_Position = projection * view * vec4(p, 1.0);
 }""",
 
     'terrain.frag': """#version 330 core
@@ -1384,7 +1477,11 @@ void main() {
             sand_col.rgb  * splat.b +
             snow_col.rgb  * splat.a
         );
-        texColor = splatColor * VertexColor * 1.1;
+        // The splat textures are the surface colour. (They used to be
+        // multiplied by the biome vertex colour as well, which roughly
+        // squared the darkness -- green grass times green vertex colour --
+        // and carried the vertex colour's per-chunk seams into textured mode.)
+        texColor = splatColor * 1.1;
     } else {
         texColor = VertexColor * 1.1;
     }
@@ -1486,7 +1583,11 @@ void main() {
     vec2 horizontal = side * sideAmount * width;
     horizontal += forward * bendAmount;
 
-    vec3 p = vec3(root + horizontal, iPosition.y + 0.02 + y * height);
+    // root/horizontal are ground-plane (x, z); the blade grows along +y.
+    // (Built as vec3(xz, h) this put each tuft's world z in its height, so
+    // tufts floated anywhere from below the ground to high in the sky.)
+    vec2 ground = root + horizontal;
+    vec3 p = vec3(ground.x, iPosition.y + 0.02 + y * height, ground.y);
     FragPos = p;
     BladeHeight = y;
     ColorVariation = iVariation;

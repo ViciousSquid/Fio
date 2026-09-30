@@ -7,7 +7,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor, QPainter, QLinearGradient, QPen
 
-from engine.terrain import Terrain, BIOMES
+from engine.terrain import (Terrain, BIOMES, DEFAULT_BIOME, DEFAULT_USE_TEXTURES,
+                            biome_key_for_name)
 
 
 class GradientPreview(QWidget):
@@ -241,7 +242,7 @@ class TerrainEditorPanel(QWidget):
         controls_layout.setSpacing(20)
         
         self.textures_checkbox = QCheckBox("Use Textures")
-        self.textures_checkbox.setChecked(False)
+        self.textures_checkbox.setChecked(DEFAULT_USE_TEXTURES)
         self.textures_checkbox.toggled.connect(self.on_textures_changed)
         controls_layout.addWidget(self.textures_checkbox)
         
@@ -1009,12 +1010,13 @@ class TerrainEditorPanel(QWidget):
     def load_from_terrain(self):
         """Load current terrain values into UI."""
         self._building_ui = True
-        self.textures_checkbox.setChecked(getattr(self.terrain, 'use_textures', False))
+        self.textures_checkbox.setChecked(
+            getattr(self.terrain, 'use_textures', DEFAULT_USE_TEXTURES))
         
         # Find biome index
         biome_index = 0
         for i in range(self.biome_combo.count()):
-            if self.biome_combo.itemData(i) == self.terrain.biome.name.lower().replace(' ', '_'):
+            if self.biome_combo.itemData(i) == biome_key_for_name(self.terrain.biome.name):
                 biome_index = i
                 break
         self.biome_combo.setCurrentIndex(biome_index)
@@ -1546,7 +1548,10 @@ class TerrainEditorPanel(QWidget):
     
     def reset_to_defaults(self):
         self._building_ui = True
-        self.biome_combo.setCurrentIndex(0)
+        default_index = max(0, self.biome_combo.findData(DEFAULT_BIOME))
+        self.biome_combo.setCurrentIndex(default_index)
+        self.textures_checkbox.setChecked(DEFAULT_USE_TEXTURES)
+        self.terrain.use_textures = DEFAULT_USE_TEXTURES
         self.seed_spin.setValue(42)
         self.chunk_size_spin.setValue(16)
         self.min_x_spin.setValue(-2)
@@ -1560,7 +1565,7 @@ class TerrainEditorPanel(QWidget):
         self.terrain.chunk_size = 256.0
         self.terrain.cleanup()
         self._building_ui = False
-        self.on_biome_changed(0)
+        self.on_biome_changed(default_index)
         self.on_bounds_changed(0)
     
     def showEvent(self, event):
