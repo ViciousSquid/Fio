@@ -1116,14 +1116,15 @@ class MainWindow(QMainWindow):
                 brush_geometry.translate_brush(obj, delta)
                 return
             pos = obj['pos']
+            pos[0] += delta[0]
+            pos[1] += delta[1]
+            pos[2] += delta[2]
         else:
-            pos = obj.pos
-            if not isinstance(pos, list):
-                pos = [pos[0], pos[1], pos[2]]
-                obj.pos = pos
-        pos[0] += delta[0]
-        pos[1] += delta[1]
-        pos[2] += delta[2]
+            # Assign, don't mutate in place: the assignment journals the move
+            # so the 3D view's entity table picks it up this frame.
+            obj.pos = [float(obj.pos[0]) + delta[0],
+                       float(obj.pos[1]) + delta[1],
+                       float(obj.pos[2]) + delta[2]]
 
     def clone_placement_active(self):
         return self.clone_placement is not None
