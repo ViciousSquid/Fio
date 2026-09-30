@@ -51,6 +51,15 @@ import numpy as np
 #: The largest grid a chunk is built at: LOD 0's 48 quads per side, plus one.
 MAX_GRID = 49
 
+#: Samples stored beyond each edge of a chunk's grid. They are never drawn;
+#: they let the smooth normal at the chunk's edge use central differences,
+#: exactly as the neighbouring chunk computes it on its side, so the normal --
+#: and the texture blend that reads it -- has no seam at chunk borders.
+GRID_BORDER = 1
+
+#: Side of the stored grid: the drawn grid plus the border on both sides.
+STORED_GRID = MAX_GRID + 2 * GRID_BORDER
+
 #: Every per-row column: ``(name, trailing shape, dtype, fill)``.
 _COLUMNS = (
     #: ``(cx, cz)`` chunk index, relative to the terrain offset.
@@ -87,7 +96,9 @@ _COLUMNS = (
     #: written or is free.
     ('seq', (), np.int64, 1),
     ('grass_dirty', (), bool, True),
-    ('heights', (MAX_GRID, MAX_GRID), np.float32, 0.0),
+    #: Grid point (i, k) of the drawn grid is heights[i + GRID_BORDER,
+    #: k + GRID_BORDER]; the border ring around it is for smooth normals only.
+    ('heights', (STORED_GRID, STORED_GRID), np.float32, 0.0),
 )
 
 _EMPTY = np.empty(0, dtype=np.intp)
@@ -397,13 +408,21 @@ class TerrainTable:
     # -- heights --------------------------------------------------------------
 
     def store(self, slot, resolution, lod_index, heights):
-        """Record a freshly built grid for *slot* (the chunk-building thread)."""
+        """Record a freshly built grid for *slot* (the chunk-building thread).
+
+        *heights* is the bordered grid, ``(resolution + 1 + 2 * GRID_BORDER)``
+        square. The height range -- which colour and culling read -- is taken
+        over the drawn grid only, never the border.
+        """
         n = resolution + 1
+        b = GRID_BORDER
+        m = n + 2 * b
+        inner = heights[b:b + n, b:b + n]
         self.seq[slot] += 1                         # odd: being written
-        self.heights[slot, :n, :n] = heights
+        self.heights[slot, :m, :m] = heights
         self.grid_res[slot] = resolution
-        self.min_y[slot] = float(heights.min())
-        self.max_y[slot] = float(heights.max())
+        self.min_y[slot] = float(inner.min())
+        self.max_y[slot] = float(inner.max())
         self.lod[slot] = lod_index
         self.built[slot] = True
         self.dirty[slot] = False
@@ -466,7 +485,7 @@ class TerrainTable:
         k = min(int(lz), n - 1)
         fx = lx - i
         fz = lz - k
-        h = self.heights[slot]
+        h = self.heights[slot, GRID_BORDER:, GRID_BORDER:]
         h10 = float(h[i + 1, k])
         h01 = float(h[i, k + 1])
         if fx + fz <= 1.0:

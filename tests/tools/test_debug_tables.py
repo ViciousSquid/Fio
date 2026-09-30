@@ -196,7 +196,7 @@ def _terrain_host(instrument):
     for cx in range(3):
         slot = table.ensure(cx, 0, 256.0, 0.0, 0.0)
         if cx < 2:
-            table.store(slot, 48, 0, np.full((49, 49), 10.0 * cx, dtype=np.float32))
+            table.store(slot, 48, 0, np.full((51, 51), 10.0 * cx, dtype=np.float32))
     table.release([table.slot_of_coord[(2, 0)]])     # a freed slot, awaiting reuse
     terrain = SimpleNamespace(
         table=table, enabled=True, streaming=True, stream_radius=2048.0,

@@ -9,7 +9,7 @@ import time
 import random
 from OpenGL.GL.shaders import compileProgram, compileShader
 from . import shaders
-from .terrain_table import MAX_GRID, TerrainTable
+from .terrain_table import GRID_BORDER, STORED_GRID, TerrainTable
 
 # ============================================================================
 # COMPATIBILITY EXPORTS
@@ -813,19 +813,23 @@ class Terrain:
         return result
     
     def _chunk_heights(self, slot: int, resolution: int) -> np.ndarray:
-        """The ``(resolution + 1)^2`` height grid of a table slot.
+        """The bordered height grid of a table slot.
 
         The one heightfield per chunk: the renderer draws it and collision
-        reads it. Sampled at exactly the float32 grid positions the mesh has
-        always used, so the heights are bit-for-bit the ones it was built from.
+        reads it. The drawn ``(resolution + 1)^2`` grid is sampled at exactly
+        the float32 grid positions the mesh has always used, so its heights are
+        bit-for-bit the ones it was built from; ``GRID_BORDER`` more samples,
+        at the same spacing, run beyond each edge for the smooth normals.
         """
         table = self.table
         step = float(table.size[slot]) / resolution
         base_x = float(table.world[slot, 0])
         base_z = float(table.world[slot, 1])
+        b = GRID_BORDER
+        m = resolution + 1 + 2 * b
 
-        ix_vals = np.arange(resolution + 1, dtype=np.float32)
-        iz_vals = np.arange(resolution + 1, dtype=np.float32)
+        ix_vals = np.arange(-b, resolution + 1 + b, dtype=np.float32)
+        iz_vals = np.arange(-b, resolution + 1 + b, dtype=np.float32)
         ix_grid, iz_grid = np.meshgrid(ix_vals, iz_vals, indexing='ij')
 
         wx = base_x + ix_grid * step
@@ -836,7 +840,7 @@ class Terrain:
 
         # --- FIXED: Use real heights even in flat mode ---
         heights_flat = self._get_heights_batch(wx_flat, wz_flat)
-        return heights_flat.reshape((resolution + 1, resolution + 1))
+        return heights_flat.reshape((m, m))
 
     def _upload_chunk(self, slot: int, resolution: int):
         """Build one chunk at *resolution*: its heights, then its GPU copy.
@@ -856,7 +860,8 @@ class Terrain:
         """The texture array holding height-grid page *page*, created on demand.
 
         One layer per table slot (slot = page * layers + layer), R32F, every
-        layer the LOD-0 grid size; a lower LOD uses the top-left corner.
+        layer the bordered LOD-0 grid size; a lower LOD uses the top-left
+        corner.
         """
         if not self._page_layers:
             limit = int(gl.glGetIntegerv(gl.GL_MAX_ARRAY_TEXTURE_LAYERS))
@@ -865,7 +870,7 @@ class Terrain:
             tex = int(gl.glGenTextures(1))
             gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
             gl.glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_R32F,
-                            MAX_GRID, MAX_GRID, self._page_layers, 0,
+                            STORED_GRID, STORED_GRID, self._page_layers, 0,
                             gl.GL_RED, gl.GL_FLOAT, None)
             for pname, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST),
                                  (gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST),
@@ -883,8 +888,9 @@ class Terrain:
             self._ensure_height_page(0)
         page, layer = divmod(int(slot), self._page_layers)
         tex = self._ensure_height_page(page)
-        n = int(table.grid_res[slot]) + 1
-        # Row i of the grid is texel row y = i; column k is x = k.
+        n = int(table.grid_res[slot]) + 1 + 2 * GRID_BORDER
+        # Stored row i is texel row y = i, column k is x = k; the drawn grid
+        # starts GRID_BORDER texels in (terrain.vert offsets by the same).
         data = np.ascontiguousarray(table.heights[slot, :n, :n], dtype=np.float32)
         gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
         gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)

@@ -49,8 +49,11 @@ def planes_for(eye, yaw_deg, far):
 
 
 def fake_heights(world_x, world_z, res, size):
-    """A cheap deterministic grid, identical for both pipelines."""
-    g = np.arange(res + 1, dtype=np.float64) * (size / res)
+    """A cheap deterministic grid, identical for both pipelines.
+
+    Bordered, as the table stores it: one extra sample beyond each edge.
+    """
+    g = np.arange(-1, res + 2, dtype=np.float64) * (size / res)
     x = world_x + g[:, None]
     z = world_z + g[None, :]
     return (40.0 * np.sin(x * 0.003) * np.cos(z * 0.002) + 0.01 * x).astype(np.float32)
@@ -94,7 +97,7 @@ class TablePipeline:
         h = fake_heights(float(t.world[slot, 0]), float(t.world[slot, 1]),
                          res, float(t.size[slot]))
         t.store(slot, res, RES.index(res), h)
-        return h
+        return h[1:-1, 1:-1]            # the drawn grid, all the old model saw
 
 
 def run_both(ref, cameras, events=None):
@@ -209,7 +212,7 @@ def test_the_table_heights_are_the_ones_the_old_mesh_was_built_from(terrain, cx,
     q = np.arange(res * res)
     i, k = q // res, q % res
     corners = ((0, 0), (1, 0), (0, 1), (1, 0), (1, 1), (0, 1))
-    stored = terrain.table.heights[slot]
+    stored = terrain.table.heights[slot, 1:, 1:]      # past the border ring
     for c, (di, dk) in enumerate(corners):
         assert np.array_equal(ref[c::6, 1], stored[i + di, k + dk])
     assert terrain.table.min_y[slot] == lo and terrain.table.max_y[slot] == hi
@@ -248,7 +251,7 @@ def test_collision_stands_on_the_drawn_triangles(terrain, res):
     # At a grid vertex it is the stored height exactly.
     step = size / res
     assert terrain.get_height_at(wx + 3 * step, wz + 5 * step) == pytest.approx(
-        float(heights[3, 5]), abs=1e-4)
+        float(heights[3 + 1, 5 + 1]), abs=1e-4)          # +1: the border ring
 
 
 def test_collision_falls_back_to_the_height_function_until_a_chunk_is_built(terrain):

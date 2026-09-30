@@ -73,10 +73,19 @@ def build(t, cx, cz, res):
     return slot
 
 
-def reference_mesh(t, slot):
-    from tests.helpers.terrain_reference import reference_chunk_mesh
+def reference_mesh(t, slot, seamless=True):
+    """The frozen CPU mesh for a slot.
+
+    *seamless* swaps in the one deliberate change -- smooth normals by central
+    differences across chunk edges (see terrain_reference). Only the textured
+    mode reads the smooth normal, so the untextured pixel tests compare
+    against the fully frozen mesh.
+    """
+    from tests.helpers.terrain_reference import (
+        reference_chunk_mesh, reference_chunk_mesh_seamless)
     table = t.table
-    mesh, _, _ = reference_chunk_mesh(
+    build = reference_chunk_mesh_seamless if seamless else reference_chunk_mesh
+    mesh, _, _ = build(
         t, float(table.world[slot, 0]), float(table.world[slot, 1]),
         float(table.size[slot]), int(table.grid_res[slot]))
     return mesh
@@ -203,6 +212,15 @@ def test_the_vertex_shader_emits_the_old_vertices(context, label):
     slot = build(t, cx, cz, res)
     got = capture.run(t, slot)
     assert_matches_reference(got, reference_mesh(t, slot), label)
+    # The smooth-normal change is confined to the chunk's edge vertices:
+    # inside, they are still the frozen np.gradient normals.
+    frozen = reference_mesh(t, slot, seamless=False)
+    step = float(t.table.size[slot]) / res
+    lx = np.rint((got[:, 0] - np.float32(t.table.world[slot, 0])) / step)
+    lz = np.rint((got[:, 2] - np.float32(t.table.world[slot, 1])) / step)
+    inside = (lx > 0) & (lx < res) & (lz > 0) & (lz < res)
+    assert np.abs(got[inside, 11:14] - frozen[inside, 11:14]).max() <= ATOL["smooth"], \
+        f"{label}: an interior smooth normal changed"
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +309,7 @@ class ReferenceDraw:
         gl.glBindVertexArray(0)
 
 
-def render_pair(context, t, eye, target, far, lights=True):
+def render_pair(context, t, eye, target, far, lights=True, seamless=False):
     """``(new image, reference image, chunks drawn, LOD resolutions drawn)``."""
     import glm
     import OpenGL.GL as gl
@@ -336,7 +354,7 @@ def render_pair(context, t, eye, target, far, lights=True):
     context.bind()
     gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
     gl.glUseProgram(ref.program)
-    ref.draw([reference_mesh(t, s) for s in drawn])
+    ref.draw([reference_mesh(t, s, seamless=seamless) for s in drawn])
     gl.glFinish()
     old = context.read_pixels()
     try:
@@ -380,7 +398,7 @@ def test_textured_terrain_renders_identically(context):
     t.sand_tex = checker_texture((210, 190, 130), (180, 150, 100))
     t.snow_tex = checker_texture((250, 250, 255), (220, 220, 235))
     eye, target = sculpted_view(t)
-    new, old, _, _ = render_pair(context, t, eye, target, far=3000.0)
+    new, old, _, _ = render_pair(context, t, eye, target, far=3000.0, seamless=True)
     assert_images_match(new, old, "textured terrain")
 
 
