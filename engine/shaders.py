@@ -786,8 +786,10 @@ struct Light {
 #define MAX_LIGHTS """ + str(MAX_LIGHTS_WATER) + """
 uniform Light lights[MAX_LIGHTS];
 uniform int active_lights;
-uniform mat4 view;
-uniform mat4 projection;
+// highp as in the vertex stage: GLSL ES links a shared uniform only when
+// both stages declare the same precision (the player's GLES path).
+uniform highp mat4 view;
+uniform highp mat4 projection;
 uniform highp vec3 viewPos;
 uniform sampler2D normalMap;
 uniform sampler2D sceneColor;
@@ -1131,8 +1133,10 @@ in highp vec2 TexCoords;
 in highp vec3 ViewFragPos;
 
 uniform highp vec3 viewPos;
-uniform mat4 view;
-uniform mat4 projection;
+// highp as in the vertex stage: GLSL ES links a shared uniform only when
+// both stages declare the same precision (the player's GLES path).
+uniform highp mat4 view;
+uniform highp mat4 projection;
 uniform vec3 waterColor;
 uniform float distortionStrength;
 uniform float fresnelIntensity;

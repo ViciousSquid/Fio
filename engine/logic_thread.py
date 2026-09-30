@@ -566,6 +566,14 @@ class LogicThread(threading.Thread):
         # The row sets this index describes; see _watch_world_rows.
         self._indexed_things = tuple(self.things)
         self._indexed_brushes = tuple(self.brushes)
+        # Door/mover state is keyed by brush index. Whoever changed the brush
+        # list -- the editor, or a console delete that rebuilds this index
+        # itself -- the states are re-keyed here: the row watcher compares
+        # against _indexed_brushes, which the line above has just moved on.
+        if (self.play_mode and self._moving_rows is not None
+                and self._indexed_brushes != self._moving_rows):
+            self._reindex_moving_brushes()
+            self.mark_collision_dirty()
         self._rebuild_portal_links()
 
     def _rebuild_portal_links(self):
@@ -1532,6 +1540,7 @@ class LogicThread(threading.Thread):
         self._id_cache = {}
         self._indexed_things = ()
         self._indexed_brushes = ()
+        self._moving_rows = None
         self._monster_by_id = {}
         self._monster_things = []
         self._timer_things = []
@@ -1961,6 +1970,9 @@ class LogicThread(threading.Thread):
         # PERF: cache the brush-only view of self.doors — was rebuilt via a
         # list comprehension every tick in _tick_play_mode.
         self._door_brush_list = [b for _, b in self.doors]
+        # The brush list the door/mover indices were taken from (_init_movers
+        # always runs first); see _build_entity_caches.
+        self._moving_rows = tuple(self.brushes)
 
     def _reset_doors(self):
         self.doors = []
@@ -2144,6 +2156,7 @@ class LogicThread(threading.Thread):
     _ROW_WATCH_TICKS = 30
     _indexed_things = ()
     _indexed_brushes = ()
+    _moving_rows = None
     _rows_epoch = None
     _rows_watch = 0
 
@@ -2167,10 +2180,8 @@ class LogicThread(threading.Thread):
         self._rows_watch -= 1
         brushes_changed = tuple(self.brushes) != self._indexed_brushes
         if brushes_changed or tuple(self.things) != self._indexed_things:
+            # Re-keys movers/doors and the collision set if brushes changed.
             self._build_entity_caches()
-            if brushes_changed:
-                self._reindex_moving_brushes()
-                self.mark_collision_dirty()
 
     def _reindex_moving_brushes(self):
         """Re-key mover and door state after the brush list changed in play.
@@ -2407,6 +2418,16 @@ class LogicThread(threading.Thread):
     # =========================================================================
     # PORTAL TRANSIT
     # =========================================================================
+
+    def note_player_teleported(self):
+        """The player moved without travelling there (a teleport, a load).
+
+        Portal transit tests the segment from last tick's position to this
+        one, so a teleport whose straight line happened to cross an aperture
+        was read as walking through it: the player arrived at the paired
+        portal instead of the destination.
+        """
+        self._portal_prev_player_pos = None
 
     def _update_portals(self, delta: float):
         """
@@ -3235,6 +3256,7 @@ class LogicThread(threading.Thread):
                     if activator is self.player:
                         self.player.pos = dest
                         self.player.velocity = glm.vec3(0, 0, 0)
+                        self.note_player_teleported()
                     else:
                         activator.pos = [dest.x, dest.y, dest.z]
                         physics_world = getattr(self, '_physics_world', None)

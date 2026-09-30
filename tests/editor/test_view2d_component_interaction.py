@@ -58,6 +58,14 @@ class _Stub3DView:
     face_mode_active = False
     grid_size = 16
 
+    def __init__(self):
+        # Read by View2D's 60 Hz camera-tracking timer, which starts with the
+        # view: a host that lacks it raises from that timer once the view is
+        # shown, inside a Qt slot, aborting the run.
+        import glm
+        self.camera = types.SimpleNamespace(pos=glm.vec3(0.0, 0.0, 0.0),
+                                            yaw=0.0, pitch=0.0)
+
     def update(self):
         pass
 
@@ -123,6 +131,10 @@ class FakeEditorWindow(QWidget):
     apply_clip_to_selection = MainWindow.apply_clip_to_selection
     perform_subtraction = MainWindow.perform_subtraction
     hollow_selected_brush = MainWindow.hollow_selected_brush
+    # Cloning arms a 500 ms timer that calls this; without it the timer fires
+    # in whichever later test next processes events, raises, and -- with no
+    # Qt exception hook under pytest -- aborts the whole run.
+    _clear_flash = MainWindow._clear_flash
 
     def __init__(self):
         super().__init__()
@@ -1484,3 +1496,20 @@ def test_component_mode_survives_a_history_step_without_stale_handles(editor):
         assert any(ref.brush is b for b in host.state.brushes)
     overlay = host.components.overlay(host.component_drag_targets())
     assert len(overlay['hot_points']) <= len(overlay['points']) + len(overlay['hot_points'])
+
+
+def test_the_host_serves_every_timer_callback_of_a_shown_view(editor):
+    """Invariant: a stand-in host must serve every deferred callback it can
+    receive, not only what its own test calls. A View2D starts its timers in
+    its constructor; the camera tracker reads the host's 3D camera whenever
+    the view is visible, and the stand-in had no camera."""
+    host, view = editor
+    view.window().show()
+    assert view.isVisible()
+    try:
+        view._check_camera_changed()
+        view._update_connection_animations()
+        view._end_nudge_burst()
+        assert view._last_camera_pos == (0.0, 0.0, 0.0)
+    finally:
+        view.window().hide()
