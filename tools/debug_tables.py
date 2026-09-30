@@ -61,7 +61,10 @@ class FrozenTable:
             # ``np.save`` refuses them, which failed every Export.
             if isinstance(value, np.ndarray) and value.dtype != object:
                 self.fields[name] = value.copy()
-        self.count = int(getattr(table, "count", 0))
+        # Rows to show. TerrainTable reuses freed slots, so its live rows are
+        # not 0..count; it reports how far its allocated rows extend.
+        self.count = int(getattr(table, "row_extent", getattr(table, "count", 0)))
+        self.live_count = int(getattr(table, "count", 0))
         self.slot_of_id = dict(getattr(table, "slot_of_id", {}))
         self.rows_read = int(getattr(table, "rows_read", 0))
         # MonsterTable's per-tick counters; absent (and unused) elsewhere.
@@ -305,6 +308,10 @@ class DebugTablesWindow(QMainWindow):
         self.entities = None
         self.monsters = None
         self.monster_copied_at = 0.0
+        #: TerrainTable copy, or None when the map has no (enabled) terrain --
+        #: absence is explicit, there is no empty table.
+        self.terrain = None
+        self.terrain_info = None
         self.follow = QCheckBox("FOLLOW SELECTION")
         self.follow.setChecked(True)
         self.always_top = QCheckBox("ALWAYS ON TOP")
@@ -326,9 +333,11 @@ class DebugTablesWindow(QMainWindow):
         self.render_raw = RawTable("RENDERTABLE", self)
         self.entity_raw = RawTable("ENTITYTABLE", self)
         self.monster_raw = RawTable("MONSTERTABLE", self)
+        self.terrain_raw = RawTable("TERRAINTABLE", self)
         tabs.addTab(self.render_raw, "RENDERTABLE")
         tabs.addTab(self.entity_raw, "ENTITYTABLE")
         tabs.addTab(self.monster_raw, "MONSTERTABLE")
+        tabs.addTab(self.terrain_raw, "TERRAINTABLE")
 
         self.keys_text = QTextBrowser()
         tabs.addTab(self.keys_text, "KEY MICROSCOPE")
@@ -531,6 +540,24 @@ class DebugTablesWindow(QMainWindow):
                 "monster_dense_bytes": int(_num_bytes(m)[0]),
             })
 
+        if self.terrain is not None and self.terrain_info is not None:
+            t, info = self.terrain, self.terrain_info
+            pipeline.update({
+                "terrain_resident": int(t.live_count),
+                "terrain_rows_allocated": int(t.count),
+                "terrain_capacity": int(len(t.live)),
+                "terrain_drawn": info.drawn,
+                "terrain_culled": info.culled,
+                "terrain_drawn_triangles": info.drawn_triangles,
+                "terrain_built_triangles": info.built_triangles,
+                "terrain_streaming": info.streaming,
+                "terrain_stream_radius": info.stream_radius,
+                "terrain_gpu_bytes": info.gpu_bytes,
+                "terrain_dense_bytes": int(_num_bytes(t)[0]),
+            })
+        else:
+            pipeline["terrain_table"] = None
+
         key_data = self._key_snapshot()
         key_manifest = {
             "logical_layout": [
@@ -567,6 +594,7 @@ class DebugTablesWindow(QMainWindow):
                 "RenderTable/*.npy",
                 "EntityTable/*.npy",
                 "MonsterTable/*.npy (play mode)",
+                "TerrainTable/*.npy (maps with terrain)",
                 "visible_brush_slots.npy",
                 "KeyMicroscope/*.npy",
                 "key_microscope.json",
@@ -683,6 +711,7 @@ class DebugTablesWindow(QMainWindow):
         finally:
             game_state.release_render_state(snap)
         self._copy_monster_table()
+        self._copy_terrain_table()
 
         self._update_raw_tables()
         self._update_dashboard(started)
@@ -717,11 +746,47 @@ class DebugTablesWindow(QMainWindow):
             lock.release()
         self.monster_copied_at = time.perf_counter()
 
+    def _copy_terrain_table(self):
+        """Copy the terrain's TerrainTable and the numbers that go with it.
+
+        The terrain builds and draws on the GUI thread -- the thread this
+        instrument runs on -- so the copy is taken between frames with no
+        lock. A map without terrain, or with terrain switched off, has no
+        table: ``self.terrain`` is None.
+        """
+        terrain = getattr(self.main_window, "terrain", None)
+        table = getattr(terrain, "table", None)
+        if terrain is None or table is None or not getattr(terrain, "enabled", False):
+            self.terrain = None
+            self.terrain_info = None
+            return
+        self.terrain = FrozenTable(table)
+        pages = list(getattr(terrain, "_height_pages", ()) or ())
+        layers = int(getattr(terrain, "_page_layers", 0) or 0)
+        grid = self.terrain.heights.shape[1] if self.terrain.heights.ndim == 3 else 0
+        self.terrain_info = SimpleNamespace(
+            streaming=bool(getattr(terrain, "streaming", False)),
+            stream_radius=float(getattr(terrain, "stream_radius", 0.0)),
+            drawn=int(len(getattr(terrain, "drawn_slots", ()))),
+            culled=int(getattr(terrain, "culled_chunks", 0)),
+            drawn_triangles=int(getattr(terrain, "total_triangles", 0)),
+            built_triangles=int(table.triangle_count()),
+            pages=len(pages),
+            page_layers=layers,
+            gpu_bytes=len(pages) * layers * grid * grid * 4,
+            use_textures=bool(getattr(terrain, "use_textures", False)),
+            grass=bool(getattr(terrain, "grass_enabled", False)),
+            budget_ms=float(getattr(terrain, "UPDATE_BUDGET_MS", 0.0)),
+            max_updates=int(getattr(terrain, "MAX_UPDATES_PER_FRAME", 0)),
+        )
+
     def _tables(self):
         """``(label, table)`` for every dense table this refresh copied."""
         tables = [("RenderTable", self.render), ("EntityTable", self.entities)]
         if self.monsters is not None:
             tables.append(("MonsterTable", self.monsters))
+        if self.terrain is not None:
+            tables.append(("TerrainTable", self.terrain))
         return tables
 
     def _update_raw_tables(self):
@@ -729,6 +794,7 @@ class DebugTablesWindow(QMainWindow):
         for raw, table in (
             (self.render_raw, self.render), (self.entity_raw, self.entities),
             (self.monster_raw, self.monsters),
+            (self.terrain_raw, self.terrain),
         ):
             if table is None:
                 continue
@@ -849,7 +915,8 @@ class DebugTablesWindow(QMainWindow):
             f"frustum-culled {culled_entities:,}   "
             f"drawn {entity_candidates - culled_entities:,}\n"
             + layer_line + "\n\n"
-            + self._monster_lines(timings) +
+            + self._monster_lines(timings)
+            + self._terrain_lines(timings) +
             "PASSES (inclusive)\n" + pass_lines
         )
 
@@ -885,6 +952,39 @@ class DebugTablesWindow(QMainWindow):
             total = sum(m.phase_ms.values())
             lines.append(f"  dense phases (ms, total {total:.3f})  " + "  ".join(
                 f"{name} {ms:.3f}" for name, ms in m.phase_ms.items()))
+        return "\n".join(lines) + "\n\n"
+
+    def _terrain_lines(self, timings):
+        """The TERRAIN section of the dashboard: residency, build, draw."""
+        t, info = self.terrain, self.terrain_info
+        if t is None or info is None:
+            return ("TERRAIN\n  (no terrain on this map — terrain_table is None)\n\n")
+        n = int(t.count)
+        live = t.live[:n].astype(bool)
+        built = live & t.built[:n].astype(bool)
+        dirty = live & t.dirty[:n].astype(bool)
+        tbytes, _ = _num_bytes(t)
+        lod = ", ".join(f"{int(r)}x{int(r)}: {int(c):,}" for r, c in zip(
+            *np.unique(t.grid_res[:n][built], return_counts=True))) or "none built"
+        mode = (f"streaming r={info.stream_radius:.0f}" if info.streaming
+                else "bounded (whole terrain resident)")
+        terrain_ms = float(timings["passes"].get("terrain", 0.0))
+        lines = [
+            "TERRAIN (TerrainTable)",
+            f"  residency   {mode}   resident {int(t.live_count):,}   "
+            f"built {int(built.sum()):,}   dirty {int(dirty.sum()):,}   "
+            f"slots allocated {n:,}   capacity {len(t.live):,}",
+            f"  this frame  drawn {info.drawn:,}   frustum-culled {info.culled:,}   "
+            f"triangles drawn {info.drawn_triangles:,} of {info.built_triangles:,} built   "
+            f"terrain pass {terrain_ms:.3f} ms",
+            f"  LOD grids   {lod}",
+            f"  build       budget {info.budget_ms:g} ms/frame, at most "
+            f"{info.max_updates} chunks   textures {'on' if info.use_textures else 'off'}   "
+            f"grass {'on' if info.grass else 'off'}",
+            f"  memory      CPU table {tbytes:,} bytes   GPU heightfield "
+            f"{info.pages} page(s) x {info.page_layers} layers = "
+            f"{info.gpu_bytes:,} bytes",
+        ]
         return "\n".join(lines) + "\n\n"
 
     def _update_keys(self):

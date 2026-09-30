@@ -103,6 +103,12 @@ def pack_keys(cx, cz):
 class TerrainTable:
     """Dense per-chunk terrain state. See the module docstring."""
 
+    # Declared like RenderTable's and EntityTable's, which is also how the
+    # Debug Tables instrument discovers a table's columns.
+    __slots__ = tuple(name for name, *_ in _COLUMNS) + (
+        'generation', 'count', 'slot_of_coord', '_free', '_next_order',
+        '_capacity')
+
     def __init__(self):
         #: Bumped whenever the columns are reallocated, so a reader on another
         #: thread can tell it straddled a resize.
@@ -123,6 +129,15 @@ class TerrainTable:
     @property
     def capacity(self) -> int:
         return self._capacity
+
+    @property
+    def row_extent(self) -> int:
+        """Slots ever allocated: live rows plus freed ones awaiting reuse.
+
+        Live rows are not contiguous (a freed slot is reused), so a viewer
+        shows rows up to here and reads ``live`` to tell them apart.
+        """
+        return self.count + len(self._free)
 
     def _grow(self, n):
         if n <= self._capacity:

@@ -183,3 +183,74 @@ def test_follow_selection_names_the_render_row_key_and_run(window):
     status = instrument.status.text()
     assert "FOLLOW id=%s" % brush["id"] in status
     assert "render-row=0" in status and "key=0x" in status and "run=0" in status
+
+
+# ---------------------------------------------------------------------------
+# TerrainTable
+# ---------------------------------------------------------------------------
+
+def _terrain_host(instrument):
+    """Give the instrument's host a terrain with a few built chunks."""
+    from engine.terrain_table import TerrainTable
+    table = TerrainTable()
+    for cx in range(3):
+        slot = table.ensure(cx, 0, 256.0, 0.0, 0.0)
+        if cx < 2:
+            table.store(slot, 48, 0, np.full((49, 49), 10.0 * cx, dtype=np.float32))
+    table.release([table.slot_of_coord[(2, 0)]])     # a freed slot, awaiting reuse
+    terrain = SimpleNamespace(
+        table=table, enabled=True, streaming=True, stream_radius=2048.0,
+        drawn_slots=np.array([0, 1]), culled_chunks=0, total_triangles=9216,
+        _height_pages=[7], _page_layers=512, use_textures=True,
+        grass_enabled=False, UPDATE_BUDGET_MS=4.0, MAX_UPDATES_PER_FRAME=2)
+    instrument.main_window.terrain = terrain
+    return terrain
+
+
+def test_the_terrain_table_is_shown(window):
+    instrument, _ = window
+    terrain = _terrain_host(instrument)
+    instrument.refresh()
+
+    assert instrument.terrain is not None
+    assert ("TerrainTable", instrument.terrain) in instrument._tables()
+    fields = [instrument.terrain_raw.selector.itemText(i)
+              for i in range(instrument.terrain_raw.selector.count())]
+    assert {"coord", "live", "built", "lod", "heights"} <= set(fields)
+    # Rows are shown up to the allocated extent, the freed slot included.
+    assert instrument.terrain.count == 3 and instrument.terrain.live_count == 2
+    text = instrument.dashboard.toPlainText()
+    assert "TERRAIN (TerrainTable)" in text
+    assert "resident 2" in text and "built 2" in text
+    assert "48x48: 2" in text
+    assert "TerrainTable" in instrument.memory_text.toPlainText()
+
+    terrain.table.heights[0, 0, 0] = 999.0         # the live table moves on
+    assert instrument.terrain.heights[0, 0, 0] == 0.0, "the copy tracked the live table"
+
+
+def test_a_map_without_terrain_has_no_terrain_table(window):
+    instrument, _ = window
+    instrument.main_window.terrain = None
+    instrument.refresh()
+    assert instrument.terrain is None
+    assert all(label != "TerrainTable" for label, _ in instrument._tables())
+    assert "terrain_table is None" in instrument.dashboard.toPlainText()
+
+
+def test_the_export_includes_the_terrain_table(window, tmp_path, monkeypatch):
+    import json
+    import zipfile
+    from PyQt5.QtWidgets import QFileDialog
+    instrument, _ = window
+    _terrain_host(instrument)
+    instrument.refresh()
+    path = tmp_path / "snapshot.zip"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (str(path), "")))
+    instrument.export_snapshot()
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()
+        pipeline = json.loads(archive.read("pipeline.json"))
+    assert "TerrainTable/heights.npy" in names
+    assert pipeline["terrain_resident"] == 2
