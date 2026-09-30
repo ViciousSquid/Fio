@@ -440,3 +440,38 @@ def test_property_signature_survives_a_key_added_while_it_reads():
 
     signature = PropertyEditor._object_signature(panel, brush)
     assert signature[0] == "brush"
+
+
+# ---------------------------------------------------------------------------
+# Console: bind with no arguments
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("accept", [False, True], ids=["cancel", "ok-empty"])
+def test_bind_with_no_arguments_opens_the_dialog(qt_app, monkeypatch, accept):
+    """``bind`` alone is documented to open a key-binding dialog; building it
+    called QKeySequenceEdit.setPlaceholderText, which Qt 5 does not have, so
+    it raised every time and the dialog never appeared. Found by the hostile
+    console fuzz."""
+    from PyQt5 import sip
+    from PyQt5.QtWidgets import QDialog, QMainWindow
+
+    from editor import debug_console
+    from editor.console_commands import ConsoleCommandHandler
+
+    shown = []
+    monkeypatch.setattr(
+        QDialog, "exec_",
+        lambda self: (shown.append(self.windowTitle()),
+                      QDialog.Accepted if accept else QDialog.Rejected)[1])
+    logged = []
+    monkeypatch.setattr(debug_console.DebugLogger, "log",
+                        lambda self, c, m: logged.append((c, m)))
+    host = QMainWindow()
+    host.state = SimpleNamespace()
+    try:
+        ConsoleCommandHandler(host).handle_command("bind")
+        assert shown == ["Bind Key"]
+        if accept:
+            assert ("Error", "No key selected") in logged
+    finally:
+        sip.delete(host)

@@ -272,8 +272,9 @@ class ConsoleCommandHandler:
         dialog.setWindowTitle("Bind Key")
         layout = QVBoxLayout(dialog)
         layout.addWidget(QLabel("Press the key combination to bind:"))
+        # (No placeholder text: QKeySequenceEdit has none before Qt 6.5, and
+        # the call raised, so `bind` never opened this dialog.)
         key_edit = QKeySequenceEdit()
-        key_edit.setPlaceholderText("Press a key...")
         layout.addWidget(key_edit)
         layout.addWidget(QLabel("Enter the command to execute:"))
         cmd_edit = QLineEdit()
