@@ -669,3 +669,26 @@ def test_the_sound_queue_keeps_only_recent_requests_while_the_ui_is_stalled():
     assert len(drained) == limit
     assert drained[-1]["n"] == limit * 4 - 1          # the newest survive
     assert game_state.consume_sounds() == ()
+
+
+def test_a_level_changer_can_be_cloned_and_copied_in_the_editor(qt_app):
+    """LevelChanger stored the MainWindow on itself, so clone (Shift+Space)
+    and copy (Ctrl+C), which deep-copy entities, raised on any LevelChanger
+    in a running editor. Found by cloning entities during play."""
+    import copy
+
+    from PyQt5.QtWidgets import QMainWindow
+
+    from editor.things import LevelChanger
+
+    class MainWindow(QMainWindow):
+        pass
+
+    window = MainWindow()
+    try:
+        changer = LevelChanger(pos=[0.0, 0.0, 0.0], properties={"name": "exit"})
+        clone = changer.duplicate(existing_names={"exit"})
+        assert clone.properties["name"] == "exit (copy)"
+        copy.deepcopy(changer)
+    finally:
+        window.deleteLater()
