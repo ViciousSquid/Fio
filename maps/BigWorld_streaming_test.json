@@ -84155,6 +84155,36 @@
                 "sprite_height": 192
             },
             "io_connections": []
+        },
+        {
+            "type": "bigworldsettings",
+            "pos": [
+                -128.0,
+                40,
+                16.0
+            ],
+            "properties": {
+                "type": "bigworldsettings",
+                "io_enabled": true,
+                "name": "BigWorldSettings_2",
+                "id": "4ec8803a-cfda-4e5f-9dde-de5a2d0ce970",
+                "enabled": true,
+                "activation_radius": 2048.0,
+                "deactivation_radius": 2304.0,
+                "sim_near_radius": 1024.0,
+                "show_cell_debug": true,
+                "terrain_fill": false,
+                "terrain_infinite": false,
+                "terrain_stream_radius": 0.0,
+                "disk_streaming": false,
+                "render_mode": "billboard",
+                "sprite_path": "plugins/bigworld/assets/bigworldsettings.png",
+                "sprite_size": [
+                    64.0,
+                    64.0
+                ]
+            },
+            "io_connections": []
         }
     ],
     "created": "2026-09-30T10:20:41",
