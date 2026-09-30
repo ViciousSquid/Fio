@@ -677,25 +677,26 @@ def test_real_terrain_streaming_math():
     t.offset_x = t.offset_z = t.offset_y = 0.0
     t.min_chunk_x, t.max_chunk_x = -100000, 100000
     t.min_chunk_z, t.max_chunk_z = -100000, 100000
-    t.chunks = {}
+    from engine.terrain_table import TerrainTable
+    t.table = TerrainTable()
     t.streaming = True
     t.stream_radius = 600.0
     t.stream_evict_padding = 256.0
-    t.HEIGHT_CACHE_RESOLUTION = Terrain.HEIGHT_CACHE_RESOLUTION
 
     t._stream_chunks(_Vec(0, 0, 0))
-    near = set(t.chunks.keys())
+    near = set(t.table.resident_coords())
     _check(0 < len(near) < 100, f"a bounded ring of chunks streams in ({len(near)})")
     _check((0, 0) in near, "the chunk under the camera is resident")
 
     # Walk far away: the origin chunks must be evicted, new ones stream in.
     far_x = 50000.0
     t._stream_chunks(_Vec(far_x, 0, 0))
-    _check((0, 0) not in t.chunks, "distant origin chunk evicted after moving away")
+    resident = t.table.resident_coords()
+    _check((0, 0) not in resident, "distant origin chunk evicted after moving away")
     far_cx = int(far_x // t.chunk_size)
-    _check(any(abs(cx - far_cx) <= 3 for (cx, cz) in t.chunks),
+    _check(any(abs(cx - far_cx) <= 3 for (cx, cz) in resident),
            "chunks stream in around the new camera position")
-    _check(len(t.chunks) < 100, "resident chunk count stays bounded regardless of travel")
+    _check(len(resident) < 100, "resident chunk count stays bounded regardless of travel")
 
 
 def main():
