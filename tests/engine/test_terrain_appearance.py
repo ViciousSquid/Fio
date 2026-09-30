@@ -238,3 +238,26 @@ def test_grass_leaves_clearings(terrain):
     tufts = len(blades) / terrain.GRASS_BLADES_PER_TUFT
     placed = min(terrain.GRASS_MAX_PER_CHUNK, int(0.06 * terrain.chunk_size ** 2))
     assert 0.2 * placed < tufts < 0.9 * placed
+
+
+def test_editing_a_band_colour_makes_a_custom_palette(terrain):
+    terrain.apply_appearance_preset('painted_strata')
+    before = ts.palette_colors(terrain.appearance)
+    terrain.set_palette_color(2, (0.1, 0.2, 0.9))
+    a = terrain.appearance
+    assert a.palette == 'custom'
+    assert a.custom_palette[2] == (0.1, 0.2, 0.9)
+    assert a.custom_palette[:2] == before[:2] and a.custom_palette[3:] == before[3:]
+    terrain.resize_palette(8)
+    assert len(terrain.appearance.custom_palette) == 8
+    terrain.resize_palette(1)
+    assert len(terrain.appearance.custom_palette) == ts.MIN_PALETTE
+    loaded = Terrain(seed=1)
+    loaded.from_dict(terrain.to_dict())
+    assert loaded.appearance.custom_palette == terrain.appearance.custom_palette
+
+
+def test_choosing_custom_starts_from_the_current_colours(terrain):
+    terrain.set_appearance(palette='autumn')
+    terrain.set_appearance(palette='custom')
+    assert terrain.appearance.custom_palette == ts.PALETTES['autumn']

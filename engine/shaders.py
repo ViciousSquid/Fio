@@ -1675,11 +1675,16 @@ void main() {
         highp float y = bandIndex(FragPos.y) * uBandHeight;
         texColor = paletteAt(heightFraction(y));
     } else if (uColorMode == 2) {
-        // Repeating strata: each band takes the next palette colour.
+        // Strata: each band is one flat colour taken from the palette at
+        // the band's height, so colours climb the terrain in order (shore,
+        // grass, earth, rock, ...). Neighbouring bands alternate slightly
+        // lighter and darker, with a little jitter, so the layers read as
+        // separate beds of the same material rather than a smooth ramp.
         highp float band = bandIndex(FragPos.y);
-        int n = max(uPaletteSize, 1);
-        int idx = int(mod(band, float(n)));
-        texColor = uPalette[idx] * mix(0.94, 1.06, hash(vec2(band, 3.7)));
+        texColor = paletteAt(heightFraction(band * uBandHeight));
+        float alternate = mod(band, 2.0) < 0.5 ? 1.0 : 0.93;
+        float jitter = 0.97 + 0.06 * hash(vec2(band, 3.7));
+        texColor *= alternate * jitter;
     } else if (use_textures == 1) {
         vec4 splat = layerWeights(FragPos, 1.0 - max(smoothNorm.y, 0.0));
 

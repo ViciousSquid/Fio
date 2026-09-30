@@ -712,6 +712,10 @@ class Terrain:
         a = self.appearance
         old_shape = a.shape_key()
         old_grass = (a.color_mode, a.layer_heights, a.layer_blend)
+        if (options.get('palette') == 'custom' and 'custom_palette' not in options
+                and not a.custom_palette):
+            # Start a custom palette from the colours on screen.
+            options['custom_palette'] = terrain_style.palette_colors(a)
         for key, value in options.items():
             if not hasattr(a, key):
                 raise AttributeError(f"unknown terrain appearance option: {key}")
@@ -721,6 +725,26 @@ class Terrain:
             a.preset = 'custom'
         a.sanitize()
         self._appearance_changed(old_shape, old_grass)
+
+    def set_palette_color(self, index: int, color):
+        """Change one palette colour (a strata band, or a height step).
+
+        Editing a built-in palette turns it into a custom palette that starts
+        from that palette's colours.
+        """
+        colors = terrain_style.palette_colors(self.appearance)
+        if not 0 <= index < len(colors):
+            raise IndexError(index)
+        colors[index] = tuple(float(np.clip(c, 0.0, 1.0)) for c in color[:3])
+        self.set_appearance(palette='custom', custom_palette=colors)
+
+    def resize_palette(self, count: int):
+        """Grow or shrink the palette to *count* colours (2..8), as custom."""
+        colors = terrain_style.palette_colors(self.appearance)
+        count = int(np.clip(count, terrain_style.MIN_PALETTE, terrain_style.MAX_PALETTE))
+        while len(colors) < count:
+            colors.append(colors[len(colors) % max(1, len(colors) - 1)])
+        self.set_appearance(palette='custom', custom_palette=colors[:count])
 
     def apply_appearance_preset(self, name: str):
         a = self.appearance

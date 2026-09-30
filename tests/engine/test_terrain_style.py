@@ -178,7 +178,7 @@ def test_labels_cover_every_option():
     assert set(ts.PRESET_LABELS) == set(ts.PRESETS)
     assert set(ts.TERRACE_MODE_LABELS) == set(ts.TERRACE_MODES)
     assert set(ts.COLOR_MODE_LABELS) == set(ts.COLOR_MODES)
-    assert set(ts.PALETTE_LABELS) == set(ts.PALETTES)
+    assert set(ts.PALETTE_LABELS) == set(ts.PALETTES) | {'custom'}
     assert all(len(p) <= ts.MAX_PALETTE for p in ts.PALETTES.values())
 
 
@@ -273,3 +273,26 @@ def test_skirt_closes_the_terrain_edge():
     walls = _faces(skirt)[np.abs(_faces(skirt)[:, 1]) < 0.5]
     assert len(walls) == 16                      # 4 edges x 4 blocks
     assert lo == -10.0
+
+
+# ---------------------------------------------------------------------------
+# Custom palette (strata band colours)
+# ---------------------------------------------------------------------------
+
+def test_custom_palette_drives_the_shader():
+    a = ts.TerrainAppearance(color_mode='bands', palette='custom',
+                             custom_palette=[(1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0)])
+    a.sanitize()
+    u = ts.shader_uniforms(a, (0.0, 100.0), (0.1, 0.5, 0.8), 1.0)
+    assert u['uPaletteSize'] == 3
+    np.testing.assert_allclose(u['uPalette'][:3], [[1, 0, 0], [0, 0, 1], [0, 1, 0]])
+
+
+def test_custom_palette_round_trips_and_is_sanitised():
+    a = ts.TerrainAppearance(palette='custom',
+                             custom_palette=[(0.1, 0.2, 0.3)] * 12 + ['bad'])
+    a.sanitize()
+    assert len(a.custom_palette) == ts.MAX_PALETTE
+    assert ts.TerrainAppearance.from_dict(a.to_dict()) == a
+    broken = ts.TerrainAppearance.from_dict({'palette': 'custom', 'custom_palette': [[1, 1]]})
+    assert broken.palette != 'custom'           # nothing usable: back to a preset palette

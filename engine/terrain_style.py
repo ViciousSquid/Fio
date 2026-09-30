@@ -50,13 +50,20 @@ PALETTES: Dict[str, List[Color]] = {
         (0.66, 0.50, 0.28), (0.76, 0.60, 0.35), (0.84, 0.69, 0.42),
         (0.90, 0.77, 0.50), (0.95, 0.84, 0.58),
     ],
-    'sunset_strata': [
-        (0.80, 0.44, 0.21), (0.88, 0.58, 0.31), (0.94, 0.80, 0.56),
-        (0.79, 0.42, 0.36), (0.90, 0.52, 0.25), (0.96, 0.70, 0.45),
+    # Strata palettes run from the lowest ground to the highest, in
+    # neighbouring shades, as layered terrain does.
+    'highland_strata': [
+        (0.86, 0.80, 0.56), (0.74, 0.75, 0.38), (0.56, 0.65, 0.32),
+        (0.43, 0.54, 0.28), (0.33, 0.45, 0.25), (0.44, 0.37, 0.28),
+        (0.52, 0.48, 0.45), (0.70, 0.68, 0.65),
     ],
-    'red_rock': [
-        (0.55, 0.22, 0.14), (0.68, 0.32, 0.18), (0.78, 0.45, 0.26),
-        (0.86, 0.62, 0.40), (0.72, 0.36, 0.24),
+    'island_strata': [
+        (0.93, 0.87, 0.66), (0.88, 0.84, 0.56), (0.80, 0.80, 0.38),
+        (0.67, 0.73, 0.35), (0.54, 0.63, 0.36), (0.42, 0.53, 0.34),
+    ],
+    'canyon_strata': [
+        (0.94, 0.85, 0.64), (0.91, 0.72, 0.47), (0.87, 0.60, 0.35),
+        (0.81, 0.50, 0.28), (0.73, 0.44, 0.31), (0.63, 0.38, 0.27),
     ],
     'alpine': [
         (0.22, 0.38, 0.20), (0.36, 0.46, 0.28), (0.48, 0.46, 0.40),
@@ -76,12 +83,16 @@ PALETTE_LABELS = {
     'forest_tiles': 'Forest Tiles',
     'meadow': 'Meadow',
     'dusty_tiles': 'Dusty Tiles',
-    'sunset_strata': 'Sunset Strata',
-    'red_rock': 'Red Rock',
+    'highland_strata': 'Highland Strata',
+    'island_strata': 'Island Strata',
+    'canyon_strata': 'Canyon Strata',
     'alpine': 'Alpine',
     'autumn': 'Autumn',
     'mono': 'Monochrome',
+    'custom': 'Custom',
 }
+
+MIN_PALETTE = 2
 
 # sand -> grass, grass -> rock, rock -> snow, as fractions of the terrain's
 # height range.
@@ -112,7 +123,10 @@ def _clamp01(v: float) -> float:
 
 def _color(v, default: Color) -> Color:
     try:
-        return tuple(_clamp01(c) for c in list(v)[:3])  # type: ignore[return-value]
+        values = list(v)
+        if len(values) < 3:
+            return default
+        return tuple(_clamp01(c) for c in values[:3])  # type: ignore[return-value]
     except (TypeError, ValueError):
         return default
 
@@ -133,6 +147,9 @@ class TerrainAppearance:
     # -- Colour -------------------------------------------------------------
     color_mode: str = 'natural'
     palette: str = 'meadow'
+    #: The colours of the 'custom' palette, in order (2..MAX_PALETTE). Used
+    #: for the strata bands (repeating) and the height palette (low to high).
+    custom_palette: Optional[List[Color]] = None
     band_height: float = 12.0       # terrain-space height of a colour band
 
     # -- Texture layers (natural colour mode with textures on) ----------------
@@ -168,6 +185,8 @@ class TerrainAppearance:
             value = getattr(self, f.name)
             if isinstance(value, tuple):
                 value = list(value)
+            elif isinstance(value, list):
+                value = [list(v) if isinstance(v, tuple) else v for v in value]
             data[f.name] = value
         return data
 
@@ -189,7 +208,10 @@ class TerrainAppearance:
             self.terrace_mode = 'none'
         if self.color_mode not in COLOR_MODES:
             self.color_mode = 'natural'
-        if self.palette not in PALETTES:
+        self.custom_palette = _palette_list(self.custom_palette)
+        if self.palette == 'custom' and self.custom_palette is None:
+            self.palette = 'meadow'
+        if self.palette not in PALETTES and self.palette != 'custom':
             self.palette = 'meadow'
         if not isinstance(self.preset, str):
             self.preset = 'custom'
@@ -232,6 +254,25 @@ class TerrainAppearance:
         return (self.terrace_mode, self.terrace_step, self.terrace_ramp)
 
 
+def _palette_list(value) -> Optional[List[Color]]:
+    """A clean custom palette (MIN..MAX colours), or None if unusable."""
+    if value is None:
+        return None
+    try:
+        colors = [_color(c, None) for c in list(value)[:MAX_PALETTE]]
+    except TypeError:
+        return None
+    colors = [c for c in colors if c is not None]
+    return colors if len(colors) >= MIN_PALETTE else None
+
+
+def palette_colors(appearance: 'TerrainAppearance') -> List[Color]:
+    """The colours the appearance's palette currently stands for."""
+    if appearance.palette == 'custom' and appearance.custom_palette:
+        return list(appearance.custom_palette)
+    return list(PALETTES.get(appearance.palette) or PALETTES['meadow'])
+
+
 def _num(v, default):
     try:
         return float(v)
@@ -248,6 +289,8 @@ PRESET_LABELS = {
     'voxel_blocks': 'Voxel Blocks',
     'retro_tiles': 'Retro Tiles',
     'painted_strata': 'Painted Strata',
+    'island_terraces': 'Island Terraces',
+    'canyon_strata': 'Canyon Strata',
 }
 
 PRESETS: Dict[str, dict] = {
@@ -272,15 +315,35 @@ PRESETS: Dict[str, dict] = {
         speckle_color=(0.10, 0.34, 0.12), speckle_amount=0.45,
         smooth_shading=False, light_steps=3, dither_levels=12,
     ),
-    # Softly terraced land painted in bands of warm colour, each terrace
-    # edged with a dark contour line, with mossy patches on the flats.
+    # Softly terraced land painted in layered beds that climb from sandy
+    # shore through grass and olive to earth and grey rock, each terrace
+    # edged with a dark contour line, with darker scrub on the flats.
     'painted_strata': dict(
         terrace_mode='smooth', terrace_step=14.0, terrace_ramp=0.6,
-        color_mode='bands', palette='sunset_strata', band_height=14.0,
-        contour_lines=0.75, contour_width=1.6,
-        wall_color=(0.62, 0.34, 0.26), wall_amount=0.25,
-        patch_color=(0.52, 0.56, 0.33), patch_amount=0.65,
-        speckle_color=(0.36, 0.42, 0.24), speckle_amount=0.35,
+        color_mode='bands', palette='highland_strata', band_height=14.0,
+        contour_lines=0.55, contour_width=1.4,
+        wall_color=(0.36, 0.30, 0.24), wall_amount=0.2,
+        patch_color=(0.36, 0.44, 0.24), patch_amount=0.35,
+        speckle_color=(0.28, 0.36, 0.20), speckle_amount=0.3,
+        smooth_shading=True, light_steps=0,
+    ),
+    # Broad, gently stepped terraces of sand and fresh grass, soft outlines.
+    'island_terraces': dict(
+        terrace_mode='smooth', terrace_step=10.0, terrace_ramp=0.35,
+        color_mode='bands', palette='island_strata', band_height=10.0,
+        contour_lines=0.3, contour_width=1.2,
+        patch_color=(0.46, 0.58, 0.32), patch_amount=0.25,
+        smooth_shading=True, light_steps=0,
+    ),
+    # Sandstone canyon: cream, ochre and rust beds with crisp dark lines and
+    # patches of olive scrub.
+    'canyon_strata': dict(
+        terrace_mode='smooth', terrace_step=12.0, terrace_ramp=0.55,
+        color_mode='bands', palette='canyon_strata', band_height=12.0,
+        contour_lines=0.7, contour_width=1.5,
+        wall_color=(0.55, 0.33, 0.24), wall_amount=0.25,
+        patch_color=(0.52, 0.56, 0.34), patch_amount=0.3,
+        speckle_color=(0.38, 0.42, 0.26), speckle_amount=0.3,
         smooth_shading=True, light_steps=0,
     ),
 }
@@ -524,8 +587,12 @@ UNIFORM_NAMES = (
 )
 
 
-def palette_array(name: str) -> Tuple[np.ndarray, int]:
-    colors = PALETTES.get(name) or PALETTES['meadow']
+def palette_array(palette) -> Tuple[np.ndarray, int]:
+    """``(8x3 array, count)`` for a palette name or a TerrainAppearance."""
+    if isinstance(palette, TerrainAppearance):
+        colors = palette_colors(palette)
+    else:
+        colors = PALETTES.get(palette) or PALETTES['meadow']
     colors = colors[:MAX_PALETTE]
     arr = np.zeros((MAX_PALETTE, 3), dtype=np.float32)
     arr[:len(colors)] = colors
@@ -548,7 +615,7 @@ def shader_uniforms(appearance: TerrainAppearance,
     lo, hi = float(height_range[0]), float(height_range[1])
     if hi - lo < 1e-3:
         hi = lo + 1.0
-    palette, palette_size = palette_array(a.palette)
+    palette, palette_size = palette_array(a)
     lh = effective_layer_heights(layer_heights)
     return {
         'uHeightRange': (lo, hi),

@@ -78,7 +78,7 @@ Dense numerical render projection. Converts render-relevant world state into par
 
 This is a derived execution representation, not a second source of truth. It exists so visibility, classification, batching and instance construction do not repeatedly traverse Python objects.
 
-Water is projected alongside the other special brush materials: the dense table carries opacity, Fresnel/reflectivity, wave state, refraction IOR, distortion and roughness. The current water path uses the same screen-space transmission/refraction model as Glass, with optional environment/cubemap resources where configured. The former planar reflection capture pass and its `Reflections` render property are no longer part of the renderer; old saved maps remain loadable and the legacy property simply projects to nothing.
+Water is projected alongside the other special brush materials: the dense table carries opacity, Fresnel/reflectivity, wave state, refraction IOR, distortion and roughness. The current water path uses the same screen-space transmission/refraction model as Glass, with optional environment/cubemap resources where configured. The former planar reflection capture pass and its `Reflections` render property are no longer part of the renderer; old saved maps remain loadable and the legacy property simply projects to nothing. Water has two tiers (`water_quality` in `settings.ini`, Settings > Renderer Performance, console `r_waterquality`): **cheap** is that pass alone; **expensive** also copies the depth buffer once per water pass (`glCopyTexSubImage2D` into a depth texture - plain GL 3.3 core, no extra render target) and uses it for Beer-Lambert absorption, waterline foam, caustics on the visible bed and screen-space reflections with the procedural sky as fallback. Low-power machines default to cheap.
 
 ### `renderer_core.py`
 `BaseRenderer`, the shared OpenGL rendering infrastructure used by renderer backends. Provides shader and texture management, VAOs/VBOs, terrain, models, sprites, water, glass, fog, portals, lighting, shadows, editor helpers, LOD support, statistics and cleanup. `render_scene()` is the concrete-renderer entry point rather than an artificial abstract interface.
@@ -117,6 +117,9 @@ Benchmark tooling consumes these same SysMon values rather than inventing a sepa
 
 ### `terrain.py`
 Chunked terrain generation and rendering, including Perlin-noise heightmaps, chunk LOD meshes, normals, texture blending and collision queries.
+
+### `terrain_style.py`
+Terrain appearance options, all independent and saved with the map: texture height layers (sand, grass, rock and snow blended over the terrain's height range, rock on steep slopes), terracing (smooth, sharp, or square blocks with walls - blocks draw per-chunk column meshes, everything else goes through the heightfield, and collision follows both), colour sources (biome/textures, a palette by height, or repeating strata bands with editable colours), contour lines, tile grid, cliff tint and stripes, shrub dots, ground patches, banded lighting and dithered colour depth. Presets are starting points only. Pure NumPy, so it is tested headlessly.
 
 ### `textures.py`
 OpenGL texture manager. Loads images through `QImage`, converts them to RGBA, uploads them and caches texture IDs.

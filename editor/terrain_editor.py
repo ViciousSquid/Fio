@@ -1132,6 +1132,31 @@ class TerrainEditorPanel(QWidget):
         form = group("Colour")
         form.addRow("Colour Source:", combo('color_mode', terrain_style.COLOR_MODE_LABELS.items()))
         form.addRow("Palette:", combo('palette', terrain_style.PALETTE_LABELS.items()))
+        # One swatch per palette colour: the strata bands in the order they
+        # repeat, or the height steps from low to high. Editing one turns
+        # the palette into a custom copy.
+        swatch_row = QHBoxLayout()
+        swatch_row.setSpacing(4)
+        self.palette_swatches = []
+        for i in range(terrain_style.MAX_PALETTE):
+            btn = QPushButton()
+            btn.setFixedSize(26, 26)
+            btn.setToolTip(f"Colour {i + 1}: click to change")
+            btn.clicked.connect(lambda _c=False, i=i: self.choose_palette_color(i))
+            swatch_row.addWidget(btn)
+            self.palette_swatches.append(btn)
+        self.palette_remove_btn = QPushButton("−")
+        self.palette_remove_btn.setFixedSize(26, 26)
+        self.palette_remove_btn.setToolTip("One colour fewer")
+        self.palette_remove_btn.clicked.connect(lambda: self.change_palette_size(-1))
+        self.palette_add_btn = QPushButton("+")
+        self.palette_add_btn.setFixedSize(26, 26)
+        self.palette_add_btn.setToolTip("One colour more")
+        self.palette_add_btn.clicked.connect(lambda: self.change_palette_size(1))
+        swatch_row.addWidget(self.palette_remove_btn)
+        swatch_row.addWidget(self.palette_add_btn)
+        swatch_row.addStretch()
+        form.addRow("Colours:", swatch_row)
         form.addRow("Band Height:", spin('band_height', 1.0, 200.0, 1.0,
                                          tip="Height of each colour band and contour interval"))
 
@@ -1202,6 +1227,25 @@ class TerrainEditorPanel(QWidget):
             self._load_appearance_ui()
             self.terrain_changed.emit()
 
+    def choose_palette_color(self, index):
+        colors = terrain_style.palette_colors(self.terrain.appearance)
+        if index >= len(colors):
+            return
+        chosen = QColorDialog.getColor(QColor.fromRgbF(*colors[index]), self,
+                                       f"Palette Colour {index + 1}")
+        if not chosen.isValid():
+            return
+        self.terrain.set_palette_color(
+            index, (chosen.redF(), chosen.greenF(), chosen.blueF()))
+        self._load_appearance_ui()
+        self.terrain_changed.emit()
+
+    def change_palette_size(self, delta):
+        count = len(terrain_style.palette_colors(self.terrain.appearance)) + delta
+        self.terrain.resize_palette(count)
+        self._load_appearance_ui()
+        self.terrain_changed.emit()
+
     def on_layer_height_changed(self, _value=None):
         for slider, label in self.layer_sliders:
             label.setText(f"{slider.value()}%")
@@ -1248,6 +1292,17 @@ class TerrainEditorPanel(QWidget):
                     palette.setColor(QPalette.Window, QColor.fromRgbF(*value))
                     widget.setAutoFillBackground(True)
                     widget.setPalette(palette)
+            colors = terrain_style.palette_colors(a)
+            for i, btn in enumerate(self.palette_swatches):
+                if i < len(colors):
+                    r, g, b = (int(round(c * 255)) for c in colors[i])
+                    btn.setStyleSheet(
+                        f"background-color: rgb({r}, {g}, {b}); border: 1px solid #222;")
+                    btn.show()
+                else:
+                    btn.hide()
+            self.palette_remove_btn.setEnabled(len(colors) > terrain_style.MIN_PALETTE)
+            self.palette_add_btn.setEnabled(len(colors) < terrain_style.MAX_PALETTE)
             for (slider, label), v in zip(self.layer_sliders, self.terrain._layer_heights()):
                 slider.setValue(int(round(v * 100)))
                 label.setText(f"{slider.value()}%")
