@@ -1,4 +1,5 @@
 import os
+import posixpath
 import json
 import zipfile
 from typing import Dict, List, Optional, Set
@@ -182,6 +183,12 @@ class PackageExporter:
         candidates = [os.path.join(assets_dir, sub, rel) for sub in self.ASSET_SUBDIRS]
         candidates.append(os.path.join(assets_dir, rel))
         candidates.append(os.path.join(self.root_dir, rel))
+        # The runtime (sounds by basename from assets/sounds) and the player's
+        # reader both fall back to the bare filename; so does the exporter.
+        base = posixpath.basename(rel)
+        if base and base != rel:
+            candidates += [os.path.join(assets_dir, sub, base)
+                           for sub in self.ASSET_SUBDIRS]
         escaped = False
         for src_path in candidates:
             if not self._inside(src_path, assets_dir):
@@ -224,6 +231,9 @@ class PackageExporter:
             if not target_map:
                 continue
 
+            # As LevelChanger resolves it at run time: ".json" is optional.
+            if not target_map.lower().endswith('.json'):
+                target_map += '.json'
             if os.path.isabs(target_map):
                 self.errors.append(
                     f"Skipped map outside the project: '{target_map}' "
