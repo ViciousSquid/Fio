@@ -700,6 +700,7 @@ out vec2 TexCoords;
 out mediump vec3 Normal;
 out mediump float WaveCrest;
 out mediump float ShoreDist;
+out highp float RestY;       // height of the still surface under this vertex
 
 uniform mat4 model;
 uniform mat4 view;
@@ -729,6 +730,7 @@ void addWave(vec2 dir, float wavelength, float amp, float speed, vec2 p,
 void main()
 {
     vec3 worldPos = vec3(model * vec4(aPos, 1.0));
+    RestY = worldPos.y;
 
     // World-space distance from this vertex to the nearest lateral brush edge.
     // Waves are pinned to zero at the edges so the surface always meets the
@@ -775,6 +777,7 @@ in highp vec2 TexCoords;
 in vec3 Normal;
 in float WaveCrest;
 in float ShoreDist;
+in highp float RestY;
 
 struct Light {
     highp vec3 position;
@@ -860,7 +863,12 @@ vec4 traceReflection(highp vec3 originView, highp vec3 dirView) {
         if (d >= 0.99999) continue;
         highp float sceneZ = viewPosFromDepth(uv, d).z;
         highp float gap = sceneZ - p.z;
-        if (gap > 0.0 && gap < stride * 2.5) {
+        // Only a ray that has just gone behind a surface hits it. Without a
+        // cap on how far behind, a ray passing behind a thin object (a box
+        // standing in the water) counted as hitting it and smeared a long
+        // streak of it across the water.
+        highp float thickness = clamp(stride * 1.5, 2.0, 48.0);
+        if (gap > 0.0 && gap < thickness) {
             highp vec3 lo = prev;
             highp vec3 hi = p;
             for (int j = 0; j < 5; j++) {
@@ -870,9 +878,11 @@ vec4 traceReflection(highp vec3 originView, highp vec3 dirView) {
                 if (mz > mid.z) hi = mid; else lo = mid;
             }
             highp vec2 huv = viewToUV(hi);
+            highp float hz = viewPosFromDepth(huv, textureLod(sceneDepth, huv, 0.0).r).z;
+            if (hz - hi.z > thickness) return vec4(0.0);
             vec2 edge = smoothstep(vec2(0.0), vec2(0.08), huv)
                       * smoothstep(vec2(0.0), vec2(0.08), vec2(1.0) - huv);
-            float fade = edge.x * edge.y * (1.0 - float(i) / 20.0);
+            float fade = edge.x * edge.y * (1.0 - smoothstep(14.0, 20.0, float(i)));
             return vec4(textureLod(sceneColor, huv, 0.0).rgb, fade);
         }
     }
@@ -900,7 +910,11 @@ void main()
     vec3 viewDir = toView / max(viewDist, 0.0001);
 
     vec3 geoN = normalize(Normal);
-    bool backside = dot(geoN, viewDir) < 0.0;
+    // Above or below the water is decided against the still surface, not
+    // per pixel: with the eye near the waterline, wave crests rise above it,
+    // and a per-pixel test flipped those crests to the underwater look.
+    bool topSurface = abs(geoN.y) > 0.5;
+    bool backside = topSurface ? (viewPos.y < RestY) : (dot(geoN, viewDir) < 0.0);
     if (backside) geoN = -geoN;
 
     float topFace = step(0.35, abs(geoN.y));
@@ -949,6 +963,16 @@ void main()
     float eta = backside ? ior : (1.0 / ior);
     highp vec3 straightDir = -viewDir;
     highp vec3 refractDir = refract(straightDir, N, eta);
+    // Past the critical angle (looking up at the surface from below at a
+    // grazing angle) there is no refracted ray: total internal reflection.
+    // refract() returns zero there, which used to fling the screen-space
+    // offset across the frame; look straight through instead and let the
+    // water body colour take over (see totalInternal below).
+    float totalInternal = 0.0;
+    if (dot(refractDir, refractDir) < 0.25) {
+        refractDir = straightDir;
+        totalInternal = 1.0;
+    }
     highp vec3 refractDeltaView = mat3(view) * (refractDir - straightDir);
     highp float refractDeltaLen = length(refractDeltaView);
     if (refractDeltaLen > 1.0e-5) {
@@ -1106,11 +1130,13 @@ void main()
 
     vec3 R = reflect(-viewDir, N);
     vec3 reflection = skyColor(R);
+    float sceneReflection = 0.0;
     if (haveDepth && ssrEnabled == 1 && topFace > 0.5) {
         // Reflect the scene itself where the ray finds it on screen; the sky
         // fills in everywhere else. Rougher water blurs towards the sky.
         vec4 ssr = traceReflection(surfaceView, normalize(mat3(view) * R));
-        reflection = mix(reflection, ssr.rgb, ssr.a * (1.0 - roughness * 0.6));
+        sceneReflection = ssr.a * (1.0 - roughness * 0.6);
+        reflection = mix(reflection, ssr.rgb, sceneReflection);
     }
 
     // Keep authored reflectivity visible at normal viewing angles. Physical
@@ -1121,6 +1147,11 @@ void main()
         fresnel,
         clamp(waterReflectivity, 0.0, 1.0) * 0.5
     );
+    // Reflections of the scene are what make water read as water from
+    // normal viewing heights, where physical Fresnel is only a few percent:
+    // let the authored reflectivity carry them further.
+    reflectionWeight = max(reflectionWeight,
+        clamp(waterReflectivity, 0.0, 1.0) * 0.8 * sceneReflection);
     vec3 color = mix(transmission, reflection, reflectionWeight);
 
     // ------------------------------------------------------------------
@@ -1214,6 +1245,12 @@ void main()
         // unabsorbed bed show through. It only fades out where the water
         // meets the shore, so there is no hard seam.
         alpha = smoothstep(0.0, 1.5, bedDepth);
+    }
+
+    if (backside && totalInternal > 0.5) {
+        // Total internal reflection mirrors the underwater world, which is
+        // mostly the water's own body colour.
+        color = mix(color, bodyCol, 0.85);
     }
 
     if (backside) {
