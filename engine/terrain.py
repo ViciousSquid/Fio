@@ -5,6 +5,7 @@ import ctypes
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional
 import math
+import time
 import random
 from OpenGL.GL.shaders import compileProgram, compileShader
 from . import shaders
@@ -404,6 +405,12 @@ class Terrain:
     LOD_HYSTERESIS_FRAMES = 10
     HEIGHT_CACHE_RESOLUTION = 33
     MAX_UPDATES_PER_FRAME = 2
+    #: Milliseconds of chunk meshing a frame may spend before the rest waits
+    #: for the next frame. One chunk is always built, so terrain keeps
+    #: streaming however slow the machine; a second only fits on a fast one.
+    #: Two builds back to back in one frame were the hitch felt when walking
+    #: into new terrain.
+    UPDATE_BUDGET_MS = 4.0
     TILING_SCALE = 20.0
     # Physical mesh scale is a true uniform terrain scale. It changes the
     # world-space footprint and vertical relief together; procedural sampling
@@ -1417,7 +1424,10 @@ class Terrain:
         # Dirty meshes first, then what the camera can see, nearest first.
         chunks_to_update.sort(
             key=lambda x: (not self.chunks[x[0]].is_dirty, not x[3], x[2]))
+        budget_end = time.perf_counter() + self.UPDATE_BUDGET_MS / 1000.0
         for i, (key, resolution, _, _) in enumerate(chunks_to_update[:self.MAX_UPDATES_PER_FRAME]):
+            if i and time.perf_counter() >= budget_end:
+                break
             chunk = self.chunks[key]
             self._upload_chunk(chunk, resolution)
 
@@ -1556,6 +1566,44 @@ class Terrain:
         bot = h01 + fx * (h11 - h01)
         return top + fz * (bot - top)
 
+    #: Largest sculpt bounding box (grid cells) packed into a dense array for
+    #: vectorised sampling -- 16M float32 cells is 64 MB. A sparser, wider
+    #: sculpt falls back to per-point dictionary lookups.
+    MAX_DENSE_SCULPT_CELLS = 16 * 1024 * 1024
+
+    def _touch_sculpt(self):
+        """Invalidate the dense sculpt grid; call after any sculpt change."""
+        self._sculpt_version = getattr(self, '_sculpt_version', 0) + 1
+
+    def _dense_sculpt(self):
+        """``(min_gx, min_gz, grid)`` for the sculpt offsets, or None.
+
+        The offsets are a sparse dict keyed by grid cell, and sampling them one
+        vertex at a time in Python cost ~6 ms per call -- twice per chunk, for
+        every chunk streamed in anywhere in the world, sculpted or not. Packed
+        once into a dense array over their bounding box, sampling a chunk is a
+        handful of NumPy operations. Rebuilt only when the offsets change.
+        """
+        offsets = self.sculpt_offsets
+        key = (id(offsets), len(offsets), getattr(self, '_sculpt_version', 0))
+        cache = getattr(self, '_sculpt_cache', None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
+        n = len(offsets)
+        keys = np.fromiter((c for k in offsets for c in k),
+                           dtype=np.int64, count=2 * n).reshape(n, 2)
+        vals = np.fromiter(offsets.values(), dtype=np.float32, count=n)
+        min_gx, min_gz = (int(v) for v in keys.min(axis=0))
+        max_gx, max_gz = (int(v) for v in keys.max(axis=0))
+        w, h = max_gx - min_gx + 1, max_gz - min_gz + 1
+        dense = None
+        if w * h <= self.MAX_DENSE_SCULPT_CELLS:
+            grid = np.zeros((w, h), dtype=np.float32)
+            grid[keys[:, 0] - min_gx, keys[:, 1] - min_gz] = vals
+            dense = (min_gx, min_gz, grid)
+        self._sculpt_cache = (key, dense)
+        return dense
+
     def _sample_sculpt_batch(self, world_x: np.ndarray, world_z: np.ndarray) -> np.ndarray:
         """Get interpolated sculpt offsets for arrays of world positions."""
         if not self.sculpt_offsets:
@@ -1567,6 +1615,31 @@ class Terrain:
         gz0 = np.floor(gz_f).astype(np.int32)
         fx = gx_f - gx0
         fz = gz_f - gz0
+        dense = self._dense_sculpt()
+        if dense is not None:
+            min_gx, min_gz, grid = dense
+            w, h = grid.shape
+            ix = gx0.astype(np.int64) - min_gx
+            iz = gz0.astype(np.int64) - min_gz
+            # Nothing sculpted within reach of these points: the common case
+            # for a streamed chunk away from the sculpted area.
+            if (ix.max() < -1 or ix.min() >= w
+                    or iz.max() < -1 or iz.min() >= h):
+                return np.zeros(len(world_x), dtype=np.float32)
+
+            def at(ax, az):
+                inside = (ax >= 0) & (ax < w) & (az >= 0) & (az < h)
+                out = np.zeros(len(ax), dtype=np.float32)
+                out[inside] = grid[ax[inside], az[inside]]
+                return out
+
+            h00 = at(ix, iz)
+            h10 = at(ix + 1, iz)
+            h01 = at(ix, iz + 1)
+            h11 = at(ix + 1, iz + 1)
+            top = h00 + fx * (h10 - h00)
+            bot = h01 + fx * (h11 - h01)
+            return (top + fz * (bot - top)).astype(np.float32)
         result = np.zeros(len(world_x), dtype=np.float32)
         for i in range(len(world_x)):
             h00 = self.sculpt_offsets.get((int(gx0[i]), int(gz0[i])), 0.0)
@@ -1659,10 +1732,12 @@ class Terrain:
     def clear_sculpt(self):
         """Remove all sculpt deformations."""
         self.sculpt_offsets.clear()
+        self._touch_sculpt()
         self.mark_all_dirty()
 
     def _mark_sculpt_region_dirty(self, world_x: float, world_z: float, radius: float):
         """Mark chunks overlapping a sculpted region as dirty."""
+        self._touch_sculpt()
         for key, chunk in self.chunks.items():
             cx = chunk.world_x + chunk.size / 2
             cz = chunk.world_z + chunk.size / 2
@@ -1883,6 +1958,7 @@ class Terrain:
         if 'custom_biome' in data: self.biome = BiomeConfig.from_dict(data['custom_biome'])
         # Sculpt offsets
         self.sculpt_offsets = {}
+        self._touch_sculpt()
         self.sculpt_grid_resolution = data.get('sculpt_grid_resolution', 4.0)
         for entry in data.get('sculpt_offsets', []):
             gx, gz, val = entry
