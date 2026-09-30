@@ -615,3 +615,57 @@ def test_loading_a_save_revives_a_monster_killed_after_it(tmp_path, save_mode):
     assert not monster.properties.get("dead", False)
     assert monster.properties["health"] == 50
     assert "_aggro_target" not in monster.properties
+
+
+def test_deleting_a_brush_in_play_keeps_io_aimed_at_the_right_door():
+    """Door/mover state is keyed by brush index, taken at Play start, and I/O
+    finds a door by its current index: deleting an earlier brush shifted
+    every later one, so Open aimed at door B opened door A."""
+    ground = box_brush("ground", (0, -16, 0), (4096, 32, 4096))
+    crate = box_brush("crate", (500, 32, 500), (64, 64, 64))
+    door_a = box_brush("door_a", (0, 64, 300), (128, 128, 16), is_door=True,
+                       door_speed=512.0, door_distance=128.0, door_direction="up",
+                       open_time=30.0)
+    door_b = box_brush("door_b", (300, 64, 300), (128, 128, 16), is_door=True,
+                       door_speed=512.0, door_distance=128.0, door_direction="up",
+                       open_time=30.0)
+    lift = box_brush("lift", (-400, 16, 0), (128, 32, 128), is_mover=True,
+                     start_on=True, speed=64.0, distance=256.0, direction=[0, 1, 0])
+    state, logic = _playing(brushes=[ground, crate, door_a, door_b, lift])
+    try:
+        for _ in range(20):
+            logic._tick(logic.TICK_DURATION)
+        lift_progress = logic.mover_states[state.brushes.index(lift)]["progress"]
+        assert lift_progress > 0
+
+        state.save_state()
+        state.brushes.remove(crate)                  # editor Delete during play
+        logic._tick(logic.TICK_DURATION)
+
+        closed_a = list(door_a["pos"])
+        logic.io_manager._execute_input("door_b", "Open", "", "test",
+                                        target_id=door_b["id"])
+        for _ in range(30):
+            logic._tick(logic.TICK_DURATION)
+        assert door_a["pos"] == closed_a, "the wrong door opened"
+        assert door_b["pos"][1] > 64.0 + 100.0, "the aimed door did not open"
+        # The mover carried its progress across the re-index.
+        assert logic.mover_states[state.brushes.index(lift)]["progress"] >= lift_progress
+    finally:
+        logic.stop()
+
+
+def test_the_sound_queue_keeps_only_recent_requests_while_the_ui_is_stalled():
+    """Found by a 5000-tick run with 1000 monsters: nothing but the UI drains
+    the queue, so a stalled UI let it grow without bound and then play every
+    stale sound at once."""
+    from engine.threaded_game_state import ThreadedGameState
+
+    game_state = ThreadedGameState()
+    limit = ThreadedGameState.SOUND_QUEUE_LIMIT
+    for i in range(limit * 4):
+        game_state.queue_sound({"file": "shot.mp3", "n": i})
+    drained = game_state.consume_sounds()
+    assert len(drained) == limit
+    assert drained[-1]["n"] == limit * 4 - 1          # the newest survive
+    assert game_state.consume_sounds() == ()

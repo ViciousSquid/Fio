@@ -2169,7 +2169,47 @@ class LogicThread(threading.Thread):
         if brushes_changed or tuple(self.things) != self._indexed_things:
             self._build_entity_caches()
             if brushes_changed:
+                self._reindex_moving_brushes()
                 self.mark_collision_dirty()
+
+    def _reindex_moving_brushes(self):
+        """Re-key mover and door state after the brush list changed in play.
+
+        The states are keyed by brush index, taken when Play started, and I/O
+        finds a door or mover by its *current* index: deleting any brush
+        before them shifted every later index, so an Open aimed at one door
+        opened whichever door now held its old index. The lists are derived
+        again and each surviving brush keeps its state, found by identity;
+        a brush added in play starts as Play would have started it.
+        """
+        movers, doors = self.movers, self.doors
+        m_states, d_states = self.mover_states, self.door_states
+        paths = self.mover_path_states
+        kept_m = {id(b): (dict(m_states[i]) if i in m_states else None,
+                          paths.get(i))
+                  for i, b in movers}
+        kept_d = {id(b): (dict(d_states[i]) if i in d_states else None)
+                  for i, b in doors}
+        self._init_movers()
+        self._init_doors()
+        m_new = {i: dict(s) for i, s in self.mover_states.items()}
+        for i, brush in self.movers:
+            if id(brush) in kept_m:
+                state, path = kept_m[id(brush)]
+                m_new.pop(i, None)
+                self.mover_path_states.pop(i, None)
+                if state is not None:
+                    m_new[i] = state
+                if path is not None:
+                    self.mover_path_states[i] = path
+        self.mover_states = m_new
+        d_new = {i: dict(s) for i, s in self.door_states.items()}
+        for i, brush in self.doors:
+            if id(brush) in kept_d:
+                d_new.pop(i, None)
+                if kept_d[id(brush)] is not None:
+                    d_new[i] = kept_d[id(brush)]
+        self.door_states = d_new
 
     def _tick_play_mode(self, delta):
         if not self.player:

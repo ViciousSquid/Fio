@@ -1816,9 +1816,28 @@ def register_all_input_handlers(io_manager: IOManager):
 # =============================================================================
 
 def _get_brush_index(brush: dict, logic) -> int:
-    """Get the index of a brush in the brushes list."""
+    """Get the index of a brush in the brushes list.
+
+    Nearly every caller is a door or mover input, and the session's mover
+    table already maps those brushes to their index: a list scan compares the
+    brush dict with every brush before it (about a millisecond per input at
+    40k brushes). The table's answer is used only if the list confirms it.
+    """
+    brushes = logic.brushes
+    table_of = getattr(logic, '_movers', None)
+    if table_of is not None:
+        try:
+            table = table_of()
+            for group in (table.movers, table.doors):
+                row = group.row_of_obj.get(id(brush))
+                if row is not None:
+                    index = group.index[row]
+                    if 0 <= index < len(brushes) and brushes[index] is brush:
+                        return index
+        except Exception:
+            pass
     try:
-        return logic.brushes.index(brush)
+        return brushes.index(brush)
     except ValueError:
         return -1
 

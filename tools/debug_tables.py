@@ -1007,7 +1007,7 @@ class DebugTablesWindow(QMainWindow):
                 getattr(self.snapshot, "visible_brush_slots", []),
                 dtype=np.int32,
             )
-            if len(slots) and int(rslot) in set(int(x) for x in slots):
+            if len(slots) and bool((slots == int(rslot)).any()):
                 tex = self.render.tex_name_id[int(rslot)]
                 drawable = (tex >= 0) & (tex != rt.TEX_ID_SKIP)
                 if getattr(self.snapshot, "is_play_mode", False):
