@@ -261,3 +261,93 @@ def test_choosing_custom_starts_from_the_current_colours(terrain):
     terrain.set_appearance(palette='autumn')
     terrain.set_appearance(palette='custom')
     assert terrain.appearance.custom_palette == ts.PALETTES['autumn']
+
+
+def test_grass_height_range_is_controllable(terrain):
+    """Grass grows only between its lowest and highest height."""
+    terrain.set_grass(True, density=0.06)
+    terrain.GRASS_MIN_NORMAL_Y = 0.0
+    terrain.set_appearance(layer_blend=0.02)
+    assert terrain.grass_height_bounds() == terrain._layer_heights()[:2]
+
+    def blade_heights():
+        out = []
+        for cx in (-1, 0):
+            for cz in (-1, 0):
+                out.append(terrain._generate_grass_blades(_slot(terrain, cx, cz)))
+        blades = np.concatenate(out)
+        raw = terrain._get_raw_heights_batch(blades[:, 0], blades[:, 2])
+        return terrain._normalized_layer_height(raw)
+
+    terrain.set_grass(True, height_range=(0.45, 0.7))
+    frac = blade_heights()
+    assert len(frac) > 0
+    # Edge blend (2 x 2 x 0.02) plus the spread of a tuft across a slope.
+    assert frac.min() > 0.45 - 0.13 and frac.max() < 0.7 + 0.13
+
+    terrain.set_grass(True, height_range=(0.9, 0.2))    # given backwards
+    assert terrain.grass_height_range == (0.2, 0.9)
+
+    loaded = Terrain(seed=1)
+    loaded.from_dict(terrain.to_dict())
+    assert loaded.grass_height_range == (0.2, 0.9)
+
+    terrain.set_grass(True, height_range='auto')
+    assert terrain.grass_height_range is None
+    assert terrain.grass_height_bounds() == terrain._layer_heights()[:2]
+
+
+def test_changing_the_grass_range_rebuilds_grass(terrain):
+    terrain.set_grass(True, density=0.03)
+    _build(terrain)
+    terrain.table.grass_dirty[:] = False
+    terrain.set_grass(True, height_range=(0.1, 0.5))
+    assert terrain.table.grass_dirty[terrain.table.live_slots()].all()
+
+
+def test_grass_matches_the_ground_by_default(terrain):
+    """Each blade carries the colour terrain.frag paints where it stands."""
+    terrain.set_grass(True, density=0.05)
+    assert not terrain.grass_color_custom
+    slot = _slot(terrain)
+
+    # Textures on: the height-blended mean texture colour.
+    terrain.set_use_textures(True)
+    blades = terrain._generate_grass_blades(slot)
+    averages = ts.terrain_texture_averages()
+    assert averages is not None
+    grass_tex = averages[1] * 1.1
+    # Grass grows in the grass layer, so its colour is (almost always) the
+    # grass texture's; blades near a layer edge blend towards the next one.
+    close = np.abs(blades[:, 6:9] - grass_tex).max(axis=1) < 0.12
+    assert close.mean() > 0.8
+
+    # Strata: the palette at each blade's band.
+    terrain.apply_appearance_preset('painted_strata')
+    terrain.set_grass(True, height_range=(0.0, 1.0))
+    blades = terrain._generate_grass_blades(slot)
+    expected = ts.palette_ground_colors(terrain.appearance, blades[:, 1],
+                                        terrain._layer_height_range(), terrain.mesh_scale)
+    np.testing.assert_allclose(blades[:, 6:9], np.clip(expected, 0, 1), atol=1e-5)
+
+
+def test_ground_coloured_grass_follows_look_changes(terrain):
+    terrain.set_grass(True, density=0.03)
+    _build(terrain)
+    live = terrain.table.live_slots()
+    terrain.table.grass_dirty[:] = False
+    terrain.set_appearance(palette='autumn')
+    assert terrain.table.grass_dirty[live].all()
+    terrain.table.grass_dirty[:] = False
+    terrain.set_use_textures(not terrain.use_textures)
+    assert terrain.table.grass_dirty[live].all()
+
+    # A chosen colour overrides the ground; 'ground' goes back to it.
+    terrain.set_grass(True, color=(0.2, 0.6, 0.1))
+    assert terrain.grass_color_custom
+    terrain.table.grass_dirty[:] = False
+    terrain.set_appearance(palette='meadow')
+    assert not terrain.table.grass_dirty[live].any()
+    terrain.set_grass(True, color='ground')
+    assert not terrain.grass_color_custom
+    assert terrain.table.grass_dirty[live].all()

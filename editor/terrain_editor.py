@@ -500,6 +500,14 @@ class TerrainEditorPanel(QWidget):
         color_row = QHBoxLayout()
         color_row.addWidget(self.grass_color_btn)
         color_row.addWidget(self.grass_color_preview)
+        self.grass_ground_label = QLabel("Matches the ground")
+        self.grass_ground_label.setStyleSheet("color: #aaa; font-style: italic;")
+        color_row.addWidget(self.grass_ground_label)
+        self.grass_ground_btn = QPushButton("Match Ground")
+        self.grass_ground_btn.setToolTip(
+            "Give each blade the colour of the terrain it grows on")
+        self.grass_ground_btn.clicked.connect(self.match_grass_to_ground)
+        color_row.addWidget(self.grass_ground_btn)
         color_row.addStretch()
         grass_layout.addRow("Colour:", color_row)
 
@@ -518,6 +526,30 @@ class TerrainEditorPanel(QWidget):
         tip_row.addWidget(self.grass_tip_auto_btn)
         tip_row.addStretch()
         grass_layout.addRow("Tips:", tip_row)
+
+        # Where the grass grows, as % of the terrain's height: by default the
+        # grass texture layer (so no grass on high rock/snow or low sand).
+        self.grass_height_sliders = []
+        for label in ("Lowest:", "Highest:"):
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(0, 100)
+            value_label = QLabel("0%")
+            value_label.setMinimumWidth(36)
+            slider.valueChanged.connect(self.on_grass_height_changed)
+            row = QHBoxLayout()
+            row.addWidget(slider, 1)
+            row.addWidget(value_label)
+            grass_layout.addRow(label, row)
+            self.grass_height_sliders.append((slider, value_label))
+        self.grass_height_sliders[0][0].setToolTip(
+            "Lowest height grass grows at (% of the terrain's height range)")
+        self.grass_height_sliders[1][0].setToolTip(
+            "Highest height grass grows at (% of the terrain's height range)")
+        self.grass_follow_btn = QPushButton("Follow Texture Layers")
+        self.grass_follow_btn.setToolTip(
+            "Grow grass exactly where the grass texture layer is")
+        self.grass_follow_btn.clicked.connect(self.reset_grass_height_range)
+        grass_layout.addRow(self.grass_follow_btn)
 
         features_layout.addWidget(grass_group)
 
@@ -1303,6 +1335,7 @@ class TerrainEditorPanel(QWidget):
                     btn.hide()
             self.palette_remove_btn.setEnabled(len(colors) > terrain_style.MIN_PALETTE)
             self.palette_add_btn.setEnabled(len(colors) < terrain_style.MAX_PALETTE)
+            self._update_grass_height_ui()
             for (slider, label), v in zip(self.layer_sliders, self.terrain._layer_heights()):
                 slider.setValue(int(round(v * 100)))
                 label.setText(f"{slider.value()}%")
@@ -1312,7 +1345,7 @@ class TerrainEditorPanel(QWidget):
     def on_textures_changed(self, enabled):
         if self._building_ui:
             return
-        self.terrain.use_textures = enabled
+        self.terrain.set_use_textures(enabled)
         self.terrain_changed.emit()
     
     def load_from_terrain(self):
@@ -1482,6 +1515,11 @@ class TerrainEditorPanel(QWidget):
         self._update_grass_color_preview()
         self.terrain_changed.emit()
 
+    def match_grass_to_ground(self):
+        self.terrain.set_grass(enabled=self.grass_checkbox.isChecked(), color='ground')
+        self._update_grass_color_preview()
+        self.terrain_changed.emit()
+
     def choose_grass_tip_color(self):
         current = QColor.fromRgbF(*self.terrain.grass_tip_colour())
         color = QColorDialog.getColor(current, self, "Grass Tip Colour")
@@ -1499,6 +1537,45 @@ class TerrainEditorPanel(QWidget):
         self._update_grass_color_preview()
         self.terrain_changed.emit()
 
+    def on_grass_height_changed(self, _value=None):
+        for slider, label in self.grass_height_sliders:
+            label.setText(f"{slider.value()}%")
+        if self._building_ui:
+            return
+        low = self.grass_height_sliders[0][0].value() / 100.0
+        high = self.grass_height_sliders[1][0].value() / 100.0
+        self.terrain.set_grass(enabled=self.grass_checkbox.isChecked(),
+                               height_range=(low, high))
+        self._update_grass_height_ui()
+        self.terrain_changed.emit()
+
+    def reset_grass_height_range(self):
+        self.terrain.set_grass(enabled=self.grass_checkbox.isChecked(),
+                               height_range='auto')
+        self._update_grass_height_ui()
+        self.terrain_changed.emit()
+
+    def _update_grass_height_ui(self):
+        """Show the grass height range (following the layers or its own)."""
+        if not hasattr(self, 'grass_height_sliders'):
+            return
+        was_building = self._building_ui
+        self._building_ui = True
+        try:
+            bounds = self.terrain.grass_height_bounds()
+            (lo_s, lo_l), (hi_s, hi_l) = self.grass_height_sliders
+            # Sliders never cross: the lowest stays at or below the highest.
+            lo_v = int(round(min(bounds) * 100))
+            hi_v = int(round(max(bounds) * 100))
+            lo_s.setValue(lo_v)
+            hi_s.setValue(hi_v)
+            lo_l.setText(f"{lo_v}%")
+            hi_l.setText(f"{hi_v}%")
+            self.grass_follow_btn.setEnabled(
+                getattr(self.terrain, 'grass_height_range', None) is not None)
+        finally:
+            self._building_ui = was_building
+
     def _update_grass_color_preview(self):
         r, g, b = self.terrain.grass_color
         # Use the palette for the colour swatch rather than injecting a
@@ -1509,6 +1586,11 @@ class TerrainEditorPanel(QWidget):
         palette.setColor(QPalette.Window, QColor.fromRgbF(r, g, b))
         self.grass_color_preview.setAutoFillBackground(True)
         self.grass_color_preview.setPalette(palette)
+        matching = not getattr(self.terrain, 'grass_color_custom', False)
+        if hasattr(self, 'grass_ground_label'):
+            self.grass_color_preview.setVisible(not matching)
+            self.grass_ground_label.setVisible(matching)
+            self.grass_ground_btn.setEnabled(not matching)
         if hasattr(self, 'grass_tip_preview'):
             palette = self.grass_tip_preview.palette()
             palette.setColor(QPalette.Window,
@@ -1517,6 +1599,10 @@ class TerrainEditorPanel(QWidget):
             self.grass_tip_preview.setPalette(palette)
             auto = getattr(self.terrain, 'grass_tip_color', None) is None
             self.grass_tip_auto_btn.setEnabled(not auto)
+            # An automatic tip derives from each blade's own colour; with
+            # ground-coloured blades there is no single colour to show.
+            self.grass_tip_preview.setVisible(not (auto and matching))
+        self._update_grass_height_ui()
 
     def on_wireframe_changed(self, enabled):
         if self._building_ui:

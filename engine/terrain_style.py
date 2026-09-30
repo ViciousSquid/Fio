@@ -9,6 +9,7 @@ The options are independent - a preset is only a convenient starting set of
 values, and any option can be changed on its own afterwards.
 """
 
+import os
 from dataclasses import dataclass, field, fields
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -643,3 +644,90 @@ def shader_uniforms(appearance: TerrainAppearance,
         'uDither': int(a.dither_levels),
         'uGridOrigin': (float(grid_origin[0]), float(grid_origin[1])),
     }
+
+
+# ---------------------------------------------------------------------------
+# Ground colour (what the terrain shader paints at a point) - for grass
+# ---------------------------------------------------------------------------
+
+def palette_at(colors: Sequence[Color], t) -> np.ndarray:
+    """Palette colours interpolated at fractions ``t`` (the shader's paletteAt)."""
+    colors = np.asarray(colors, dtype=np.float64)
+    t = np.clip(np.asarray(t, dtype=np.float64), 0.0, 1.0)
+    if len(colors) == 1:
+        return np.repeat(colors, len(t), axis=0)
+    x = t * (len(colors) - 1)
+    i = np.minimum(np.floor(x).astype(int), len(colors) - 1)
+    j = np.minimum(i + 1, len(colors) - 1)
+    f = (x - i)[:, None]
+    return colors[i] * (1.0 - f) + colors[j] * f
+
+
+def palette_ground_colors(appearance: 'TerrainAppearance', y,
+                          height_range: Tuple[float, float],
+                          mesh_scale: float) -> np.ndarray:
+    """Base colour of the 'palette' and 'bands' colour modes at heights *y*.
+
+    Mirrors terrain.frag: the palette is sampled at the height of the band a
+    point belongs to, and strata bands alternate slightly darker.
+    """
+    y = np.asarray(y, dtype=np.float64)
+    band_h = max(appearance.band_height * max(mesh_scale, 1e-6), 1e-3)
+    lo, hi = float(height_range[0]), float(height_range[1])
+    band = np.floor(y / band_h + 0.12)
+    t = (band * band_h - lo) / max(hi - lo, 1e-3)
+    out = palette_at(palette_colors(appearance), t)
+    if appearance.color_mode == 'bands':
+        out *= np.where(np.mod(band, 2.0) < 0.5, 1.0, 0.93)[:, None]
+    return out
+
+
+_TEXTURE_AVERAGES: Dict[str, Optional[np.ndarray]] = {}
+TERRAIN_TEXTURE_FILES = ('sand.jpg', 'grass.jpg', 'rock.jpg', 'snow.jpg')
+
+
+def texture_average(filename: str) -> Optional[np.ndarray]:
+    """Mean RGB (0..1) of a terrain texture file, cached; None if unreadable.
+
+    The mean is what the texture looks like from any distance (it is its
+    smallest mip level), read from the file so no GL readback is needed.
+    """
+    if filename in _TEXTURE_AVERAGES:
+        return _TEXTURE_AVERAGES[filename]
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    result = None
+    for root in (here, os.getcwd()):
+        path = os.path.join(root, 'assets', 'textures', 'terrain', filename)
+        if os.path.isfile(path):
+            try:
+                from PIL import Image
+                with Image.open(path) as img:
+                    small = img.convert('RGB').resize((64, 64))
+                    result = np.asarray(small, dtype=np.float64).reshape(-1, 3).mean(0) / 255.0
+            except Exception:
+                result = None
+            break
+    _TEXTURE_AVERAGES[filename] = result
+    return result
+
+
+def terrain_texture_averages() -> Optional[np.ndarray]:
+    """(4, 3) mean colours of sand, grass, rock and snow, or None."""
+    rows = [texture_average(name) for name in TERRAIN_TEXTURE_FILES]
+    if any(r is None for r in rows):
+        return None
+    return np.stack(rows)
+
+
+def textured_ground_colors(h, slope, layer_heights: Sequence[float], blend: float,
+                           slope_rock: float, averages: np.ndarray) -> np.ndarray:
+    """Colour of the height-layered textures at normalised heights *h*.
+
+    The layer weights of terrain.frag (without its edge noise), rock on steep
+    ground, applied to each texture's mean colour, times the shader's 1.1.
+    """
+    w = layer_weights(h, layer_heights, blend)
+    steep = _smoothstep(0.25, 0.5, np.asarray(slope, dtype=np.float64)) * slope_rock
+    w = w * (1.0 - steep)[:, None]
+    w[:, 2] += steep
+    return (w @ averages) * 1.1

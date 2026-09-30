@@ -1824,11 +1824,13 @@ layout (location = 2) in vec3 iPosition;
 layout (location = 3) in float iSize;
 layout (location = 4) in float iPhase;
 layout (location = 5) in float iVariation;
+layout (location = 6) in vec3 iGround;     // colour of the ground under the blade
 
 out vec3 FragPos;
 out vec3 BladeNormal;
 out float BladeHeight;
 out vec3 BladeTint;
+out vec3 GroundColor;
 
 uniform mat4 projection;
 uniform mat4 view;
@@ -1987,6 +1989,7 @@ void main() {
     BladeTint = mix(vec3(1.0), vec3(1.25, 1.1, 0.55), dry)
               * mix(0.82, 1.12, fieldPatch) * iVariation;
 
+    GroundColor = iGround;
     FragPos = p;
     BladeHeight = level;
     gl_Position = projection * view * vec4(p, 1.0);
@@ -2001,17 +2004,24 @@ in vec3 FragPos;
 in vec3 BladeNormal;
 in float BladeHeight;
 in vec3 BladeTint;
+in vec3 GroundColor;
 
-uniform vec3 grassColor;       // blade colour
-uniform vec3 grassTipColor;    // colour the blades fade to at their tips
+uniform vec3 grassColor;       // blade colour, when one was chosen
+uniform vec3 grassTipColor;    // tip colour, when one was chosen
+uniform int uMatchGround;      // 1: blades take the colour of their ground
+uniform int uTipAuto;          // 1: tips are a sun-bleached shade of the blade
 uniform vec3 cameraPos;
 """ + FOG_GLSL + """
 void main() {
     // Shaded roots rising through the blade colour to the tip colour.
     float g = smoothstep(0.0, 1.0, BladeHeight);
-    vec3 rootColor = grassColor * 0.45;
-    vec3 albedo = (g < 0.5 ? mix(rootColor, grassColor, g * 2.0)
-                           : mix(grassColor, grassTipColor, g * 2.0 - 1.0)) * BladeTint;
+    vec3 bladeColor = (uMatchGround == 1) ? GroundColor : grassColor;
+    vec3 tipColor = (uTipAuto == 1)
+        ? mix(min(bladeColor * 1.3, vec3(1.0)), vec3(0.80, 0.78, 0.55), 0.3)
+        : grassTipColor;
+    vec3 rootColor = bladeColor * 0.45;
+    vec3 albedo = (g < 0.5 ? mix(rootColor, bladeColor, g * 2.0)
+                           : mix(bladeColor, tipColor, g * 2.0 - 1.0)) * BladeTint;
 
     vec3 n = normalize(BladeNormal);
     // Lean the lighting normal towards the ground normal so a field reads
