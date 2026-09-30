@@ -100,7 +100,7 @@
         "use_textures": false,
         "flat_mode": false,
         "grass_enabled": false,
-        "grass_density": 0.02,
+        "grass_density": 0.0474,
         "grass_color": [
             0.6,
             0.4,
@@ -111,36 +111,36 @@
         "grass_height_range": null,
         "appearance": {
             "preset": "custom",
-            "terrace_mode": "blocks",
-            "terrace_step": 8.0,
-            "terrace_ramp": 0.35,
-            "block_size": 16.0,
+            "terrace_mode": "sharp",
+            "terrace_step": 10.0,
+            "terrace_ramp": 0.05,
+            "block_size": 64.0,
             "skirt": true,
             "color_mode": "palette",
-            "palette": "forest_tiles",
+            "palette": "dusty_tiles",
             "custom_palette": null,
-            "band_height": 8.0,
+            "band_height": 10.0,
             "layer_heights": null,
             "layer_blend": 0.05,
             "slope_rock": 0.8,
             "contour_lines": 0.0,
             "contour_width": 1.5,
-            "grid_lines": 0.0,
+            "grid_lines": 0.18,
             "grid_size": 16.0,
-            "cell_variation": 0.35,
+            "cell_variation": 0.58,
             "wall_color": [
-                0.86,
-                0.48,
-                0.14
+                0.4,
+                0.26,
+                0.13
             ],
-            "wall_amount": 1.0,
-            "wall_stripes": 0.15,
+            "wall_amount": 0.85,
+            "wall_stripes": 0.6,
             "speckle_color": [
-                0.12,
-                0.3,
-                0.1
+                0.1,
+                0.34,
+                0.12
             ],
-            "speckle_amount": 0.0,
+            "speckle_amount": 0.45,
             "patch_color": [
                 0.5,
                 0.55,
@@ -148,8 +148,8 @@
             ],
             "patch_amount": 0.0,
             "smooth_shading": false,
-            "light_steps": 0,
-            "dither_levels": 0
+            "light_steps": 3,
+            "dither_levels": 12
         },
         "custom_biome": {
             "name": "Desert Canyon",

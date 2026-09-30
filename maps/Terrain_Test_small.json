@@ -66,7 +66,7 @@
         },
         {
             "pos": [
-                384.0,
+                128.0,
                 104.0,
                 -760.0
             ],
@@ -87,7 +87,7 @@
         },
         {
             "pos": [
-                1024.0,
+                768.0,
                 104.0,
                 -192.0
             ],
@@ -108,7 +108,7 @@
         },
         {
             "pos": [
-                536.0,
+                280.0,
                 104.0,
                 -266.1333333333333
             ],
@@ -133,7 +133,7 @@
                             0.0,
                             0.0
                         ],
-                        "d": 768.0,
+                        "d": 512.0,
                         "texture": "default.png",
                         "face": "east"
                     },
@@ -143,7 +143,7 @@
                             0.0,
                             0.0
                         ],
-                        "d": -432.0,
+                        "d": -176.0,
                         "texture": "default.png",
                         "face": "west"
                     },
@@ -193,7 +193,7 @@
                             0.9149178015729321,
                             0.40364020657629357
                         ],
-                        "d": -8.180441519946216,
+                        "d": -8.180441519946207,
                         "texture": "default.png"
                     }
                 ]
@@ -213,7 +213,8 @@
                 "type": "playerstart",
                 "name": "PlayerStart_1",
                 "angle": 0.0,
-                "id": "55f41b17-d732-434a-859c-19ac8a0c3f1e"
+                "id": "55f41b17-d732-434a-859c-19ac8a0c3f1e",
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -243,7 +244,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -273,7 +275,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -303,7 +306,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -333,7 +337,8 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -363,17 +368,20 @@
                     0.0,
                     0.0,
                     0.0
-                ]
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         }
     ],
+    "created": "2026-10-01T00:32:24",
     "terrain_data": {
         "enabled": true,
         "solid": true,
         "seed": 42,
-        "biome": "Low Poly Valley",
+        "biome": "Alpine Forest",
         "chunk_size": 256.0,
+        "mesh_scale": 1.0,
         "base_resolution": 48,
         "offset_x": 0.0,
         "offset_z": 0.0,
@@ -382,68 +390,144 @@
         "max_chunk_x": 2,
         "min_chunk_z": -2,
         "max_chunk_z": 2,
-        "use_textures": false,
-        "flat_mode": true,
+        "use_textures": true,
+        "flat_mode": false,
+        "grass_enabled": true,
+        "grass_density": 0.02,
+        "grass_color": [
+            0.18,
+            0.35,
+            0.15
+        ],
+        "grass_color_custom": false,
+        "grass_tip_color": null,
+        "grass_height_range": null,
+        "appearance": {
+            "preset": "custom",
+            "terrace_mode": "smooth",
+            "terrace_step": 10.0,
+            "terrace_ramp": 0.2,
+            "block_size": 16.0,
+            "skirt": true,
+            "color_mode": "bands",
+            "palette": "island_strata",
+            "custom_palette": null,
+            "band_height": 10.0,
+            "layer_heights": null,
+            "layer_blend": 0.05,
+            "slope_rock": 0.8,
+            "contour_lines": 0.3,
+            "contour_width": 2.2,
+            "grid_lines": 0.04,
+            "grid_size": 16.0,
+            "cell_variation": 0.0,
+            "wall_color": [
+                0.78,
+                0.45,
+                0.16
+            ],
+            "wall_amount": 0.0,
+            "wall_stripes": 0.0,
+            "speckle_color": [
+                0.12,
+                0.3,
+                0.1
+            ],
+            "speckle_amount": 0.0,
+            "patch_color": [
+                0.46,
+                0.58,
+                0.32
+            ],
+            "patch_amount": 0.25,
+            "smooth_shading": true,
+            "light_steps": 0,
+            "dither_levels": 0
+        },
         "custom_biome": {
-            "name": "Low Poly Valley",
-            "base_height": 10.0,
-            "height_scale": 250.0,
+            "name": "Alpine Forest",
+            "base_height": 30.0,
+            "height_scale": 220.0,
             "hills_scale": 0.004,
-            "hills_intensity": 0.8,
+            "hills_intensity": 0.6,
             "mountains_enabled": true,
-            "mountains_scale": 0.006,
-            "mountains_intensity": 1.2,
-            "mountains_sharpness": 0.2,
+            "mountains_scale": 0.007,
+            "mountains_intensity": 0.8,
+            "mountains_sharpness": 0.45,
             "valleys_enabled": true,
             "valleys_scale": 0.003,
-            "valleys_depth": 0.2,
+            "valleys_depth": 0.3,
             "plateaus_enabled": false,
             "plateaus_scale": 0.004,
             "plateaus_intensity": 0.5,
             "plateaus_flatness": 0.7,
             "trees_enabled": true,
-            "tree_density": 0.15,
+            "tree_density": 0.8,
             "color_gradient": [
                 [
                     0.0,
                     [
-                        0.38,
-                        0.6,
-                        0.25
+                        0.18,
+                        0.35,
+                        0.15
                     ]
                 ],
                 [
-                    0.25,
+                    0.2,
+                    [
+                        0.25,
+                        0.45,
+                        0.2
+                    ]
+                ],
+                [
+                    0.4,
                     [
                         0.35,
-                        0.55,
-                        0.22
+                        0.52,
+                        0.28
                     ]
                 ],
                 [
-                    0.28,
+                    0.55,
                     [
-                        0.55,
-                        0.4,
-                        0.25
+                        0.42,
+                        0.48,
+                        0.32
+                    ]
+                ],
+                [
+                    0.7,
+                    [
+                        0.52,
+                        0.5,
+                        0.45
+                    ]
+                ],
+                [
+                    0.85,
+                    [
+                        0.65,
+                        0.63,
+                        0.58
                     ]
                 ],
                 [
                     1.0,
                     [
-                        0.65,
-                        0.45,
-                        0.3
+                        0.92,
+                        0.94,
+                        0.96
                     ]
                 ]
             ],
             "blend_weights": [
-                1.0,
+                0.8,
+                0.6,
                 0.0,
-                0.0,
-                0.0
+                0.4
             ],
-            "terrain_height_scale": 0.003
+            "terrain_height_scale": 0.0030303030303030303
         }
     }
 }
