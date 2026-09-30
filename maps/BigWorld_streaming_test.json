@@ -82963,7 +82963,7 @@
             "type": "bigworldsettings",
             "pos": [
                 0,
-                40,
+                32,
                 0
             ],
             "properties": {
@@ -84157,31 +84157,71 @@
             "io_connections": []
         },
         {
-            "type": "bigworldsettings",
+            "type": "prop",
             "pos": [
-                -128.0,
-                40,
-                16.0
+                0.0,
+                160,
+                0.0
             ],
             "properties": {
-                "type": "bigworldsettings",
+                "type": "prop",
                 "io_enabled": true,
-                "name": "BigWorldSettings_2",
-                "id": "4ec8803a-cfda-4e5f-9dde-de5a2d0ce970",
-                "enabled": true,
-                "activation_radius": 2048.0,
-                "deactivation_radius": 2304.0,
-                "sim_near_radius": 1024.0,
-                "show_cell_debug": true,
-                "terrain_fill": false,
-                "terrain_infinite": false,
-                "terrain_stream_radius": 0.0,
-                "disk_streaming": false,
+                "name": "Prop_1",
+                "id": "1bd707ee-0abf-4cc3-9ef9-51eca5979d10",
+                "model_path": "assets/models/Oil_Drum.obj",
                 "render_mode": "billboard",
-                "sprite_path": "plugins/bigworld/assets/bigworldsettings.png",
+                "sprite_path": "assets/sprites/gun1.png",
                 "sprite_size": [
-                    64.0,
-                    64.0
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": true,
+                "collect_type": "weapon",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "auto",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
                 ]
             },
             "io_connections": []
