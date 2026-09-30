@@ -123,6 +123,10 @@ class FakeEditorWindow(QWidget):
     apply_clip_to_selection = MainWindow.apply_clip_to_selection
     perform_subtraction = MainWindow.perform_subtraction
     hollow_selected_brush = MainWindow.hollow_selected_brush
+    # Cloning arms a 500 ms timer that calls this; without it the timer fires
+    # in whichever later test next processes events, raises, and -- with no
+    # Qt exception hook under pytest -- aborts the whole run.
+    _clear_flash = MainWindow._clear_flash
 
     def __init__(self):
         super().__init__()

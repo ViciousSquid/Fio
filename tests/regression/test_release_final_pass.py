@@ -313,17 +313,18 @@ def test_rebuilding_recent_files_does_not_accumulate_actions(qt_app, tmp_path):
         host.recent_files = paths
         rebuild = MainWindow.update_recent_files_menu.__get__(host)
 
+        # No event processing: QMenu.clear() deletes the actions it owns at
+        # once, and pumping the loop would run other tests' queued events.
         rebuild()
-        qt_app.processEvents()
         baseline = len(host.findChildren(QAction))
         for _ in range(20):
             rebuild()
-        qt_app.processEvents()
         assert len(host.recent_menu.actions()) == 5
         assert len(host.findChildren(QAction)) == baseline, (
             "Recent Files actions accumulate on every rebuild")
     finally:
-        host.deleteLater()
+        from PyQt5 import sip
+        sip.delete(host)                      # now, not via the event loop
 
 
 # ---------------------------------------------------------------------------
