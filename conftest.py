@@ -280,6 +280,85 @@ def qt_app():
     yield app
 
 
+@pytest.fixture(autouse=True)
+def _deferred_callbacks_belong_to_their_test(request):
+    """Run, at teardown, every single-shot callback a test armed and left.
+
+    Invariant: a fake QObject/window that can receive a deferred callback must
+    implement the whole interface that callback uses -- not only the
+    synchronous methods its own test calls.  Tests bind real MainWindow
+    methods onto stand-in hosts, and some of those methods arm
+    ``QTimer.singleShot`` (clone's 500 ms flash, a level load's camera
+    re-centre, a toast's clear).  Left pending, such a timer fires in whichever
+    later test next processes events; if the stand-in lacks what it calls, it
+    raises there, and PyQt -- with no exception hook under pytest -- aborts
+    the whole run.  So each callback is tracked, the ones still pending when
+    the test ends are run then, and one that raises fails *the test that
+    armed it*.  A drained callback is disarmed, so it never runs twice.
+
+    Qt's own rule is kept: a callback bound to a QObject that has since been
+    destroyed is dropped, as Qt drops it.  Only ``qt`` tests (and tests using
+    ``qt_app``) are watched, so the headless tier never imports Qt.
+    """
+    if (request.node.get_closest_marker("qt") is None
+            and "qt_app" not in request.fixturenames):
+        yield
+        return
+    try:
+        from PyQt5 import sip
+        from PyQt5.QtCore import QObject, QTimer
+    except ImportError:
+        yield
+        return
+
+    original = QTimer.singleShot
+    pending = []
+
+    def _receiver_gone(callback):
+        owner = getattr(callback, "__self__", None)
+        return isinstance(owner, QObject) and sip.isdeleted(owner)
+
+    def single_shot(*args):
+        callback = args[-1]
+        if not callable(callback) or not isinstance(args[0], int):
+            return original(*args)
+        entry = {"callback": callback, "done": False}
+
+        def proxy():
+            if entry["done"] or _receiver_gone(callback):
+                return
+            entry["done"] = True
+            callback()
+
+        pending.append(entry)
+        return original(*args[:-1], proxy)
+
+    QTimer.singleShot = staticmethod(single_shot)
+    try:
+        yield
+        failures = []
+        for _ in range(10):                  # a callback may arm another
+            due = [e for e in pending if not e["done"]]
+            if not due:
+                break
+            for entry in due:
+                entry["done"] = True
+                if _receiver_gone(entry["callback"]):
+                    continue
+                try:
+                    entry["callback"]()
+                except Exception as exc:  # noqa: BLE001 - reported below
+                    failures.append("%r raised %s: %s" % (
+                        entry["callback"], type(exc).__name__, exc))
+        if failures:
+            pytest.fail(
+                "deferred callback(s) this test armed would raise when they "
+                "fire -- in a later test, aborting the run:\n  "
+                + "\n  ".join(failures), pytrace=False)
+    finally:
+        QTimer.singleShot = original
+
+
 # ---------------------------------------------------------------------------
 # OpenGL tier
 # ---------------------------------------------------------------------------
