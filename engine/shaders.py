@@ -1305,7 +1305,9 @@ out mediump vec3 SmoothNormal;
 uniform mat4 projection;
 uniform mat4 view;
 
-// Height grid of the chunk: texel (x = k, y = i) holds grid point (i, k).
+// Height grid of the chunk: texel (x = k + 1, y = i + 1) holds grid point
+// (i, k). The one-texel ring around it (i or k = -1 or res + 1) lies beyond
+// the chunk's edges and is sampled only for smooth normals.
 uniform highp sampler2DArray uHeights;
 uniform ivec2 uChunkI;     // (quads per side, texture layer)
 uniform vec3  uChunkX;     // (world x, world z, grid step), as float32
@@ -1324,7 +1326,7 @@ uniform float uGradW[MAX_GRADIENT_STOPS];
 uniform vec3  uGradD[MAX_GRADIENT_STOPS];
 
 float heightAt(int i, int k) {
-    return texelFetch(uHeights, ivec3(k, i, uChunkI.y), 0).r;
+    return texelFetch(uHeights, ivec3(k + 1, i + 1, uChunkI.y), 0).r;
 }
 
 vec3 gridPoint(ivec2 p) {
@@ -1333,15 +1335,15 @@ vec3 gridPoint(ivec2 p) {
                 uChunkX.y + float(p.y) * uChunkX.z);
 }
 
-// np.gradient(heights, step): central differences inside, one-sided at the
-// chunk edge (edge_order=1).
-float gradientAlong(int i, int k, int res, bool alongX) {
-    int lo = (alongX ? i : k) == 0 ? 0 : -1;
-    int hi = (alongX ? i : k) == res ? 0 : 1;
-    ivec2 a = alongX ? ivec2(i + lo, k) : ivec2(i, k + lo);
-    ivec2 b = alongX ? ivec2(i + hi, k) : ivec2(i, k + hi);
-    float span = (hi - lo) == 2 ? 2.0 * uChunkX.z : uChunkX.z;
-    return (heightAt(b.x, b.y) - heightAt(a.x, a.y)) / span;
+// Central differences everywhere, the chunk's edge included: the border ring
+// supplies the sample beyond it, so both chunks sharing an edge compute the
+// same smooth normal there. (The CPU mesh took one-sided differences at the
+// edge -- np.gradient's edge_order=1 -- which kinked the normal by a few
+// degrees and showed as a seam in the texture blend.)
+float gradientAlong(int i, int k, bool alongX) {
+    ivec2 a = alongX ? ivec2(i - 1, k) : ivec2(i, k - 1);
+    ivec2 b = alongX ? ivec2(i + 1, k) : ivec2(i, k + 1);
+    return (heightAt(b.x, b.y) - heightAt(a.x, a.y)) / (2.0 * uChunkX.z);
 }
 
 vec3 gradientColour(float h) {
@@ -1392,8 +1394,8 @@ void main() {
         VertexColor = clamp(gradientColour(norm) + variation, 0.0, 1.0);
     }
 
-    float gx = gradientAlong(me.x, me.y, res, true);
-    float gz = gradientAlong(me.x, me.y, res, false);
+    float gx = gradientAlong(me.x, me.y, true);
+    float gz = gradientAlong(me.x, me.y, false);
     SmoothNormal = vec3(-gx, 1.0, -gz) / sqrt(gx * gx + 1.0 + gz * gz);
 
     TexCoords = p.xz / uTiling;

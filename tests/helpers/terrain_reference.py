@@ -404,3 +404,47 @@ class ReferenceChunkModel:
         chunk.is_uploaded = True
         chunk.lod_level = (self.LOD_RESOLUTIONS.index(resolution)
                            if resolution in self.LOD_RESOLUTIONS else 0)
+
+
+# ---------------------------------------------------------------------------
+# Deliberate change: seamless smooth normals
+# ---------------------------------------------------------------------------
+#
+# The one intentional departure from the frozen mesh above. The old builder
+# took np.gradient's one-sided differences at a chunk's edge, which kinked the
+# smooth normal by a few degrees at every chunk border -- a seam in the
+# texture blend, the only consumer of the smooth normal. The engine now stores
+# a one-sample border around each chunk and takes central differences
+# everywhere. Every other attribute is still the frozen behaviour.
+
+def seamless_smooth_normals(terrain, world_x, world_z, size, resolution):
+    """Per-vertex smooth normals as the engine now computes them.
+
+    Returns an array aligned with :func:`reference_chunk_mesh`'s vertices.
+    """
+    step = size / resolution
+    g = np.arange(-1, resolution + 2, dtype=np.float32)
+    ix, iz = np.meshgrid(g, g, indexing='ij')
+    wx = (world_x + ix * step).flatten().astype(np.float32)
+    wz = (world_z + iz * step).flatten().astype(np.float32)
+    h = terrain._get_heights_batch(wx, wz).reshape(resolution + 3, resolution + 3)
+    span = np.float32(2 * step)
+    gx = (h[2:, 1:-1] - h[:-2, 1:-1]) / span          # (res+1)^2, grid (i, k)
+    gz = (h[1:-1, 2:] - h[1:-1, :-2]) / span
+    length = np.sqrt(gx ** 2 + np.float32(1) + gz ** 2)
+    sn = np.stack([-gx / length, np.float32(1) / length, -gz / length], axis=-1)
+    q = np.arange(resolution * resolution)
+    i, k = q // resolution, q % resolution
+    out = np.zeros((resolution * resolution * 6, 3), dtype=np.float32)
+    corners = ((0, 0), (1, 0), (0, 1), (1, 0), (1, 1), (0, 1))
+    for c, (di, dk) in enumerate(corners):
+        out[c::6] = sn[i + di, k + dk]
+    return out
+
+
+def reference_chunk_mesh_seamless(terrain, world_x, world_z, size, resolution):
+    """The frozen mesh with only its smooth normals replaced (see above)."""
+    vertices, lo, hi = reference_chunk_mesh(terrain, world_x, world_z, size, resolution)
+    vertices = vertices.copy()
+    vertices[:, 11:14] = seamless_smooth_normals(terrain, world_x, world_z, size, resolution)
+    return vertices, lo, hi
