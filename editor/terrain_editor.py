@@ -8,6 +8,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor, QPainter, QLinearGradient, QPen
 
 from engine.terrain import (Terrain, BIOMES, DEFAULT_BIOME, DEFAULT_USE_TEXTURES,
+                            DEFAULT_GRASS_ENABLED,
                             biome_key_for_name)
 from engine import terrain_style
 
@@ -1974,7 +1975,9 @@ class TerrainEditorPanel(QWidget):
         default_index = max(0, self.biome_combo.findData(DEFAULT_BIOME))
         self.biome_combo.setCurrentIndex(default_index)
         self.textures_checkbox.setChecked(DEFAULT_USE_TEXTURES)
-        self.terrain.use_textures = DEFAULT_USE_TEXTURES
+        self.terrain.set_use_textures(DEFAULT_USE_TEXTURES)
+        self.grass_checkbox.setChecked(DEFAULT_GRASS_ENABLED)
+        self.terrain.set_grass(DEFAULT_GRASS_ENABLED)
         self.seed_spin.setValue(42)
         self.chunk_size_spin.setValue(16)
         self.min_x_spin.setValue(-2)

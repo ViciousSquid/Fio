@@ -322,8 +322,9 @@ def biome_key_for_name(name) -> str:
 
 #: What a newly created terrain starts as. A map that saves its terrain keeps
 #: whatever it saved; these apply to terrain created fresh in the editor.
-DEFAULT_BIOME = 'low_poly_valley'
+DEFAULT_BIOME = 'rocky_mountains'
 DEFAULT_USE_TEXTURES = True
+DEFAULT_GRASS_ENABLED = True
 
 # ============================================================================
 # MAIN TERRAIN CLASS
@@ -412,7 +413,8 @@ class Terrain:
         # places every blade of a tuft on the terrain surface and uploads one
         # compact position/size/phase record per blade; the GPU builds the
         # tapered, curved blade and animates it (see shaders 'grass.vert').
-        self.grass_enabled: bool = False
+        # New terrain grows grass; maps saved without it stay grass-free.
+        self.grass_enabled: bool = DEFAULT_GRASS_ENABLED
         self.grass_density: float = 0.02
         self.grass_color: Tuple[float, float, float] = tuple(self.biome.color_gradient[0][1])
         self.grass_color_custom: bool = False

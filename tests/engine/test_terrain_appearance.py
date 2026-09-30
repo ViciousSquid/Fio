@@ -18,6 +18,8 @@ pytestmark = pytest.mark.qt
 @pytest.fixture
 def terrain():
     t = Terrain(seed=11)
+    # Pinned, so a change of the default biome cannot move these tests.
+    t.set_biome('grassy_hills')
     t.set_bounds(-1, 0, -1, 0)
     return t
 
@@ -60,11 +62,14 @@ def test_built_terraces_are_what_collision_reads(terrain, mode):
     _build(terrain, res=48)
     step = terrain._terrace_step_world()
     on_flats = 0
-    for x, z in POINTS:
+    points = [(x, z) for x in np.linspace(-240.0, 240.0, 9)
+              for z in np.linspace(-240.0, 240.0, 9)]
+    for x, z in points:
         h = terrain.get_height_at(x, z)
         assert h == pytest.approx(terrain._get_height_scalar(x, z), abs=step * 0.5)
         on_flats += abs(h / step - round(h / step)) < 1e-3
-    assert on_flats >= 1
+    # Most of a gently terraced hill is flat steps.
+    assert on_flats >= len(points) * 0.25
 
 
 def test_built_blocks_are_flat_for_collision(terrain):
