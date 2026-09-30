@@ -718,15 +718,27 @@ class BaseRenderer:
             self._preload_water_uniforms()
 
             # glass
-            vs_src = self._shader_source('glass.vert')
-            fs_src = self._shader_source('glass.frag')
-            self.shaders['glass'] = self.shader_loader.compile_from_source(vs_src, fs_src)
-            self.uniforms['glass'] = UniformCache(self.shaders['glass'])
-            self.uniforms['glass'].preload(['projection', 'view', 'model', 'viewPos', 'waterColor',
-                                            'distortionStrength', 'fresnelIntensity', 'glassOpacity',
-                                            'refractionIndex', 'roughness', 'normalMatrix',
-                                            'sceneColor', 'screenSize'])
-            self.uniforms['glass'].preload(self.ENV_UNIFORMS)
+            # Glass is an optional visual effect. A driver/compiler rejection here
+            # must not abort common shader initialization and take the whole world
+            # renderer down with it; the glass pass already skips itself when no
+            # glass program is registered.
+            try:
+                vs_src = self._shader_source('glass.vert')
+                fs_src = self._shader_source('glass.frag')
+                glass_program = self.shader_loader.compile_from_source(vs_src, fs_src)
+                self.shaders['glass'] = glass_program
+                self.uniforms['glass'] = UniformCache(glass_program)
+                self.uniforms['glass'].preload([
+                    'projection', 'view', 'model', 'viewPos', 'waterColor',
+                    'distortionStrength', 'fresnelIntensity', 'glassOpacity',
+                    'refractionIndex', 'roughness', 'normalMatrix',
+                    'sceneColor', 'screenSize'
+                ])
+                self.uniforms['glass'].preload(self.ENV_UNIFORMS)
+            except Exception as e:
+                self.shaders.pop('glass', None)
+                self.uniforms.pop('glass', None)
+                print(f"Glass shader unavailable; continuing without glass: {e}")
             # fog – use ARM‑optimised fragment shader (works everywhere)
             fog_vert = self._shader_source('fog.vert')
             fog_frag = self._shader_source('fog_arm.frag') or self._shader_source('fog.frag')
