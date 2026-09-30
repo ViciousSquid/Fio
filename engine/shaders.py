@@ -1319,9 +1319,37 @@ uniform sampler2D texGrass;
 uniform sampler2D texRock;
 uniform sampler2D texSand;
 uniform sampler2D texSnow;
-uniform vec4 biomeWeights;
-uniform float terrainHeightScale;
 uniform int use_textures;
+
+// Height texture layers. uHeightRange is the terrain's world-space height
+// range; uLayerHeights are the sand->grass, grass->rock and rock->snow
+// boundaries as fractions of it.
+uniform highp vec2 uHeightRange;
+uniform vec3 uLayerHeights;
+uniform float uLayerBlend;
+uniform float uSlopeRock;
+
+// Appearance options (engine/terrain_style.py). Each one is independent.
+uniform int uColorMode;              // 0 natural, 1 palette by height, 2 bands
+uniform vec3 uPalette[8];
+uniform int uPaletteSize;
+uniform highp float uBandHeight;
+uniform float uContour;
+uniform float uContourWidth;
+uniform float uGrid;
+uniform highp float uGridSize;
+uniform highp vec2 uGridOrigin;
+uniform float uCellVariation;
+uniform vec3 uWallColor;
+uniform float uWall;
+uniform float uWallStripes;
+uniform vec3 uSpeckleColor;
+uniform float uSpeckle;
+uniform vec3 uPatchColor;
+uniform float uPatch;
+uniform int uSmoothShading;
+uniform int uLightSteps;
+uniform int uDither;
 
 struct Light {
     highp vec3 position;
@@ -1347,61 +1375,175 @@ highp float noise(highp vec2 p) {
     highp vec2 u = f * f * (3.0 - 2.0 * f);
     return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
 }
+float fbm2(highp vec2 p) {
+    return noise(p) * 0.6 + noise(p * 2.03 + 17.1) * 0.3 + noise(p * 4.1 + 5.3) * 0.1;
+}
 
-vec4 get_splat_weights(highp vec3 worldPos, vec3 smoothNorm) {
-    float height = clamp(worldPos.y * terrainHeightScale, 0.0, 1.0);
-    float slope  = 1.0 - max(smoothNorm.y, 0.0);  
-    float n      = noise(worldPos.xz * 0.02 + height * 5.0) * 0.5 + 0.5;
+float heightFraction(highp float y) {
+    return clamp((y - uHeightRange.x) / max(uHeightRange.y - uHeightRange.x, 1e-3), 0.0, 1.0);
+}
 
-    float grass_w = (1.0 - slope * 1.5) * (1.0 - height * 0.6) * biomeWeights.r;
-    float rock_w  = slope * 0.8 + n * 0.4 * biomeWeights.g;
-    float sand_w  = (1.0 - height * 0.4) * (1.0 - slope * 0.5) * biomeWeights.b;
-    float snow_w  = smoothstep(0.6, 1.0, height) * biomeWeights.a;
+// Sand, grass, rock and snow weights. Each boundary is a smoothstep, so the
+// weights always sum to one; a little noise wobbles the edges so they read
+// as natural rather than as contour lines. Steep ground turns to rock.
+vec4 layerWeights(highp vec3 worldPos, float slope) {
+    float h = heightFraction(worldPos.y)
+            + (fbm2(worldPos.xz * 0.01) - 0.5) * uLayerBlend * 2.0;
+    float b = max(uLayerBlend, 1e-3);
+    float s0 = smoothstep(uLayerHeights.x - b, uLayerHeights.x + b, h);
+    float s1 = smoothstep(uLayerHeights.y - b, uLayerHeights.y + b, h);
+    float s2 = smoothstep(uLayerHeights.z - b, uLayerHeights.z + b, h);
+    vec4 w = vec4(1.0 - s0, s0 - s1, s1 - s2, s2);
+    float steep = smoothstep(0.25, 0.5, slope) * uSlopeRock;
+    return mix(w, vec4(0.0, 0.0, 1.0, 0.0), steep);
+}
 
-    vec4 weights = vec4(grass_w, rock_w, sand_w, snow_w);
-    return weights / (dot(weights, vec4(1.0)) + 0.001);
+vec3 paletteAt(float t) {
+    int n = max(uPaletteSize, 1);
+    float x = clamp(t, 0.0, 1.0) * float(n - 1);
+    int i = int(floor(x));
+    int j = min(i + 1, n - 1);
+    return mix(uPalette[i], uPalette[j], fract(x));
+}
+
+// Index of the colour band / terrace a height belongs to. Terrace flats sit
+// exactly on multiples of the band height; the offset keeps each riser with
+// the level below it until just under the lip, where the contour line runs.
+highp float bandIndex(highp float y) {
+    return floor(y / max(uBandHeight, 1e-3) + 0.12);
+}
+
+float bayer4(vec2 fragCoord) {
+    int x = int(mod(fragCoord.x, 4.0));
+    int y = int(mod(fragCoord.y, 4.0));
+    int index = x + y * 4;
+    const float m[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0,
+                                  3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    return (m[index] + 0.5) / 16.0;
 }
 
 void main() {
-    vec3 norm = normalize(Normal);
+    vec3 smoothNorm = normalize(SmoothNormal);
+    vec3 faceNorm = normalize(Normal);
+    // The ground is seen from above: keep the face normal on the same side
+    // as the (always upward) smooth normal.
+    if (dot(faceNorm, smoothNorm) < 0.0) faceNorm = -faceNorm;
+    vec3 norm = (uSmoothShading == 1) ? smoothNorm : faceNorm;
+    float faceSlope = 1.0 - clamp(faceNorm.y, 0.0, 1.0);
+    float flatness = 1.0 - smoothstep(0.15, 0.35, faceSlope);
     vec3 texColor;
-    
-    if (use_textures == 1) {
-        vec3 smoothNorm = normalize(SmoothNormal);
-        vec4 splat = get_splat_weights(FragPos, smoothNorm);
-        
+
+    // ---- Base colour --------------------------------------------------
+    if (uColorMode == 1) {
+        // Palette graded by height, stepped with the terraces.
+        highp float y = bandIndex(FragPos.y) * uBandHeight;
+        texColor = paletteAt(heightFraction(y));
+    } else if (uColorMode == 2) {
+        // Repeating strata: each band takes the next palette colour.
+        highp float band = bandIndex(FragPos.y);
+        int n = max(uPaletteSize, 1);
+        int idx = int(mod(band, float(n)));
+        texColor = uPalette[idx] * mix(0.94, 1.06, hash(vec2(band, 3.7)));
+    } else if (use_textures == 1) {
+        vec4 splat = layerWeights(FragPos, 1.0 - max(smoothNorm.y, 0.0));
+
         vec4 grass_col = texture(texGrass, TexCoords * 1.0);
-        vec4 rock_col  = texture(texRock,  TexCoords * 0.5 + vec2(splat.g * 0.5, 0.0));
-        vec4 sand_col  = texture(texSand,  TexCoords * 1.5 + vec2(splat.b * 0.3, splat.b * 0.2));
+        vec4 rock_col  = texture(texRock,  TexCoords * 0.5);
+        vec4 sand_col  = texture(texSand,  TexCoords * 1.5);
         vec4 snow_col  = texture(texSnow,  TexCoords * 0.8);
-        
+
         vec3 splatColor = (
-            grass_col.rgb * splat.r +
-            rock_col.rgb  * splat.g +
-            sand_col.rgb  * splat.b +
-            snow_col.rgb  * splat.a
+            sand_col.rgb  * splat.x +
+            grass_col.rgb * splat.y +
+            rock_col.rgb  * splat.z +
+            snow_col.rgb  * splat.w
         );
-        texColor = splatColor * VertexColor * 1.1;
+        // The biome colour only tints the textures lightly, so each layer
+        // keeps its own character instead of everything turning biome-green.
+        float tintLuma = max(dot(VertexColor, vec3(0.299, 0.587, 0.114)), 0.05);
+        vec3 tint = mix(vec3(1.0), VertexColor / tintLuma, 0.25);
+        texColor = splatColor * tint * 1.05;
     } else {
         texColor = VertexColor * 1.1;
     }
-    
+
+    // ---- Surface details ---------------------------------------------
+    highp vec2 cellCoord = (FragPos.xz - uGridOrigin) / max(uGridSize, 1e-3);
+    if (uCellVariation > 0.0) {
+        float jitter = hash(floor(cellCoord) + vec2(0.37, 0.71)) - 0.5;
+        texColor *= 1.0 + jitter * uCellVariation * 0.5;
+    }
+
+    if (uPatch > 0.0) {
+        float n = fbm2(FragPos.xz * 0.006);
+        float m = smoothstep(0.50, 0.58, n) * uPatch * flatness;
+        float grain = mix(0.88, 1.06, noise(FragPos.xz * 0.45));
+        vec3 patchCol = uPatchColor * grain * mix(0.8, 1.0, smoothstep(0.5, 0.62, n));
+        texColor = mix(texColor, patchCol, m);
+    }
+
+    if (uWall > 0.0) {
+        float wallMask = smoothstep(0.35, 0.7, faceSlope) * uWall;
+        highp float yb = FragPos.y / max(uBandHeight, 1e-3);
+        vec3 wallCol = uWallColor * mix(0.78, 1.06, fract(yb));
+        float stripe = step(fract(yb * 2.0), 0.18);
+        wallCol *= 1.0 - stripe * uWallStripes * 0.35;
+        texColor = mix(texColor, wallCol, wallMask);
+    }
+
+    if (uSpeckle > 0.0) {
+        highp vec2 sc = FragPos.xz / 3.0;
+        vec2 ci = floor(sc);
+        vec2 cf = fract(sc);
+        float density = uSpeckle * smoothstep(0.3, 0.7, noise(FragPos.xz * 0.02)) * flatness;
+        vec2 centre = vec2(hash(ci + 7.3), hash(ci + 19.1)) * 0.6 + 0.2;
+        float dotMask = step(hash(ci), density)
+                      * (1.0 - smoothstep(0.16, 0.26, length(cf - centre)));
+        // Far away the dots are smaller than a pixel: use their average.
+        float far = smoothstep(0.15, 0.5, length(fwidth(sc)));
+        float amount = mix(dotMask, density * 0.15, far);
+        texColor = mix(texColor, uSpeckleColor * mix(0.8, 1.1, hash(ci + 3.1)), amount);
+    }
+
+    if (uGrid > 0.0) {
+        vec2 fw = max(fwidth(cellCoord), vec2(1e-4));
+        vec2 d = abs(fract(cellCoord - 0.5) - 0.5) / fw;
+        float line = 1.0 - smoothstep(0.5, 1.5, min(d.x, d.y));
+        line *= 1.0 - smoothstep(0.15, 0.4, max(fw.x, fw.y));
+        texColor *= 1.0 - line * uGrid * (1.0 - smoothstep(0.3, 0.6, faceSlope));
+    }
+
+    if (uContour > 0.0) {
+        highp float coord = FragPos.y / max(uBandHeight, 1e-3) + 0.12;
+        float fw = max(fwidth(coord), 1e-4);
+        float f = fract(coord);
+        float d = min(f, 1.0 - f) / fw;
+        float line = 1.0 - smoothstep(uContourWidth * 0.5 - 0.5, uContourWidth * 0.5 + 0.5, d);
+        line *= 1.0 - smoothstep(0.3, 0.6, fw);
+        texColor *= 1.0 - line * uContour;
+    }
+
+    // ---- Lighting -----------------------------------------------------
     vec3 skyColor    = vec3(0.6, 0.75, 0.9);
     vec3 groundColor = vec3(0.3, 0.25, 0.2);
     float skyFactor  = (norm.y + 1.0) * 0.5;
     vec3 ambient     = (mix(groundColor, skyColor, skyFactor) * 0.3 + uAmbient) * texColor;
-    
+
     vec3 result  = ambient;
     vec3 sunDir  = normalize(vec3(0.4, 0.7, 0.3));
     vec3 sunColor = vec3(1.0, 0.95, 0.85);
     float sunDiff    = max(dot(norm, sunDir), 0.0);
     float wrappedDiff = (sunDiff + 0.3) / 1.3;
+    if (uLightSteps > 0) {
+        float steps = float(uLightSteps);
+        wrappedDiff = floor(wrappedDiff * steps + 0.5) / steps;
+    }
     result += wrappedDiff * sunColor * 0.7 * texColor;
-    
+
     vec3 fillDir  = normalize(vec3(-0.3, 0.2, -0.4));
     float fillDiff = max(dot(norm, fillDir), 0.0) * 0.2;
     result += fillDiff * skyColor * texColor;
-    
+
     for (int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS_TERRAIN) + """; i++) {
         highp vec3  toLight  = lights[i].position - FragPos;
         highp float distance = length(toLight);
@@ -1414,79 +1556,198 @@ void main() {
             result += (1.0 - shadow) * diff * lights[i].color * lights[i].intensity * attenuation * texColor;
         }
     }
-    
+
     float gray = dot(result, vec3(0.299, 0.587, 0.114));
     result = mix(vec3(gray), result, 1.15);
-    
-    FragColor = vec4(applyFog(result, FragPos), 1.0);
+
+    result = applyFog(result, FragPos);
+    if (uDither > 0) {
+        float levels = float(uDither);
+        result = floor(clamp(result, 0.0, 1.0) * levels + bayer4(gl_FragCoord.xy)) / levels;
+    }
+    FragColor = vec4(result, 1.0);
 }""",
 
     'grass.vert': """#version 330 core
 
+// One instance is one grass blade. The CPU supplies the root position (already
+// sitting on the terrain surface), a size, a yaw/seed and a colour variation;
+// the GPU builds the tapered blade from gl_VertexID.
+//
+// A blade with S segments is (S - 1) quads followed by a tip triangle, so a
+// draw uses (S - 1) * 6 + 3 vertices per instance. Near chunks draw several
+// segments; far chunks draw the S = 1 blade, which is the tip triangle alone.
+// Between uLodStart and uLodEnd every blade morphs its width, bend and wind
+// profile onto that single triangle, so the swap is invisible.
 layout (location = 2) in vec3 iPosition;
 layout (location = 3) in float iSize;
 layout (location = 4) in float iPhase;
 layout (location = 5) in float iVariation;
 
 out vec3 FragPos;
+out vec3 BladeNormal;
 out float BladeHeight;
-out float ColorVariation;
+out vec3 BladeTint;
 
 uniform mat4 projection;
 uniform mat4 view;
 uniform float time;
 uniform float windStrength;
+uniform vec3 cameraPos;
+uniform int uSegments;
+uniform float uLodStart;
+uniform float uLodEnd;
+uniform float uFadeStart;
+uniform float uFadeEnd;
+uniform float uBladeHeight;
+uniform float uBladeWidth;
+
+float hash1(float n) {
+    return fract(sin(n) * 43758.5453123);
+}
+
+// Classic Perlin 2D noise by Stefan Gustavson (MIT).
+vec4 permute(vec4 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
+vec2 fade(vec2 t) { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); }
+float cnoise(vec2 P) {
+    vec4 Pi = floor(P.xyxy) + vec4(0.0, 0.0, 1.0, 1.0);
+    vec4 Pf = fract(P.xyxy) - vec4(0.0, 0.0, 1.0, 1.0);
+    Pi = mod(Pi, 289.0);
+    vec4 ix = Pi.xzxz;
+    vec4 iy = Pi.yyww;
+    vec4 fx = Pf.xzxz;
+    vec4 fy = Pf.yyww;
+    vec4 i = permute(permute(ix) + iy);
+    vec4 gx = 2.0 * fract(i * 0.0243902439) - 1.0;
+    vec4 gy = abs(gx) - 0.5;
+    vec4 tx = floor(gx + 0.5);
+    gx = gx - tx;
+    vec2 g00 = vec2(gx.x, gy.x);
+    vec2 g10 = vec2(gx.y, gy.y);
+    vec2 g01 = vec2(gx.z, gy.z);
+    vec2 g11 = vec2(gx.w, gy.w);
+    vec4 norm = 1.79284291400159 - 0.85373472095314 *
+                vec4(dot(g00, g00), dot(g01, g01), dot(g10, g10), dot(g11, g11));
+    g00 *= norm.x; g01 *= norm.y; g10 *= norm.z; g11 *= norm.w;
+    float n00 = dot(g00, vec2(fx.x, fy.x));
+    float n10 = dot(g10, vec2(fx.y, fy.y));
+    float n01 = dot(g01, vec2(fx.z, fy.z));
+    float n11 = dot(g11, vec2(fx.w, fy.w));
+    vec2 fade_xy = fade(Pf.xy);
+    vec2 n_x = mix(vec2(n00, n01), vec2(n10, n11), fade_xy.x);
+    return 2.3 * mix(n_x.x, n_x.y, fade_xy.y);
+}
+
+// Quadratic bezier from 0 to 1 with a low control point: a blade that stays
+// upright at the root and curls over towards the tip.
+float bezier(float t, float p1) {
+    float it = 1.0 - t;
+    return 2.0 * it * t * p1 + t * t;
+}
+
+float bendT(float h, float bendStart) {
+    return clamp((h - bendStart) / (1.0 - bendStart), 0.0, 1.0);
+}
+
+// Horizontal displacement of the blade's centre line at height fraction h.
+vec2 centreOffset(float h, float lod, vec2 forward, vec2 windDir,
+                  float bendStrength, float bendStart, float strong, float gentle) {
+    float bend = mix(bezier(bendT(h, bendStart), 0.1), h, lod);
+    float sway = mix(bendT(h, bendStart), h, lod);
+    float windProfile = mix(h * h, h, lod);
+    return forward * (bendStrength * bend + gentle * sway)
+         + windDir * (strong * windProfile);
+}
 
 void main() {
-    // One instance is a small crossed pair of ordinary grass blades.
-    // The CPU supplies only the tuft position and a few cheap random values;
-    // the GPU builds the 12 vertices for the two blades.
-    int blade = gl_VertexID / 6;
-    int vertex = gl_VertexID - blade * 6;
+    int segments = max(uSegments, 1);
+    int bodyQuads = segments - 1;
+    int quad = gl_VertexID / 6;
+    int corner = gl_VertexID - quad * 6;
 
-    float y;
-    float sideAmount;
-
-    if (vertex == 0) {
-        y = 0.0; sideAmount = -1.0;
-    } else if (vertex == 1) {
-        y = 0.0; sideAmount = 1.0;
-    } else if (vertex == 2) {
-        y = 1.0; sideAmount = 1.0;
-    } else if (vertex == 3) {
-        y = 0.0; sideAmount = -1.0;
-    } else if (vertex == 4) {
-        y = 1.0; sideAmount = 1.0;
+    float level;
+    float side;
+    if (quad < bodyQuads) {
+        // (L,i) (R,i) (L,i+1) / (L,i+1) (R,i) (R,i+1)
+        int up = (corner == 2 || corner == 3 || corner == 5) ? 1 : 0;
+        side = (corner == 1 || corner == 4 || corner == 5) ? 1.0 : -1.0;
+        level = float(quad + up) / float(segments);
     } else {
-        y = 1.0; sideAmount = -1.0;
+        level = (corner == 2) ? 1.0 : float(bodyQuads) / float(segments);
+        side = (corner == 0) ? -1.0 : ((corner == 1) ? 1.0 : 0.0);
     }
 
-    float angle = iPhase + float(blade) * 1.5707963;
-    vec2 forward = vec2(cos(angle), sin(angle));
-    vec2 side = vec2(-forward.y, forward.x);
+    float dist = distance(cameraPos.xz, iPosition.xz);
+    float lod = (segments == 1) ? 1.0 : smoothstep(uLodStart, uLodEnd, dist);
+    float distanceScale = 1.0 - smoothstep(uFadeStart, uFadeEnd, dist);
 
-    // Tall, thin blades: this is intentionally simple geometry.
-    float height = iSize * (2.0 + 0.55 * iVariation);
-    float width = iSize * (0.16 + 0.04 * iVariation);
+    float seedA = hash1(iPhase * 12.9898 + iVariation * 78.233);
+    float seedB = hash1(seedA * 91.7 + 3.1);
+    float seedC = hash1(seedB * 47.3 + 7.9);
 
-    // Slightly separate the crossed blades so their bases do not z-fight.
-    vec2 root = iPosition.xz + forward * (float(blade) - 0.5) * width * 0.25;
+    float height = uBladeHeight * iSize * mix(0.7, 1.3, seedC) * distanceScale;
+    float halfWidth = uBladeWidth * mix(0.8, 1.2, seedB) * (0.5 + 0.5 * distanceScale);
 
-    // Cheap, spatially varying wind. The root stays planted.
-    float spatial = dot(iPosition.xz, vec2(0.021, 0.017));
-    float wave = sin(time * 1.1 + spatial + iPhase);
-    float gust = sin(time * 0.47 + iPosition.x * 0.009
-                     - iPosition.z * 0.011 + iPhase * 1.7);
-    float bend = (wave * 0.72 + gust * 0.28) * windStrength;
+    // Static curl direction is fixed in the world. The flat side of the
+    // blade turns towards the camera (with a stable per-blade offset) so a
+    // field never shows its blades edge-on.
+    vec2 forward = vec2(cos(iPhase), sin(iPhase));
+    vec2 toCamera = cameraPos.xz - iPosition.xz;
+    toCamera = dot(toCamera, toCamera) > 1e-6 ? normalize(toCamera) : vec2(0.0, 1.0);
+    float turn = (seedA - 0.5) * 1.2;
+    vec2 cameraSide = vec2(-toCamera.y, toCamera.x);
+    vec2 sideDir = vec2(cameraSide.x * cos(turn) - cameraSide.y * sin(turn),
+                        cameraSide.x * sin(turn) + cameraSide.y * cos(turn));
 
-    float bendAmount = bend * height * y * y;
-    vec2 horizontal = side * sideAmount * width;
-    horizontal += forward * bendAmount;
+    // Wind: a slow Perlin field rolling across the world, biased downwind,
+    // plus a small per-blade flutter.
+    vec2 windDir = normalize(vec2(1.0, 0.35));
+    float wave = cnoise(iPosition.xz * 0.012 - windDir * time * 0.6);
+    float strong = (wave * 0.5 + 0.2) * windStrength * height;
+    float gentle = sin(time * 1.9 + seedA * 10.0) * 0.08 * height;
+    float bendStrength = mix(0.15, 0.45, seedA) * height;
+    float bendStart = mix(0.0, 0.3, seedB);
 
-    vec3 p = vec3(root + horizontal, iPosition.y + 0.02 + y * height);
+    // Taper: the detailed blade narrows gently and then closes in the tip
+    // triangle; the far blade is a plain triangle. Morph between the two.
+    float widthHigh = halfWidth * (1.0 - 0.45 * level);
+    float widthLow = halfWidth * (1.0 - level);
+    float width = mix(widthHigh, widthLow, lod);
+
+    vec2 offset = centreOffset(level, lod, forward, windDir,
+                               bendStrength, bendStart, strong, gentle);
+    // Keep the blade roughly its own length as it leans over.
+    float rise = level * height;
+    float y = sqrt(max(rise * rise - dot(offset, offset) * 0.6, 0.2 * rise * rise));
+
+    vec3 root = iPosition;
+    vec3 p = vec3(root.x + offset.x + sideDir.x * side * width,
+                  root.y + y,
+                  root.z + offset.y + sideDir.y * side * width);
+
+    // Surface normal from the bent centre line and the blade's width axis,
+    // then tilted across the width so the flat card shades like a rounded
+    // blade.
+    float h2 = min(level + 0.05, 1.0);
+    float h1 = h2 - 0.05;
+    vec2 o1 = centreOffset(h1, lod, forward, windDir, bendStrength, bendStart, strong, gentle);
+    vec2 o2 = centreOffset(h2, lod, forward, windDir, bendStrength, bendStart, strong, gentle);
+    vec3 tangent = vec3(o2.x - o1.x, (h2 - h1) * height, o2.y - o1.y);
+    vec3 side3 = vec3(sideDir.x, 0.0, sideDir.y);
+    vec3 n = cross(side3, tangent);
+    n = dot(n, n) > 1e-10 ? normalize(n) : vec3(0.0, 1.0, 0.0);
+    if (dot(n, cameraPos - p) < 0.0) n = -n;
+    BladeNormal = normalize(n + side3 * side * 0.6);
+
+    // Colour variation: a large-scale patchiness across the field and a few
+    // sun-dried blades.
+    float patch = cnoise(iPosition.xz * 0.0035) * 0.5 + 0.5;
+    float dry = smoothstep(0.78, 1.0, seedC) * 0.7;
+    BladeTint = mix(vec3(1.0), vec3(1.25, 1.1, 0.55), dry)
+              * mix(0.82, 1.12, patch) * iVariation;
+
     FragPos = p;
-    BladeHeight = y;
-    ColorVariation = iVariation;
+    BladeHeight = level;
     gl_Position = projection * view * vec4(p, 1.0);
 }
 
@@ -1496,24 +1757,43 @@ void main() {
 out vec4 FragColor;
 
 in vec3 FragPos;
+in vec3 BladeNormal;
 in float BladeHeight;
-in float ColorVariation;
+in vec3 BladeTint;
 
 uniform vec3 grassColor;
 uniform vec3 cameraPos;
 """ + FOG_GLSL + """
 void main() {
-    // Geometry supplies the silhouette; unlike the old billboard pass there
-    // is no alpha-card coverage to discard. Fade is handled by fog.
-    float heightShade = mix(0.82, 1.08, clamp(BladeHeight, 0.0, 1.0));
-    
-    // Grass uses a constant upward normal by design: terrain slope does not
-    // make blades lie down and no per-blade normal data is uploaded.
-    vec3 upwardNormal = vec3(0.0, 1.0, 0.0);
+    // Dark, shaded roots rising to lighter, slightly sun-bleached tips.
+    float g = smoothstep(0.0, 1.0, BladeHeight);
+    vec3 baseColor = grassColor * 0.38;
+    vec3 tipColor = mix(grassColor * 1.3, vec3(0.80, 0.78, 0.55), 0.3);
+    vec3 albedo = mix(baseColor, tipColor, g) * BladeTint;
+
+    vec3 n = normalize(BladeNormal);
+    // Lean the lighting normal towards the ground normal so a field reads
+    // as one surface lit the same way as the terrain under it.
+    vec3 nLight = normalize(mix(n, vec3(0.0, 1.0, 0.0), 0.45));
+    vec3 viewDir = normalize(cameraPos - FragPos);
+
     vec3 sunDir = normalize(vec3(0.4, 0.7, 0.3));
-    float sun = 0.45 + 0.55 * max(dot(upwardNormal, sunDir), 0.0);
-    float variation = mix(0.88, 1.08, clamp((ColorVariation - 0.82) / 0.30, 0.0, 1.0));
-    vec3 color = grassColor * sun * heightShade * variation + uAmbient * grassColor;
+    vec3 sunColor = vec3(1.0, 0.95, 0.85);
+    vec3 skyColor = vec3(0.6, 0.75, 0.9);
+    vec3 groundColor = vec3(0.3, 0.25, 0.2);
+
+    float diffuse = (max(dot(nLight, sunDir), 0.0) + 0.3) / 1.3;
+    // Light shining through the blade when looking towards the sun.
+    float translucency = pow(max(dot(-viewDir, sunDir), 0.0), 4.0) * 0.45 * g;
+    float specular = pow(max(dot(reflect(-sunDir, n), viewDir), 0.0), 24.0) * 0.12 * g;
+    float occlusion = mix(0.55, 1.0, g);
+
+    vec3 ambient = mix(groundColor, skyColor, (nLight.y + 1.0) * 0.5) * 0.3 + uAmbient;
+    vec3 color = albedo * (ambient * occlusion + sunColor * (diffuse * 0.7 + translucency))
+               + sunColor * specular;
+
+    float gray = dot(color, vec3(0.299, 0.587, 0.114));
+    color = mix(vec3(gray), color, 1.15);
     FragColor = vec4(applyFog(color, FragPos), 1.0);
 }
 """,

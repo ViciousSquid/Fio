@@ -684,7 +684,6 @@ class BaseRenderer:
                 self.uniforms['terrain'].preload([
                     'projection', 'view', 'active_lights',
                     'texGrass', 'texRock', 'texSand', 'texSnow',
-                    'biomeWeights', 'terrainHeightScale'
                 ])
                 self.uniforms['terrain'].preload(self.ENV_UNIFORMS)
                 print("Terrain shader loaded")
@@ -2072,8 +2071,6 @@ layout (location = 10) in float iInstanceAlpha;
             'texRock': self.uniforms['terrain']['texRock'],
             'texSand': self.uniforms['terrain']['texSand'],
             'texSnow': self.uniforms['terrain']['texSnow'],
-            'biomeWeights': self.uniforms['terrain']['biomeWeights'],
-            'terrainHeightScale': self.uniforms['terrain']['terrainHeightScale'],
         }
         for i in range(self.MAX_LIGHTS):
             terrain.uniforms[f'lights[{i}].position'] = self.uniforms['terrain'][f'lights[{i}].position']
