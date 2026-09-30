@@ -1062,6 +1062,7 @@ class Terrain:
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDepthFunc(gl.GL_LEQUAL)
         gl.glDepthMask(gl.GL_TRUE)
+        cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
         gl.glDisable(gl.GL_CULL_FACE)
         gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         dist_sq = self.table.nearest_dist_sq(
@@ -1075,9 +1076,11 @@ class Terrain:
             gl.glBindVertexArray(int(self._grass_vao[slot]))
             gl.glDrawArraysInstanced(gl.GL_TRIANGLES, 0, 12, int(self._grass_count[slot]))
         gl.glBindVertexArray(0)
-        # Grass blades are double-sided. Restore normal culling
-        # state before the renderer continues with subsequent passes.
-        gl.glEnable(gl.GL_CULL_FACE)
+        # Grass blades are double-sided. Put culling back the way it was
+        # found -- the terrain pass runs with it off. Forcing it on leaked
+        # into Qt's overlay painter, which then culled the SysMon panel.
+        if cull_was:
+            gl.glEnable(gl.GL_CULL_FACE)
 
     def _get_lod_resolution(self, dist_sq: float) -> int:
         for i, threshold in enumerate(self.LOD_DISTANCES_SQ):

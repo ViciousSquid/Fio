@@ -1583,7 +1583,11 @@ void main() {
     vec2 horizontal = side * sideAmount * width;
     horizontal += forward * bendAmount;
 
-    vec3 p = vec3(root + horizontal, iPosition.y + 0.02 + y * height);
+    // root/horizontal are ground-plane (x, z); the blade grows along +y.
+    // (Built as vec3(xz, h) this put each tuft's world z in its height, so
+    // tufts floated anywhere from below the ground to high in the sky.)
+    vec2 ground = root + horizontal;
+    vec3 p = vec3(ground.x, iPosition.y + 0.02 + y * height, ground.y);
     FragPos = p;
     BladeHeight = y;
     ColorVariation = iVariation;

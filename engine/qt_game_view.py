@@ -1685,6 +1685,10 @@ class QtGameView(QOpenGLWidget):
                        camera_pos=camera_pos, play_mode=self.play_mode)
 
         restore_default_pixel_store()
+        # QPainter draws the HUD with GL and assumes default state; a pass
+        # that leaves face culling on makes it cull the overlay's filled
+        # rectangles (the SysMon panel vanished that way).
+        gl.glDisable(gl.GL_CULL_FACE)
         painter = QPainter(self)
         if self.play_mode:
             self._draw_underwater_overlay(painter, render_state)
