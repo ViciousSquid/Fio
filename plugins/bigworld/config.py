@@ -169,6 +169,43 @@ def effective_streaming_radii(
     return effective_activation, effective_deactivation
 
 
+def bound_view_horizon(logic, radius: float):
+    """Keep the host camera from seeing past *radius*; return an undo callable.
+
+    Residency and visibility have to agree, and there are two ways to make
+    them.  :func:`effective_streaming_radii` widens residency out to whatever
+    the camera can see, which is the safe fallback -- but on its own it means
+    the authored activation radius does nothing on any map whose view distance
+    is the stock 4096: the camera's fog end (~3770) wins and every cell out to
+    it stays live, drawn and simulated.
+
+    So a session also narrows the camera to the world: the shared view-distance
+    object is given a ``limit`` of the activation radius, which pulls the fog
+    end and the far plane in to it.  Objects then fade into fog exactly where
+    the map says they stop, the widening above becomes a no-op, and the
+    renderer's far plane culls everything past the streamed region.  A
+    requested view distance already inside the radius is left alone.
+
+    Returns a zero-argument callable that restores the previous limit.  A host
+    with no view-distance object (a head-less test, a benchmark) gets a no-op.
+    """
+    view_distance = getattr(logic, "view_distance", None)
+    if view_distance is None or not hasattr(view_distance, "limit"):
+        return lambda: None
+    previous = view_distance.limit
+    try:
+        radius = float(radius)
+    except (TypeError, ValueError):
+        return lambda: None
+    if radius > 0.0 and math.isfinite(radius):
+        view_distance.limit = (radius if previous is None
+                               else min(previous, radius))
+
+    def restore():
+        view_distance.limit = previous
+    return restore
+
+
 def config_from_properties(props: Optional[dict]) -> Dict[str, Any]:
     """The full typed config for a map, from a settings entity's properties.
 

@@ -1,15 +1,20 @@
+import contextlib
+import math
 import os
 import json
+
+import glm
 from PyQt5.QtWidgets import QMessageBox
 
 from editor.debug_console import debug_log
 from engine.change_journal import touch
+from engine.spatial import set_authored_flag
 
 # Try to import I/O system (available in both editor and play mode)
 try:
     from .io_system import (
         get_connections, set_connections,
-        OutputConnection, get_output_names, get_input_names,
+        OutputConnection, add_connection, get_output_names, get_input_names,
         get_entity_type_for_io
     )
     IO_AVAILABLE = True
@@ -112,6 +117,7 @@ class ConsoleCommandHandler:
             'r_shadows': self.cmd_render_shadows,
             'r_fog': self.cmd_render_fog,
             'r_water': self.cmd_render_water,
+            'r_waterquality': self.cmd_water_quality,
             'r_glass': self.cmd_render_glass,
             'r_lighting': self.cmd_render_lighting,
             'r_deferred': self.cmd_render_deferred,
@@ -140,6 +146,7 @@ class ConsoleCommandHandler:
             'shadows': self.cmd_render_shadows,
             'fog': self.cmd_render_fog,
             'water': self.cmd_render_water,
+            'waterquality': self.cmd_water_quality,
             'glass': self.cmd_render_glass,
             'lighting': self.cmd_render_lighting,
             'deferred': self.cmd_render_deferred,
@@ -267,8 +274,9 @@ class ConsoleCommandHandler:
         dialog.setWindowTitle("Bind Key")
         layout = QVBoxLayout(dialog)
         layout.addWidget(QLabel("Press the key combination to bind:"))
+        # (No placeholder text: QKeySequenceEdit has none before Qt 6.5, and
+        # the call raised, so `bind` never opened this dialog.)
         key_edit = QKeySequenceEdit()
-        key_edit.setPlaceholderText("Press a key...")
         layout.addWidget(key_edit)
         layout.addWidget(QLabel("Enter the command to execute:"))
         cmd_edit = QLineEdit()
@@ -359,12 +367,7 @@ class ConsoleCommandHandler:
 
         # If in play mode, clear this monster's stale AI state so it doesn't
         # inherit a near-zero shoot timer from before it died.
-        try:
-            if hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.logic_thread:
-                lt = self.main_window.view_3d.logic_thread
-                lt.monster_states.pop(id(entity), None)
-        except Exception as e:
-            debug_log("Warning", f"Could not reset monster AI state: {e}")
+        self._reset_monster_ai_states([entity])
 
         debug_log("Info", f"Monster '{name}' revived")
         self.main_window.update_all_ui()
@@ -385,17 +388,33 @@ class ConsoleCommandHandler:
         for monster in monsters:
             self._revive_monster(monster)
 
-        # If we're in play mode, clear the entire monster AI state dict so no
-        # monster inherits a stale shoot timer or animation state from before death.
-        try:
-            if hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.logic_thread:
-                lt = self.main_window.view_3d.logic_thread
-                lt.monster_states = {}
-        except Exception as e:
-            debug_log("Warning", f"Could not reset monster AI states: {e}")
+        # If we're in play mode, clear the monster AI state so no monster
+        # inherits a stale shoot timer or animation state from before death.
+        self._reset_monster_ai_states(None)
 
         debug_log("Info", f"Revived {len(monsters)} monster(s)")
         self.main_window.update_all_ui()
+
+    def _reset_monster_ai_states(self, monsters):
+        """Drop the AI's per-monster state for *monsters* (``None``: all).
+
+        The state lives on the MonsterAI, not the LogicThread, and the AI
+        thread iterates it, so it is changed under the monster lock.
+        """
+        lt = self._logic_thread()
+        ai = getattr(lt, 'monster_ai', None)
+        states = getattr(ai, 'monster_states', None)
+        if states is None:
+            return
+        lock = getattr(lt, '_monster_lock', None)
+        if lock is None:
+            lock = contextlib.nullcontext()
+        with lock:
+            if monsters is None:
+                states.clear()
+            else:
+                for monster in monsters:
+                    states.pop(id(monster), None)
 
     def _revive_monster(self, entity):
         """
@@ -413,7 +432,9 @@ class ConsoleCommandHandler:
         restored_health = current_health if current_health > 0 else 100
         entity.properties['health']      = restored_health
         entity.properties['dead']        = False
-        entity.properties['hidden']      = False
+        # Through the parking-aware writer, as `show` does: a direct write to
+        # a Big World-parked monster would be undone when its cell returns.
+        set_authored_flag(entity, 'hidden', False)
         # Reset awake so triggered/sight-gated monsters go dormant again —
         # wake logic will re-apply correctly on next play mode start.
         entity.properties['awake']       = False
@@ -432,6 +453,19 @@ class ConsoleCommandHandler:
     # VISIBILITY & TINT
     # ===================================================================
 
+    def _set_hidden(self, entity, hidden):
+        """Write *entity*'s authored ``hidden`` the way an I/O Hide/Show does.
+
+        Through the parking-aware writer (which journals the render row), and
+        for a brush in play the collision grid is rebuilt, since it files
+        brushes by their authored visibility.
+        """
+        set_authored_flag(entity, 'hidden', hidden)
+        if isinstance(entity, dict):
+            mark = getattr(self._logic_thread(), 'mark_collision_dirty', None)
+            if mark is not None:
+                mark()
+
     def cmd_hide(self, args):
         """hide <name> — Set hidden flag on a brush or entity."""
         if not args:
@@ -442,11 +476,7 @@ class ConsoleCommandHandler:
         if not entity:
             debug_log("Error", f"Entity '{name}' not found")
             return
-        if isinstance(entity, dict):
-            entity['hidden'] = True
-        elif hasattr(entity, 'properties'):
-            entity.properties['hidden'] = True
-        touch(entity)
+        self._set_hidden(entity, True)
         debug_log("Info", f"'{name}' is now hidden")
 
     def cmd_show(self, args):
@@ -459,11 +489,7 @@ class ConsoleCommandHandler:
         if not entity:
             debug_log("Error", f"Entity '{name}' not found")
             return
-        if isinstance(entity, dict):
-            entity['hidden'] = False
-        elif hasattr(entity, 'properties'):
-            entity.properties['hidden'] = False
-        touch(entity)
+        self._set_hidden(entity, False)
         debug_log("Info", f"'{name}' is now visible")
 
     def cmd_tint(self, args):
@@ -558,6 +584,9 @@ class ConsoleCommandHandler:
                 cam = self.main_window.view_3d.camera
                 pos = [cam.pos.x, cam.pos.y, cam.pos.z]
 
+        # Checkpoint before the change: undo restores the state before it.
+        self.editor_state.save_state()
+
         # Create portal A
         portal_a = Portal(pos=[pos[0] - 64, pos[1], pos[2]])
         portal_a.properties['name'] = name1
@@ -572,7 +601,6 @@ class ConsoleCommandHandler:
 
         self.editor_state.things.append(portal_a)
         self.editor_state.things.append(portal_b)
-        self.editor_state.save_state()
         self._rebuild_logic_entity_caches()
 
         debug_log("Info", f"Created portal pair: '{name1}' ↔ '{name2}' at ({pos[0]:.0f}, {pos[1]:.0f}, {pos[2]:.0f})")
@@ -605,8 +633,10 @@ class ConsoleCommandHandler:
             for t in self.editor_state.things
         )
 
-        portal.properties['portal_target'] = target_name
         self.editor_state.save_state()
+        portal.properties['portal_target'] = target_name
+        touch(portal)
+        self._rebuild_logic_entity_caches()
 
         status = f"linked to '{target_name}'"
         if not target_exists:
@@ -632,19 +662,21 @@ class ConsoleCommandHandler:
             return
 
         # Find and update all matching portals
+        portals = [t for t in self.editor_state.things
+                   if isinstance(t, Portal) and t.properties.get('name') == name]
+        if portals:
+            self.editor_state.save_state()
         found = False
-        for t in self.editor_state.things:
-            if isinstance(t, Portal) and t.properties.get('name') == name:
-                t.properties['color'] = [r, g, b]
-                touch(t)
-                found = True
-                debug_log("Info", f"Portal '{name}' color set to ({r}, {g}, {b})")
+        for t in portals:
+            t.properties['color'] = [r, g, b]
+            touch(t)
+            found = True
+            debug_log("Info", f"Portal '{name}' color set to ({r}, {g}, {b})")
 
         if not found:
             debug_log("Error", f"Portal '{name}' not found")
             return
 
-        self.editor_state.save_state()
         self.main_window.update_all_ui()
 
     def cmd_portal_enable(self, args):
@@ -657,9 +689,9 @@ class ConsoleCommandHandler:
         name = args.strip()
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
+                self.editor_state.save_state()
                 t.properties['active'] = True
                 touch(t)
-                self.editor_state.save_state()
                 debug_log("Info", f"Portal '{name}' enabled")
                 self.main_window.update_all_ui()
                 return
@@ -675,9 +707,9 @@ class ConsoleCommandHandler:
         name = args.strip()
         for t in self.editor_state.things:
             if isinstance(t, Portal) and t.properties.get('name') == name:
+                self.editor_state.save_state()
                 t.properties['active'] = False
                 touch(t)
-                self.editor_state.save_state()
                 debug_log("Info", f"Portal '{name}' disabled")
                 self.main_window.update_all_ui()
                 return
@@ -759,6 +791,7 @@ class ConsoleCommandHandler:
 
         target_name = portal.properties.get('portal_target', '')
 
+        self.editor_state.save_state()
         self.editor_state.things.remove(portal)
         deleted = [name]
 
@@ -769,7 +802,6 @@ class ConsoleCommandHandler:
                     deleted.append(target_name)
                     break
 
-        self.editor_state.save_state()
         self._rebuild_logic_entity_caches()
         debug_log("Info", f"Deleted portal(s): {', '.join(deleted)}")
         self.main_window.update_all_ui()
@@ -865,6 +897,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">r_wireframe</b>{sep}<b style="color:orange;">wireframe</b> — Toggle wireframe mode<br>
 <b style="color:orange;">r_shadows</b>{sep}<b style="color:orange;">shadows</b> — Toggle shadows<br>
 <b style="color:orange;">r_fog</b>{sep}<b style="color:orange;">fog</b> — Toggle volumetric fog (fog brushes)<br>
+<b style="color:orange;">r_waterquality</b>{sep}<b style="color:orange;">waterquality</b> [cheap|expensive] — Water detail tier<br>
 <b style="color:orange;">r_lighting</b>{sep}<b style="color:orange;">lighting</b> — Toggle real-time lighting<br>
 <b style="color:orange;">r_clearcolor</b> r g b — Set background colour<br>
 <b style="color:cyan;">=== View Distance &amp; Far-Plane Fog ===</b><br>
@@ -958,6 +991,7 @@ entity to drive them from the I/O system.</i><br>
 
         add_line("Wireframe", "ON" if getattr(renderer, 'wireframe', False) else "OFF")
         add_line("Shadows", "ON" if getattr(renderer, 'shadows_enabled', False) else "OFF")
+        add_line("Water quality", getattr(renderer, 'water_quality', 'expensive'))
         add_line("Volumetric Fog", "ON" if getattr(renderer, 'fog_enabled', True) else "OFF")
         add_line("Water Shader", "ON" if getattr(renderer, 'water_enabled', True) else "OFF")
         add_line("Glass Shader", "ON" if getattr(renderer, 'glass_enabled', True) else "OFF")
@@ -1009,6 +1043,21 @@ entity to drive them from the I/O system.</i><br>
         if not renderer: return
         renderer.water_enabled = not getattr(renderer, 'water_enabled', True)
         debug_log("Info", f"Water shader: {'ON' if renderer.water_enabled else 'OFF'}")
+
+    def cmd_water_quality(self, args):
+        """Show or set the water tier: cheap / expensive (no argument toggles)."""
+        renderer = self._get_renderer()
+        if not renderer: return
+        current = getattr(renderer, 'water_quality', 'expensive')
+        if args:
+            wanted = str(args[0]).strip().lower()
+            if wanted not in renderer.WATER_QUALITIES:
+                debug_log("Warning", "Usage: waterquality [cheap|expensive]")
+                return
+        else:
+            wanted = 'cheap' if current == 'expensive' else 'expensive'
+        renderer.water_quality = wanted
+        debug_log("Info", f"Water quality: {wanted}")
 
     def cmd_render_glass(self, args):
         renderer = self._get_renderer()
@@ -1413,8 +1462,9 @@ entity to drive them from the I/O system.</i><br>
                          if hasattr(entity, 'properties')
                          else entity.get('id', ''))
             try:
-                io._execute_input(entity_name, input_name, parameter,
-                                  "console", target_id=target_id)
+                with self._io_dispatch_lock():
+                    io._execute_input(entity_name, input_name, parameter,
+                                      "console", target_id=target_id)
                 debug_log("Info", f"✓ Fired input '{input_name}' on '{entity_name}'")
             except Exception as e:
                 debug_log("Error", f"ent_fire failed: {e}")
@@ -1452,7 +1502,8 @@ entity to drive them from the I/O system.</i><br>
             debug_log("Info", f"🔄 Toggling {entity_name}")
             io = self._get_io_manager()
             if io:
-                io._execute_input(entity_name, "Toggle", "", "console")
+                with self._io_dispatch_lock():
+                    io._execute_input(entity_name, "Toggle", "", "console")
             return
 
         # Generic entity fallback
@@ -1471,7 +1522,8 @@ entity to drive them from the I/O system.</i><br>
         if entity:
             io = self._get_io_manager()
             if io:
-                io._execute_input(entity_name, input_name, param, "console")
+                with self._io_dispatch_lock():
+                    io._execute_input(entity_name, input_name, param, "console")
             debug_log("Info", f"Sent input '{input_name}' to {entity_name}")
         else:
             debug_log("Error", f"Entity '{entity_name}' not found")
@@ -1493,18 +1545,31 @@ entity to drive them from the I/O system.</i><br>
             debug_log("Error", f"Entity '{name}' not found")
             return
 
-        if isinstance(entity, dict):
-            entity[key] = value
+        props = entity if isinstance(entity, dict) else entity.properties
+        # The console hands over text, and every flag is read as bool(value):
+        # stored as the string "false", `setprop door hidden false` hid it.
+        current = props.get(key)
+        if (current is None or isinstance(current, bool)) and \
+                value.strip().lower() in ('true', 'false'):
+            value = value.strip().lower() == 'true'
+
+        self.editor_state.save_state()
+        if key == 'hidden' and isinstance(value, bool):
+            # As hide/show: parking-aware, and a brush's collision follows.
+            self._set_hidden(entity, value)
+        elif key == 'disabled' and isinstance(value, bool):
+            set_authored_flag(entity, 'disabled', value)
         else:
-            entity.properties[key] = value
+            props[key] = value
         touch(entity)
 
         debug_log("Info", f"Set {name}.{key} = {value}")
-        self.editor_state.save_state()
+        # A name, id or portal target is indexed by the running logic thread.
+        self._rebuild_logic_entity_caches()
 
     def cmd_get_property(self, args):
         parts = args.split()
-        if len(parts) < 2:
+        if len(parts) != 2:
             debug_log("Error", "Usage: getprop <entity> <key>")
             return
         name, key = parts
@@ -1576,32 +1641,39 @@ entity to drive them from the I/O system.</i><br>
             debug_log("Warning", f"Target '{tgt}' not found (connection will still be created)")
 
         # --- Create connection ---
+        # Aimed by UUID as well as by name when the target exists, as the
+        # editor's I/O panel does, so a later rename does not break it.
+        if target_ent is None:
+            target_id = ""
+        elif isinstance(target_ent, dict):
+            target_id = target_ent.get('id', '') or ''
+        else:
+            target_id = getattr(target_ent, 'properties', {}).get('id', '') or ''
         try:
-            conn = OutputConnection(outp, tgt, inp, param, delay, fire_once=False)
+            conn = OutputConnection(outp, tgt, inp, param, delay,
+                                    fire_once=False, target_id=target_id)
         except Exception as e:
             debug_log("Error", f"Failed to create connection: {e}")
             return
 
         # --- Attach connection safely ---
-        try:
-            if hasattr(source_ent, 'add_output_connection'):
-                source_ent.add_output_connection(conn)
-            else:
-                if not isinstance(source_ent, dict):
-                    debug_log("Error", f"Source '{src}' cannot store IO connections")
-                    return
-
-                source_ent.setdefault('_io_connections', []).append(conn)
-
-        except Exception as e:
-            debug_log("Error", f"Failed to attach connection: {e}")
+        # Thing.add_output_connection takes the connection's fields, not a
+        # connection, so passing one failed for every entity; add_connection
+        # stores it on a brush or a Thing alike and bumps the I/O revision.
+        if not isinstance(source_ent, dict) and not hasattr(source_ent, 'properties'):
+            debug_log("Error", f"Source '{src}' cannot store IO connections")
             return
-
-        # --- Persist state ---
+        # --- Checkpoint first: undo restores the state before the change ---
         try:
             self.editor_state.save_state()
         except Exception as e:
-            debug_log("Warning", f"Connection created but failed to save state: {e}")
+            debug_log("Warning", f"Could not checkpoint before connecting: {e}")
+        try:
+            add_connection(source_ent, conn)
+        except Exception as e:
+            self.editor_state.discard_last_checkpoint()
+            debug_log("Error", f"Failed to attach connection: {e}")
+            return
 
         # --- Final log ---
         debug_log(
@@ -1655,12 +1727,11 @@ entity to drive them from the I/O system.</i><br>
             debug_log("Warning", f"No matching connections on '{src}'")
             return
 
-        set_connections(source_ent, remaining)
-
         try:
             self.editor_state.save_state()
         except Exception as e:
-            debug_log("Warning", f"Disconnected but failed to save state: {e}")
+            debug_log("Warning", f"Could not checkpoint before disconnecting: {e}")
+        set_connections(source_ent, remaining)
 
         debug_log("Info", f"Removed {removed} connection(s) from '{src}'")
 
@@ -1698,26 +1769,26 @@ entity to drive them from the I/O system.</i><br>
             elif collect_type == "key":
                 new_prop.properties['sprite_path'] = new_prop.get_key_sprite_path(
                     new_prop.properties.get('collect_key_name', new_prop.DEFAULT_KEY_NAME))
+            self.editor_state.save_state()
             self.editor_state.things.append(new_prop)
             debug_log("Info", f"Spawned Prop collection: {item} (value={value}) named '{new_prop.properties['name']}'")
-            self.editor_state.save_state()
             self.main_window.update_all_ui()
 
         elif spawn_type == "light":
             new_light = Light(pos=[0, 100, 0])
             new_light.properties['name'] = f"Light_{self._spawn_counter}"
+            self.editor_state.save_state()
             self.editor_state.things.append(new_light)
             debug_log("Info", f"Spawned light at [0, 100, 0] named '{new_light.properties['name']}'")
-            self.editor_state.save_state()
             self.main_window.update_all_ui()
 
         elif spawn_type == "levelchanger":
             new_changer = LevelChanger(pos=[0, 40, 0])
             new_changer.properties['name'] = f"LevelChanger_{self._spawn_counter}"
             new_changer.properties['target_map'] = "Simple_Map_Test.json"
+            self.editor_state.save_state()
             self.editor_state.things.append(new_changer)
             debug_log("Info", f"Spawned LevelChanger at [0, 40, 0] named '{new_changer.properties['name']}'")
-            self.editor_state.save_state()
             self.main_window.update_all_ui()
 
         else:
@@ -1740,6 +1811,15 @@ entity to drive them from the I/O system.</i><br>
         else:
             if entity in self.editor_state.things:
                 self.editor_state.things.remove(entity)
+        if self._in_play_mode():
+            # The session's entity index would keep simulating (a monster,
+            # a timer) and resolving the deleted object, and its collision
+            # set would keep a deleted wall solid.
+            self._rebuild_logic_entity_caches()
+            if isinstance(entity, dict):
+                mark = getattr(self._logic_thread(), 'mark_collision_dirty', None)
+                if mark is not None:
+                    mark()
 
         debug_log("Info", f"Deleted entity: {name}")
         self.main_window.update_all_ui()
@@ -2007,8 +2087,19 @@ entity to drive them from the I/O system.</i><br>
             x = float(parts[0])
             y = float(parts[1])
             z = float(parts[2])
+            if not all(math.isfinite(c) for c in (x, y, z)):
+                raise ValueError
 
-            self.main_window.view_3d.player.position = [x, y, z]
+            # As a Teleport trigger does. ``player.position`` is no attribute
+            # of Player: the command reported a teleport and moved nothing.
+            player = self.main_window.view_3d.player
+            with self._io_dispatch_lock():
+                player.pos = glm.vec3(x, y, z)
+                player.velocity = glm.vec3(0, 0, 0)
+                teleported = getattr(self._logic_thread(),
+                                     'note_player_teleported', None)
+                if teleported is not None:
+                    teleported()
             debug_log("Info", f"Player teleported to [{x:.1f}, {y:.1f}, {z:.1f}]")
             self.main_window.show_toast(f"Teleported to {x:.1f}, {y:.1f}, {z:.1f}")
         except Exception:
@@ -2114,6 +2205,17 @@ entity to drive them from the I/O system.</i><br>
         view_3d = getattr(self.main_window, 'view_3d', None)
         return getattr(view_3d, 'logic_thread', None) if view_3d else None
 
+    def _io_dispatch_lock(self):
+        """The running logic thread's tick lock, for I/O sent from the console.
+
+        Console commands run on the UI thread; an input dispatched from here
+        runs its handler against the world the logic tick is advancing, so it
+        has to land between ticks, as play start/stop and save/load do.
+        """
+        logic = self._logic_thread()
+        lock = getattr(logic, '_tick_lock', None) if logic is not None else None
+        return lock if lock is not None else contextlib.nullcontext()
+
     def _rebuild_logic_entity_caches(self):
         """Tell a running logic thread that the thing list changed.
 
@@ -2125,7 +2227,15 @@ entity to drive them from the I/O system.</i><br>
         """
         logic = self._logic_thread()
         if logic is not None and hasattr(logic, '_build_entity_caches'):
-            logic._build_entity_caches()
+            # Console commands run on the UI thread. The rebuild replaces
+            # caches a tick walks (the Prop registry above all), so it must
+            # land between ticks, never inside one.
+            lock = getattr(logic, '_tick_lock', None)
+            if lock is None:
+                logic._build_entity_caches()
+            else:
+                with lock:
+                    logic._build_entity_caches()
 
     def _in_play_mode(self):
         view_3d = getattr(self.main_window, 'view_3d', None)
@@ -2218,7 +2328,8 @@ entity to drive them from the I/O system.</i><br>
             if lt is None:
                 debug_log("Error", "load: no active play session.")
                 return
-            ok, msg = lt.load_session(path, map_name=self._current_map_name())
+            ok, msg = lt.load_session(path, map_name=self._current_map_name(),
+                                       base_level=self._base_level())
             debug_log("Info" if ok else "Error", msg)
             if ok:
                 self.main_window.show_toast(f"Loaded: {os.path.basename(path)}")
@@ -2269,7 +2380,8 @@ entity to drive them from the I/O system.</i><br>
         if lt is None:
             debug_log("Error", "load: no active play session after entering play.")
             return
-        ok, msg = lt.load_session(path, map_name=self._current_map_name())
+        ok, msg = lt.load_session(path, map_name=self._current_map_name(),
+                                  base_level=self._base_level())
         if not ok and 'different base map' in (msg or ''):
             # Genuinely ambiguous: a delta whose base map we couldn't reconcile.
             # This is the one case where automatic recovery isn't safe — ask.
@@ -2277,7 +2389,10 @@ entity to drive them from the I/O system.</i><br>
                 from engine import savegame
                 try:
                     data = savegame.read(path)
-                    savegame.restore_delta(lt, data)
+                    # Under the tick lock, as load_session applies a save: a
+                    # tick must not run against a half-restored world.
+                    with self._io_dispatch_lock():
+                        savegame.restore_delta(lt, data)
                     ok, msg = True, (f"Loaded play session from "
                                      f"'{os.path.basename(path)}' — forced delta "
                                      f"onto the current map (missing entities skipped)")

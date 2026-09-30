@@ -370,6 +370,29 @@ def _build_plugins_menu(MainWindow):
         act.setEnabled(False)
         return
 
+    # (plugin, "Enabled" toggle, plugin-owned actions) per submenu, re-read
+    # from the live enabled state every time the menu opens. The menu is built
+    # once at startup, but a plugin's state changes after that without the
+    # menu being involved -- above all a level that auto-enables its plugin
+    # (Big World for a map with a BigWorldSettings entity). Without the
+    # refresh the toggle kept showing that plugin as off while it ran.
+    rows = []
+
+    def _sync_with_live_state():
+        for plugin, toggle, actions in rows:
+            on = mgr.is_enabled(plugin)
+            if toggle.isChecked() != on:
+                # Reflect the state; do not fire _toggle_plugin, which would
+                # persist it and turn an auto-enable into a manual one.
+                toggle.blockSignals(True)
+                toggle.setChecked(on)
+                toggle.blockSignals(False)
+            for act in actions:
+                act.setVisible(on)
+                act.setEnabled(on)
+
+    menu.aboutToShow.connect(_sync_with_live_state)
+
     for plugin in mgr.plugins:
         sub = menu.addMenu(plugin.name)
 
@@ -407,6 +430,7 @@ def _build_plugins_menu(MainWindow):
         toggle.toggled.connect(
             lambda checked, p=plugin, acts=plugin_actions:
             _toggle_plugin(MainWindow, p, checked, acts))
+        rows.append((plugin, toggle, plugin_actions))
         sub.addSeparator()
 
         # Placement entries for this plugin's entities.
@@ -782,7 +806,11 @@ def _render_schema_rows(editor_self, form, thing, specs):
     from editor.property_editor import _make_spin, _make_checkbox
     from PyQt5.QtWidgets import QLineEdit
 
-    _HIDDEN = ("name", "id", "type", "_io_connections")
+    # An entity class can keep plumbing out of its panel -- e.g. the marker
+    # sprite a settings entity draws with -- by listing the keys in
+    # EDITOR_HIDDEN_PROPERTIES. They are still stored and saved as usual.
+    _HIDDEN = ("name", "id", "type", "_io_connections") + tuple(
+        getattr(thing, "EDITOR_HIDDEN_PROPERTIES", ()) or ())
     covered = set()
     current_group = None
 

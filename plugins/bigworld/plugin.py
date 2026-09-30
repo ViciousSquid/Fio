@@ -139,6 +139,13 @@ class BigWorldPlugin(FioPlugin):
                 )
                 session.start()
             except Exception:
+                # Undo whatever a half-started session already claimed (the
+                # camera-horizon limit, above all) before falling back.
+                try:
+                    if session is not None:
+                        session.stop()
+                except Exception:
+                    pass
                 session = None
         if session is None:
             session = BigWorldSession(

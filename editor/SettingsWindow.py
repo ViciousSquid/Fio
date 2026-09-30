@@ -232,6 +232,21 @@ class SettingsWindow(QDialog):
             "Disable for better performance on slower devices."
         )
         renderer_layout.addWidget(self.shadows_enabled_checkbox)
+
+        water_row = QHBoxLayout()
+        water_row.addWidget(QLabel("Water Quality:"))
+        self.water_quality_combo = QComboBox()
+        self.water_quality_combo.addItem("Cheap", 'cheap')
+        self.water_quality_combo.addItem("Expensive", 'expensive')
+        self.water_quality_combo.setToolTip(
+            "Cheap: waves, refraction, sky reflection and edge foam.\n"
+            "Expensive: also copies the depth buffer once per frame for\n"
+            "depth-based colour, shoreline foam, caustics and reflections\n"
+            "of the scene. Applies the next time Fio starts."
+        )
+        water_row.addWidget(self.water_quality_combo)
+        water_row.addStretch()
+        renderer_layout.addLayout(water_row)
         
         auto_detect_btn = QPushButton("Auto-Detect Best Settings")
         auto_detect_btn.clicked.connect(self._auto_detect_renderer_settings)
@@ -268,27 +283,36 @@ class SettingsWindow(QDialog):
         if is_low_power:
             self.lowpower_mode_checkbox.setChecked(True)
             self.shadows_enabled_checkbox.setChecked(False)
+            self._set_water_quality('cheap')
             QMessageBox.information(
                 self,
                 "Auto-Detect Complete",
                 f"Detected: {reason}\n\n"
                 "Applied low-power settings:\n"
                 "• Low-power Mode: ON\n"
-                "• Dynamic Shadows: OFF\n\n"
+                "• Dynamic Shadows: OFF\n"
+                "• Water Quality: Cheap\n\n"
                 "These settings improve performance on low-power hardware."
             )
         else:
             self.lowpower_mode_checkbox.setChecked(False)
             self.shadows_enabled_checkbox.setChecked(True)
+            self._set_water_quality('expensive')
             QMessageBox.information(
                 self,
                 "Auto-Detect Complete", 
                 f"Detected: {reason}\n\n"
                 "Applied standard settings:\n"
                 "• Low-power Mode: OFF (full light budget)\n"
-                "• Dynamic Shadows: ON\n\n"
+                "• Dynamic Shadows: ON\n"
+                "• Water Quality: Expensive\n\n"
                 "Full quality rendering enabled."
             )
+
+    def _set_water_quality(self, quality):
+        index = self.water_quality_combo.findData(quality)
+        if index >= 0:
+            self.water_quality_combo.setCurrentIndex(index)
 
     def _create_play_modes_tab(self):
         widget = QWidget()
@@ -310,6 +334,16 @@ class SettingsWindow(QDialog):
             "including split-screen and portal views."
         )
         gameplay_layout.addWidget(self.show_glasses_checkbox)
+
+        self.restore_world_checkbox = QCheckBox("Restore the world when leaving Play")
+        self.restore_world_checkbox.setToolTip(
+            "When on, Stop puts every brush and entity back exactly as it was "
+            "when Play started: anything killed, hidden, moved or collected "
+            "during the session is undone.\n"
+            "When off, the editor keeps showing what happened in play "
+            "(dead monsters, killed or hidden objects) until the next Play."
+        )
+        gameplay_layout.addWidget(self.restore_world_checkbox)
 
         gameplay_group.setLayout(gameplay_layout)
         layout.addWidget(gameplay_group)
@@ -509,8 +543,13 @@ class SettingsWindow(QDialog):
             'Renderer', 'arm_mode', fallback=default_lowpower_mode)
         self.lowpower_mode_checkbox.setChecked(self.config.getboolean('Renderer', 'lowpower_mode', fallback=default_lowpower_mode))
         self.shadows_enabled_checkbox.setChecked(self.config.getboolean('Renderer', 'shadows_enabled', fallback=default_shadows))
+        self._set_water_quality(self.config.get(
+            'Renderer', 'water_quality',
+            fallback='cheap' if is_low_power else 'expensive'))
 
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
+        self.restore_world_checkbox.setChecked(
+            self.config.getboolean('Settings', 'restore_world_on_stop', fallback=False))
         self.show_hud_checkbox.setChecked(self.config.getboolean('Display', 'show_hud', fallback=True))
         self.show_glasses_checkbox.setChecked(
             self.config.getboolean('Display', 'show_glasses', fallback=True)
@@ -622,6 +661,8 @@ class SettingsWindow(QDialog):
             self.config.add_section('Renderer')
         self.config.set('Renderer', 'lowpower_mode', str(self.lowpower_mode_checkbox.isChecked()))
         self.config.set('Renderer', 'shadows_enabled', str(self.shadows_enabled_checkbox.isChecked()))
+        self.config.set('Renderer', 'water_quality',
+                        self.water_quality_combo.currentData() or 'expensive')
         
         self.config.set('Display', 'show_hud', str(self.show_hud_checkbox.isChecked()))
         self.config.set('Display', 'show_glasses', str(self.show_glasses_checkbox.isChecked()))
@@ -629,6 +670,8 @@ class SettingsWindow(QDialog):
         if not self.config.has_section('Settings'):
             self.config.add_section('Settings')
         self.config.set('Settings', 'physics', str(self.physics_checkbox.isChecked()))
+        self.config.set('Settings', 'restore_world_on_stop',
+                        str(self.restore_world_checkbox.isChecked()))
         self.config.set('Settings', 'save_mode',
                         self.save_mode_combo.currentData() or 'full')
 

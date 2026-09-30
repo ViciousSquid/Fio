@@ -16,6 +16,8 @@ So the objects say when they change. There are two kinds of change:
   renderer reads (``hidden``, ``dead``, a light's ``state``, a brush's tint),
   or runtime render state (a carried prop's yaw, a respawn fade, an effect
   being triggered). Whoever writes such a value calls :func:`touch`.
+* :data:`VISIBILITY` -- only the live ``hidden`` flag, written by a streaming
+  layer that parks the object; ``touch(obj, VISIBILITY)``.
 
 Editor transactions still go through
 :meth:`editor.editor_state.EditorState.mark_world_changed`; this journal is
@@ -39,10 +41,22 @@ import weakref
 MOVED = 1
 #: Something other than the transform that a row is resolved from changed.
 STATE = 2
+#: Only the live ``hidden`` flag changed -- a streaming layer parking or
+#: unparking the object, which leaves everything *authored* about it alone.
+#: Tables re-read that one warm value instead of re-resolving the row: a Big
+#: World cell crossing parks thousands of rows at once, and resolving each
+#: row's textures, class and materials again cost ~180 ms per 10 000 rows, per
+#: render buffer.
+VISIBILITY = 4
 
 #: Pending entries a subscriber may accumulate before it is told to refresh
-#: every row instead.
-PENDING_LIMIT = 8192
+#: every row instead. This only bounds the memory of a subscriber that stopped
+#: draining: a pending set holds at most one entry per distinct object, and
+#: refreshing every row costs far more than applying even a large precise set
+#: (at 10 000 moving monsters, 120 ms a frame against 7 ms). A low limit made
+#: a large battle -- or a slow paint holding one buffer's table undrained for
+#: several logic frames -- fall off that cliff every frame.
+PENDING_LIMIT = 1 << 17
 
 
 class _Overflow:
@@ -58,13 +72,46 @@ class _Overflow:
 OVERFLOW = _Overflow()
 
 
+class _Sink:
+    """One subscriber's pending changes, held apart from the subscriber.
+
+    ``record`` walks a plain tuple of these rather than a
+    ``WeakKeyDictionary``: iterating the weak mapping costs an iteration
+    guard and a removal commit per call, and ``record`` is called for every
+    relay an I/O chain fires -- 24,000 times in one tick when 1000 monsters
+    shoot at once, 0.35 s of it in the mapping. The subscriber is still held
+    weakly: when it is collected, its finaliser marks the sink dead and the
+    next subscribe or drain drops it.
+    """
+
+    __slots__ = ('pending', 'alive', '__weakref__')
+
+    def __init__(self):
+        self.pending = {}
+        self.alive = True
+
+    def _die(self):
+        # Runs from the garbage collector, possibly inside ``record`` on this
+        # very thread, so it must not take the journal lock: one attribute
+        # store, and the sink is skipped from then on.
+        self.alive = False
+
+
 class ChangeJournal:
     """Per-subscriber sets of ``id(obj) -> MOVED|STATE`` since the last drain."""
 
     def __init__(self):
         self._lock = threading.Lock()
-        # subscriber -> dict, or OVERFLOW once it outgrew PENDING_LIMIT.
-        self._pending = weakref.WeakKeyDictionary()
+        # subscriber -> _Sink; a sink's pending is a dict, or OVERFLOW once it
+        # outgrew PENDING_LIMIT.
+        self._sinks = weakref.WeakKeyDictionary()
+        # The live sinks, for record() to walk.
+        self._live = ()
+
+    def _prune(self):
+        """Drop dead sinks from the walk list (caller holds the lock)."""
+        if not all(sink.alive for sink in self._live):
+            self._live = tuple(sink for sink in self._live if sink.alive)
 
     def subscribe(self, subscriber) -> None:
         """Start collecting changes for *subscriber* (idempotent).
@@ -74,18 +121,47 @@ class ChangeJournal:
         every row it takes on.
         """
         with self._lock:
-            if subscriber not in self._pending:
-                self._pending[subscriber] = {}
+            if subscriber not in self._sinks:
+                self._add(subscriber)
+
+    def _add(self, subscriber):
+        sink = _Sink()
+        self._sinks[subscriber] = sink
+        weakref.finalize(subscriber, sink._die)
+        self._prune()
+        self._live = self._live + (sink,)
+        return sink
 
     def record(self, obj, flags: int) -> None:
         oid = id(obj)
         with self._lock:
-            for subscriber, pending in self._pending.items():
-                if pending is OVERFLOW:
+            for sink in self._live:
+                pending = sink.pending
+                if pending is OVERFLOW or not sink.alive:
                     continue
                 pending[oid] = pending.get(oid, 0) | flags
                 if len(pending) > PENDING_LIMIT:
-                    self._pending[subscriber] = OVERFLOW
+                    sink.pending = OVERFLOW
+
+    def record_many(self, objs, flags: int) -> None:
+        """:meth:`record` for a batch: one lock, one pass per subscriber.
+
+        What the dense monster pass uses to journal every monster it moved in
+        a tick, rather than taking the lock once per monster.
+        """
+        oids = [id(obj) for obj in objs]
+        if not oids:
+            return
+        with self._lock:
+            for sink in self._live:
+                pending = sink.pending
+                if pending is OVERFLOW or not sink.alive:
+                    continue
+                get = pending.get
+                for oid in oids:
+                    pending[oid] = get(oid, 0) | flags
+                if len(pending) > PENDING_LIMIT:
+                    sink.pending = OVERFLOW
 
     def drain(self, subscriber):
         """``{id(obj): flags}`` recorded since the last drain, or OVERFLOW.
@@ -94,11 +170,13 @@ class ChangeJournal:
         told to refresh everything.
         """
         with self._lock:
-            pending = self._pending.get(subscriber)
-            if pending is None:
-                self._pending[subscriber] = {}
+            sink = self._sinks.get(subscriber)
+            if sink is None:
+                self._add(subscriber)
                 return OVERFLOW
-            self._pending[subscriber] = {}
+            pending = sink.pending
+            sink.pending = {}
+            self._prune()
             return pending
 
 
@@ -114,6 +192,18 @@ def touch(obj, flags: int = STATE) -> None:
 def moved(obj) -> None:
     """Tell the render projections that *obj*'s transform changed."""
     JOURNAL.record(obj, MOVED)
+
+
+def set_positions(objs, positions) -> None:
+    """Assign ``pos`` on many entities and journal them as one batch.
+
+    The same result as ``obj.pos = [x, y, z]`` for each -- the stored value is
+    a new list of three Python floats -- with one journal lock instead of one
+    per entity. *positions* is any ``(N, 3)`` sequence aligned with *objs*.
+    """
+    for obj, (x, y, z) in zip(objs, positions):
+        obj.__dict__['pos'] = [float(x), float(y), float(z)]
+    JOURNAL.record_many(objs, MOVED)
 
 
 class TrackedPosition:

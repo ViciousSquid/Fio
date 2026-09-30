@@ -432,7 +432,10 @@ def test_line_of_sight_uses_the_spatial_grid_when_one_is_set(monster_factory,
         return real(*args, **kwargs)
 
     ai._grid.has_line_of_sight = _counting
-    ai.update(TICK)
+    # A ray is cast when a shot is due -- the one place its answer is used --
+    # so run until the first one is.
+    for _ in range(int(MONSTER_SHOOT_INTERVAL / TICK) + 2):
+        ai.update(TICK)
     assert calls, ("MonsterAI did not route line of sight through the spatial "
                    "grid; it fell back to the O(all brushes) scan")
 

@@ -131,6 +131,36 @@ class TestEngineIntegration(unittest.TestCase):
             self.skipTest("fog.frag not in set")
         self.assertIn("precision highp sampler3D;", fog)
 
+    def test_uniforms_shared_by_both_stages_have_one_precision(self):
+        """GLSL ES links a program only if a uniform declared in both stages
+        has the same precision. water.frag and glass.frag declared
+        ``precision mediump float`` and a plain ``uniform mat4 view`` /
+        ``projection`` (highp in the vertex stage), so on Mesa -- and strict
+        mobile drivers -- neither program linked and the player had no water
+        or glass."""
+        decl = re.compile(
+            r"^\s*uniform\s+(?:(lowp|mediump|highp)\s+)?(\w+)\s+(\w+)", re.M)
+        float_default = re.compile(
+            r"\bprecision\s+(lowp|mediump|highp)\s+float\s*;")
+
+        def float_uniforms(src, stage_default):
+            m = float_default.search(src)
+            default = m.group(1) if m else stage_default
+            return {name: prec or default
+                    for prec, typ, name in decl.findall(src)
+                    if typ in ("float", "vec2", "vec3", "vec4",
+                               "mat2", "mat3", "mat4")}
+
+        for program, (vert, frag) in gs.build_gles_shader_map().items():
+            if vert not in self.shader_set or frag not in self.shader_set:
+                continue
+            v = float_uniforms(self.shader_set[vert], "highp")
+            f = float_uniforms(self.shader_set[frag], "highp")
+            mismatched = {n: (v[n], f[n]) for n in v.keys() & f.keys()
+                          if v[n] != f[n]}
+            self.assertEqual(mismatched, {},
+                             msg=f"'{program}' would not link on GLSL ES")
+
     def test_shader_map_available(self):
         smap = gs.build_gles_shader_map()
         self.assertIn("lit", smap)

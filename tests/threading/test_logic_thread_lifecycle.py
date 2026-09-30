@@ -242,6 +242,10 @@ def test_leaving_play_mode_removes_the_model_collision_pseudo_brushes(logic):
     thread.set_play_mode(False)
     assert thread._model_collision_brushes == [], (
         "model collision brushes built for the session were left behind")
+    # The session's collision set is rebuilt when Play starts; kept past
+    # Stop it pinned the session's brushes (see test_final_audit).
+    assert thread._collision_brushes_cache == []
+    thread.set_play_mode(True)
     assert thread._collision_brushes_cache == thread.brushes
 
 

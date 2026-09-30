@@ -97,9 +97,6 @@ class Renderer_F(BaseRenderer):
     def set_sprite_textures(self, textures):
         self.sprite_textures = textures
 
-    def set_instance_textures(self, textures):
-        self.instance_textures = textures
-
     @staticmethod
     def _selected_slot(table, config):
         """The slot of the selected brush, or -1.
@@ -795,7 +792,14 @@ class Renderer_F(BaseRenderer):
             raise RuntimeError("dense EntityTable is required for light rendering")
         slots = table.light_slots
         if len(slots):
-            slots = slots[table.light_enabled[slots]]
+            keep = table.light_enabled[slots]
+            hidden = config.get('thing_hidden')
+            if config.get('play_mode', False) and hidden is not None:
+                # A hidden light is out of the running world -- Big World
+                # parks out-of-range lights exactly this way, and they must
+                # not keep lighting (or take light and shadow slots).
+                keep = keep & ~np.asarray(hidden)[slots]
+            slots = slots[keep]
         return (table, slots)
 
     def entities_are_numeric(self, config, brush_slots=None):
@@ -805,19 +809,6 @@ class Renderer_F(BaseRenderer):
         thing_hidden = config.get('thing_hidden')
         return (etable is not None and thing_slots is not None
                 and thing_hidden is not None and len(thing_hidden) >= etable.count)
-
-    def will_instance_sprites(self, config, brush_slots):
-        """Whether the billboard pass will read columns rather than objects.
-
-        Keep this predicate identical to the renderer's actual sprite-path
-        requirements. The Qt view uses it to avoid rebuilding per-entity
-        texture overrides when the dense EntityTable path will resolve its own
-        textures. A missing predicate here must never force an object-based sprite
-        path back into the frame; dense EntityTable instancing is the only
-        supported renderer path.
-        """
-        return (self.entities_are_numeric(config, brush_slots)
-                and 'sprite_instanced' in self.shaders)
 
     def _portal_numeric_scene_inputs(self, projection, view, config):
         """Resolve a portal virtual scene entirely from the dense projections.
@@ -861,17 +852,6 @@ class Renderer_F(BaseRenderer):
         # are filtered numerically; no Thing objects are materialised.
         if etable is not None and thing_hidden is not None:
             thing_slots = np.arange(etable.count, dtype=np.int32)
-            if len(thing_slots):
-                entity_planes = planes
-                centres = etable.pos[thing_slots]
-                distances = centres @ entity_planes[:, :3].T + entity_planes[:, 3]
-                radii = np.maximum(
-                    etable.sprite_size[thing_slots].max(axis=1) * 0.5, 1.0)
-                model_rows = etable.model_recipe_id[thing_slots] >= 0
-                radii[model_rows] = np.maximum(radii[model_rows], 128.0)
-                entity_visible = np.all(
-                    distances >= -radii[:, None], axis=1)
-                thing_slots = thing_slots[entity_visible]
             model_slots, sprite_slots = entity_projection.classify_slots(
                 etable,
                 thing_slots,
@@ -879,6 +859,11 @@ class Renderer_F(BaseRenderer):
                 config.get('play_mode', False),
                 config.get('show_sprites_in_play_mode', False),
             )
+            # The same exact-conservative bounds the main view uses: a
+            # billboard's half-diagonal, a mesh's measured radius.
+            sprite_slots = self._cull_entity_rows(etable, sprite_slots, planes)
+            model_slots = self._cull_entity_rows(
+                etable, model_slots, planes, models=True)
             effect_slots = thing_slots[
                 (etable.class_bits[thing_slots] & entity_projection.ENT_EFFECT) != 0
             ]
@@ -1003,6 +988,19 @@ class Renderer_F(BaseRenderer):
             etable, tslots, thing_hidden,
             config.get('play_mode', False),
             config.get('show_sprites_in_play_mode', False))
+        # Frustum, against this view's own camera. The logic thread publishes
+        # every entity row, because lights, portals and effects need them all;
+        # the sprite and model passes only need what this camera can see, and
+        # every row they skip is a quad or a mesh instance never packed,
+        # uploaded or rasterised.
+        entity_planes = self._frustum_planes(projection * view)
+        candidates = len(sprite_slots) + len(numeric_model_slots)
+        sprite_slots = self._cull_entity_rows(etable, sprite_slots, entity_planes)
+        numeric_model_slots = self._cull_entity_rows(
+            etable, numeric_model_slots, entity_planes, models=True)
+        self.render_stats.entity_candidates = candidates
+        self.render_stats.culled_entities = candidates - (
+            len(sprite_slots) + len(numeric_model_slots))
         # Effects own a dedicated dense slot vector. Do not derive this
         # transient render pass from the generic Thing classification; a newly
         # authored Effect must become visible as soon as the EntityTable row exists.
@@ -1030,7 +1028,12 @@ class Renderer_F(BaseRenderer):
 
         terrain = config.get('terrain', None)
         if terrain and terrain.enabled:
-            self.render_terrain(projection, view, camera_pos, terrain, lights)
+            # The same planes the entity passes cull against. Their far plane
+            # is the view distance, so terrain beyond it is never submitted --
+            # without them every resident chunk was drawn, and pulling the
+            # view distance in did nothing for the terrain's cost.
+            self.render_terrain(projection, view, camera_pos, terrain, lights,
+                                frustum_planes=entity_planes)
         if (config.get('play_mode', False)
                 and self._portal_gl_ready):
             # Portal discovery is a numeric EntityTable selection. No Thing

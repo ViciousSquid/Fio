@@ -136,15 +136,8 @@ class RenderState:
         
         # Visual FX
         self.bullet_marks = [] # List of {'pos': [x,y,z], 'alpha': float}
-        self.projectiles = []  # list of {
-            #     'pos': [x, y, z],
-            #     'vel': [vx, vy, vz],
-            #     'owner_id': int,      # id() of the monster that fired it
-            #     'sprite': str,        # projectile sprite path
-            #     'lifetime': float,    # seconds remaining
-            #     'damage': int,
-            #     'size': (w, h),       # billboard size
-            # }
+        #: Live monster projectiles, as an ``(N, 3)`` float32 array of positions.
+        self.projectiles = np.empty((0, 3), dtype=np.float32)
 
         # Muzzle flash — True for one frame after the player fires
         self.muzzle_flash_active = False
@@ -231,7 +224,8 @@ class RenderState:
         self.hud_message = ""
         self.hud_prompt_key = None
         self.bullet_marks = []
-        self.projectiles = []
+        #: Live monster projectiles, as an ``(N, 3)`` float32 array of positions.
+        self.projectiles = np.empty((0, 3), dtype=np.float32)
         self.muzzle_flash_active = False
         self.camera_transition_active = False
         self.cinematic_camera_active = False
@@ -245,12 +239,45 @@ class RenderState:
         self.prepare_ms = 0.0
 
 
+class _OwnedLock:
+    """A non-reentrant lock that knows which thread holds it.
+
+    The render-state lease finalizer is a garbage-collector safety net, and a
+    collection can run on whichever thread happens to be allocating -- which
+    includes a thread inside this lock (a swap resets a RenderState in here).
+    Taking the lock again from there would deadlock that thread on itself, so
+    the finalizer asks :attr:`holder` first and defers instead.
+    """
+
+    __slots__ = ('_lock', 'holder')
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.holder = None
+
+    def __enter__(self):
+        self._lock.acquire()
+        self.holder = threading.get_ident()
+        return self
+
+    def __exit__(self, *exc):
+        self.holder = None
+        self._lock.release()
+        return False
+
+
 class ThreadedGameState:
     """
     Thread-safe container for communication between UI/Input and Logic threads.
     """
+
+    #: Pending sound requests kept while the UI is not draining them.
+    SOUND_QUEUE_LIMIT = 256
     def __init__(self):
-        self._render_state_lock = threading.Lock()
+        self._render_state_lock = _OwnedLock()
+        #: Lease releases a finalizer could not take the lock for (it ran on
+        #: the thread already holding it); folded in by the next locked call.
+        self._deferred_releases = []
 
         # Double buffering, as in Quake 3's SMP renderer: the renderer reads
         # one RenderState while the logic thread writes the other, and each
@@ -300,9 +327,13 @@ class ThreadedGameState:
             'jump': False, 'crouch': False,
         }
 
-        # Sound queue — thread-safe, accessed from logic and render threads
+        # Sound queue — thread-safe, accessed from logic and render threads.
+        # Bounded: the UI drains it every frame, so it only fills while the UI
+        # is stalled (a modal dialog, a long hitch), and then the oldest
+        # requests are stale; unbounded, a 1000-monster fight queued ~25 a
+        # second to play all at once when the UI came back.
         self._sound_lock = threading.Lock()
-        self.sound_queue = deque()
+        self.sound_queue = deque(maxlen=self.SOUND_QUEUE_LIMIT)
 
         # Console command queue — thread-safe. The I/O system (logic thread)
         # enqueues command strings (e.g. from a logic_command entity fired by a
@@ -322,11 +353,24 @@ class ThreadedGameState:
         owner = owner_ref()
         if owner is None:
             return
+        if owner._render_state_lock.holder == threading.get_ident():
+            # A collection inside a locked section of this very thread.
+            owner._deferred_releases.append(1)
+            return
         with owner._render_state_lock:
+            owner._fold_deferred_releases()
             if owner._read_leases > 0:
                 owner._read_leases -= 1
             if owner._read_leases == 0 and owner._write_ready:
                 owner._swap_locked()
+
+    def _fold_deferred_releases(self) -> None:
+        """Apply lease releases deferred by a finalizer (caller holds the lock)."""
+        deferred = self._deferred_releases
+        while deferred:
+            deferred.pop()
+            if self._read_leases > 0:
+                self._read_leases -= 1
 
     def get_render_state(self) -> RenderState:
         """Borrow the latest published frame for the renderer/UI.
@@ -340,6 +384,7 @@ class ThreadedGameState:
         borrows nothing.
         """
         with self._render_state_lock:
+            self._fold_deferred_releases()
             source = self._read_state
             self._read_leases += 1
             snap = object.__new__(RenderState)
@@ -403,6 +448,7 @@ class ThreadedGameState:
         thread's next tick (which rebuilds it with newer state first).
         """
         with self._render_state_lock:
+            self._fold_deferred_releases()
             if self._read_leases:
                 self.declined_swaps += 1
                 self._write_ready = True

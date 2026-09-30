@@ -62,7 +62,7 @@ class FakeInspector:
         self.target = target
         self.refreshes = 0
 
-    def set_target(self, brush, face_key, raise_window=True):
+    def set_target(self, brush, face_key, raise_window=True, reveal=True):
         self.target = (brush, face_key) if brush is not None else None
 
     def refresh_from_face(self):

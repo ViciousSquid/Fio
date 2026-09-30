@@ -207,9 +207,11 @@ cross-level state through the [`GlobalStore`](API.md#globalstore--cross-level-st
   the keys you pass to `register_io` and `register_input_handler`. If you
   subclass `Thing` directly, the base defaults `type` to the lowercased class
   name; set it explicitly to be safe.
-- **Want 3D geometry in play mode?** Subclass the engine's `Model` for a new visual entity, or set a `model_path` property — any `Thing` with a
-  `model_path` is rendered by the existing model pipeline. Things without one are
-  editor-only sprites.
+- **Want 3D geometry in play mode?** Use a `Prop` with `render_mode='model'`
+  (every model in a Fio world is one), or set a `model_path` property on your
+  own `Thing` subclass — any `Thing` with a `model_path` is rendered by the
+  existing model pipeline. Things without one are editor-only sprites. There is
+  no `Model` base class; importing it still works but warns and gives `Thing`.
 - **Keep `register()` UI-free.** It runs in headless/engine contexts too — no Qt,
   no OpenGL. Registration can declare editor actions and wizards; the callbacks
   themselves run later in the editor.
@@ -314,7 +316,7 @@ Plugin gameplay runs in **both** hosts:
 
 To make this work everywhere, the plugin runtime is **dependency-free**: no
 PyGLM (plain-Python vector math) and no PyQt. Plugin entities normally subclass
-the editor's `Thing`/`Model`, but when the editor package is absent (the player)
+the editor's `Thing`, but when the editor package is absent (the player)
 they fall back to [`entitybase.py`](entitybase.py), a tiny PyQt-free base. So the
 same plugin loads in the editor, the desktop player, and the APK.
 

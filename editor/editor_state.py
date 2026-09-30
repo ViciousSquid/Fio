@@ -365,9 +365,9 @@ class EditorState:
 
     def clear_scene(self):
         """Resets the scene to an empty state."""
-        self._invalidate_entity_caches()
         self.brushes.clear()
         self.things.clear()
+        self._invalidate_entity_caches()
         self.selected_object = None
         self.selected_objects = []
         self.terrain_data = None
@@ -487,6 +487,34 @@ class EditorState:
         return result
 
     @staticmethod
+    def _dedupe_loaded_ids(brushes, things):
+        """Give every object after the first that shares a UUID one of its own.
+
+        Maps written by older editors (whose clone copied the source's id) can
+        hold several brushes under one UUID. The id is the object's *name* --
+        undo re-points the selection by it, I/O aims by it, saves restore by
+        it and the render tables key their rows on it -- so a shared one makes
+        all of those pick an arbitrary member. The first holder keeps the id,
+        so connections already aimed at it stay aimed at the same object.
+        """
+        seen = set()
+        for brush in brushes:
+            bid = brush.get('id')
+            if bid in seen:
+                brush['id'] = bid = str(uuid.uuid4())
+            seen.add(bid)
+        for thing in things:
+            props = getattr(thing, 'properties', None)
+            if not isinstance(props, dict):
+                continue
+            tid = props.get('id')
+            if tid is None:
+                continue
+            if tid in seen:
+                props['id'] = tid = str(uuid.uuid4())
+            seen.add(tid)
+
+    @staticmethod
     def validate_level_data(level_data):
         """Raise ``ValueError`` if *level_data* is not shaped like a map.
 
@@ -525,9 +553,21 @@ class EditorState:
             if thing is not None:
                 new_things.append(thing)
 
-        self._invalidate_entity_caches()
+        self._dedupe_loaded_ids(new_brushes, new_things)
+
+        legacy_models = [t for t in new_things if getattr(t, '_legacy_model', False)]
+        if legacy_models:
+            try:
+                from editor.io_system import retarget_legacy_model_inputs
+                retarget_legacy_model_inputs(new_brushes + new_things, legacy_models)
+            except ImportError:
+                pass
+
+        # Published before the invalidation, for the reason restore_state
+        # gives: a frame between the two must not rebuild the outgoing world.
         self.brushes = new_brushes
         self.things = new_things
+        self._invalidate_entity_caches()
 
         self.terrain_data = level_data.get('terrain_data', None)
         # Absent in maps written before this existed; the overview falls back to
@@ -735,13 +775,21 @@ class EditorState:
         return result
 
     def restore_state(self, state_json):
-        """Restores the scene from a JSON state string."""
-        self._invalidate_entity_caches()
+        """Restores the scene from a JSON state string.
+
+        The replacement world is built aside and published by assignment, and
+        only then is the world invalidated. The logic thread projects
+        ``brushes``/``things`` every frame: invalidating first -- and filling
+        ``self.brushes`` in place -- let it rebuild the dense tables from the
+        outgoing world (or a half-restored one) under the new epoch, then
+        rebuild both buffers again once the restore landed. On a 40k-brush
+        map that was several seconds of logic-thread stall per undo or Stop.
+        """
         state = json.loads(state_json)
 
         # Restore brushes with I/O connections
         raw_brushes = state.get('brushes', [])
-        self.brushes = []
+        new_brushes = []
         for brush_data in raw_brushes:
             brush = brush_data.copy()
 
@@ -753,7 +801,7 @@ class EditorState:
                         OutputConnection.from_dict(d) for d in io_data
                     ]
 
-            self.brushes.append(brush)
+            new_brushes.append(brush)
 
         # Restore things
         things_data = state.get('things', [])
@@ -762,7 +810,9 @@ class EditorState:
             thing = Thing.from_dict(t_data)
             if thing is not None:
                 new_things.append(thing)
+        self.brushes = new_brushes
         self.things = new_things
+        self._invalidate_entity_caches()
 
         if 'selection' in state:
             self._restore_selection(state['selection'])

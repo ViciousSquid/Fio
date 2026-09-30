@@ -5,7 +5,7 @@ import os
 from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog, QApplication
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
-from editor.things import (Thing, Light, PlayerStart, Speaker, Model, Prop, Monster,
+from editor.things import (Thing, Light, PlayerStart, Speaker, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
                           LogicCamera, LogicSpawner, Portal, LogicState, Effect)
 from engine import brush_geometry as bg  # convex/angled-brush geometry
@@ -90,16 +90,6 @@ class View2D(QWidget):
         # Throttle tracker for 3D updates during drag
         self.last_3d_update_time = 0.0
 
-        # Add timer-based smooth updating
-        self.smooth_update_timer = QTimer(self)
-        self.smooth_update_timer.setInterval(33)  # ~30 FPS
-        self.smooth_update_timer.timeout.connect(self._smooth_update_tick)
-        self.smooth_update_timer_active = False
-        
-        # Camera tracking for efficient updates
-        self.last_camera_pos = None
-        self.last_camera_yaw = None
-        
         # Connection line animation state
         self.connection_animations = {}
         self.last_io_connections = set()
@@ -1227,61 +1217,6 @@ class View2D(QWidget):
         # full-scene save_state() on the very next nudge, which is exactly the
         # slowdown we are avoiding.  The idle timer ends the burst after a pause.
         super().keyReleaseEvent(event)
-
-    def _smooth_update_tick(self):
-        """Check for camera changes and repaint only when needed."""
-        if not self.isVisible():
-            return
-            
-        current_pos, current_yaw = self.get_camera_state_in_2d()
-        
-        # Only repaint if camera moved significantly
-        if (self.last_camera_pos is None or 
-            (self.last_camera_pos - current_pos).manhattanLength() > 0.5 or
-            self.last_camera_yaw != current_yaw):
-            
-            self.last_camera_pos = current_pos
-            self.last_camera_yaw = current_yaw
-            self.update()
-
-    def get_camera_state_in_2d(self):
-        """Get camera position and relevant rotation for this 2D view."""
-        ax1, ax2 = self.get_axes()
-        if not ax1 or not ax2:
-            return QPointF(0, 0), 0
-            
-        ax_map = {'x': 0, 'y': 1, 'z': 2}
-        camera = self.editor.view_3d.camera
-        
-        pos_2d = QPointF(camera.pos[ax_map[ax1]], camera.pos[ax_map[ax2]])
-        
-        # Extract relevant rotation
-        if self.view_type == 'top':
-            rotation = camera.yaw
-        elif self.view_type == 'front':
-            rotation = -camera.yaw
-        elif self.view_type == 'side':
-            rotation = -camera.pitch
-        else:
-            rotation = 0
-            
-        return pos_2d, rotation
-
-    def start_smooth_updates(self):
-        """Enable smooth 30 FPS updates when camera is moving."""
-        if not self.smooth_update_timer_active:
-            self.smooth_update_timer_active = True
-            # Initialize tracking
-            self.last_camera_pos, self.last_camera_yaw = self.get_camera_state_in_2d()
-            self.smooth_update_timer.start()
-
-    def stop_smooth_updates(self):
-        """Disable smooth updates when camera is stationary."""
-        if self.smooth_update_timer_active:
-            self.smooth_update_timer_active = False
-            self.smooth_update_timer.stop()
-            self.last_camera_pos = None
-            self.last_camera_yaw = None
 
     def get_visible_world_bounds(self):
         """Returns a QRectF of the visible world area in this 2D view."""
@@ -3902,8 +3837,7 @@ class View2D(QWidget):
                 except Exception:
                     rel_path = filepath
                 
-                new_thing = Model(pos=pos_3d)
-                new_thing.properties['model_path'] = rel_path
+                new_thing = Prop.for_model(rel_path, pos=pos_3d)
 
         # Finalize Creation
         if new_thing:

@@ -151,3 +151,44 @@ def test_a_persisted_disable_really_stops_the_plugin(window, monkeypatch):
         assert ticks == [1], "a plugin disabled in settings.ini still ticked"
     finally:
         mgr.set_enabled(tidy, was)
+
+
+def _enabled_toggle(window, plugin_name):
+    for action in window.menuBar().actions():
+        if action.text().replace("&", "") != "Plugins":
+            continue
+        for sub in action.menu().actions():
+            if sub.text() == plugin_name and sub.menu() is not None:
+                for entry in sub.menu().actions():
+                    if entry.text() == "Enabled":
+                        return action.menu(), entry
+    return None, None
+
+
+def test_the_toggle_shows_a_plugin_a_level_auto_enabled(window):
+    """The menu is built at startup; a map loaded later auto-enables its
+    plugin. Opening the menu must show that plugin as on -- it used to keep
+    showing Big World unticked while its session ran."""
+    load_plugins()
+    mgr = get_manager()
+    bigworld = mgr.find_plugin("bigworld")
+    if bigworld is None:
+        pytest.skip("the Big World plugin is not present in this build")
+    was = mgr.is_enabled(bigworld)
+    try:
+        mgr.set_enabled(bigworld, False)
+        integration._build_plugins_menu(window)
+        menu, toggle = _enabled_toggle(window, bigworld.name)
+        assert toggle is not None and not toggle.isChecked()
+
+        mgr.auto_enable_for_map(
+            {"things": [{"type": "bigworldsettings", "properties": {}}]})
+        assert mgr.is_enabled(bigworld)
+
+        menu.aboutToShow.emit()
+        assert toggle.isChecked(), "the menu still shows Big World as off"
+        # Reflecting the state is not a manual toggle: the level still owns
+        # the enable, so File > New can switch it back off.
+        assert bigworld in mgr._auto_enabled
+    finally:
+        mgr.set_enabled(bigworld, was)

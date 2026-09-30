@@ -81,6 +81,11 @@ class _Window:
         self.calls.append("enter play")
         self.view_3d.play_mode = True
 
+    def center_2d_views_on(self, world_pos):
+        # _load_level calls this now and again from a 50 ms timer for a map
+        # with a PlayerStart; the host must serve the deferred call too.
+        self.calls.append("centre views")
+
 
 LEVEL = {"version": 3, "brushes": [], "things": []}
 
@@ -266,3 +271,24 @@ def test_stopping_and_starting_play_still_starts_unarmed(playing_logic):
     playing_logic.set_play_mode(False)
     playing_logic.set_play_mode(True)
     assert _loadout(playing_logic) == (None, False, 0)
+
+
+def test_a_map_with_a_player_start_recentres_now_and_once_deferred(tmp_path):
+    """The load arms a 50 ms timer that re-centres the 2D views; the stand-in
+    host has to serve that deferred call (the suite's teardown guard runs it
+    and fails this test if it cannot)."""
+    level = {"version": 3, "brushes": [], "things": [
+        {"type": "playerstart", "pos": [64, 0, 32],
+         "properties": {"type": "playerstart", "name": "Start", "angle": 90}}]}
+    path = tmp_path / "start.json"
+    path.write_text(json.dumps(level))
+    window = _Window()
+    window._apply_level_data = lambda data: _load_into(window, data)
+
+    assert window.load_level_file(str(path)) is True
+    assert window.calls.count("centre views") == 1
+
+
+def _load_into(window, data):
+    from editor.things import Thing
+    window.state.things = [Thing.from_dict(t) for t in data["things"]]

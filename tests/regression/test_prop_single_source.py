@@ -24,7 +24,9 @@ def test_every_import_path_yields_the_same_class():
 
     assert editor.things.Prop is Prop
     assert plugins.entitybase.Prop is Prop
-    assert EDITOR_TIER and issubclass(Prop, editor.things.Model)
+    assert EDITOR_TIER and issubclass(Prop, editor.things.Thing)
+    # There is no separate Model entity: every model is a Prop.
+    assert 'Model' not in editor.things.ENTITY_TYPES
 
 
 @pytest.mark.qt
@@ -56,7 +58,7 @@ def test_headless_player_gets_the_same_contract_without_pyqt():
         # as the editor tier does.
         "fixed = {k: v for k, v in PROP_DEFAULTS.items() if k != 'render_mode'}\n"
         "ok = all(p.properties[k] == v for k, v in fixed.items())\n"
-        "print(EDITOR_TIER, eb.Prop is Prop, issubclass(Prop, eb.Model), ok,"
+        "print(EDITOR_TIER, eb.Prop is Prop, issubclass(Prop, eb.Thing), ok,"
         " p.properties['render_mode'], 'PyQt5' in sys.modules)"
     )
     assert out == "False True True True billboard False"

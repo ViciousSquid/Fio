@@ -16,7 +16,7 @@ def test_prop_collection_defaults_are_independent_of_carry():
     assert prop.properties["collect_enabled"] is False
     assert prop.properties["collect_type"] == "health"
     assert prop.properties["collect_weapon"] == "gun1"
-    assert prop.properties["carry_enabled"] is True
+    assert prop.properties["carry_enabled"] is False
 
 
 def test_weapon_prop_serializes_explicit_collection_data():

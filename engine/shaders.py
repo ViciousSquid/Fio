@@ -3,7 +3,6 @@ import platform
 import re
 import sys
 
-SHADER_DIR = os.path.join(os.path.dirname(__file__), 'shaders')
 
 
 # ==============================================================================
@@ -787,8 +786,10 @@ struct Light {
 #define MAX_LIGHTS """ + str(MAX_LIGHTS_WATER) + """
 uniform Light lights[MAX_LIGHTS];
 uniform int active_lights;
-uniform mat4 view;
-uniform mat4 projection;
+// highp as in the vertex stage: GLSL ES links a shared uniform only when
+// both stages declare the same precision (the player's GLES path).
+uniform highp mat4 view;
+uniform highp mat4 projection;
 uniform highp vec3 viewPos;
 uniform sampler2D normalMap;
 uniform sampler2D sceneColor;
@@ -808,10 +809,10 @@ uniform vec3 waterTint;
 // depth, soft foamy shorelines, caustics and screen-space reflections. With
 // hasSceneDepth == 0 (no depth buffer to copy) the shader falls back to the
 // depth-less look.
-uniform sampler2D sceneDepth;
+uniform highp sampler2D sceneDepth;
 uniform int hasSceneDepth;
 uniform int ssrEnabled;
-uniform mat4 invProjection;""" + FOG_GLSL + """
+uniform highp mat4 invProjection;""" + FOG_GLSL + """
 
 const vec3 SUN_DIR   = vec3(0.4767, 0.6555, 0.5859);  // pre-normalized
 const vec3 SUN_COLOR = vec3(1.00, 0.95, 0.82);
@@ -854,7 +855,8 @@ vec4 traceReflection(highp vec3 originView, highp vec3 dirView) {
         if (p.z > -0.5) break;
         highp vec2 uv = viewToUV(p);
         if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
-        highp float d = texture(sceneDepth, uv).r;
+        // textureLod: no implicit derivatives inside the loop.
+        highp float d = textureLod(sceneDepth, uv, 0.0).r;
         if (d >= 0.99999) continue;
         highp float sceneZ = viewPosFromDepth(uv, d).z;
         highp float gap = sceneZ - p.z;
@@ -864,14 +866,14 @@ vec4 traceReflection(highp vec3 originView, highp vec3 dirView) {
             for (int j = 0; j < 5; j++) {
                 highp vec3 mid = (lo + hi) * 0.5;
                 highp vec2 muv = viewToUV(mid);
-                highp float mz = viewPosFromDepth(muv, texture(sceneDepth, muv).r).z;
+                highp float mz = viewPosFromDepth(muv, textureLod(sceneDepth, muv, 0.0).r).z;
                 if (mz > mid.z) hi = mid; else lo = mid;
             }
             highp vec2 huv = viewToUV(hi);
             vec2 edge = smoothstep(vec2(0.0), vec2(0.08), huv)
                       * smoothstep(vec2(0.0), vec2(0.08), vec2(1.0) - huv);
             float fade = edge.x * edge.y * (1.0 - float(i) / 20.0);
-            return vec4(texture(sceneColor, huv).rgb, fade);
+            return vec4(textureLod(sceneColor, huv, 0.0).rgb, fade);
         }
     }
     return vec4(0.0);
@@ -999,11 +1001,11 @@ void main()
     highp vec3 bedWorld = FragPos - vec3(0.0, 1.0e4, 0.0);
     bool bedVisible = false;
     if (haveDepth) {
-        highp float dRefract = texture(sceneDepth, refractUV).r;
+        highp float dRefract = textureLod(sceneDepth, refractUV, 0.0).r;
         if (viewPosFromDepth(refractUV, dRefract).z > surfaceView.z) {
             refractUV = clamp(screenUV, vec2(0.001), vec2(0.999));
         }
-        highp float dBed = texture(sceneDepth, refractUV).r;
+        highp float dBed = textureLod(sceneDepth, refractUV, 0.0).r;
         if (dBed < 0.99999) {
             highp vec3 bedView = viewPosFromDepth(refractUV, dBed);
             thickness = max(length(bedView) - length(surfaceView), 0.0);
@@ -1062,13 +1064,14 @@ void main()
         0.45 + 0.55 * max(dot(N, SUN_DIR), 0.0);
 
     vec3 transmission;
+    // Caustics: light focused by the ripples dances over the bed, strongest
+    // in the shallows. Sampled unconditionally so the mipmapped lookups stay
+    // in uniform control flow.
+    highp vec2 cuv = bedWorld.xz * 0.03;
+    float c1 = texture(normalMap, cuv + time * vec2(0.031, 0.022)).x;
+    float c2 = texture(normalMap, cuv * 1.37 - time * vec2(0.024, 0.037)).y;
     if (haveDepth) {
-        // Caustics: light focused by the ripples dances over the bed,
-        // strongest in the shallows.
         if (bedVisible && topFace > 0.5) {
-            highp vec2 cuv = bedWorld.xz * 0.03;
-            float c1 = texture(normalMap, cuv + time * vec2(0.031, 0.022)).x;
-            float c2 = texture(normalMap, cuv * 1.37 - time * vec2(0.024, 0.037)).y;
             float caustic = pow(1.0 - abs(c1 + c2 - 1.0), 10.0);
             transmitted *= 1.0 + caustic * 0.55 * exp(-bedDepth * 0.03) * detailFade;
         }
@@ -1258,8 +1261,10 @@ in highp vec2 TexCoords;
 in highp vec3 ViewFragPos;
 
 uniform highp vec3 viewPos;
-uniform mat4 view;
-uniform mat4 projection;
+// highp as in the vertex stage: GLSL ES links a shared uniform only when
+// both stages declare the same precision (the player's GLES path).
+uniform highp mat4 view;
+uniform highp mat4 projection;
 uniform vec3 waterColor;
 uniform float distortionStrength;
 uniform float fresnelIntensity;
@@ -1268,23 +1273,6 @@ uniform float refractionIndex;
 uniform float roughness;
 uniform sampler2D sceneColor;
 uniform vec2 screenSize;""" + FOG_GLSL + """
-
-highp float hash21(highp vec2 p) {
-    p = fract(p * vec2(123.34, 345.45));
-    p += dot(p, p + 34.345);
-    return fract(p.x * p.y);
-}
-
-highp float noise2(highp vec2 p) {
-    highp vec2 i = floor(p);
-    highp vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
 
 void main() {
     highp vec3 viewDir = normalize(viewPos - FragPos);
@@ -1322,14 +1310,11 @@ void main() {
 
     highp vec2 screenUV = gl_FragCoord.xy / screenSize;
 
-    // A compact procedural perturbation breaks up the perfectly planar warp.
-    // It is intentionally cheap and deterministic on GL 3.3 hardware.
-    highp float n1 = noise2(FragPos.xz * 0.08 + TexCoords * 3.0);
-    highp float n2 = noise2(FragPos.xy * 0.11 + TexCoords * 5.0);
-    highp vec2 microWarp = (vec2(n1, n2) - 0.5) * 0.020;
-
+    // Keep the warp entirely on the core refraction/normal path. The former
+    // procedural hash/noise helper triggered an Intel GLSL compiler failure on
+    // some older integrated-GPU drivers.
     highp vec2 uvOffset =
-        (refractionWarp + normalWarp + microWarp) * distortionStrength;
+        (refractionWarp + normalWarp) * distortionStrength;
 
     highp vec2 refractUV = clamp(
         screenUV + uvOffset,
@@ -1406,6 +1391,130 @@ void main() {
 }""",
 
     'terrain.vert': """#version 330 core
+precision highp float;
+precision highp int;
+// Terrain drawn from a heightfield: no vertex buffer at all.
+//
+// Each chunk is drawn as 6 vertices per quad, in exactly the order the CPU
+// mesh used -- quad q = ix * res + iz, triangle 1 at (ix,iz)(ix+1,iz)(ix,iz+1)
+// and triangle 2 at (ix+1,iz)(ix+1,iz+1)(ix,iz+1) -- and every attribute the
+// 14-float vertex carried is rebuilt here from the chunk's height grid:
+// position, the flat face normal, the per-triangle colour, the UV and the
+// smooth normal. The arithmetic follows the old NumPy builder step by step
+// (float32 throughout), including its quirks, which are preserved on purpose:
+// the face normal points down (cross(+x, +z) = -y), colour is normalised by
+// the chunk's own height range, and the "variation" seed reduces to iz.
+out vec3 FragPos;
+out mediump vec3 Normal;
+out mediump vec3 VertexColor;
+out vec2 TexCoords;
+out mediump vec3 SmoothNormal;
+
+uniform mat4 projection;
+uniform mat4 view;
+
+// Height grid of the chunk: texel (x = k + 1, y = i + 1) holds grid point
+// (i, k). The one-texel ring around it (i or k = -1 or res + 1) lies beyond
+// the chunk's edges and is sampled only for smooth normals.
+uniform highp sampler2DArray uHeights;
+uniform ivec2 uChunkI;     // (quads per side, texture layer)
+uniform vec3  uChunkX;     // (world x, world z, grid step), as float32
+uniform vec2  uChunkY;     // (chunk min height, height range; 1 when flat)
+uniform float uTiling;     // Terrain.TILING_SCALE
+uniform int   uFlatMode;
+
+// The biome colour gradient, pre-cast exactly as the CPU cast it: stop
+// heights and colours, and per segment the float32 width (h1 - h0, or 0 when
+// h1 <= h0) and colour delta (c1 - c0).
+#define MAX_GRADIENT_STOPS 32
+uniform int   uGradCount;
+uniform float uGradH[MAX_GRADIENT_STOPS];
+uniform vec3  uGradC[MAX_GRADIENT_STOPS];
+uniform float uGradW[MAX_GRADIENT_STOPS];
+uniform vec3  uGradD[MAX_GRADIENT_STOPS];
+
+float heightAt(int i, int k) {
+    return texelFetch(uHeights, ivec3(k + 1, i + 1, uChunkI.y), 0).r;
+}
+
+vec3 gridPoint(ivec2 p) {
+    return vec3(uChunkX.x + float(p.x) * uChunkX.z,
+                heightAt(p.x, p.y),
+                uChunkX.y + float(p.y) * uChunkX.z);
+}
+
+// Central differences everywhere, the chunk's edge included: the border ring
+// supplies the sample beyond it, so both chunks sharing an edge compute the
+// same smooth normal there. (The CPU mesh took one-sided differences at the
+// edge -- np.gradient's edge_order=1 -- which kinked the normal by a few
+// degrees and showed as a seam in the texture blend.)
+float gradientAlong(int i, int k, bool alongX) {
+    ivec2 a = alongX ? ivec2(i - 1, k) : ivec2(i, k - 1);
+    ivec2 b = alongX ? ivec2(i + 1, k) : ivec2(i, k + 1);
+    return (heightAt(b.x, b.y) - heightAt(a.x, a.y)) / (2.0 * uChunkX.z);
+}
+
+vec3 gradientColour(float h) {
+    if (uGradCount == 0) return vec3(0.5);
+    vec3 result = vec3(0.0);
+    for (int s = 0; s < uGradCount - 1; ++s) {
+        if (h >= uGradH[s] && h <= uGradH[s + 1]) {
+            float t = uGradW[s] > 0.0 ? (h - uGradH[s]) / uGradW[s] : 0.0;
+            result = uGradC[s] + t * uGradD[s];
+        }
+    }
+    if (h > uGradH[uGradCount - 1]) result = uGradC[uGradCount - 1];
+    return result;
+}
+
+void main() {
+    int res = uChunkI.x;
+    int quad = gl_VertexID / 6;
+    int corner = gl_VertexID - quad * 6;
+    int ix = quad / res;
+    int iz = quad - ix * res;
+    bool second = corner >= 3;
+
+    ivec2 a = second ? ivec2(ix + 1, iz)     : ivec2(ix, iz);
+    ivec2 b = second ? ivec2(ix + 1, iz + 1) : ivec2(ix + 1, iz);
+    ivec2 c = ivec2(ix, iz + 1);
+    int own = second ? corner - 3 : corner;
+    ivec2 me = own == 0 ? a : (own == 1 ? b : c);
+
+    vec3 pa = gridPoint(a);
+    vec3 pb = gridPoint(b);
+    vec3 pc = gridPoint(c);
+    vec3 p  = own == 0 ? pa : (own == 1 ? pb : pc);
+
+    // Flat face normal: cross(v1 - v0, v2 - v0) / |.|, as stored.
+    vec3 n = cross(pb - pa, pc - pa);
+    float nlen = sqrt(dot(n, n));
+    Normal = nlen == 0.0 ? n : n / nlen;
+
+    if (uFlatMode != 0) {
+        VertexColor = vec3(0.7);
+    } else {
+        float meanHeight = (pa.y + pb.y + pc.y) / 3.0;   // "centroid" is reserved
+        float norm = clamp((meanHeight - uChunkY.x) / uChunkY.y, 0.0, 1.0);
+        int seed = second ? ((ix + 1000) * 1000 + iz + 1000) % 100
+                          : (ix * 1000 + iz) % 100;
+        float variation = (float(seed) / 100.0 - 0.5) * 0.08;
+        VertexColor = clamp(gradientColour(norm) + variation, 0.0, 1.0);
+    }
+
+    float gx = gradientAlong(me.x, me.y, true);
+    float gz = gradientAlong(me.x, me.y, false);
+    SmoothNormal = vec3(-gx, 1.0, -gz) / sqrt(gx * gx + 1.0 + gz * gz);
+
+    TexCoords = p.xz / uTiling;
+    FragPos = p;
+    gl_Position = projection * view * vec4(p, 1.0);
+}""",
+
+    # Blocks terracing: square land columns and their walls, built on the
+    # CPU per chunk (engine.terrain_style.build_block_mesh), because a height
+    # grid cannot hold vertical walls. Same outputs as terrain.vert.
+    'terrain_mesh.vert': """#version 330 core
 precision highp float;
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -1539,13 +1648,14 @@ highp float bandIndex(highp float y) {
     return floor(y / max(uBandHeight, 1e-3) + 0.12);
 }
 
+// Ordered-dither threshold in [0, 1) from a 4x4 Bayer matrix, computed
+// arithmetically (no arrays, no integer maths) for the widest driver support.
+float bayer2(vec2 a) {
+    a = floor(a);
+    return fract(dot(a, vec2(0.5, a.y * 0.75)));
+}
 float bayer4(vec2 fragCoord) {
-    int x = int(mod(fragCoord.x, 4.0));
-    int y = int(mod(fragCoord.y, 4.0));
-    int index = x + y * 4;
-    const float m[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0,
-                                  3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
-    return (m[index] + 0.5) / 16.0;
+    return bayer2(fragCoord * 0.5) * 0.25 + bayer2(fragCoord);
 }
 
 void main() {
@@ -1584,11 +1694,11 @@ void main() {
             rock_col.rgb  * splat.z +
             snow_col.rgb  * splat.w
         );
-        // The biome colour only tints the textures lightly, so each layer
-        // keeps its own character instead of everything turning biome-green.
-        float tintLuma = max(dot(VertexColor, vec3(0.299, 0.587, 0.114)), 0.05);
-        vec3 tint = mix(vec3(1.0), VertexColor / tintLuma, 0.25);
-        texColor = splatColor * tint * 1.05;
+        // The splat textures are the surface colour. (They used to be
+        // multiplied by the biome vertex colour as well, which roughly
+        // squared the darkness -- green grass times green vertex colour --
+        // and carried the vertex colour's per-chunk seams into textured mode.)
+        texColor = splatColor * 1.1;
     } else {
         texColor = VertexColor * 1.1;
     }
@@ -1626,8 +1736,8 @@ void main() {
         float dotMask = step(hash(ci), density)
                       * (1.0 - smoothstep(0.16, 0.26, length(cf - centre)));
         // Far away the dots are smaller than a pixel: use their average.
-        float far = smoothstep(0.15, 0.5, length(fwidth(sc)));
-        float amount = mix(dotMask, density * 0.15, far);
+        float farFade = smoothstep(0.15, 0.5, length(fwidth(sc)));
+        float amount = mix(dotMask, density * 0.15, farFade);
         texColor = mix(texColor, uSpeckleColor * mix(0.8, 1.1, hash(ci + 3.1)), amount);
     }
 
@@ -1867,10 +1977,10 @@ void main() {
 
     // Colour variation: a large-scale patchiness across the field and a few
     // sun-dried blades.
-    float patch = cnoise(iPosition.xz * 0.0035) * 0.5 + 0.5;
+    float fieldPatch = cnoise(iPosition.xz * 0.0035) * 0.5 + 0.5;
     float dry = smoothstep(0.78, 1.0, seedC) * 0.7;
     BladeTint = mix(vec3(1.0), vec3(1.25, 1.1, 0.55), dry)
-              * mix(0.82, 1.12, patch) * iVariation;
+              * mix(0.82, 1.12, fieldPatch) * iVariation;
 
     FragPos = p;
     BladeHeight = level;
@@ -1887,15 +1997,16 @@ in vec3 BladeNormal;
 in float BladeHeight;
 in vec3 BladeTint;
 
-uniform vec3 grassColor;
+uniform vec3 grassColor;       // blade colour
+uniform vec3 grassTipColor;    // colour the blades fade to at their tips
 uniform vec3 cameraPos;
 """ + FOG_GLSL + """
 void main() {
-    // Dark, shaded roots rising to lighter, slightly sun-bleached tips.
+    // Shaded roots rising through the blade colour to the tip colour.
     float g = smoothstep(0.0, 1.0, BladeHeight);
-    vec3 baseColor = grassColor * 0.38;
-    vec3 tipColor = mix(grassColor * 1.3, vec3(0.80, 0.78, 0.55), 0.3);
-    vec3 albedo = mix(baseColor, tipColor, g) * BladeTint;
+    vec3 rootColor = grassColor * 0.45;
+    vec3 albedo = (g < 0.5 ? mix(rootColor, grassColor, g * 2.0)
+                           : mix(grassColor, grassTipColor, g * 2.0 - 1.0)) * BladeTint;
 
     vec3 n = normalize(BladeNormal);
     // Lean the lighting normal towards the ground normal so a field reads
@@ -2125,16 +2236,3 @@ SHADER_MAP = {
     # Procedural is available but not yet integrated into the main render loop
     'procedural':    ('procedural_vert.glsl', 'procedural_frag.glsl'),
 }
-
-def load_shader_source(filename):
-    """Loads a shader source string from the shader directory."""
-    filepath = os.path.join(SHADER_DIR, filename)
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            return f.read()
-    except FileNotFoundError:
-        print(f"FATAL: Shader file not found: {filepath}")
-        return ""
-    except Exception as e:
-        print(f"FATAL: Error reading shader file {filepath}: {e}")
-        return ""

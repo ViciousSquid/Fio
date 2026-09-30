@@ -7,7 +7,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor, QPainter, QLinearGradient, QPen
 
-from engine.terrain import Terrain, BIOMES
+from engine.terrain import (Terrain, BIOMES, DEFAULT_BIOME, DEFAULT_USE_TEXTURES,
+                            biome_key_for_name)
 from engine import terrain_style
 
 
@@ -242,7 +243,7 @@ class TerrainEditorPanel(QWidget):
         controls_layout.setSpacing(20)
         
         self.textures_checkbox = QCheckBox("Use Textures")
-        self.textures_checkbox.setChecked(False)
+        self.textures_checkbox.setChecked(DEFAULT_USE_TEXTURES)
         self.textures_checkbox.toggled.connect(self.on_textures_changed)
         controls_layout.addWidget(self.textures_checkbox)
         
@@ -492,7 +493,7 @@ class TerrainEditorPanel(QWidget):
         density_row.addWidget(self.grass_density_value)
         grass_layout.addRow("Density:", density_row)
 
-        self.grass_color_btn = QPushButton("Grass Colour")
+        self.grass_color_btn = QPushButton("Blade Colour")
         self.grass_color_btn.clicked.connect(self.choose_grass_color)
         self.grass_color_preview = QFrame()
         self.grass_color_preview.setFixedSize(28, 28)
@@ -501,6 +502,22 @@ class TerrainEditorPanel(QWidget):
         color_row.addWidget(self.grass_color_preview)
         color_row.addStretch()
         grass_layout.addRow("Colour:", color_row)
+
+        # The blades fade from the blade colour to this at their tips.
+        self.grass_tip_btn = QPushButton("Tip Colour")
+        self.grass_tip_btn.clicked.connect(self.choose_grass_tip_color)
+        self.grass_tip_preview = QFrame()
+        self.grass_tip_preview.setFixedSize(28, 28)
+        self.grass_tip_auto_btn = QPushButton("Auto")
+        self.grass_tip_auto_btn.setToolTip(
+            "Derive the tips from the blade colour (a sun-bleached shade)")
+        self.grass_tip_auto_btn.clicked.connect(self.reset_grass_tip_color)
+        tip_row = QHBoxLayout()
+        tip_row.addWidget(self.grass_tip_btn)
+        tip_row.addWidget(self.grass_tip_preview)
+        tip_row.addWidget(self.grass_tip_auto_btn)
+        tip_row.addStretch()
+        grass_layout.addRow("Tips:", tip_row)
 
         features_layout.addWidget(grass_group)
 
@@ -1246,12 +1263,13 @@ class TerrainEditorPanel(QWidget):
     def load_from_terrain(self):
         """Load current terrain values into UI."""
         self._building_ui = True
-        self.textures_checkbox.setChecked(getattr(self.terrain, 'use_textures', False))
+        self.textures_checkbox.setChecked(
+            getattr(self.terrain, 'use_textures', DEFAULT_USE_TEXTURES))
         
         # Find biome index
         biome_index = 0
         for i in range(self.biome_combo.count()):
-            if self.biome_combo.itemData(i) == self.terrain.biome.name.lower().replace(' ', '_'):
+            if self.biome_combo.itemData(i) == biome_key_for_name(self.terrain.biome.name):
                 biome_index = i
                 break
         self.biome_combo.setCurrentIndex(biome_index)
@@ -1409,6 +1427,23 @@ class TerrainEditorPanel(QWidget):
         self._update_grass_color_preview()
         self.terrain_changed.emit()
 
+    def choose_grass_tip_color(self):
+        current = QColor.fromRgbF(*self.terrain.grass_tip_colour())
+        color = QColorDialog.getColor(current, self, "Grass Tip Colour")
+        if not color.isValid():
+            return
+        self.terrain.set_grass(
+            enabled=self.grass_checkbox.isChecked(),
+            tip_color=(color.redF(), color.greenF(), color.blueF()),
+        )
+        self._update_grass_color_preview()
+        self.terrain_changed.emit()
+
+    def reset_grass_tip_color(self):
+        self.terrain.set_grass(enabled=self.grass_checkbox.isChecked(), tip_color='auto')
+        self._update_grass_color_preview()
+        self.terrain_changed.emit()
+
     def _update_grass_color_preview(self):
         r, g, b = self.terrain.grass_color
         # Use the palette for the colour swatch rather than injecting a
@@ -1419,6 +1454,14 @@ class TerrainEditorPanel(QWidget):
         palette.setColor(QPalette.Window, QColor.fromRgbF(r, g, b))
         self.grass_color_preview.setAutoFillBackground(True)
         self.grass_color_preview.setPalette(palette)
+        if hasattr(self, 'grass_tip_preview'):
+            palette = self.grass_tip_preview.palette()
+            palette.setColor(QPalette.Window,
+                             QColor.fromRgbF(*self.terrain.grass_tip_colour()))
+            self.grass_tip_preview.setAutoFillBackground(True)
+            self.grass_tip_preview.setPalette(palette)
+            auto = getattr(self.terrain, 'grass_tip_color', None) is None
+            self.grass_tip_auto_btn.setEnabled(not auto)
 
     def on_wireframe_changed(self, enabled):
         if self._building_ui:
@@ -1787,7 +1830,10 @@ class TerrainEditorPanel(QWidget):
     
     def reset_to_defaults(self):
         self._building_ui = True
-        self.biome_combo.setCurrentIndex(0)
+        default_index = max(0, self.biome_combo.findData(DEFAULT_BIOME))
+        self.biome_combo.setCurrentIndex(default_index)
+        self.textures_checkbox.setChecked(DEFAULT_USE_TEXTURES)
+        self.terrain.use_textures = DEFAULT_USE_TEXTURES
         self.seed_spin.setValue(42)
         self.chunk_size_spin.setValue(16)
         self.min_x_spin.setValue(-2)
@@ -1801,7 +1847,7 @@ class TerrainEditorPanel(QWidget):
         self.terrain.chunk_size = 256.0
         self.terrain.cleanup()
         self._building_ui = False
-        self.on_biome_changed(0)
+        self.on_biome_changed(default_index)
         self.on_bounds_changed(0)
     
     def showEvent(self, event):

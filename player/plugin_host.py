@@ -32,7 +32,7 @@ from typing import List, Optional
 
 
 from engine.prop_runtime import PropSession
-from engine.prop_entity import Prop as CoreProp
+from engine.prop_entity import Prop as CoreProp, legacy_model_properties
 
 
 class _CamPlayer:
@@ -170,7 +170,12 @@ class PlayerPluginHost:
             if not typ:
                 continue
             norm = str(typ).replace("_", "").lower()
+            properties = dict(t.get("properties", {}))
 
+            if norm == "model":
+                # A model is a Prop, in the player as in the editor.
+                properties = legacy_model_properties(properties)
+                norm = "prop"
             if norm == "prop":
                 cls = CoreProp
             else:
@@ -182,7 +187,7 @@ class PlayerPluginHost:
                 things.append(
                     cls(
                         pos=list(t.get("pos", [0, 0, 0])),
-                        properties=dict(t.get("properties", {})),
+                        properties=properties,
                     )
                 )
             except Exception:

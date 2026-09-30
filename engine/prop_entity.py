@@ -5,7 +5,9 @@ editor, editor play mode and the standalone player / Android build.
 
 A Prop may independently carry, collect, use physics, and render as either a
 billboard or a model. Collection is an optional gameplay behaviour on the Prop;
-it is not a separate entity type.
+it is not a separate entity type -- and neither is a model. Every 3D model in a
+Fio world is a Prop with ``render_mode='model'``; the old ``Model`` entity type
+is read from maps as one (see :data:`LEGACY_MODEL_DEFAULTS`).
 """
 
 from __future__ import annotations
@@ -13,10 +15,10 @@ from __future__ import annotations
 from engine.change_journal import TrackedAttribute
 
 try:
-    from editor.things import Model as _ModelBase
+    from editor.things import Thing as _ThingBase
     EDITOR_TIER = True
 except ImportError:  # standalone player / Android: no PyQt5
-    from plugins.entitybase import Model as _ModelBase
+    from plugins.entitybase import Thing as _ThingBase
     EDITOR_TIER = False
 
 
@@ -86,8 +88,9 @@ PROP_DEFAULTS = {
     'sprite_path': 'assets/sprites/pickup.png',
     'sprite_size': [32.0, 32.0],
 
-    # Carry behaviour.
-    'carry_enabled': True,
+    # Carry behaviour. Off unless the author turns it on: a Prop is scenery by
+    # default -- neither carryable nor solid (see no_collision below).
+    'carry_enabled': False,
     'carry_reach': 110.0,
     'carry_distance': 55.0,
     'carry_offset': [0.0, -6.0, 0.0],
@@ -119,11 +122,41 @@ PROP_DEFAULTS = {
 
     'disabled': False,
     'io_enabled': True,
+
+    # Model representation. model_path is deliberately not a default mesh: a
+    # billboard Prop must not collide as one (see __init__).
+    'rotation': [0, 0, 0],
+    'scale': [1, 1, 1],
+}
+
+#: What a Prop placed to show a model starts as: the Prop defaults (neither
+#: carryable nor solid) in model representation.
+MODEL_PROP_DEFAULTS = {
+    'render_mode': 'model',
+}
+
+#: What a map saved with the old ``Model`` entity meant by one: solid, and not
+#: something the player picks up. Applied under whatever the record authors,
+#: so a saved map keeps playing as it was saved.
+LEGACY_MODEL_DEFAULTS = {
+    'render_mode': 'model',
+    'no_collision': False,
+    'carry_enabled': False,
 }
 
 
+def legacy_model_properties(properties):
+    """A pre-Prop ``Model`` record's properties, read as a Prop's.
 
-class Prop(_ModelBase):
+    Every loader that meets the old ``model`` type token -- the editor's, the
+    plugin fallback base's, the standalone player's -- reads it through this,
+    so a model is the same Prop wherever the map is opened.
+    """
+    return {**LEGACY_MODEL_DEFAULTS, **dict(properties or {}), 'type': 'prop'}
+
+
+
+class Prop(_ThingBase):
     """A generic world object with optional carry and collect behaviour."""
 
     DEFAULT_MODEL_PATH = DEFAULT_MODEL_PATH
@@ -162,6 +195,8 @@ class Prop(_ModelBase):
         authored_render_mode = 'render_mode' in self.properties
         authored_sprite_path = 'sprite_path' in self.properties
         authored_collect_value = 'collect_value' in self.properties
+        # Present on every Prop, empty unless it shows a model.
+        self.properties.setdefault('model_path', '')
         for key, value in PROP_DEFAULTS.items():
             self.properties.setdefault(
                 key, list(value) if isinstance(value, list) else value)
@@ -192,9 +227,34 @@ class Prop(_ModelBase):
                 and not authored_sprite_path):
             self.properties['sprite_path'] = self.get_collect_sprite_path()
 
-        # Collected Props are not useful as carry targets.
+        # Collected Props are not useful as carry targets. What the author set
+        # is kept, so resetting the collection restores it rather than forcing
+        # every Prop carryable.
+        self._carry_before_collect = bool(
+            self.properties.get('carry_enabled', False))
         if self.properties.get('collect_collected'):
             self.properties['carry_enabled'] = False
+
+    def reset_collection(self):
+        """Un-collect this Prop, restoring the carry setting it was authored with."""
+        if self.properties.get('collect_collected'):
+            self.properties['carry_enabled'] = self._carry_before_collect
+        self.properties['collect_collected'] = False
+
+    @classmethod
+    def for_model(cls, model_path, pos=None, properties=None):
+        """A Prop showing the model at *model_path*, with the Prop defaults.
+
+        The one way a model enters a world from the editor -- the Asset
+        Browser and the 2D view's Add Model both come here -- so a model is
+        always a Prop, never a separate kind of entity. Like any Prop it is
+        neither carryable nor solid until the author says so.
+        """
+        props = dict(MODEL_PROP_DEFAULTS)
+        props.update(properties or {})
+        props['model_path'] = str(model_path).replace('\\', '/')
+        return cls(pos=list(pos) if pos is not None else [0, 0, 0],
+                   properties=props)
 
     def _implied_render_mode(self):
         """Resolve representation from authored assets when no mode was saved."""

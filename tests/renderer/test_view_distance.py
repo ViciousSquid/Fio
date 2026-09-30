@@ -285,3 +285,65 @@ def test_describe_marks_automatic_values_and_covers_every_setting():
         assert label in rows
     vd.fog_end = 6000.0
     assert "(auto)" not in dict(vd.describe())["Fog End"]
+
+
+# ---------------------------------------------------------------------------
+# limit: a horizon imposed by the world (Big World's activation radius)
+# ---------------------------------------------------------------------------
+
+def test_no_limit_by_default():
+    vd = ViewDistance(4096.0)
+    assert vd.limit is None
+    assert vd.effective_distance == vd.far_plane == 4096.0
+
+
+def test_a_limit_puts_the_fog_end_on_it_and_pulls_the_far_plane_in():
+    vd = ViewDistance(4096.0)
+    vd.limit = 2048.0
+    start, end = vd.resolve()
+    assert end == pytest.approx(2048.0)
+    assert start < end
+    assert vd.far_plane == pytest.approx(2048.0 / AUTO_FOG_END_FRAC)
+    assert vd.distance_sq == pytest.approx(vd.far_plane ** 2)
+    assert vd.visual_horizon == pytest.approx(2048.0)
+    assert vd.fog_factor(2048.0) == 1.0
+    # The player's own setting survives; only what is in force changes.
+    assert vd.distance == 4096.0
+
+
+def test_a_limit_never_widens_the_view():
+    vd = ViewDistance(1000.0)
+    vd.limit = 2048.0
+    assert vd.far_plane == 1000.0
+    assert vd.resolve() == ViewDistance(1000.0).resolve()
+
+
+def test_a_limit_caps_a_pinned_fog_distance():
+    vd = ViewDistance(8192.0)
+    vd.fog_end = 6000.0
+    vd.limit = 2048.0
+    assert vd.resolve()[1] == pytest.approx(2048.0)
+
+
+def test_with_fog_off_the_limit_is_the_far_plane():
+    vd = ViewDistance(4096.0)
+    vd.fog_enabled = False
+    vd.limit = 2048.0
+    assert vd.far_plane == 2048.0
+    assert vd.visual_horizon == 2048.0
+
+
+def test_clearing_the_limit_restores_the_requested_distance():
+    vd = ViewDistance(4096.0)
+    vd.limit = 2048.0
+    vd.limit = None
+    assert vd.far_plane == 4096.0
+    assert vd.resolve() == ViewDistance(4096.0).resolve()
+
+
+@pytest.mark.parametrize("bad", [float("nan"), 0.0, -5.0])
+def test_an_unusable_limit_is_ignored(bad):
+    vd = ViewDistance(4096.0)
+    vd.limit = 2048.0
+    vd.limit = bad
+    assert vd.limit == 2048.0

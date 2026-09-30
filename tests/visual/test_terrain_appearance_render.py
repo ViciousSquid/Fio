@@ -34,6 +34,7 @@ def _terrain(white):
     t.set_bounds(-1, 0, -1, 0)
     t.grass_tex = t.rock_tex = t.sand_tex = t.snow_tex = white
     t.MAX_UPDATES_PER_FRAME = 16
+    t.UPDATE_BUDGET_MS = 1.0e6
     return t
 
 

@@ -24,9 +24,9 @@ from .threaded_game_state import ThreadedGameState, PublishedBrushes, PublishedE
 from .player import Player
 from .camera import Camera
 from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
-from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
+from .brush_geometry import build_collision_mesh, brush_has_geometry
 from .prop_runtime import PropSession
-from .change_journal import moved, touch
+from .change_journal import JOURNAL, STATE, moved, touch
 from .mover_table import MoverTable
 from .entity_table import ENT_PROP
 from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
@@ -124,6 +124,45 @@ _PORTAL_PLAYER_EXIT_EPSILON = 0.05
 # quieter, so a monster has to be closer to notice the player entering/leaving.
 _GUNFIRE_LOUDNESS = 1.0
 _WATER_LOUDNESS = 0.7
+
+
+def _trigger_is_once(brush) -> bool:
+    """Whether a trigger brush fires only once ('Once', any case)."""
+    return str(brush.get('trigger_type', 'multiple')).strip().lower() == 'once'
+
+
+def _trigger_activation(brush) -> str:
+    """'touch' or 'use'. Older editor builds wrote the setting under
+    ``trigger_collect_activation``; it is honoured when the real key is absent."""
+    value = brush.get('trigger_activation')
+    if value is None:
+        value = brush.get('trigger_collect_activation', 'touch')
+    return str(value or 'touch').strip().lower()
+
+
+def _trigger_damage(brush):
+    """A hurt trigger's damage: the editor's ``hurt_amount``, else ``damage``."""
+    value = brush.get('hurt_amount', brush.get('damage', 10))
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 10
+
+
+#: ``trigger_save`` values a trigger may request, and the console command each
+#: runs. Anything else (including the default, 'none') does nothing.
+_TRIGGER_SAVE_COMMANDS = {'quicksave': 'quicksave', 'quickload': 'quickload'}
+
+
+def _trigger_save(brush):
+    """The console command a trigger's optional save action asks for, or None."""
+    return _TRIGGER_SAVE_COMMANDS.get(
+        str(brush.get('trigger_save', 'none') or 'none').strip().lower())
+
+
+#: Shared, read-only "no projectiles" array for the published frame.
+_NO_PROJECTILES = np.empty((0, 3), dtype=np.float32)
+_NO_PROJECTILES.flags.writeable = False
 
 
 class LogicThread(threading.Thread):
@@ -232,6 +271,9 @@ class LogicThread(threading.Thread):
         write_state = self.game_state.get_write_state()
         self._render_table = write_state.render_table
         self._entity_table = write_state.entity_table
+        #: ``id -> object`` of the editor selection the last frame re-read as
+        #: edited; see _prepare_render_state.
+        self._last_edited = {}
 
         # Editor camera
         self.editor_camera = Camera()
@@ -414,6 +456,8 @@ class LogicThread(threading.Thread):
 
         # Monster projectiles (flying monster ranged attacks)
         self._monster_projectiles: list = []
+        #: Their positions as the ``(N, 3)`` float32 array each frame publishes.
+        self._projectile_positions = _NO_PROJECTILES
 
         # Gunfire sound events for AI hearing (list of dicts with pos, time, source)
         self._gunfire_events: list = []
@@ -506,12 +550,39 @@ class LogicThread(threading.Thread):
         # every entity in the level on every AI tick.
         self._monster_things = [t for t in self.things if MonsterThing and isinstance(t, MonsterThing)]
         self._monster_by_id = {id(t): t for t in self._monster_things}
+        # AI state of monsters that have left the world: keyed by id(), so a
+        # monster spawned into a freed address would inherit it.
+        live = self._monster_by_id
+        with self._monster_lock:
+            states = self.monster_ai.monster_states
+            for key in [key for key in states if key not in live]:
+                del states[key]
 
         # PERF: the timer list, for the same reason — _update_logic_timers is
         # the one per-frame path the logic system has, and it should walk the
         # timers, not the level.
         self._timer_things = [t for t in self.things if LogicTimer and isinstance(t, LogicTimer)]
 
+        # The row sets this index describes; see _watch_world_rows.
+        self._indexed_things = tuple(self.things)
+        self._indexed_brushes = tuple(self.brushes)
+        # Door/mover state is keyed by brush index. Whoever changed the brush
+        # list -- the editor, or a console delete that rebuilds this index
+        # itself -- the states are re-keyed here: the row watcher compares
+        # against _indexed_brushes, which the line above has just moved on.
+        if (self.play_mode and self._moving_rows is not None
+                and self._indexed_brushes != self._moving_rows):
+            self._reindex_moving_brushes()
+            self.mark_collision_dirty()
+        self._rebuild_portal_links()
+
+    def _rebuild_portal_links(self):
+        """Resolve every portal's ``portal_target`` name to its paired portal.
+
+        Part of :meth:`_build_entity_caches`, and called on its own by the
+        portal SetTarget input: transit reads these lists, so a retargeted
+        portal kept sending the player to its old partner.
+        """
         # PERF: portals, for the same reason again.  _update_portals ticks every
         # portal's fade every frame, but the traversal relation itself is also
         # cached numerically.  The slot space is exactly enumerate(self.things),
@@ -546,12 +617,35 @@ class LogicThread(threading.Thread):
     def _find_entity_by_name(self, name: str):
         if not name:
             return None
+        if not self.play_mode:
+            return self._scan_entity('name', name)
         return self._name_cache.get(name)
 
     def _find_entity_by_id(self, entity_id: str):
         if not entity_id:
             return None
+        if not self.play_mode:
+            return self._scan_entity('id', entity_id)
         return self._id_cache.get(entity_id)
+
+    def _scan_entity(self, key, value):
+        """Look an entity up in the live world, outside a play session.
+
+        The caches are built when Play starts. The console's ``ent_fire``,
+        ``send`` and ``trigger`` dispatch through the same I/O manager in the
+        editor, where the caches are empty (never played) or hold the objects
+        of the last session -- replaced by a restore or a map load -- so an
+        input either failed with "not found" or landed on an object no longer
+        in the world. Same precedence as the cache build: last one wins,
+        entities over brushes.
+        """
+        for thing in reversed(self.things):
+            if thing.properties.get(key) == value:
+                return thing
+        for brush in reversed(self.brushes):
+            if brush.get(key) == value:
+                return brush
+        return None
 
     def _find_path_node_by_name(self, name: str):
         """Return PathNode thing with given name, or None."""
@@ -616,12 +710,18 @@ class LogicThread(threading.Thread):
             debug_log("Collision", f"Prepared mesh collision for {count} angled brush(es)")
         return count
 
-    @staticmethod
-    def _clear_brush_collision(brush):
+    #: What build_collision_mesh attaches, and all a revert may remove. The
+    #: rest of GEO_RUNTIME_KEYS is the brush's geometry identity and cache:
+    #: popping ``_geo_epoch`` gave every angled brush a new epoch behind the
+    #: render tables' back at each play start/stop, so their rows held stale
+    #: records and every convex shape was re-derived.
+    _COLLISION_KEYS = ('_collision_mode', '_mesh_triangles', '_mesh_bounds',
+                       '_mesh_planes')
+
+    @classmethod
+    def _clear_brush_collision(cls, brush):
         """Strip runtime mesh-collision keys so the brush reverts to AABB."""
-        for k in GEO_RUNTIME_KEYS:
-            if k in ('_geo_cache', '_geo_cache_sig'):
-                continue  # keep the geometry render/query cache
+        for k in cls._COLLISION_KEYS:
             brush.pop(k, None)
 
     def _clear_angled_brush_collision(self):
@@ -1131,8 +1231,9 @@ class LogicThread(threading.Thread):
             self.collected_keys.clear()
             for thing in self.things:
                 if PropThing and isinstance(thing, PropThing):
-                    thing.properties['collect_collected'] = False
-                    thing.properties['carry_enabled'] = True
+                    # Restores what the author set; forcing carry on here made
+                    # every Prop -- scenery models included -- carryable.
+                    thing.reset_collection()
             if self._props is not None:
                 self._props.start()
             
@@ -1238,6 +1339,7 @@ class LogicThread(threading.Thread):
 
             # Clear monster projectiles
             self._monster_projectiles.clear()
+            self._projectile_positions = _NO_PROJECTILES
 
             # Clear gunfire events
             self._gunfire_events.clear()
@@ -1263,9 +1365,6 @@ class LogicThread(threading.Thread):
             self._reset_parented_lights()
             self._reset_parented_portals()
             self._clear_angled_brush_collision()
-            self._model_collision_brushes = []
-            self._physics_body_brushes = []
-            self._refresh_collision_brushes_cache()
             self.current_hud_message = ""
             self.current_hud_key_name = None
             self.gate_inputs = {}
@@ -1322,12 +1421,14 @@ class LogicThread(threading.Thread):
 
             # Clear monster projectiles
             self._monster_projectiles.clear()
+            self._projectile_positions = _NO_PROJECTILES
 
             # Clear gunfire events
             self._gunfire_events.clear()
 
             # Reset monster AI state
             self._reset_all_monsters(clear_dead=False)
+            self._release_session_caches()
 
         # Plugin play lifecycle: initialise per-session state on entering play,
         # tear it down on leaving. Runs after the core reset above so plugins
@@ -1390,7 +1491,8 @@ class LogicThread(threading.Thread):
         except Exception as exc:
             return False, f"Save failed: {exc}"
 
-    def load_session(self, path: str, *, map_name: str = ""):
+    def load_session(self, path: str, *, map_name: str = "",
+                     base_level: dict = None):
         """Restore a saved play session from *path* as an overlay on the live
         session. Returns ``(ok, message)``.
 
@@ -1402,7 +1504,9 @@ class LogicThread(threading.Thread):
 
         The save mode (full / delta / both / legacy) is auto-detected from the
         file's metadata; *map_name* is the currently-loaded map, used to validate
-        a delta's base map. Loading never prompts unless recovery is impossible.
+        a delta's base map, and *base_level* that map as loaded (see
+        :func:`engine.savegame.restore_delta`). Loading never prompts unless
+        recovery is impossible.
         """
         if not self.play_mode:
             return False, "Enter play mode before loading a session."
@@ -1410,7 +1514,8 @@ class LogicThread(threading.Thread):
             from engine import savegame
             data = savegame.read(path)
             with self._tick_lock:
-                report = savegame.restore_auto(self, data, current_map_name=map_name)
+                report = savegame.restore_auto(self, data, current_map_name=map_name,
+                                               base_level=base_level)
             msg = f"Loaded play session from '{os.path.basename(path)}'"
             warning = report.get("warning")
             if warning:
@@ -1420,6 +1525,46 @@ class LogicThread(threading.Thread):
             return False, f"Save file not found: {path}"
         except Exception as exc:
             return False, f"Load failed: {exc}"
+
+    def _release_session_caches(self):
+        """Drop every reference the finished session's caches hold.
+
+        Everything here is rebuilt when Play starts (_build_entity_caches,
+        _init_movers/_init_doors, the collision set). Kept past Stop, these
+        lists pinned the session's objects -- after a restore-on-stop or a map
+        load, objects no longer in the world -- and anything resolving through
+        them reached those instead of the live ones. Outside play the entity
+        finders read the live world (see :meth:`_scan_entity`).
+        """
+        self._name_cache = {}
+        self._id_cache = {}
+        self._indexed_things = ()
+        self._indexed_brushes = ()
+        self._moving_rows = None
+        self._monster_by_id = {}
+        self._monster_things = []
+        self._timer_things = []
+        self._levelchanger_things = []
+        self._trigger_brushes = []
+        self._trigger_brush_by_bid = {}
+        self._use_trigger_entries = []
+        self._portal_things = []
+        self._portal_target_things = []
+        self._portal_slots = np.empty(0, dtype=np.int32)
+        self._portal_target_slots = np.empty(0, dtype=np.int32)
+        self._collision_brushes_cache = []
+        self._model_collision_brushes = []
+        self._physics_body_brushes = []
+        self._mover_brush_list = []
+        self._door_brush_list = []
+        self._monster_spawn_health = {}
+        if self.io_manager is not None:
+            # Delayed events hold their connection; outputs queued from other
+            # threads hold their source entity.
+            self.io_manager.reset()
+        for player in (self.player, getattr(self, 'player2', None)):
+            if player is not None:
+                player.ground_object = None
 
     def _start_monster_ai(self):
         """Start the monster AI processing thread."""
@@ -1452,14 +1597,17 @@ class LogicThread(threading.Thread):
         map authored is gone.  One dict filled during a pass that already walks
         every monster — no extra scan, and nothing new on the entity itself.
         """
-        self.monster_ai.monster_states = {}
+        with self._monster_lock:
+            self.monster_ai.forget_monsters()
         if not MonsterThing:
             return
         if clear_dead:
             self._monster_spawn_health = {}
+        reset = []
         for thing in self.things:
             if not isinstance(thing, MonsterThing):
                 continue
+            reset.append(thing)
             if clear_dead:
                 try:
                     self._monster_spawn_health[thing.properties.get('id')] = \
@@ -1476,6 +1624,9 @@ class LogicThread(threading.Thread):
                 thing.properties['awake'] = False
             else:
                 thing.properties['awake'] = True
+        # dead and is_shooting choose the sprite: without this a monster left
+        # mid-shot, or dead, when play stopped kept that sprite in the editor.
+        JOURNAL.record_many(reset, STATE)
 
     def _start_speakers_on_spawn(self):
         """Turn on speakers authored with Start On when the player spawns.
@@ -1819,6 +1970,9 @@ class LogicThread(threading.Thread):
         # PERF: cache the brush-only view of self.doors — was rebuilt via a
         # list comprehension every tick in _tick_play_mode.
         self._door_brush_list = [b for _, b in self.doors]
+        # The brush list the door/mover indices were taken from (_init_movers
+        # always runs first); see _build_entity_caches.
+        self._moving_rows = tuple(self.brushes)
 
     def _reset_doors(self):
         self.doors = []
@@ -1877,6 +2031,8 @@ class LogicThread(threading.Thread):
         published: a declined swap (the renderer is mid-paint) or a catch-up
         frame running several ticks would otherwise drop them.
         """
+        if not getattr(self, '_frame_prepared', True):
+            return False
         if not self.game_state.request_swap():
             return False
         self.muzzle_flash_active = False
@@ -1908,7 +2064,22 @@ class LogicThread(threading.Thread):
                 self.tick_ms = (time.perf_counter() - started) * 1000.0
                 self._update_tps_counter()
 
-            self._prepare_render_state()
+            try:
+                self._prepare_render_state()
+                self._frame_prepared = True
+            except Exception:
+                # Same policy as a bad tick: a frame that cannot be projected
+                # (a malformed authored value, a projection bug) must not kill
+                # the thread and freeze the game for good. The half-built
+                # buffer is not published; the error is logged once per kind.
+                self._frame_prepared = False
+                import traceback
+                trace = traceback.format_exc()
+                key = trace.strip().splitlines()[-1]
+                if key != getattr(self, '_last_prepare_error', None):
+                    self._last_prepare_error = key
+                    debug_log("LogicThread",
+                              "Unhandled exception preparing a frame:\n" + trace)
         return accumulator
 
     def stop(self):
@@ -1926,8 +2097,30 @@ class LogicThread(threading.Thread):
     def _tick(self, delta: float):
         if self.play_mode:
             self._tick_play_mode(delta)
+            if self._collision_dirty:
+                self._rebuild_collision_for_authored_change()
         else:
             self._tick_editor_mode(delta)
+
+    #: Set when an I/O input changed a brush's authored ``hidden`` during play;
+    #: see :meth:`mark_collision_dirty`.
+    _collision_dirty = False
+
+    def mark_collision_dirty(self):
+        """A brush's authored visibility changed at runtime (I/O Show/Hide/Kill).
+
+        The collision grid files brushes by their authored ``hidden`` once, so
+        a wall revealed by ``Show`` was drawn but walked through, and a hidden
+        one still blocked monsters' sight. Callable from any thread: the rebuild
+        itself runs once, at the end of the tick, on the logic thread.
+        """
+        self._collision_dirty = True
+
+    def _rebuild_collision_for_authored_change(self):
+        self._collision_dirty = False
+        # The monster AI thread queries the grid while populate() refills it.
+        with self._monster_lock:
+            self.notify_authored_visibility_changed()
 
     def _tick_editor_mode(self, delta: float):
         dx, dy = self.game_state.consume_mouse_delta()
@@ -1959,9 +2152,80 @@ class LogicThread(threading.Thread):
                 speed *= self.EDITOR_CAMERA_FAST_MULT
             self.editor_camera.pos += move_dir * speed * delta
 
+    #: Ticks to keep comparing the world's row sets after an editor edit.
+    _ROW_WATCH_TICKS = 30
+    _indexed_things = ()
+    _indexed_brushes = ()
+    _moving_rows = None
+    _rows_epoch = None
+    _rows_watch = 0
+
+    def _watch_world_rows(self):
+        """Re-index the session when the editor adds or removes objects.
+
+        The session indexes the world when Play starts (_build_entity_caches)
+        and the collision set with it. An object cloned, pasted, placed or
+        deleted in the editor during play otherwise had no AI, no I/O name,
+        or -- deleted -- kept being simulated and collided with. Every editor
+        edit moves ``world_epoch``, so the row sets are compared only for a
+        short while after one (tools checkpoint before they mutate): an
+        integer compare per tick otherwise.
+        """
+        epoch = getattr(self.editor_state, 'world_epoch', None)
+        if epoch != self._rows_epoch:
+            self._rows_epoch = epoch
+            self._rows_watch = self._ROW_WATCH_TICKS
+        if not self._rows_watch:
+            return
+        self._rows_watch -= 1
+        brushes_changed = tuple(self.brushes) != self._indexed_brushes
+        if brushes_changed or tuple(self.things) != self._indexed_things:
+            # Re-keys movers/doors and the collision set if brushes changed.
+            self._build_entity_caches()
+
+    def _reindex_moving_brushes(self):
+        """Re-key mover and door state after the brush list changed in play.
+
+        The states are keyed by brush index, taken when Play started, and I/O
+        finds a door or mover by its *current* index: deleting any brush
+        before them shifted every later index, so an Open aimed at one door
+        opened whichever door now held its old index. The lists are derived
+        again and each surviving brush keeps its state, found by identity;
+        a brush added in play starts as Play would have started it.
+        """
+        movers, doors = self.movers, self.doors
+        m_states, d_states = self.mover_states, self.door_states
+        paths = self.mover_path_states
+        kept_m = {id(b): (dict(m_states[i]) if i in m_states else None,
+                          paths.get(i))
+                  for i, b in movers}
+        kept_d = {id(b): (dict(d_states[i]) if i in d_states else None)
+                  for i, b in doors}
+        self._init_movers()
+        self._init_doors()
+        m_new = {i: dict(s) for i, s in self.mover_states.items()}
+        for i, brush in self.movers:
+            if id(brush) in kept_m:
+                state, path = kept_m[id(brush)]
+                m_new.pop(i, None)
+                self.mover_path_states.pop(i, None)
+                if state is not None:
+                    m_new[i] = state
+                if path is not None:
+                    self.mover_path_states[i] = path
+        self.mover_states = m_new
+        d_new = {i: dict(s) for i, s in self.door_states.items()}
+        for i, brush in self.doors:
+            if id(brush) in kept_d:
+                d_new.pop(i, None)
+                if kept_d[id(brush)] is not None:
+                    d_new[i] = kept_d[id(brush)]
+        self.door_states = d_new
+
     def _tick_play_mode(self, delta):
         if not self.player:
             return
+        self._watch_world_rows()
         
         # Update movers & doors first (for platform carrying)
         self._update_movers(delta)
@@ -2154,6 +2418,16 @@ class LogicThread(threading.Thread):
     # =========================================================================
     # PORTAL TRANSIT
     # =========================================================================
+
+    def note_player_teleported(self):
+        """The player moved without travelling there (a teleport, a load).
+
+        Portal transit tests the segment from last tick's position to this
+        one, so a teleport whose straight line happened to cross an aperture
+        was read as walking through it: the player arrived at the paired
+        portal instead of the destination.
+        """
+        self._portal_prev_player_pos = None
 
     def _update_portals(self, delta: float):
         """
@@ -2489,7 +2763,7 @@ class LogicThread(threading.Thread):
         # runs during construction, ahead of the first cache build.
         self._use_trigger_entries = [
             (bid, brush) for bid, brush in getattr(self, '_trigger_brushes', ())
-            if str(brush.get('trigger_activation', 'touch')).lower() == 'use'
+            if _trigger_activation(brush) == 'use'
         ]
 
     def _use_prompt_candidates(self):
@@ -2502,8 +2776,7 @@ class LogicThread(threading.Thread):
             # A spent 'once' trigger does nothing, so it must not keep
             # advertising itself -- 2.4.2 suppressed the prompt for exactly
             # this case and the rewrite dropped the check.
-            if (str(brush.get('trigger_type', 'multiple')).lower() == 'once'
-                    and bid in self.fired_once_triggers):
+            if _trigger_is_once(brush) and bid in self.fired_once_triggers:
                 continue
             centre = brush.get('pos', (0.0, 0.0, 0.0))
             yield (bid, brush,
@@ -2605,7 +2878,7 @@ class LogicThread(threading.Thread):
             if brush.get('disabled', False):
                 continue
 
-            activation = brush.get('trigger_activation', 'touch').lower()
+            activation = _trigger_activation(brush)
             if activation == 'use':
                 center = brush.get('pos', (0.0, 0.0, 0.0))
                 radius = float(brush.get('use_radius', 96.0))
@@ -2749,7 +3022,7 @@ class LogicThread(threading.Thread):
                             # touch-state-driven; their broad-phase contact is
                             # handled below, but it must not fire OnStartTouch
                             # merely because the player entered its AABB.
-                            if brush.get('trigger_activation', 'touch').lower() != 'use':
+                            if _trigger_activation(brush) != 'use':
                                 self._on_trigger_enter(
                                     brush,
                                     bid,
@@ -2770,7 +3043,7 @@ class LogicThread(threading.Thread):
                             activator = self._monster_by_id.get(entity_id)
 
                         if activator is not None:
-                            if brush.get('trigger_activation', 'touch').lower() != 'use':
+                            if _trigger_activation(brush) != 'use':
                                 self._on_trigger_exit(
                                     brush,
                                     bid,
@@ -2839,8 +3112,7 @@ class LogicThread(threading.Thread):
                 if float(np.dot(p_forward, to_trigger)) <= 0.5:
                     continue
 
-            trigger_type = brush.get('trigger_type', 'multiple').lower()
-            if trigger_type == 'once' and bid in self.fired_once_triggers:
+            if _trigger_is_once(brush) and bid in self.fired_once_triggers:
                 continue
 
             self._on_trigger_enter(
@@ -2861,7 +3133,7 @@ class LogicThread(threading.Thread):
             if (
                 brush
                 and brush.get('trigger_action') == 'hurt'
-                and brush.get('trigger_activation', 'touch').lower() != 'use'
+                and _trigger_activation(brush) != 'use'
             ):
                 self._process_hurt_trigger(
                     brush,
@@ -2966,8 +3238,10 @@ class LogicThread(threading.Thread):
         activator_type='player',
         activator_entity=None,
     ):
-        trigger_type = brush.get('trigger_type', 'multiple')
-        if trigger_type == 'once' and trigger_id in self.fired_once_triggers:
+        # Authored as 'Once'/'Multiple' by the editor and the shipped maps; the
+        # raw compare against 'once' made every Once trigger fire on each entry.
+        once = _trigger_is_once(brush)
+        if once and trigger_id in self.fired_once_triggers:
             return
 
         action = brush.get('trigger_action', 'target')
@@ -2982,6 +3256,7 @@ class LogicThread(threading.Thread):
                     if activator is self.player:
                         self.player.pos = dest
                         self.player.velocity = glm.vec3(0, 0, 0)
+                        self.note_player_teleported()
                     else:
                         activator.pos = [dest.x, dest.y, dest.z]
                         physics_world = getattr(self, '_physics_world', None)
@@ -3002,7 +3277,7 @@ class LogicThread(threading.Thread):
         elif action == 'hurt':
             # Only the player has damage/health semantics at present.
             if activator_type == 'player':
-                damage = brush.get('damage', 10)
+                damage = _trigger_damage(brush)
                 self._apply_player_damage(damage)
                 self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
 
@@ -3015,6 +3290,12 @@ class LogicThread(threading.Thread):
                     brush, 'OnTrigger', activator_entity=activator_entity
                 )
 
+        # Optional checkpoint: the save/load runs on the UI thread, where the
+        # console's quicksave/quickload own the save slot, one frame later.
+        save = _trigger_save(brush)
+        if save:
+            self.game_state.queue_console_command(save)
+
         self._plugin_emit(
             "trigger_enter",
             trigger=brush,
@@ -3022,7 +3303,7 @@ class LogicThread(threading.Thread):
             trigger_id=trigger_id,
             activator_type=activator_type,
         )
-        if trigger_type == 'once':
+        if once:
             self.fired_once_triggers.add(trigger_id)
 
     def _on_trigger_exit(
@@ -3047,7 +3328,7 @@ class LogicThread(threading.Thread):
         if trigger_id in self.hurt_trigger_timers:
             self.hurt_trigger_timers[trigger_id] -= float(poll_interval)
             if self.hurt_trigger_timers[trigger_id] <= 0:
-                damage = brush.get('damage', 10)
+                damage = _trigger_damage(brush)
                 self._apply_player_damage(damage)
                 self.hurt_trigger_timers[trigger_id] = self.HURT_INTERVAL
 
@@ -3637,86 +3918,193 @@ class LogicThread(threading.Thread):
     # MONSTER PROJECTILES (flying monster ranged attacks)
     # =========================================================================
 
+    #: Monster hit sphere for projectiles: centred 64 units above the
+    #: monster's origin, radius 64.
+    PROJECTILE_MONSTER_LIFT = 64.0
+    PROJECTILE_MONSTER_RADIUS = 64.0
+    #: Player hit sphere for projectiles.
+    PROJECTILE_PLAYER_RADIUS = 32.0
+
+    def _projectile_monster_candidates(self, pos32, owners):
+        """``(projectile, monster row)`` pairs inside a monster's hit sphere.
+
+        The monsters are hashed into cells twice the hit radius wide, so a
+        projectile's candidates are the monsters filed in the 3x3 cells round
+        it; the exact test is the float32 distance the ``glm`` walk used. The
+        owner and the owner's team are excluded here; dead and hidden are
+        judged live when a hit is applied, because a hit earlier in the pass
+        can kill a monster this list still holds.
+        """
+        monsters = [t for t in self.things if isinstance(t, MonsterThing)]
+        empty = np.empty(0, dtype=np.int64)
+        if not monsters or not len(pos32):
+            return monsters, empty, empty
+        count = len(monsters)
+        centres = np.empty((count, 3), dtype=np.float32)
+        centres[:] = [m.pos for m in monsters]
+        centres[:, 1] += np.float32(self.PROJECTILE_MONSTER_LIFT)
+        codes = {}
+        team = np.fromiter(
+            (codes.setdefault(m.properties.get('team', ''), len(codes))
+             if m.properties.get('team', '') else -1 for m in monsters),
+            dtype=np.int64, count=count)
+        row_of = {id(m): row for row, m in enumerate(monsters)}
+
+        cell = 2.0 * self.PROJECTILE_MONSTER_RADIUS
+        mcx = np.floor(centres[:, 0] / cell).astype(np.int64)
+        mcz = np.floor(centres[:, 2] / cell).astype(np.int64)
+        mkey = (mcx + (1 << 30)) * (1 << 31) + (mcz + (1 << 30))
+        order = np.argsort(mkey, kind='stable')
+        keys = mkey[order]
+        pcx = np.floor(pos32[:, 0] / cell).astype(np.int64)
+        pcz = np.floor(pos32[:, 2] / cell).astype(np.int64)
+        query_parts, row_parts = [], []
+        for dx in (-1, 0, 1):
+            for dz in (-1, 0, 1):
+                qkey = (pcx + dx + (1 << 30)) * (1 << 31) + (pcz + dz + (1 << 30))
+                lo = np.searchsorted(keys, qkey, side='left')
+                hi = np.searchsorted(keys, qkey, side='right')
+                counts = hi - lo
+                total = int(counts.sum())
+                if not total:
+                    continue
+                query = np.repeat(np.arange(len(qkey)), counts)
+                within = np.arange(total) - np.repeat(np.cumsum(counts) - counts, counts)
+                query_parts.append(query)
+                row_parts.append(order[np.repeat(lo, counts) + within])
+        if not query_parts:
+            return monsters, empty, empty
+        query = np.concatenate(query_parts)
+        row = np.concatenate(row_parts)
+        d = centres[row] - pos32[query]
+        near = (d[:, 0] * d[:, 0] + d[:, 1] * d[:, 1] + d[:, 2] * d[:, 2]
+                < np.float32(self.PROJECTILE_MONSTER_RADIUS) ** 2)
+        owner_row = np.array([row_of.get(o, -1) for o in owners], dtype=np.int64)
+        owner = owner_row[query]
+        near &= row != owner
+        owner_team = np.where(owner >= 0, team[np.maximum(owner, 0)], -1)
+        near &= ~((owner_team >= 0) & (team[row] == owner_team))
+        query, row = query[near], row[near]
+        # First in things order within each projectile.
+        order = np.lexsort((row, query))
+        return monsters, query[order], row[order]
+
+    def _projectile_wall_candidates(self, pos32):
+        """``(projectile, brush)`` pairs whose box holds the projectile's point.
+
+        The brushes filed in the projectile's cell -- what ``get_nearby_brushes``
+        returned -- tested inclusively against the same float64 boxes. Whether
+        each is solid is asked live, of the few that contain a point.
+        """
+        grid = getattr(self, '_spatial_grid', None)
+        rows = grid._cell_rows
+        rows.refresh_movers()
+        cs = grid.cell_size
+        x = pos32[:, 0].astype(np.float64)
+        y = pos32[:, 1].astype(np.float64)
+        z = pos32[:, 2].astype(np.float64)
+        query, row = rows.pairs(np.floor(x / cs), np.floor(z / cs))
+        if not len(query):
+            return {}
+        lo = rows.lo[row]
+        hi = rows.hi[row]
+        inside = ((lo[:, 0] <= x[query]) & (x[query] <= hi[:, 0])
+                  & (lo[:, 1] <= y[query]) & (y[query] <= hi[:, 1])
+                  & (lo[:, 2] <= z[query]) & (z[query] <= hi[:, 2]))
+        hits = {}
+        for q, r in zip(query[inside].tolist(), row[inside].tolist()):
+            hits.setdefault(q, []).append(r)
+        return hits
+
     def _update_monster_projectiles(self, delta: float):
-        """Update all active monster projectiles: move, check collisions, apply damage."""
+        """Move every monster projectile and resolve what it hits, as arrays.
+
+        Movement, range and lifetime, and the player, monster and wall tests
+        run over all projectiles at once; only a projectile that hits
+        something is handled in Python, in list order, so a hit that kills
+        the player or a monster is seen by every projectile after it -- as it
+        was when each projectile walked the world in turn. With 1000 monsters
+        fighting that walk was most of a 38 ms logic tick, inside the monster
+        lock the AI thread waits on.
+        """
         if not hasattr(self, '_monster_projectiles'):
             return
+        projectiles = self._monster_projectiles
+        if not projectiles:
+            self._monster_projectiles = []
+            self._projectile_positions = _NO_PROJECTILES
+            return
 
-        remaining = []
-        if self._monster_projectiles:
-            # PERF: reuse the cached combined collision-brush list instead of
-            # rebuilding it (was previously rebuilt once per projectile).
-            all_collision_brushes = self._collision_brushes_cache
-            owner_team_by_id = {}
-            with self._monster_lock:
-                for t in self.things:
-                    if isinstance(t, MonsterThing):
-                        owner_team_by_id[id(t)] = t.properties.get('team', '')
-        for proj in self._monster_projectiles:
-            # Update position
-            vel = proj['vel']
-            prev_pos = (proj['pos'][0], proj['pos'][1], proj['pos'][2])
-            proj['pos'][0] += vel[0] * delta
-            proj['pos'][1] += vel[1] * delta
-            proj['pos'][2] += vel[2] * delta
+        count = len(projectiles)
+        pos = np.array([p['pos'] for p in projectiles], dtype=np.float64)
+        vel = np.array([p['vel'] for p in projectiles], dtype=np.float64)
+        prev = pos.copy()
+        pos += vel * delta
 
-            # Route the projectile through any portal it crossed this step, so
-            # ranged attacks can travel between linked portals like the player.
-            self._transit_projectile_through_portals(proj, prev_pos)
+        # Portal transit is per projectile, and only when there are portals.
+        if Portal is not None and len(getattr(self, '_portal_things', ()) or ()):
+            for i, proj in enumerate(projectiles):
+                proj['pos'][0], proj['pos'][1], proj['pos'][2] = pos[i].tolist()
+                self._transit_projectile_through_portals(proj, tuple(prev[i]))
+                pos[i] = proj['pos']
+                vel[i] = proj['vel']
 
-            # Track distance travelled
-            speed = math.sqrt(vel[0]**2 + vel[1]**2 + vel[2]**2)
-            proj['distance_travelled'] += speed * delta
+        speed = np.sqrt(vel[:, 0] ** 2 + vel[:, 1] ** 2 + vel[:, 2] ** 2)
+        travelled = np.array([p['distance_travelled'] for p in projectiles],
+                             dtype=np.float64) + speed * delta
+        lifetime = np.array([p['lifetime'] for p in projectiles],
+                            dtype=np.float64) - delta
+        live = (travelled < MONSTER_PROJECTILE_MAX_DIST) & (lifetime > 0.0)
+        pos32 = pos.astype(np.float32)
 
-            # Decrease lifetime
-            proj['lifetime'] -= delta
+        # The player's hit sphere, in the float32 glm.distance used.
+        player_hit = np.zeros(count, dtype=bool)
+        if self.player is not None:
+            pp = self.player.pos
+            player32 = np.array((pp[0], pp[1], pp[2]), dtype=np.float32)
+            d = pos32 - player32
+            player_hit = (np.sqrt(d[:, 0] * d[:, 0] + d[:, 1] * d[:, 1]
+                                  + d[:, 2] * d[:, 2])
+                          < np.float32(self.PROJECTILE_PLAYER_RADIUS)) & live
 
-            # Check max distance
-            if proj['distance_travelled'] >= MONSTER_PROJECTILE_MAX_DIST:
-                continue  # Expired
+        grid = getattr(self, '_spatial_grid', None)
+        all_collision_brushes = self._collision_brushes_cache
+        survivors = []
+        with self._monster_lock:
+            live_rows = np.flatnonzero(live)
+            owners = [projectiles[i]['owner_id'] for i in live_rows]
+            monsters, mq, mrow = self._projectile_monster_candidates(
+                pos32[live_rows], owners)
+            mq = live_rows[mq] if len(mq) else mq
+            monster_hits = {}
+            for q, r in zip(mq.tolist(), mrow.tolist()):
+                monster_hits.setdefault(q, []).append(r)
+            if grid is not None:
+                wall_hits = self._projectile_wall_candidates(pos32[live_rows])
+                wall_hits = {int(live_rows[q]): rows for q, rows in wall_hits.items()}
+                wall_brushes = grid._cell_rows
+            else:
+                wall_hits = None
 
-            if proj['lifetime'] <= 0.0:
-                continue  # Expired
-
-            p_pos = glm.vec3(proj['pos'][0], proj['pos'][1], proj['pos'][2])
-
-            # ---- Collision with player ----
-            if self.player and not self.god_mode and not self.player_dead:
-                player_pos = self.player.pos
-                # Simple sphere collision with player (radius ~32 units)
-                dist_to_player = glm.distance(p_pos, player_pos)
-                if dist_to_player < 32.0:
+            for i in live_rows.tolist():
+                proj = projectiles[i]
+                # ---- Collision with player ----
+                if (player_hit[i] and self.player and not self.god_mode
+                        and not self.player_dead):
                     damage = proj['damage']
                     self._apply_player_damage(damage)
                     if self.monster_ai.monster_debug_active:
                         debug_log("MonsterAI", f"Projectile hit player for {damage} dmg")
                     continue  # Projectile consumed
 
-            # ---- Collision with monsters (team-aware) ----
-            owner_id = proj['owner_id']
-            hit_monster = None
-            
-            owner_team = owner_team_by_id.get(owner_id)
-            with self._monster_lock:
-                for thing in self.things:
-                    if not isinstance(thing, MonsterThing):
-                        continue
-                    if id(thing) == owner_id:
-                        continue  # Don\'t hit self
-                    if thing.properties.get('dead', False) or thing.properties.get('hidden', False):
-                        continue
-
-                    # Team-aware: don\'t hit same-team allies
-                    target_team = thing.properties.get('team', '')
-                    if owner_team and target_team and owner_team == target_team:
-                        continue
-
-                    t_pos = glm.vec3(thing.pos[0], thing.pos[1] + 64.0, thing.pos[2])
-                    dist = glm.distance(p_pos, t_pos)
-                    if dist < 64.0:  # Monster hit radius (increased for better feel)
-                        hit_monster = thing
+                # ---- Collision with monsters (team-aware), first in order ----
+                hit_monster = None
+                for r in monster_hits.get(i, ()):
+                    candidate = monsters[r]
+                    cp = candidate.properties
+                    if not (cp.get('dead', False) or cp.get('hidden', False)):
+                        hit_monster = candidate
                         break
-
                 if hit_monster is not None:
                     damage = proj['damage']
                     self.monster_ai._apply_monster_damage(hit_monster, damage, attacker=None)
@@ -3725,51 +4113,40 @@ class LogicThread(threading.Thread):
                         debug_log("MonsterAI", f"Projectile hit {name} for {damage} dmg")
                     continue  # Projectile consumed
 
-            # ---- Collision with solid brushes (walls) ----
-            hit_wall = False
-            # PERF: narrow candidates via the spatial grid (same brush set
-            # and filtering as populate()) instead of scanning every brush.
-            grid = getattr(self, '_spatial_grid', None)
-            if grid is not None:
-                wall_candidates = grid.get_nearby_brushes(p_pos.x, p_pos.z)
-            else:
-                wall_candidates = all_collision_brushes
-            for brush in wall_candidates:
-                if not is_solid_world_brush(brush):
-                    continue
-                pos = brush['pos']
-                size = brush['size']
-                bx_min = pos[0] - size[0] * 0.5
-                bx_max = pos[0] + size[0] * 0.5
-                by_min = pos[1] - size[1] * 0.5
-                by_max = pos[1] + size[1] * 0.5
-                bz_min = pos[2] - size[2] * 0.5
-                bz_max = pos[2] + size[2] * 0.5
+                # ---- Collision with solid brushes (walls) ----
+                if wall_hits is not None:
+                    hit_wall = any(is_solid_world_brush(wall_brushes.brushes[r])
+                                   for r in wall_hits.get(i, ()))
+                else:
+                    x, y, z = (float(v) for v in pos32[i])
+                    hit_wall = False
+                    for brush in all_collision_brushes:
+                        if not is_solid_world_brush(brush):
+                            continue
+                        bp = brush['pos']
+                        bs = brush['size']
+                        if (bp[0] - bs[0] * 0.5 <= x <= bp[0] + bs[0] * 0.5 and
+                                bp[1] - bs[1] * 0.5 <= y <= bp[1] + bs[1] * 0.5 and
+                                bp[2] - bs[2] * 0.5 <= z <= bp[2] + bs[2] * 0.5):
+                            hit_wall = True
+                            break
+                if hit_wall:
+                    continue  # Projectile consumed
 
-                if (bx_min <= p_pos.x <= bx_max and
-                    by_min <= p_pos.y <= by_max and
-                    bz_min <= p_pos.z <= bz_max):
-                    hit_wall = True
-                    break
+                # Projectile survived this tick
+                p_pos = proj['pos']
+                p_pos[0], p_pos[1], p_pos[2] = pos[i].tolist()
+                p_vel = proj['vel']
+                p_vel[0], p_vel[1], p_vel[2] = vel[i].tolist()
+                proj['distance_travelled'] = float(travelled[i])
+                proj['lifetime'] = float(lifetime[i])
+                survivors.append(i)
 
-            if hit_wall:
-                continue  # Projectile consumed
-
-            # Projectile survived this tick
-            remaining.append(proj)
-
-        self._monster_projectiles = remaining
-
-        # Sync projectiles to render state for visualisation
-        write_state = self.game_state.get_write_state()
-        write_state.projectiles = [
-            {
-                'pos': list(proj['pos']),
-                'sprite': proj.get('sprite', 'projectile.png'),
-                'size': proj.get('size', MONSTER_PROJECTILE_SPRITE_SIZE),
-            }
-            for proj in remaining
-        ]
+        self._monster_projectiles = [projectiles[i] for i in survivors]
+        # Published as one dense array by _prepare_render_state, every frame:
+        # a frame that runs no tick must still carry the projectiles.
+        self._projectile_positions = (pos32[survivors] if survivors
+                                      else _NO_PROJECTILES)
 
 
     # =========================================================================
@@ -3920,6 +4297,16 @@ class LogicThread(threading.Thread):
                 self._hud_health_alpha = 0.5
                 return self._hud_health_alpha
 
+            # Treat the exact end of the fade as a completed state before
+            # normalising the duration.  This avoids a one-ULP floating-point
+            # remainder leaving the state machine in "out" while alpha is
+            # already at the idle value.
+            if out_elapsed >= self._hud_health_fade_out_duration:
+                self._hud_health_alpha = 0.5
+                self._hud_health_fade_started = None
+                self._hud_health_fade_phase = "idle"
+                return self._hud_health_alpha
+
             t = max(
                 0.0,
                 min(
@@ -3928,10 +4315,6 @@ class LogicThread(threading.Thread):
                 ),
             )
             self._hud_health_alpha = 1.0 - (0.5 * t)
-            if t >= 1.0:
-                self._hud_health_alpha = 0.5
-                self._hud_health_fade_started = None
-                self._hud_health_fade_phase = "idle"
             return self._hud_health_alpha
 
         health = self.player_health
@@ -3955,6 +4338,20 @@ class LogicThread(threading.Thread):
             self._hud_health_last_value = health
 
         return _sample(now)
+
+    def _peer_render_dirty(self, own_dirty, peer_table, snapshot_epoch):
+        """What changed since *peer_table*'s epoch, when a table must rebuild.
+
+        Only asked when this buffer's own journal replay is a global rebuild
+        (``own_dirty is None``); ``None`` when the peer is no help either.
+        """
+        if own_dirty is not None or peer_table is None:
+            return None
+        peer_epoch = getattr(peer_table, '_epoch', None)
+        if peer_epoch is None:
+            return None
+        return self.editor_state.render_dirty_since(
+            peer_epoch, through_epoch=snapshot_epoch)[1]
 
     def _prepare_render_state(self):
         started = time.perf_counter()
@@ -4093,6 +4490,10 @@ class LogicThread(threading.Thread):
             write_state.shot_ready = False
         write_state.camera_transition_active = bool(self.camera_transition)
 
+        write_state.projectiles = (
+            getattr(self, '_projectile_positions', _NO_PROJECTILES)
+            if self.play_mode and getattr(self, '_monster_projectiles', None)
+            else _NO_PROJECTILES)
         write_state.monster_debug_active = self.monster_ai.monster_debug_active
         write_state.monster_debug_rays = list(self.monster_ai._debug_rays)
 
@@ -4144,10 +4545,24 @@ class LogicThread(threading.Thread):
         # only ones re-read every frame. Everything else changes through a
         # journal (see RenderTable.begin_frame).
         edited = () if self.play_mode else self.editor_state.edited_objects()
+        # An edited row is re-read only by the buffer being written, so when an
+        # object leaves the edited set (a deselect after a drag, entering
+        # play) the other buffer still holds whatever it last saw and the two
+        # published frames would alternate between old and new transforms.
+        # Journal the leavers: every table drains its own copy of the journal.
+        edited_ids = {id(obj): obj for obj in edited}
+        left = [obj for oid, obj in getattr(self, '_last_edited', {}).items()
+                if oid not in edited_ids]
+        if left:
+            JOURNAL.record_many(left, STATE)
+        self._last_edited = edited_ids
         peer = self.game_state.peer_state()
+        peer_table = peer.render_table if peer is not write_state else None
         table.begin_frame(
             brushes, world_epoch, dirty_objects=render_dirty, edited=edited,
-            peer=peer.render_table if peer is not write_state else None)
+            peer=peer_table,
+            peer_dirty=self._peer_render_dirty(
+                render_dirty, peer_table, snapshot_epoch))
         if self.play_mode:
             # Every mover and door position, as two array stores.
             self._movers().publish(self, table)
@@ -4195,12 +4610,15 @@ class LogicThread(threading.Thread):
         # only EntityTable touched until request_swap publishes this frame.
         etable = write_state.entity_table
         self._entity_table = etable
+        peer_etable = peer.entity_table if peer is not write_state else None
         thing_hidden = etable.begin_frame(
             things,
             world_epoch,
             dirty_objects=render_dirty,
             effect_runtime=self.play_mode,
-            peer=peer.entity_table if peer is not write_state else None,
+            peer=peer_etable,
+            peer_dirty=self._peer_render_dirty(
+                render_dirty, peer_etable, snapshot_epoch),
         )
         erefs = etable.refs
         entity_things = etable.things

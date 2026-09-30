@@ -10,17 +10,111 @@ class _LosRows:
     """Line of sight's view of a populated grid; see SpatialGrid._build_los_rows."""
 
     __slots__ = ('lo', 'hi', 'static_by_cell', 'moving_by_cell',
-                 'brushes_by_cell')
+                 'brushes_by_cell', 'static_bounds_by_cell')
 
-    def __init__(self, lo, hi, static_by_cell, moving_by_cell, brushes_by_cell):
+    def __init__(self, lo, hi, static_by_cell, moving_by_cell, brushes_by_cell,
+                 static_bounds_by_cell=None):
         self.lo = lo
         self.hi = hi
         self.static_by_cell = static_by_cell
         self.moving_by_cell = moving_by_cell
         self.brushes_by_cell = brushes_by_cell
+        #: coord -> ``(row, lo_x, lo_y, lo_z, hi_x, hi_y, hi_z)`` per static
+        #: brush: what the per-brush walk tests, resolved once per populate
+        #: instead of once per brush per ray.
+        self.static_bounds_by_cell = static_bounds_by_cell or {}
 
 
-_EMPTY_LOS_ROWS = _LosRows(np.empty((0, 3)), np.empty((0, 3)), {}, {}, {})
+_EMPTY_LOS_ROWS = _LosRows(np.empty((0, 3)), np.empty((0, 3)), {}, {}, {}, {})
+
+
+#: Cell coordinates packed into one int64 so a batch of queries can find its
+#: cells with one ``searchsorted``. Coordinates are offset to be non-negative;
+#: 2**20 cells of 512 units either side of the origin is far beyond any map.
+_CELL_OFFSET = 1 << 20
+_CELL_STRIDE = 1 << 21
+
+
+def _cell_keys(cx, cz):
+    return ((np.asarray(cx, dtype=np.int64) + _CELL_OFFSET) * _CELL_STRIDE
+            + (np.asarray(cz, dtype=np.int64) + _CELL_OFFSET))
+
+
+class _CellRows:
+    """Every filed brush's box, grouped by cell, for batched point/box queries.
+
+    The grid's buckets as flat arrays: ``keys`` (sorted packed cell coords),
+    ``starts`` (``keys[i]``'s rows are ``rows[starts[i]:starts[i+1]]``) and
+    ``lo``/``hi`` float64 boxes computed exactly as :meth:`SpatialGrid.raycast_down`
+    and :meth:`SpatialGrid.overlaps_wall` compute them, ``pos -/+ size * 0.5``.
+    Movers and doors keep their row but are re-read live on every query,
+    which is what the per-brush queries do.
+    """
+
+    __slots__ = ('keys', 'starts', 'rows', 'lo', 'hi', 'movers', 'brushes')
+
+    def __init__(self, cells):
+        order = sorted(cells.items(), key=lambda kv: int(_cell_keys(kv[0][0], kv[0][1])))
+        row_of = {}
+        brushes = []
+        keys = []
+        starts = [0]
+        rows = []
+        for (cx, cz), bucket in order:
+            keys.append(int(_cell_keys(cx, cz)))
+            for brush in bucket:
+                row = row_of.get(id(brush))
+                if row is None:
+                    row = row_of[id(brush)] = len(brushes)
+                    brushes.append(brush)
+                rows.append(row)
+            starts.append(len(rows))
+        self.keys = np.asarray(keys, dtype=np.int64)
+        self.starts = np.asarray(starts, dtype=np.int64)
+        self.rows = np.asarray(rows, dtype=np.int64)
+        count = len(brushes)
+        self.lo = np.empty((count, 3), dtype=np.float64)
+        self.hi = np.empty((count, 3), dtype=np.float64)
+        #: row -> the brush, for the per-brush predicates a caller still asks.
+        self.brushes = brushes
+        self.movers = []
+        for row, brush in enumerate(brushes):
+            self._resolve(row, brush)
+            if brush.get('is_mover') or brush.get('is_door'):
+                self.movers.append((row, brush))
+
+    def _resolve(self, row, brush):
+        pos = brush['pos']
+        size = brush['size']
+        for axis in range(3):
+            half = size[axis] * 0.5
+            self.lo[row, axis] = pos[axis] - half
+            self.hi[row, axis] = pos[axis] + half
+
+    def refresh_movers(self):
+        for row, brush in self.movers:
+            self._resolve(row, brush)
+
+    def pairs(self, cx, cz):
+        """``(query, row)`` for every brush filed in each query's cell."""
+        count = len(cx)
+        if not len(self.keys) or not count:
+            empty = np.empty(0, dtype=np.int64)
+            return empty, empty
+        keys = _cell_keys(cx, cz)
+        at = np.searchsorted(self.keys, keys)
+        clipped = np.minimum(at, len(self.keys) - 1)
+        found = (at < len(self.keys)) & (self.keys[clipped] == keys)
+        first = np.where(found, self.starts[clipped], 0)
+        counts = np.where(found, self.starts[clipped + 1] - first, 0)
+        total = int(counts.sum())
+        query = np.repeat(np.arange(count, dtype=np.int64), counts)
+        within = np.arange(total, dtype=np.int64) - np.repeat(
+            np.cumsum(counts) - counts, counts)
+        return query, self.rows[np.repeat(first, counts) + within]
+
+
+_EMPTY_CELL_ROWS = _CellRows({})
 
 
 class SpatialGrid:
@@ -91,12 +185,15 @@ class SpatialGrid:
         self.water_brushes = []       # non-solid water volumes, for swim physics queries
         # What line of sight reads, built once per populate: see _build_los_rows.
         self._los_rows = _EMPTY_LOS_ROWS
+        # What the batched point/box queries read, built with it.
+        self._cell_rows = _EMPTY_CELL_ROWS
 
     def clear(self):
         self.cells.clear()
         self._all_solid.clear()
         self.water_brushes.clear()
         self._los_rows = _EMPTY_LOS_ROWS
+        self._cell_rows = _EMPTY_CELL_ROWS
 
     # ------------------------------------------------------------------
     # Line-of-sight rows
@@ -126,6 +223,7 @@ class SpatialGrid:
         row_of = {}
         bounds = []
         static_by_cell = {}
+        static_bounds_by_cell = {}
         moving_by_cell = {}
         brushes_by_cell = {}
         for coord, bucket in self.cells.items():
@@ -143,12 +241,15 @@ class SpatialGrid:
                 rows.append(row)
             if rows:
                 static_by_cell[coord] = np.asarray(rows, dtype=np.intp)
+                static_bounds_by_cell[coord] = tuple(
+                    (row,) + bounds[row] for row in rows)
             if moving:
                 moving_by_cell[coord] = tuple(moving)
         box = np.asarray(bounds, dtype=np.float64).reshape(-1, 6)
         return _LosRows(np.ascontiguousarray(box[:, :3]),
                         np.ascontiguousarray(box[:, 3:]),
-                        static_by_cell, moving_by_cell, brushes_by_cell)
+                        static_by_cell, moving_by_cell, brushes_by_cell,
+                        static_bounds_by_cell)
 
     # ------------------------------------------------------------------
     # Build
@@ -202,6 +303,7 @@ class SpatialGrid:
                                pos[0] + size[0] * 0.5, pos[2] + size[2] * 0.5)
 
         self._los_rows = self._build_los_rows()
+        self._cell_rows = _CellRows(self.cells)
 
     # ------------------------------------------------------------------
     # Player queries  (unchanged API)
@@ -414,6 +516,79 @@ class SpatialGrid:
             append((cx, cz))
         return cells
 
+    def raycast_down_batch(self, x, z, start_y):
+        """:meth:`raycast_down` for many points at once; NaN where it is None.
+
+        The same brushes (those filed in each point's cell), the same float64
+        boxes and the same comparisons, as one masked reduction instead of a
+        Python loop per point.
+        """
+        x = np.asarray(x, dtype=np.float64)
+        z = np.asarray(z, dtype=np.float64)
+        start_y = np.broadcast_to(np.asarray(start_y, dtype=np.float64), x.shape)
+        rows = self._cell_rows
+        rows.refresh_movers()
+        cs = self.cell_size
+        query, row = rows.pairs(np.floor(x / cs), np.floor(z / cs))
+        best = np.full(len(x), -np.inf)
+        if len(query):
+            lo = rows.lo[row]
+            hi = rows.hi[row]
+            qx = x[query]
+            qz = z[query]
+            hit = ((lo[:, 0] <= qx) & (qx <= hi[:, 0])
+                   & (lo[:, 2] <= qz) & (qz <= hi[:, 2])
+                   & (hi[:, 1] <= start_y[query]))
+            np.maximum.at(best, query[hit], hi[hit, 1])
+        best[np.isneginf(best)] = np.nan
+        return best
+
+    def overlaps_wall_batch(self, mx, my, mz, margin):
+        """:meth:`overlaps_wall` for many monster boxes at once.
+
+        Each box's cells are the same ``floor`` of its corners; a box spanning
+        more than two cells on an axis (a margin wider than a cell) is asked of
+        the per-box query instead, so the answer never depends on the path.
+        """
+        mx = np.asarray(mx, dtype=np.float64)
+        my = np.asarray(my, dtype=np.float64)
+        mz = np.asarray(mz, dtype=np.float64)
+        count = len(mx)
+        result = np.zeros(count, dtype=bool)
+        if not count:
+            return result
+        rows = self._cell_rows
+        rows.refresh_movers()
+        cs = self.cell_size
+        xmin, xmax = mx - margin, mx + margin
+        zmin, zmax = mz - margin, mz + margin
+        ymin, ymax = my, my + 128.0
+        cx0, cx1 = np.floor(xmin / cs), np.floor(xmax / cs)
+        cz0, cz1 = np.floor(zmin / cs), np.floor(zmax / cs)
+        wide = ((cx1 - cx0) > 1) | ((cz1 - cz0) > 1)
+        corners = []
+        for cx, cz, distinct in ((cx0, cz0, None),
+                                 (cx1, cz0, cx1 != cx0),
+                                 (cx0, cz1, cz1 != cz0),
+                                 (cx1, cz1, (cx1 != cx0) & (cz1 != cz0))):
+            live = ~wide if distinct is None else (~wide & distinct)
+            which = np.flatnonzero(live)
+            query, row = rows.pairs(cx[which], cz[which])
+            corners.append((which[query], row))
+        query = np.concatenate([q for q, _ in corners])
+        row = np.concatenate([r for _, r in corners])
+        if len(query):
+            lo = rows.lo[row]
+            hi = rows.hi[row]
+            hit = ((xmax[query] > lo[:, 0]) & (xmin[query] < hi[:, 0])
+                   & (ymax[query] > lo[:, 1]) & (ymin[query] < hi[:, 1])
+                   & (zmax[query] > lo[:, 2]) & (zmin[query] < hi[:, 2]))
+            result[query[hit]] = True
+        for i in np.flatnonzero(wide):
+            result[i] = self.overlaps_wall(float(mx[i]), float(my[i]),
+                                           float(mz[i]), margin)
+        return result
+
     def raycast_down(self, x, z, start_y=10000.0):
         """Return Y of the highest solid brush surface below (x, z), or None.
         Uses the grid — only checks brushes in the cell containing (x, z)."""
@@ -479,9 +654,13 @@ class SpatialGrid:
 
         dense = self._los_dense(start, ray_dir, ray_len, rows, coords)
         if dense is None:
-            return self._los_walk(rows.brushes_by_cell, coords,
-                                  start, ray_dir, ray_len)
-        if not dense:
+            # Static brushes from their resolved bounds, then the movers live:
+            # the same candidate set as walking every brush, split by whether
+            # its box can change. Either blocking the ray is the whole answer.
+            if not self._los_walk(rows.static_bounds_by_cell, coords,
+                                  start, ray_dir, ray_len, resolved=True):
+                return False
+        elif not dense:
             return False
         return self._los_walk(rows.moving_by_cell, coords,
                               start, ray_dir, ray_len)
@@ -552,8 +731,13 @@ class SpatialGrid:
         return not bool(np.any(alive & (t_min < ray_len - 0.1)))
 
     @staticmethod
-    def _los_walk(cells, coords, start, ray_dir, ray_len):
-        """The per-brush narrow phase over ``cells`` (coord -> brushes)."""
+    def _los_walk(cells, coords, start, ray_dir, ray_len, resolved=False):
+        """The per-brush narrow phase over ``cells``.
+
+        ``cells`` maps coord -> brushes, whose bounds are read live; with
+        *resolved*, coord -> ``(key, lo_x, lo_y, lo_z, hi_x, hi_y, hi_z)``
+        tuples already resolved by :meth:`SpatialGrid._build_los_rows`.
+        """
         # PERF: hoist the ray endpoints/direction to scalars once and inline the
         # slab test below (bit-identical to LogicThread.intersect_ray_aabb).
         # This avoids two throwaway glm.vec3 constructions + a Python call per
@@ -568,12 +752,16 @@ class SpatialGrid:
         seen = set()
         seen_add = seen.add
         for coord in coords:
-            for brush in cells.get(coord, ()):
-                bid = id(brush)
+            for entry in cells.get(coord, ()):
+                if resolved:
+                    bid, b0, b1, b2, b3, b4, b5 = entry
+                else:
+                    bid = id(entry)
                 if bid in seen:
                     continue
                 seen_add(bid)
-                b0, b1, b2, b3, b4, b5 = brush_aabb_bounds(brush)
+                if not resolved:
+                    b0, b1, b2, b3, b4, b5 = brush_aabb_bounds(entry)
                 # --- ray/AABB slab test (matches intersect_ray_aabb) ---
                 t_min = 0.0
                 t_max = 10000.0

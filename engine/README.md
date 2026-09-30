@@ -105,6 +105,9 @@ The single world-cell convention used by Fio. Defines the 512-unit cell maths, A
 
 Also owns the distinction between mapper-authored hidden state and streaming-parked state.
 
+### `sprite_layers.py`
+Entity sprite images as layers of one `GL_TEXTURE_2D_ARRAY`. The billboard pass is blended with depth writes off, so it must draw back to front; with the image as per-instance layer data rather than draw state, the whole pass is one instanced draw in exact depth order. Layers are filled by readback and `glTexSubImage3D` (mip chain included) — never by rendering into the array, which made Mesa's llvmpipe stall the sampling draw on the whole frame.
+
 ### `sysmon.py`
 System monitor overlay and machine-readable performance snapshot.
 

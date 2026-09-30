@@ -37,14 +37,14 @@ from __future__ import annotations
 
 from typing import Optional
 
-from engine.change_journal import touch
+from engine.change_journal import VISIBILITY, touch
 
 from .cell import cell_of_point
 from .manager import (BigWorldManager, DEFAULT_ACTIVATION_RADIUS,
                       DEFAULT_DEACTIVATION_RADIUS)
 from .persistence import (build_cell_delta_registry, flatten_cell_delta_registry,
                           normalize_streaming_state)
-from .config import effective_streaming_radii
+from .config import bound_view_horizon, effective_streaming_radii
 
 # Marker keys the session writes onto objects it parks, so it can restore the
 # exact prior value and never clobber a user's own hidden/disabled state.
@@ -153,6 +153,9 @@ class BigWorldSession:
         self._started = False
         #: Last camera horizon applied to residency.
         self._visual_horizon = None
+        #: Undoes the camera-horizon limit start() places (see
+        #: :func:`~plugins.bigworld.config.bound_view_horizon`).
+        self._release_view_horizon = None
         # Prior terrain config captured on start(), restored verbatim on stop()
         # so the editor/authored terrain is returned exactly as it was.
         self._terrain = None
@@ -227,6 +230,12 @@ class BigWorldSession:
         not in the per-frame path. After this, everything is inactive except the
         cells inside the activation radius of ``player_pos``.
         """
+        # Fade the camera out at the activation radius before reading its
+        # horizon, so residency is the authored radius rather than whatever
+        # the view distance happens to reach.
+        if self._release_view_horizon is None:
+            self._release_view_horizon = bound_view_horizon(
+                self.logic, self._authored_activation_radius)
         self._sync_visual_horizon()
         brushes = list(getattr(self.logic, "brushes", None) or [])
         things = list(getattr(self.logic, "things", None) or [])
@@ -323,6 +332,9 @@ class BigWorldSession:
         self._clear_transient_markers()   # includes every tier stamp
         self.tiers.clear(())
         self._restore_terrain()
+        if self._release_view_horizon is not None:
+            self._release_view_horizon()
+            self._release_view_horizon = None
         self._started = False
 
     def _clear_transient_markers(self) -> None:
@@ -536,7 +548,8 @@ class BigWorldSession:
             brush["hidden"] = True
             brush["bw_active"] = False
             self._parked_brushes[id(brush)] = brush
-        touch(brush)
+        # Parking changes the live flag only; the authored value is stashed.
+        touch(brush, VISIBILITY)
 
     def _restore_brush(self, brush: dict) -> None:
         if _HID_MARK in brush:
@@ -569,7 +582,7 @@ class BigWorldSession:
             props["disabled"] = True
             props["bw_active"] = False
             self._parked_things[id(thing)] = thing
-        touch(thing)
+        touch(thing, VISIBILITY)
 
     def _set_light_active(self, light, active: bool) -> None:
         props = getattr(light, "properties", None)
@@ -584,7 +597,7 @@ class BigWorldSession:
             props["hidden"] = True
             props["bw_active"] = False
             self._parked_lights[id(light)] = light
-        touch(light)
+        touch(light, VISIBILITY)
 
     def _restore_thing(self, thing) -> None:
         props = getattr(thing, "properties", None)
@@ -656,10 +669,40 @@ class BigWorldSession:
         if cell is None:
             return
         live = normalize_streaming_state(self._cell_live_level(cell))
-        sub = build_cell_delta_registry(self._base_level, live, self.manager.cell_size)
+        sub = build_cell_delta_registry(
+            self._base_subset(live), live, self.manager.cell_size)
         for k, entry in sub.items():
             if entry.get("things") or entry.get("brushes"):
                 self.registry[k] = entry
+
+    def _base_subset(self, live: dict) -> dict:
+        """The base records that share an id with *live*'s.
+
+        The delta only ever looks base records up by the ids *live* holds, so
+        diffing one cell against this subset gives the same result as diffing
+        it against the whole base world -- at the cost of the cell, not of the
+        world, for every cell committed on unload. The id index is built once
+        per captured base.
+        """
+        base = self._base_level or {}
+        index = getattr(self, "_base_index", None)
+        if index is None or index[0] is not base:
+            things = {}
+            for t in base.get("things", []) or []:
+                tid = (t.get("properties") or {}).get("id")
+                if tid:
+                    things[tid] = t
+            brushes = {b.get("id"): b for b in base.get("brushes", []) or []
+                       if isinstance(b, dict) and b.get("id")}
+            index = self._base_index = (base, things, brushes)
+        _base, things, brushes = index
+        sub_things = [things[tid] for tid in (
+            (t.get("properties") or {}).get("id") for t in live.get("things", []))
+            if tid in things]
+        sub_brushes = [brushes[bid] for bid in (
+            b.get("id") for b in live.get("brushes", []) if isinstance(b, dict))
+            if bid in brushes]
+        return {"things": sub_things, "brushes": sub_brushes}
 
     def commit_all(self) -> dict:
         """Flush every cell's current state into the registry and return it.

@@ -78,8 +78,9 @@ from itertools import chain
 import glm
 import numpy as np
 
-from .change_journal import JOURNAL, OVERFLOW, STATE, is_tracked
+from .change_journal import JOURNAL, OVERFLOW, STATE, VISIBILITY, is_tracked
 from .portal_transform import basis_from_rotation
+from .render_table import _can_adopt
 
 # Defensive, as everywhere else in engine/: editor.things pulls in PyQt5, and
 # the standalone player tier does not have it.  A tier without the classes
@@ -263,7 +264,7 @@ def sprite_candidates(thing):
         return _monster_sprite_candidates(props)
 
     out = []
-    # -- the per-entity override, in update_instance_textures' own order ----
+    # -- the per-entity override, in the order the object path resolved it --
     if LogicGate is not None and isinstance(thing, LogicGate):
         ltype = str(props.get('logic_type', 'and')).lower()
         out.append(('logic_%s' % ltype, 'logic_%s.png' % ltype, 'sprites', True))
@@ -299,8 +300,8 @@ def sprite_size(thing):
     """The billboard's world size, in the order ``draw_sprites`` decides it."""
     props = _props_of(thing)
     if Monster is not None and isinstance(thing, Monster):
-        return (float(props.get('sprite_width', 128)),
-                float(props.get('sprite_height', 128)))
+        return (_float_property(props.get('sprite_width', 128), 128.0),
+                _float_property(props.get('sprite_height', 128), 128.0))
     if Light is not None and isinstance(thing, Light):
         return (16.0, 16.0)
     if props.get('sprite_path'):
@@ -761,7 +762,7 @@ class EntityTable:
         return tuple(things) != self._row_tuple
 
     def begin_frame(self, things, epoch=None, dirty_objects=None,
-                    effect_runtime=False, peer=None):
+                    effect_runtime=False, peer=None, peer_dirty=None):
         """Bring the table into line with *things*; return the ``hidden`` mask.
 
         Nothing here visits an entity that has not changed. The row set is
@@ -782,11 +783,14 @@ class EntityTable:
         if self.needs_reconcile(things, epoch):
             if self._refresh_in_place(things, epoch, dirty_objects):
                 pass
-            elif (peer is not None and dirty_objects is None and epoch is not None
-                    and peer._epoch == epoch and peer._row_tuple == things):
+            elif _can_adopt(peer, things, epoch, dirty_objects, peer_dirty):
                 # The other buffer's table already resolved exactly these
-                # rows at this epoch: copy rather than re-derive.
+                # rows, at this epoch or a precisely journalled edit or two
+                # behind it: copy rather than re-derive, then catch up.
                 self.adopt(peer)
+                if (peer_dirty and not self._refresh_in_place(
+                        things, epoch, peer_dirty)):
+                    self._reconcile(things, dirty_objects=peer_dirty)
             else:
                 resolved_all = self._reconcile(things, dirty_objects=dirty_objects)
             self._epoch = epoch
@@ -796,6 +800,7 @@ class EntityTable:
             pass
         elif changes is OVERFLOW:
             self.refresh_rows(things, range(n))
+            self._resolve_portal_links(things)
         elif changes:
             self._apply_changes(things, changes)
         if len(self._poll_slots):
@@ -856,18 +861,31 @@ class EntityTable:
         slot_of = self._slot_of_obj
         moved = []
         state = []
+        shown = []
         for oid, flags in changes.items():
             slot = slot_of.get(oid)
             if slot is None:
                 continue
             if flags & STATE:
                 state.append(slot)
-            else:
+                continue
+            if flags & VISIBILITY:
+                shown.append(slot)
+            if flags & ~VISIBILITY:
                 moved.append(slot)
         if moved:
             self._read_positions(things, moved)
+        if shown:
+            # A park or unpark: the live flag alone, nothing authored.
+            self.rows_read += len(shown)
+            self.hidden[shown] = [
+                bool(_props_of(things[s]).get('hidden', False)) for s in shown]
         if state:
             self.refresh_rows(things, state)
+            # I/O can retarget or rename a portal; links are resolved by name.
+            if (len(self.portal_slots)
+                    and (self.class_bits[state] & ENT_PORTAL).any()):
+                self._resolve_portal_links(things)
 
     def _read_positions(self, things, slots):
         self.rows_read += len(slots)
@@ -1211,6 +1229,12 @@ class EntityTable:
             self.light_enabled[slot] = _light_bool(thing, 'state', True)
             self.light_casts_shadows[slot] = _light_bool(
                 thing, 'casts_shadows', False)
+        elif not (self.class_bits[slot] & ENT_EFFECT):
+            # A reused slot must not keep its previous occupant's light.
+            self.light_color[slot] = 0.0
+            self.light_params[slot] = 0.0
+            self.light_enabled[slot] = False
+            self.light_casts_shadows[slot] = False
 
         if self.class_bits[slot] & ENT_PORTAL:
             self.portal_active[slot] = _bool_property(
@@ -1237,6 +1261,14 @@ class EntityTable:
                 basis_from_rotation(props.get(
                     'rotation', [props.get('angle', 0.0), 0.0, 0.0])),
                 dtype=np.float64)
+        else:
+            self.portal_active[slot] = False
+            self.portal_fade[slot] = 0.0
+            self.portal_direction[slot] = 0
+            self.portal_width_height[slot] = 0.0
+            self.portal_color[slot] = 1.0
+            self.portal_show_rim[slot] = False
+            self.portal_basis[slot] = 0.0
 
     def refresh_rows(self, things, slots):
         """Re-resolve every column of *slots* from their entities."""

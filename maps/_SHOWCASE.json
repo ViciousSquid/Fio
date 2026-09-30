@@ -452,7 +452,7 @@
                 "top": "Metal_08-512x512.png",
                 "down": "Metal_08-512x512.png"
             },
-            "id": "81089d8e-4a5e-42cb-8a26-4ce17b8f7cc7",
+            "id": "5b10b49b-9b6c-45d9-91ee-0b6f06970590",
             "geometry": {
                 "planes": [
                     {
@@ -748,7 +748,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "id": "2e03fd69-078c-4fbc-9f08-a1b373466404",
             "hidden": false
         },
         {
@@ -770,7 +770,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "id": "e61e2e94-5d3c-49a0-b430-ea28c19da224",
             "hidden": false
         },
         {
@@ -792,7 +792,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "id": "4b99bbeb-4d36-427e-a1a0-1280841c0960",
             "hidden": false
         },
         {
@@ -814,7 +814,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "id": "5abe2cde-d643-4a05-89a9-42aba815dddf",
             "hidden": false
         },
         {
@@ -836,7 +836,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "id": "5ac13b4f-2bf8-4874-86e7-b13e5d148c20",
             "hidden": false
         },
         {
@@ -858,7 +858,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "id": "89b98285-855c-42ae-bd56-cf90e902459d",
             "hidden": false
         },
         {
@@ -880,7 +880,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "id": "90d7fc1d-1df7-4b69-b25b-4e98f17e4ef2",
             "hidden": false
         },
         {
@@ -902,7 +902,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "22686ed3-7e1d-43cf-bf9b-03f6374d5a9f",
+            "id": "407aae0c-280a-4f73-bdda-cc44de877483",
             "hidden": false
         },
         {
@@ -992,7 +992,7 @@
                 "down": "default.png"
             },
             "lock": false,
-            "id": "c62153f0-d23e-45f9-8136-69eff76b8c91",
+            "id": "e0f0cae3-bdb5-444b-bb00-ac0567b4db28",
             "uv_angle": {
                 "east": 90
             },
@@ -1112,7 +1112,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "aa956ec9-d1fc-4da0-9512-be52fe28f127",
+            "id": "50feb057-fde5-4e99-a811-04711836e03d",
             "hidden": false
         },
         {
@@ -1156,7 +1156,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "15114d57-9fa0-4cdd-8111-462f0cf680d7",
+            "id": "4ab0e99b-84b5-4bb8-821a-2936f3ce8604",
             "hidden": false
         },
         {
@@ -1178,7 +1178,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "15114d57-9fa0-4cdd-8111-462f0cf680d7",
+            "id": "2027ebca-4641-4099-87a5-708b63d517b8",
             "hidden": false
         },
         {
@@ -1200,7 +1200,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "15114d57-9fa0-4cdd-8111-462f0cf680d7",
+            "id": "a1d5c15b-7401-492e-8c68-1b14fbf51fba",
             "hidden": false
         },
         {
@@ -1222,7 +1222,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "15114d57-9fa0-4cdd-8111-462f0cf680d7",
+            "id": "05a1029c-be58-4a14-93c5-4168525f9c4f",
             "hidden": false
         },
         {
@@ -1531,7 +1531,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "aa956ec9-d1fc-4da0-9512-be52fe28f127",
+            "id": "b4b98da5-d80f-4cf4-80de-0f7a0090bfdc",
             "hidden": false
         },
         {
@@ -1553,7 +1553,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "aa956ec9-d1fc-4da0-9512-be52fe28f127",
+            "id": "81c3557f-9f8a-4234-96ca-9244b6b9c6be",
             "hidden": false
         },
         {
@@ -1683,7 +1683,7 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "id": "690b26ee-154c-4be6-8a95-e8e257b3abbb",
+            "id": "064200fe-0b2a-4a47-b924-0e4ba33785f3",
             "hidden": false
         },
         {
@@ -3486,15 +3486,6 @@
                     "delay": 8.5,
                     "fire_once": false,
                     "target_id": "8dae2cb1-3be8-455f-b87c-e0fa9bfd1bcc"
-                },
-                {
-                    "output": "OnPlayerSpawn",
-                    "target": "intro_messages",
-                    "input": "Trigger",
-                    "parameter": "",
-                    "delay": 0.0,
-                    "fire_once": false,
-                    "target_id": "2a7d4c35-0543-4c0d-92e9-4edbb1e3484f"
                 },
                 {
                     "output": "OnPlayerSpawn",

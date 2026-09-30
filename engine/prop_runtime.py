@@ -122,7 +122,7 @@ class PropSession:
         p = prop.properties
         reach = 0.0
 
-        if p.get("carry_enabled", True):
+        if p.get("carry_enabled", False):
             try:
                 reach = max(reach, float(
                     p.get("carry_reach", self.DEFAULT_CARRY_REACH)))
@@ -268,7 +268,7 @@ class PropSession:
 
         for prop in candidates:
             p = prop.properties
-            if p.get("disabled") or not p.get("carry_enabled", True):
+            if p.get("disabled") or not p.get("carry_enabled", False):
                 continue
             if p.get("collect_collected", False):
                 continue

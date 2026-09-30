@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import QShortcut
 from PyQt5.QtCore import Qt, QByteArray, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal
 from PyQt5.QtGui import QKeySequence, QPixmap, QCursor, QColor, QIcon
 
-from editor.things import Light, PlayerStart, Model, update_all_counters_from_entities
+from editor.things import Light, PlayerStart, Prop, update_all_counters_from_entities
 from editor.SettingsWindow import SettingsWindow
 from editor.ui import LAYOUT_VERSION, Ui_MainWindow
 from editor.tooltips import set_tooltips_enabled
@@ -148,6 +148,8 @@ class MainWindow(QMainWindow):
         self.load_key_bindings()
 
         self.unsaved_changes = False
+        #: The world as Play started, when Stop is set to restore it.
+        self._pre_play_world = None
         self.file_path = None
         self.recent_files = []
         self.load_level_signal.connect(self.load_level_file)
@@ -474,10 +476,12 @@ class MainWindow(QMainWindow):
         if not hasattr(self, 'recent_menu'):
             return
         
+        # Actions are parented to the menu: clear() deletes only the actions
+        # it owns, so window-owned ones piled up on every map load.
         self.recent_menu.clear()
         
         if not self.recent_files:
-            dummy = QAction("No recent files", self)
+            dummy = QAction("No recent files", self.recent_menu)
             dummy.setEnabled(False)
             self.recent_menu.addAction(dummy)
             return
@@ -488,7 +492,7 @@ class MainWindow(QMainWindow):
                 continue
                 
             fname = os.path.basename(path)
-            action = QAction(fname, self)
+            action = QAction(fname, self.recent_menu)
             action.setToolTip(path)
             # Use lambda with default arg to capture variable in loop
             action.triggered.connect(lambda checked, p=path: self.load_level_file(p))
@@ -1203,10 +1207,10 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        # FIX: Initialize with only 'pos', then set properties
-        new_model = Model(pos=[0, 0, 0])
-        new_model.properties['model_path'] = filepath.replace('\\', '/') # Ensure forward slashes
-        new_model.properties['rotation'] = rotation
+        # Every model is a Prop, with a Prop's defaults: not solid and not
+        # carryable until the author turns either on.
+        new_model = Prop.for_model(filepath, pos=[0, 0, 0],
+                                   properties={'rotation': rotation})
 
         # Downloaded OBJs are commonly authored in real-world units and can be
         # only a few Fio units across. Fio's world is much larger (TILE_SIZE is
@@ -2054,6 +2058,13 @@ class MainWindow(QMainWindow):
                 brush['textures'][face_name] = texture_name
         else:
             brush['textures'][face_name] = texture_name
+        if brush_geometry.brush_has_geometry(brush):
+            # The derived faces copied the old texture, and the GPU mesh is
+            # keyed by the geometry signature: both must move on.
+            brush_geometry.invalidate_geometry_cache(brush)
+        # The face may only be hovered, not selected, so the checkpoint above
+        # did not journal it for the render projection.
+        self.state.mark_lighting_dirty([brush])
 
         # Remember the last-textured face so the rotate-texture button / Page
         # Up-Down keys know which face to act on when nothing is hovered.
@@ -2201,6 +2212,7 @@ class MainWindow(QMainWindow):
                 }
             """)
 
+        self._capture_pre_play_world()
         physics_enabled = self.config.getboolean('Settings', 'physics', fallback=True)
         self.view_3d.toggle_play_mode(player_start.pos, player_start.get_angle(), physics_enabled)
         self.view_3d.setFocus()
@@ -2211,11 +2223,52 @@ class MainWindow(QMainWindow):
         #self.ui.notification_label.setText("ESC = EXIT PLAY MODE  |  F12 = FULLSCREEN")
 
 
+    def _capture_pre_play_world(self):
+        """Remember the world as Play starts, if Stop is to put it back.
+
+        Optional (Settings -> Play Modes -> "Restore the world when leaving
+        Play"). By default the editor keeps showing what happened in play --
+        dead monsters, killed or hidden objects -- as it always has.
+        """
+        self._pre_play_world = None
+        if not self.config.getboolean('Settings', 'restore_world_on_stop',
+                                      fallback=False):
+            return
+        self._pre_play_world = (
+            self.state.snapshot(),
+            list(self.state.undo_stack),
+            list(self.state.redo_stack),
+            self.unsaved_changes,
+        )
+
+    def _restore_pre_play_world(self):
+        """Put back the world captured by :meth:`_capture_pre_play_world`.
+
+        Runs once the session has fully stopped. The same object replacement
+        undo uses, so everything holding a reference is re-pointed the same
+        way; the history and the unsaved flag go back too, so a restored
+        session leaves no trace.
+        """
+        captured = getattr(self, '_pre_play_world', None)
+        self._pre_play_world = None
+        if captured is None:
+            return
+        world, undo, redo, unsaved = captured
+        self.state.restore_state(world)
+        self.state.undo_stack.clear()
+        self.state.undo_stack.extend(undo)
+        self.state.redo_stack = redo
+        self._resync_components_after_history()
+        self.unsaved_changes = unsaved
+        self.update_title()
+        self.update_all_ui()
+
     def _exit_play_mode(self):
         """Exit play mode and return to editor."""
         if hasattr(self.view_3d, 'play_mode') and self.view_3d.play_mode:
             self.view_3d.toggle_play_mode(None, None)
             self.view_3d.play_mode = False  # Force state change before UI update
+            self._restore_pre_play_world()
 
         self.ui.notification_label.setText("")
         self._restore_properties_tab()
@@ -2408,10 +2461,13 @@ class MainWindow(QMainWindow):
         inspector = getattr(self, 'surface_inspector', None)
         if inspector is not None and inspector.target is not None:
             rebound = _rebind(inspector.target)
+            # Re-pointed, never re-opened: undo is not a window action.
             if rebound is None:
-                inspector.set_target(None, None, raise_window=False)
+                inspector.set_target(None, None, raise_window=False,
+                                     reveal=False)
             elif rebound is not inspector.target:
-                inspector.set_target(rebound[0], rebound[1], raise_window=False)
+                inspector.set_target(rebound[0], rebound[1],
+                                     raise_window=False, reveal=False)
             else:
                 inspector.refresh_from_face()
 
@@ -3929,13 +3985,19 @@ class MainWindow(QMainWindow):
         """
         # Refuse a malformed document before the current scene is cleared.
         self.state.validate_level_data(level_data)
-        self.state.clear_scene()
+        # load_from_data parses the whole map before it replaces the scene
+        # (and does everything clear_scene did but mark lighting dirty), so a
+        # map that fails to parse leaves the open level as it was. Clearing
+        # first emptied the scene for any map that got past the shape check.
+        self.state.load_from_data(level_data)
+        self.state.mark_lighting_dirty()
 
-        # Clear existing terrain BEFORE loading new data
+        # Drop the previous map's terrain; this also clears terrain_data,
+        # so keep the one the new map just brought.
+        terrain_data = self.state.terrain_data
         self._clear_terrain()
         self.view_3d.terrain = None
-
-        self.state.load_from_data(level_data)
+        self.state.terrain_data = terrain_data
 
         # Re-initialize terrain if present in the new map
         if getattr(self.state, 'terrain_data', None):
@@ -3979,6 +4041,7 @@ class MainWindow(QMainWindow):
             return False
 
         loaded = False
+        open_level = None
         try:
             # A level change during play: end the running session *before*
             # the scene is replaced.  Its teardown (movers, doors, Props, the
@@ -3992,11 +4055,16 @@ class MainWindow(QMainWindow):
             loadout = (logic.carried_loadout()
                        if was_playing and logic is not None else None)
             if was_playing:
+                # The world captured at Play belongs to the map being left.
+                self._pre_play_world = None
                 self._exit_play_mode()
 
             # From here the scene is being replaced.  Until it has been, it
             # belongs to no file: a failure part-way must never leave the
             # previous map's path on a half-built scene for Ctrl+S to write.
+            open_level = (self.file_path, self.unsaved_changes,
+                          getattr(self.state, 'brushes', None),
+                          getattr(self.state, 'things', None))
             self.file_path = None
             self._apply_level_data(level_data)
 
@@ -4068,7 +4136,15 @@ class MainWindow(QMainWindow):
             return True
 
         except Exception as e:
-            if not loaded:
+            if (not loaded and open_level is not None
+                    and open_level[2] is not None and open_level[3] is not None
+                    and getattr(self.state, 'brushes', None) is open_level[2]
+                    and getattr(self.state, 'things', None) is open_level[3]):
+                # The map failed to parse: the open level was never replaced,
+                # so it keeps its file.
+                self.file_path, self.unsaved_changes = open_level[:2]
+                self.update_title()
+            elif not loaded:
                 # Whatever made it into the scene is unsaved work of no file.
                 self.unsaved_changes = True
                 self.update_title()
@@ -4624,11 +4700,20 @@ class MainWindow(QMainWindow):
         problems = validation['problems']
         total = validation['total']
 
+        def _name(entity):
+            if hasattr(entity, 'properties'):
+                return entity.properties.get('name', '?')
+            return entity.get('name', '?')
+
         # Format validation problems.  I/O and PathNode problems use the
         # same four-item tuple shape, but their connection objects differ.
+        # Missing targets first: a connection pointing at nothing is a broken
+        # map, while an unknown input is usually a typo in an otherwise sound one.
+        ordered = sorted(problems,
+                         key=lambda p: 0 if p[2] == PROBLEM_MISSING_TARGET else 1)
         lines = []
 
-        for entity, connection, code, message in problems:
+        for entity, connection, code, message in ordered:
             if code in (
                 "missing_pathnode_target",
                 "invalid_pathnode_target",
@@ -4644,8 +4729,11 @@ class MainWindow(QMainWindow):
                     "PathNode '%s': %s" % (name, message)
                 )
             else:
-                # Existing I/O validation message.
-                lines.append(message)
+                # An I/O message names the target, not the connection's
+                # owner: say which entity and output it is.
+                lines.append("  %s.%s %s" % (
+                    _name(entity), getattr(connection, 'output_name', '?'),
+                    message))
 
         QMessageBox.warning(
             self,
@@ -4656,26 +4744,6 @@ class MainWindow(QMainWindow):
                 total,
                 "\n".join(lines),
             ),
-        )
-        return
-
-        def _name(entity):
-            if hasattr(entity, 'properties'):
-                return entity.properties.get('name', '?')
-            return entity.get('name', '?')
-
-        # Missing targets first: a connection pointing at nothing is a broken
-        # map, while an unknown input is usually a typo in an otherwise sound one.
-        ordered = sorted(problems,
-                         key=lambda p: 0 if p[2] == PROBLEM_MISSING_TARGET else 1)
-        lines = [
-            "  %s.%s %s" % (_name(entity), conn.output_name, message)
-            for entity, conn, _code, message in ordered
-        ]
-        QMessageBox.warning(
-            self, "Validate Connections",
-            "%d of %d connection(s) have problems:\n\n%s"
-            % (len(problems), total, "\n".join(lines))
         )
 
     def closeEvent(self, event):

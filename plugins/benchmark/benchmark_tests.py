@@ -49,6 +49,7 @@ class BenchmarkTests:
             "live_1000_brushes": 6.0,
             "live_10000_brushes": 6.0,
             "live_100000_brushes": 4.0,
+            "live_500_models": 6.0,
             "monster_chaos_witness": 35.0,
         }.get(label, 3.0)
     
@@ -543,6 +544,19 @@ class BenchmarkTests:
                     "  Live brush scene: created %d real brushes with varied dimensions; "
                     "camera sweep will exercise culling and dense RenderTable key sorting."
                     % brush_count
+                )
+            elif label == "live_500_models":
+                data = bench.make_model_stress_world(
+                    500, shadow_lights=4, yield_hook=cooperative_yield)
+                bench.load_live_benchmark_world(
+                    window, data, yield_hook=cooperative_yield)
+                QApplication.processEvents()
+                self._prepare_player_area_sweep()
+                self._append(
+                    "  Live model scene: 500 model Props (as the Asset "
+                    "Browser places them) and 4 shadow-casting lights; the camera "
+                    "sweep exercises the instanced model pass, its frustum cull "
+                    "and the shadow pass's model casters."
                 )
             elif label == "monster_chaos_witness":
                 cooperative_yield = lambda: self._live_cooperative_yield(label)

@@ -82,7 +82,13 @@ def test_a_dropped_table_stops_being_recorded_for():
     journal.subscribe(table)
     del table
     journal.record(object(), STATE)          # must not keep the table alive
-    assert len(journal._pending) == 0
+    assert len(journal._sinks) == 0
+    journal.subscribe(_Subscriber())         # and its sink leaves the walk
+    assert sum(sink.alive for sink in journal._live) <= 1
+    keep = _Subscriber()
+    journal.subscribe(keep)
+    journal.drain(keep)
+    assert all(sink.alive for sink in journal._live)
 
 
 def test_position_assignment_journals_and_normalises():
@@ -295,7 +301,8 @@ def test_a_journal_kept_table_matches_a_rebuild(seed):
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 #: The player, the camera and ``self`` inside the player keep their own glm
 #: positions; they are not table rows.
-_NOT_ENTITIES = {"player", "player2", "camera", "self"}
+# ``table`` is a dense table (MonsterTable.pos is a NumPy column, not an entity).
+_NOT_ENTITIES = {"player", "player2", "camera", "self", "table"}
 
 
 def _in_place_position_writes(tree):

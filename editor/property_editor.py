@@ -9,7 +9,7 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5 import sip
 from engine.prop_entity import normalise_collect_type
-from editor.things import (Thing, Light, Effect, Prop, Monster, Model, Speaker,
+from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
                            LogicState)
 from editor import state_values as _sv
@@ -425,7 +425,12 @@ class PropertyEditor(QWidget):
             kind = type(obj).__name__
 
         fields = []
-        for key, value in source.items():
+        # A snapshot, taken in one step: the logic thread adds its cache keys
+        # (_geo_epoch, _geo_cache, _aabb_*) to a brush dict the first time it
+        # projects it -- a brush undo/redo/paste has just created is being
+        # read here at that moment -- and iterating the live dict raised
+        # "dictionary changed size during iteration" out of the UI refresh.
+        for key, value in list(source.items()):
             if key in self._SIGNATURE_IGNORED or key.startswith('_geo_cache') \
                     or key.startswith('_box_shape') or key.startswith('_mesh_') \
                     or key.startswith('_mat_') or key.startswith('_nmat_') \
@@ -1030,9 +1035,13 @@ class PropertyEditor(QWidget):
         self._widgets['trigger_type_combo'] = type_combo
 
         # Activation mode: touch fires on entry; use requires E press.
+        # `trigger_activation` is the key the engine and the maps use; older
+        # builds of this tab wrote `trigger_collect_activation`, which nothing
+        # read, so it is only a fallback for showing what was chosen.
         collect_activation_combo = _make_combo(
             ['touch', 'use'],
-            brush.get('trigger_collect_activation', 'touch'),
+            brush.get('trigger_activation',
+                      brush.get('trigger_collect_activation', 'touch')),
             tooltip=(
                 "touch — fires when player walks inside\n"
                 "use — fires when player presses E while inside"
@@ -1078,7 +1087,9 @@ class PropertyEditor(QWidget):
             )
         )
 
-        is_use_mode = brush.get('trigger_collect_activation', 'touch') == 'use'
+        is_use_mode = brush.get(
+            'trigger_activation',
+            brush.get('trigger_collect_activation', 'touch')) == 'use'
         use_label_lbl.setVisible(is_use_mode)
         use_label_input.setVisible(is_use_mode)
 
@@ -1087,7 +1098,7 @@ class PropertyEditor(QWidget):
         self._widgets['trigger_use_label_input'] = use_label_input
 
         def _on_collect_activation_changed(val):
-            self.update_object_prop('trigger_collect_activation', val)
+            self.update_object_prop('trigger_activation', val)
             show = (val == 'use')
             use_label_lbl.setVisible(show)
             use_label_input.setVisible(show)
@@ -1133,6 +1144,21 @@ class PropertyEditor(QWidget):
         )
         form.addRow("Action:", action_combo)
         self._widgets['trigger_action_combo'] = action_combo
+
+        # Optional checkpoint, independent of the action: the trigger also
+        # quicksaves (or quickloads) the play session when it fires.
+        save_combo = _make_combo(
+            ['none', 'quicksave', 'quickload'],
+            brush.get('trigger_save', 'none'),
+            lambda t: self.update_object_prop('trigger_save', t),
+            tooltip=(
+                "none — no save action\n"
+                "quicksave — save the session to the quicksave slot when fired\n"
+                "quickload — load the quicksave slot when fired"
+            )
+        )
+        form.addRow("Save:", save_combo)
+        self._widgets['trigger_save_combo'] = save_combo
 
         # Target node (teleport only)
         node_lbl = QLabel("Target Node:")
@@ -1751,7 +1777,7 @@ class PropertyEditor(QWidget):
         form = QFormLayout()
         tab_layout.addLayout(form)
 
-        if isinstance(thing, Model):
+        if isinstance(thing, Prop):
             model_mode = True
             is_prop = isinstance(thing, Prop)
             mode_combo = None
@@ -1904,68 +1930,7 @@ class PropertyEditor(QWidget):
                 # is further narrowed by _refresh_prop_collection_appearance().
                 self._refresh_prop_collection_appearance(thing)
 
-            # Prop owns its physical state on its dedicated Physics tab.
-            # Ordinary Model entities retain their collision controls.
-            if not isinstance(thing, Prop):
-                # Collision toggle for this model entity
-                no_collision = thing.properties.get('no_collision', False)
-                collision_cb = _make_checkbox(
-                    "Disable collision for this model",
-                    no_collision,
-                    lambda c: self.update_object_prop('no_collision', c),
-                    _Style.CHECKBOX,
-                )
-                collision_cb.setToolTip(
-                    "If checked, player and monsters will pass through this model"
-                )
-                form.addRow("", collision_cb)
-                self._widgets['model_no_collision_cb'] = collision_cb
-
-                # Collision shape selection uses the same Automatic /
-                # AABB / Mesh modes as Prop.
-                shape_mode = str(
-                    thing.properties.get('collision_shape', 'auto')
-                ).lower()
-                shape_labels = {
-                    'auto': 'Automatic',
-                    'aabb': 'AABB',
-                    'mesh': 'Mesh',
-                }
-                shape_combo = _make_combo(
-                    list(shape_labels.values()),
-                    shape_labels.get(shape_mode, 'Automatic'),
-                    None,
-                    tooltip=(
-                        "Automatic uses mesh collision where supported and "
-                        "otherwise uses the model bounds. AABB always uses a "
-                        "box around the model. Mesh uses triangle collision "
-                        "where supported."
-                    ),
-                )
-                reverse_shape_labels = {
-                    label: value for value, label in shape_labels.items()
-                }
-                shape_combo.currentTextChanged.connect(
-                    lambda label: self.update_object_prop(
-                        'collision_shape',
-                        reverse_shape_labels.get(label, 'auto'),
-                    )
-                )
-                form.addRow("Collision Shape:", shape_combo)
-                self._widgets['model_collision_shape_combo'] = shape_combo
-
-                # Collision size override
-                collision_size = thing.properties.get('collision_size')
-                cs_widget, cs_inputs = self._vec3_row(
-                    collision_size if collision_size else [0, 0, 0],
-                    lambda v: self._on_collision_size_changed(v, thing)
-                )
-                cs_label = QLabel("Collision Size:")
-                cs_label.setToolTip(
-                    "Custom collision box size (0,0,0 = auto from scale)"
-                )
-                form.addRow(cs_label, cs_widget)
-                self._widgets['model_collision_size_inputs'] = cs_inputs
+            # Collision lives on the Prop's dedicated Physics tab.
 
             if IO_AVAILABLE:
                 note = QLabel("💡 Use the I/O tab for advanced targeting")
@@ -2654,7 +2619,7 @@ class PropertyEditor(QWidget):
 
         carry_cb = _make_checkbox(
             "Carryable",
-            bool(thing.properties.get('carry_enabled', True)),
+            bool(thing.properties.get('carry_enabled', False)),
             lambda checked: self.update_object_prop('carry_enabled', bool(checked)),
             _Style.CHECKBOX,
         )
@@ -3113,7 +3078,7 @@ class PropertyEditor(QWidget):
             ):
                 continue
 
-            if isinstance(thing, Model) and key in (
+            if isinstance(thing, Prop) and key in (
                 'model_path',
                 'scale',
                 'rotation',

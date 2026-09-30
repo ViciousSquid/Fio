@@ -9,6 +9,8 @@ Half-Life 2's Hammer Editor. Entities ("things") communicate through:
 Example: A trigger_once fires "OnTrigger" which calls "Open" on "door_main" after 0.5s
 """
 
+import threading
+from collections import deque
 from dataclasses import dataclass, field
 from typing import List, Dict, Callable, Optional, Set
 
@@ -294,6 +296,17 @@ class IOManager:
         # activator simply has none.
         self._activator_entity = None
         self._activator_id: str = ""
+
+        # The thread that runs play ticks (whoever last called update()), and
+        # the outputs other threads fired while play was running. The monster
+        # AI runs on its own thread and fires OnDeath, OnSeePlayer, OnAttack
+        # and patrol events; dispatching those in place raced the logic tick:
+        # update() rebuilds pending_events, so a delayed event appended
+        # meanwhile was lost, and the source/activator context above was
+        # interleaved between two chains. They are delivered, in order, at the
+        # start of the next update() instead -- on the tick's thread.
+        self._tick_thread = None
+        self._foreign_outputs = deque()
     
     def set_logic_thread(self, logic_thread):
         """Set reference to logic thread."""
@@ -359,6 +372,7 @@ class IOManager:
     def reset(self):
         """Reset for new play session."""
         self.pending_events.clear()
+        self._foreign_outputs.clear()
         self.current_time = 0.0
         self._source_entity = None
         self._source_id = ""
@@ -380,6 +394,12 @@ class IOManager:
         connection with an explicit parameter always keeps its own parameter.
         """
         if not io_enabled(source_entity):
+            return
+        tick_thread = self._tick_thread
+        if (tick_thread is not None and tick_thread != threading.get_ident()
+                and getattr(self._logic_thread, 'play_mode', False)):
+            self._foreign_outputs.append(
+                (source_entity, output_name, value, activator_entity))
             return
 
         connections = self._get_connections(source_entity)
@@ -455,6 +475,10 @@ class IOManager:
             io_log(f"{source_name}.{output_name} (no connections)")
     
     def update(self, delta: float):
+        self._tick_thread = threading.get_ident()
+        foreign = self._foreign_outputs
+        while foreign:
+            self.fire_output(*foreign.popleft())
         self.current_time += delta
         
         still_pending = []
@@ -522,6 +546,10 @@ class IOManager:
                 and self._find_entity_by_id):
             self._activator_entity = self._find_entity_by_id(self._activator_id)
 
+        # A brush's authored visibility is what the collision grid is built
+        # from; the logic thread rebuilds it if an input changes it.
+        was_hidden = (authored_flag(target, 'hidden')
+                      if isinstance(target, dict) else None)
         try:
             if handler:
                 try:
@@ -537,6 +565,11 @@ class IOManager:
             # render projection re-resolves that one row -- including when a
             # handler failed part-way through its writes.
             touch(target)
+            if (was_hidden is not None
+                    and authored_flag(target, 'hidden') != was_hidden):
+                mark = getattr(self._logic_thread, 'mark_collision_dirty', None)
+                if mark is not None:
+                    mark()
             (self._source_entity, self._source_id,
              self._activator_entity, self._activator_id) = previous
     
@@ -574,11 +607,14 @@ class IOManager:
             set_authored_flag(entity, 'disabled', True)
 
         elif input_lower == 'kill':
-            # Mark for removal (handled by logic thread)
-            if isinstance(entity, dict):
-                entity['_kill'] = True
-            elif hasattr(entity, 'properties'):
-                entity.properties['_kill'] = True
+            # Remove from the running world: nothing draws or collides with a
+            # hidden, disabled object. (Monsters have their own Kill handler.)
+            # Deleting it from the scene lists instead would destroy authored
+            # data the editor is showing, and the `_kill` marker this used to
+            # set was read by nothing but the monster AI, so a killed brush
+            # stayed solid and visible.
+            set_authored_flag(entity, 'hidden', True)
+            set_authored_flag(entity, 'disabled', True)
 
         # ---- Generic Hide / Show / ToggleVisibility --------------------------
         elif input_lower == 'hide':
@@ -983,20 +1019,6 @@ def register_default_io():
             IODef('OnCollected', 'Fired when the player collects this prop'),
             IODef('OnRespawn', 'Fired when this prop respawns'),
         ]
-    )
-
-    # === MODEL ===
-    register_io('model',
-        inputs=[
-            IODef('Enable', 'Show model'),
-            IODef('Disable', 'Hide model'),
-            IODef('SetSkin', 'Set model skin', 'int'),
-            IODef('SetAnimation', 'Play animation', 'string'),
-            IODef('Hide', 'Hide this model'),
-            IODef('Show', 'Show this model'),
-            IODef('ToggleVisibility', 'Toggle visibility'),
-        ],
-        outputs=[]
     )
 
     # === LEVEL CHANGER ===
@@ -1719,6 +1741,46 @@ def remove_connection(entity, connection: OutputConnection):
     if connection in connections:
         connections.remove(connection)
         bump_io_revision()
+
+
+#: What the old Model entity's inputs did, as the Prop inputs that do it. A
+#: Model's Enable/Disable showed and hid it; a Prop's toggle its gameplay, so a
+#: map written against a Model is re-aimed at Show/Hide when it loads. SetSkin
+#: and SetAnimation only ever recorded a value nothing read, and are left as
+#: authored.
+LEGACY_MODEL_INPUTS = {'enable': 'Show', 'disable': 'Hide'}
+
+
+def retarget_legacy_model_inputs(entities, models) -> int:
+    """Re-aim connections into loaded legacy models at the Prop inputs.
+
+    *entities* is every brush and Thing that can carry outputs; *models* the
+    Things that were read from an old ``model`` record. Returns how many
+    connections changed.
+    """
+    ids = {m.properties.get('id') for m in models if m.properties.get('id')}
+    names = {m.properties.get('name') for m in models if m.properties.get('name')}
+    if not ids and not names:
+        return 0
+    changed = 0
+    for entity in entities:
+        for conn in get_connections(entity):
+            is_dict = isinstance(conn, dict)
+            target_id = conn.get('target_id', '') if is_dict else conn.target_id
+            target_name = conn.get('target', '') if is_dict else conn.target_name
+            if not (target_id in ids if target_id else target_name in names):
+                continue
+            key = 'input' if is_dict else 'input_name'
+            current = conn.get(key, '') if is_dict else conn.input_name
+            replacement = LEGACY_MODEL_INPUTS.get(str(current).lower())
+            if replacement is None:
+                continue
+            if is_dict:
+                conn[key] = replacement
+            else:
+                conn.input_name = replacement
+            changed += 1
+    return changed
 
 
 def get_connections(entity) -> List[OutputConnection]:

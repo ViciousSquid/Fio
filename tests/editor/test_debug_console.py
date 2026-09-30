@@ -81,3 +81,49 @@ def test_startup_banner_source_matches_requested_shape():
     assert 'debug_log_raw("github.com/vicioussquid/Fio")' in source
     assert "Registered {len(io_manager._input_handlers)} input handlers" in source
     assert "Type 'help' to see all available commands" in source
+
+
+def test_a_burst_of_messages_is_inserted_in_batches(qt_app):
+    """A monster fight with I/O logging on logs hundreds of lines a second
+    from worker threads; inserting each as it arrived froze the editor."""
+    console = DebugConsole()
+    console.clear()
+    inserts = []
+    real_insert = console._insert_lines
+
+    def counting(lines):
+        inserts.append(len(lines))
+        real_insert(lines)
+
+    console._insert_lines = counting
+    for i in range(1000):
+        console._on_message("IO", "[IO] Relay_%d.OnTrigger -> Relay_%d.Trigger" % (i, i + 1))
+    # The first line is immediate; the rest wait for one flush.
+    assert inserts == [1]
+    console._flush_timer.stop()
+    console._flush_pending()
+    # One insert for the rest, capped, with a note of what was skipped.
+    assert len(inserts) == 2
+    assert inserts[1] == console.MAX_LINES_PER_FLUSH + 1
+    text = console.console.toPlainText()
+    assert "Relay_999.OnTrigger" in text
+    assert "messages not shown" in text
+    console.deleteLater()
+
+
+def test_an_isolated_message_still_appears_at_once(qt_app):
+    console = DebugConsole()
+    console.clear()
+    console._flush_timer.stop()
+    console._on_message("Info", "[Info] hello there")
+    assert "hello there" in console.console.toPlainText()
+    console.deleteLater()
+
+
+def test_the_document_is_rebuilt_before_it_grows_without_bound(qt_app):
+    console = DebugConsole()
+    console.clear()
+    for i in range(console.MAX_DOCUMENT_LINES + 10):
+        console._insert_lines(['line %d<br>' % i])
+    assert console._document_lines <= console.MAX_DOCUMENT_LINES
+    console.deleteLater()
