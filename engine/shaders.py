@@ -1146,23 +1146,6 @@ uniform float roughness;
 uniform sampler2D sceneColor;
 uniform vec2 screenSize;""" + FOG_GLSL + """
 
-highp float hash21(highp vec2 p) {
-    p = fract(p * vec2(123.34, 345.45));
-    p += dot(p, p + 34.345);
-    return fract(p.x * p.y);
-}
-
-highp float noise2(highp vec2 p) {
-    highp vec2 i = floor(p);
-    highp vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
 void main() {
     highp vec3 viewDir = normalize(viewPos - FragPos);
     highp vec3 baseNormal = normalize(Normal);
@@ -1199,14 +1182,11 @@ void main() {
 
     highp vec2 screenUV = gl_FragCoord.xy / screenSize;
 
-    // A compact procedural perturbation breaks up the perfectly planar warp.
-    // It is intentionally cheap and deterministic on GL 3.3 hardware.
-    highp float n1 = noise2(FragPos.xz * 0.08 + TexCoords * 3.0);
-    highp float n2 = noise2(FragPos.xy * 0.11 + TexCoords * 5.0);
-    highp vec2 microWarp = (vec2(n1, n2) - 0.5) * 0.020;
-
+    // Keep the warp entirely on the core refraction/normal path. The former
+    // procedural hash/noise helper triggered an Intel GLSL compiler failure on
+    // some older integrated-GPU drivers.
     highp vec2 uvOffset =
-        (refractionWarp + normalWarp + microWarp) * distortionStrength;
+        (refractionWarp + normalWarp) * distortionStrength;
 
     highp vec2 refractUV = clamp(
         screenUV + uvOffset,
