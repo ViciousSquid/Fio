@@ -290,6 +290,25 @@ Likewise, moving the camera independently of the player cannot be used to change
 
 ---
 
+## View distance and fog
+
+Residency is camera-independent, but what the camera *sees* is bounded by it.
+
+While a Big World session runs, the camera's view is limited to the
+**activation radius**: distance fog becomes fully opaque at that radius and the
+far plane follows it in. Objects therefore fade into the fog exactly where the
+map says they stop being active, rather than visibly popping when a cell is
+parked.
+
+The editor's cull distance / `r_viewdistance` still works as before, but can
+only pull the view *further in* than the activation radius, never push it out.
+The player's own setting is kept and comes back when play stops.
+
+The same far plane culls terrain chunks, so terrain beyond the view is never
+submitted to the GPU.
+
+---
+
 # Objects spanning cells
 
 An object can overlap multiple cells.

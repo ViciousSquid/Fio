@@ -46,7 +46,7 @@ from .cell import (CELL_SIZE, CellCoord, cell_distance_sq, cell_of_point,
                    cells_for_aabb)
 from .manager import (DEFAULT_ACTIVATION_RADIUS, DEFAULT_DEACTIVATION_RADIUS,
                       DEFAULT_PERSISTENT_TYPES, _normalise_type)
-from .config import effective_streaming_radii
+from .config import bound_view_horizon, effective_streaming_radii
 from .persistence import cell_key_for_pos, normalize_streaming_state
 
 _BRUSH = "brush"
@@ -283,6 +283,8 @@ class DiskStreamingSession:
         self.evict_radius = self._authored_evict_radius
         self.streaming = True
         self._started = False
+        #: Undoes the camera-horizon limit start() places.
+        self._release_view_horizon = None
 
         self._loaded: Dict[CellCoord, _LoadedCell] = {}
         self._live_by_id: Dict[str, object] = {}
@@ -362,6 +364,10 @@ class DiskStreamingSession:
         except Exception:
             self.logic.things = list(persistent)
             self.logic.brushes = []
+        # Fade the camera out where cells stop loading (see bound_view_horizon).
+        if self._release_view_horizon is None:
+            self._release_view_horizon = bound_view_horizon(
+                self.logic, self._authored_load_radius)
         self._sync_visual_horizon()
         pos = player_pos if player_pos is not None else self._player_pos()
         if pos is not None:
@@ -373,6 +379,9 @@ class DiskStreamingSession:
         self._live_by_id.clear()
         self._load_ref.clear()
         self._base_by_uuid.clear()
+        if self._release_view_horizon is not None:
+            self._release_view_horizon()
+            self._release_view_horizon = None
         self._started = False
 
     def _reset_streaming(self) -> None:

@@ -5,6 +5,7 @@ import ctypes
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional
 import math
+import time
 import random
 from OpenGL.GL.shaders import compileProgram, compileShader
 from . import shaders
@@ -395,7 +396,8 @@ class TerrainChunk:
 class Terrain:
     # Terrain inside this radius is a protected high-detail zone. A chunk is
     # never allowed to change LOD while any part of it lies within 4096 world
-    # units of the camera.
+    # units of the camera -- or within the stream radius, if streaming keeps
+    # less than that resident (see _near_detail_radius).
     NEAR_DETAIL_RADIUS = 4096.0
     NEAR_DETAIL_RADIUS_SQ = NEAR_DETAIL_RADIUS ** 2
     LOD_DISTANCES_SQ = [4608**2, 6144**2, 8192**2, 12288**2]
@@ -403,6 +405,12 @@ class Terrain:
     LOD_HYSTERESIS_FRAMES = 10
     HEIGHT_CACHE_RESOLUTION = 33
     MAX_UPDATES_PER_FRAME = 2
+    #: Milliseconds of chunk meshing a frame may spend before the rest waits
+    #: for the next frame. One chunk is always built, so terrain keeps
+    #: streaming however slow the machine; a second only fits on a fast one.
+    #: Two builds back to back in one frame were the hitch felt when walking
+    #: into new terrain.
+    UPDATE_BUDGET_MS = 4.0
     TILING_SCALE = 20.0
     # Physical mesh scale is a true uniform terrain scale. It changes the
     # world-space footprint and vertical relief together; procedural sampling
@@ -1175,11 +1183,32 @@ class Terrain:
         dz = nz - float(camera_pos.z)
         return dx * dx + dz * dz
     
+    def _near_detail_radius(self) -> float:
+        """Radius of the protected full-detail zone for this frame.
+
+        :data:`NEAR_DETAIL_RADIUS` normally, but never wider than the stream
+        radius while streaming: a chunk outside the stream radius is evicted,
+        so protecting it only forced chunks to be resident that the streamer
+        was told not to keep.
+        """
+        if self.streaming and self.stream_radius > 0.0:
+            return min(self.NEAR_DETAIL_RADIUS, float(self.stream_radius))
+        return self.NEAR_DETAIL_RADIUS
+
     def _is_chunk_visible(self, chunk: TerrainChunk, frustum_planes) -> bool:
         if frustum_planes is None: return True
         half_size = chunk.size / 2
-        cx, cy, cz = chunk.center
-        half_y = (chunk.max_y - chunk.min_y) / 2 + 10
+        if chunk.is_uploaded:
+            cx, cy, cz = chunk.center
+            half_y = (chunk.max_y - chunk.min_y) / 2 + 10
+        else:
+            # No mesh yet, so no measured centre or height span: the defaults
+            # sit at the world origin. Test the chunk's true XZ footprint with
+            # an unbounded height, which can only err towards visible.
+            cx = chunk.world_x + half_size
+            cz = chunk.world_z + half_size
+            cy = 0.0
+            half_y = 1.0e6
         for plane in frustum_planes:
             a, b, c, d = plane
             px = cx + half_size if a >= 0 else cx - half_size
@@ -1258,13 +1287,12 @@ class Terrain:
             self._pending_prune = False
 
         if self.streaming:
-            # Keep at least one complete chunk ring beyond the protected zone
-            # resident. This prevents a chunk from being created/evicted as its
-            # edge crosses the 4096-unit gameplay radius.
-            self.stream_radius = max(
-                self.stream_radius,
-                self.NEAR_DETAIL_RADIUS + self.chunk_size,
-            )
+            # The stream radius is the caller's to set (Big World derives it
+            # from its activation radius) and is not inflated here. It used to
+            # be raised to the 4096-unit protected zone plus a chunk every
+            # frame, which on a Big World map meant ~1000 resident full-detail
+            # chunks whatever the map asked for. The protected zone shrinks to
+            # the stream radius instead -- see _near_detail_radius().
             self._stream_chunks(camera_pos)
         else:
             for cz in range(self.min_chunk_z, self.max_chunk_z + 1):
@@ -1336,21 +1364,24 @@ class Terrain:
         gl.glActiveTexture(gl.GL_TEXTURE0)
         
         lod_level_loc = self.uniforms.get('lod_level', -1)
+        near_detail_radius = self._near_detail_radius()
 
         if self.wireframe: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
         chunks_to_update = []
         for key, chunk in self.chunks.items():
-            if not self._is_chunk_visible(chunk, frustum_planes):
-                self.culled_chunks += 1
-                continue
+            # Frustum (far plane included, so the view distance applies) only
+            # decides what is *drawn*. Mesh upkeep below still runs for every
+            # resident chunk, so turning round never exposes a chunk that was
+            # skipped while it was behind the camera.
+            visible = self._is_chunk_visible(chunk, frustum_planes)
             # Use nearest chunk-point distance so an edge cannot drop LOD
             # while it is still inside the protected radius.
             dist_sq = self._chunk_nearest_dist_sq(chunk, camera_pos)
             # Pre-promote an entire one-chunk ring around the protected zone.
             # That means a chunk is already at full resolution before its edge
-            # can enter the 4096-unit radius; there is no visible LOD upgrade
+            # can enter the protected radius; there is no visible LOD upgrade
             # as the player crosses the boundary.
-            prewarm_radius = self.NEAR_DETAIL_RADIUS + chunk.size
+            prewarm_radius = near_detail_radius + chunk.size
             protected = dist_sq <= prewarm_radius * prewarm_radius
             target_resolution = (
                 self.LOD_RESOLUTIONS[0]
@@ -1375,7 +1406,10 @@ class Terrain:
                         needs_update = True
                         chunk.lod_stable_frames = 0
             if needs_update:
-                chunks_to_update.append((key, target_resolution, dist_sq))
+                chunks_to_update.append((key, target_resolution, dist_sq, visible))
+            if not visible:
+                self.culled_chunks += 1
+                continue
             if chunk.vao and chunk.vertex_count > 0:
                 # Upload the chunk's current LOD level so the fragment shader
                 # can choose the appropriate shading path.
@@ -1387,8 +1421,13 @@ class Terrain:
                 self.total_triangles += chunk.vertex_count // 3
         gl.glBindVertexArray(0)
         if self.wireframe: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
-        chunks_to_update.sort(key=lambda x: (not self.chunks[x[0]].is_dirty, x[2]))
-        for i, (key, resolution, _) in enumerate(chunks_to_update[:self.MAX_UPDATES_PER_FRAME]):
+        # Dirty meshes first, then what the camera can see, nearest first.
+        chunks_to_update.sort(
+            key=lambda x: (not self.chunks[x[0]].is_dirty, not x[3], x[2]))
+        budget_end = time.perf_counter() + self.UPDATE_BUDGET_MS / 1000.0
+        for i, (key, resolution, _, _) in enumerate(chunks_to_update[:self.MAX_UPDATES_PER_FRAME]):
+            if i and time.perf_counter() >= budget_end:
+                break
             chunk = self.chunks[key]
             self._upload_chunk(chunk, resolution)
 
@@ -1527,6 +1566,44 @@ class Terrain:
         bot = h01 + fx * (h11 - h01)
         return top + fz * (bot - top)
 
+    #: Largest sculpt bounding box (grid cells) packed into a dense array for
+    #: vectorised sampling -- 16M float32 cells is 64 MB. A sparser, wider
+    #: sculpt falls back to per-point dictionary lookups.
+    MAX_DENSE_SCULPT_CELLS = 16 * 1024 * 1024
+
+    def _touch_sculpt(self):
+        """Invalidate the dense sculpt grid; call after any sculpt change."""
+        self._sculpt_version = getattr(self, '_sculpt_version', 0) + 1
+
+    def _dense_sculpt(self):
+        """``(min_gx, min_gz, grid)`` for the sculpt offsets, or None.
+
+        The offsets are a sparse dict keyed by grid cell, and sampling them one
+        vertex at a time in Python cost ~6 ms per call -- twice per chunk, for
+        every chunk streamed in anywhere in the world, sculpted or not. Packed
+        once into a dense array over their bounding box, sampling a chunk is a
+        handful of NumPy operations. Rebuilt only when the offsets change.
+        """
+        offsets = self.sculpt_offsets
+        key = (id(offsets), len(offsets), getattr(self, '_sculpt_version', 0))
+        cache = getattr(self, '_sculpt_cache', None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
+        n = len(offsets)
+        keys = np.fromiter((c for k in offsets for c in k),
+                           dtype=np.int64, count=2 * n).reshape(n, 2)
+        vals = np.fromiter(offsets.values(), dtype=np.float32, count=n)
+        min_gx, min_gz = (int(v) for v in keys.min(axis=0))
+        max_gx, max_gz = (int(v) for v in keys.max(axis=0))
+        w, h = max_gx - min_gx + 1, max_gz - min_gz + 1
+        dense = None
+        if w * h <= self.MAX_DENSE_SCULPT_CELLS:
+            grid = np.zeros((w, h), dtype=np.float32)
+            grid[keys[:, 0] - min_gx, keys[:, 1] - min_gz] = vals
+            dense = (min_gx, min_gz, grid)
+        self._sculpt_cache = (key, dense)
+        return dense
+
     def _sample_sculpt_batch(self, world_x: np.ndarray, world_z: np.ndarray) -> np.ndarray:
         """Get interpolated sculpt offsets for arrays of world positions."""
         if not self.sculpt_offsets:
@@ -1538,6 +1615,31 @@ class Terrain:
         gz0 = np.floor(gz_f).astype(np.int32)
         fx = gx_f - gx0
         fz = gz_f - gz0
+        dense = self._dense_sculpt()
+        if dense is not None:
+            min_gx, min_gz, grid = dense
+            w, h = grid.shape
+            ix = gx0.astype(np.int64) - min_gx
+            iz = gz0.astype(np.int64) - min_gz
+            # Nothing sculpted within reach of these points: the common case
+            # for a streamed chunk away from the sculpted area.
+            if (ix.max() < -1 or ix.min() >= w
+                    or iz.max() < -1 or iz.min() >= h):
+                return np.zeros(len(world_x), dtype=np.float32)
+
+            def at(ax, az):
+                inside = (ax >= 0) & (ax < w) & (az >= 0) & (az < h)
+                out = np.zeros(len(ax), dtype=np.float32)
+                out[inside] = grid[ax[inside], az[inside]]
+                return out
+
+            h00 = at(ix, iz)
+            h10 = at(ix + 1, iz)
+            h01 = at(ix, iz + 1)
+            h11 = at(ix + 1, iz + 1)
+            top = h00 + fx * (h10 - h00)
+            bot = h01 + fx * (h11 - h01)
+            return (top + fz * (bot - top)).astype(np.float32)
         result = np.zeros(len(world_x), dtype=np.float32)
         for i in range(len(world_x)):
             h00 = self.sculpt_offsets.get((int(gx0[i]), int(gz0[i])), 0.0)
@@ -1630,10 +1732,12 @@ class Terrain:
     def clear_sculpt(self):
         """Remove all sculpt deformations."""
         self.sculpt_offsets.clear()
+        self._touch_sculpt()
         self.mark_all_dirty()
 
     def _mark_sculpt_region_dirty(self, world_x: float, world_z: float, radius: float):
         """Mark chunks overlapping a sculpted region as dirty."""
+        self._touch_sculpt()
         for key, chunk in self.chunks.items():
             cx = chunk.world_x + chunk.size / 2
             cz = chunk.world_z + chunk.size / 2
@@ -1854,6 +1958,7 @@ class Terrain:
         if 'custom_biome' in data: self.biome = BiomeConfig.from_dict(data['custom_biome'])
         # Sculpt offsets
         self.sculpt_offsets = {}
+        self._touch_sculpt()
         self.sculpt_grid_resolution = data.get('sculpt_grid_resolution', 4.0)
         for entry in data.get('sculpt_offsets', []):
             gx, gz, val = entry
