@@ -9,7 +9,7 @@ import time
 import random
 from OpenGL.GL.shaders import compileProgram, compileShader
 from . import shaders
-from .terrain_table import TerrainTable
+from .terrain_table import MAX_GRID, TerrainTable
 
 # ============================================================================
 # COMPATIBILITY EXPORTS
@@ -320,6 +320,24 @@ class Terrain:
     #: Two builds back to back in one frame were the hitch felt when walking
     #: into new terrain.
     UPDATE_BUDGET_MS = 4.0
+    #: Draw chunks from their height grid on the GPU (a texture layer per
+    #: chunk, every vertex attribute rebuilt in the vertex shader) rather than
+    #: from a 14-float CPU vertex buffer. Same triangles, same attributes.
+    gpu_heightfield = True
+    #: Largest colour gradient the heightfield shader holds (MAX_GRADIENT_STOPS).
+    MAX_GRADIENT_STOPS = 32
+    #: Texture layers per height-grid page; clamped to the driver's limit.
+    HEIGHT_PAGE_LAYERS = 512
+    #: Every uniform the terrain programs are driven through.
+    _UNIFORM_NAMES = (
+        'projection', 'view', 'active_lights', 'use_textures', 'lod_level',
+        'texGrass', 'texRock', 'texSand', 'texSnow', 'biomeWeights',
+        'terrainHeightScale',
+    )
+    _HEIGHTFIELD_UNIFORM_NAMES = (
+        'uHeights', 'uChunkI', 'uChunkX', 'uChunkY', 'uTiling', 'uFlatMode',
+        'uGradCount', 'uGradH', 'uGradC', 'uGradW', 'uGradD',
+    )
     TILING_SCALE = 20.0
     # Physical mesh scale is a true uniform terrain scale. It changes the
     # world-space footprint and vertical relief together; procedural sampling
@@ -357,10 +375,22 @@ class Terrain:
         self.max_chunk_z: int = 2
         self.tree_positions: List[Tuple[float, float, float]] = []
         self.total_triangles: int = 0
+        self.drawn_slots = np.zeros(0, dtype=np.intp)
         self.visible_chunks: int = 0
         self.culled_chunks: int = 0
         self.shader_program: int = 0
         self.uniforms: Dict[str, int] = {}
+        #: The heightfield program and its uniform table (gpu_heightfield).
+        self.heightfield_program: int = 0
+        self.hf_uniforms: Dict[str, int] = {}
+        # Height-grid texture pages (GL_TEXTURE_2D_ARRAY, R32F), slot ->
+        # (page, layer); the table version each slot was last uploaded at;
+        # the empty VAO an attribute-less draw needs in a core profile.
+        self._height_pages: List[int] = []
+        self._page_layers = 0
+        self._gpu_version = np.zeros(0, dtype=np.int64)
+        self._empty_vao = 0
+        self._gradient_warned = False
         # Grass is a separate, simple GL 3.3 instanced pass. CPU owns one
         # compact position/size/phase record per tuft; the GPU expands each
         # instance into two crossed grass blades and animates their tops.
@@ -411,59 +441,48 @@ class Terrain:
             self.load_terrain_textures(texture_manager)
         self._init_shader()
     
-    def _init_shader(self):
+    def _compile_program(self, vertex_name):
+        """Compile the terrain fragment shader against *vertex_name*.
+
+        Returns the program, or 0 when there is no GL context yet (harmless:
+        update_and_render() recompiles on the GL thread at first draw) or the
+        compile genuinely failed (reported).
+        """
         try:
-            vertex_code = shaders.DEFAULT_SHADERS['terrain.vert']
+            vertex_code = shaders.DEFAULT_SHADERS[vertex_name]
             fragment_code = shaders.light_ubo_source(
                 shaders.DEFAULT_SHADERS['terrain.frag'])
             vertex_shader = compileShader(vertex_code, gl.GL_VERTEX_SHADER)
             fragment_shader = compileShader(fragment_code, gl.GL_FRAGMENT_SHADER)
-            self.shader_program = compileProgram(vertex_shader, fragment_shader, validate=False)
-            if not self.shader_program:
+            program = compileProgram(vertex_shader, fragment_shader, validate=False)
+            if not program:
                 print("ERROR: Failed to compile terrain shader program!")
-                self.shader_program = 0
-                return
+                return 0
         except Exception as e:
             msg = str(e)
             # The Terrain can be constructed before the view's GL context is
             # current (e.g. during map load), so glCreateShader isn't bound yet.
-            # That's harmless -- update_and_render() recompiles the shader on the
-            # GL thread at first draw -- so stay quiet instead of printing a
-            # scary ERROR. Only a genuine compile failure is worth reporting.
+            # Stay quiet then; only a genuine compile failure is worth reporting.
             if ("glCreateShader" in msg or "undefined alternate function" in msg
                     or "context" in msg.lower()):
-                self.shader_program = 0
-                return
+                return 0
             print(f"ERROR: Exception during terrain shader compilation: {e}")
-            self.shader_program = 0
-            return
-        
-        block_index = gl.glGetUniformBlockIndex(
-            self.shader_program, 'FioLightBlock')
+            return 0
+        block_index = gl.glGetUniformBlockIndex(program, 'FioLightBlock')
         invalid = getattr(gl, 'GL_INVALID_INDEX', 0xFFFFFFFF)
         if block_index != invalid:
-            gl.glUniformBlockBinding(
-                self.shader_program, block_index, shaders.LIGHT_UBO_BINDING)
+            gl.glUniformBlockBinding(program, block_index, shaders.LIGHT_UBO_BINDING)
+        return program
 
+    def _init_shader(self):
+        self.shader_program = self._compile_program('terrain.vert')
+        if not self.shader_program:
+            return
+        self.heightfield_program = self._compile_program('terrain_heightfield.vert')
         self._init_grass_shader()
+        self.uniforms = {}
+        self.hf_uniforms = {}
 
-        self.uniforms = {
-            'projection':        gl.glGetUniformLocation(self.shader_program, 'projection'),
-            'view':              gl.glGetUniformLocation(self.shader_program, 'view'),
-            'active_lights':     gl.glGetUniformLocation(self.shader_program, 'active_lights'),
-            'use_textures':      gl.glGetUniformLocation(self.shader_program, 'use_textures'),
-            'lod_level':         gl.glGetUniformLocation(self.shader_program, 'lod_level'),
-            'texGrass':          gl.glGetUniformLocation(self.shader_program, 'texGrass'),
-            'texRock':           gl.glGetUniformLocation(self.shader_program, 'texRock'),
-            'texSand':           gl.glGetUniformLocation(self.shader_program, 'texSand'),
-            'texSnow':           gl.glGetUniformLocation(self.shader_program, 'texSnow'),
-            'biomeWeights':      gl.glGetUniformLocation(self.shader_program, 'biomeWeights'),
-            'terrainHeightScale': gl.glGetUniformLocation(self.shader_program, 'terrainHeightScale'),
-        }
-        # Depth cube-map samplers for point-light shadows.
-        for i in range(shaders.MAX_SHADOW_LIGHTS):
-            self.uniforms[f'shadowMaps[{i}]'] = gl.glGetUniformLocation(self.shader_program, f'shadowMaps[{i}]')
-    
     def _init_grass_shader(self):
         try:
             vertex_code = shaders.DEFAULT_SHADERS['grass.vert']
@@ -718,7 +737,7 @@ class Terrain:
         if len(getattr(self, '_grass_count', ())) >= cap:
             return
         for name in ('_mesh_vao', '_mesh_vbo', '_vertex_count',
-                     '_grass_vao', '_grass_vbo', '_grass_count'):
+                     '_grass_vao', '_grass_vbo', '_grass_count', '_gpu_version'):
             old = getattr(self, name, np.zeros(0, dtype=np.int64))
             new = np.zeros(cap, dtype=np.int64)
             new[:len(old)] = old
@@ -928,6 +947,9 @@ class Terrain:
         lod_index = (self.LOD_RESOLUTIONS.index(resolution)
                      if resolution in self.LOD_RESOLUTIONS else 0)
         self.table.store(slot, resolution, lod_index, heights)
+        if self.gpu_heightfield:
+            self._upload_heightfield(slot)
+            return
         vertex_data = self._mesh_from_heights(slot, resolution, heights)
         self._sync_gl_columns()
         self._vertex_count[slot] = len(vertex_data) // 14
@@ -949,6 +971,135 @@ class Terrain:
         gl.glVertexAttribPointer(4, 3, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(44))
         gl.glEnableVertexAttribArray(4)
         gl.glBindVertexArray(0)
+
+    # -- GPU heightfield --------------------------------------------------
+
+    def _ensure_height_page(self, page: int) -> int:
+        """The texture array holding height-grid page *page*, created on demand.
+
+        One layer per table slot (slot = page * layers + layer), R32F, every
+        layer the LOD-0 grid size; a lower LOD uses the top-left corner.
+        """
+        if not self._page_layers:
+            limit = int(gl.glGetIntegerv(gl.GL_MAX_ARRAY_TEXTURE_LAYERS))
+            self._page_layers = max(1, min(self.HEIGHT_PAGE_LAYERS, limit))
+        while len(self._height_pages) <= page:
+            tex = int(gl.glGenTextures(1))
+            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
+            gl.glTexImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, gl.GL_R32F,
+                            MAX_GRID, MAX_GRID, self._page_layers, 0,
+                            gl.GL_RED, gl.GL_FLOAT, None)
+            for pname, value in ((gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST),
+                                 (gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST),
+                                 (gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE),
+                                 (gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)):
+                gl.glTexParameteri(gl.GL_TEXTURE_2D_ARRAY, pname, value)
+            self._height_pages.append(tex)
+        return self._height_pages[page]
+
+    def _upload_heightfield(self, slot: int):
+        """Copy a slot's height grid into its texture layer."""
+        table = self.table
+        self._sync_gl_columns()
+        if not self._page_layers:
+            self._ensure_height_page(0)
+        page, layer = divmod(int(slot), self._page_layers)
+        tex = self._ensure_height_page(page)
+        n = int(table.grid_res[slot]) + 1
+        # Row i of the grid is texel row y = i; column k is x = k.
+        data = np.ascontiguousarray(table.heights[slot, :n, :n], dtype=np.float32)
+        gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, tex)
+        gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
+        gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
+        gl.glTexSubImage3D(gl.GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, n, n, 1,
+                           gl.GL_RED, gl.GL_FLOAT, data)
+        self._gpu_version[slot] = table.version[slot]
+
+    def gradient_uniforms(self):
+        """``(count, H, C, W, D)``: the biome gradient as the shader reads it.
+
+        Each value is cast the way the old NumPy colour code cast it: stop
+        heights and colours to float32, and per segment the width ``h1 - h0``
+        (0 when ``h1 <= h0``) and the colour delta ``c1 - c0`` computed in
+        double precision and then rounded once to float32.
+        """
+        stops = list(self.biome.color_gradient or ())
+        limit = self.MAX_GRADIENT_STOPS
+        if len(stops) > limit and not self._gradient_warned:
+            print(f"[Terrain] colour gradient has {len(stops)} stops; the "
+                  f"heightfield shader uses the first {limit}")
+            self._gradient_warned = True
+        stops = stops[:limit]
+        H = np.zeros(limit, dtype=np.float32)
+        C = np.zeros((limit, 3), dtype=np.float32)
+        W = np.zeros(limit, dtype=np.float32)
+        D = np.zeros((limit, 3), dtype=np.float32)
+        for i, (h, c) in enumerate(stops):
+            H[i] = h
+            C[i] = [c[0], c[1], c[2]]
+        for i in range(len(stops) - 1):
+            h0, c0 = stops[i]
+            h1, c1 = stops[i + 1]
+            W[i] = (h1 - h0) if h1 > h0 else 0.0
+            D[i] = [c1[j] - c0[j] for j in range(3)]
+        return len(stops), H, C, W, D
+
+    def chunk_uniforms(self, slot: int):
+        """``(uChunkI, uChunkX, uChunkY)`` for one slot, as float32/int values."""
+        table = self.table
+        res = int(table.grid_res[slot])
+        layer = int(slot) % self._page_layers if self._page_layers else 0
+        lo = float(table.min_y[slot])
+        hi = float(table.max_y[slot])
+        height_range = hi - lo if hi > lo else 1.0
+        f = lambda v: float(np.float32(v))
+        return ((res, layer),
+                (f(table.world[slot, 0]), f(table.world[slot, 1]),
+                 f(float(table.size[slot]) / res)),
+                (f(lo), f(height_range)))
+
+    def set_heightfield_frame_uniforms(self, u, unit):
+        """Per-frame heightfield uniforms: sampler unit, tiling, gradient."""
+        count, H, C, W, D = self.gradient_uniforms()
+        limit = self.MAX_GRADIENT_STOPS
+        gl.glUniform1i(u['uHeights'], unit)
+        gl.glUniform1f(u['uTiling'], float(np.float32(self.TILING_SCALE)))
+        gl.glUniform1i(u['uFlatMode'], 1 if self.flat_mode else 0)
+        gl.glUniform1i(u['uGradCount'], count)
+        gl.glUniform1fv(u['uGradH'], limit, H)
+        gl.glUniform3fv(u['uGradC'], limit, C)
+        gl.glUniform1fv(u['uGradW'], limit, W)
+        gl.glUniform3fv(u['uGradD'], limit, D)
+
+    def draw_heightfield_slots(self, u, slots, unit, lod_level_loc=-1):
+        """Draw built *slots* from their height grids (the program is current)."""
+        table = self.table
+        stale = slots[self._gpu_version[slots] != table.version[slots]]
+        for slot in stale:
+            self._upload_heightfield(int(slot))
+        if not self._empty_vao:
+            self._empty_vao = int(gl.glGenVertexArrays(1))
+        gl.glBindVertexArray(self._empty_vao)
+        gl.glActiveTexture(gl.GL_TEXTURE0 + unit)
+        bound_page = -1
+        triangles = 0
+        for slot in slots:
+            slot = int(slot)
+            page = slot // self._page_layers
+            if page != bound_page:
+                gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._height_pages[page])
+                bound_page = page
+            (res, layer), cx, cy = self.chunk_uniforms(slot)
+            if lod_level_loc != -1:
+                gl.glUniform1i(lod_level_loc, int(table.lod[slot]))
+            gl.glUniform2i(u['uChunkI'], res, layer)
+            gl.glUniform3f(u['uChunkX'], *cx)
+            gl.glUniform2f(u['uChunkY'], *cy)
+            gl.glDrawArrays(gl.GL_TRIANGLES, 0, 6 * res * res)
+            triangles += 2 * res * res
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glBindVertexArray(0)
+        return triangles
 
     def _upload_grass_chunk(self, slot: int):
         """Generate deterministic grass instances for one chunk and upload them."""
@@ -1115,10 +1266,13 @@ class Terrain:
                           shadow_cubemaps=None, shadow_index_map=None, shadow_unit_base=4,
                           env_uniforms=None):
         if not self.enabled: return
-        if not self.shader_program:
+        gpu = bool(self.gpu_heightfield)
+        if not (self.heightfield_program if gpu else self.shader_program):
             self._init_shader()
-            if not self.shader_program:
-                return
+        prog = self.heightfield_program if gpu else self.shader_program
+        if not prog:
+            return
+        u = self.hf_uniforms if gpu else self.uniforms
 
         # Terrain can be constructed before the GL context exists. In that
         # case _init_shader() cannot create the grass program either, and the
@@ -1136,17 +1290,12 @@ class Terrain:
         # defaults to texture unit 0, collides with the ``sampler2D`` terrain
         # textures bound there, and makes glDrawArrays raise
         # GL_INVALID_OPERATION.
-        for name in ('use_textures', 'lod_level'):
-            if name not in self.uniforms:
-                self.uniforms[name] = gl.glGetUniformLocation(self.shader_program, name)
-        if env_uniforms:
-            for name in env_uniforms:
-                if name not in self.uniforms:
-                    self.uniforms[name] = gl.glGetUniformLocation(self.shader_program, name)
-        for i in range(shaders.MAX_SHADOW_LIGHTS):
-            key = f'shadowMaps[{i}]'
-            if key not in self.uniforms:
-                self.uniforms[key] = gl.glGetUniformLocation(self.shader_program, key)
+        names = self._UNIFORM_NAMES + (self._HEIGHTFIELD_UNIFORM_NAMES if gpu else ())
+        names += tuple(env_uniforms or ())
+        names += tuple(f'shadowMaps[{i}]' for i in range(shaders.MAX_SHADOW_LIGHTS))
+        for name in names:
+            if name not in u:
+                u[name] = gl.glGetUniformLocation(prog, name)
 
         self.visible_chunks = 0
         self.culled_chunks = 0
@@ -1169,21 +1318,21 @@ class Terrain:
             self.table.ensure_bounds(self._chunk_bounds(), self.chunk_size,
                                      self.offset_x, self.offset_z)
         
-        gl.glUseProgram(self.shader_program)
-        gl.glUniformMatrix4fv(self.uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(self.uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-        gl.glActiveTexture(gl.GL_TEXTURE0); gl.glBindTexture(gl.GL_TEXTURE_2D, self.grass_tex); gl.glUniform1i(self.uniforms['texGrass'], 0)
-        gl.glActiveTexture(gl.GL_TEXTURE1); gl.glBindTexture(gl.GL_TEXTURE_2D, self.rock_tex);  gl.glUniform1i(self.uniforms['texRock'],  1)
-        gl.glActiveTexture(gl.GL_TEXTURE2); gl.glBindTexture(gl.GL_TEXTURE_2D, self.sand_tex);  gl.glUniform1i(self.uniforms['texSand'],  2)
-        gl.glActiveTexture(gl.GL_TEXTURE3); gl.glBindTexture(gl.GL_TEXTURE_2D, self.snow_tex);  gl.glUniform1i(self.uniforms['texSnow'],  3)
-        gl.glUniform4f(self.uniforms['biomeWeights'], *self.biome.blend_weights)
-        gl.glUniform1f(self.uniforms['terrainHeightScale'], self.biome.terrain_height_scale)
+        gl.glUseProgram(prog)
+        gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glActiveTexture(gl.GL_TEXTURE0); gl.glBindTexture(gl.GL_TEXTURE_2D, self.grass_tex); gl.glUniform1i(u['texGrass'], 0)
+        gl.glActiveTexture(gl.GL_TEXTURE1); gl.glBindTexture(gl.GL_TEXTURE_2D, self.rock_tex);  gl.glUniform1i(u['texRock'],  1)
+        gl.glActiveTexture(gl.GL_TEXTURE2); gl.glBindTexture(gl.GL_TEXTURE_2D, self.sand_tex);  gl.glUniform1i(u['texSand'],  2)
+        gl.glActiveTexture(gl.GL_TEXTURE3); gl.glBindTexture(gl.GL_TEXTURE_2D, self.snow_tex);  gl.glUniform1i(u['texSnow'],  3)
+        gl.glUniform4f(u['biomeWeights'], *self.biome.blend_weights)
+        gl.glUniform1f(u['terrainHeightScale'], self.biome.terrain_height_scale)
         
         # Force textures off if flat_mode is enabled or textures aren't loaded
         textures_loaded = (self.grass_tex != 0 and self.rock_tex != 0
                            and self.sand_tex != 0 and self.snow_tex != 0)
         use_tex = 0 if self.flat_mode or not textures_loaded else (1 if getattr(self, 'use_textures', True) else 0)
-        gl.glUniform1i(self.uniforms['use_textures'], use_tex)
+        gl.glUniform1i(u['use_textures'], use_tex)
 
         # Distance fog + global ambient (engine.shaders.FOG_GLSL). The terrain
         # owns its program and its own uniform table, so the renderer hands the
@@ -1193,7 +1342,7 @@ class Terrain:
         # to the far plane.
         if env_uniforms:
             for name, value in env_uniforms.items():
-                loc = self.uniforms.get(name, -1)
+                loc = u.get(name, -1)
                 if loc is None or loc == -1:
                     continue
                 if isinstance(value, int):
@@ -1205,7 +1354,7 @@ class Terrain:
         
         # The renderer has already selected the terrain light subset and
         # packed it into the shared std140 light UBO.
-        gl.glUniform1i(self.uniforms['active_lights'], active_lights_count)
+        gl.glUniform1i(u['active_lights'], active_lights_count)
 
         # Bind depth cube-maps so terrain receives point-light shadows.
         #
@@ -1224,7 +1373,7 @@ class Terrain:
         shadow_cubemaps = shadow_cubemaps or []
         placeholder = self._ensure_placeholder_cubemap()
         for i in range(shaders.MAX_SHADOW_LIGHTS):
-            loc = self.uniforms.get(f'shadowMaps[{i}]', -1)
+            loc = u.get(f'shadowMaps[{i}]', -1)
             if loc is None or loc == -1:
                 continue
             cm = shadow_cubemaps[i] if (i < len(shadow_cubemaps) and shadow_cubemaps[i]) else placeholder
@@ -1233,7 +1382,7 @@ class Terrain:
             gl.glUniform1i(loc, shadow_unit_base + i)
         gl.glActiveTexture(gl.GL_TEXTURE0)
         
-        lod_level_loc = self.uniforms.get('lod_level', -1)
+        lod_level_loc = u.get('lod_level', -1)
         table = self.table
         self._sync_gl_columns()
         slots = table.live_slots()
@@ -1255,16 +1404,25 @@ class Terrain:
         self.culled_chunks = int(len(slots) - np.count_nonzero(visible))
 
         if self.wireframe: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
-        drawn = slots[visible]
-        drawn = drawn[(self._mesh_vao[drawn] != 0) & (self._vertex_count[drawn] > 0)]
-        for slot in drawn:
-            if lod_level_loc != -1:
-                gl.glUniform1i(lod_level_loc, int(table.lod[slot]))
-            gl.glBindVertexArray(int(self._mesh_vao[slot]))
-            gl.glDrawArrays(gl.GL_TRIANGLES, 0, int(self._vertex_count[slot]))
+        if gpu:
+            unit = shadow_unit_base + shaders.MAX_SHADOW_LIGHTS
+            self.set_heightfield_frame_uniforms(u, unit)
+            drawn = slots[visible & table.built[slots]]
+            self.total_triangles = self.draw_heightfield_slots(
+                u, drawn, unit, lod_level_loc)
+        else:
+            drawn = slots[visible]
+            drawn = drawn[(self._mesh_vao[drawn] != 0) & (self._vertex_count[drawn] > 0)]
+            for slot in drawn:
+                if lod_level_loc != -1:
+                    gl.glUniform1i(lod_level_loc, int(table.lod[slot]))
+                gl.glBindVertexArray(int(self._mesh_vao[slot]))
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, int(self._vertex_count[slot]))
+            self.total_triangles = int((self._vertex_count[drawn] // 3).sum())
+            gl.glBindVertexArray(0)
         self.visible_chunks = int(len(drawn))
-        self.total_triangles = int((self._vertex_count[drawn] // 3).sum())
-        gl.glBindVertexArray(0)
+        #: The slots drawn this frame, in draw order (tests, Debug Tables).
+        self.drawn_slots = drawn
         if self.wireframe: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_FILL)
         # Dirty meshes first, then what the camera can see, nearest first.
         budget_end = time.perf_counter() + self.UPDATE_BUDGET_MS / 1000.0
@@ -1701,6 +1859,13 @@ class Terrain:
 
     def cleanup(self):
         self._free_gl(self.table.clear())
+        if self._height_pages:
+            gl.glDeleteTextures(len(self._height_pages), self._height_pages)
+            self._height_pages = []
+        if self._empty_vao:
+            gl.glDeleteVertexArrays(1, [self._empty_vao])
+            self._empty_vao = 0
+        self._gpu_version[:] = 0
     
     def to_dict(self) -> dict:
         # While the editor is previewing a Big World fill the live bounds are

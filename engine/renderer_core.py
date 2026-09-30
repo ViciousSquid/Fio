@@ -311,6 +311,7 @@ normalize_color = normalize_color
 _SHADER_LIGHT_CAPS = {
     'water': shaders.MAX_LIGHTS_WATER,
     'terrain': shaders.MAX_LIGHTS_TERRAIN,
+    'terrain_heightfield': shaders.MAX_LIGHTS_TERRAIN,
 }
 
 
@@ -750,10 +751,29 @@ class BaseRenderer:
                     'biomeWeights', 'terrainHeightScale'
                 ])
                 self.uniforms['terrain'].preload(self.ENV_UNIFORMS)
+                # The same fragment shader, fed by a vertex shader that
+                # rebuilds every attribute from the chunk's height grid.
+                hf_vs = compileShader(
+                    shaders.DEFAULT_SHADERS['terrain_heightfield.vert'],
+                    gl.GL_VERTEX_SHADER)
+                hf_fs = compileShader(
+                    shaders.light_ubo_source(TERRAIN_FRAGMENT_SHADER),
+                    gl.GL_FRAGMENT_SHADER,
+                )
+                hf_program = compileProgram(hf_vs, hf_fs, validate=False)
+                self.shaders['terrain_heightfield'] = hf_program
+                self.uniforms['terrain_heightfield'] = UniformCache(hf_program)
+                self.uniforms['terrain_heightfield'].preload([
+                    'projection', 'view', 'active_lights',
+                    'texGrass', 'texRock', 'texSand', 'texSnow',
+                    'biomeWeights', 'terrainHeightScale'
+                ])
+                self.uniforms['terrain_heightfield'].preload(self.ENV_UNIFORMS)
                 print("Terrain shader loaded")
             except Exception as e:
                 print(f"Terrain shader error: {e}")
                 self.shaders['terrain'] = None
+                self.shaders['terrain_heightfield'] = None
 
             # lit and textured shaders (needed for forward fallback in Deferred)
             if self.lowpower_mode:
@@ -2187,6 +2207,11 @@ layout (location = 10) in float iInstanceAlpha;
             terrain.uniforms[f'lights[{i}].color'] = self.uniforms['terrain'][f'lights[{i}].color']
             terrain.uniforms[f'lights[{i}].intensity'] = self.uniforms['terrain'][f'lights[{i}].intensity']
             terrain.uniforms[f'lights[{i}].radius'] = self.uniforms['terrain'][f'lights[{i}].radius']
+        hf_program = self.shaders.get('terrain_heightfield')
+        if hf_program:
+            # Resolved lazily by the terrain against this program.
+            terrain.heightfield_program = hf_program
+            terrain.hf_uniforms = {}
 
     def _ensure_terrain_textures(self, terrain):
         mappings = [('grass_tex', 'grass.jpg'), ('rock_tex', 'rock.jpg'),
@@ -2223,9 +2248,19 @@ layout (location = 10) in float iInstanceAlpha;
         # light UBO, so the terrain program must be current before that call.
         # Without this, glUniform1i/uFogEnabled can raise GL_INVALID_OPERATION
         # when terrain follows a pass that has left another program bound.
-        gl.glUseProgram(terrain.shader_program)
-        self._current_shader = terrain.shader_program
-        self._upload_lights_once('terrain', terrain_lights)
+        # The heightfield path has its own program, and so its own uniform
+        # locations: the upload must be keyed by the program actually drawn.
+        use_heightfield = bool(getattr(terrain, 'gpu_heightfield', False)
+                               and self.shaders.get('terrain_heightfield'))
+        if use_heightfield:
+            if not getattr(terrain, 'heightfield_program', 0):
+                self.setup_terrain_shader(terrain)
+            shader_name, program = 'terrain_heightfield', terrain.heightfield_program
+        else:
+            shader_name, program = 'terrain', terrain.shader_program
+        gl.glUseProgram(program)
+        self._current_shader = program
+        self._upload_lights_once(shader_name, terrain_lights)
         active_lights_count = len(terrain_lights[1])
         gl.glDisable(gl.GL_CULL_FACE)
         if hasattr(terrain, 'get_tri_count'):
@@ -3733,7 +3768,8 @@ layout (location = 10) in float iInstanceAlpha;
         # This is one shader-pass operation, never part of the per-draw loop.
         if shader_name in ('lit', 'textured', 'lit_instanced',
                            'textured_instanced', 'brush_instanced',
-                           'lit_brush_instanced', 'terrain'):
+                           'lit_brush_instanced', 'terrain',
+                           'terrain_heightfield'):
             self._bind_shadow_maps(self.uniforms[shader_name])
     # --------------------------------------------------------------------------
     # Depth cube-map shadow mapping
