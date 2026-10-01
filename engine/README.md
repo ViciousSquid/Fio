@@ -78,8 +78,6 @@ Dense numerical render projection. Converts render-relevant world state into par
 
 This is a derived execution representation, not a second source of truth. It exists so visibility, classification, batching and instance construction do not repeatedly traverse Python objects.
 
-Water is projected alongside the other special brush materials: the dense table carries opacity, Fresnel/reflectivity, wave state, refraction IOR, distortion and roughness. The current water path uses the same screen-space transmission/refraction model as Glass, with optional environment/cubemap resources where configured. The former planar reflection capture pass and its `Reflections` render property are no longer part of the renderer; old saved maps remain loadable and the legacy property simply projects to nothing. Water has two tiers (`water_quality` in `settings.ini`, Settings > Renderer Performance, console `r_waterquality`): **cheap** is that pass alone; **expensive** also copies the depth buffer once per water pass (`glCopyTexSubImage2D` into a depth texture - plain GL 3.3 core, no extra render target) and uses it for Beer-Lambert absorption, waterline foam, caustics on the visible bed and screen-space reflections with the procedural sky as fallback. Low-power machines default to cheap.
-
 ### `renderer_core.py`
 `BaseRenderer`, the shared OpenGL rendering infrastructure used by renderer backends. Provides shader and texture management, VAOs/VBOs, terrain, models, sprites, water, glass, fog, portals, lighting, shadows, editor helpers, LOD support, statistics and cleanup. `render_scene()` is the concrete-renderer entry point rather than an artificial abstract interface.
 
@@ -90,7 +88,8 @@ Shadow rendering is part of the dense execution boundary. `render_shadow_maps(sh
 ### `renderer_F.py`
 Fio's production forward renderer. Implements the frame passes and brush batching, including lit/textured/glow brush paths, forward lighting, point-light shadow cube maps, portal virtual views and render-mode switching.
 
-The renderer consumes the dense numerical render representation and turns equal-key runs into GPU submissions. Billboards go the same way: `draw_sprites_instanced` reads position, size, yaw and texture identity from the entity projection's columns, packs one instance row per sprite and submits one `glDrawArraysInstanced` per texture run. The object-level sprite renderer has been removed; editor, portal and split-screen views all consume the same dense EntityTable sprite representation. Opaque filled brush passes also use back-face culling where safe, while transparent, wireframe and vertex paths leave culling disabled.
+The renderer consumes the dense numerical render representation and turns equal-key runs into GPU submissions. Billboards go the same way: `draw_sprites_instanced` reads position, size, yaw and texture identity from the entity projection's columns, packs one instance row per sprite and submits one `glDrawArraysInstanced` per texture run. 
+> See: [Renderer technical overview](https://github.com/ViciousSquid/Fio/wiki/Renderer-Technical-overview)
 
 ### `savegame.py`
 Native play-session save/load. Serialises player state, entity/mover state, trigger/collection progress and I/O state to `.fiosave` files and restores it on a freshly loaded map.
