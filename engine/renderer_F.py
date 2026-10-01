@@ -1205,8 +1205,17 @@ class Renderer_F(BaseRenderer):
                                             gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
                                         gl.glEnable(gl.GL_DEPTH_TEST)
                                         gl.glDepthFunc(gl.GL_LEQUAL)
+                                        # The virtual scene uses an oblique
+                                        # near-plane projection to clip everything
+                                        # behind the destination aperture. The
+                                        # player's self-representation necessarily
+                                        # lives with the virtual camera, i.e. on that
+                                        # clipped side of the plane, so render this
+                                        # dedicated overlay with the ordinary frame
+                                        # projection while retaining the portal
+                                        # stencil and virtual destination view.
                                         self.draw_player_glasses(
-                                            proj, vw, player_positions)
+                                            projection, vw, player_positions)
                                         gl.glDepthFunc(gl.GL_LESS)
 
                             gl.glDepthMask(gl.GL_TRUE)
