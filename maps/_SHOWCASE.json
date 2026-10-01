@@ -2223,8 +2223,8 @@
         {
             "pos": [
                 -1786,
-                220,
-                -472
+                224,
+                -480
             ],
             "size": [
                 252,
@@ -2254,7 +2254,7 @@
                 220,
                 -472
             ],
-            "hidden": true,
+            "hidden": false,
             "io_connections": [
                 {
                     "output": "OnFullyOpen",
@@ -2270,8 +2270,8 @@
         {
             "pos": [
                 -2046,
-                220,
-                -472
+                224,
+                -480
             ],
             "size": [
                 260,
@@ -2298,7 +2298,7 @@
                 220,
                 -472
             ],
-            "hidden": true,
+            "hidden": false,
             "io_connections": [
                 {
                     "output": "OnFullyOpen",
@@ -4788,9 +4788,9 @@
         {
             "type": "logic_relay",
             "pos": [
-                -1912,
-                216,
-                -424
+                -1504.0,
+                216.0,
+                -416.0
             ],
             "properties": {
                 "type": "logic_relay",
@@ -4822,14 +4822,17 @@
             ]
         },
         {
-            "type": "model",
+            "type": "prop",
             "pos": [
                 -144,
                 96,
                 -896
             ],
             "properties": {
-                "type": "model",
+                "render_mode": "model",
+                "no_collision": true,
+                "carry_enabled": false,
+                "type": "prop",
                 "io_enabled": true,
                 "name": "LowPoly_Tree_v1",
                 "id": "023bab19-f71e-4b6c-9cd8-1544f6d90fb5",
@@ -4845,21 +4848,62 @@
                     1
                 ],
                 "collision_shape": "auto",
-                "no_collision": true,
                 "hidden": false,
-                "disabled": false
+                "disabled": false,
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "health",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12
             },
             "io_connections": []
         },
         {
-            "type": "model",
+            "type": "prop",
             "pos": [
                 -96,
                 96,
                 -1056
             ],
             "properties": {
-                "type": "model",
+                "render_mode": "model",
+                "no_collision": true,
+                "carry_enabled": false,
+                "type": "prop",
                 "io_enabled": true,
                 "name": "LowPoly_Tree_v1 (copy)",
                 "id": "9a56371c-da21-442f-a3a3-e4b32e24ee39",
@@ -4875,21 +4919,62 @@
                     1
                 ],
                 "collision_shape": "auto",
-                "no_collision": true,
                 "hidden": false,
-                "disabled": false
+                "disabled": false,
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "health",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12
             },
             "io_connections": []
         },
         {
-            "type": "model",
+            "type": "prop",
             "pos": [
                 -256,
                 96,
                 -1056
             ],
             "properties": {
-                "type": "model",
+                "render_mode": "model",
+                "no_collision": true,
+                "carry_enabled": false,
+                "type": "prop",
                 "io_enabled": true,
                 "name": "LowPoly_Tree_v1 (copy) (copy)",
                 "id": "7de5285a-f758-4974-a3f8-962073de7251",
@@ -4905,9 +4990,47 @@
                     0.59
                 ],
                 "collision_shape": "auto",
-                "no_collision": true,
                 "hidden": false,
-                "disabled": false
+                "disabled": false,
+                "sprite_path": "assets/sprites/pickup.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": false,
+                "collect_type": "health",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12
             },
             "io_connections": []
         },
@@ -5035,8 +5158,8 @@
         {
             "type": "logic_relay",
             "pos": [
-                -1696.0,
-                40,
+                -1584.0,
+                40.0,
                 464.0
             ],
             "properties": {
