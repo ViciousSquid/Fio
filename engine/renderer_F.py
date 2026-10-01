@@ -1130,6 +1130,35 @@ class Renderer_F(BaseRenderer):
                                     proj, vw, cfg.get('entity_table'),
                                     portal_sprite_slots, camera_pos=cam)
 
+                            gl.glEnable(gl.GL_BLEND)
+                            gl.glDepthMask(gl.GL_FALSE)
+                            if mode == RENDER_MODE_UNLIT:
+                                self.draw_textured_brushes_optimized(
+                                    proj, vw, cam,
+                                    portal_groups['transparent'], portal_lights, cfg,
+                                    portal_table)
+                            else:
+                                self.draw_lit_brushes_optimized(
+                                    proj, vw, cam,
+                                    portal_groups['transparent'], portal_lights, cfg,
+                                    is_transparent_pass=True,
+                                    table=portal_table)
+                            self.draw_water_brushes(
+                                proj, vw, cam, portal_groups['water'], portal_lights, cfg,
+                                table=portal_table)
+                            self.draw_glass_brushes(
+                                proj, vw, cam, portal_groups['glass'], portal_lights, cfg,
+                                table=portal_table)
+                            self.draw_fog_volumes(
+                                proj, vw, cam, portal_groups['fog'], portal_lights, cfg,
+                                table=portal_table)
+
+                            # Player glasses are a portal-scene overlay, but must
+                            # still obey the portal aperture and destination depth.
+                            # Draw them after every world material pass so water,
+                            # glass and fog cannot overwrite the representation,
+                            # and restore the exact stencil/depth state established
+                            # by draw_portals before submitting the billboard.
                             if cfg.get('show_glasses', True):
                                 player_positions = cfg.get(
                                     'player_glasses_positions', ())
@@ -1162,31 +1191,24 @@ class Renderer_F(BaseRenderer):
                                             for pos in player_positions
                                         )
                                     if player_positions:
+                                        # draw_portals owns the stencil mask;
+                                        # reassert it here because the material
+                                        # passes above are independent render
+                                        # operations and must not leak state.
+                                        depth = int(getattr(
+                                            view_state, 'recursion_depth', 1))
+                                        gl.glEnable(gl.GL_STENCIL_TEST)
+                                        gl.glStencilMask(0x00)
+                                        gl.glStencilFunc(
+                                            gl.GL_EQUAL, depth, 0xFF)
+                                        gl.glStencilOp(
+                                            gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
+                                        gl.glEnable(gl.GL_DEPTH_TEST)
+                                        gl.glDepthFunc(gl.GL_LEQUAL)
                                         self.draw_player_glasses(
                                             proj, vw, player_positions)
+                                        gl.glDepthFunc(gl.GL_LESS)
 
-                            gl.glEnable(gl.GL_BLEND)
-                            gl.glDepthMask(gl.GL_FALSE)
-                            if mode == RENDER_MODE_UNLIT:
-                                self.draw_textured_brushes_optimized(
-                                    proj, vw, cam,
-                                    portal_groups['transparent'], portal_lights, cfg,
-                                    portal_table)
-                            else:
-                                self.draw_lit_brushes_optimized(
-                                    proj, vw, cam,
-                                    portal_groups['transparent'], portal_lights, cfg,
-                                    is_transparent_pass=True,
-                                    table=portal_table)
-                            self.draw_water_brushes(
-                                proj, vw, cam, portal_groups['water'], portal_lights, cfg,
-                                table=portal_table)
-                            self.draw_glass_brushes(
-                                proj, vw, cam, portal_groups['glass'], portal_lights, cfg,
-                                table=portal_table)
-                            self.draw_fog_volumes(
-                                proj, vw, cam, portal_groups['fog'], portal_lights, cfg,
-                                table=portal_table)
                             gl.glDepthMask(gl.GL_TRUE)
                         finally:
                             self._frame_camera_pos = saved_cam
