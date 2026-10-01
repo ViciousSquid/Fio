@@ -61,6 +61,20 @@ def is_water_brush(brush):
     return False
 
 
+def water_high_quality(brush):
+    """A water brush's "High quality" flag (``water_high_quality``, default on).
+
+    High-quality water copies the scene depth for depth-based colour,
+    shoreline foam, caustics and screen-space reflections; off, it is the
+    cheap look (waves, refraction, sky reflection). Authored per brush, so
+    hand-edited maps may hold strings like ``"false"`` or ``"0"``.
+    """
+    value = brush.get('water_high_quality', True)
+    if isinstance(value, str):
+        return value.strip().lower() not in ('0', 'false', 'no', 'off', '')
+    return bool(value)
+
+
 def is_solid_world_brush(brush):
     """Single source of truth for "is this brush part of the solid world?".
 

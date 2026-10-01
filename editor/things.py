@@ -1253,6 +1253,8 @@ class Portal(Thing):
                            Toggle at runtime via Enable/Disable/Toggle inputs.
     color          (list)  [r, g, b] 0-255 rim/glow tint.  Default white.
     show_rim       (bool)  Draw outline.
+    glasses        (bool)  Looking into this portal shows your own glasses
+                           reflected back at you, like a mirror.  Default on.
 
     I/O outputs
     -----------
@@ -1290,6 +1292,7 @@ class Portal(Thing):
     'portal_direction',
     'color',
     'show_rim',
+    'glasses',
     )
 
     DEFAULT_WIDTH  = 128.0
@@ -1336,6 +1339,9 @@ class Portal(Thing):
         # Visual rim
         self.properties.setdefault('color',    [255, 255, 255])
         self.properties.setdefault('show_rim', True)
+
+        # Reflect the viewer's own glasses when they look into this portal.
+        self.properties.setdefault('glasses', True)
 
         # Parenting: attach this portal to a mover brush by name.
         # When parent_mover is non-empty the logic thread moves this

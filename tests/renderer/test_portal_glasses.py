@@ -21,22 +21,31 @@ SELF_EYE = (1000.0, 154.0, -1100.0)
 OTHER_EYE = (300.0, 154.0, -500.0)
 
 
-def _cfg(*positions, mirror=True):
+def _cfg(*positions, glasses=True, sprites=None):
+    """Portal A (slot 0) looks out of portal B (slot 1). *glasses* is portal
+    A's ``glasses`` property: whether it reflects your own glasses."""
     basis = np.zeros((2, 3, 3))
     basis[0] = A_BASIS
     basis[1] = B_BASIS
-    table = SimpleNamespace(pos=np.asarray([A_POS, B_POS]), portal_basis=basis)
-    return {'player_glasses_positions': tuple(positions), 'entity_table': table,
-            'portal_mirror': mirror}
+    table = SimpleNamespace(pos=np.asarray([A_POS, B_POS]), portal_basis=basis,
+                            portal_glasses=np.asarray([glasses, True]))
+    cfg = {'player_glasses_positions': tuple(positions), 'entity_table': table}
+    if sprites is not None:
+        cfg['player_glasses_sprites'] = tuple(sprites)
+    return cfg
 
 
 def _view(depth=1):
     return SimpleNamespace(aperture_slot=0, clip_slot=1, recursion_depth=depth)
 
 
-def _positions(cfg, view, camera):
+def _entries(cfg, view, camera):
     renderer = Renderer_F.__new__(Renderer_F)
     return renderer._portal_glasses_positions(cfg, view, camera)
+
+
+def _positions(cfg, view, camera):
+    return tuple(pos for pos, _sprite in _entries(cfg, view, camera))
 
 
 def test_own_glasses_are_mirrored_and_others_stay_where_they_are():
@@ -66,6 +75,28 @@ def test_no_players_draw_nothing():
     assert _positions(_cfg(), _view(), SELF_EYE) == ()
 
 
-def test_portal_mirror_off_keeps_everyone_at_their_real_position():
-    got = _positions(_cfg(SELF_EYE, OTHER_EYE, mirror=False), _view(), SELF_EYE)
+def test_portal_with_glasses_off_keeps_everyone_at_their_real_position():
+    got = _positions(_cfg(SELF_EYE, OTHER_EYE, glasses=False), _view(), SELF_EYE)
     assert np.allclose(got, (SELF_EYE, OTHER_EYE))
+
+
+def test_glasses_is_read_from_the_portal_being_looked_into():
+    # Portal B has Glasses on, but the view is into A, whose Glasses is off.
+    cfg = _cfg(SELF_EYE, glasses=False)
+    assert np.allclose(_positions(cfg, _view(), SELF_EYE), (SELF_EYE,))
+    # Looking into B instead reflects you.
+    into_b = SimpleNamespace(aperture_slot=1, clip_slot=0, recursion_depth=1)
+    got = _positions(cfg, into_b, SELF_EYE)
+    assert len(got) == 1 and not np.allclose(got[0], SELF_EYE)
+
+
+def test_each_player_keeps_their_own_glasses_sprite():
+    cfg = _cfg(SELF_EYE, OTHER_EYE, sprites=('Glasses:pixel_shades', 'Glasses'))
+    got = _entries(cfg, _view(), SELF_EYE)
+    # Your reflection still wears your pair; the other player wears theirs.
+    assert [sprite for _pos, sprite in got] == ['Glasses', 'Glasses:pixel_shades']
+
+
+def test_missing_sprites_fall_back_to_the_default_pair():
+    got = _entries(_cfg(SELF_EYE, OTHER_EYE), _view(), (0.0, 2000.0, 0.0))
+    assert [sprite for _pos, sprite in got] == ['Glasses', 'Glasses']

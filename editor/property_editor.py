@@ -15,6 +15,7 @@ from editor.things import (Thing, Light, Effect, Prop, Monster, Speaker,
 from editor import state_values as _sv
 from engine.brush_geometry import GEO_RUNTIME_KEYS
 from engine.monster_constants import MONSTER_VARIANTS
+from engine.constants import water_high_quality
 from editor.tooltips import set_tooltips_enabled
 
 def _project_root() -> str:
@@ -1552,19 +1553,16 @@ class PropertyEditor(QWidget):
         layout = QVBoxLayout(group)
         layout.setSpacing(8)
 
-        # Water quality is a renderer setting shared by every water brush
-        # (also in Settings > Renderer Performance and the console's
-        # r_waterquality); it is surfaced here where water is edited.
         quality_cb = _make_checkbox(
-            "Expensive water",
-            self._water_quality() == 'expensive',
-            self._set_expensive_water,
+            "High quality",
+            water_high_quality(brush),
+            lambda c: self.update_object_prop('water_high_quality', c),
             _Style.CHECKBOX)
         quality_cb.setToolTip(
-            "Applies to all water in the level (the Water Quality setting).\n"
+            "This water brush only.\n"
             "On: depth-based colour, shoreline foam, caustics and reflections\n"
             "of the scene. Off: cheap water - waves, refraction and sky\n"
-            "reflection only.")
+            "reflection only (faster).")
         self._widgets['water_quality_cb'] = quality_cb
 
         plane_cb = _make_checkbox(
@@ -1657,43 +1655,6 @@ class PropertyEditor(QWidget):
         layout.addWidget(wave_group)
 
         return group
-
-    def _view_renderer(self):
-        view = getattr(self.editor, 'view_3d', None)
-        return getattr(view, 'renderer', None) if view is not None else None
-
-    def _water_quality(self):
-        """The water quality in use: the live renderer's, else settings.ini's."""
-        renderer = self._view_renderer()
-        if renderer is not None and hasattr(renderer, 'water_quality'):
-            return renderer.water_quality
-        config = getattr(self.editor, 'config', None)
-        if config is not None:
-            try:
-                return config.get('Renderer', 'water_quality', fallback='expensive')
-            except Exception:
-                pass
-        return 'expensive'
-
-    def _set_expensive_water(self, checked):
-        """Switch every water surface between expensive and cheap, and save it."""
-        quality = 'expensive' if checked else 'cheap'
-        renderer = self._view_renderer()
-        if renderer is not None:
-            renderer.water_quality = quality
-            view = getattr(self.editor, 'view_3d', None)
-            if hasattr(view, 'update'):
-                view.update()
-        config = getattr(self.editor, 'config', None)
-        if config is not None:
-            try:
-                if not config.has_section('Renderer'):
-                    config.add_section('Renderer')
-                config.set('Renderer', 'water_quality', quality)
-                if hasattr(self.editor, 'save_config'):
-                    self.editor.save_config()
-            except Exception:
-                pass
 
     def _create_fog_properties(self, brush):
         group = QGroupBox("Fog Properties")
@@ -4346,7 +4307,7 @@ class PropertyEditor(QWidget):
             shader_keys = ('glass_color', 'glass_opacity', 'glass_distortion', 'glass_refraction',
                            'glass_roughness', 'glass_fresnel', 'glow_color', 'glow_intensity',
                            'water_tint', 'water_opacity', 'water_reflectivity', 'water_wave_enabled',
-                           'water_wave_height', 'water_plane', 'water_reflections',
+                           'water_wave_height', 'water_plane', 'water_high_quality', 'water_reflections',
                            'water_distortion', 'water_refraction', 'water_roughness', 'water_fresnel',
                            'fog_color', 'fog_density')
             for key in shader_keys:

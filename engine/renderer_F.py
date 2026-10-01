@@ -881,18 +881,27 @@ class Renderer_F(BaseRenderer):
     PORTAL_SELF_GLASSES_RADIUS = 64.0
 
     def _portal_glasses_positions(self, cfg, view_state, frame_camera_pos):
-        """Glasses positions to draw in one portal's virtual scene.
+        """Glasses to draw in one portal's virtual scene, as ``(pos, key)``.
 
-        With ``portal_mirror`` on (settings.ini), the viewer's own glasses are
-        mirrored by the portal being looked into (only for portals seen
-        directly, not portals seen inside portals); everyone else keeps their
-        real position. With it off, everyone keeps their real position.
+        A portal whose ``glasses`` property is on (the default) mirrors the
+        viewer's own glasses when they look straight into it (only for
+        portals seen directly, not portals seen inside portals); everyone
+        else keeps their real position. With it off, everyone keeps their
+        real position. *key* is the sprite each player wears (see
+        ``player_glasses_sprites``).
         """
         positions = cfg.get('player_glasses_positions', ())
         if not positions:
             return ()
-        if not cfg.get('portal_mirror', True):
-            return tuple(positions)
+        sprites = tuple(cfg.get('player_glasses_sprites', ()))
+        sprites = sprites + ('Glasses',) * (len(positions) - len(sprites))
+        entries = list(zip(positions, sprites))
+        aperture = int(getattr(view_state, 'aperture_slot', -1))
+        clip = int(getattr(view_state, 'clip_slot', -1))
+        table = cfg.get('entity_table')
+        if (table is not None and 0 <= aperture < len(table.portal_glasses)
+                and not bool(table.portal_glasses[aperture])):
+            return tuple(entries)
         self_index = -1
         if frame_camera_pos is not None:
             cx = float(frame_camera_pos[0])
@@ -908,17 +917,14 @@ class Renderer_F(BaseRenderer):
                     best = dist_sq
                     self_index = i
         if self_index < 0:
-            return tuple(positions)
-        others = [pos for i, pos in enumerate(positions) if i != self_index]
-        aperture = int(getattr(view_state, 'aperture_slot', -1))
-        clip = int(getattr(view_state, 'clip_slot', -1))
-        table = cfg.get('entity_table')
+            return tuple(entries)
+        others = [entry for i, entry in enumerate(entries) if i != self_index]
         if (int(getattr(view_state, 'recursion_depth', 1)) == 1
                 and aperture >= 0 and clip >= 0 and table is not None):
-            others.append(_portal_mirror_point(
+            others.append((_portal_mirror_point(
                 table.pos[aperture], self._portal_slot_basis(table, aperture),
                 table.pos[clip], self._portal_slot_basis(table, clip),
-                positions[self_index]))
+                positions[self_index]), sprites[self_index]))
         return tuple(others)
 
     def render_scene(self, projection, view, camera_pos, brushes, things,
@@ -1200,22 +1206,23 @@ class Renderer_F(BaseRenderer):
                                 table=portal_table)
 
                             # Player glasses through a portal (same "show glasses"
-                            # setting as split-screen). With portal_mirror on, the
-                            # portal you are looking into shows your own glasses as
-                            # a mirror would: your position is reflected across that
-                            # aperture and carried through to the destination side,
-                            # so it is seen straight back at you. Every other player
-                            # (split-screen), and you with portal_mirror off, is
-                            # drawn where they really are -- the virtual scene is the
-                            # real world seen from the destination side.
+                            # setting as split-screen). A portal with its Glasses
+                            # property on shows your own glasses as a mirror would
+                            # when you look into it: your position is reflected
+                            # across that aperture and carried through to the
+                            # destination side, so it is seen straight back at you.
+                            # Every other player (split-screen), and you in a portal
+                            # with Glasses off, is drawn where they really are --
+                            # the virtual scene is the real world seen from the
+                            # destination side.
                             # Drawn after every world material pass so water, glass
                             # and fog cannot overwrite them, with the oblique
                             # projection so anything behind the destination aperture
                             # stays clipped, and inside this portal's stencil level.
                             if cfg.get('show_glasses', True):
-                                player_positions = self._portal_glasses_positions(
+                                player_glasses = self._portal_glasses_positions(
                                     cfg, view_state, camera_pos)
-                                if player_positions:
+                                if player_glasses:
                                     depth = int(getattr(
                                         view_state, 'recursion_depth', 1))
                                     gl.glEnable(gl.GL_STENCIL_TEST)
@@ -1224,7 +1231,9 @@ class Renderer_F(BaseRenderer):
                                     gl.glStencilOp(
                                         gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
                                     self.draw_player_glasses(
-                                        proj, vw, player_positions)
+                                        proj, vw,
+                                        [pos for pos, _ in player_glasses],
+                                        sprites=[key for _, key in player_glasses])
 
                             gl.glDepthMask(gl.GL_TRUE)
                         finally:

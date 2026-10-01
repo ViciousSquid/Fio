@@ -52,6 +52,10 @@ from engine.threaded_game_state import ThreadedGameState, RenderState
 from engine.entity_table import EntityTable
 from engine.renderer_core import restore_default_pixel_store
 from engine.view_distance import ViewDistance
+from engine.glasses import (
+    DEFAULT_GLASSES, DEFAULT_SPRITE_KEY, GLASSES_STYLES, GLASSES_SUBFOLDER,
+    glasses_sprite_key, normalize_glasses,
+)
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.debug_console import DebugConsole
@@ -210,12 +214,11 @@ class QtGameView(QOpenGLWidget):
         self.show_glasses = self.editor.config.getboolean(
             'Display', 'show_glasses', fallback=True
         )
-        # settings.ini [Display] portal_mirror: a portal you look into shows
-        # your own glasses as a reflection. Off, you only appear where the
-        # exit portal really looks back at you.
-        self.portal_mirror = self.editor.config.getboolean(
-            'Display', 'portal_mirror', fallback=True
-        )
+        # The glasses player 1 wears (Settings > Appearance); player 2
+        # always wears the default pair.
+        self.player1_glasses = normalize_glasses(self.editor.config.get(
+            'Appearance', 'glasses', fallback=DEFAULT_GLASSES
+        ))
 
         # PYGAME INIT (MUST happen before _init_sound_system)
         pygame.init()
@@ -269,8 +272,8 @@ class QtGameView(QOpenGLWidget):
             "time": 0.0,
             "show_sprites_in_play_mode": False,
             "show_glasses": True,
-            "portal_mirror": True,
             "player_glasses_positions": (),
+            "player_glasses_sprites": (),
             "grid_visible": True,
         }
 
@@ -1236,6 +1239,7 @@ class QtGameView(QOpenGLWidget):
             positions,
             width=40.0,
             height=18.0,
+            sprites=self._render_config.get("player_glasses_sprites", ()),
         )
         # render_scene leaves depth testing disabled; restore that state after
         # this explicit post-scene billboard pass.
@@ -1429,17 +1433,21 @@ class QtGameView(QOpenGLWidget):
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
         self._render_config["show_glasses"] = bool(getattr(self, 'show_glasses', True))
-        self._render_config["portal_mirror"] = bool(getattr(self, 'portal_mirror', True))
         _glass_positions = []
+        _glass_sprites = []
         if render_state is not None and self.play_mode and self._render_config["show_glasses"]:
             if not getattr(render_state, 'player_dead', False):
                 _p = render_state.player_pos
                 _glass_positions.append((float(_p.x), float(_p.y) + 40.0, float(_p.z)))
+                _glass_sprites.append(glasses_sprite_key(
+                    getattr(self, 'player1_glasses', DEFAULT_GLASSES)))
             if (getattr(render_state, 'splitscreen_active', False)
                     and not getattr(render_state, 'player2_dead', False)):
                 _p2 = render_state.player2_pos
                 _glass_positions.append((float(_p2.x), float(_p2.y) + 40.0, float(_p2.z)))
+                _glass_sprites.append(DEFAULT_SPRITE_KEY)
         self._render_config["player_glasses_positions"] = tuple(_glass_positions)
+        self._render_config["player_glasses_sprites"] = tuple(_glass_sprites)
         self._render_config["grid_visible"] = getattr(self, 'grid_visible', True) and not self.play_mode
         self._render_config["terrain"] = getattr(self.editor, 'terrain', None)
         if render_state and hasattr(render_state, 'all_brushes'):
@@ -2292,7 +2300,6 @@ class QtGameView(QOpenGLWidget):
     def load_all_sprite_textures(self):
         things = {
             'PlayerStart': 'player.png',
-            'Glasses': 'glasses.png',
             'Light': 'light.png',
             'Monster': 'monster.png',
             'Prop': 'pickup.png',
@@ -2312,6 +2319,11 @@ class QtGameView(QOpenGLWidget):
             tid = self.load_texture(fname, 'sprites')
             if tid:
                 self.sprite_textures[cls] = tid
+        # Every glasses style, so changing Appearance needs no reload.
+        for style, _label, fname in GLASSES_STYLES:
+            tid = self.load_texture(fname, GLASSES_SUBFOLDER)
+            if tid:
+                self.sprite_textures[glasses_sprite_key(style)] = tid
         if 'Portal' not in self.sprite_textures and self.renderer:
             try:
                 tex_id = gl.glGenTextures(1)

@@ -485,6 +485,36 @@ def _toggle_plugin(MainWindow, plugin, enabled, menu_actions=None):
                               + ("" if enabled else " (restart to fully unload)"))
 
 
+def singleton_instance(things, ttype):
+    """The entity in *things* that a new *ttype* entity would duplicate.
+
+    None unless *ttype* is a registered per-map singleton (see
+    ``register_singleton_entity``) and *things* already holds one. Fully
+    guarded -- any error means "no conflict", so an ordinary entity is never
+    affected. Placement, clone and paste all ask this.
+    """
+    if not ttype:
+        return None
+    try:
+        from plugins.manager import get_manager
+        mgr = get_manager()
+        if not mgr.is_singleton_entity(ttype):
+            return None
+        norm = mgr._normalise_type(ttype)
+    except Exception:
+        return None
+    for t in things or []:
+        props = getattr(t, "properties", None)
+        if not isinstance(props, dict):
+            continue
+        try:
+            if mgr._normalise_type(props.get("type", "")) == norm:
+                return t
+        except Exception:
+            continue
+    return None
+
+
 def _singleton_blocked(main_window, editor_state, ttype) -> bool:
     """Enforce per-map singleton entity types (see ``register_singleton_entity``).
 
@@ -493,27 +523,7 @@ def _singleton_blocked(main_window, editor_state, ttype) -> bool:
     placement. Otherwise returns False. Fully guarded -- any error means "don't
     block", so an ordinary entity is never affected.
     """
-    if not ttype:
-        return False
-    try:
-        from plugins.manager import get_manager
-        mgr = get_manager()
-        if not mgr.is_singleton_entity(ttype):
-            return False
-        norm = mgr._normalise_type(ttype)
-    except Exception:
-        return False
-    existing = None
-    for t in getattr(editor_state, "things", []) or []:
-        props = getattr(t, "properties", None)
-        if not isinstance(props, dict):
-            continue
-        try:
-            if mgr._normalise_type(props.get("type", "")) == norm:
-                existing = t
-                break
-        except Exception:
-            continue
+    existing = singleton_instance(getattr(editor_state, "things", []), ttype)
     if existing is None:
         return False
     try:

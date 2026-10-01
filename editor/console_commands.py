@@ -86,7 +86,6 @@ class ConsoleCommandHandler:
             'teleport': self.cmd_setpos,
             'ss': self.cmd_split_screen,
             'showglasses': self.cmd_show_glasses,
-            'portal_mirror': self.cmd_portal_mirror,
             'message': self.cmd_message,
             'message2': self.cmd_message2,
             'message3': self.cmd_message3,
@@ -894,12 +893,11 @@ class ConsoleCommandHandler:
 <b style="color:orange;">tint</b> &lt;name&gt; &lt;R&gt; &lt;G&gt; &lt;B&gt; — Set tint colour (0-255) or 'clear'<br>
 <b style="color:cyan;">=== Rendering ===</b><br>
 <b style="color:orange;">ss</b> — Toggle split-screen mode (F9)<br>
-<b style="color:orange;">portal_mirror</b> 0|1 — Show your own glasses reflected in portals you look into<br>
 <b style="color:orange;">r_list</b> — Show all current render settings<br>
 <b style="color:orange;">r_wireframe</b>{sep}<b style="color:orange;">wireframe</b> — Toggle wireframe mode<br>
 <b style="color:orange;">r_shadows</b>{sep}<b style="color:orange;">shadows</b> — Toggle shadows<br>
 <b style="color:orange;">r_fog</b>{sep}<b style="color:orange;">fog</b> — Toggle volumetric fog (fog brushes)<br>
-<b style="color:orange;">r_waterquality</b>{sep}<b style="color:orange;">waterquality</b> [cheap|expensive] — Water detail tier<br>
+<b style="color:orange;">r_waterquality</b>{sep}<b style="color:orange;">waterquality</b> [cheap|expensive] — Debug cap: cheap forces all water cheap; expensive lets each brush's High quality decide<br>
 <b style="color:orange;">r_lighting</b>{sep}<b style="color:orange;">lighting</b> — Toggle real-time lighting<br>
 <b style="color:orange;">r_clearcolor</b> r g b — Set background colour<br>
 <b style="color:cyan;">=== View Distance &amp; Far-Plane Fog ===</b><br>
@@ -993,7 +991,9 @@ entity to drive them from the I/O system.</i><br>
 
         add_line("Wireframe", "ON" if getattr(renderer, 'wireframe', False) else "OFF")
         add_line("Shadows", "ON" if getattr(renderer, 'shadows_enabled', False) else "OFF")
-        add_line("Water quality", getattr(renderer, 'water_quality', 'expensive'))
+        add_line("Water quality cap",
+                 "per brush" if getattr(renderer, 'water_quality', 'expensive') == 'expensive'
+                 else "cheap (all water)")
         add_line("Volumetric Fog", "ON" if getattr(renderer, 'fog_enabled', True) else "OFF")
         add_line("Water Shader", "ON" if getattr(renderer, 'water_enabled', True) else "OFF")
         add_line("Glass Shader", "ON" if getattr(renderer, 'glass_enabled', True) else "OFF")
@@ -1047,7 +1047,12 @@ entity to drive them from the I/O system.</i><br>
         debug_log("Info", f"Water shader: {'ON' if renderer.water_enabled else 'OFF'}")
 
     def cmd_water_quality(self, args):
-        """Show or set the water tier: cheap / expensive (no argument toggles)."""
+        """Debug cap on water quality: cheap / expensive (no argument toggles).
+
+        Quality is a per-brush property ("High quality" on a water brush);
+        ``cheap`` forces every brush cheap for this session, ``expensive``
+        lets each brush choose. Never saved.
+        """
         renderer = self._get_renderer()
         if not renderer: return
         current = getattr(renderer, 'water_quality', 'expensive')
@@ -1059,7 +1064,8 @@ entity to drive them from the I/O system.</i><br>
         else:
             wanted = 'cheap' if current == 'expensive' else 'expensive'
         renderer.water_quality = wanted
-        debug_log("Info", f"Water quality: {wanted}")
+        debug_log("Info", "Water quality: " + (
+            "per brush" if wanted == 'expensive' else "cheap (all water)"))
 
     def cmd_render_glass(self, args):
         renderer = self._get_renderer()
@@ -2136,26 +2142,6 @@ entity to drive them from the I/O system.</i><br>
         state = "ON" if view_3d.show_glasses else "OFF"
         self.main_window.show_toast(f"Player glasses: {state}")
         debug_log("Info", f"Player glasses display set to {state}")
-        view_3d.update()
-
-    def cmd_portal_mirror(self, args):
-        """portal_mirror 0|1 — Reflect your own glasses in portals you look into.
-
-        Overrides settings.ini [Display] portal_mirror for this session.
-        """
-        view_3d = self.main_window.view_3d
-        arg = args.strip().lower() if args else ""
-        if arg in ("1", "on", "true"):
-            view_3d.portal_mirror = True
-        elif arg in ("0", "off", "false"):
-            view_3d.portal_mirror = False
-        else:
-            state = 1 if getattr(view_3d, 'portal_mirror', True) else 0
-            debug_log("Info", f"portal_mirror is {state}. Usage: portal_mirror 0|1")
-            return
-        state = "ON" if view_3d.portal_mirror else "OFF"
-        self.main_window.show_toast(f"Portal mirror: {state}")
-        debug_log("Info", f"Portal mirror set to {state}")
         view_3d.update()
 
     def cmd_clear(self, args):

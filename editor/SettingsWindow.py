@@ -1,13 +1,17 @@
 from PyQt5.QtWidgets import (
     QDialog, QCheckBox, QVBoxLayout, QDialogButtonBox, QGroupBox, QHBoxLayout,
     QLabel, QSpinBox, QPushButton, QTabWidget, QWidget, QFormLayout, QSlider,
-    QMessageBox, QComboBox
+    QMessageBox, QComboBox, QGridLayout, QToolButton, QButtonGroup
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtGui import QIcon, QPixmap
 import sys
 import os
 
 from engine import shaders
+from engine.glasses import (
+    DEFAULT_GLASSES, GLASSES_STYLES, glasses_path, normalize_glasses,
+)
 
 class SettingsWindow(QDialog):
     """
@@ -29,6 +33,7 @@ class SettingsWindow(QDialog):
         self._create_play_modes_tab()
         self._create_controls_tab()
         self._create_split_screen_tab()   # new tab
+        self._create_appearance_tab()
         
         button_layout = QHBoxLayout()
         
@@ -233,21 +238,6 @@ class SettingsWindow(QDialog):
         )
         renderer_layout.addWidget(self.shadows_enabled_checkbox)
 
-        water_row = QHBoxLayout()
-        water_row.addWidget(QLabel("Water Quality:"))
-        self.water_quality_combo = QComboBox()
-        self.water_quality_combo.addItem("Cheap", 'cheap')
-        self.water_quality_combo.addItem("Expensive", 'expensive')
-        self.water_quality_combo.setToolTip(
-            "Cheap: waves, refraction, sky reflection and edge foam.\n"
-            "Expensive: also copies the depth buffer once per frame for\n"
-            "depth-based colour, shoreline foam, caustics and reflections\n"
-            "of the scene. Applies the next time Fio starts."
-        )
-        water_row.addWidget(self.water_quality_combo)
-        water_row.addStretch()
-        renderer_layout.addLayout(water_row)
-        
         auto_detect_btn = QPushButton("Auto-Detect Best Settings")
         auto_detect_btn.clicked.connect(self._auto_detect_renderer_settings)
         renderer_layout.addWidget(auto_detect_btn)
@@ -283,36 +273,27 @@ class SettingsWindow(QDialog):
         if is_low_power:
             self.lowpower_mode_checkbox.setChecked(True)
             self.shadows_enabled_checkbox.setChecked(False)
-            self._set_water_quality('cheap')
             QMessageBox.information(
                 self,
                 "Auto-Detect Complete",
                 f"Detected: {reason}\n\n"
                 "Applied low-power settings:\n"
                 "• Low-power Mode: ON\n"
-                "• Dynamic Shadows: OFF\n"
-                "• Water Quality: Cheap\n\n"
+                "• Dynamic Shadows: OFF\n\n"
                 "These settings improve performance on low-power hardware."
             )
         else:
             self.lowpower_mode_checkbox.setChecked(False)
             self.shadows_enabled_checkbox.setChecked(True)
-            self._set_water_quality('expensive')
             QMessageBox.information(
                 self,
                 "Auto-Detect Complete", 
                 f"Detected: {reason}\n\n"
                 "Applied standard settings:\n"
                 "• Low-power Mode: OFF (full light budget)\n"
-                "• Dynamic Shadows: ON\n"
-                "• Water Quality: Expensive\n\n"
+                "• Dynamic Shadows: ON\n\n"
                 "Full quality rendering enabled."
             )
-
-    def _set_water_quality(self, quality):
-        index = self.water_quality_combo.findData(quality)
-        if index >= 0:
-            self.water_quality_combo.setCurrentIndex(index)
 
     def _create_play_modes_tab(self):
         widget = QWidget()
@@ -464,6 +445,71 @@ class SettingsWindow(QDialog):
         layout.addWidget(p2_group)
         layout.addStretch()
 
+    def _create_appearance_tab(self):
+        """Appearance tab: the glasses that represent player 1 in the world."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        self.tabs.addTab(widget, "Appearance")
+
+        group = QGroupBox("Glasses (Player 1)")
+        group_layout = QVBoxLayout()
+        note = QLabel(
+            "Choose the glasses other players see you as - in split-screen\n"
+            "and reflected in portals. Player 2 always wears the classic pair."
+        )
+        note.setStyleSheet("color: #9fb7b5;")
+        group_layout.addWidget(note)
+
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        self.glasses_buttons = QButtonGroup(self)
+        self.glasses_buttons.setExclusive(True)
+        self._glasses_button_for = {}
+        columns = 3
+        for index, (style, label, _fname) in enumerate(GLASSES_STYLES):
+            button = QToolButton()
+            button.setCheckable(True)
+            button.setText(label)
+            button.setToolTip(label)
+            button.setIcon(QIcon(QPixmap(glasses_path(style))))
+            button.setIconSize(QSize(150, 64))
+            button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+            button.setMinimumSize(170, 100)
+            button.setProperty('glasses_style', style)
+            button.setStyleSheet("""
+                QToolButton {
+                    background-color: #d8e2e1;
+                    color: #1e2b2a;
+                    border: 2px solid #555;
+                    border-radius: 6px;
+                    padding: 6px;
+                }
+                QToolButton:hover { border: 2px solid #4A6B73; }
+                QToolButton:checked {
+                    border: 3px solid #F08000;
+                    font-weight: bold;
+                }
+            """)
+            self.glasses_buttons.addButton(button, index)
+            self._glasses_button_for[style] = button
+            grid.addWidget(button, index // columns, index % columns)
+        group_layout.addLayout(grid)
+        group.setLayout(group_layout)
+        layout.addWidget(group)
+        layout.addStretch()
+
+    def _set_glasses(self, style):
+        button = self._glasses_button_for.get(normalize_glasses(style))
+        if button is not None:
+            button.setChecked(True)
+
+    def selected_glasses(self):
+        """The glasses style currently picked on the Appearance tab."""
+        button = self.glasses_buttons.checkedButton()
+        if button is None:
+            return DEFAULT_GLASSES
+        return normalize_glasses(button.property('glasses_style'))
+
     def _apply_stylesheet(self):
         self.setStyleSheet("""
             QCheckBox::indicator:checked {
@@ -543,9 +589,6 @@ class SettingsWindow(QDialog):
             'Renderer', 'arm_mode', fallback=default_lowpower_mode)
         self.lowpower_mode_checkbox.setChecked(self.config.getboolean('Renderer', 'lowpower_mode', fallback=default_lowpower_mode))
         self.shadows_enabled_checkbox.setChecked(self.config.getboolean('Renderer', 'shadows_enabled', fallback=default_shadows))
-        self._set_water_quality(self.config.get(
-            'Renderer', 'water_quality',
-            fallback='cheap' if is_low_power else 'expensive'))
 
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
         self.restore_world_checkbox.setChecked(
@@ -554,6 +597,8 @@ class SettingsWindow(QDialog):
         self.show_glasses_checkbox.setChecked(
             self.config.getboolean('Display', 'show_glasses', fallback=True)
         )
+        self._set_glasses(self.config.get(
+            'Appearance', 'glasses', fallback=DEFAULT_GLASSES))
 
         save_mode = str(self.config.get('Settings', 'save_mode', fallback='full')).strip().lower()
         idx = self.save_mode_combo.findData(save_mode)
@@ -661,11 +706,15 @@ class SettingsWindow(QDialog):
             self.config.add_section('Renderer')
         self.config.set('Renderer', 'lowpower_mode', str(self.lowpower_mode_checkbox.isChecked()))
         self.config.set('Renderer', 'shadows_enabled', str(self.shadows_enabled_checkbox.isChecked()))
-        self.config.set('Renderer', 'water_quality',
-                        self.water_quality_combo.currentData() or 'expensive')
+        # Water quality is per water brush now; drop the old global key.
+        self.config.remove_option('Renderer', 'water_quality')
         
         self.config.set('Display', 'show_hud', str(self.show_hud_checkbox.isChecked()))
         self.config.set('Display', 'show_glasses', str(self.show_glasses_checkbox.isChecked()))
+
+        if not self.config.has_section('Appearance'):
+            self.config.add_section('Appearance')
+        self.config.set('Appearance', 'glasses', self.selected_glasses())
         
         if not self.config.has_section('Settings'):
             self.config.add_section('Settings')

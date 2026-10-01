@@ -564,6 +564,9 @@ _COLUMNS = (
     ('portal_fade', (), np.float32, 0.0),
     ('portal_color', (3,), np.float32, 1.0),
     ('portal_show_rim', (), bool, False),
+    #: The portal's "Glasses" property: looking into it shows your own
+    #: glasses reflected back at you.
+    ('portal_glasses', (), bool, False),
     #: Procedural Effect state. Authored data and the playback runtime the
     #: Effect owns are resolved per row; elapsed/alive are advanced per frame
     #: from those, numerically.
@@ -1257,6 +1260,8 @@ class EntityTable:
                 self.portal_color[slot] = 1.0
             self.portal_show_rim[slot] = _bool_property(
                 props.get('show_rim', True), True)
+            self.portal_glasses[slot] = _bool_property(
+                props.get('glasses', True), True)
             self.portal_basis[slot] = np.asarray(
                 basis_from_rotation(props.get(
                     'rotation', [props.get('angle', 0.0), 0.0, 0.0])),
@@ -1268,6 +1273,7 @@ class EntityTable:
             self.portal_width_height[slot] = 0.0
             self.portal_color[slot] = 1.0
             self.portal_show_rim[slot] = False
+            self.portal_glasses[slot] = False
             self.portal_basis[slot] = 0.0
 
     def refresh_rows(self, things, slots):

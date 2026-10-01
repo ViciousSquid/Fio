@@ -573,7 +573,15 @@ def test_portal_authored_state_is_dense_and_geometry_is_shared():
     assert int(table.portal_direction[0]) == et.PORTAL_DIRECTION_REVERSE
     assert np.allclose(table.portal_color[0], [64/255.0, 128/255.0, 1.0])
     assert bool(table.portal_show_rim[0]) is False
+    assert bool(table.portal_glasses[0]) is True       # "Glasses" defaults on
     assert np.allclose(table.portal_basis[0], np.asarray(portal.get_basis()))
+
+
+def test_portal_glasses_property_is_per_portal():
+    on = make_thing(Portal, 'On')
+    off = make_thing(Portal, 'Off', glasses=False)
+    table = _synced([on, off])
+    assert table.portal_glasses[:2].tolist() == [True, False]
 
 
 def test_portal_live_state_refreshes_without_reconciling():

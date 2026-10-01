@@ -385,7 +385,7 @@ class BaseRenderer:
         # 'expensive' water also samples the scene's depth (copied the same
         # way) for depth absorption, soft shores, caustics and screen-space
         # reflections; 'cheap' water skips the copy and the reflection trace.
-        # Chosen from settings.ini below.
+        # Chosen per water brush (its "High quality" property).
         self._water_depth_texture = 0
         self._water_depth_size = (0, 0)
         self._water_depth_texture_unit = 3
@@ -421,9 +421,6 @@ class BaseRenderer:
             self.lowpower_mode = config.getboolean('Renderer', 'lowpower_mode',
                                                    fallback=legacy)
             self.shadows_enabled = config.getboolean('Renderer', 'shadows_enabled', fallback=not is_low_power)
-            water_quality = config.get(
-                'Renderer', 'water_quality',
-                fallback='cheap' if is_low_power else 'expensive')
             try:
                 shadow_size = config.getint('Renderer', 'shadow_map_size', fallback=self.SHADOW_MAP_SIZE)
             except Exception:
@@ -431,10 +428,12 @@ class BaseRenderer:
         else:
             self.lowpower_mode = is_low_power
             self.shadows_enabled = not is_low_power
-            water_quality = 'cheap' if is_low_power else 'expensive'
             shadow_size = self.SHADOW_MAP_SIZE
-        #: 'cheap' or 'expensive' water (see WATER_QUALITIES).
-        self.water_quality = self.normalize_water_quality(water_quality)
+        #: Session-only debug cap on water quality (see WATER_QUALITIES).
+        #: Quality itself is per water brush (``water_high_quality``);
+        #: 'expensive' lets each brush choose, 'cheap' forces every brush
+        #: cheap. Set by the console's r_waterquality, never saved.
+        self.water_quality = 'expensive'
         # Clamp to a sane, power-of-two-ish range. Lower = faster, blockier.
         self.shadow_map_size = max(256, min(2048, int(shadow_size)))
 
@@ -2885,7 +2884,7 @@ layout (location = 10) in float iInstanceAlpha;
         return 0
 
     def draw_player_glasses(self, projection, view, positions,
-                           width=40.0, height=18.0, lift=40.0):
+                           width=40.0, height=18.0, lift=40.0, sprites=()):
         """Draw the player as the fixed glasses billboard.
 
         Player bodies are deliberately not EntityTable rows, so this is the
@@ -2894,12 +2893,15 @@ layout (location = 10) in float iInstanceAlpha;
         shader/VAO and performs at most two draws in a normal split-screen view.
         *positions* are the published ``player_glasses_positions``; each
         billboard is raised by *lift* here so every view (split-screen halves
-        and portal scenes) places the glasses at the same height.
+        and portal scenes) places the glasses at the same height. *sprites*
+        holds the ``sprite_textures`` key each position wears (player 1's
+        chosen style, see :mod:`engine.glasses`); missing or unloaded keys
+        fall back to the default pair.
         """
         if not positions or 'sprite' not in self.shaders:
             return 0
-        tex_id = self.sprite_textures.get('Glasses')
-        if not tex_id:
+        default_tex = self.sprite_textures.get('Glasses')
+        if not default_tex:
             return 0
         vao = self.vaos.get('sprite')
         if not vao:
@@ -2917,7 +2919,6 @@ layout (location = 10) in float iInstanceAlpha;
         )
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glUniform1i(uniforms['sprite_texture'], 0)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, int(tex_id))
         gl.glBindVertexArray(vao)
 
         gl.glEnable(gl.GL_DEPTH_TEST)
@@ -2929,8 +2930,15 @@ layout (location = 10) in float iInstanceAlpha;
         size_loc = uniforms['sprite_size']
 
         count = 0
+        sprites = tuple(sprites or ())
+        bound = None
         try:
-            for pos in positions:
+            for i, pos in enumerate(positions):
+                key = sprites[i] if i < len(sprites) else None
+                tex_id = int(self.sprite_textures.get(key) or default_tex)
+                if tex_id != bound:
+                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                    bound = tex_id
                 try:
                     px, py, pz = float(pos.x), float(pos.y), float(pos.z)
                 except AttributeError:
@@ -3180,15 +3188,25 @@ layout (location = 10) in float iInstanceAlpha;
                 max(int(viewport[3]), 1),
             )
         scene_width, scene_height = scene_size
-        expensive = getattr(self, 'water_quality', 'expensive') == 'expensive'
-        has_depth = expensive and self._capture_scene_depth()
+        # Quality is per brush ("High quality" in the property editor). The
+        # depth copy is made once, and only if some brush in the pass wants
+        # it; the renderer's water_quality is a session-only debug cap
+        # (r_waterquality cheap forces every brush cheap).
+        high_quality = table.water_high_quality[brushes]
+        if getattr(self, 'water_quality', 'expensive') != 'expensive':
+            high_quality = np.zeros_like(high_quality)
+        has_depth = bool(high_quality.any()) and self._capture_scene_depth()
         depth_unit = self._water_depth_texture_unit
         gl.glActiveTexture(gl.GL_TEXTURE0 + depth_unit)
         gl.glBindTexture(gl.GL_TEXTURE_2D,
                          self._water_depth_texture if has_depth else 0)
         gl.glUniform1i(uniforms['sceneDepth'], depth_unit)
-        gl.glUniform1i(uniforms['hasSceneDepth'], 1 if has_depth else 0)
-        gl.glUniform1i(uniforms['ssrEnabled'], 1 if has_depth else 0)
+        has_depth_loc = uniforms['hasSceneDepth']
+        ssr_loc = uniforms['ssrEnabled']
+        brush_depth = None
+        if not has_depth:
+            gl.glUniform1i(has_depth_loc, 0)
+            gl.glUniform1i(ssr_loc, 0)
         # Keep the inverse alive: value_ptr() only borrows its storage.
         inv_projection = glm.inverse(projection)
         gl.glUniformMatrix4fv(
@@ -3245,6 +3263,13 @@ layout (location = 10) in float iInstanceAlpha;
 
             opacity = float(params[i, 0])
             fresnel = float(params[i, 1])
+            if has_depth:
+                wants_depth = bool(high_quality[i])
+                if wants_depth != brush_depth:
+                    gl.glUniform1i(has_depth_loc, 1 if wants_depth else 0)
+                    gl.glUniform1i(ssr_loc, 1 if wants_depth else 0)
+                    brush_depth = wants_depth
+
             gl.glUniform1f(opacity_loc, opacity)
             gl.glUniform1f(reflectivity_loc, fresnel)
             gl.glUniform1f(fresnel_loc, fresnel)
