@@ -469,12 +469,11 @@ class SettingsWindow(QDialog):
         for index, (style, label, _fname) in enumerate(GLASSES_STYLES):
             button = QToolButton()
             button.setCheckable(True)
-            button.setText(label)
             button.setToolTip(label)
             button.setIcon(QIcon(QPixmap(glasses_path(style))))
             button.setIconSize(QSize(150, 64))
-            button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-            button.setMinimumSize(170, 100)
+            button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            button.setMinimumSize(170, 84)
             button.setProperty('glasses_style', style)
             button.setStyleSheet("""
                 QToolButton {
@@ -485,10 +484,7 @@ class SettingsWindow(QDialog):
                     padding: 6px;
                 }
                 QToolButton:hover { border: 2px solid #4A6B73; }
-                QToolButton:checked {
-                    border: 3px solid #F08000;
-                    font-weight: bold;
-                }
+                QToolButton:checked { border: 3px solid #F08000; }
             """)
             self.glasses_buttons.addButton(button, index)
             self._glasses_button_for[style] = button

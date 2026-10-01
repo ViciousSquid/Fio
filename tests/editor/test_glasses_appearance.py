@@ -92,6 +92,8 @@ def test_the_appearance_tab_lists_every_pair_with_a_thumbnail(qt_app):
     assert [b.property('glasses_style') for b in buttons] == \
         [s for s, _label, _f in GLASSES_STYLES]
     assert all(not b.icon().isNull() for b in buttons)
+    # Pictures only: the name is a tooltip, never text under the image.
+    assert all(b.text() == '' and b.toolTip() for b in buttons)
     # Nothing saved yet: the classic pair is picked.
     assert dialog.selected_glasses() == DEFAULT_GLASSES
 
