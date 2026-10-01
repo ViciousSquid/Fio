@@ -125,6 +125,7 @@ class FakeEditorWindow(QWidget):
     cancel_clone_placement = MainWindow.cancel_clone_placement
     _translate_object = staticmethod(MainWindow._translate_object)
     _copy_name = staticmethod(MainWindow._copy_name)
+    _drop_singleton_copies = MainWindow._drop_singleton_copies
     selection_centre = MainWindow.selection_centre
     selected_objects_list = MainWindow.selected_objects_list
     apply_rotation_to_selection = MainWindow.apply_rotation_to_selection
