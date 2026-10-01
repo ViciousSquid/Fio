@@ -126,9 +126,10 @@ OpenGL texture manager. Loads images through `QImage`, converts them to RGBA, up
 ### `threaded_game_state.py`
 Thread-safe bridge between simulation and rendering. `ThreadedGameState` synchronises updates; `RenderState` provides the per-frame render snapshot containing camera, player, visible-world and HUD state.
 
+---
+
 ## Numerical execution architecture
 
-The performance-sensitive parts of the engine increasingly follow this shape:
 
 ```
 authoritative world
@@ -146,9 +147,9 @@ equal-key runs / packed payloads
 OpenGL
 ```
 
-The renderer therefore is not merely a collection of Python draw calls with NumPy sprinkled around it. `render_table.py`, `entity_table.py`, `render_cull.py` and `render_keys.py` form a numerical frontend between the flexible world model and the GPU backend. Brushes and entities are projected the same way and on the same refresh discipline, so neither half of the world is re-interrogated object by object once a frame starts.
+The renderer  is not merely a collection of Python draw calls with NumPy sprinkled around it. `render_table.py`, `entity_table.py`, `render_cull.py` and `render_keys.py` form a numerical frontend between the flexible world model and the GPU backend. Brushes and entities are projected the same way and on the same refresh discipline, so neither half of the world is re-interrogated object by object once a frame starts.
 
-This boundary is also the primary observability boundary. The Debug Tables instrumentation can inspect the live dense tables, packed key/range data and related counters directly, making the numerical execution state visible without adding a parallel representation or changing the renderer's production data path.
+This boundary is also the primary observability boundary. The [Debug Tables](https://github.com/ViciousSquid/Fio/wiki/Debug-Tables) instrumentation can inspect the live dense tables, packed key/range data and related counters directly, making the numerical execution state visible without adding a parallel representation or changing the renderer's production data path.
 
 The same principle is used by `physics.py`: simulation state is dense and contiguous while `PhysicsBody` remains a convenient object/API handle.
 
