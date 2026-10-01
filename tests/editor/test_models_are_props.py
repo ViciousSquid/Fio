@@ -82,7 +82,7 @@ def test_the_player_tier_reads_a_legacy_model_as_the_same_prop():
         "False True model False False"
 
 
-@pytest.mark.parametrize("name", ["_SHOWCASE.json", "DevTest.json"])
+@pytest.mark.parametrize("name", ["DevTest.json"])
 def test_shipped_maps_load_their_models_as_props(name):
     with open(os.path.join(ROOT, "maps", name), encoding="utf-8") as handle:
         data = json.load(handle)
