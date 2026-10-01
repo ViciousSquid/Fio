@@ -2,7 +2,7 @@
 
 The runtime engine: world simulation, physics, resource loading, numerical render projection, OpenGL rendering, shaders, terrain, models, sprites and the Qt game viewport.
 
-The engine's authoritative gameplay/world state remains object-oriented. Performance-sensitive execution paths project that state into dense NumPy representations before entering hot loops. Rendering and physics both use this pattern: Python objects provide the API and world model; contiguous numerical arrays provide the execution representation.
+The engine's authoritative gameplay/world state remains object-oriented. Performance-sensitive execution paths project that state into dense NumPy representations before entering hot loops. Python objects provide the API and world model; contiguous numerical arrays provide the execution representation.
 
 ---
 
