@@ -30,6 +30,7 @@ pytestmark = pytest.mark.qt
 PATCHED_METHODS = [
     (PropertyEditor, "_iterate_thing_properties", "_patch_property_editor"),
     (PropertyEditor, "populate_for_thing", "_patch_property_editor"),
+    (PropertyEditor, "_create_thing_properties_tab", "_patch_property_editor"),
 ]
 
 

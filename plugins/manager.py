@@ -128,6 +128,11 @@ class PluginManager:
         # property tabs. Both keyed/filtered by normalised entity type.
         self._extra_fields: dict = {}       # type -> list[PropertySpec]
         self._property_tabs: list = []      # list[(label, factory, type_or_None)]
+        # API 1.5.0 editor extensions, each recorded with its owning plugin so
+        # a disabled plugin's contributions drop out (as Tools actions do).
+        self._property_sections: list = []  # [(plugin, label, factory, type|None, expanded)]
+        self._kv_suggestion_providers: list = []  # [(plugin, provider)]
+        self._entity_inspectors: list = []  # [(plugin, provider, type|None)]
         self._tools_actions: list = []
         self._menu_actions: list = []
         self._console_commands: dict = {}
@@ -837,6 +842,96 @@ class PluginManager:
         norm = self._normalise_type(entity_type)
         return [(label, factory) for (label, factory, t) in self._property_tabs
                 if t is None or t == norm]
+
+    # -- API 1.5.0: property sections, key suggestions, entity inspectors ----
+    def _record_property_section(self, plugin, label: str, factory,
+                                 entity_type=None, expanded: bool = False) -> None:
+        if callable(factory):
+            self._property_sections.append(
+                (plugin, str(label), factory,
+                 self._normalise_type(entity_type) if entity_type else None,
+                 bool(expanded)))
+
+    def property_sections_for(self, entity_type: str):
+        """``(label, factory, expanded)`` sections that apply to *entity_type*.
+
+        Consumed by the editor integration when it builds the Properties tab.
+        Sections of a disabled plugin are left out.
+        """
+        norm = self._normalise_type(entity_type)
+        return [(label, factory, expanded)
+                for (plugin, label, factory, t, expanded) in self._property_sections
+                if (t is None or t == norm) and self.is_enabled(plugin)]
+
+    def _record_kv_suggestions(self, plugin, provider) -> None:
+        if callable(provider):
+            self._kv_suggestion_providers.append((plugin, provider))
+
+    def kv_suggestions(self, store=None) -> list:
+        """Every enabled provider's key suggestions for the LogicState *store*.
+
+        Returns ``(label, key, default_value, tooltip)`` rows, in registration
+        order. A malformed row is skipped and a failing provider is logged,
+        never raised; when two providers offer the same key the first wins.
+        """
+        out: list = []
+        seen: set = set()
+        for plugin, provider in self._kv_suggestion_providers:
+            if not self.is_enabled(plugin):
+                continue
+            try:
+                rows = list(provider(store) or [])
+            except Exception:
+                self._log(f"key suggestions failed for "
+                          f"'{getattr(plugin, 'name', '?')}':\n{traceback.format_exc()}")
+                continue
+            for row in rows:
+                if not isinstance(row, (tuple, list)) or len(row) < 3:
+                    continue
+                label, key, default = row[0], row[1], row[2]
+                tooltip = row[3] if len(row) > 3 else ""
+                key = str(key).strip()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                out.append((str(label), key, default, str(tooltip or "")))
+        return out
+
+    def _record_entity_inspector(self, plugin, provider, entity_type=None) -> None:
+        if callable(provider):
+            self._entity_inspectors.append(
+                (plugin, provider,
+                 self._normalise_type(entity_type) if entity_type else None))
+
+    def has_entity_inspector(self, entity_type=None) -> bool:
+        """Whether an enabled provider would be asked about *entity_type*."""
+        norm = self._normalise_type(entity_type) if entity_type else None
+        return any(self.is_enabled(plugin) and (t is None or t == norm)
+                   for plugin, _provider, t in self._entity_inspectors)
+
+    def inspect_entity(self, entity, logic=None):
+        """The first non-empty inspection document a provider returns for
+        *entity*, or None when no enabled provider has one.
+
+        A failing provider is logged and the next one asked.
+        """
+        props = getattr(entity, "properties", None)
+        etype = props.get("type") if isinstance(props, dict) else None
+        norm = self._normalise_type(etype) if etype else None
+        for plugin, provider, t in self._entity_inspectors:
+            if t is not None and t != norm:
+                continue
+            if not self.is_enabled(plugin):
+                continue
+            try:
+                document = provider(entity, logic)
+            except Exception:
+                self._log(f"entity inspector failed for "
+                          f"'{getattr(plugin, 'name', '?')}':\n{traceback.format_exc()}")
+                continue
+            if document:
+                return document
+        return None
 
     # -- lifecycle dispatch -------------------------------------------------
     @staticmethod

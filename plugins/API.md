@@ -60,8 +60,8 @@ implements; `API_VERSION_INFO` is the same value as an `(int, int, int)` tuple.
 
 | Value | Introduced |
 |-------|------------|
-| `API_VERSION` | `"1.4.0"` |
-| `API_VERSION_INFO` | `(1, 4, 0)` |
+| `API_VERSION` | `"1.5.0"` |
+| `API_VERSION_INFO` | `(1, 5, 0)` |
 
 History:
 
@@ -71,6 +71,9 @@ History:
   (`register_renderer`), editor-UI extensions (extra property fields on any
   entity, custom property tabs), and the `FIO_NO_PLUGINS` kill-switch.
 - **1.4.0** — optional editor Tools actions and console-command registration for developer plugins.
+- **1.5.0** — [editor content extensions](#editor-content-extensions-api-150): collapsible
+  property sections, LogicState preset keys and entity inspectors. Additive: every
+  1.4.0 plugin loads and behaves unchanged.
 
 A plugin declares the minimum it needs with `FioPlugin.api_version`. If that is
 **newer** than the host's `API_VERSION`, the manager refuses to load the plugin
@@ -349,6 +352,55 @@ console command; its callback receives `(args, main_window, logic, play_mode)`.
 Both are gated by the plugin's enabled state and are available from API 1.4.0.
 `register_menu_action` above is the plugin-specific menu counterpart for actions
 that belong with the plugin rather than in Tools.
+
+### Editor content extensions (API 1.5.0)
+
+Fio provides the mechanism; the plugin provides the content. All three are
+recorded with the registering plugin and drop out while it is disabled. A plugin
+that calls them should declare `api_version = "1.5.0"`, so an older host refuses
+it with a clear message rather than failing at `register()`.
+
+```python
+def register_property_section(self, label: str, factory, entity_type=None,
+                              expanded: bool = False) -> None
+```
+Add a collapsible section at the end of the entity's **Properties** tab. Same
+`factory(thing) -> widget` contract as `register_property_tab`; use a section for
+a small editor that belongs with the entity's other properties, a tab for one
+that needs the room. *expanded* is the initial state, and a collapsed section's
+factory does not run until it is first opened. With *entity_type* the section
+appears only for that type.
+
+```python
+def register_kv_suggestions(self, provider) -> None
+```
+Offer preset keys in the LogicState editor. `provider(store)` receives the
+LogicState being edited and returns rows of `(label, key, default_value)` or
+`(label, key, default_value, tooltip)`; the panel lists them in a **Preset key**
+picker, and **Insert** adds the key with its default as a designer default (or
+selects it if already present). Return `[]` for stores the plugin does not use;
+`store.properties["store_name"]` tells stores apart. When two providers offer the
+same key the first registered wins; malformed rows are skipped.
+
+```python
+def register_entity_inspector(self, provider, entity_type=None) -> None
+```
+Supply the contents of the **Entity Inspector**, a live, read-only panel opened
+from the Scene Hierarchy's **Inspect** action or by calling
+`main_window.show_entity_inspector(entity)` (for example from a console
+command). `provider(entity, logic) -> dict | None`, where *logic* is the running
+logic thread or `None` outside Play Mode, returns an inspection document:
+
+```python
+{"title":    "Gate Keeper",
+ "subtitle": "patrolling · awake",
+ "sections": [("Vitals", [("Health", 80), ("Speed", 1.5)]),
+              ("Goals",  [("Patrol", "", 0.9), ("Rest", "", 0.2)])]}
+```
+A row is `(label, value)`, or `(label, value, fraction)` to draw a 0..1 bar. The
+first provider returning a non-empty document is shown; with none the panel lists
+the entity's public properties. The panel refreshes about four times a second
+while visible. With *entity_type* the provider is only asked about that type.
 
 ### Global store & logging
 

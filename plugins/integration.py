@@ -656,6 +656,35 @@ def _patch_property_editor():
 
     PropertyEditor._iterate_thing_properties = _iterate_thing_properties
 
+    # Property sections (API 1.5.0): small editors that belong with an entity's
+    # own properties rather than in a tab of their own. They go at the end of
+    # the Properties tab as collapsible sections, each built the first time it
+    # is opened, so a collapsed section costs nothing.
+    _orig_props_tab = PropertyEditor._create_thing_properties_tab
+
+    def _create_thing_properties_tab(self, thing):
+        tab = _orig_props_tab(self, thing)
+        try:
+            props = getattr(thing, "properties", None)
+            ttype = props.get("type") if isinstance(props, dict) else None
+            sections = get_manager().property_sections_for(ttype) if ttype else []
+            layout = tab.layout() if (sections and tab is not None) else None
+            if layout is None:
+                return tab
+            from editor.property_editor import CollapsibleSection
+
+            for label, factory, expanded in sections:
+                section = CollapsibleSection(label, expanded=expanded)
+                section.setObjectName(f"fio_property_section:{label}")
+                _wire_lazy_section(section, factory, thing, label)
+                # Before the tab's trailing stretch, so sections pack to the top.
+                layout.insertWidget(max(0, layout.count() - 1), section)
+        except Exception as exc:
+            _log(f"property sections failed ({exc})")
+        return tab
+
+    PropertyEditor._create_thing_properties_tab = _create_thing_properties_tab
+
     # Custom property tabs: append plugin tabs after the stock ones are built.
     _orig_populate = PropertyEditor.populate_for_thing
 
@@ -715,6 +744,32 @@ def _patch_property_editor():
 
     PropertyEditor.populate_for_thing = populate_for_thing
     PropertyEditor._fio_plugins_patched = True
+
+
+def _wire_lazy_section(section, factory, thing, label):
+    """Build a property section's content the first time it is opened.
+
+    A section's factory can be as heavy as a tab's, and a collapsed section is
+    not being looked at, so nothing is built until it is expanded. One that
+    starts expanded is built immediately.
+    """
+    state = {"built": False}
+
+    def _build(*_args):
+        if state["built"]:
+            return
+        state["built"] = True
+        try:
+            inner = factory(thing)
+        except Exception as exc:
+            _log(f"property section '{label}' failed ({exc})")
+            return
+        if inner is not None:
+            section.addWidget(inner)
+
+    section.toggle.toggled.connect(lambda checked: checked and _build())
+    if section.toggle.isChecked():
+        _build()
 
 
 def _append_extra_fields(editor_self, form, thing, specs):

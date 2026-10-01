@@ -943,12 +943,18 @@ class SceneHierarchy(QWidget):
                 action.triggered.connect(lambda checked, c=colour_name: self.set_thing_colour(thing_obj, c, checked))
 
             menu.addSeparator()
+            inspect_action = None
+            if hasattr(self.main_window, 'show_entity_inspector'):
+                inspect_action = menu.addAction("Inspect")
+                inspect_action.setToolTip("Open a live, read-only view of this entity")
             properties_action = menu.addAction("Properties")
             properties_action.setToolTip("Show this object in the Properties panel")
 
             action = menu.exec_(self.tree.viewport().mapToGlobal(position))
 
-            if action == lock_action:
+            if action is not None and action == inspect_action:
+                self.main_window.show_entity_inspector(thing_obj)
+            elif action == lock_action:
                 self.main_window.save_state()
                 thing_obj.properties['lock'] = not is_locked
                 self.main_window.update_all_ui()
