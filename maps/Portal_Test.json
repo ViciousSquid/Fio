@@ -228,7 +228,7 @@
                     "target": "LevelChanger_1",
                     "input": "Trigger",
                     "parameter": "",
-                    "delay": 0,
+                    "delay": 0.0,
                     "fire_once": false
                 }
             ]
@@ -473,7 +473,7 @@
                     255,
                     255
                 ],
-                "show_rim": true,
+                "show_rim": false,
                 "parent_mover": "",
                 "parent_offset": [
                     0,
@@ -513,7 +513,7 @@
                     255,
                     255
                 ],
-                "show_rim": true,
+                "show_rim": false,
                 "parent_mover": "",
                 "parent_offset": [
                     0,
@@ -549,7 +549,51 @@
                 "collect_respawn_time": 20,
                 "collect_key_name": "blue_key",
                 "collect_weapon": "gun1",
-                "sprite_path": "assets/sprites/health.png"
+                "sprite_path": "assets/sprites/health.png",
+                "model_path": "",
+                "render_mode": "billboard",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "auto",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
             },
             "io_connections": []
         },
