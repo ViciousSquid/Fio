@@ -1,0 +1,253 @@
+"""World pause: owners hold it, the play tick and the monster AI honour it.
+
+``LogicThread.set_world_paused(owner, paused)`` freezes the play-mode world
+while any owner holds a request -- a game's modal screen, the actor picker, a
+pause menu -- and keeps plugins ticking so a game's menus still work. These
+tests pin the three halves of that contract:
+
+* requests are per owner, so releasing one never unpauses another, and a play
+  session never inherits a request from the one before it;
+* a paused play tick moves nothing and drains look/fire input, while plugins
+  still tick with the use key;
+* the monster AI thread idles while paused and does not fast-forward after.
+
+Every "nothing happened" assertion has an unpaused control beside it, so a
+test cannot pass because the thing it watches would not have moved anyway.
+"""
+
+import threading
+import time
+
+import glm
+import pytest
+
+pytest.importorskip("PyQt5", reason="drives the real editor state and logic thread")
+
+from editor.editor_state import EditorState               # noqa: E402
+from editor.things import PlayerStart                     # noqa: E402
+from engine.logic_thread import Key_W, LogicThread        # noqa: E402
+from engine.monster_ai import MonsterAIThread             # noqa: E402
+from engine.player import Player                          # noqa: E402
+from engine.threaded_game_state import ThreadedGameState  # noqa: E402
+from tests.helpers.worlds import box_brush, make_thing    # noqa: E402
+
+pytestmark = [pytest.mark.qt, pytest.mark.integration]
+
+TICK = 1.0 / 60.0
+
+
+@pytest.fixture
+def logic():
+    state = EditorState()
+    state.brushes = [box_brush("floor", (0, -16, 0), (2048, 32, 2048))]
+    state.things = [make_thing(PlayerStart, "spawn", (0, 64, 0))]
+    thread = LogicThread(ThreadedGameState(), state)
+    thread.player = Player(0.0, 0.0)
+    thread.player.pos.y = 40.0
+    yield thread
+    thread.set_play_mode(False)
+    thread.stop()
+
+
+@pytest.fixture
+def playing(logic):
+    logic.set_play_mode(True)
+    # The AI thread is not under test here; keep the tick single-threaded.
+    logic._stop_monster_ai()
+    return logic
+
+
+class _RecordingPlugins:
+    def __init__(self):
+        self.ticks = []
+
+    def wants_tick(self):
+        return True
+
+    def tick(self, logic, **kwargs):
+        self.ticks.append(kwargs)
+
+
+def _ticks(logic, n=10):
+    for _ in range(n):
+        logic._tick_play_mode(TICK)
+
+
+# ---------------------------------------------------------------------------
+# Owners
+# ---------------------------------------------------------------------------
+
+def test_the_world_is_paused_while_any_owner_holds_a_request(logic):
+    assert logic.world_paused is False
+    logic.set_world_paused("menu", True)
+    logic.set_world_paused("picker", True)
+    assert logic.world_paused is True
+    assert logic.world_pause_owners() == {"menu", "picker"}
+    logic.set_world_paused("menu", False)
+    assert logic.world_paused is True, "releasing one owner unpaused the other"
+    logic.set_world_paused("picker", False)
+    assert logic.world_paused is False
+
+
+def test_releasing_twice_or_releasing_a_stranger_is_harmless(logic):
+    logic.set_world_paused("menu", True)
+    logic.set_world_paused("stranger", False)
+    logic.set_world_paused("menu", False)
+    logic.set_world_paused("menu", False)
+    assert logic.world_pause_owners() == frozenset()
+
+
+def test_holding_twice_is_still_one_request(logic):
+    logic.set_world_paused("menu", True)
+    logic.set_world_paused("menu", True)
+    logic.set_world_paused("menu", False)
+    assert logic.world_paused is False
+
+
+@pytest.mark.parametrize("entering", [True, False])
+def test_a_play_mode_change_drops_every_request(logic, entering):
+    if not entering:
+        logic.set_play_mode(True)
+    logic.set_world_paused("leftover", True)
+    logic.set_play_mode(entering)
+    assert logic.world_paused is False
+
+
+def test_requests_from_many_threads_are_not_lost(logic):
+    def hold(i):
+        for _ in range(200):
+            logic.set_world_paused(("t", i), True)
+            logic.set_world_paused(("t", i), False)
+        logic.set_world_paused(("t", i), True)
+
+    threads = [threading.Thread(target=hold, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5.0)
+    assert logic.world_pause_owners() == {("t", i) for i in range(8)}
+
+
+# ---------------------------------------------------------------------------
+# The play tick
+# ---------------------------------------------------------------------------
+
+def test_an_unpaused_tick_moves_the_player(playing):
+    """The control: holding W does move the player in this world."""
+    start = glm.vec3(playing.player.pos)
+    playing.game_state.set_keys({Key_W})
+    _ticks(playing, 20)
+    assert glm.distance(playing.player.pos, start) > 1.0
+
+
+def test_a_paused_tick_does_not_move_the_player(playing):
+    start = glm.vec3(playing.player.pos)
+    playing.set_world_paused("menu", True)
+    playing.game_state.set_keys({Key_W})
+    _ticks(playing, 20)
+    assert glm.distance(playing.player.pos, start) == 0.0
+
+
+def test_look_and_fire_over_a_paused_world_are_discarded(playing, monkeypatch):
+    shots = []
+    monkeypatch.setattr(playing, "_handle_shooting", lambda *a, **k: shots.append(1))
+    angle = playing.player.angle
+    playing.set_world_paused("menu", True)
+    playing.game_state.set_mouse_delta(80.0, 30.0)
+    playing.game_state.queue_shot()
+    _ticks(playing, 1)
+    assert playing.player.angle == angle
+    playing.set_world_paused("menu", False)
+    _ticks(playing, 1)
+    assert playing.player.angle == angle, "look input queued over a menu landed on resume"
+    assert shots == [], "a shot fired over a menu landed on resume"
+
+
+def test_a_paused_tick_advances_no_world_system(playing, monkeypatch):
+    calls = []
+    for name in ("_update_movers", "_update_doors", "_update_logic_timers",
+                 "_update_light_fades", "_handle_triggers",
+                 "_update_monster_projectiles", "_update_portals"):
+        monkeypatch.setattr(playing, name,
+                            lambda *a, _n=name, **k: calls.append(_n))
+    if playing.io_manager is not None:
+        monkeypatch.setattr(playing.io_manager, "update",
+                            lambda *a, **k: calls.append("io"))
+    playing.set_world_paused("menu", True)
+    _ticks(playing, 5)
+    assert calls == []
+    playing.set_world_paused("menu", False)
+    _ticks(playing, 1)
+    assert "_update_movers" in calls and "_handle_triggers" in calls   # the control
+
+
+def test_plugins_still_tick_over_a_paused_world(playing):
+    plugins = _RecordingPlugins()
+    playing.plugins = plugins
+    playing.set_world_paused("menu", True)
+    playing.game_state.set_use_key_pressed()
+    _ticks(playing, 2)
+    assert len(plugins.ticks) == 2
+    assert plugins.ticks[0]["use_pressed"] is True
+    assert plugins.ticks[0]["delta"] == pytest.approx(TICK)
+    assert plugins.ticks[1]["use_pressed"] is False
+
+
+# ---------------------------------------------------------------------------
+# The monster AI thread
+# ---------------------------------------------------------------------------
+
+class _CountingAI:
+    def __init__(self):
+        self.updates = 0
+
+    def update(self, delta):
+        self.updates += 1
+
+
+class _Host:
+    world_paused = False
+
+
+def _wait_for(predicate, timeout=2.0):
+    deadline = time.perf_counter() + timeout
+    while time.perf_counter() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
+def test_the_monster_ai_thread_idles_while_the_world_is_paused():
+    host, ai = _Host(), _CountingAI()
+    thread = MonsterAIThread(host, ai, threading.Lock(), tick_rate=100)
+    thread.start()
+    try:
+        assert _wait_for(lambda: ai.updates > 3), "the control: the AI runs"
+        host.world_paused = True
+        time.sleep(0.05)                     # let an in-flight frame finish
+        frozen = ai.updates
+        time.sleep(0.3)
+        assert ai.updates == frozen
+        host.world_paused = False
+        assert _wait_for(lambda: ai.updates > frozen), "the AI did not resume"
+    finally:
+        thread.stop()
+        thread.join(timeout=2.0)
+
+
+def test_the_monster_ai_does_not_fast_forward_after_a_pause():
+    """0.5 s paused at 100 Hz would be ~50 catch-up updates in one burst."""
+    host, ai = _Host(), _CountingAI()
+    host.world_paused = True
+    thread = MonsterAIThread(host, ai, threading.Lock(), tick_rate=100)
+    thread.start()
+    try:
+        time.sleep(0.5)
+        assert ai.updates == 0
+        host.world_paused = False
+        time.sleep(0.03)
+        assert ai.updates < 15
+    finally:
+        thread.stop()
+        thread.join(timeout=2.0)

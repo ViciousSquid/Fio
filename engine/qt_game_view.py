@@ -58,7 +58,7 @@ from engine.glasses import (
 )
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
-from editor.debug_console import DebugConsole
+from editor.debug_console import DebugConsole, debug_log
 from .sysmon import SysMon
 
 # Pygame for gamepad support
@@ -289,6 +289,11 @@ class QtGameView(QOpenGLWidget):
         self.projection_matrix = glm.mat4(1.0)
         self.view_matrix = glm.mat4(1.0)
         self._cached_aspect_ratio = 1.0
+        #: An armed play-mode actor pick (see begin_actor_pick): ``{'on_pick':
+        #: callable}``, or None. ``actor_pick_hover`` is the actor under the
+        #: cursor while one is armed.
+        self._actor_pick = None
+        self.actor_pick_hover = None
         # The camera's draw distance and the fog that hides its far plane, in
         # one object shared with the renderer and the logic thread so the
         # editor spinbox and the r_* console commands take effect on the next
@@ -2029,6 +2034,8 @@ class QtGameView(QOpenGLWidget):
             painter.drawText(cx - tw // 2 + 2, cy + 2, hint)
             painter.setPen(self._hud_grey_pen)
             painter.drawText(cx - tw // 2, cy, hint)
+        if self._actor_pick is not None:
+            self._draw_actor_pick_hint(painter, viewport_width)
         # Overhead: held weapon shown as a bottom-right collectible icon (like keys).
         # It takes the rightmost slot; keys shift left so both fit side by side.
         key_slot_offset = 0
@@ -2401,6 +2408,8 @@ class QtGameView(QOpenGLWidget):
             # looping speaker channels and one-shot mixer channels, and discard
             # any sound requests queued by the logic thread during teardown.
             self.stop_all_sounds()
+            self._actor_pick = None
+            self.actor_pick_hover = None
             if self.console_overlay_active:
                 self._console_input.hide()
                 self.console_overlay_active = False
@@ -3014,6 +3023,12 @@ class QtGameView(QOpenGLWidget):
                                           shear=armed['shear'])
 
     def mousePressEvent(self, event):
+        if self.play_mode and self._actor_pick is not None:
+            if event.button() == Qt.RightButton:
+                self.cancel_actor_pick()
+            elif event.button() == Qt.LeftButton:
+                self._click_actor_pick(event.x(), event.y())
+            return
         if (self.play_mode and getattr(self, '_cached_level_complete_ui', None)
                 and getattr(self, '_level_complete_btn_rect', None)):
             if self._level_complete_btn_rect.contains(event.pos()):
@@ -3159,6 +3174,9 @@ class QtGameView(QOpenGLWidget):
             return
         if self.play_mode:
             if self.console_overlay_active:
+                return
+            if self._actor_pick is not None:
+                self._update_actor_pick_hover(event.x(), event.y())
                 return
             cp = event.pos()
             dx, dy = cp.x() - self.last_mouse_pos.x(), cp.y() - self.last_mouse_pos.y()
@@ -3321,12 +3339,159 @@ class QtGameView(QOpenGLWidget):
         self._console_input.clearFocus()
         self.setFocus()
         if self.play_mode:
-            while QApplication.overrideCursor() is not None:
-                QApplication.restoreOverrideCursor()
-            QApplication.setOverrideCursor(Qt.BlankCursor)
-            center = self.mapToGlobal(self.rect().center())
-            QCursor.setPos(center)
-            self.last_mouse_pos = self.mapFromGlobal(center)
+            if self._actor_pick is not None:
+                # A command just armed a pick: the cursor stays free for it.
+                self._show_pick_cursor()
+            else:
+                self._capture_play_cursor()
+
+    def _capture_play_cursor(self):
+        """Hide the cursor and re-centre it for mouse look (Play Mode)."""
+        while QApplication.overrideCursor() is not None:
+            QApplication.restoreOverrideCursor()
+        QApplication.setOverrideCursor(Qt.BlankCursor)
+        center = self.mapToGlobal(self.rect().center())
+        QCursor.setPos(center)
+        self.last_mouse_pos = self.mapFromGlobal(center)
+
+    def _show_pick_cursor(self):
+        while QApplication.overrideCursor() is not None:
+            QApplication.restoreOverrideCursor()
+        QApplication.setOverrideCursor(Qt.CrossCursor)
+
+    # =========================================================================
+    # ACTOR PICK (Play Mode)
+    # =========================================================================
+
+    #: The world-pause owner key an armed pick holds.
+    ACTOR_PICK_PAUSE = "actor_pick"
+
+    @property
+    def actor_pick_active(self) -> bool:
+        return self._actor_pick is not None
+
+    def begin_actor_pick(self, on_pick=None) -> bool:
+        """Arm a one-shot click-to-pick of an actor in Play Mode.
+
+        The world pauses (``LogicThread.set_world_paused``) so the actor holds
+        still, and the cursor is freed. The next left-click on an actor ends
+        the pick and calls ``on_pick(entity)``; by default that opens the
+        Entity Inspector on it. A click on nothing keeps the pick armed; Esc
+        or a right-click cancels it. Returns False outside Play Mode.
+        """
+        if not self.play_mode:
+            return False
+        self._actor_pick = {'on_pick': on_pick}
+        self.actor_pick_hover = None
+        logic = self.logic_thread
+        if logic is not None and hasattr(logic, 'set_world_paused'):
+            logic.set_world_paused(self.ACTOR_PICK_PAUSE, True)
+        if not self.console_overlay_active:
+            self._show_pick_cursor()
+        self.update()
+        return True
+
+    def cancel_actor_pick(self):
+        """Disarm a pick without choosing anything."""
+        self._end_actor_pick()
+
+    def _end_actor_pick(self):
+        if self._actor_pick is None:
+            return
+        self._actor_pick = None
+        self.actor_pick_hover = None
+        logic = self.logic_thread
+        if logic is not None and hasattr(logic, 'set_world_paused'):
+            logic.set_world_paused(self.ACTOR_PICK_PAUSE, False)
+        if self.play_mode and not self.console_overlay_active:
+            self._capture_play_cursor()
+        self.update()
+
+    def _pick_ray(self, mx, my):
+        """World ray through pixel (mx, my) of the frame last drawn.
+
+        Origin and direction both come from the matrices that frame was
+        drawn with, so the ray leaves the camera the player is looking
+        through -- first person or overhead -- not the editor camera.
+        """
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return None
+        ndc_x = (2.0 * mx / w) - 1.0
+        ndc_y = 1.0 - (2.0 * my / h)
+        inv_view = glm.inverse(self.view_matrix)
+        eye = glm.inverse(self.projection_matrix) * glm.vec4(ndc_x, ndc_y, -1.0, 1.0)
+        direction = glm.vec3(inv_view * glm.vec4(eye.x, eye.y, -1.0, 0.0))
+        if glm.length(direction) == 0.0:
+            return None
+        origin = glm.vec3(inv_view[3])
+        return origin, glm.normalize(direction)
+
+    def actor_at(self, mx, my):
+        """The actor under pixel (mx, my) in the frame last drawn, or None.
+
+        Reads the published entity and render tables (borrowed only for the
+        test) through :func:`engine.actor_pick.pick_actor`: brushes only
+        occlude, so the floor under an actor never wins the click.
+        """
+        ray = self._pick_ray(mx, my)
+        if ray is None:
+            return None
+        from engine.actor_pick import NO_SLOT, pick_actor
+        render_state = self.game_state.get_render_state() if self.logic_thread else None
+        try:
+            table = getattr(render_state, 'entity_table', None)
+            if table is None:
+                return None
+            slot = pick_actor(ray[0], ray[1], table,
+                              getattr(render_state, 'render_table', None))
+            if slot == NO_SLOT or slot >= len(table.things):
+                return None
+            return table.things[slot]
+        finally:
+            if render_state is not None:
+                self.game_state.release_render_state(render_state)
+
+    def _update_actor_pick_hover(self, mx, my):
+        hovered = self.actor_at(mx, my)
+        if hovered is not self.actor_pick_hover:
+            self.actor_pick_hover = hovered
+            self.update()
+
+    def _click_actor_pick(self, mx, my) -> bool:
+        """Resolve an armed pick at the clicked pixel. True if it ended."""
+        actor = self.actor_at(mx, my)
+        if actor is None:
+            return False
+        on_pick = self._actor_pick.get('on_pick') or self._open_inspector_for
+        self._end_actor_pick()
+        try:
+            on_pick(actor)
+        except Exception as exc:
+            debug_log("Error", f"actor pick handler failed: {exc}")
+        return True
+
+    def _open_inspector_for(self, actor):
+        show = getattr(self.editor, 'show_entity_inspector', None)
+        if show is not None:
+            show(actor)
+
+    def _draw_actor_pick_hint(self, painter, viewport_width):
+        hovered = self.actor_pick_hover
+        name = ""
+        if hovered is not None:
+            props = getattr(hovered, 'properties', {}) or {}
+            name = str(props.get('name') or props.get('type') or "")
+        text = (f"Inspect: {name} - click to open (Esc to cancel)" if name
+                else "Inspect (paused): click an actor (Esc to cancel)")
+        metrics = QFontMetrics(self._hud_msg_font)
+        tw = metrics.horizontalAdvance(text)
+        x, y = viewport_width // 2 - tw // 2, 40
+        painter.setFont(self._hud_msg_font)
+        painter.setPen(self._hud_shadow_pen)
+        painter.drawText(x + 2, y + 2, text)
+        painter.setPen(self._hud_grey_pen)
+        painter.drawText(x, y, text)
 
     def _submit_console_command(self):
         cmd = self._console_input.text().strip()
@@ -3362,6 +3527,11 @@ class QtGameView(QOpenGLWidget):
         self.game_state.set_p2_input(move_x, move_z, look_dx, look_dy, jump, crouch)
 
     def keyPressEvent(self, event):
+        # An armed actor pick owns Escape: it cancels the pick, not Play Mode.
+        if (event.key() == Qt.Key_Escape and self.play_mode
+                and self._actor_pick is not None):
+            self.cancel_actor_pick()
+            return
         # Sculpt mode owns Escape while active. Do this before normal
         # editor/play-mode escape handling.
         if event.key() == Qt.Key_Escape and self.terrain_sculpt_active and not self.play_mode:

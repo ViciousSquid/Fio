@@ -291,7 +291,15 @@ class LogicThread(threading.Thread):
         self.god_mode = False
         self.buddha_mode = False
         self.notarget = False
-        
+
+        # World pause: each owner (a modal game screen, the entity picker, a
+        # pause menu) holds its own request, and the world stays frozen while
+        # any is held, so one owner releasing never unpauses another's. See
+        # set_world_paused(). Replaced whole, never mutated, so a reader on
+        # another thread always sees a consistent set.
+        self._world_pause_owners = frozenset()
+        self._world_pause_lock = threading.Lock()
+
         # I/O System
         self.io_manager = None
         if IO_AVAILABLE and IOManager:
@@ -1187,6 +1195,10 @@ class LogicThread(threading.Thread):
 
     def _apply_play_mode(self, enabled: bool):
         self.play_mode = enabled
+        # A pause belongs to the session that took it: a new session, or the
+        # editor after one, never starts frozen by a request nobody released.
+        with self._world_pause_lock:
+            self._world_pause_owners = frozenset()
         
         if enabled:
             # Read P2 turn sensitivity from editor config
@@ -2255,10 +2267,69 @@ class LogicThread(threading.Thread):
                     d_new[i] = kept_d[id(brush)]
         self.door_states = d_new
 
+    # =========================================================================
+    # WORLD PAUSE
+    # =========================================================================
+
+    def set_world_paused(self, owner, paused: bool = True) -> None:
+        """Hold (or release) a pause of the play-mode world for *owner*.
+
+        While any owner holds one, a play tick advances nothing in the world:
+        no player movement, look or shooting, no movers, doors, I/O timers,
+        triggers, props, physics, projectiles or portals, and the monster AI
+        thread idles. Plugins still tick, with the input they would normally
+        see, so a game's menus keep working over the frozen world. The frame is
+        still published, so the view keeps drawing it.
+
+        *owner* is any hashable key naming who paused (a modal screen, the
+        entity picker, a pause menu); each releases only its own request.
+        Callable from any thread. Leaving or entering Play Mode drops every
+        request.
+        """
+        with self._world_pause_lock:
+            owners = set(self._world_pause_owners)
+            if paused:
+                owners.add(owner)
+            else:
+                owners.discard(owner)
+            self._world_pause_owners = frozenset(owners)
+
+    @property
+    def world_paused(self) -> bool:
+        """True while any owner holds a world pause (see set_world_paused)."""
+        return bool(self._world_pause_owners)
+
+    def world_pause_owners(self) -> frozenset:
+        """The owners currently holding a world pause."""
+        return self._world_pause_owners
+
+    def _tick_paused_world(self, delta):
+        """One play tick with the world frozen: input drained, plugins run.
+
+        Look and fire input is discarded rather than queued, so nothing the
+        player did over a menu lands in the world when it resumes. The use key
+        goes to the plugins, which is how a game's screen closes on it.
+        """
+        self.game_state.consume_mouse_delta()
+        use_key = self.game_state.consume_use_key()
+        self.game_state.consume_shot()
+        if self.plugins is not None and self.plugins.wants_tick():
+            self.plugins.tick(
+                self,
+                use_pressed=use_key,
+                interaction_consumed=False,
+                delta=delta,
+                keys=self.game_state.get_keys,
+            )
+
     def _tick_play_mode(self, delta):
         if not self.player:
             return
         self._watch_world_rows()
+
+        if self._world_pause_owners:
+            self._tick_paused_world(delta)
+            return
         
         # Update movers & doors first (for platform carrying)
         self._update_movers(delta)

@@ -2202,6 +2202,17 @@ class MainWindow(QMainWindow):
         panel.show()
         return panel
 
+    def begin_actor_pick(self, on_pick=None):
+        """Arm the Play Mode click-to-pick of an actor (see
+        ``QtGameView.begin_actor_pick``): the world pauses and the next click
+        on an actor calls ``on_pick(entity)``, by default opening the Entity
+        Inspector on it. Returns False when there is no play session to pick
+        in. Plugins arm it from their own commands.
+        """
+        view = getattr(self, 'view_3d', None)
+        begin = getattr(view, 'begin_actor_pick', None)
+        return bool(begin(on_pick)) if begin is not None else False
+
     def sync_surface_inspector(self):
         """Point an open Surface Inspector at something worth editing.
 
