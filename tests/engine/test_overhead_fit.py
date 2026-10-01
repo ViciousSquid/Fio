@@ -29,12 +29,14 @@ class _Camera:
     _overhead_camera = LogicThread._overhead_camera
     _safe_up = staticmethod(LogicThread._safe_up)
     set_frustum_fov = LogicThread.set_frustum_fov
+    effective_overhead_height = LogicThread.effective_overhead_height
 
     def __init__(self, aspect=16 / 9, height=800.0, tilt=0.0, overhead=True,
                  orientation="north", fov=90.0):
         self.frustum_aspect = aspect
         self.frustum_fov = fov
         self.overhead_height = height
+        self.overhead_height_limit = None
         self.overhead_tilt = tilt
         self.overhead_orientation = orientation
         self.player = types.SimpleNamespace(pos=glm.vec3(100.0, 50.0, -40.0), angle=0.0)
@@ -193,3 +195,43 @@ def test_row_deltas_are_float64():
     ai = _ai(bigworld=True, overhead=True)
     row_dt, sit = ai._offscreen_rows([_thing(900.0), _thing()], TICK, PLAYER, RECT)
     assert row_dt.dtype == np.float64 and sit.tolist() == [True, False]
+
+
+# ---------------------------------------------------------------------------
+# The overhead camera's height ceiling
+# ---------------------------------------------------------------------------
+
+class _CeilingCamera(_Camera):
+    def __init__(self, limit=None, **kw):
+        super().__init__(**kw)
+        self.overhead_height_limit = limit
+
+
+def test_the_camera_floats_no_higher_than_its_ceiling():
+    cam = _CeilingCamera(height=5000.0, limit=2048.0)
+    assert cam.effective_overhead_height() == 2048.0
+    pos, _d, _u = cam._overhead_camera(cam.player.pos, 0.0)
+    assert pos.y - cam.player.pos.y == pytest.approx(2048.0)
+    # The footprint is the one the held camera shows, not the asked-for one.
+    assert cam.overhead_ground_footprint()[1] == pytest.approx(2048.0, rel=1e-4)
+    # The authored height is left alone, and a lower one is not raised.
+    assert cam.overhead_height == 5000.0
+    assert _CeilingCamera(height=600.0, limit=2048.0).effective_overhead_height() == 600.0
+
+
+def test_no_ceiling_is_the_authored_height():
+    assert _CeilingCamera(height=5000.0).effective_overhead_height() == 5000.0
+
+
+@pytest.mark.parametrize("entering", [True, False])
+def test_a_play_mode_change_drops_the_ceiling(entering):
+    from editor.editor_state import EditorState
+    from engine.threaded_game_state import ThreadedGameState
+    logic = LogicThread(ThreadedGameState(), EditorState())
+    try:
+        logic.overhead_height_limit = 1024.0
+        logic._apply_play_mode(entering)
+        assert logic.overhead_height_limit is None
+    finally:
+        logic._apply_play_mode(False)
+        logic.stop()

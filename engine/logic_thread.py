@@ -240,6 +240,11 @@ class LogicThread(threading.Thread):
         # "player" (rotate with facing).
         self.camera_mode = "First Person"
         self.overhead_height = 800.0
+        #: Ceiling on the overhead camera's height, or None. A Big World
+        #: session sets it to the map's activation radius, so the camera can
+        #: never float out of the world it streams; overhead_height itself is
+        #: left as authored. See effective_overhead_height().
+        self.overhead_height_limit = None
         self.overhead_tilt = 0.0
         self.overhead_orientation = "north"
         # PERF: is_overhead() runs every render-state build (~60 Hz). Cache the
@@ -1200,7 +1205,10 @@ class LogicThread(threading.Thread):
         # editor after one, never starts frozen by a request nobody released.
         with self._world_pause_lock:
             self._world_pause_owners = frozenset()
-        
+        # Likewise a camera ceiling: a session that sets one (Big World) sets
+        # it again from its play-start hook, which runs after this.
+        self.overhead_height_limit = None
+
         if enabled:
             # Read P2 turn sensitivity from editor config
             if hasattr(self.editor_state, 'config'):
@@ -1759,10 +1767,19 @@ class LogicThread(threading.Thread):
                 "overhead", "top-down", "topdown")
         return self._camera_mode_overhead
 
+    def effective_overhead_height(self) -> float:
+        """How high the overhead camera actually floats: ``overhead_height``,
+        held under ``overhead_height_limit`` when one is set."""
+        height = float(self.overhead_height)
+        limit = getattr(self, "overhead_height_limit", None)
+        if limit is not None and float(limit) > 0.0:
+            height = min(height, float(limit))
+        return height
+
     def _overhead_camera(self, player_pos, angle):
         """Compute ``(cam_pos, direction, up)`` for the overhead camera.
 
-        The camera floats ``overhead_height`` above the player looking down (raked
+        The camera floats ``effective_overhead_height()`` above the player looking down (raked
         by ``overhead_tilt``); the up hint is the ground heading (fixed north or
         the player's facing) so it is always perpendicular to a straight-down view
         — never the degenerate world-up that would corrupt the view/frustum.
@@ -1779,7 +1796,7 @@ class LogicThread(threading.Thread):
         dlen = math.sqrt(dir_x * dir_x + dir_y * dir_y + dir_z * dir_z) or 1.0
         direction = glm.vec3(dir_x / dlen, dir_y / dlen, dir_z / dlen)
 
-        dist = float(self.overhead_height) / max(1e-3, cos_t)
+        dist = self.effective_overhead_height() / max(1e-3, cos_t)
         cam_pos = glm.vec3(px - direction.x * dist,
                            py - direction.y * dist,
                            pz - direction.z * dist)

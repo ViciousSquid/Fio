@@ -1413,7 +1413,10 @@ class QtGameView(QOpenGLWidget):
         # restore precision. First-person keeps the stock 0.1 near plane.
         _near = 0.1
         if self.play_mode and self._is_overhead():
-            _oh = float(getattr(getattr(self, 'logic_thread', None), 'overhead_height', 800.0) or 800.0)
+            _lt = getattr(self, 'logic_thread', None)
+            _height = getattr(_lt, 'effective_overhead_height', None)
+            _oh = float((_height() if _height is not None
+                         else getattr(_lt, 'overhead_height', 800.0)) or 800.0)
             _near = max(1.0, _oh * 0.1)
         # The far plane IS the view distance -- that is what makes "nothing is
         # drawn past it" true of a fragment and not just of a whole object. The

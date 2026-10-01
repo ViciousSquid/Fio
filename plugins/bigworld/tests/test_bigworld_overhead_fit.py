@@ -11,6 +11,8 @@ footprint at all, nothing here applies: the authored radii, the near circle and
 the view-distance horizon stand exactly as before.
 """
 
+import math
+
 from engine.spatial import TIER_ACTIVE, TIER_NEAR, tier_of
 from engine.view_distance import ViewDistance
 from plugins.bigworld.runtime import BigWorldSession
@@ -177,7 +179,8 @@ def test_a_screen_past_the_authored_radius_keeps_the_authored_residency():
     logic, session = fitted_session(grid_world(), footprint=(57000.0, 45000.0, 72600.0))
     assert session.manager.activation_radius == 2048.0
     assert session.manager.deactivation_radius == 2304.0
-    assert logic.view_distance.limit == 2048.0
+    # The camera sees down to the residency edge at the player's ground.
+    assert logic.view_distance.limit == 64.0 * math.ceil(math.hypot(2048.0, 800.0) / 64.0)
     # The screen's box is still published, for whoever throttles off screen.
     assert logic.sim_view_rect is not None
 
@@ -209,3 +212,22 @@ def test_the_published_radii_do_not_depend_on_when_the_fit_arrived():
     assert (at_start.sim_near_radius, at_start.sim_active_radius) == \
         (later.sim_near_radius, later.sim_active_radius)
     assert at_start.sim_view_rect == later.sim_view_rect
+
+
+def test_the_overhead_camera_is_held_under_the_activation_radius():
+    logic, session = fitted_session(grid_world(), footprint=(900.0, 500.0))
+    assert logic.overhead_height_limit == 2048.0
+    session.stop()
+    assert logic.overhead_height_limit is None
+
+
+def test_a_camera_at_the_ceiling_still_sees_the_player():
+    """With the screen past residency, the camera reaches down to the
+    residency edge at the player's ground -- past the camera's own height, so
+    the player is never beyond the far plane."""
+    logic, session = fitted_session(grid_world(), footprint=(4000.0, 2048.0, 4500.0))
+    logic.overhead_height = 2048.0
+    logic.footprint = (4100.0, 2048.0, 4600.0)      # re-fit at the new height
+    session.tick()
+    assert session.manager.activation_radius == 2048.0
+    assert logic.view_distance.limit > 2048.0 * 1.4

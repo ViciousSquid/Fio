@@ -246,17 +246,33 @@ class BigWorldSession:
         near_rect = (up(hx + margin), up(hz + margin))
         authored = self._authored_activation_radius
         activation = up(reach + self.FIT_REFRESH)
+        height = self._camera_height()
         if activation >= authored:
-            residency = (authored, self._authored_deactivation_radius, authored)
+            # The screen reaches past the map's residency: keep it, and let the
+            # camera see down to its edge at the player's ground -- which, with
+            # the camera held under the activation radius, always includes the
+            # player (see start()).
+            residency = (authored, self._authored_deactivation_radius,
+                         up(math.hypot(authored, height)))
         else:
             band = max(q, self._authored_deactivation_radius - authored)
             # The camera's reach: from its height down to the residency edge,
             # with room for ground lower than the player. Inside the authored
             # radius, so it is bounded too.
-            height = float(getattr(self.logic, "overhead_height", 800.0) or 800.0)
             limit = up(math.hypot(activation + band, height + 400.0))
             residency = (activation, activation + band, limit)
         return residency, near_rect
+
+    def _camera_height(self) -> float:
+        """How high the host's overhead camera floats, ceiling included."""
+        effective = getattr(self.logic, "effective_overhead_height", None)
+        try:
+            height = effective() if callable(effective) else None
+        except Exception:
+            height = None
+        if height is None:
+            height = getattr(self.logic, "overhead_height", 800.0)
+        return float(height or 800.0)
 
     def _tier_near_radius(self) -> float:
         """The near circle the tiers are configured with: the authored one, or
@@ -343,6 +359,14 @@ class BigWorldSession:
             self._publish_view_rect()
         return changed
 
+    def _set_camera_ceiling(self, height) -> None:
+        """Hold the host's overhead camera at or under *height* (None: no
+        ceiling). Guarded, like the published radii."""
+        try:
+            self.logic.overhead_height_limit = height
+        except Exception:
+            pass
+
     def _publish_view_rect(self) -> None:
         """Tell the host the screen's box, ``(hx, hz)`` around the player, or
         None when tiers are not fitted to an overhead camera.
@@ -372,6 +396,11 @@ class BigWorldSession:
         not in the per-frame path. After this, everything is inactive except the
         cells inside the activation radius of ``player_pos``.
         """
+        # The overhead camera may never float higher than the map's
+        # activation radius: above it, the far plane that follows residency
+        # would leave the camera nothing to see. A ceiling, not an edit --
+        # the host's own overhead_height is kept and applies again on stop().
+        self._set_camera_ceiling(self._authored_activation_radius)
         # Fade the camera out at the activation radius before reading its
         # horizon, so residency is the authored radius rather than whatever
         # the view distance happens to reach.
@@ -483,6 +512,7 @@ class BigWorldSession:
         self._fit_pos = self._tier_pos = None
         self.tiers.set_near_rect(None)
         self._publish_view_rect()
+        self._set_camera_ceiling(None)
         self._restore_terrain()
         if self._release_view_horizon is not None:
             self._release_view_horizon()
