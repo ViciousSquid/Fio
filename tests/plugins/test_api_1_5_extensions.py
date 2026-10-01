@@ -54,7 +54,6 @@ def test_a_1_4_plugin_contributes_nothing_to_the_1_5_extensions(plugin_manager):
     assert manager.property_sections_for("api14entity") == []
     assert manager.kv_suggestions(_thing("logic_state")) == []
     assert manager.inspect_entity(_thing("api14entity")) is None
-    assert manager.has_entity_inspector("api14entity") is False
 
 
 def test_a_plugin_needing_the_next_minor_api_is_refused(plugin_manager):
@@ -181,8 +180,6 @@ def test_a_typed_inspector_is_not_asked_about_other_entities(plugin_manager):
     manager = _fresh_extensions(plugin_manager)
     assert manager.inspect_entity(_thing("wellbehavedentity")) is None
     assert manager.find_plugin("editor_extensions").inspected == []
-    assert manager.has_entity_inspector("gaugeentity") is True
-    assert manager.has_entity_inspector("wellbehavedentity") is False
 
 
 def test_the_first_provider_with_a_document_wins(plugin_manager):
@@ -223,7 +220,6 @@ def test_a_disabled_plugins_extensions_drop_out_and_return(plugin_manager):
     assert manager.property_sections_for("gaugeentity") == []
     assert manager.kv_suggestions(store) == []
     assert manager.inspect_entity(gauge) is None
-    assert manager.has_entity_inspector("gaugeentity") is False
 
     manager.set_enabled(plugin, True)
     assert len(manager.property_sections_for("gaugeentity")) == 1

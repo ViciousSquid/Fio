@@ -112,8 +112,8 @@ class BigWorldPlugin(FioPlugin):
     # -- play lifecycle -----------------------------------------------------
     def on_play_start(self, logic):
         logic._bigworld = None
-        # Only a running session fits tiers to the camera (see the runtime).
-        logic.sim_tiers_fit_view = False
+        # Only a running session publishes a camera-fitted view (see the runtime).
+        logic.sim_view_rect = None
         things = getattr(logic, "things", None) or []
         if not self.map_uses_bigworld(things):
             # No opt-in: behave as ordinary Fio, and in particular leave the

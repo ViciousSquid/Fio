@@ -1,9 +1,10 @@
 """Big World with an overhead camera: residency and tiers sized from the screen.
 
 While the host's camera is overhead, residency is a circle just past the
-screen's corners, NEAR is the screen's rectangle (in cells), and both follow
-the player's own movement instead of waiting for a cell crossing. A host reads
-``sim_tiers_fit_view`` to know that ACTIVE now means off screen.
+screen's farthest corner (never larger than authored), NEAR is the screen's
+rectangle (in cells), and both follow the player's own movement instead of
+waiting for a cell crossing. The session publishes the rectangle as
+``sim_view_rect`` so a host knows what is on screen.
 
 With a first-person camera -- the host's footprint is None -- or a host with no
 footprint at all, nothing here applies: the authored radii, the near circle and
@@ -49,7 +50,7 @@ def test_residency_is_sized_from_the_screen_not_the_authored_radius():
     assert corner + session.FIT_REFRESH <= act < corner + session.FIT_REFRESH + session.FIT_QUANTUM
     assert act < 2048.0
     assert session.manager.deactivation_radius > act
-    assert logic.sim_tiers_fit_view is True
+    assert logic.sim_view_rect == session.tiers.near_rect
     # The camera's far plane follows residency.
     assert logic.view_distance.limit is not None
 
@@ -82,7 +83,7 @@ def _authored(session, logic):
     assert session.manager.deactivation_radius == 2304.0
     assert session.tiers.near_rect is None
     assert session.tiers.near_radius == 1024.0
-    assert not getattr(logic, "sim_tiers_fit_view", False)
+    assert getattr(logic, "sim_view_rect", None) is None
 
 
 def test_a_first_person_camera_keeps_the_authored_radii():
@@ -164,6 +165,47 @@ def test_leaving_the_overhead_camera_restores_the_authored_radii():
 
 def test_stopping_hands_the_fit_back():
     logic, session = fitted_session(grid_world(), footprint=(900.0, 500.0))
-    assert logic.sim_tiers_fit_view is True
+    assert logic.sim_view_rect is not None
     session.stop()
-    assert logic.sim_tiers_fit_view is False
+    assert logic.sim_view_rect is None
+    assert session.tiers.near_rect is None
+
+
+def test_a_screen_past_the_authored_radius_keeps_the_authored_residency():
+    """A raked or high camera can show tens of thousands of units of ground;
+    residency and the camera's reach stay what the map authored."""
+    logic, session = fitted_session(grid_world(), footprint=(57000.0, 45000.0, 72600.0))
+    assert session.manager.activation_radius == 2048.0
+    assert session.manager.deactivation_radius == 2304.0
+    assert logic.view_distance.limit == 2048.0
+    # The screen's box is still published, for whoever throttles off screen.
+    assert logic.sim_view_rect is not None
+
+
+def test_turning_the_camera_retiers_but_leaves_residency_alone():
+    logic, session = fitted_session(grid_world(cells_each_way=8),
+                                    footprint=(900.0, 500.0, 1030.0))
+    residency = (session.manager.activation_radius, logic.view_distance.limit)
+    forced = []
+    original = session.manager.update
+
+    def update(pos, force=False):
+        forced.append(force)
+        return original(pos, force=force)
+    session.manager.update = update
+    logic.footprint = (700.0, 800.0, 1030.0)        # same reach, turned box
+    session.tick()
+    assert (session.manager.activation_radius, logic.view_distance.limit) == residency
+    assert True not in forced                       # no forced residency pass
+    assert logic.sim_view_rect == session.tiers.near_rect
+    assert session.tiers.near_rect[1] > session.tiers.near_rect[0]
+
+
+def test_the_published_radii_do_not_depend_on_when_the_fit_arrived():
+    at_start, s1 = fitted_session(grid_world(), footprint=(1000.0, 500.0))
+    later, s2 = fitted_session(grid_world(), footprint=None)
+    later.footprint = (1000.0, 500.0)
+    s2.tick()
+    assert (at_start.sim_near_radius, at_start.sim_active_radius) == \
+        (later.sim_near_radius, later.sim_active_radius)
+    assert at_start.sim_view_rect == later.sim_view_rect

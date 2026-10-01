@@ -1427,6 +1427,11 @@ class QtGameView(QOpenGLWidget):
         _bg = self.view_distance.fog_color
         gl.glClearColor(_bg[0], _bg[1], _bg[2], 1.0)
         self.projection_matrix = perspective_projection(self.camera.fov, self._cached_aspect_ratio, _near, _far)
+        _set_fov = getattr(getattr(self, 'logic_thread', None), 'set_frustum_fov', None)
+        if self.play_mode and _set_fov is not None:
+            # Culling and the overhead ground footprint must see the frustum
+            # drawn here, not an assumed one.
+            _set_fov(self.camera.fov)
         self._proj_ptr = glm.value_ptr(self.projection_matrix)
         self._view_ptr = glm.value_ptr(self.view_matrix)
         self._render_config["culling_enabled"] = self.culling_enabled

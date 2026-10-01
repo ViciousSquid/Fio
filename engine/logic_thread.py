@@ -173,9 +173,6 @@ class LogicThread(threading.Thread):
     
     TICK_RATE = 60
     TICK_DURATION = 1.0 / TICK_RATE
-    #: Vertical field of view of the overhead camera, in degrees. The overhead
-    #: projection and :meth:`overhead_ground_footprint` both read it.
-    OVERHEAD_FOV = 90.0
 
     # Trigger polling is scheduled at the fastest supported interval, while
     # each trigger independently decides when its next sample is due.
@@ -225,6 +222,10 @@ class LogicThread(threading.Thread):
         # Frustum culling settings
         self.culling_enabled = True
         self.frustum_aspect = 16.0 / 9.0
+        #: Vertical field of view (degrees) the play view projects with. The
+        #: view hands it over each frame (set_frustum_fov), so culling and
+        #: overhead_ground_footprint see the frustum that is actually drawn.
+        self.frustum_fov = 90.0
         # Shared with the viewport and the renderer (set_view_distance). Held
         # as None until the viewport hands one over, so a LogicThread built in
         # a test without one still culls against the historical far plane.
@@ -1723,6 +1724,15 @@ class LogicThread(threading.Thread):
     def set_frustum_aspect(self, aspect: float):
         self.frustum_aspect = aspect
 
+    def set_frustum_fov(self, fov: float):
+        """The play view's vertical field of view, in degrees (see frustum_fov)."""
+        try:
+            fov = float(fov)
+        except (TypeError, ValueError):
+            return
+        if 1.0 <= fov <= 179.0:
+            self.frustum_fov = fov
+
     def set_view_distance(self, view_distance):
         """Adopt the viewport's shared view-distance settings.
 
@@ -1777,13 +1787,16 @@ class LogicThread(threading.Thread):
         return cam_pos, direction, up
 
     def overhead_ground_footprint(self):
-        """Half extents ``(hx, hz)`` of the ground the overhead camera shows.
+        """What ground the overhead camera shows: ``(hx, hz, reach)``.
 
-        The axis-aligned box around the player that holds the four points
-        where the view's corner rays meet the ground at the player's height,
-        or None when the camera is not overhead (or looks at the horizon, so
-        the view has no ground edge). Used to fit world streaming and
-        simulation tiers to what is actually on screen.
+        ``hx``/``hz`` are the half extents of the axis-aligned box around the
+        player that holds the four points where the view's corner rays meet
+        the ground at the player's height; ``reach`` is the distance from the
+        player to the farthest of those points, which -- unlike the box --
+        does not change as a player-oriented camera turns. None when the
+        camera is not overhead (or looks at the horizon, so the view has no
+        ground edge). Used to fit world streaming and simulation to what is
+        actually on screen.
         """
         if not self.is_overhead() or self.player is None:
             return None
@@ -1792,19 +1805,22 @@ class LogicThread(threading.Thread):
         d = glm.normalize(glm.vec3(direction))
         right = glm.normalize(glm.cross(d, glm.vec3(up)))
         true_up = glm.cross(right, d)
-        tan_v = math.tan(math.radians(self.OVERHEAD_FOV) / 2.0)
+        tan_v = math.tan(math.radians(float(getattr(self, "frustum_fov", 90.0))) / 2.0)
         tan_h = tan_v * max(0.1, float(getattr(self, "frustum_aspect", 16.0 / 9.0)))
         ground = float(pos.y)
-        hx = hz = 0.0
+        hx = hz = reach = 0.0
         for sx in (-1.0, 1.0):
             for sy in (-1.0, 1.0):
                 ray = d + true_up * (sy * tan_v) + right * (sx * tan_h)
                 if ray.y >= -1e-3:
                     return None
                 t = (ground - cam.y) / ray.y
-                hx = max(hx, abs(cam.x + ray.x * t - pos.x))
-                hz = max(hz, abs(cam.z + ray.z * t - pos.z))
-        return hx, hz
+                dx = cam.x + ray.x * t - pos.x
+                dz = cam.z + ray.z * t - pos.z
+                hx = max(hx, abs(dx))
+                hz = max(hz, abs(dz))
+                reach = max(reach, math.hypot(dx, dz))
+        return hx, hz, reach
 
     @staticmethod
     def _safe_up(direction, up):
@@ -1828,14 +1844,14 @@ class LogicThread(threading.Thread):
         """
         if overhead:
             cam_pos, direction, up = self._overhead_camera(player_pos, player_angle)
-            return cam_pos, direction, up, self.OVERHEAD_FOV
+            return cam_pos, direction, up, self.frustum_fov
         cam_pos = player_pos + glm.vec3(0, camera_height, 0)
         direction = glm.vec3(
             math.sin(player_angle) * math.cos(player_pitch),
             math.sin(player_pitch),
             math.cos(player_angle) * math.cos(player_pitch),
         )
-        return cam_pos, direction, glm.vec3(0, 1, 0), 90.0
+        return cam_pos, direction, glm.vec3(0, 1, 0), self.frustum_fov
 
     def start_camera_transition(self, target_mode=None, duration=1.0):
         """Begin a smooth tween between First Person and Overhead cameras.
@@ -2309,15 +2325,21 @@ class LogicThread(threading.Thread):
         Look and fire input is discarded rather than queued, so nothing the
         player did over a menu lands in the world when it resumes. The use key
         goes to the plugins, which is how a game's screen closes on it.
+
+        Plugins tick exactly when an unpaused tick would reach them: not during
+        a cinematic, a death or the level-complete screen, which freeze input
+        and return before the plugin step either way.
         """
         self.game_state.consume_mouse_delta()
         use_key = self.game_state.consume_use_key()
         self.game_state.consume_shot()
+        if self.cinematic_state or self.player_dead or self.level_complete_ui:
+            return
         if self.plugins is not None and self.plugins.wants_tick():
             self.plugins.tick(
                 self,
                 use_pressed=use_key,
-                interaction_consumed=False,
+                interaction_consumed=bool(self.current_hud_message),
                 delta=delta,
                 keys=self.game_state.get_keys,
             )
@@ -4512,7 +4534,7 @@ class LogicThread(threading.Thread):
                     # degeneracy that would corrupt the view and every plane.
                     cam_pos, direction, up_vec = self._overhead_camera(player_pos, player_angle)
                     view_matrix = glm.lookAt(cam_pos, cam_pos + direction, up_vec)
-                    fov = 90.0
+                    fov = self.frustum_fov
                 else:
                     cam_pos = player_pos + glm.vec3(0, camera_height, 0)
                     direction = glm.vec3(
@@ -4521,7 +4543,7 @@ class LogicThread(threading.Thread):
                         math.cos(player_angle) * math.cos(player_pitch),
                     )
                     view_matrix = glm.lookAt(cam_pos, cam_pos + direction, glm.vec3(0, 1, 0))
-                    fov = 90.0
+                    fov = self.frustum_fov
                 write_state.player_pos = player_pos
                 write_state.player_angle = player_angle
                 write_state.player_pitch = player_pitch

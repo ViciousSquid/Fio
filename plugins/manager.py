@@ -903,12 +903,6 @@ class PluginManager:
                 (plugin, provider,
                  self._normalise_type(entity_type) if entity_type else None))
 
-    def has_entity_inspector(self, entity_type=None) -> bool:
-        """Whether an enabled provider would be asked about *entity_type*."""
-        norm = self._normalise_type(entity_type) if entity_type else None
-        return any(self.is_enabled(plugin) and (t is None or t == norm)
-                   for plugin, _provider, t in self._entity_inspectors)
-
     def inspect_entity(self, entity, logic=None):
         """The first non-empty inspection document a provider returns for
         *entity*, or None when no enabled provider has one.

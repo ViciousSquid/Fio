@@ -17,6 +17,8 @@ editor reads; ``monkeypatch`` restores its lists after every test.
 
 import configparser
 
+import types
+
 import pytest
 
 pytest.importorskip("PyQt5", reason="the property editor is Qt")
@@ -423,18 +425,21 @@ def test_the_inspector_follows_the_scene(api, inspector_host):
     assert "no longer in the scene" in panel.subtitle_label.text()
 
 
-def test_the_inspector_reads_the_views_logic_thread(api, inspector_host):
+@pytest.mark.parametrize("play_mode", [True, False])
+def test_the_inspector_hands_providers_logic_only_in_play_mode(api, inspector_host, play_mode):
+    """The logic thread lives for the whole editor session; providers are
+    promised it only while Play Mode runs, and None otherwise."""
     seen = []
     api.register_entity_inspector(lambda e, logic: seen.append(logic) or {"title": "x"})
 
     class View:
-        logic_thread = object()
+        logic_thread = types.SimpleNamespace(play_mode=play_mode)
 
     inspector_host.view_3d = View()
     a = Thing(pos=[0, 0, 0], properties={"type": "t"})
     inspector_host.state.things.append(a)
     inspector_host.show_entity_inspector(a)
-    assert seen[-1] is View.logic_thread
+    assert seen[-1] is (View.logic_thread if play_mode else None)
 
 
 def test_no_entity_opens_nothing(inspector_host):

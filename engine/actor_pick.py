@@ -15,8 +15,10 @@ columns, with no walk over the scene's objects.
   tall sprite's head hits it.
 * **Occluders** are the visible solid brushes (``CLASS_SHADOW_CASTER``: not a
   trigger, fog, water, glass or glow volume, not a subtract brush), tested as
-  their bounding boxes. An actor behind a wall is not clickable; a trigger
-  volume around it does not get in the way.
+  the boxes the renderer draws -- ``centre +/- half``, turned by the row's
+  ``rot`` about its centre, so a swung door or a spinning mover occludes where
+  it is drawn. An actor behind a wall is not clickable; a trigger volume around
+  it does not get in the way. Terrain does not occlude.
 
 The nearest actor hit in front of the nearest wall wins.
 """
@@ -41,7 +43,7 @@ def nearest_wall(ray_o, ray_d, render_table, limit=np.inf) -> float:
     """Distance along the ray to the first visible solid brush, or *limit*."""
     if render_table is None or not getattr(render_table, 'count', 0):
         return float(limit)
-    from engine.render_table import CLASS_SHADOW_CASTER
+    from engine.render_table import CLASS_SHADOW_CASTER, rotation_matrices
     n = render_table.count
     solid = ((render_table.class_bits[:n] & CLASS_SHADOW_CASTER) != 0) \
         & ~render_table.hidden[:n]
@@ -49,9 +51,17 @@ def nearest_wall(ray_o, ray_d, render_table, limit=np.inf) -> float:
     if not len(rows):
         return float(limit)
     bounds = render_table.bounds[rows]
-    lo = bounds[:, 0:3] - bounds[:, 3:6]
-    hi = bounds[:, 0:3] + bounds[:, 3:6]
-    o, d = _as_vec(ray_o), _as_vec(ray_d)
+    half = bounds[:, 3:6]
+    # Every ray in the box's own frame, where the box is centred at the origin
+    # and axis-aligned: o' = R^T (o - c), d' = R^T d. Unrotated rows (almost
+    # all of them) need only the translation.
+    o = np.broadcast_to(_as_vec(ray_o) - bounds[:, 0:3], half.shape).copy()
+    d = np.broadcast_to(_as_vec(ray_d), half.shape).copy()
+    turned, r = rotation_matrices(render_table.rot[rows])
+    if len(turned):
+        o[turned] = np.einsum('nji,nj->ni', r, o[turned])
+        d[turned] = np.einsum('nji,nj->ni', r, d[turned])
+    lo, hi = -half, half
     with np.errstate(divide='ignore', invalid='ignore'):
         inv = 1.0 / d
         t1 = (lo - o) * inv
@@ -63,8 +73,8 @@ def nearest_wall(ray_o, ray_d, render_table, limit=np.inf) -> float:
     flat = d == 0.0
     if flat.any():
         inside = (o >= lo) & (o <= hi)
-        t_near[:, flat] = np.where(inside[:, flat], -np.inf, np.inf)
-        t_far[:, flat] = np.where(inside[:, flat], np.inf, -np.inf)
+        t_near[flat] = np.where(inside[flat], -np.inf, np.inf)
+        t_far[flat] = np.where(inside[flat], np.inf, -np.inf)
     enter = np.max(t_near, axis=1)
     leave = np.min(t_far, axis=1)
     hit = (enter <= leave) & (leave > 0.0)

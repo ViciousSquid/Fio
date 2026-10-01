@@ -33,8 +33,8 @@ from PyQt5.QtWidgets import (QDialog, QLabel, QProgressBar, QTreeWidget,
                              QTreeWidgetItem, QVBoxLayout)
 
 #: Properties the fallback document leaves out: identity it already shows in
-#: the title, and editor bookkeeping.
-_FALLBACK_SKIP = frozenset({"name", "type", "id", "_io_connections"})
+#: the title. Editor bookkeeping (any ``_``-prefixed key) is left out too.
+_FALLBACK_SKIP = frozenset({"name", "type", "id"})
 
 
 def _row(raw):

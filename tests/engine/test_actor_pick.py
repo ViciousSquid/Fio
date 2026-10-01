@@ -104,6 +104,22 @@ def test_only_visible_solid_brushes_occlude(props):
     assert _picked([npc], [volume], (0, 64, 0), EAST) is npc
 
 
+def test_a_turned_brush_occludes_where_it_is_drawn():
+    """A swung door or a spinning mover: rotation about the brush's centre,
+    in degrees, as the renderer draws it."""
+    actor = _actor("a", [600.0, 64.0, 200.0])
+    # 16 wide on X, 512 long on Z: square across the ray at z=200 ...
+    door = box_brush("door", (300.0, 64.0, 0.0), (16.0, 128.0, 512.0))
+    assert _picked([actor], [door], (0.0, 64.0, 200.0), EAST) is None
+    # ... swung 90 degrees it lies along X at z ~ 0, out of the ray's way ...
+    door['rot_axis'] = [0.0, 1.0, 0.0]
+    door['_rot_angle'] = 90.0
+    assert _picked([actor], [door], (0.0, 64.0, 200.0), EAST) is actor
+    # ... and now blocks a ray it used to miss.
+    behind = _actor("b", [300.0, 64.0, 600.0])
+    assert _picked([behind], [door], (300.0, 64.0, -600.0), (0.0, 0.0, 1.0)) is None
+
+
 def test_a_brush_around_the_eye_does_not_occlude():
     npc = _actor("npc", (500, 64, 0))
     room = box_brush("room", (0, 64, 0), (256, 256, 256))

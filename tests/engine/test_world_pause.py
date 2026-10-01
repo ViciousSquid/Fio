@@ -193,6 +193,29 @@ def test_plugins_still_tick_over_a_paused_world(playing):
     assert plugins.ticks[1]["use_pressed"] is False
 
 
+@pytest.mark.parametrize("state", ["cinematic_state", "player_dead", "level_complete_ui"])
+def test_plugins_over_a_paused_world_tick_only_when_an_unpaused_tick_would(playing, state):
+    """A cinematic, a death or the level-complete screen returns before the
+    plugin step either way; pausing on top of one does not start plugins."""
+    plugins = _RecordingPlugins()
+    playing.plugins = plugins
+    setattr(playing, state, {"active": True} if state != "player_dead" else True)
+    playing.set_world_paused("menu", True)
+    playing.game_state.set_use_key_pressed()
+    _ticks(playing, 2)
+    assert plugins.ticks == []
+    assert playing.game_state.consume_use_key() is False      # still drained
+
+
+def test_a_paused_tick_reports_a_hud_prompt_as_consuming_the_use_key(playing):
+    plugins = _RecordingPlugins()
+    playing.plugins = plugins
+    playing.current_hud_message = "Press E to open"
+    playing.set_world_paused("menu", True)
+    _ticks(playing, 1)
+    assert plugins.ticks[0]["interaction_consumed"] is True
+
+
 # ---------------------------------------------------------------------------
 # The monster AI thread
 # ---------------------------------------------------------------------------
