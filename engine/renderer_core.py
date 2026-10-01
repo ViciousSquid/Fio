@@ -2885,13 +2885,16 @@ layout (location = 10) in float iInstanceAlpha;
         return 0
 
     def draw_player_glasses(self, projection, view, positions,
-                           width=40.0, height=18.0):
+                           width=40.0, height=18.0, lift=40.0):
         """Draw the player as the fixed glasses billboard.
 
         Player bodies are deliberately not EntityTable rows, so this is the
         small non-entity billboard path used only for player representation
         (split-screen and portal virtual scenes). It reuses the existing sprite
         shader/VAO and performs at most two draws in a normal split-screen view.
+        *positions* are the published ``player_glasses_positions``; each
+        billboard is raised by *lift* here so every view (split-screen halves
+        and portal scenes) places the glasses at the same height.
         """
         if not positions or 'sprite' not in self.shaders:
             return 0
@@ -2932,7 +2935,7 @@ layout (location = 10) in float iInstanceAlpha;
                     px, py, pz = float(pos.x), float(pos.y), float(pos.z)
                 except AttributeError:
                     px, py, pz = float(pos[0]), float(pos[1]), float(pos[2])
-                gl.glUniform3f(pos_loc, px, py, pz)
+                gl.glUniform3f(pos_loc, px, py + float(lift), pz)
                 gl.glUniform2f(size_loc, float(width), float(height))
                 gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
                 count += 1

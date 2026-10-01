@@ -13,7 +13,6 @@ import os
 from .renderer_core import BaseRenderer, normalize_color, timed_pass
 from engine import render_table
 from engine import entity_table as entity_projection
-from engine.portal_transform import map_point as _portal_map_point
 from engine.render_keys import KeyLayout, sort_into_runs
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.things import Thing, Effect
@@ -1153,70 +1152,32 @@ class Renderer_F(BaseRenderer):
                                 proj, vw, cam, portal_groups['fog'], portal_lights, cfg,
                                 table=portal_table)
 
-                            # Player glasses are a portal-scene overlay, but must
-                            # still obey the portal aperture and destination depth.
-                            # Draw them after every world material pass so water,
-                            # glass and fog cannot overwrite the representation,
-                            # and restore the exact stencil/depth state established
-                            # by draw_portals before submitting the billboard.
+                            # Player glasses through a portal (same "show glasses"
+                            # setting as split-screen). The virtual scene IS the
+                            # real world seen from the destination side, so the
+                            # players are drawn at their real positions -- this is
+                            # how you see yourself when the destination portal
+                            # looks back at you. (Mapping them through the portal
+                            # like the camera would put your own glasses exactly
+                            # on the virtual eye, where they can never be seen.)
+                            # Drawn after every world material pass so water,
+                            # glass and fog cannot overwrite them, with the
+                            # oblique projection so anything behind the
+                            # destination aperture stays clipped, and inside this
+                            # portal's stencil level.
                             if cfg.get('show_glasses', True):
                                 player_positions = cfg.get(
                                     'player_glasses_positions', ())
                                 if player_positions:
-                                    # Portal scenes are rendered from the
-                                    # destination side. Map the player
-                                    # representations through the same portal
-                                    # transform as the virtual camera so a
-                                    # player can see themselves/other players
-                                    # through the portal.
-                                    aperture = int(getattr(
-                                        view_state, 'aperture_slot', -1))
-                                    clip = int(getattr(
-                                        view_state, 'clip_slot', -1))
-                                    if (aperture >= 0 and clip >= 0
-                                            and cfg.get('entity_table') is not None):
-                                        table = cfg['entity_table']
-                                        player_positions = tuple(
-                                            _portal_map_point(
-                                                table.pos[aperture],
-                                                self._portal_slot_basis(table, aperture),
-                                                table.pos[clip],
-                                                self._portal_slot_basis(table, clip),
-                                                (
-                                                    float(pos[0]),
-                                                    float(pos[1]),
-                                                    float(pos[2]),
-                                                ),
-                                            )
-                                            for pos in player_positions
-                                        )
-                                    if player_positions:
-                                        # draw_portals owns the stencil mask;
-                                        # reassert it here because the material
-                                        # passes above are independent render
-                                        # operations and must not leak state.
-                                        depth = int(getattr(
-                                            view_state, 'recursion_depth', 1))
-                                        gl.glEnable(gl.GL_STENCIL_TEST)
-                                        gl.glStencilMask(0x00)
-                                        gl.glStencilFunc(
-                                            gl.GL_EQUAL, depth, 0xFF)
-                                        gl.glStencilOp(
-                                            gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
-                                        gl.glEnable(gl.GL_DEPTH_TEST)
-                                        gl.glDepthFunc(gl.GL_LEQUAL)
-                                        # The virtual scene uses an oblique
-                                        # near-plane projection to clip everything
-                                        # behind the destination aperture. The
-                                        # player's self-representation necessarily
-                                        # lives with the virtual camera, i.e. on that
-                                        # clipped side of the plane, so render this
-                                        # dedicated overlay with the ordinary frame
-                                        # projection while retaining the portal
-                                        # stencil and virtual destination view.
-                                        self.draw_player_glasses(
-                                            projection, vw, player_positions)
-                                        gl.glDepthFunc(gl.GL_LESS)
+                                    depth = int(getattr(
+                                        view_state, 'recursion_depth', 1))
+                                    gl.glEnable(gl.GL_STENCIL_TEST)
+                                    gl.glStencilMask(0x00)
+                                    gl.glStencilFunc(gl.GL_EQUAL, depth, 0xFF)
+                                    gl.glStencilOp(
+                                        gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
+                                    self.draw_player_glasses(
+                                        proj, vw, player_positions)
 
                             gl.glDepthMask(gl.GL_TRUE)
                         finally:

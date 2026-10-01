@@ -1223,16 +1223,10 @@ class QtGameView(QOpenGLWidget):
             return
         if not positions or not self.renderer:
             return
-        eye_positions = [
-            (float(pos.x), float(pos.y) + 40.0, float(pos.z))
-            if hasattr(pos, 'x')
-            else (float(pos[0]), float(pos[1]) + 40.0, float(pos[2]))
-            for pos in positions
-        ]
         self.renderer.draw_player_glasses(
             proj_matrix,
             view_matrix,
-            eye_positions,
+            positions,
             width=40.0,
             height=18.0,
         )
