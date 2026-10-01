@@ -402,6 +402,23 @@ first provider returning a non-empty document is shown; with none the panel list
 the entity's public properties. The panel refreshes about four times a second
 while visible. With *entity_type* the provider is only asked about that type.
 
+### World pause and actor pick (engine, Play Mode)
+
+Not part of the versioned `EditorAPI`; engine objects a plugin already receives.
+
+```python
+logic.set_world_paused(owner, paused=True)   # hold/release a pause for *owner*
+logic.world_paused                           # True while any owner holds one
+main_window.begin_actor_pick(on_pick=None)   # arm click-to-pick of an actor
+```
+While any owner holds a world pause, a play tick advances nothing in the world
+(player, movers, doors, I/O timers, triggers, props, physics, projectiles, the
+monster AI thread) but plugins still tick, so a game's menus keep working. Each
+owner releases only its own request; entering or leaving Play Mode drops them
+all. `begin_actor_pick` pauses the world, frees the cursor and calls
+`on_pick(entity)` for the next actor clicked (default: open the Entity
+Inspector); Esc or a right-click cancels.
+
 ### Global store & logging
 
 ```python
