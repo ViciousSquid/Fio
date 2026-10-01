@@ -37,12 +37,16 @@ class _RecordingAPI:
     def __init__(self):
         self.entities = []
         self.properties = {}
+        self.singletons = []
 
     def register_entity(self, cls, menu_label=""):
         self.entities.append((cls, menu_label))
 
     def register_properties(self, entity_type, specs):
         self.properties[entity_type] = list(specs)
+
+    def register_singleton_entity(self, entity_type):
+        self.singletons.append(entity_type)
 
 
 def _registered_schema():

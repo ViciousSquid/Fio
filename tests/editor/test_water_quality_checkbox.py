@@ -1,9 +1,9 @@
-"""The water shader tab's "Expensive water" checkbox.
+"""The water shader tab's "High quality" checkbox.
 
-Water quality is one renderer setting shared by every water brush. The
-Property Editor shows it at the top of a water brush's shader properties,
-next to "Draw top surface only"; ticking it switches the live renderer and
-saves the choice to settings.ini, as Settings > Renderer Performance does.
+Water quality is a property of each water brush (``water_high_quality``,
+default on), not a renderer or settings.ini setting. The Property Editor
+shows it at the top of a water brush's shader properties, next to "Draw top
+surface only".
 """
 
 import configparser
@@ -82,11 +82,11 @@ def water_brush():
     }
 
 
-def _panel(qt_app, quality='expensive'):
+def _panel(qt_app, **props):
     host = FakeHost()
-    host.view_3d.renderer.water_quality = quality
     editor = PropertyEditor(host)
     brush = water_brush()
+    brush.update(props)
     host.state.brushes = [brush]
     host.state.selected_objects = [brush]
     editor.set_object(brush, force=True)
@@ -98,34 +98,49 @@ def test_the_checkbox_sits_at_the_top_beside_top_surface_only(qt_app):
     host, editor = _panel(qt_app)
     quality = editor._widgets['water_quality_cb']
     plane = editor._widgets['water_plane_cb']
-    assert quality.text() == "Expensive water"
+    assert quality.text() == "High quality"
     assert quality.parentWidget() is plane.parentWidget()
     # Same row, quality first, above every other water control.
     checkboxes = [w for w in quality.parentWidget().findChildren(QCheckBox)
-                  if w.text() in ("Expensive water", "Draw top surface only", "Enable Waves")]
+                  if w.text() in ("High quality", "Draw top surface only", "Enable Waves")]
     order = sorted(checkboxes, key=lambda w: (w.mapTo(quality.window(), w.rect().topLeft()).y(),
                                               w.mapTo(quality.window(), w.rect().topLeft()).x()))
-    assert [w.text() for w in order][:2] == ["Expensive water", "Draw top surface only"]
+    assert [w.text() for w in order][:2] == ["High quality", "Draw top surface only"]
     y = [w.mapTo(quality.window(), w.rect().center()).y() for w in order[:2]]
     assert abs(y[0] - y[1]) <= 2                # one row
 
 
-@pytest.mark.parametrize("quality", ["cheap", "expensive"])
-def test_the_checkbox_shows_the_current_setting(qt_app, quality):
-    host, editor = _panel(qt_app, quality)
-    assert editor._widgets['water_quality_cb'].isChecked() == (quality == 'expensive')
+@pytest.mark.parametrize("props, checked", [
+    ({}, True),                                  # default on
+    ({'water_high_quality': True}, True),
+    ({'water_high_quality': False}, False),
+    ({'water_high_quality': 'false'}, False),    # hand-edited map
+])
+def test_the_checkbox_shows_the_brush_setting(qt_app, props, checked):
+    host, editor = _panel(qt_app, **props)
+    assert editor._widgets['water_quality_cb'].isChecked() == checked
     assert host.config_saves == 0          # building the panel saves nothing
 
 
-def test_ticking_it_switches_the_renderer_and_saves(qt_app):
-    host, editor = _panel(qt_app, 'expensive')
+def test_ticking_it_sets_only_this_brush_and_never_the_renderer(qt_app):
+    host, editor = _panel(qt_app)
     box = editor._widgets['water_quality_cb']
     box.setChecked(False)
-    assert host.view_3d.renderer.water_quality == 'cheap'
-    assert host.config.get('Renderer', 'water_quality') == 'cheap'
-    assert host.config_saves == 1
+    assert host.state.brushes[0]['water_high_quality'] is False
     box.setChecked(True)
+    assert host.state.brushes[0]['water_high_quality'] is True
+    # A brush property, never a renderer or settings.ini setting.
     assert host.view_3d.renderer.water_quality == 'expensive'
-    assert host.config.get('Renderer', 'water_quality') == 'expensive'
-    # The checkbox is a renderer setting, never a brush property.
-    assert 'water_quality' not in host.state.brushes[0]
+    assert not host.config.has_option('Renderer', 'water_quality')
+    assert host.config_saves == 0
+
+
+def test_the_render_table_reads_the_flag_per_brush():
+    from engine.render_table import RenderTable, CLASS_WATER
+
+    hq = water_brush()
+    cheap = dict(water_brush(), id='id-cheap', water_high_quality=False)
+    table = RenderTable()
+    table.begin_frame([hq, cheap])
+    assert (table.class_bits[:2] & CLASS_WATER).all()
+    assert table.water_high_quality[:2].tolist() == [True, False]

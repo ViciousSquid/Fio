@@ -8,6 +8,7 @@ from engine.portal_transform import (
     corners,
     map_direction,
     map_point,
+    mirror_point,
 )
 
 
@@ -43,3 +44,27 @@ def test_aperture_corners_and_contains_share_the_same_frame():
     assert contains_point(pos, basis, 128.0, 256.0, pos)
     far = (pos[0] + 1000.0, pos[1], pos[2])
     assert not contains_point(pos, basis, 128.0, 256.0, far)
+
+
+def test_mirror_point_shows_the_viewer_straight_back_through_the_portal():
+    """A portal used as a mirror: the reflection sits in front of the exit at
+    the viewer's own distance, dead ahead of the virtual camera at 2x range."""
+    a_pos = (1072.0, 224.0, -800.0)
+    b_pos = (480.0, 224.0, -448.0)
+    a_basis = basis_from_rotation([180.0, 0.0, 0.0])
+    b_basis = basis_from_rotation([270.0, 0.0, 0.0])
+    eye = (1000.0, 154.0, -1100.0)
+
+    cam = np.asarray(map_point(a_pos, a_basis, b_pos, b_basis, eye))
+    mirrored = np.asarray(mirror_point(a_pos, a_basis, b_pos, b_basis, eye))
+
+    a_n = np.asarray(a_basis[2])
+    b_n = np.asarray(b_basis[2])
+    dist = float(np.dot(np.asarray(eye) - a_pos, a_n))
+    assert dist > 0.0
+    assert np.isclose(np.dot(mirrored - b_pos, b_n), dist)
+    assert np.isclose(np.dot(cam - b_pos, b_n), -dist)
+    # Looking straight into the source portal means looking along -normal,
+    # which maps to +normal at the exit: the reflection is right ahead.
+    ahead = np.asarray(map_direction(a_basis, b_basis, tuple(-a_n)))
+    assert np.allclose(mirrored - cam, ahead * 2.0 * dist, atol=1e-9)

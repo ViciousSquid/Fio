@@ -26,6 +26,7 @@ from editor.SettingsWindow import SettingsWindow
 from editor.ui import LAYOUT_VERSION, Ui_MainWindow
 from editor.tooltips import set_tooltips_enabled
 from engine.constants import TILE_SIZE
+from engine.glasses import DEFAULT_GLASSES, normalize_glasses
 from engine import brush_geometry
 from engine.change_journal import moved, touch
 from engine.fileio import write_json_atomic
@@ -1034,6 +1035,9 @@ class MainWindow(QMainWindow):
             sources.append(self.state.selected_object)
         if not sources:
             return
+        sources, skipped = self._drop_singleton_copies(sources)
+        if not sources:
+            return
 
         # A clone while one is still being placed drops the pending one first,
         # so repeated Shift+Space never strands half-placed duplicates.
@@ -1090,6 +1094,32 @@ class MainWindow(QMainWindow):
                 obj['_flash_until'] = time.time() + 0.5  # Flash for 0.5s
                 QTimer.singleShot(500, lambda o=obj: self._clear_flash(o))
         self.update_all_ui()
+
+    def _drop_singleton_copies(self, sources):
+        """*sources* minus entities a copy of which would break a per-map
+        singleton (one BigWorldSettings per map, say), and how many went.
+
+        A copy is refused while the scene already holds an instance of its
+        type; the toast says so. Brushes and ordinary entities pass through.
+        """
+        try:
+            from plugins.integration import singleton_instance
+        except Exception:
+            return list(sources), 0
+        kept, skipped = [], 0
+        for source in sources:
+            props = getattr(source, 'properties', None)
+            if (not isinstance(source, dict) and isinstance(props, dict)
+                    and singleton_instance(self.state.things, props.get('type'))
+                    is not None):
+                skipped += 1
+                continue
+            kept.append(source)
+        if skipped:
+            self.show_toast(
+                "Only one of this entity is allowed per map - not copied.",
+                is_error=True)
+        return kept, skipped
 
     @staticmethod
     def _copy_name(base, taken):
@@ -1842,6 +1872,10 @@ class MainWindow(QMainWindow):
             self.view_3d.show_glasses = self.config.getboolean(
                 'Display', 'show_glasses', fallback=True
             )
+            # So is player 1's choice of glasses (Settings > Appearance).
+            self.view_3d.player1_glasses = normalize_glasses(self.config.get(
+                'Appearance', 'glasses', fallback=DEFAULT_GLASSES
+            ))
             self.view_3d.update()
                 
             new_dpi_setting = self.config.getboolean('Display', 'high_dpi_scaling', fallback=False)
@@ -1915,6 +1949,9 @@ class MainWindow(QMainWindow):
         if not self._brush_clipboard:
             self.show_toast("Nothing to paste", is_error=True)
             return
+        sources, _skipped = self._drop_singleton_copies(self._brush_clipboard)
+        if not sources:
+            return
 
         self.save_state()
         offset = self.grid_size_spinbox.value()
@@ -1922,7 +1959,7 @@ class MainWindow(QMainWindow):
         pasted_objects = []
         taken_names = set(self.state.get_all_entity_names())
 
-        for source in self._brush_clipboard:
+        for source in sources:
             pasted = copy.deepcopy(source)
 
             if isinstance(pasted, dict):
@@ -3309,14 +3346,20 @@ class MainWindow(QMainWindow):
         # Ctrl+V: Paste the copied brush or multi-selection.  Every pasted
         # object receives a fresh UUID; the copied UUID is never reused.
         if event.key() == Qt.Key_V and event.modifiers() == Qt.ControlModifier:
+            sources = []
             if self._brush_clipboard:
+                sources, _skipped = self._drop_singleton_copies(
+                    self._brush_clipboard)
+                if not sources:
+                    return
+            if sources:
                 self.save_state()
                 offset = self.grid_size_spinbox.value()
                 delta = [offset, 0.0, offset]
                 pasted_objects = []
                 taken_names = set(self.state.get_all_entity_names())
 
-                for source in self._brush_clipboard:
+                for source in sources:
                     pasted = copy.deepcopy(source)
 
                     if isinstance(pasted, dict):

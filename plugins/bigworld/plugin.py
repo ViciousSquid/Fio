@@ -69,6 +69,9 @@ class BigWorldPlugin(FioPlugin):
         from .config import FIELDS
         from .entities import BigWorldSettings  # lazy: pulls in editor.things
         api.register_entity(BigWorldSettings, menu_label="Big World Settings")
+        # One per map: a second would leave the session's config ambiguous
+        # (only the first is ever read). Placement, clone and paste refuse it.
+        api.register_singleton_entity(self.SETTINGS_TYPE)
         # The schema is derived, not written out again: the entity's defaults
         # and the runtime's coercion read the same table, so a field can't be
         # editable here and invisible to the session (see .config).

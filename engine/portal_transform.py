@@ -44,6 +44,26 @@ def map_point(src_pos, src_basis, dst_pos, dst_basis, point):
             float(dst_pos[2]) + lr * r2[2] + lu * u2[2] + ln * n2[2])
 
 
+def mirror_point(src_pos, src_basis, dst_pos, dst_basis, point):
+    """Where *point* appears when the portal is treated as a mirror.
+
+    The point is reflected across the source aperture plane and the
+    reflection is carried through the portal pair. In the source portal's
+    virtual view it therefore sits as far in front of the destination
+    aperture as *point* is in front of the source one, so the viewer sees it
+    straight back at them, like their reflection.
+    """
+    dx = float(point[0]) - float(src_pos[0])
+    dy = float(point[1]) - float(src_pos[1])
+    dz = float(point[2]) - float(src_pos[2])
+    n = src_basis[2]
+    d2 = 2.0 * (dx * n[0] + dy * n[1] + dz * n[2])
+    reflected = (float(point[0]) - d2 * n[0],
+                 float(point[1]) - d2 * n[1],
+                 float(point[2]) - d2 * n[2])
+    return map_point(src_pos, src_basis, dst_pos, dst_basis, reflected)
+
+
 def map_direction(src_basis, dst_basis, direction):
     """Map a world direction or velocity through a portal pair."""
     r, u, n = src_basis
