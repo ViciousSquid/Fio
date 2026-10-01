@@ -1842,6 +1842,9 @@ class MainWindow(QMainWindow):
             self.view_3d.show_glasses = self.config.getboolean(
                 'Display', 'show_glasses', fallback=True
             )
+            self.view_3d.portal_mirror = self.config.getboolean(
+                'Display', 'portal_mirror', fallback=True
+            )
             self.view_3d.update()
                 
             new_dpi_setting = self.config.getboolean('Display', 'high_dpi_scaling', fallback=False)

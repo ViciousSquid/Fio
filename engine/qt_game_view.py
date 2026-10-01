@@ -210,6 +210,12 @@ class QtGameView(QOpenGLWidget):
         self.show_glasses = self.editor.config.getboolean(
             'Display', 'show_glasses', fallback=True
         )
+        # settings.ini [Display] portal_mirror: a portal you look into shows
+        # your own glasses as a reflection. Off, you only appear where the
+        # exit portal really looks back at you.
+        self.portal_mirror = self.editor.config.getboolean(
+            'Display', 'portal_mirror', fallback=True
+        )
 
         # PYGAME INIT (MUST happen before _init_sound_system)
         pygame.init()
@@ -263,6 +269,7 @@ class QtGameView(QOpenGLWidget):
             "time": 0.0,
             "show_sprites_in_play_mode": False,
             "show_glasses": True,
+            "portal_mirror": True,
             "player_glasses_positions": (),
             "grid_visible": True,
         }
@@ -1422,6 +1429,7 @@ class QtGameView(QOpenGLWidget):
         self._render_config["time"] = time.perf_counter() - self.start_time
         self._render_config["show_sprites_in_play_mode"] = self.show_sprites_in_play_mode
         self._render_config["show_glasses"] = bool(getattr(self, 'show_glasses', True))
+        self._render_config["portal_mirror"] = bool(getattr(self, 'portal_mirror', True))
         _glass_positions = []
         if render_state is not None and self.play_mode and self._render_config["show_glasses"]:
             if not getattr(render_state, 'player_dead', False):

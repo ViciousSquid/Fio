@@ -13,6 +13,7 @@ import os
 from .renderer_core import BaseRenderer, normalize_color, timed_pass
 from engine import render_table
 from engine import entity_table as entity_projection
+from engine.portal_transform import mirror_point as _portal_mirror_point
 from engine.render_keys import KeyLayout, sort_into_runs
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.things import Thing, Effect
@@ -874,6 +875,52 @@ class Renderer_F(BaseRenderer):
         lights = self._get_active_lights((), config)
         return table, groups, model_slots, sprite_slots, effect_slots, lights
 
+    #: How close (world units) a published glasses position must be to the
+    #: frame camera to count as the viewer's own body. Both are the player's
+    #: eye in first person, so they normally coincide exactly.
+    PORTAL_SELF_GLASSES_RADIUS = 64.0
+
+    def _portal_glasses_positions(self, cfg, view_state, frame_camera_pos):
+        """Glasses positions to draw in one portal's virtual scene.
+
+        With ``portal_mirror`` on (settings.ini), the viewer's own glasses are
+        mirrored by the portal being looked into (only for portals seen
+        directly, not portals seen inside portals); everyone else keeps their
+        real position. With it off, everyone keeps their real position.
+        """
+        positions = cfg.get('player_glasses_positions', ())
+        if not positions:
+            return ()
+        if not cfg.get('portal_mirror', True):
+            return tuple(positions)
+        self_index = -1
+        if frame_camera_pos is not None:
+            cx = float(frame_camera_pos[0])
+            cy = float(frame_camera_pos[1])
+            cz = float(frame_camera_pos[2])
+            best = self.PORTAL_SELF_GLASSES_RADIUS ** 2
+            for i, pos in enumerate(positions):
+                dx = float(pos[0]) - cx
+                dy = float(pos[1]) - cy
+                dz = float(pos[2]) - cz
+                dist_sq = dx * dx + dy * dy + dz * dz
+                if dist_sq <= best:
+                    best = dist_sq
+                    self_index = i
+        if self_index < 0:
+            return tuple(positions)
+        others = [pos for i, pos in enumerate(positions) if i != self_index]
+        aperture = int(getattr(view_state, 'aperture_slot', -1))
+        clip = int(getattr(view_state, 'clip_slot', -1))
+        table = cfg.get('entity_table')
+        if (int(getattr(view_state, 'recursion_depth', 1)) == 1
+                and aperture >= 0 and clip >= 0 and table is not None):
+            others.append(_portal_mirror_point(
+                table.pos[aperture], self._portal_slot_basis(table, aperture),
+                table.pos[clip], self._portal_slot_basis(table, clip),
+                positions[self_index]))
+        return tuple(others)
+
     def render_scene(self, projection, view, camera_pos, brushes, things,
                      selected_object, config, clear=True, brush_slots=None):
         """Draw one view.
@@ -1153,21 +1200,21 @@ class Renderer_F(BaseRenderer):
                                 table=portal_table)
 
                             # Player glasses through a portal (same "show glasses"
-                            # setting as split-screen). The virtual scene IS the
-                            # real world seen from the destination side, so the
-                            # players are drawn at their real positions -- this is
-                            # how you see yourself when the destination portal
-                            # looks back at you. (Mapping them through the portal
-                            # like the camera would put your own glasses exactly
-                            # on the virtual eye, where they can never be seen.)
-                            # Drawn after every world material pass so water,
-                            # glass and fog cannot overwrite them, with the
-                            # oblique projection so anything behind the
-                            # destination aperture stays clipped, and inside this
-                            # portal's stencil level.
+                            # setting as split-screen). With portal_mirror on, the
+                            # portal you are looking into shows your own glasses as
+                            # a mirror would: your position is reflected across that
+                            # aperture and carried through to the destination side,
+                            # so it is seen straight back at you. Every other player
+                            # (split-screen), and you with portal_mirror off, is
+                            # drawn where they really are -- the virtual scene is the
+                            # real world seen from the destination side.
+                            # Drawn after every world material pass so water, glass
+                            # and fog cannot overwrite them, with the oblique
+                            # projection so anything behind the destination aperture
+                            # stays clipped, and inside this portal's stencil level.
                             if cfg.get('show_glasses', True):
-                                player_positions = cfg.get(
-                                    'player_glasses_positions', ())
+                                player_positions = self._portal_glasses_positions(
+                                    cfg, view_state, camera_pos)
                                 if player_positions:
                                     depth = int(getattr(
                                         view_state, 'recursion_depth', 1))
