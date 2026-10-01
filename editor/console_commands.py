@@ -86,6 +86,7 @@ class ConsoleCommandHandler:
             'teleport': self.cmd_setpos,
             'ss': self.cmd_split_screen,
             'showglasses': self.cmd_show_glasses,
+            'portal_mirror': self.cmd_portal_mirror,
             'message': self.cmd_message,
             'message2': self.cmd_message2,
             'message3': self.cmd_message3,
@@ -893,6 +894,7 @@ class ConsoleCommandHandler:
 <b style="color:orange;">tint</b> &lt;name&gt; &lt;R&gt; &lt;G&gt; &lt;B&gt; — Set tint colour (0-255) or 'clear'<br>
 <b style="color:cyan;">=== Rendering ===</b><br>
 <b style="color:orange;">ss</b> — Toggle split-screen mode (F9)<br>
+<b style="color:orange;">portal_mirror</b> 0|1 — Show your own glasses reflected in portals you look into<br>
 <b style="color:orange;">r_list</b> — Show all current render settings<br>
 <b style="color:orange;">r_wireframe</b>{sep}<b style="color:orange;">wireframe</b> — Toggle wireframe mode<br>
 <b style="color:orange;">r_shadows</b>{sep}<b style="color:orange;">shadows</b> — Toggle shadows<br>
@@ -2134,6 +2136,26 @@ entity to drive them from the I/O system.</i><br>
         state = "ON" if view_3d.show_glasses else "OFF"
         self.main_window.show_toast(f"Player glasses: {state}")
         debug_log("Info", f"Player glasses display set to {state}")
+        view_3d.update()
+
+    def cmd_portal_mirror(self, args):
+        """portal_mirror 0|1 — Reflect your own glasses in portals you look into.
+
+        Overrides settings.ini [Display] portal_mirror for this session.
+        """
+        view_3d = self.main_window.view_3d
+        arg = args.strip().lower() if args else ""
+        if arg in ("1", "on", "true"):
+            view_3d.portal_mirror = True
+        elif arg in ("0", "off", "false"):
+            view_3d.portal_mirror = False
+        else:
+            state = 1 if getattr(view_3d, 'portal_mirror', True) else 0
+            debug_log("Info", f"portal_mirror is {state}. Usage: portal_mirror 0|1")
+            return
+        state = "ON" if view_3d.portal_mirror else "OFF"
+        self.main_window.show_toast(f"Portal mirror: {state}")
+        debug_log("Info", f"Portal mirror set to {state}")
         view_3d.update()
 
     def cmd_clear(self, args):
