@@ -352,13 +352,23 @@ def test_keyvalue_defaults_are_json_serialisable():
 
 
 def test_keyvalue_group_is_generic():
-    """No game-supplied suggestion hook may exist in the generic editor."""
+    """The generic editor carries no game's keys or vocabulary.
+
+    Preset keys exist since plugin API 1.5.0, but only as a plugin extension:
+    the LogicState panel lists whatever ``EditorAPI.register_kv_suggestions``
+    providers return, asked through the plugin manager, and knows no key of
+    its own. (Before 1.5.0 this guard banned the hook outright, to keep a
+    game-specific copy of it out of Fio.)
+    """
     src = _read("editor/property_editor.py")
-    assert "_kv_suggestions" not in src
-    assert "kv_key_suggestions" not in src
-    assert "Preset key" not in src
+    assert "kv_key_suggestions" not in src          # the old game-side name
+    assert "get_manager().kv_suggestions(store)" in src
     for banned in ("quest", "faction", "miniwind"):
         assert banned not in src.lower(), f"RPG term '{banned}' in property_editor"
+    start = src.index("def _kv_suggestions(store):")
+    helper = src[start:src.index("\nclass ", start)]
+    assert "return [(" not in helper and "append((" not in helper, (
+        "the generic editor must not supply preset keys of its own")
 
 
 def test_keyvalue_group_has_its_helpers():

@@ -222,6 +222,10 @@ class LogicThread(threading.Thread):
         # Frustum culling settings
         self.culling_enabled = True
         self.frustum_aspect = 16.0 / 9.0
+        #: Vertical field of view (degrees) the play view projects with. The
+        #: view hands it over each frame (set_frustum_fov), so culling and
+        #: overhead_ground_footprint see the frustum that is actually drawn.
+        self.frustum_fov = 90.0
         # Shared with the viewport and the renderer (set_view_distance). Held
         # as None until the viewport hands one over, so a LogicThread built in
         # a test without one still culls against the historical far plane.
@@ -236,6 +240,11 @@ class LogicThread(threading.Thread):
         # "player" (rotate with facing).
         self.camera_mode = "First Person"
         self.overhead_height = 800.0
+        #: Ceiling on the overhead camera's height, or None. A Big World
+        #: session sets it to the map's activation radius, so the camera can
+        #: never float out of the world it streams; overhead_height itself is
+        #: left as authored. See effective_overhead_height().
+        self.overhead_height_limit = None
         self.overhead_tilt = 0.0
         self.overhead_orientation = "north"
         # PERF: is_overhead() runs every render-state build (~60 Hz). Cache the
@@ -288,7 +297,15 @@ class LogicThread(threading.Thread):
         self.god_mode = False
         self.buddha_mode = False
         self.notarget = False
-        
+
+        # World pause: each owner (a modal game screen, the entity picker, a
+        # pause menu) holds its own request, and the world stays frozen while
+        # any is held, so one owner releasing never unpauses another's. See
+        # set_world_paused(). Replaced whole, never mutated, so a reader on
+        # another thread always sees a consistent set.
+        self._world_pause_owners = frozenset()
+        self._world_pause_lock = threading.Lock()
+
         # I/O System
         self.io_manager = None
         if IO_AVAILABLE and IOManager:
@@ -1184,7 +1201,14 @@ class LogicThread(threading.Thread):
 
     def _apply_play_mode(self, enabled: bool):
         self.play_mode = enabled
-        
+        # A pause belongs to the session that took it: a new session, or the
+        # editor after one, never starts frozen by a request nobody released.
+        with self._world_pause_lock:
+            self._world_pause_owners = frozenset()
+        # Likewise a camera ceiling: a session that sets one (Big World) sets
+        # it again from its play-start hook, which runs after this.
+        self.overhead_height_limit = None
+
         if enabled:
             # Read P2 turn sensitivity from editor config
             if hasattr(self.editor_state, 'config'):
@@ -1708,6 +1732,15 @@ class LogicThread(threading.Thread):
     def set_frustum_aspect(self, aspect: float):
         self.frustum_aspect = aspect
 
+    def set_frustum_fov(self, fov: float):
+        """The play view's vertical field of view, in degrees (see frustum_fov)."""
+        try:
+            fov = float(fov)
+        except (TypeError, ValueError):
+            return
+        if 1.0 <= fov <= 179.0:
+            self.frustum_fov = fov
+
     def set_view_distance(self, view_distance):
         """Adopt the viewport's shared view-distance settings.
 
@@ -1734,10 +1767,19 @@ class LogicThread(threading.Thread):
                 "overhead", "top-down", "topdown")
         return self._camera_mode_overhead
 
+    def effective_overhead_height(self) -> float:
+        """How high the overhead camera actually floats: ``overhead_height``,
+        held under ``overhead_height_limit`` when one is set."""
+        height = float(self.overhead_height)
+        limit = getattr(self, "overhead_height_limit", None)
+        if limit is not None and float(limit) > 0.0:
+            height = min(height, float(limit))
+        return height
+
     def _overhead_camera(self, player_pos, angle):
         """Compute ``(cam_pos, direction, up)`` for the overhead camera.
 
-        The camera floats ``overhead_height`` above the player looking down (raked
+        The camera floats ``effective_overhead_height()`` above the player looking down (raked
         by ``overhead_tilt``); the up hint is the ground heading (fixed north or
         the player's facing) so it is always perpendicular to a straight-down view
         — never the degenerate world-up that would corrupt the view/frustum.
@@ -1754,12 +1796,48 @@ class LogicThread(threading.Thread):
         dlen = math.sqrt(dir_x * dir_x + dir_y * dir_y + dir_z * dir_z) or 1.0
         direction = glm.vec3(dir_x / dlen, dir_y / dlen, dir_z / dlen)
 
-        dist = float(self.overhead_height) / max(1e-3, cos_t)
+        dist = self.effective_overhead_height() / max(1e-3, cos_t)
         cam_pos = glm.vec3(px - direction.x * dist,
                            py - direction.y * dist,
                            pz - direction.z * dist)
         up = self._safe_up(direction, glm.vec3(head_x, 0.0, head_z))
         return cam_pos, direction, up
+
+    def overhead_ground_footprint(self):
+        """What ground the overhead camera shows: ``(hx, hz, reach)``.
+
+        ``hx``/``hz`` are the half extents of the axis-aligned box around the
+        player that holds the four points where the view's corner rays meet
+        the ground at the player's height; ``reach`` is the distance from the
+        player to the farthest of those points, which -- unlike the box --
+        does not change as a player-oriented camera turns. None when the
+        camera is not overhead (or looks at the horizon, so the view has no
+        ground edge). Used to fit world streaming and simulation to what is
+        actually on screen.
+        """
+        if not self.is_overhead() or self.player is None:
+            return None
+        pos = self.player.pos
+        cam, direction, up = self._overhead_camera(pos, getattr(self.player, "angle", 0.0))
+        d = glm.normalize(glm.vec3(direction))
+        right = glm.normalize(glm.cross(d, glm.vec3(up)))
+        true_up = glm.cross(right, d)
+        tan_v = math.tan(math.radians(float(getattr(self, "frustum_fov", 90.0))) / 2.0)
+        tan_h = tan_v * max(0.1, float(getattr(self, "frustum_aspect", 16.0 / 9.0)))
+        ground = float(pos.y)
+        hx = hz = reach = 0.0
+        for sx in (-1.0, 1.0):
+            for sy in (-1.0, 1.0):
+                ray = d + true_up * (sy * tan_v) + right * (sx * tan_h)
+                if ray.y >= -1e-3:
+                    return None
+                t = (ground - cam.y) / ray.y
+                dx = cam.x + ray.x * t - pos.x
+                dz = cam.z + ray.z * t - pos.z
+                hx = max(hx, abs(dx))
+                hz = max(hz, abs(dz))
+                reach = max(reach, math.hypot(dx, dz))
+        return hx, hz, reach
 
     @staticmethod
     def _safe_up(direction, up):
@@ -1783,14 +1861,14 @@ class LogicThread(threading.Thread):
         """
         if overhead:
             cam_pos, direction, up = self._overhead_camera(player_pos, player_angle)
-            return cam_pos, direction, up, 90.0
+            return cam_pos, direction, up, self.frustum_fov
         cam_pos = player_pos + glm.vec3(0, camera_height, 0)
         direction = glm.vec3(
             math.sin(player_angle) * math.cos(player_pitch),
             math.sin(player_pitch),
             math.cos(player_angle) * math.cos(player_pitch),
         )
-        return cam_pos, direction, glm.vec3(0, 1, 0), 90.0
+        return cam_pos, direction, glm.vec3(0, 1, 0), self.frustum_fov
 
     def start_camera_transition(self, target_mode=None, duration=1.0):
         """Begin a smooth tween between First Person and Overhead cameras.
@@ -2222,10 +2300,75 @@ class LogicThread(threading.Thread):
                     d_new[i] = kept_d[id(brush)]
         self.door_states = d_new
 
+    # =========================================================================
+    # WORLD PAUSE
+    # =========================================================================
+
+    def set_world_paused(self, owner, paused: bool = True) -> None:
+        """Hold (or release) a pause of the play-mode world for *owner*.
+
+        While any owner holds one, a play tick advances nothing in the world:
+        no player movement, look or shooting, no movers, doors, I/O timers,
+        triggers, props, physics, projectiles or portals, and the monster AI
+        thread idles. Plugins still tick, with the input they would normally
+        see, so a game's menus keep working over the frozen world. The frame is
+        still published, so the view keeps drawing it.
+
+        *owner* is any hashable key naming who paused (a modal screen, the
+        entity picker, a pause menu); each releases only its own request.
+        Callable from any thread. Leaving or entering Play Mode drops every
+        request.
+        """
+        with self._world_pause_lock:
+            owners = set(self._world_pause_owners)
+            if paused:
+                owners.add(owner)
+            else:
+                owners.discard(owner)
+            self._world_pause_owners = frozenset(owners)
+
+    @property
+    def world_paused(self) -> bool:
+        """True while any owner holds a world pause (see set_world_paused)."""
+        return bool(self._world_pause_owners)
+
+    def world_pause_owners(self) -> frozenset:
+        """The owners currently holding a world pause."""
+        return self._world_pause_owners
+
+    def _tick_paused_world(self, delta):
+        """One play tick with the world frozen: input drained, plugins run.
+
+        Look and fire input is discarded rather than queued, so nothing the
+        player did over a menu lands in the world when it resumes. The use key
+        goes to the plugins, which is how a game's screen closes on it.
+
+        Plugins tick exactly when an unpaused tick would reach them: not during
+        a cinematic, a death or the level-complete screen, which freeze input
+        and return before the plugin step either way.
+        """
+        self.game_state.consume_mouse_delta()
+        use_key = self.game_state.consume_use_key()
+        self.game_state.consume_shot()
+        if self.cinematic_state or self.player_dead or self.level_complete_ui:
+            return
+        if self.plugins is not None and self.plugins.wants_tick():
+            self.plugins.tick(
+                self,
+                use_pressed=use_key,
+                interaction_consumed=bool(self.current_hud_message),
+                delta=delta,
+                keys=self.game_state.get_keys,
+            )
+
     def _tick_play_mode(self, delta):
         if not self.player:
             return
         self._watch_world_rows()
+
+        if self._world_pause_owners:
+            self._tick_paused_world(delta)
+            return
         
         # Update movers & doors first (for platform carrying)
         self._update_movers(delta)
@@ -4408,7 +4551,7 @@ class LogicThread(threading.Thread):
                     # degeneracy that would corrupt the view and every plane.
                     cam_pos, direction, up_vec = self._overhead_camera(player_pos, player_angle)
                     view_matrix = glm.lookAt(cam_pos, cam_pos + direction, up_vec)
-                    fov = 90.0
+                    fov = self.frustum_fov
                 else:
                     cam_pos = player_pos + glm.vec3(0, camera_height, 0)
                     direction = glm.vec3(
@@ -4417,7 +4560,7 @@ class LogicThread(threading.Thread):
                         math.cos(player_angle) * math.cos(player_pitch),
                     )
                     view_matrix = glm.lookAt(cam_pos, cam_pos + direction, glm.vec3(0, 1, 0))
-                    fov = 90.0
+                    fov = self.frustum_fov
                 write_state.player_pos = player_pos
                 write_state.player_angle = player_angle
                 write_state.player_pitch = player_pitch

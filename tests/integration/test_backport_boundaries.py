@@ -151,9 +151,17 @@ def test_console_has_no_rpg_commands():
 
 
 def test_manager_has_no_rpg_inspector_provider():
+    """The manager's only inspector hook is the generic API 1.5.0 one.
+
+    ``register_entity_inspector`` / ``inspect_entity`` take any plugin's
+    provider and return its document unread; the game-side names this guard
+    was written against must not come back, and the manager stays free of RPG
+    vocabulary (see ``test_generic_modules_carry_no_rpg_vocabulary``).
+    """
     src = _read("plugins/manager.py")
     assert "register_inspector_provider" not in src
     assert "inspector_snapshot" not in src
+    assert "def inspect_entity(self, entity, logic=None):" in src
 
 
 # ---------------------------------------------------------------------------

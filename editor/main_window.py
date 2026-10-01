@@ -223,6 +223,7 @@ class MainWindow(QMainWindow):
         self.terrain = None
         self.terrain_editor_window = None
         self.surface_inspector = None  # lazily created Face-mode Surface Inspector
+        self._entity_inspectors = {}   # id(entity) -> open EntityInspector (API 1.5.0)
         self.shortcuts_window = None   # lazily created Help > Keys window
 
         # debug_console is embedded in the properties tab widget (created in setupUi)
@@ -2166,6 +2167,54 @@ class MainWindow(QMainWindow):
             self.surface_inspector = SurfaceInspector(self, self)
         self.surface_inspector.set_target(brush, face_name,
                                           raise_window=raise_window)
+
+    def show_entity_inspector(self, entity):
+        """Open (or raise) the Entity Inspector for *entity*.
+
+        The inspector is a live, read-only view whose contents plugins supply
+        through ``EditorAPI.register_entity_inspector`` (API 1.5.0); an entity
+        no plugin describes shows its public properties. One panel per entity:
+        asking again for an entity already being inspected raises its panel.
+        Plugins open it from their own commands, e.g. a console command's
+        ``callback(args, main_window, logic, play_mode)``.
+        """
+        if entity is None:
+            return None
+        inspectors = self._entity_inspectors
+        panel = inspectors.get(id(entity))
+        if panel is not None and panel.entity is entity:
+            panel.show()
+            panel.raise_()
+            panel.activateWindow()
+            return panel
+        from editor.entity_inspector import EntityInspector
+
+        def _logic():
+            # The logic thread lives for the whole editor session; providers
+            # are promised it only while Play Mode is running.
+            logic = getattr(getattr(self, 'view_3d', None), 'logic_thread', None)
+            return logic if getattr(logic, 'play_mode', False) else None
+
+        def _alive(e=entity):
+            return any(t is e for t in getattr(self.state, 'things', ()))
+
+        panel = EntityInspector(entity, logic=_logic, alive=_alive, parent=self)
+        key = id(entity)
+        inspectors[key] = panel
+        panel.destroyed.connect(lambda *_a, k=key: inspectors.pop(k, None))
+        panel.show()
+        return panel
+
+    def begin_actor_pick(self, on_pick=None):
+        """Arm the Play Mode click-to-pick of an actor (see
+        ``QtGameView.begin_actor_pick``): the world pauses and the next click
+        on an actor calls ``on_pick(entity)``, by default opening the Entity
+        Inspector on it. Returns False when there is no play session to pick
+        in. Plugins arm it from their own commands.
+        """
+        view = getattr(self, 'view_3d', None)
+        begin = getattr(view, 'begin_actor_pick', None)
+        return bool(begin(on_pick)) if begin is not None else False
 
     def sync_surface_inspector(self):
         """Point an open Surface Inspector at something worth editing.

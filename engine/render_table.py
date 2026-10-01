@@ -978,39 +978,53 @@ def model_matrices(table, slots, out_model=None, out_normal=None):
     normals[:, 8] = inv_size[:, 2]
 
     # --- and the rotated rows on top ---------------------------------------
-    rot = table.rot[slots]
-    rotated = np.flatnonzero(rot[:, 3] != 0.0)
+    rotated, r = rotation_matrices(table.rot[slots])
     if len(rotated):
-        axis = rot[rotated, :3].astype(np.float64)
-        length = np.linalg.norm(axis, axis=1)
-        # A degenerate axis means no rotation, exactly as the scalar path's
-        # `if glm.length(axis) > 0.001` guard decided.
-        usable = length > 0.001
-        rotated = rotated[usable]
-        if len(rotated):
-            axis = axis[usable] / length[usable, None]
-            angle = np.radians(rot[rotated, 3].astype(np.float64))
-            cos_a = np.cos(angle)[:, None]
-            sin_a = np.sin(angle)[:, None]
-            one_c = 1.0 - cos_a
-            ux, uy, uz = axis[:, 0:1], axis[:, 1:2], axis[:, 2:3]
-            # Rodrigues, as (rows, cols) of the 3x3 rotation.
-            r = np.empty((len(rotated), 3, 3), dtype=np.float64)
-            r[:, 0, 0] = (cos_a + ux * ux * one_c)[:, 0]
-            r[:, 0, 1] = (ux * uy * one_c - uz * sin_a)[:, 0]
-            r[:, 0, 2] = (ux * uz * one_c + uy * sin_a)[:, 0]
-            r[:, 1, 0] = (uy * ux * one_c + uz * sin_a)[:, 0]
-            r[:, 1, 1] = (cos_a + uy * uy * one_c)[:, 0]
-            r[:, 1, 2] = (uy * uz * one_c - ux * sin_a)[:, 0]
-            r[:, 2, 0] = (uz * ux * one_c - uy * sin_a)[:, 0]
-            r[:, 2, 1] = (uz * uy * one_c + ux * sin_a)[:, 0]
-            r[:, 2, 2] = (cos_a + uz * uz * one_c)[:, 0]
-
-            rs = size[rotated]
-            ri = inv_size[rotated]
-            for col in range(3):
-                for row in range(3):
-                    models[rotated, col * 4 + row] = r[:, row, col] * rs[:, col]
-                    normals[rotated, col * 3 + row] = r[:, row, col] * ri[:, col]
+        rs = size[rotated]
+        ri = inv_size[rotated]
+        for col in range(3):
+            for row in range(3):
+                models[rotated, col * 4 + row] = r[:, row, col] * rs[:, col]
+                normals[rotated, col * 3 + row] = r[:, row, col] * ri[:, col]
 
     return models, normals
+
+
+def rotation_matrices(rot):
+    """The rows of a ``rot`` column block that rotate, and their 3x3 matrices.
+
+    *rot* is ``(n, 4)``: axis xyz and an angle in degrees, about the row's
+    centre. Returns ``(rows, R)`` with ``R`` shaped ``(len(rows), 3, 3)`` as
+    (row, col). A zero angle or a degenerate axis means no rotation, exactly
+    as the scalar path's ``if glm.length(axis) > 0.001`` guard decided, and
+    such rows are left out. Shared by the draw's model matrices and anything
+    else that must see a brush where the renderer drew it.
+    """
+    rot = np.asarray(rot)
+    rotated = np.flatnonzero(rot[:, 3] != 0.0)
+    if not len(rotated):
+        return rotated, np.empty((0, 3, 3), dtype=np.float64)
+    axis = rot[rotated, :3].astype(np.float64)
+    length = np.linalg.norm(axis, axis=1)
+    usable = length > 0.001
+    rotated = rotated[usable]
+    if not len(rotated):
+        return rotated, np.empty((0, 3, 3), dtype=np.float64)
+    axis = axis[usable] / length[usable, None]
+    angle = np.radians(rot[rotated, 3].astype(np.float64))
+    cos_a = np.cos(angle)[:, None]
+    sin_a = np.sin(angle)[:, None]
+    one_c = 1.0 - cos_a
+    ux, uy, uz = axis[:, 0:1], axis[:, 1:2], axis[:, 2:3]
+    # Rodrigues, as (rows, cols) of the 3x3 rotation.
+    r = np.empty((len(rotated), 3, 3), dtype=np.float64)
+    r[:, 0, 0] = (cos_a + ux * ux * one_c)[:, 0]
+    r[:, 0, 1] = (ux * uy * one_c - uz * sin_a)[:, 0]
+    r[:, 0, 2] = (ux * uz * one_c + uy * sin_a)[:, 0]
+    r[:, 1, 0] = (uy * ux * one_c + uz * sin_a)[:, 0]
+    r[:, 1, 1] = (cos_a + uy * uy * one_c)[:, 0]
+    r[:, 1, 2] = (uy * uz * one_c - ux * sin_a)[:, 0]
+    r[:, 2, 0] = (uz * ux * one_c - uy * sin_a)[:, 0]
+    r[:, 2, 1] = (uz * uy * one_c + ux * sin_a)[:, 0]
+    r[:, 2, 2] = (cos_a + uz * uz * one_c)[:, 0]
+    return rotated, r

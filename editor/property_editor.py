@@ -214,6 +214,22 @@ def _make_spin(value, range0, range1, suffix="", decimals=0, step=1, callback=No
     return s
 
 
+def _kv_suggestions(store):
+    """Plugin-supplied preset keys for the LogicState editor (API 1.5.0).
+
+    Fio offers none of its own; plugins register them through
+    ``EditorAPI.register_kv_suggestions`` and this only collects what the
+    plugin manager holds for *store*. ``[]`` when none are registered or the
+    plugin system is unavailable.
+    """
+    try:
+        from plugins.manager import get_manager
+        return get_manager().kv_suggestions(store)
+    except Exception as exc:
+        debug_log("Plugins", f"LogicState key suggestions unavailable ({exc})")
+        return []
+
+
 class ClickableLineEdit(QLineEdit):
     clicked_while_empty = pyqtSignal()
 
@@ -3893,21 +3909,34 @@ class PropertyEditor(QWidget):
                 QPushButton:hover { background-color: #3a7a7a; }
             """)
 
-        def _add_pair():
+        def _add_pair(key=None, default="value"):
+            """Append a designer-default row.
+
+            With no *key* an unused name is generated.  A preset key (from a
+            plugin's suggestions) passes its own key and default; if that key
+            is already in the table, its value cell is selected instead of
+            adding a duplicate.
+            """
             capacity = int(cap)
+            existing = [kv_table.item(r, 0).text() if kv_table.item(r, 0) else ""
+                        for r in range(kv_table.rowCount())]
+            if key is not None and str(key) in existing:
+                kv_table.setCurrentCell(existing.index(str(key)), 2)
+                return
             if kv_table.rowCount() >= capacity:
                 debug_log("Warning", f"Logic state store is full ({capacity} keys).")
                 return
-            existing = [kv_table.item(r, 0).text() if kv_table.item(r, 0) else ""
-                        for r in range(kv_table.rowCount())]
+            if key is None:
+                key = self._unused_state_key(existing)
+            value = _sv.parse(default) if isinstance(default, str) else default
             self._kv_loading = True
             r = kv_table.rowCount()
             kv_table.insertRow(r)
-            kv_table.setItem(r, 0, QTableWidgetItem(self._unused_state_key(existing)))
-            type_item = QTableWidgetItem("string")
+            kv_table.setItem(r, 0, QTableWidgetItem(str(key)))
+            type_item = QTableWidgetItem(_sv.type_of(value))
             type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
             kv_table.setItem(r, 1, type_item)
-            kv_table.setItem(r, 2, QTableWidgetItem("value"))
+            kv_table.setItem(r, 2, QTableWidgetItem(_sv.format_value(value)))
             state_item = QTableWidgetItem("default")
             state_item.setFlags(state_item.flags() & ~Qt.ItemIsEditable)
             kv_table.setItem(r, 3, state_item)
@@ -3921,12 +3950,40 @@ class PropertyEditor(QWidget):
                 kv_table.removeRow(row)
                 _write_back_kv()
 
-        add_btn.clicked.connect(_add_pair)
+        add_btn.clicked.connect(lambda _checked=False: _add_pair())
         rem_btn.clicked.connect(_remove_selected)
         btn_row.addWidget(add_btn)
         btn_row.addWidget(rem_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
+
+        # Preset keys a plugin knows this store uses (API 1.5.0).
+        suggestions = _kv_suggestions(thing)
+        if suggestions:
+            preset_row = QHBoxLayout()
+            preset_row.setSpacing(4)
+            preset_row.addWidget(QLabel("Preset key:"))
+            preset_combo = ClickableComboBox()
+            for label, key, default, tooltip in suggestions:
+                preset_combo.addItem(label, (key, default))
+                if tooltip:
+                    preset_combo.setItemData(preset_combo.count() - 1, tooltip,
+                                             Qt.ToolTipRole)
+            preset_row.addWidget(preset_combo, 1)
+            preset_btn = QPushButton("Insert")
+            preset_btn.setToolTip("Add the chosen key with its default value")
+            preset_btn.setStyleSheet(add_btn.styleSheet())
+
+            def _insert_preset(_checked=False):
+                data = preset_combo.currentData()
+                if data:
+                    _add_pair(data[0], data[1])
+
+            preset_btn.clicked.connect(_insert_preset)
+            preset_row.addWidget(preset_btn)
+            layout.addLayout(preset_row)
+            self._widgets['kv_preset_combo'] = preset_combo
+            self._widgets['kv_preset_button'] = preset_btn
 
         self._kv_count_lbl = QLabel("")
         self._kv_count_lbl.setStyleSheet("QLabel { color: #888; font-size: 10px; }")

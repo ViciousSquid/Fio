@@ -112,6 +112,9 @@ class BigWorldPlugin(FioPlugin):
     # -- play lifecycle -----------------------------------------------------
     def on_play_start(self, logic):
         logic._bigworld = None
+        # Only a running session publishes a camera-fitted view (see the runtime).
+        logic.sim_view_rect = None
+        logic.overhead_height_limit = None
         things = getattr(logic, "things", None) or []
         if not self.map_uses_bigworld(things):
             # No opt-in: behave as ordinary Fio, and in particular leave the

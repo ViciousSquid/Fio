@@ -64,8 +64,10 @@ from typing import Any, Callable, List, Optional, Tuple
 #:   the engine event bus, and the ``connect(host)`` hook.
 #: * 1.3.0 — render hooks, swappable-renderer registration, and editor-UI extensions.
 #: * 1.4.0 — optional editor Tools actions and console-command registration.
-API_VERSION = "1.4.0"
-API_VERSION_INFO = (1, 4, 0)
+#: * 1.5.0 — collapsible property sections, LogicState key suggestions and
+#:   entity inspectors.
+API_VERSION = "1.5.0"
+API_VERSION_INFO = (1, 5, 0)
 
 
 def version_tuple(value: str) -> tuple:
@@ -507,6 +509,57 @@ class EditorAPI:
         is given the tab appears only for that type, otherwise for every entity.
         """
         self._manager.register_property_tab(label, factory, entity_type)
+
+    def register_property_section(self, label: str, factory, entity_type=None,
+                                  expanded: bool = False) -> None:
+        """Add a collapsible section to the property panel's Properties tab
+        (API 1.5.0).
+
+        The same ``factory(thing) -> widget`` contract as
+        :meth:`register_property_tab`; the difference is placement. A section
+        sits among the entity's own properties, under a titled header that
+        collapses, rather than in a tab of its own. Use it for a small editor
+        that belongs with the other properties, and a tab for one that needs
+        the room. *expanded* is the section's initial state; a collapsed
+        section's factory does not run until the section is first opened. If
+        *entity_type* is given the section appears only for that type,
+        otherwise for every entity.
+        """
+        self._manager._record_property_section(
+            self._plugin, label, factory, entity_type, expanded)
+
+    def register_kv_suggestions(self, provider) -> None:
+        """Offer ready-made keys in the LogicState editor (API 1.5.0).
+
+        ``provider(store)`` is called when a LogicState panel is built, with
+        that LogicState entity, and returns rows of
+        ``(label, key, default_value)`` or ``(label, key, default_value,
+        tooltip)``. The editor lists them in a "Preset key" picker; inserting
+        one adds *key* with *default_value* as a designer default. Return
+        ``[]`` for stores the plugin has nothing to say about (the store's
+        ``store_name`` property tells them apart).
+        """
+        self._manager._record_kv_suggestions(self._plugin, provider)
+
+    def register_entity_inspector(self, provider, entity_type=None) -> None:
+        """Supply the live contents of the entity inspector (API 1.5.0).
+
+        ``provider(entity, logic) -> dict | None``. *logic* is the running
+        :class:`~engine.logic_thread.LogicThread`, or None outside Play Mode.
+        The returned dict is an inspection document::
+
+            {"title":    "Gate Keeper",
+             "subtitle": "patrolling · awake",
+             "sections": [("Vitals", [("Health", 80), ("Speed", 1.5)]),
+                          ("Goals",  [("Patrol", "", 0.9), ("Rest", "", 0.2)])]}
+
+        A row is ``(label, value)``, or ``(label, value, fraction)`` to draw a
+        0..1 bar beside it. The first provider that returns a non-empty
+        document for an entity is shown; with none, the inspector shows the
+        entity's public properties. If *entity_type* is given the provider is
+        asked only about entities of that type.
+        """
+        self._manager._record_entity_inspector(self._plugin, provider, entity_type)
 
     def register_singleton_entity(self, entity_type: str) -> None:
         """Mark *entity_type* as a per-map singleton (at most one instance).
