@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - exercised by the head-less player
         print(f"[{category}] {message}")
 from .change_journal import JOURNAL, STATE, set_positions, touch
 from . import monster_table
+from .spatial import TIER_ACTIVE, TIER_DORMANT, tier_of
 from .constants import is_solid_world_brush
 from .monster_constants import (
     MONSTER_SIGHT_RANGE,
@@ -109,6 +110,10 @@ class MonsterAI:
         self._enemy_range = None       # the range the batch was built for
         self._enemy_ready = False      # has this tick's batch been attempted
         self._enemy_pos = np.empty((0, 3), dtype=np.float64)
+        # Camera-fitted Big World only (see _fitted_view): this tick's
+        # resident monsters, and the time owed to the off-screen ones.
+        self._tick_monsters = None
+        self._offscreen_accum = 0.0
 
     def set_spatial_grid(self, grid):
         """Called by LogicThread after populating the grid."""
@@ -132,6 +137,8 @@ class MonsterAI:
         self._enemy_teams = ()
         self._enemy_nearest = None
         self._enemy_ready = False
+        self._tick_monsters = None
+        self._offscreen_accum = 0.0
         self._debug_rays.clear()
 
     # -------------------------------------------------------------------------
@@ -158,15 +165,31 @@ class MonsterAI:
         monster_things = getattr(self.lt, '_monster_things', None)
         if monster_things is None:
             monster_things = [t for t in self.lt.things if isinstance(t, MonsterThing)]
+        # Fitted to an overhead camera, the pass and the enemy searches use
+        # the resident monsters only; otherwise nothing new is kept and they
+        # read the logic thread's list exactly as before.
+        if self._fitted_view():
+            monster_things = self._tick_monsters = self._resident_monsters(monster_things)
+        else:
+            self._tick_monsters = None
 
         path = self._fallback_reason()
         self.table.path = path
+        offscreen, off_delta = self._offscreen_rows(monster_things, delta)
         if path == 'dense':
-            self._update_dense(monster_things, delta, player_pos)
+            if offscreen is None:
+                self._update_dense(monster_things, delta, player_pos)
+            else:
+                self._update_dense(monster_things,
+                                   np.where(offscreen, off_delta, delta), player_pos)
         else:
             # The table describes the dense pass; say it did not run.
             self.table.rows_read = 0
-            for thing in monster_things:
+            for i, thing in enumerate(monster_things):
+                if offscreen is not None and offscreen[i]:
+                    if off_delta > 0.0:
+                        self._update_monster(thing, off_delta, player_pos)
+                    continue
                 self._update_monster(thing, delta, player_pos)
 
         # ---- Player death check (after all monsters processed) ----
@@ -186,6 +209,62 @@ class MonsterAI:
     #: Set False to run every monster through the per-monster path (the
     #: reference the dense pass is tested against).
     DENSE_UPDATE = True
+
+    def _resident_monsters(self, monsters):
+        """*monsters* without the ones a streamer has parked (DORMANT).
+
+        Parked monsters are hidden and disabled: they neither act nor can be
+        anybody's target, so they are left out of the pass altogether rather
+        than gathered and skipped every tick. The enemy batch and the walks
+        measure the same list, so their rows still line up with the table's.
+        Only with a fitted overhead view (:meth:`_fitted_view`); otherwise the
+        list is returned as it is.
+        """
+        if not self._fitted_view():
+            return monsters
+        return [m for m in monsters if tier_of(m) != TIER_DORMANT]
+
+    def _fitted_view(self) -> bool:
+        """Is a Big World session fitting tiers to an overhead camera's view?
+
+        The one gate for this pass's camera-derived behaviour (leaving parked
+        monsters out, throttling off-screen ones). False with no session, and
+        False in a session whose camera is first person, so both run every
+        monster every tick exactly as before.
+        """
+        return (getattr(self.lt, '_bigworld', None) is not None
+                and bool(getattr(self.lt, 'sim_tiers_fit_view', False)))
+
+    #: Seconds between AI passes for monsters off screen (see
+    #: :meth:`_offscreen_rows`).
+    OFFSCREEN_INTERVAL = 0.2
+
+    def _offscreen_rows(self, monsters, delta):
+        """``(mask, delta)`` for the monsters off screen this tick, or
+        ``(None, 0)`` when every monster runs at full rate.
+
+        Only inside a Big World session that says its tiers are fitted to the
+        camera's view (``sim_tiers_fit_view``); with no session -- any camera,
+        overhead included -- every monster runs every tick as it always has.
+        Fitted, ``NEAR`` is exactly what is on screen
+        and anything else resident is off it. Those monsters think and move in
+        one pass every :attr:`OFFSCREEN_INTERVAL` carrying the whole interval
+        (a 0 delta in between skips them), so they cover the same ground at a
+        fraction of the cost and nobody can see the coarser steps.
+        """
+        if not monsters or not self._fitted_view():
+            self._offscreen_accum = 0.0
+            return None, 0.0
+        mask = np.fromiter((tier_of(m) >= TIER_ACTIVE for m in monsters),
+                           dtype=bool, count=len(monsters))
+        if not mask.any():
+            return None, 0.0
+        accum = self._offscreen_accum + delta
+        if accum >= self.OFFSCREEN_INTERVAL:
+            self._offscreen_accum = 0.0
+            return mask, accum
+        self._offscreen_accum = accum
+        return mask, 0.0
 
     def _fallback_reason(self):
         """``'dense'``, or why this tick runs the per-monster path (Debug Tables).
@@ -240,9 +319,17 @@ class MonsterAI:
         props = t.props
         states = self.monster_states
         self._sight_changed = np.zeros(n, dtype=bool)
+        # *delta* may be one number or one per row (see _offscreen_rows). A
+        # plain number is today's tick for every row, exactly as before; only
+        # in a per-row delta does 0 mean "this row sits the tick out".
+        dt = np.asarray(delta, dtype=np.float64)
+        per_row = dt.ndim > 0
+        dt = dt[:n] if per_row else np.full(n, float(dt))
 
         hidden = t.hidden[:n]
         skip = hidden | t.disabled[:n]
+        if per_row:
+            skip = skip | (dt <= 0.0)
         dead = ~skip & t.dead[:n]
         mode = t.mode[:n]
         mode[dead] = monster_table.MODE_DEAD
@@ -256,7 +343,7 @@ class MonsterAI:
         # ---- Dead monsters fall, as one batch -----------------------------
         dead_rows = np.flatnonzero(dead)
         if len(dead_rows):
-            self._fall_dead(t, dead_rows, delta)
+            self._fall_dead(t, dead_rows, dt[dead_rows])
         phase['fall'] = clock()
 
         alive = ~skip & ~dead
@@ -321,7 +408,7 @@ class MonsterAI:
         phase['classify'] = clock()
         if len(rows):
             self._chase(t, rows, aggro_row, pos32, player32, player_pos,
-                        nearest, delta)
+                        nearest, dt[rows])
         phase['chase'] = clock()
 
         # ---- Irregular rows, events, search: Python, in row order ----------
@@ -335,7 +422,7 @@ class MonsterAI:
             row = int(row)
             thing = monsters[row]
             if scalar[row]:
-                self._update_monster(thing, delta, player_pos)
+                self._update_monster(thing, float(dt[row]), player_pos)
                 continue
             if thing.properties.get('dead', False):
                 continue                     # killed earlier in this tick
@@ -364,7 +451,7 @@ class MonsterAI:
                 if aggro_monster is not None:
                     thing.properties.pop('_aggro_target', None)
                 self._search(thing, state, props[row].get('monster_type', 'human'),
-                             delta, player_pos)
+                             float(dt[row]), player_pos)
         phase['events'] = clock()
         # Published whole, so a reader between ticks never sees half of one.
         phase_ms = {}
@@ -386,9 +473,10 @@ class MonsterAI:
         falling = has_ground & (pos[:, 1] > target_y + 1.0)
         settle = has_ground & ~falling & (np.abs(pos[:, 1] - target_y) > 1.0)
         new_vel = np.where(has_ground & falling, vel, 0.0)
-        fv = vel[falling] + MONSTER_GRAVITY * delta
+        dl = np.broadcast_to(np.asarray(delta, dtype=np.float64), (len(rows),))[falling]
+        fv = vel[falling] + MONSTER_GRAVITY * dl
         fv = np.maximum(fv, MONSTER_TERMINAL_VEL)
-        new_y = pos[falling, 1] + fv * delta
+        new_y = pos[falling, 1] + fv * dl
         landed = new_y <= target_y[falling]
         new_y[landed] = target_y[falling][landed]
         fv[landed] = 0.0
@@ -428,6 +516,9 @@ class MonsterAI:
         row_states = [states[id(monsters[row])] for row in rows]
         t.gather_states(rows, row_states)
         p32 = pos32[rows]
+        # One delta per chased row (rows sitting this tick out were never
+        # chased); a plain number still works.
+        delta = np.broadcast_to(np.asarray(delta, dtype=np.float64), (len(rows),))
 
         # ---- Gravity for ground monsters (one batched ground query) -------
         ground_rows = ~t.flying[rows]
@@ -445,8 +536,9 @@ class MonsterAI:
             has_ground = ~np.isnan(ground)
             foot = y - half
             falling = has_ground & (foot > ground + 1.0)
-            fv = np.maximum(v[falling] + MONSTER_GRAVITY * delta, MONSTER_TERMINAL_VEL)
-            new_foot = foot[falling] + fv * delta
+            dg = delta[g][falling]
+            fv = np.maximum(v[falling] + MONSTER_GRAVITY * dg, MONSTER_TERMINAL_VEL)
+            new_foot = foot[falling] + fv * dg
             landed = new_foot <= ground[falling]
             new_foot[landed] = ground[falling][landed]
             fv[landed] = 0.0
@@ -529,7 +621,8 @@ class MonsterAI:
             m = m[ok]
             direction = direction[ok]
             if len(m):
-                step = direction * np.float32(MONSTER_MOVE_SPEED) * np.float32(delta)
+                step = (direction * np.float32(MONSTER_MOVE_SPEED)
+                        * delta[m].astype(np.float32)[:, None])
                 start = p32[m]
                 full = start + step
                 slide_x = start.copy()
@@ -553,7 +646,7 @@ class MonsterAI:
         # ---- Shot timers; a ray only for a shot that is due ---------------
         shoot = t.shoot_timer[rows].copy()
         anim = t.anim_timer[rows].copy()
-        shoot[in_sight] -= delta
+        shoot[in_sight] -= delta[in_sight]
         due = np.flatnonzero(in_sight & (shoot <= 0.0))
         fired = np.zeros(len(rows), dtype=bool)
         if len(due):
@@ -575,7 +668,7 @@ class MonsterAI:
             anim[fired] = MONSTER_SHOOT_ANIM_TIME
         t.fired[rows] = fired
         shooting = in_sight & (anim > 0.0)
-        anim[shooting] -= delta
+        anim[shooting] -= delta[shooting]
         anim[~in_sight] = 0.0
         t.shoot_timer[rows] = shoot
         t.anim_timer[rows] = anim
@@ -1113,7 +1206,9 @@ class MonsterAI:
         self._enemy_nearest = None
         self._enemy_range = max_range
 
-        monsters = getattr(self.lt, '_monster_things', None)
+        monsters = getattr(self, '_tick_monsters', None)
+        if monsters is None:
+            monsters = getattr(self.lt, '_monster_things', None)
         if not monsters or len(monsters) < self.ENEMY_BATCH_MIN_MONSTERS:
             return None
 
@@ -1227,7 +1322,10 @@ class MonsterAI:
         best_dist_sq = float('inf')
         best_monster = None
         max_range_sq = max_range * max_range
-        monster_things = getattr(self.lt, '_monster_things', None) or self.lt.things
+        # This tick's resident monsters when the AI is running (parked ones
+        # are hidden and never a candidate), else the logic thread's list.
+        monster_things = (getattr(self, '_tick_monsters', None)
+                          or getattr(self.lt, '_monster_things', None) or self.lt.things)
         # Hoisted: this used to be re-evaluated per candidate, and `things` is
         # a property, so a 240-monster tick called it 57,600 times.
         needs_type_check = monster_things is self.lt.things
@@ -1275,7 +1373,10 @@ class MonsterAI:
         best_t = ray_len
         best_victim = None
         shooter_team = shooter.properties.get('team', '')
-        monster_things = getattr(self.lt, '_monster_things', None) or self.lt.things
+        # This tick's resident monsters when the AI is running (parked ones
+        # are hidden and never a candidate), else the logic thread's list.
+        monster_things = (getattr(self, '_tick_monsters', None)
+                          or getattr(self.lt, '_monster_things', None) or self.lt.things)
 
         for t in monster_things:
             if monster_things is self.lt.things and not isinstance(t, MonsterThing):
