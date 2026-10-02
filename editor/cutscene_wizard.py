@@ -893,6 +893,8 @@ class CutsceneWizard(QtWidgets.QDialog):
             elif event.get("type") == "dialogue" and str(event.get("speaker_id", "")) == aid:
                 event = dict(event)
                 event["speaker_id"] = ""
+            elif event.get("type") == "io" and str(event.get("source_id", "")) == aid:
+                continue
             cleaned_events.append(event)
         self.events = cleaned_events
 
