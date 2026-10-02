@@ -152,7 +152,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         actors_box = QtWidgets.QGroupBox("Actors")
         av = QtWidgets.QVBoxLayout(actors_box)
         help_label = QtWidgets.QLabel(
-            "<b>Step 1:</b> Add an NPC or creature. <b>Step 2:</b> select it, "
+            "<b>Step 1:</b> Add an actor. <b>Step 2:</b> select it, "
             "then move it directly in the 3D view. <b>Step 3:</b> capture its "
             "current position below. Repeat for each point in the performance."
         )
@@ -623,14 +623,6 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.blood_time.setDecimals(2)
         self.blood_variant = QtWidgets.QComboBox()
         self.blood_variant.addItem("Random", "random")
-        try:
-            from game.rpg import gib
-            for i, path in enumerate(gib.stain_paths(False)):
-                self.blood_variant.addItem(
-                    f'Variant {i + 1} — {path.rsplit("/", 1)[-1]}', i
-                )
-        except Exception:
-            pass
         self.blood_x = QtWidgets.QDoubleSpinBox()
         self.blood_y = QtWidgets.QDoubleSpinBox()
         self.blood_z = QtWidgets.QDoubleSpinBox()
@@ -1202,7 +1194,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         }
         props["id"] = str(aid)
         return {
-            "type": str(props.get("type") or "npc"),
+            "type": str(props.get("type") or "monster"),
             "pos": _v3(actor.pos),
             "yaw": float(getattr(actor, "angle", 0.0)),
             "properties": props,
