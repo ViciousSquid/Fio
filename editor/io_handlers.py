@@ -1218,6 +1218,8 @@ def register_all_input_handlers(io_manager: IOManager):
         }
         if logic.io_manager:
             logic.io_manager.fire_output(entity, 'OnStart')
+        if hasattr(logic, '_fire_cinematic_io_events'):
+            logic._fire_cinematic_io_events()
 
     def camera_stop(entity, param, logic):
         """Abort and return camera to the player."""
