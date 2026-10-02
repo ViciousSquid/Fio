@@ -1067,6 +1067,10 @@ class CutsceneWizard(QtWidgets.QDialog):
             frame["look_at"] = {"actor": str(aid)}
         self.camera_keys.append(frame)
         self.camera_keys.sort(key=lambda x: x["time"])
+        self._refresh_camera_list()
+        self.camera_time.setValue(float(frame["time"]) + 1.0)
+
+    def _refresh_camera_list(self):
         self.camera_keys_list.clear()
         for row in self.camera_keys:
             look = row.get("look_at", {}).get("actor", "")
@@ -1075,7 +1079,6 @@ class CutsceneWizard(QtWidgets.QDialog):
             self.camera_keys_list.addItem(
                 f"{row['time']:.2f}s — camera {row['pos']}{suffix}"
             )
-        self.camera_time.setValue(float(frame["time"]) + 1.0)
 
     def _refresh_actor_keys_list(self):
         self.actor_keys_list.clear()
