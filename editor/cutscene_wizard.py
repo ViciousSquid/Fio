@@ -402,6 +402,23 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._update_waypoint_controls()
         self._refresh_summary()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Keep the modeless wizard fully visible on screen.  Its height can
+        # exceed the available desktop height on smaller displays, so clamp
+        # the frame upward after Qt has applied window decorations.
+        screen = self.screen() or QtWidgets.QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            frame = self.frameGeometry()
+            if frame.bottom() > available.bottom():
+                frame.moveBottom(available.bottom())
+            if frame.top() < available.top():
+                frame.moveTop(available.top())
+            self.move(frame.topLeft())
+        self.raise_()
+        self.activateWindow()
+
     # ------------------------------------------------------------------
     # Editor-side preview transport.
     # ------------------------------------------------------------------
