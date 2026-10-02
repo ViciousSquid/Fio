@@ -1,178 +1,176 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox
-import os
-import configparser
-import subprocess
-import sys
+from PyQt5.QtWidgets import (
+    QDialog, QCheckBox, QVBoxLayout, QDialogButtonBox, QGroupBox, QHBoxLayout,
+    QLabel, QSpinBox, QPushButton, QTabWidget, QWidget, QFormLayout
+)
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QKeySequence
 
-class SettingsWindow:
+class SettingsWindow(QDialog):
     """
-    Manages the settings window for the level editor.
+    A dialog window for editing application settings, built with PyQt5.
     """
-    def __init__(self, root, editor_app, initial_font_size):
-        """
-        Initializes the floating settings window.
-        """
-        self.editor_app = editor_app
-        self.maps_path = ""
-
-        self.window = tk.Toplevel(root)
-        self.window.title("Settings")
-        self.window.geometry("400x500+0+0")
-        self.window.protocol("WM_DELETE_WINDOW", self.hide)
-
-        main_frame = tk.Frame(self.window, padx=10, pady=10)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-
-        # --- Map Launcher Section ---
-        launcher_frame = tk.LabelFrame(main_frame, text="Map Launcher", padx=10, pady=10)
-        #launcher_frame.pack(fill=tk.X, pady=(0, 10))
-
-        self.map_listbox = tk.Listbox(launcher_frame, height=6)
-        #self.map_listbox.pack(fill=tk.X, expand=True)
-
-        launch_button = tk.Button(launcher_frame, text="Launch Selected Map", command=self.launch_map)
-        #launch_button.pack(pady=(5,0))
-
-        # --- Display Section ---
-        display_frame = tk.LabelFrame(main_frame, text="Display", padx=10, pady=10)
-        display_frame.pack(fill=tk.X, pady=(0, 10))
-        
-        self.show_fps_var = tk.BooleanVar()
-        self.show_fps_checkbox = tk.Checkbutton(display_frame, text="Show FPS in game window",
-                                                variable=self.show_fps_var, command=self.save_display_settings)
-        self.show_fps_checkbox.pack(anchor=tk.W)
-
-        font_frame = tk.Frame(display_frame)
-        font_frame.pack(fill=tk.X, pady=(10, 0))
-        tk.Label(font_frame, text="Font Size:").pack(side=tk.LEFT)
-        self.font_size_scale = tk.Scale(font_frame, from_=8, to=24, orient=tk.HORIZONTAL,
-                                        command=self.editor_app.update_font_size)
-        self.font_size_scale.set(initial_font_size)
-        self.font_size_scale.pack(side=tk.RIGHT, expand=True, fill=tk.X)
-
-        # --- Physics Checkbox ---
-        physics_frame = tk.LabelFrame(main_frame, text="Physics (Experimental)", padx=10, pady=10)
-        physics_frame.pack(fill=tk.X, pady=(0, 10))
-        self.physics_var = tk.BooleanVar(value=True)
-        self.physics_checkbox = tk.Checkbutton(physics_frame, text="Enable Physics",
-                                               variable=self.physics_var, command=self.toggle_physics)
-        self.physics_checkbox.pack(anchor=tk.W)
-
-        # --- Controls Section ---
-        controls_frame = tk.LabelFrame(main_frame, text="Controls", padx=10, pady=10)
-        controls_frame.pack(fill=tk.X, pady=(10, 0), expand=True)
-
-        self.invert_mouse_var = tk.BooleanVar()
-        self.invert_mouse_checkbox = tk.Checkbutton(controls_frame, text="Invert Mouse Look",
-                                                    variable=self.invert_mouse_var, command=self.save_controls)
-        self.invert_mouse_checkbox.pack(anchor=tk.W)
-
-        self.control_keys = {}
-        self.control_buttons = {}
+    def __init__(self, config, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        self.setMinimumWidth(600)
+        self.config = config
         self.binding_in_progress = None
 
-        for control_name in ["forward", "back", "left", "right"]:
-            frame = tk.Frame(controls_frame)
-            frame.pack(fill=tk.X, pady=2)
-
-            tk.Label(frame, text=f"{control_name.capitalize()}:").pack(side=tk.LEFT, padx=(0, 5))
-
-            self.control_keys[control_name] = tk.StringVar()
-            self.control_buttons[control_name] = tk.Button(frame, textvariable=self.control_keys[control_name],
-                                                           width=10, command=lambda c=control_name: self.change_key(c))
-            self.control_buttons[control_name].pack(side=tk.RIGHT)
-
-        self.load_settings()
-        self.window.withdraw() # Hide window initially
-
-    def toggle_visibility(self):
-        """Toggles the visibility of the settings window."""
-        if self.window.state() == 'normal':
-            self.hide()
-        else:
-            self.show()
-
-    def set_maps_path(self, path):
-        """Receives the path to the maps directory and populates the listbox."""
-        self.maps_path = path
-        self.map_listbox.delete(0, tk.END)
-        try:
-            for filename in sorted(os.listdir(path)):
-                if filename.endswith(".json"):
-                    self.map_listbox.insert(tk.END, filename)
-        except FileNotFoundError:
-            print(f"Map directory not found: {path}")
-
-    def launch_map(self):
-        """Launches the game engine with the selected map."""
-        selection = self.map_listbox.curselection()
-        if not selection:
-            messagebox.showwarning("No Map Selected", "Please select a map to launch.")
-            return
+        # --- Main Layout ---
+        self.layout = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        self.layout.addWidget(self.tabs)
         
-        map_filename = self.map_listbox.get(selection[0])
-        try:
-            python_executable = sys.executable
-            subprocess.Popen([python_executable, "game_engine.py", map_filename])
-        except Exception as e:
-            messagebox.showerror("Launch Error", f"Failed to launch game_engine.py:\n{e}")
+        # --- Display & Physics Tab ---
+        display_physics_widget = QWidget()
+        display_physics_layout = QVBoxLayout(display_physics_widget)
+        self.tabs.addTab(display_physics_widget, "General")
 
-    def toggle_physics(self):
-        self.editor_app.physics_enabled = self.physics_var.get()
-        self.editor_app.save_config()
-        self.editor_app.reload_config_and_update()
+        # --- Display Section ---
+        display_group = QGroupBox("")
+        display_layout = QVBoxLayout()
 
-    def change_key(self, control_name):
-        self.binding_in_progress = control_name
-        button = self.control_buttons[control_name]
-        button.config(text="Press a key...")
-        self.window.bind("<KeyPress>", self._capture_key)
+        self.show_fps_checkbox = QCheckBox("Show FPS in 3D view")
+        display_layout.addWidget(self.show_fps_checkbox)
+        
+        self.dpi_scaling_checkbox = QCheckBox("Enable High DPI Scaling (requires restart)")
+        display_layout.addWidget(self.dpi_scaling_checkbox)
 
-    def _capture_key(self, event):
-        if self.binding_in_progress:
-            new_key = event.keysym.lower()
-            if new_key in ["escape", "return", "enter"]:
-                messagebox.showwarning("Invalid Key", "This key cannot be bound.")
-                self.control_buttons[self.binding_in_progress].config(text=self.control_keys[self.binding_in_progress].get())
-            else:
-                self.control_keys[self.binding_in_progress].set(new_key)
-                self.control_buttons[self.binding_in_progress].config(text=new_key)
-                self.save_controls()
-            self.window.unbind("<KeyPress>")
-            self.binding_in_progress = None
+        self.show_caulk_checkbox = QCheckBox("Show Caulk textures in editor")
+        display_layout.addWidget(self.show_caulk_checkbox)
+
+        self.sync_selection_checkbox = QCheckBox("Highlight selected brushes in 3D view")
+        display_layout.addWidget(self.sync_selection_checkbox)
+
+        self.show_connections_checkbox = QCheckBox("Show animated connection lines in 2D views")
+        display_layout.addWidget(self.show_connections_checkbox)
+
+        self.show_hud_checkbox = QCheckBox("Show HUD in play mode (health, etc.)")
+        display_layout.addWidget(self.show_hud_checkbox)
+
+        font_layout = QHBoxLayout()
+        font_layout.addWidget(QLabel("Font Size:"))
+        self.font_size_spinbox = QSpinBox()
+        self.font_size_spinbox.setRange(8, 24)
+        font_layout.addWidget(self.font_size_spinbox)
+        display_layout.addLayout(font_layout)
+        
+        display_group.setLayout(display_layout)
+        display_physics_layout.addWidget(display_group)
+        
+        # --- Physics Section ---
+        physics_group = QGroupBox("")
+        physics_layout = QVBoxLayout()
+        self.physics_checkbox = QCheckBox("Physics in Play mode")
+        physics_layout.addWidget(self.physics_checkbox)
+        physics_group.setLayout(physics_layout)
+        display_physics_layout.addWidget(physics_group)
+        display_physics_layout.addStretch()
+        
+        # --- Controls Tab ---
+        controls_widget = QWidget()
+        controls_layout = QVBoxLayout(controls_widget)
+        self.tabs.addTab(controls_widget, "Controls")
+
+        self.invert_mouse_checkbox = QCheckBox("Invert Mouse Look")
+        controls_layout.addWidget(self.invert_mouse_checkbox)
+        
+        self.middle_click_drag_checkbox = QCheckBox("Enable Middle Click to Drag in 2D Views")
+        controls_layout.addWidget(self.middle_click_drag_checkbox)
+        controls_layout.addStretch()
+        
+        # --- Keyboard Shortcuts Tab ---
+        shortcuts_widget = QWidget()
+        shortcuts_layout = QFormLayout(shortcuts_widget)
+        self.tabs.addTab(shortcuts_widget, "Keyboard")
+
+        # Asset Browser first
+        asset_browser_label = QLabel("T")
+        shortcuts_layout.addRow("Asset Browser:", asset_browser_label)
+
+        shortcut_definitions = {
+            "apply_texture": "Shift+T",
+            "Clone Brush": "SPACE",
+            "Delete Brush": "DEL",
+            "reset_layout": "Ctrl+Shift+R",
+            "save_layout": "Ctrl+Shift+S",
+            "Hide Brush": "H",
+            "Unhide All Brushes": "Shift+H",
+            "Toggle play mode": "F5",
+            "Use (play mode)": "E",
+        }
+        
+        self.shortcut_labels = {}
+        for action_name, shortcut_text in shortcut_definitions.items():
+            label_text = action_name.replace('_', ' ').title()
+            shortcut_label = QLabel(shortcut_text)
+            self.shortcut_labels[action_name] = shortcut_label
+            shortcuts_layout.addRow(label_text, shortcut_label)
+
+        switch_2d_views_label = QLabel("Shift+Tab")
+        shortcuts_layout.addRow("Switch 2D Views:", switch_2d_views_label)
+        
+        # --- OK and Cancel Buttons ---
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        self.layout.addWidget(button_box)
+        
+        self.load_settings()
+
+        # --- Style Sheet to make checkboxes 25px square ---
+        self.setStyleSheet("""
+            QCheckBox::indicator {
+                width: 25px;
+                height: 25px;
+            }
+        """)
 
     def load_settings(self):
-        config = self.editor_app.config
-        self.physics_var.set(config.getboolean('Settings', 'physics', fallback=True))
-        self.show_fps_var.set(config.getboolean('Display', 'show_fps', fallback=False))
-        if 'Controls' in config:
-            for control, key_var in self.control_keys.items():
-                key_var.set(config.get('Controls', control, fallback=key_var.get()))
-            self.invert_mouse_var.set(config.getboolean('Controls', 'invert_mouse', fallback=False))
+        # Display settings
+        self.show_fps_checkbox.setChecked(self.config.getboolean('Display', 'show_fps', fallback=True))
+        self.dpi_scaling_checkbox.setChecked(self.config.getboolean('Display', 'high_dpi_scaling', fallback=False))
+        self.show_caulk_checkbox.setChecked(self.config.getboolean('Display', 'show_caulk', fallback=True))
+        self.font_size_spinbox.setValue(self.config.getint('Display', 'font_size', fallback=10))
+        self.sync_selection_checkbox.setChecked(self.config.getboolean('Display', 'sync_selection', fallback=True))
+        self.show_connections_checkbox.setChecked(self.config.getboolean('Display', 'show_connections', fallback=True))
+        self.show_hud_checkbox.setChecked(self.config.getboolean('Display', 'show_hud', fallback=True))
 
-    def save_display_settings(self):
-        config = self.editor_app.config
-        if 'Display' not in config:
-            config.add_section('Display')
-        config.set('Display', 'show_fps', str(self.show_fps_var.get()))
-        self.editor_app.save_config()
-        self.editor_app.reload_config_and_update()
+        # Physics settings
+        self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
 
-    def save_controls(self):
-        config = self.editor_app.config
-        if 'Controls' not in config:
-            config.add_section('Controls')
-        for control, key_var in self.control_keys.items():
-            config.set('Controls', control, key_var.get())
-        config.set('Controls', 'invert_mouse', str(self.invert_mouse_var.get()))
-        self.editor_app.save_config()
-        self.editor_app.reload_config_and_update()
+        # Controls settings
+        self.invert_mouse_checkbox.setChecked(self.config.getboolean('Controls', 'invert_mouse', fallback=False))
+        self.middle_click_drag_checkbox.setChecked(self.config.getboolean('Controls', 'MiddleClickDrag', fallback=False))
 
-    def show(self):
-        """Makes the settings window visible."""
-        self.window.deiconify()
+        pass
 
-    def hide(self):
-        """Hides the settings window."""
-        self.window.withdraw()
+    def accept(self):
+        """Saves the current UI state back to the config object."""
+        if not self.config.has_section('Display'): self.config.add_section('Display')
+        self.config.set('Display', 'show_fps', str(self.show_fps_checkbox.isChecked()))
+        self.config.set('Display', 'high_dpi_scaling', str(self.dpi_scaling_checkbox.isChecked()))
+        self.config.set('Display', 'show_caulk', str(self.show_caulk_checkbox.isChecked()))
+        self.config.set('Display', 'font_size', str(self.font_size_spinbox.value()))
+        self.config.set('Display', 'sync_selection', str(self.sync_selection_checkbox.isChecked()))
+        self.config.set('Display', 'show_connections', str(self.show_connections_checkbox.isChecked()))
+        self.config.set('Display', 'show_hud', str(self.show_hud_checkbox.isChecked()))
+
+        if not self.config.has_section('Settings'): self.config.add_section('Settings')
+        self.config.set('Settings', 'physics', str(self.physics_checkbox.isChecked()))
+
+        if not self.config.has_section('Controls'): self.config.add_section('Controls')
+        self.config.set('Controls', 'invert_mouse', str(self.invert_mouse_checkbox.isChecked()))
+        self.config.set('Controls', 'MiddleClickDrag', str(self.middle_click_drag_checkbox.isChecked()))
+        
+        super().accept()
+
+    def change_key(self, control_name):
+        """Prepares to capture the next key press for a specific control."""
+        # This method is here for future use
+        pass
+
+    def keyPressEvent(self, event):
+        """Captures the key press if a binding is in progress."""
+        # This method is here for future use
+        super().keyPressEvent(event)

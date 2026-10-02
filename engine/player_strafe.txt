@@ -1,0 +1,20 @@
+def update(self, keys, brushes, delta):
+        forward_input = (1 if Qt.Key_W in keys or Qt.Key_Up in keys else 0) - \
+                        (1 if Qt.Key_S in keys or Qt.Key_Down in keys else 0)
+        # --- THIS IS THE CORRECTED LINE ---
+        strafe_input = (1 if Qt.Key_A in keys or Qt.Key_Left in keys else 0) - \
+                       (1 if Qt.Key_D in keys or Qt.Key_Right in keys else 0)
+        # --- END OF CORRECTION ---
+        is_fast = Qt.Key_Shift in keys
+
+        speed = self.speed * 3 if is_fast else self.speed
+
+        cam_forward = glm.vec3(math.sin(self.angle), 0, math.cos(self.angle))
+        cam_right = glm.vec3(math.sin(self.angle + math.pi/2), 0, math.cos(self.angle + math.pi/2))
+
+        move_dir = cam_forward * forward_input + cam_right * strafe_input
+        if glm.length(move_dir) > 0:
+            move_dir = glm.normalize(move_dir)
+
+        if self.physics_enabled:
+            # Apply gravity

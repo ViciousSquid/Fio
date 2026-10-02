@@ -16,3 +16,14 @@ WALL_TILE = 0
 FLOOR_TILE = 1
 PORTAL_A_TILE = 3
 PORTAL_B_TILE = 4
+
+# --- Render Modes ---
+RENDER_MODE_LIT = 0        # Phong Shading
+RENDER_MODE_UNLIT = 1      # Fullbright / Textured
+RENDER_MODE_WIREFRAME = 2  # Wireframe lines
+RENDER_MODE_VERTEX = 3     # Points
+
+# --- Physics Constants ---
+GRAVITY = -275.0
+JUMP_STRENGTH = 180.0
+TERMINAL_VELOCITY = -500.0

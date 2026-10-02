@@ -1,0 +1,247 @@
+{
+    "brushes": [
+        {
+            "pos": [
+                0.0,
+                416.0,
+                16.0
+            ],
+            "size": [
+                832.0,
+                64.0,
+                800.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                16.0,
+                192.0,
+                -368.0
+            ],
+            "size": [
+                800.0,
+                512.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                24.0,
+                192.0,
+                384.0
+            ],
+            "size": [
+                816.0,
+                512.0,
+                96.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                -440.0,
+                192.0,
+                16.0
+            ],
+            "size": [
+                112.0,
+                512.0,
+                832.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                464.0,
+                192.0,
+                16.0
+            ],
+            "size": [
+                96.0,
+                512.0,
+                832.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                8.0,
+                -96.0,
+                16.0
+            ],
+            "size": [
+                1008.0,
+                64.0,
+                832.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": false,
+            "lock": false
+        },
+        {
+            "pos": [
+                304.0,
+                0,
+                -240.0
+            ],
+            "size": [
+                208.0,
+                128,
+                368.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                144.0,
+                0,
+                -240.0
+            ],
+            "size": [
+                128.0,
+                128,
+                368.0
+            ],
+            "textures": {
+                "north": "trigger.jpg",
+                "south": "trigger.jpg",
+                "east": "trigger.jpg",
+                "west": "trigger.jpg",
+                "top": "trigger.jpg",
+                "down": "trigger.jpg"
+            },
+            "is_trigger": true,
+            "target": "Light_2"
+        },
+        {
+            "pos": [
+                -320.0,
+                0.0,
+                -272.0
+            ],
+            "size": [
+                128.0,
+                128,
+                128.0
+            ],
+            "textures": {
+                "north": "WoodenCrate_512.jpg",
+                "south": "WoodenCrate_512.jpg",
+                "east": "WoodenCrate_512.jpg",
+                "west": "WoodenCrate_512.jpg",
+                "top": "WoodenCrate_512.jpg",
+                "down": "WoodenCrate_512.jpg"
+            }
+        }
+    ],
+    "things": [
+        {
+            "type": "light",
+            "pos": [
+                32.0,
+                160.0,
+                -16.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_2",
+                "color": "[255, 255, 200]",
+                "intensity": "1.0",
+                "radius": "512.0",
+                "colour": "[255, 255, 255]",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        },
+        {
+            "type": "playerstart",
+            "pos": [
+                0.0,
+                40,
+                -160.0
+            ],
+            "properties": {
+                "type": "playerstart",
+                "name": "PlayerStart_1",
+                "angle": "0.0"
+            }
+        },
+        {
+            "type": "light",
+            "pos": [
+                224.0,
+                224.0,
+                208.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "colour": "[129, 1, 3]",
+                "intensity": "1.0",
+                "radius": "512.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        }
+    ],
+    "fingerprint": "RStudio"
+}

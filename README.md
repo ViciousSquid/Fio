@@ -1,10 +1,23 @@
-Pre-alpha prototype
 
-- The editor modifies the same data that the actual runtime uses - no intermediary transformation
-- World representation is a 2D integer array (inspecable data)
-- Renderer walks the map to find what to draw
-- Multiple renderers - still experimenting _(immediate mode!!)_
+<img src="https://github.com/user-attachments/assets/37761c81-82c5-4661-962f-0a31380f9ed9" width="700">
 
-  Entry point is `backrooms.py`
+#### A brush-based CSG world editor inspired by QeRadiant and Worldcraft (from the old times!)
 
-Only run through Python otherwise everything is horribly broken
+* Custom OpenGL/PyGame engine supports immediate "drop-in and play" (like CryEngine Editor)
+* Real-time lighting with optional stencil shadows
+* Volumetric fog
+* `json` level format :-)
+* Custom physics engine with configurable parameters
+* Fully modular and open source (MIT License)
+
+* Lights can cast stencil shadows (buggy)
+* Physics in Play Mode
+* Volumetric Fog
+  
+### Roadmap:
+* Quake/Quake2/Quake3/Half-life map support
+* OBJ model support (currently partially implemented)
+* Visual scripting
+* Terrain generation
+
+

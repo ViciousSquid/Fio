@@ -1,81 +1,182 @@
 # engine/player.py
-import pygame
 import math
-from .constants import TILE_SIZE, WALL_TILE, FLOOR_HEIGHT
+import glm
+from PyQt5.QtCore import Qt
+from .constants import TILE_SIZE, GRAVITY, JUMP_STRENGTH, TERMINAL_VELOCITY
 
 class Player:
-    def __init__(self, x, y, angle=math.pi, physics_enabled=True, controls=None):
-        self.x, self.y, self.angle, self.height = x, y, angle, TILE_SIZE / 2.0
-        self.speed, self.mouse_sensitivity = 8, 0.002
-        self.z = 0  # Height from the floor
-        self.radius = TILE_SIZE / 5
+    def __init__(self, x, z, angle=math.pi, physics_enabled=True):
+        self.pos = glm.vec3(float(x), float(TILE_SIZE) * 2, float(z))
+        self.velocity = glm.vec3(0, 0, 0)
+        self.angle, self.pitch = angle, 0.0
+        self.speed, self.camera_speed = 200, 0.2
+        self.mouse_sensitivity = 0.0015
+        self.width, self.height, self.depth = TILE_SIZE, TILE_SIZE * 2, TILE_SIZE
         
-        # Physics properties
+        # Physics state
+        self.on_ground = False
+        self.ground_object = None  # Reference to the brush we are standing on
         self.physics_enabled = physics_enabled
-        self.velocity_z = 0
-        self.gravity = -0.5
-        self.jump_power = 10
-        self.on_ground = True
-        self.controls = controls if controls else {'forward': pygame.K_w, 'back': pygame.K_s, 'left': pygame.K_a, 'right': pygame.K_d, 'invert_mouse': False}
+        self.step_height = 18.0  # Max height the player can step up automatically
 
-    def update(self, tile_map):
-        dx_mouse, dy_mouse = pygame.mouse.get_rel()
-        
-        # Update player's facing angle based on mouse movement
-        self.angle = (self.angle - dx_mouse * self.mouse_sensitivity) % (2 * math.pi)
-        
-        if self.controls.get('invert_mouse'):
-            self.angle = (self.angle - dy_mouse * self.mouse_sensitivity) % (2 * math.pi)
+    def update_angle(self, dx, dy):
+        self.angle = (self.angle - dx * self.mouse_sensitivity) % (2 * math.pi)
+        self.pitch = max(-math.pi/2, min(math.pi/2, self.pitch - dy * self.mouse_sensitivity))
 
-        keys = pygame.key.get_pressed()
-        forward_input = keys[self.controls['forward']] - keys[self.controls['back']]
-        strafe_input = keys[self.controls['right']] - keys[self.controls['left']]
-        
-        # Calculate movement direction relative to player's facing angle
-        dx = (forward_input * math.cos(self.angle)) + (strafe_input * math.cos(self.angle + math.pi/2))
-        dy = (forward_input * math.sin(self.angle)) + (strafe_input * math.sin(self.angle + math.pi/2))
-        
-        # Normalize the vector to prevent faster diagonal movement
-        if dx != 0 or dy != 0:
-            length = math.sqrt(dx*dx + dy*dy)
-            dx = (dx / length) * self.speed
-            dy = (dy / length) * self.speed
-        
-        # Physics handling
-        if self.physics_enabled:
-            # Jumping
-            if keys[pygame.K_SPACE] and self.on_ground:
-                self.velocity_z = self.jump_power
-                self.on_ground = False
+    def _check_overlap(self, brushes, ignore_brush=None):
+        """Returns True if the player currently overlaps any brush."""
+        player_min = self.pos - glm.vec3(self.width/2, self.height/2, self.depth/2)
+        player_max = self.pos + glm.vec3(self.width/2, self.height/2, self.depth/2)
+
+        for brush in brushes:
+            if brush.get('is_trigger', False): continue
             
-            # Apply gravity
-            self.velocity_z += self.gravity
-            self.z += self.velocity_z
-            
-            # Check for ground collision
-            if self.z <= 0:
-                self.z = 0
-                self.velocity_z = 0
-                self.on_ground = True
-        else:
-            # Flying controls
-            if keys[pygame.K_r]: self.z += self.speed
-            if keys[pygame.K_f]: self.z -= self.speed
+            # Ignore the brush we are currently standing on
+            if ignore_brush is not None and brush is ignore_brush:
+                continue
 
-        # Apply movement with collision detection
-        if not self.is_colliding(self.x + dx, self.y, tile_map): 
-            self.x += dx
-        if not self.is_colliding(self.x, self.y + dy, tile_map): 
-            self.y += dy
+            b_pos = glm.vec3(brush['pos'])
+            b_size = glm.vec3(brush['size'])
+            b_min = b_pos - b_size / 2.0
+            b_max = b_pos + b_size / 2.0
 
-    def is_colliding(self, x, y, tile_map):
-        grid_height, grid_width = tile_map.shape
-        for corner_x_offset in [-self.radius, self.radius]:
-            for corner_y_offset in [-self.radius, self.radius]:
-                check_x, check_y = x + corner_x_offset, y + corner_y_offset
-                grid_c, grid_r = int(check_x / TILE_SIZE), int(check_y / TILE_SIZE)
-                if not (0 <= grid_r < grid_height and 0 <= grid_c < grid_width): 
-                    return True
-                if tile_map[grid_r, grid_c] == WALL_TILE: 
-                    return True
+            if (player_max.x > b_min.x and player_min.x < b_max.x and
+                player_max.y > b_min.y and player_min.y < b_max.y and
+                player_max.z > b_min.z and player_min.z < b_max.z):
+                return True
         return False
+
+    def update(self, keys, brushes, delta):
+        # --- 1. Input Processing ---
+        forward_input = (1 if Qt.Key_W in keys or Qt.Key_Up in keys else 0) - \
+                        (1 if Qt.Key_S in keys or Qt.Key_Down in keys else 0)
+        strafe_input = (1 if Qt.Key_A in keys or Qt.Key_Left in keys else 0) - \
+                       (1 if Qt.Key_D in keys or Qt.Key_Right in keys else 0)
+        is_fast = Qt.Key_Shift in keys
+        current_speed = self.speed * 3 if is_fast else self.speed
+
+        cam_forward = glm.vec3(math.sin(self.angle), 0, math.cos(self.angle))
+        cam_right = glm.vec3(math.sin(self.angle + math.pi/2), 0, math.cos(self.angle + math.pi/2))
+
+        move_dir = cam_forward * forward_input + cam_right * strafe_input
+        if glm.length(move_dir) > 0:
+            move_dir = glm.normalize(move_dir)
+
+        self.velocity.x = move_dir.x * current_speed
+        self.velocity.z = move_dir.z * current_speed
+
+        if not self.physics_enabled:
+            self.pos += move_dir * current_speed * delta
+            return
+
+        # --- 2. Physics & Collision with Step Smoothing ---
+        
+       # A. Horizontal Movement (X Axis)
+        original_pos = glm.vec3(self.pos)
+        self.pos.x += self.velocity.x * delta
+        
+        # Pass self.ground_object to ignore the floor we are glued to
+        if self._check_overlap(brushes, ignore_brush=self.ground_object):
+            self.pos.x = original_pos.x 
+            self.pos.y += self.step_height 
+            self.pos.x += self.velocity.x * delta 
+            
+            if not self._check_overlap(brushes, ignore_brush=self.ground_object):
+                self._resolve_collision(brushes, axis='y')
+            else:
+                self.pos = original_pos
+                self.pos.x += self.velocity.x * delta
+                self._resolve_collision(brushes, axis='x')
+
+        # B. Horizontal Movement (Z Axis)
+        original_pos = glm.vec3(self.pos)
+        self.pos.z += self.velocity.z * delta
+        
+        if self._check_overlap(brushes, ignore_brush=self.ground_object):
+            self.pos.z = original_pos.z 
+            self.pos.y += self.step_height 
+            self.pos.z += self.velocity.z * delta 
+            
+            if not self._check_overlap(brushes, ignore_brush=self.ground_object):
+                self._resolve_collision(brushes, axis='y')
+            else:
+                self.pos = original_pos
+                self.pos.z += self.velocity.z * delta
+                self._resolve_collision(brushes, axis='z')
+
+        # C. Vertical Movement (Y Axis)
+        self.velocity.y += GRAVITY * delta
+        if self.velocity.y < TERMINAL_VELOCITY:
+            self.velocity.y = TERMINAL_VELOCITY
+
+        if Qt.Key_Space in keys and self.on_ground:
+            self.velocity.y = JUMP_STRENGTH
+            self.on_ground = False
+            self.ground_object = None
+
+        self.pos.y += self.velocity.y * delta
+        
+        self.on_ground = False 
+        self.ground_object = None
+        
+        self._resolve_collision(brushes, axis='y')
+
+    def _resolve_collision(self, brushes, axis):
+        """
+        Axis-Aligned Bounding Box (AABB) collision resolution.
+        Moves the player out of the wall/floor if they overlap.
+        """
+        player_min = self.pos - glm.vec3(self.width/2, self.height/2, self.depth/2)
+        player_max = self.pos + glm.vec3(self.width/2, self.height/2, self.depth/2)
+
+        for brush in brushes:
+            if brush.get('is_trigger', False):
+                continue
+
+            # Calculate Brush AABB
+            b_pos = glm.vec3(brush['pos'])
+            b_size = glm.vec3(brush['size'])
+            b_min = b_pos - b_size / 2.0
+            b_max = b_pos + b_size / 2.0
+
+            # Check for overlap
+            if (player_max.x > b_min.x and player_min.x < b_max.x and
+                player_max.y > b_min.y and player_min.y < b_max.y and
+                player_max.z > b_min.z and player_min.z < b_max.z):
+
+                # Resolve based on the axis we just moved on
+                if axis == 'x':
+                    if self.velocity.x > 0: # Moving Right -> Hit Left Wall
+                        self.pos.x = b_min.x - self.width / 2 - 0.001
+                    elif self.velocity.x < 0: # Moving Left -> Hit Right Wall
+                        self.pos.x = b_max.x + self.width / 2 + 0.001
+                    self.velocity.x = 0
+                
+                elif axis == 'z':
+                    if self.velocity.z > 0: # Moving Forward -> Hit Back Wall
+                        self.pos.z = b_min.z - self.depth / 2 - 0.001
+                    elif self.velocity.z < 0: # Moving Backward -> Hit Front Wall
+                        self.pos.z = b_max.z + self.depth / 2 + 0.001
+                    self.velocity.z = 0
+                
+                elif axis == 'y':
+                    if self.velocity.y < 0: # Falling -> Hit Floor
+                        self.pos.y = b_max.y + self.height / 2
+                        self.velocity.y = 0
+                        self.on_ground = True
+                        self.ground_object = brush # Store reference for movers
+                    elif self.velocity.y > 0: # Jumping -> Hit Ceiling
+                        self.pos.y = b_min.y - self.height / 2
+                        self.velocity.y = 0
+
+    def get_position(self):
+        return self.pos
+
+    def get_view_matrix(self):
+        cam_forward = glm.vec3(
+            math.sin(self.angle) * math.cos(self.pitch),
+            math.sin(self.pitch),
+            math.cos(self.angle) * math.cos(self.pitch)
+        )
+        target = self.pos + cam_forward
+        return glm.lookAt(self.pos, target, glm.vec3(0, 1, 0))

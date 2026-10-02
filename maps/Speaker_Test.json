@@ -1,0 +1,217 @@
+{
+    "brushes": [
+        {
+            "pos": [
+                -496.0,
+                24.0,
+                48.0
+            ],
+            "size": [
+                32.0,
+                816.0,
+                864.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "concrete02.png",
+                "south": "concrete02.png",
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png"
+            }
+        },
+        {
+            "pos": [
+                496.0,
+                24.0,
+                48.0
+            ],
+            "size": [
+                32.0,
+                816.0,
+                864.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "concrete02.png",
+                "south": "concrete02.png",
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png"
+            }
+        },
+        {
+            "pos": [
+                0.0,
+                -368.0,
+                48.0
+            ],
+            "size": [
+                960.0,
+                32.0,
+                864.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "tiles.jpg",
+                "south": "tiles.jpg",
+                "east": "tiles.jpg",
+                "west": "tiles.jpg",
+                "top": "tiles.jpg",
+                "down": "tiles.jpg"
+            }
+        },
+        {
+            "pos": [
+                0.0,
+                416.0,
+                48.0
+            ],
+            "size": [
+                960.0,
+                32.0,
+                864.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "concrete02.png",
+                "south": "concrete02.png",
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png"
+            },
+            "hidden": false
+        },
+        {
+            "pos": [
+                0.0,
+                24.0,
+                -368.0
+            ],
+            "size": [
+                960.0,
+                752.0,
+                32.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "concrete02.png",
+                "south": "concrete02.png",
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png"
+            }
+        },
+        {
+            "pos": [
+                0.0,
+                24.0,
+                464.0
+            ],
+            "size": [
+                960.0,
+                752.0,
+                32.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "concrete02.png",
+                "south": "concrete02.png",
+                "east": "concrete02.png",
+                "west": "concrete02.png",
+                "top": "concrete02.png",
+                "down": "concrete02.png"
+            }
+        },
+        {
+            "pos": [
+                320.0,
+                -288.0,
+                -192.0
+            ],
+            "size": [
+                136.0,
+                128,
+                128.0
+            ],
+            "textures": {
+                "north": "WoodenCrate_512.jpg",
+                "south": "WoodenCrate_512.jpg",
+                "east": "WoodenCrate_512.jpg",
+                "west": "WoodenCrate_512.jpg",
+                "top": "WoodenCrate_512.jpg",
+                "down": "WoodenCrate_512.jpg"
+            }
+        }
+    ],
+    "things": [
+        {
+            "type": "light",
+            "pos": [
+                0.0,
+                40,
+                16.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "colour": "[255, 255, 255]",
+                "intensity": "1.0",
+                "radius": "1024.0",
+                "state": "on",
+                "show_radius": "False"
+            }
+        },
+        {
+            "type": "speaker",
+            "pos": [
+                0.0,
+                -192.0,
+                64.0
+            ],
+            "properties": {
+                "type": "speaker",
+                "name": "Speaker_1",
+                "sound_file": "sounds/engine-room.wav",
+                "radius": "512.0",
+                "global": "True",
+                "show_radius": "False",
+                "volume": "0.75",
+                "looping": "True",
+                "play_on_start": "True"
+            }
+        },
+        {
+            "type": "playerstart",
+            "pos": [
+                -144.0,
+                -256.0,
+                176.0
+            ],
+            "properties": {
+                "type": "playerstart",
+                "name": "PlayerStart_1",
+                "angle": "0.0"
+            }
+        },
+        {
+            "type": "pickup",
+            "pos": [
+                224.0,
+                40,
+                16.0
+            ],
+            "properties": {
+                "type": "pickup",
+                "name": "Pickup_1",
+                "item_type": "health",
+                "value": "25"
+            }
+        }
+    ],
+    "fingerprint": "RStudio"
+}
