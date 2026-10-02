@@ -4728,6 +4728,15 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def open_cutscene_wizard(self):
+        """Open the live cutscene authoring wizard."""
+        from editor.cutscene_wizard import CutsceneWizard
+        wiz = CutsceneWizard(self, parent=self)
+        wiz.show()
+        wiz.raise_()
+        wiz.activateWindow()
+        self._cutscene_wizard = wiz
+
     def open_logic_wizard(self):
         """Open the Logic Wizard (guided I/O scenario setup)."""
         from editor.logic_graph_widget import LogicGraphScene
