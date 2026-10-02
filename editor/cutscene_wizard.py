@@ -772,6 +772,34 @@ class CutsceneWizard(QtWidgets.QDialog):
         aid = str(item.data(QtCore.Qt.UserRole))
         self.actor_meta.pop(aid, None)
         self.actor_tracks.pop(aid, None)
+
+        # Remove every authored reference to the deleted actor. A cutscene
+        # must never save dangling actor IDs in fights, camera look-at targets,
+        # dialogue speakers, or waypoint destinations.
+        self.camera_keys = [
+            row for row in self.camera_keys
+            if str(row.get("look_at", {}).get("actor", "")) != aid
+        ]
+        for row in self.actor_tracks.values():
+            for frame in row:
+                if str(frame.get("target_id", "")) == aid:
+                    frame.pop("target_id", None)
+        cleaned_events = []
+        for event in self.events:
+            if event.get("type") == "fight":
+                attackers = [str(x) for x in event.get("attackers", []) if str(x) != aid]
+                defenders = [str(x) for x in event.get("defenders", []) if str(x) != aid]
+                if not attackers or not defenders:
+                    continue
+                event = dict(event)
+                event["attackers"] = attackers
+                event["defenders"] = defenders
+            elif event.get("type") == "dialogue" and str(event.get("speaker_id", "")) == aid:
+                event = dict(event)
+                event["speaker_id"] = ""
+            cleaned_events.append(event)
+        self.events = cleaned_events
+
         if aid in self.temporary_actor_ids:
             actor = self.actor_objects.get(aid)
             if actor is not None:
@@ -783,6 +811,8 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.actor_objects.pop(aid, None)
         self._refresh_actor_lists()
         self._refresh_waypoints()
+        self._refresh_event_list()
+        self._refresh_camera_list()
         self.main_window.update_all_ui()
         self._refresh_summary()
 
@@ -1292,7 +1322,7 @@ class CutsceneWizard(QtWidgets.QDialog):
             "type": "logic_camera",
             "id": str(uuid.uuid4()),
             "name": self.name.text().strip() or "Cutscene Camera",
-            "cutscene_file": str(Path(CUTSCENE_DIR) / filename).replace("\\\\", "/"),
+            "cutscene_file": str(Path(CUTSCENE_DIR) / filename).replace("\\", "/"),
             "cutscene_trigger_mode": self.trigger_mode.currentData(),
             "cutscene_trigger_radius": float(self.radius.value()),
             "cutscene_once": self.once.isChecked(),
@@ -1300,13 +1330,14 @@ class CutsceneWizard(QtWidgets.QDialog):
             "cutscene_stop_on_escape": self.stop_escape.isChecked(),
         }
         scene = LogicCamera(pos=pos, properties=props)
+        # Capture the undo checkpoint after temporary authoring actors are gone.
+        # They are embedded in the cutscene JSON, not part of the map operation.
+        self._delete_temporary_actors()
         self.main_window.state.save_state()
         self.main_window.state.things.append(scene)
         self.main_window.set_selected_object(scene)
         self.main_window.unsaved_changes = True
         self.main_window.update_all_ui()
-
-        self._delete_temporary_actors()
         self._saved = True
         self.main_window.show_toast(f"Created cutscene {filename}")
         super().accept()
