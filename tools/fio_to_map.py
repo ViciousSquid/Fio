@@ -10,7 +10,7 @@ Usage:
 Supports:
     - Standard Quake .map format (mapversion 220 for Valve 220 UVs)
     - Axis-aligned brushes with per-face texturing
-    - Entity conversion (PlayerStart, Light, Monster, Pickup, etc.)
+    - Entity conversion (PlayerStart, Light, Monster, Prop, etc.)
     - I/O connections → target/targetname links
     - Subtractive brushes (CSG)
     - Custom properties preservation
@@ -39,8 +39,7 @@ ENTITY_CLASSNAMES = {
     'PlayerStart': 'info_player_start',
     'Light': 'light',
     'Monster': 'monster_army',  # Generic; subtype determines specific class
-    'Pickup': 'item_health',    # Determined by item_type
-    'Model': 'misc_model',
+    'Prop': 'info_null',       # Collectible and model Props are resolved below
     'Portal': 'misc_teleporter',
     'PathNode': 'path_corner',
     'LogicRelay': 'trigger_relay',
@@ -74,8 +73,8 @@ MONSTER_CLASSNAMES = {
     'default': 'monster_army',
 }
 
-# Pickup type mapping
-PICKUP_CLASSNAMES = {
+# Collection type mapping
+COLLECT_CLASSNAMES = {
     'health': 'item_health',
     'ammo': 'item_rockets',
     'gun1': 'weapon_shotgun',
@@ -412,10 +411,21 @@ def convert_fio_entity(fio_thing: Dict[str, Any]) -> Optional[MapEntity]:
         monster_type = props.get('monster_type', 'human')
         classname = MONSTER_CLASSNAMES.get(monster_type, MONSTER_CLASSNAMES['default'])
     
-    elif entity_type == 'Pickup':
-        item_type = props.get('item_type', 'health')
-        classname = PICKUP_CLASSNAMES.get(item_type, PICKUP_CLASSNAMES['default'])
+    elif str(entity_type).lower() == 'prop' and props.get('collect_enabled', False):
+        collect_type = props.get('collect_type', 'health')
+        weapon = props.get('collect_weapon', collect_type)
+        collect_class = weapon if collect_type == 'weapon' else collect_type
+        classname = COLLECT_CLASSNAMES.get(
+            collect_class, COLLECT_CLASSNAMES['default'])
     
+    elif (str(entity_type).lower() == 'model'
+          or (str(entity_type).lower() == 'prop'
+              and str(props.get('render_mode', '')).lower() == 'model'
+              and props.get('model_path'))):
+        # A model is a Prop showing a mesh; maps written before that say
+        # 'model'. Either way it is Quake's misc_model.
+        classname = 'misc_model'
+
     elif entity_type == 'Light':
         classname = 'light'
     

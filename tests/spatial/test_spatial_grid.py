@@ -257,28 +257,10 @@ def test_overlaps_wall_agrees_across_the_single_and_multi_cell_paths():
 # Line of sight
 # ---------------------------------------------------------------------------
 
-def _intersect_ray_aabb(origin, direction, box_min, box_max):
-    t_min, t_max = 0.0, 10000.0
-    for i in range(3):
-        if abs(direction[i]) < 1e-6:
-            if origin[i] < box_min[i] or origin[i] > box_max[i]:
-                return False, 0
-        else:
-            inv = 1.0 / direction[i]
-            t1 = (box_min[i] - origin[i]) * inv
-            t2 = (box_max[i] - origin[i]) * inv
-            t_min = max(t_min, min(t1, t2))
-            t_max = min(t_max, max(t1, t2))
-            if t_min > t_max:
-                return False, 0
-    return True, t_min
-
-
 def test_line_of_sight_is_clear_across_an_empty_room():
     grid = SpatialGrid()
     grid.populate(room(size=2048.0))
-    assert grid.has_line_of_sight(glm.vec3(-800, 60, 0), glm.vec3(800, 60, 0),
-                                  _intersect_ray_aabb) is True
+    assert grid.has_line_of_sight(glm.vec3(-800, 60, 0), glm.vec3(800, 60, 0)) is True
 
 
 def test_a_wall_blocks_line_of_sight():
@@ -286,8 +268,7 @@ def test_a_wall_blocks_line_of_sight():
     brushes.append(box_brush("pillar", (0, 64, 0), (128, 256, 128)))
     grid = SpatialGrid()
     grid.populate(brushes)
-    assert grid.has_line_of_sight(glm.vec3(-800, 64, 0), glm.vec3(800, 64, 0),
-                                  _intersect_ray_aabb) is False, \
+    assert grid.has_line_of_sight(glm.vec3(-800, 64, 0), glm.vec3(800, 64, 0)) is False, \
         "a 128-unit pillar on the line between the two points did not block it"
 
 
@@ -298,7 +279,7 @@ def test_a_diagonal_ray_sees_a_brush_straddling_a_cell_boundary():
     grid.populate([blocker])
     start = glm.vec3(0, 64, 0)
     end = glm.vec3(2 * CELL_SIZE, 64, 2 * CELL_SIZE)
-    assert grid.has_line_of_sight(start, end, _intersect_ray_aabb) is False, (
+    assert grid.has_line_of_sight(start, end) is False, (
         "a brush at the cell corner (%.0f, %.0f) was stepped over by the "
         "diagonal ray" % (CELL_SIZE, CELL_SIZE))
 
@@ -307,14 +288,13 @@ def test_a_zero_length_ray_is_always_clear():
     grid = SpatialGrid()
     grid.populate([box_brush("wall", (0, 0, 0), (512, 512, 512))])
     p = glm.vec3(0, 0, 0)
-    assert grid.has_line_of_sight(p, p, _intersect_ray_aabb) is True
+    assert grid.has_line_of_sight(p, p) is True
 
 
 def test_a_brush_beyond_the_far_end_does_not_block():
     grid = SpatialGrid()
     grid.populate([box_brush("far", (900, 64, 0), (64, 256, 64))])
-    assert grid.has_line_of_sight(glm.vec3(0, 64, 0), glm.vec3(400, 64, 0),
-                                  _intersect_ray_aabb) is True, (
+    assert grid.has_line_of_sight(glm.vec3(0, 64, 0), glm.vec3(400, 64, 0)) is True, (
         "a brush 900 units away blocked a ray that stops at 400")
 
 

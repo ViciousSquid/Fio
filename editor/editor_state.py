@@ -13,13 +13,14 @@ import json
 import copy
 import datetime
 import uuid
+import threading
 from collections import deque
-from .things import Thing, Model
+from .things import Thing
 from editor.things import update_all_counters_from_entities
 
 # Import I/O system for serialization
 try:
-    from .io_system import OutputConnection, get_connections, set_connections
+    from .io_system import OutputConnection, get_connections
     IO_AVAILABLE = True
 except ImportError:
     IO_AVAILABLE = False
@@ -53,13 +54,31 @@ try:
     LIGHTMAP_AVAILABLE = True
 except ImportError:
     LIGHTMAP_AVAILABLE = False
-    print("[LIGHTMAP_AVAILABLE] False")
 
 
 class EditorState:
     """Manages all the data for the current level being edited."""
 
+    #: ``post_event(fn)`` runs *fn* once the UI event being handled has
+    #: finished. The main window installs one (a zero-delay timer); without a
+    #: UI event loop, edits are synchronous and nothing needs deferring.
+    post_event = None
+
     def __init__(self):
+        #: Coarse "something about the world changed" counter -- see
+        #: :meth:`mark_world_changed`.  Set before anything that bumps it can
+        #: run, because save_state() is reachable during construction.
+        self._render_dirty_lock = threading.RLock()
+        self.world_epoch = 0
+        # Object ids whose render-facing cold columns changed in the current
+        # editor transaction. _render_dirty_all is used for reload/undo,
+        # where the object identities themselves are replaced.
+        self._render_dirty_objects = set()
+        self._render_dirty_epoch_by_id = {}
+        self._render_dirty_all = False
+        self._render_dirty_all_epoch = -1
+        # Bounded replay history for double-buffered render projections.
+        self._render_dirty_history = deque(maxlen=32)
         self.brushes = []
         self.things = []
         self.selected_object = None
@@ -87,13 +106,143 @@ class EditorState:
     # =========================================================================
 
 
-    def mark_lighting_dirty(self) -> None:
+    def mark_render_dirty(self, *objects) -> None:
+        """Mark specific objects whose render-facing cold state changed."""
+        with self._render_dirty_lock:
+            if self._render_dirty_all:
+                # The global invalidation already covers every row, but remember
+                # the later epoch so a frame snapshot cannot consume an edit that
+                # happened after it was captured.
+                self._render_dirty_all_epoch = self.world_epoch
+                return
+            epoch = self.world_epoch
+            for obj in objects:
+                if obj is not None:
+                    obj_id = id(obj)
+                    self._render_dirty_objects.add(obj_id)
+                    self._render_dirty_epoch_by_id[obj_id] = epoch
+
+    def render_dirty_snapshot(self):
+        """Capture the render dirtiness and its epoch as one frame boundary."""
+        with self._render_dirty_lock:
+            if self._render_dirty_all:
+                dirty = None
+            else:
+                dirty = set(self._render_dirty_objects)
+            return self.world_epoch, dirty
+
+    def render_dirty_since(self, epoch, through_epoch=None):
+        """Return precise render dirtiness newer than *epoch*.
+
+        Each double-buffered render projection has its own last-published epoch.
+        The live frame journal is consumed after publication, so a second
+        projection needs replayable history rather than the already-cleared set.
+        A bounded history is sufficient for the alternating render buffers; if
+        a consumer falls behind it, return None for a safe global rebuild.
+        """
+        with self._render_dirty_lock:
+            current = self.world_epoch
+            limit = current if through_epoch is None else min(current, int(through_epoch))
+            if epoch is None:
+                return limit, None
+            epoch = int(epoch)
+            if epoch >= limit:
+                return limit, set()
+            history = getattr(self, "_render_dirty_history", ())
+            if not history:
+                return limit, None
+            oldest_epoch = history[0][0]
+            if epoch < oldest_epoch - 1:
+                return limit, None
+            dirty = set()
+            for change_epoch, objects in history:
+                if change_epoch <= epoch:
+                    continue
+                if change_epoch > limit:
+                    break
+                if objects is None:
+                    return limit, None
+                dirty.update(objects)
+            return limit, dirty
+
+    def clear_render_dirty(self, snapshot=None) -> None:
+        """Consume only render dirtiness covered by a previously captured snapshot."""
+        with self._render_dirty_lock:
+            if snapshot is None:
+                # Backward-compatible immediate consume for callers that do not
+                # participate in the frame-boundary protocol.
+                self._render_dirty_objects.clear()
+                self._render_dirty_epoch_by_id.clear()
+                self._render_dirty_all = False
+                self._render_dirty_all_epoch = -1
+                return
+
+            cutoff_epoch, _dirty = snapshot
+
+            # A later global invalidation belongs to a later frame and must survive.
+            if (self._render_dirty_all
+                    and self._render_dirty_all_epoch <= cutoff_epoch):
+                self._render_dirty_all = False
+                self._render_dirty_all_epoch = -1
+
+            # A row dirtied again after the snapshot has a later epoch and must not
+            # be consumed by this frame. This also handles the same object being
+            # edited twice across the snapshot boundary.
+            for obj_id in tuple(self._render_dirty_objects):
+                if self._render_dirty_epoch_by_id.get(obj_id, cutoff_epoch) <= cutoff_epoch:
+                    self._render_dirty_objects.discard(obj_id)
+                    self._render_dirty_epoch_by_id.pop(obj_id, None)
+
+    def mark_world_changed(self, objects=None) -> None:
+        """Bump the world revision and journal the affected render rows.
+
+        objects is the precise editor transaction path. A bare call remains
+        the conservative global invalidation used by external callers/tests.
+
+        A derived structure that resolves expensive per-object data -- the
+        renderer's dense projection above all -- has to know when to re-resolve
+        it without inspecting every object every frame.  This counter is that
+        signal: monotonic, one integer, and cheap enough to compare per frame.
+
+        It is bumped from three places, all of them here, so nothing outside
+        this module has to remember to call it:
+
+        * :meth:`save_state`, which every tool calls at the start of a gesture;
+        * :meth:`_invalidate_entity_caches`, which undo, redo, load and clear
+          go through;
+        * :meth:`mark_lighting_dirty`, which is what a tool holding one undo
+          checkpoint open across a burst of edits calls per edit -- the Surface
+          Inspector being the one that does.
+
+        Deliberately coarse.  It says *something* changed, not what; a consumer
+        that wants to be finer-grained tracks its own per-row dirty set on top.
+        """
+        with self._render_dirty_lock:
+            self.world_epoch += 1
+            if objects is None or not objects:
+                self._render_dirty_objects.clear()
+                self._render_dirty_epoch_by_id.clear()
+                self._render_dirty_all = True
+                self._render_dirty_all_epoch = self.world_epoch
+                self._render_dirty_history.append((self.world_epoch, None))
+            else:
+                object_ids = frozenset(id(obj) for obj in objects if obj is not None)
+                self._render_dirty_history.append((self.world_epoch, object_ids))
+                self.mark_render_dirty(*objects)
+
+    def mark_lighting_dirty(self, objects=None) -> None:
         """
         Call whenever static geometry or static lights change so the next
         Play automatically triggers a rebake.
 
         Safe to call even when the lightmap system is unavailable.
         """
+        # A tool that holds one undo checkpoint open across a burst of edits
+        # (the Surface Inspector) calls this per edit, so it is the signal that
+        # catches what save_state alone would miss.
+        if objects is None:
+            objects = getattr(self, "selected_objects", ())
+        self.mark_world_changed(objects)
         if self.bake_state is not None:
             self.bake_state.mark_dirty()
 
@@ -109,7 +258,7 @@ class EditorState:
         if brush.get('lightmap_static') == static:
             return  # no change
         brush['lightmap_static'] = static
-        self.mark_lighting_dirty()
+        self.mark_lighting_dirty([brush])
 
     def count_static_brushes(self) -> int:
         return sum(1 for b in self.brushes if b.get('lightmap_static', False))
@@ -134,7 +283,7 @@ class EditorState:
         self.save_state()
         if _geo_clip_brush(brush, normal, offset, keep_positive=keep_positive,
                            texture=texture, uv_scale=uv_scale):
-            self.mark_lighting_dirty()
+            self.mark_lighting_dirty([brush])
             return True
         # Nothing changed -> discard the undo snapshot we just pushed.
         self.discard_last_checkpoint()
@@ -144,7 +293,7 @@ class EditorState:
         """Rotate ``brush`` about ``pivot`` (default: its centre), making it angled."""
         self.save_state()
         if _geo_rotate_brush(brush, angle_deg, axis, pivot=pivot):
-            self.mark_lighting_dirty()
+            self.mark_lighting_dirty([brush])
             return True
         self.discard_last_checkpoint()
         return False
@@ -157,7 +306,7 @@ class EditorState:
         brush.pop('geometry', None)
         brush.pop('_geo_cache', None)
         brush.pop('_geo_cache_sig', None)
-        self.mark_lighting_dirty()
+        self.mark_lighting_dirty([brush])
 
     def simplify_brush_geometry(self, brush: dict) -> None:
         """If a geometry brush is really an axis-aligned box, drop to pos/size."""
@@ -175,6 +324,20 @@ class EditorState:
         self.selected_object = obj
         self.selected_objects = [] if obj is None else [obj]
 
+    def edited_objects(self) -> tuple:
+        """The objects an editor tool may be writing in place right now.
+
+        A drag, a nudge or a component edit changes the selection for many
+        frames after one undo checkpoint, writing the dicts directly; the
+        render projection re-reads these rows every frame instead of every
+        row. Safe to call from the logic thread: the lists are copied.
+        """
+        selected = tuple(self.selected_objects)
+        primary = self.selected_object
+        if primary is not None and primary not in selected:
+            selected += (primary,)
+        return selected
+
     def _invalidate_entity_caches(self):
         """Tell anything caching per-object data that the objects are changing.
 
@@ -183,6 +346,16 @@ class EditorState:
         identity or contents cannot see it happen and would go on showing the
         entities that used to be there.
         """
+        with self._render_dirty_lock:
+            self._render_dirty_objects.clear()
+            self._render_dirty_epoch_by_id.clear()
+            self._render_dirty_all = True
+            self._render_dirty_all_epoch = self.world_epoch
+            self.mark_world_changed()
+        self._bump_io_revision()
+
+    @staticmethod
+    def _bump_io_revision():
         if IO_AVAILABLE:
             try:
                 from .io_system import bump_io_revision
@@ -192,9 +365,9 @@ class EditorState:
 
     def clear_scene(self):
         """Resets the scene to an empty state."""
-        self._invalidate_entity_caches()
         self.brushes.clear()
         self.things.clear()
+        self._invalidate_entity_caches()
         self.selected_object = None
         self.selected_objects = []
         self.terrain_data = None
@@ -285,11 +458,13 @@ class EditorState:
 
         return serialized
 
-    def _deserialize_brushes(self, brushes_data):
+    def _deserialize_brushes(self, brushes_data, yield_hook=None):
         """Deserialize brushes with I/O connections."""
         result = []
 
-        for brush_data in brushes_data:
+        for index, brush_data in enumerate(brushes_data):
+            if yield_hook is not None and index % 64 == 0:
+                yield_hook()
             brush = brush_data.copy()
 
             # Backfill stable ID for legacy maps
@@ -311,26 +486,88 @@ class EditorState:
 
         return result
 
-    def load_from_data(self, level_data):
-        """Populates the scene from a dictionary."""
+    @staticmethod
+    def _dedupe_loaded_ids(brushes, things):
+        """Give every object after the first that shares a UUID one of its own.
+
+        Maps written by older editors (whose clone copied the source's id) can
+        hold several brushes under one UUID. The id is the object's *name* --
+        undo re-points the selection by it, I/O aims by it, saves restore by
+        it and the render tables key their rows on it -- so a shared one makes
+        all of those pick an arbitrary member. The first holder keeps the id,
+        so connections already aimed at it stay aimed at the same object.
+        """
+        seen = set()
+        for brush in brushes:
+            bid = brush.get('id')
+            if bid in seen:
+                brush['id'] = bid = str(uuid.uuid4())
+            seen.add(bid)
+        for thing in things:
+            props = getattr(thing, 'properties', None)
+            if not isinstance(props, dict):
+                continue
+            tid = props.get('id')
+            if tid is None:
+                continue
+            if tid in seen:
+                props['id'] = tid = str(uuid.uuid4())
+            seen.add(tid)
+
+    @staticmethod
+    def validate_level_data(level_data):
+        """Raise ``ValueError`` if *level_data* is not shaped like a map.
+
+        Structural only (an object holding lists of objects), and cheap, so a
+        caller can reject a document before it clears the current scene.
+        """
+        if not isinstance(level_data, dict):
+            raise ValueError("a map document must be a JSON object")
+        for kind in ('brushes', 'things'):
+            items = level_data.get(kind) or []
+            if not isinstance(items, list):
+                raise ValueError(f"a map's '{kind}' must be a list")
+            for index, item in enumerate(items):
+                if not isinstance(item, dict):
+                    raise ValueError(f"{kind}[{index}] is not an object")
+
+    def load_from_data(self, level_data, *, yield_hook=None, save_undo=True):
+        """Populates the scene from a dictionary.
+
+        ``yield_hook`` is an optional cooperative callback used by long-running
+        imports. Normal editor loads remain unchanged.
+        """
+        # Everything is parsed before the scene is touched: a malformed map
+        # raises here and leaves the current scene exactly as it was, rather
+        # than half of one map mixed with half of another.
+        self.validate_level_data(level_data)
+        brushes_data = level_data.get('brushes') or []
+        things_data = level_data.get('things') or []
+
+        new_brushes = self._deserialize_brushes(brushes_data, yield_hook=yield_hook)
+        new_things = []
+        for index, t_data in enumerate(things_data):
+            if yield_hook is not None and index % 25 == 0:
+                yield_hook()
+            thing = Thing.from_dict(t_data)
+            if thing is not None:
+                new_things.append(thing)
+
+        self._dedupe_loaded_ids(new_brushes, new_things)
+
+        legacy_models = [t for t in new_things if getattr(t, '_legacy_model', False)]
+        if legacy_models:
+            try:
+                from editor.io_system import retarget_legacy_model_inputs
+                retarget_legacy_model_inputs(new_brushes + new_things, legacy_models)
+            except ImportError:
+                pass
+
+        # Published before the invalidation, for the reason restore_state
+        # gives: a frame between the two must not rebuild the outgoing world.
+        self.brushes = new_brushes
+        self.things = new_things
         self._invalidate_entity_caches()
-
-        # Handle both old and new format
-        version = level_data.get('version', 1)
-
-        if version >= 2:
-            # New format with I/O connections stored separately
-            self.brushes = self._deserialize_brushes(level_data.get('brushes', []))
-        else:
-            # Old format - brushes are plain dicts
-            self.brushes = level_data.get('brushes', [])
-            # Backfill stable IDs for v1 brushes
-            for brush in self.brushes:
-                brush.setdefault('id', str(uuid.uuid4()))
-            # Migrate legacy 'target' property to I/O connections
-            if IO_AVAILABLE:
-                for brush in self.brushes:
-                    self._migrate_legacy_target(brush)
 
         self.terrain_data = level_data.get('terrain_data', None)
         # Absent in maps written before this existed; the overview falls back to
@@ -340,25 +577,10 @@ class EditorState:
         # Store logic graph positions for later use by the graph window
         self._logic_graph_positions = {}
         lg = level_data.get('logic_graph', {})
-        if lg:
-            self._logic_graph_positions = lg.get('node_positions', {})
-
-        # Load things
-        things_data = level_data.get('things', [])
-        new_things = []
-        for t_data in things_data:
-            if t_data.get('type') == 'Model':
-                model_kwargs = {k: v for k, v in t_data.items() if k != 'type'}
-                new_things.append(Model(**model_kwargs))
-            else:
-                thing = Thing.from_dict(t_data)
-                if thing:
-                    # Migrate legacy 'target' property
-                    if thing.properties.get('target') and IO_AVAILABLE:
-                        self._migrate_legacy_thing_target(thing)
-                    new_things.append(thing)
-
-        self.things = new_things
+        if isinstance(lg, dict):
+            positions = lg.get('node_positions', {})
+            if isinstance(positions, dict):
+                self._logic_graph_positions = positions
 
         # ===== NEW: Reset class counters based on loaded entity names =====
         update_all_counters_from_entities(self.brushes + self.things)
@@ -379,57 +601,8 @@ class EditorState:
             # at least once before the first Play in this session.
             self.bake_state.mark_dirty()
 
-        self.save_state()
-
-    def _migrate_legacy_target(self, brush):
-        """Migrate old 'target' property to I/O connection for brushes."""
-        target = brush.get('target', '')
-        if not target:
-            return
-
-        # Determine what output to use
-        if brush.get('is_trigger'):
-            output = 'OnTrigger'
-        elif brush.get('is_mover'):
-            output = 'OnFullyOpen'
-        elif brush.get('is_door'):
-            output = 'OnOpen'
-        else:
-            return
-
-        # Create connection
-        conn = OutputConnection(
-            output_name=output,
-            target_name=target,
-            input_name='Toggle',  # Generic default
-            parameter='',
-            delay=0.0,
-            fire_once=False
-        )
-
-        if '_io_connections' not in brush:
-            brush['_io_connections'] = []
-        brush['_io_connections'].append(conn)
-
-    def _migrate_legacy_thing_target(self, thing):
-        """Migrate old 'target' property to I/O connection for things."""
-        target = thing.properties.get('target', '')
-        if not target:
-            return
-
-        entity_type = thing.properties.get('type', '')
-
-        # Determine output based on type
-        if entity_type == 'logic_gate':
-            output = 'OnTrigger'
-        else:
-            return
-
-        thing.add_output_connection(
-            output_name=output,
-            target_name=target,
-            input_name='Toggle'
-        )
+        if save_undo:
+            self.save_state()
 
     def _selection_identifiers(self):
         """Stable identifiers for the whole selection, for state restoration.
@@ -522,7 +695,7 @@ class EditorState:
             'brushes': self._serialize_brushes_for_undo(),
             'things': [t.to_dict() for t in self.things],
             'selection': self._selection_identifiers(),
-        })
+        }, separators=(',', ':'), check_circular=False)
 
     def save_state(self):
         """Checkpoint the scene *before* an operation changes it.
@@ -532,6 +705,19 @@ class EditorState:
         record of what the scene now looks like.  :meth:`undo` therefore has to
         capture the live scene itself — see the note there.
         """
+        selected = tuple(getattr(self, "selected_objects", ()))
+        self.mark_world_changed(selected)
+        # A checkpoint is taken *before* the operation changes anything, so a
+        # render frame prepared in between consumes the journal entry while the
+        # objects still hold their old state. Journal them again once the UI
+        # event that is making the change has finished.
+        post_event = self.post_event
+        if post_event is not None and selected:
+            post_event(lambda: self.mark_world_changed(selected))
+        # The operation may add or delete a connection's source or target.
+        # The I/O reverse index keys on object counts and list identity, which
+        # a delete followed by a placement restores exactly, so it must be told.
+        self._bump_io_revision()
         # Keep the redo branch we are about to drop, so an operation that turns
         # out to change nothing can put it back (see discard_last_checkpoint).
         self._discarded_redo = list(self.redo_stack)
@@ -559,46 +745,51 @@ class EditorState:
         return True
 
     def _serialize_brushes_for_undo(self):
-        """Serialize brushes for undo stack (deep copy with I/O)."""
+        """The brushes as JSON-ready dicts for an undo checkpoint.
+
+        Shallow: the checkpoint is encoded to a JSON string straight away, and
+        encoding already makes an independent copy, so a deep copy first only
+        doubled the work -- about 0.4 s a checkpoint on a 24k-brush map.
+        Renderer-internal cache keys are left out (GLM matrices, cached convex
+        geometry: neither serialisable nor meaningful outside the renderer),
+        and I/O connections are written as dicts.
+        """
         result = []
         for brush in self.brushes:
-            # Strip renderer-internal cache keys *before* the deep copy.  They
-            # hold GLM matrices and cached convex geometry that are neither
-            # JSON-serialisable nor meaningful outside the renderer's lifetime,
-            # and deep-copying them first only to throw them away made every
-            # undo checkpoint pay for geometry it discards.
             # Give every brush a stable id before it is checkpointed. Undo
             # rebuilds brush dicts from JSON, so the id is what lets the
             # selection (and anything else holding a reference) be re-pointed at
             # the brush that replaced it; a brush drawn in a view and not saved
             # since would otherwise have nothing to be recognised by.
-            brush.setdefault('id', str(uuid.uuid4()))
-            shallow = {k: v for k, v in brush.items()
-                       if k not in _RENDERER_PRIVATE_KEYS}
-            brush_copy = copy.deepcopy(shallow)
-
-            # Convert OutputConnection objects to dicts for JSON
-            if '_io_connections' in brush_copy:
-                connections = brush_copy['_io_connections']
-                serialized = []
-                for conn in connections:
-                    if hasattr(conn, 'to_dict'):
-                        serialized.append(conn.to_dict())
-                    elif isinstance(conn, dict):
-                        serialized.append(conn)
-                brush_copy['_io_connections'] = serialized
-
-            result.append(brush_copy)
+            if 'id' not in brush:
+                brush['id'] = str(uuid.uuid4())
+            entry = {k: v for k, v in brush.items()
+                     if k not in _RENDERER_PRIVATE_KEYS}
+            connections = entry.get('_io_connections')
+            if connections:
+                entry['_io_connections'] = [
+                    conn.to_dict() if hasattr(conn, 'to_dict') else conn
+                    for conn in connections
+                    if hasattr(conn, 'to_dict') or isinstance(conn, dict)]
+            result.append(entry)
         return result
 
     def restore_state(self, state_json):
-        """Restores the scene from a JSON state string."""
-        self._invalidate_entity_caches()
+        """Restores the scene from a JSON state string.
+
+        The replacement world is built aside and published by assignment, and
+        only then is the world invalidated. The logic thread projects
+        ``brushes``/``things`` every frame: invalidating first -- and filling
+        ``self.brushes`` in place -- let it rebuild the dense tables from the
+        outgoing world (or a half-restored one) under the new epoch, then
+        rebuild both buffers again once the restore landed. On a 40k-brush
+        map that was several seconds of logic-thread stall per undo or Stop.
+        """
         state = json.loads(state_json)
 
         # Restore brushes with I/O connections
         raw_brushes = state.get('brushes', [])
-        self.brushes = []
+        new_brushes = []
         for brush_data in raw_brushes:
             brush = brush_data.copy()
 
@@ -610,20 +801,18 @@ class EditorState:
                         OutputConnection.from_dict(d) for d in io_data
                     ]
 
-            self.brushes.append(brush)
+            new_brushes.append(brush)
 
         # Restore things
         things_data = state.get('things', [])
         new_things = []
         for t_data in things_data:
-            if t_data.get('type') == 'Model':
-                model_kwargs = {k: v for k, v in t_data.items() if k != 'type'}
-                new_things.append(Model(**model_kwargs))
-            else:
-                thing = Thing.from_dict(t_data)
-                if thing:
-                    new_things.append(thing)
+            thing = Thing.from_dict(t_data)
+            if thing is not None:
+                new_things.append(thing)
+        self.brushes = new_brushes
         self.things = new_things
+        self._invalidate_entity_caches()
 
         if 'selection' in state:
             self._restore_selection(state['selection'])
@@ -701,6 +890,37 @@ class EditorState:
                 return thing
 
         return None
+
+    def ensure_entity_ids(self):
+        """Stamp the stable UUID onto any brush or Thing that has not got one.
+
+        Fio assigns ids lazily, at the three points that serialise the scene
+        (save, load, undo checkpoint), because those are where an id earns its
+        keep: it is what lets a dict rebuilt from JSON be recognised as the
+        object it replaced.  A brush a tool has only just appended has
+        therefore not been stamped yet -- ``save_state`` snapshots the scene
+        *before* the operation that creates it.
+
+        Anything that keys a derived structure on the id needs one to exist by
+        the time it looks, so it calls this rather than stamping ids itself:
+        the write stays here, in the module that owns the world, and the
+        derived structure stays read-only with respect to it.
+
+        Uses the same ``setdefault`` semantics as the serialisers, so whoever
+        gets there first wins and an object that already has an id is
+        untouched.  Returns how many ids were assigned.
+        """
+        assigned = 0
+        for brush in self.brushes:
+            if 'id' not in brush:
+                brush['id'] = str(uuid.uuid4())
+                assigned += 1
+        for thing in self.things:
+            props = getattr(thing, 'properties', None)
+            if isinstance(props, dict) and 'id' not in props:
+                props['id'] = str(uuid.uuid4())
+                assigned += 1
+        return assigned
 
     def get_entity_id(self, entity):
         """Return the stable ID of an entity (brush dict or Thing)."""

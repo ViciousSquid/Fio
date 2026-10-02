@@ -40,10 +40,13 @@ import os
 from collections import Counter
 from typing import Dict, List, Optional, Set, Tuple
 
+from engine.change_journal import touch
+
 from .cell import (CELL_SIZE, CellCoord, cell_distance_sq, cell_of_point,
                    cells_for_aabb)
 from .manager import (DEFAULT_ACTIVATION_RADIUS, DEFAULT_DEACTIVATION_RADIUS,
                       DEFAULT_PERSISTENT_TYPES, _normalise_type)
+from .config import bound_view_horizon, effective_streaming_radii
 from .persistence import cell_key_for_pos, normalize_streaming_state
 
 _BRUSH = "brush"
@@ -272,10 +275,16 @@ class DiskStreamingSession:
         self.logic = logic
         self.source = source
         self.cell_size = float(getattr(source, "cell_size", CELL_SIZE))
-        self.load_radius = float(load_radius)
-        self.evict_radius = max(float(evict_radius), self.load_radius)
+        self._authored_load_radius = max(0.0, float(load_radius))
+        self._authored_evict_radius = max(
+            self._authored_load_radius, float(evict_radius)
+        )
+        self.load_radius = self._authored_load_radius
+        self.evict_radius = self._authored_evict_radius
         self.streaming = True
         self._started = False
+        #: Undoes the camera-horizon limit start() places.
+        self._release_view_horizon = None
 
         self._loaded: Dict[CellCoord, _LoadedCell] = {}
         self._live_by_id: Dict[str, object] = {}
@@ -322,6 +331,26 @@ class DiskStreamingSession:
         return rec.get("pos", (0.0, 0.0, 0.0))
 
     # ------------------------------------------------------------------
+    # Residency / camera cooperation
+    # ------------------------------------------------------------------
+
+    def _sync_visual_horizon(self) -> bool:
+        view_distance = getattr(self.logic, "view_distance", None)
+        horizon = getattr(view_distance, "visual_horizon", None)
+        load_radius, evict_radius = effective_streaming_radii(
+            self._authored_load_radius,
+            self._authored_evict_radius,
+            horizon,
+        )
+        changed = (
+            load_radius != self.load_radius
+            or evict_radius != self.evict_radius
+        )
+        self.load_radius = load_radius
+        self.evict_radius = max(evict_radius, load_radius)
+        return changed
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
     def start(self, player_pos=None) -> None:
@@ -335,6 +364,11 @@ class DiskStreamingSession:
         except Exception:
             self.logic.things = list(persistent)
             self.logic.brushes = []
+        # Fade the camera out where cells stop loading (see bound_view_horizon).
+        if self._release_view_horizon is None:
+            self._release_view_horizon = bound_view_horizon(
+                self.logic, self._authored_load_radius)
+        self._sync_visual_horizon()
         pos = player_pos if player_pos is not None else self._player_pos()
         if pos is not None:
             self._restream(pos, force=True)
@@ -345,6 +379,9 @@ class DiskStreamingSession:
         self._live_by_id.clear()
         self._load_ref.clear()
         self._base_by_uuid.clear()
+        if self._release_view_horizon is not None:
+            self._release_view_horizon()
+            self._release_view_horizon = None
         self._started = False
 
     def _reset_streaming(self) -> None:
@@ -372,7 +409,8 @@ class DiskStreamingSession:
         pos = player_pos if player_pos is not None else self._player_pos()
         if pos is None:
             return False
-        return self._restream(pos, force=False)
+        radius_changed = self._sync_visual_horizon()
+        return self._restream(pos, force=radius_changed)
 
     def _restream(self, pos, force: bool) -> bool:
         px, pz = float(pos[0]), float(pos[2])
@@ -489,6 +527,7 @@ class DiskStreamingSession:
 
     def _apply_saved_delta(self, lc: _LoadedCell) -> None:
         """Overlay any saved delta for this cell's UUIDs onto the fresh objects."""
+        moved = []
         for kind, uuid in lc.objs:
             entry = self._delta_by_uuid.get(uuid)
             if entry is None:
@@ -500,19 +539,33 @@ class DiskStreamingSession:
             if kind == _BRUSH:
                 self._apply_brush_rec(obj, rec)
             else:
-                self._apply_thing_rec(obj, rec)
+                if self._apply_thing_rec(obj, rec):
+                    moved.append(obj)
+        # A cell coming back puts its Things where the save left them, so the
+        # Prop domain is told which ones moved -- as one batch per cell, not a
+        # call per object. Unknown Things are ignored on the far side, so this
+        # does not have to know which of them are Props.
+        if moved:
+            session = getattr(self.logic, "_props", None)
+            if session is not None:
+                session.refile(moved)
 
     @staticmethod
-    def _apply_thing_rec(thing, rec: dict) -> None:
+    def _apply_thing_rec(thing, rec: dict) -> bool:
+        """Overlay one saved Thing record. Returns True if its position moved."""
+        placed = False
         try:
             if rec.get("pos") is not None:
                 thing.pos = list(rec["pos"])
+                placed = True
             for k, v in (rec.get("properties") or {}).items():
                 if k == "_io_connections":
                     continue
                 thing.properties[k] = v
         except Exception:
             pass
+        touch(thing)
+        return placed
 
     def _apply_brush_rec(self, brush: dict, rec: dict) -> None:
         from engine.savegame import _BRUSH_OVERLAY_KEYS
@@ -521,6 +574,7 @@ class DiskStreamingSession:
                 brush[k] = rec[k]
             else:
                 brush.pop(k, None)
+        touch(brush)
 
     # ------------------------------------------------------------------
     # Commit / registry

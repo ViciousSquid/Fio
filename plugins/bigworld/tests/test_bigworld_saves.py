@@ -93,7 +93,6 @@ class FakeLogic:
         self.player2_max_health = 100
         self.player2_dead = False
         self.collected_keys = set()
-        self.collected_pickups = set()
         self.door_states = {}
         self.mover_states = {}
         self.monster_ai = FakeMonsterAI()
@@ -113,10 +112,10 @@ B_POS = (6000.0, 0.0, 100.0)
 def make_world():
     things = [
         FakeThing("A-mon", "monster", [110.0, 0.0, 110.0], {"health": 50}),
-        FakeThing("A-key", "pickup", [120.0, 0.0, 90.0], {"pickup_type": "gold"}),
+        FakeThing("A-key", "prop", [120.0, 0.0, 90.0], {"collect_enabled": True, "collect_type": "key", "collect_key_name": "gold"}),
         FakeThing("A-light", "light", [100.0, 60.0, 100.0], {"radius": 100.0}),
         FakeThing("B-mon", "monster", [6010.0, 0.0, 110.0], {"health": 80}),
-        FakeThing("B-key", "pickup", [6020.0, 0.0, 90.0], {"pickup_type": "silver"}),
+        FakeThing("B-key", "prop", [6020.0, 0.0, 90.0], {"collect_enabled": True, "collect_type": "key", "collect_key_name": "silver"}),
         # The Big World opt-in entity (persistent global).
         FakeThing("bw-settings", "bigworldsettings", [0.0, 0.0, 0.0],
                   {"enabled": True, "activation_radius": 600.0,
@@ -322,7 +321,7 @@ def test_wrong_world_fails_safely():
     # A different world: different UUIDs and name.
     other_things = [
         FakeThing("X-1", "monster", [0, 0, 0], {}),
-        FakeThing("X-2", "pickup", [0, 0, 0], {}),
+        FakeThing("X-2", "prop", [0, 0, 0], {"collect_enabled": True, "collect_type": "health"}),
     ]
     other = FakeLogic(other_things, [{"id": "X-b"}], A_POS)
     new_session(other).start(player_pos=A_POS)
@@ -500,3 +499,26 @@ def test_play_stop_returns_a_restored_dormant_world_to_its_saved_state():
     assert a_mon.properties.get("disabled") is True
     assert "_bw_parked_hidden" not in a_mon.properties, (
         "play-stop left a parking marker behind")
+
+
+def test_committing_one_cell_diffs_only_that_cells_base_records():
+    """commit_cell used to diff every unloaded cell against the whole base
+    world (O(world) per cell, ~5 ms a crossing on a 2300-brush world). The
+    base subset it now uses must give exactly the whole-world answer."""
+    things, brushes = make_world()
+    logic = FakeLogic(things, brushes, A_POS)
+    s = new_session(logic)
+    s.start(player_pos=A_POS)
+    things[0].properties["dead"] = True
+    things[2].properties["on"] = False
+    brushes[0]["hidden"] = True
+    for coord, cell in s.manager.cells.items():
+        live = persistence.normalize_streaming_state(s._cell_live_level(cell))
+        whole = persistence.build_cell_delta_registry(
+            s._base_level, live, s.manager.cell_size)
+        subset = persistence.build_cell_delta_registry(
+            s._base_subset(live), live, s.manager.cell_size)
+        assert subset == whole, coord
+    s.tick(player_pos=B_POS)
+    assert {t["properties"]["id"] for t in s.registry["0,0"]["things"]} == \
+        {"A-mon", "A-light"}

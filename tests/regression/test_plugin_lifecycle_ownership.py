@@ -40,13 +40,13 @@ _GENERIC_SOURCES = ("engine/logic_thread.py", "engine/savegame.py",
 #: name would flag signal wiring rather than a lifecycle path.
 _LIFECYCLE_HOOKS = ("on_play_start", "on_play_stop", "on_tick")
 
-#: The plugin *framework* — the manager, the API, the host, the packaging and
-#: integration layers.  Engine code is allowed to depend on these; they are how
+#: The plugin *framework* — the manager, the API, the host and the
+#: integration layer.  Engine code is allowed to depend on these; they are how
 #: it hosts plugins at all.  Anything else under ``plugins.`` is a particular
 #: plugin's implementation.
 _FRAMEWORK_MODULES = frozenset({
     "plugins", "plugins.api", "plugins.manager", "plugins.host",
-    "plugins.integration", "plugins.packaging", "plugins.entitybase",
+    "plugins.integration", "plugins.entitybase",
 })
 
 

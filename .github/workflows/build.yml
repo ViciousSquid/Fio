@@ -3,6 +3,9 @@ name: Nuitka Build and Validate
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -78,7 +81,7 @@ jobs:
       - name: Convert icon to .icns
         run: |
           mkdir -p build/icon.iconset
-          
+
           # Convert ico to png first if needed
           if [ -f "assets/icon.ico" ]; then
             sips -s format png assets/icon.ico --out build/icon.png
@@ -88,18 +91,25 @@ jobs:
             echo "No icon file found!"
             exit 1
           fi
-          
+
           # Generate all required sizes for .icns
           for size in 16 32 64 128 256 512; do
             sips -z $size $size build/icon.png --out build/icon.iconset/icon_${size}x${size}.png
             sips -z $(($size*2)) $(($size*2)) build/icon.png --out build/icon.iconset/icon_${size}x${size}@2x.png
           done
-          
+
           # Create .icns file
           iconutil -c icns build/icon.iconset -o build/icon.icns
-          
+
           # Also create a 1024x1024 version for high-res
           sips -z 1024 1024 build/icon.png --out build/icon_1024.png
+
+      - name: Read Fio version
+        run: |
+          FIO_VERSION="$(sed -n 's/^version //p' editor/version.txt)"
+          test -n "$FIO_VERSION"
+          echo "FIO_VERSION=$FIO_VERSION" >> "$GITHUB_ENV"
+          echo "Building Fio $FIO_VERSION"
 
       - name: Build with Nuitka (App Bundle)
         run: |
@@ -107,7 +117,7 @@ jobs:
             --standalone \
             --macos-create-app-bundle \
             --macos-app-name=Fio \
-            --macos-app-version=1.0.0 \
+            --macos-app-version="$FIO_VERSION" \
             --output-filename=Fio \
             --assume-yes-for-downloads \
             --plugin-enable=pyqt5 \
@@ -131,6 +141,7 @@ jobs:
         run: |
           if [ -f "build/main.app/Contents/MacOS/Fio" ]; then
             echo "App bundle OK"
+            /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "build/main.app/Contents/Info.plist" | grep -Fx "$FIO_VERSION"
           else
             echo "App bundle broken"
             exit 1
@@ -139,29 +150,29 @@ jobs:
       - name: Inject Info.plist with proper icon configuration
         run: |
           plist_path="build/main.app/Contents/Info.plist"
-          
+
           # Backup original plist
           cp "$plist_path" "$plist_path.bak"
-          
+
           # Set CFBundleIconFile
           if /usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "$plist_path" 2>/dev/null; then
             /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile icon" "$plist_path"
           else
             /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string icon" "$plist_path"
           fi
-          
+
           # Set CFBundleIconName
           if /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$plist_path" 2>/dev/null; then
             /usr/libexec/PlistBuddy -c "Set :CFBundleIconName icon" "$plist_path"
           else
             /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string icon" "$plist_path"
           fi
-          
+
           # Ensure CFBundleIdentifier is set properly
           if ! /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$plist_path" 2>/dev/null; then
             /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string com.fio.editor" "$plist_path"
           fi
-          
+
           echo "Info.plist configured:"
           /usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "$plist_path"
           /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$plist_path"
@@ -170,23 +181,24 @@ jobs:
         run: |
           # Copy icns to Resources folder with the name referenced in Info.plist
           cp build/icon.icns "build/main.app/Contents/Resources/icon.icns"
-          
+
           # Also copy as AppIcon.icns (fallback for some macOS versions)
           cp build/icon.icns "build/main.app/Contents/Resources/AppIcon.icns"
-          
+
           # Verify icon exists in Resources
           ls -la "build/main.app/Contents/Resources/" | grep icns
-          
+
           echo "Icon files copied to bundle"
 
       - name: Create qt.conf for proper plugin paths
         run: |
           mkdir -p build/main.app/Contents/Resources
+
           cat > build/main.app/Contents/Resources/qt.conf << 'EOF'
           [Paths]
           Plugins = ../MacOS/PyQt5/Qt5/plugins
           EOF
-          
+
           echo "qt.conf created"
 
       - name: Set executable permissions
@@ -234,7 +246,7 @@ jobs:
             echo "✗ Icon missing from final bundle!"
             exit 1
           fi
-          
+
           # Verify Info.plist still has icon settings after rename
           /usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "build/Fio.app/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "build/Fio.app/Contents/Info.plist"
@@ -292,7 +304,7 @@ jobs:
           # Create a .desktop file
           mkdir -p build/main.dist/share/applications
           mkdir -p build/main.dist/share/icons/hicolor/256x256/apps
-          
+
           # Copy icon if available
           if [ -f "assets/icon.png" ]; then
             cp assets/icon.png build/main.dist/share/icons/hicolor/256x256/apps/fio.png
@@ -300,7 +312,7 @@ jobs:
             # Convert ico to png using ImageMagick or fallback
             convert assets/icon.ico build/main.dist/share/icons/hicolor/256x256/apps/fio.png || true
           fi
-          
+
           # Create desktop entry
           cat > build/main.dist/fio.desktop << EOF
           [Desktop Entry]
@@ -312,7 +324,7 @@ jobs:
           Type=Application
           Categories=Development;IDE;
           EOF
-          
+
           echo "Linux desktop integration prepared"
 
       - name: Validate executable exists
@@ -328,3 +340,130 @@ jobs:
         with:
           name: fio-linux
           path: build/main.dist/
+
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+
+    needs:
+      - build-windows
+      - build-macos
+      - build-linux
+
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: fio-windows
+          path: release/windows
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: fio-macos
+          path: release/macos
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: fio-linux
+          path: release/linux
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BRANCH="${GITHUB_REF_NAME}"
+
+          echo "Current branch: $BRANCH"
+
+          # Every release branch must use:
+          # X.X.X.XXXX_Latest
+          if [[ "$BRANCH" != *_Latest ]]; then
+            echo "ERROR: Release workflow must be run from a branch ending in _Latest."
+            echo "Current branch: $BRANCH"
+            exit 1
+          fi
+
+          # Remove the _Latest suffix.
+          VERSION="${BRANCH%_Latest}"
+
+          if [[ -z "$VERSION" ]]; then
+            echo "ERROR: Could not determine release version from branch name."
+            exit 1
+          fi
+
+          echo "Release version: $VERSION"
+
+          # Ensure the version follows the expected:
+          # X.X.X.XXXX
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Branch name does not match the expected format:"
+            echo "       X.X.X.XXXX_Latest"
+            echo "Actual: $BRANCH"
+            exit 1
+          fi
+
+          mkdir -p release/assets
+
+          # Package Windows build.
+          echo "Packaging Windows..."
+          (
+            cd release/windows
+            zip -r "../assets/Fio_${VERSION}_Windows.zip" .
+          )
+
+          # Package Linux build.
+          echo "Packaging Linux..."
+          (
+            cd release/linux
+            zip -r "../assets/Fio_${VERSION}_linux.zip" .
+          )
+
+          # macOS was already packaged with ditto by the macOS job.
+          MAC_ZIP="$(find release/macos -type f -name 'Fio-macOS.zip' -print -quit)"
+
+          if [[ -z "$MAC_ZIP" ]]; then
+            echo "ERROR: Fio-macOS.zip not found."
+            echo "Contents of release/macos:"
+            find release/macos -maxdepth 3 -type f -print
+            exit 1
+          fi
+
+          echo "Packaging macOS..."
+          cp "$MAC_ZIP" "release/assets/Fio_${VERSION}_macOS.zip"
+
+          echo
+          echo "Final release assets:"
+          ls -lh release/assets
+
+          # Export version for the next step.
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Creating release $VERSION..."
+
+          gh release create "$VERSION" \
+            "release/assets/Fio_${VERSION}_Windows.zip" \
+            "release/assets/Fio_${VERSION}_macOS.zip" \
+            "release/assets/Fio_${VERSION}_linux.zip" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Fio $VERSION" \
+            --generate-notes
+
+          echo
+          echo "Release created successfully:"
+          echo "  Tag:    $VERSION"
+          echo "  Title:  Fio $VERSION"
+          echo
+          echo "Assets:"
+          ls -lh release/assets

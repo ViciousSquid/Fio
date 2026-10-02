@@ -54,7 +54,7 @@ from __future__ import annotations
 import math
 import time as _time
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional, Tuple, Type
+from typing import Any, Callable, List, Optional, Tuple
 
 
 #: Version of the plugin API surface this module implements. Compare against
@@ -62,11 +62,12 @@ from typing import Any, Callable, List, Optional, Tuple, Type
 #:
 #: * 1.2.0 — the open-ended extension surface: :class:`plugins.host.PluginHost`,
 #:   the engine event bus, and the ``connect(host)`` hook.
-#: * 1.3.0 — render hooks (``render.*`` events), swappable-renderer registration
-#:   (``register_renderer``), editor-UI extensions (extra property fields on any
-#:   entity, custom property tabs), and the ``FIO_NO_PLUGINS`` kill-switch.
-API_VERSION = "1.3.0"
-API_VERSION_INFO = (1, 3, 0)
+#: * 1.3.0 — render hooks, swappable-renderer registration, and editor-UI extensions.
+#: * 1.4.0 — optional editor Tools actions and console-command registration.
+#: * 1.5.0 — collapsible property sections, LogicState key suggestions and
+#:   entity inspectors.
+API_VERSION = "1.5.0"
+API_VERSION_INFO = (1, 5, 0)
 
 
 def version_tuple(value: str) -> tuple:
@@ -278,7 +279,7 @@ def prop(name: str, type: str = "string", label: str = "", default: Any = None,
 
 
 # ---------------------------------------------------------------------------
-# Global key/value store (cross-level, shared with map LogicKeyValueStores)
+# Global key/value store (cross-level, shared with map LogicState entities)
 # ---------------------------------------------------------------------------
 
 class GlobalStore:
@@ -430,11 +431,54 @@ class EditorAPI:
             from editor.io_system import register_io
         except Exception:
             return
-        register_io(
-            entity_type,
+        defs_in = [d for d in inputs if d is not None]
+        defs_out = [d for d in outputs if d is not None]
+        register_io(entity_type, defs_in, defs_out)
+        # Remember the call so the manager can put it back. IO_REGISTRY is a
+        # module-level singleton that something else may reset (the test
+        # harness does; a future plugin reload would), and plugin registration
+        # is otherwise a once-per-process side effect with no way to replay it.
+        self._manager._record_io_registration(
+            self._plugin, 'set', entity_type, defs_in, defs_out)
+
+    def extend_io(self, entity_type: str, inputs=(), outputs=()):
+        """Add I/O to an entity type this plugin does not own.
+
+        A plugin that extends a *core* entity -- Tidy adding ``Reset`` and
+        ``OnTidied`` to ``prop``, say -- cannot use :meth:`register_io`, which
+        replaces the type's declarations outright and would strip the core
+        ones. Without this the only way to do it was to reach past the plugin
+        API into ``editor.io_system`` and perform the read-merge-write by hand,
+        which is both easy to get wrong and invisible to the manager, so the
+        registration could not be replayed.
+
+        Definitions already declared for *entity_type* are left alone, matched
+        case-insensitively by name, so this is idempotent.
+        """
+        try:
+            from editor.io_system import get_inputs, get_outputs, register_io
+        except Exception:
+            # Headless/player processes do not expose the editor I/O registry.
+            return
+
+        merged_in = list(get_inputs(entity_type))
+        merged_out = list(get_outputs(entity_type))
+        have_in = {d.name.lower() for d in merged_in}
+        have_out = {d.name.lower() for d in merged_out}
+
+        added_in = [d for d in inputs if d is not None and d.name.lower() not in have_in]
+        added_out = [d for d in outputs if d is not None and d.name.lower() not in have_out]
+        merged_in.extend(added_in)
+        merged_out.extend(added_out)
+
+        register_io(entity_type, merged_in, merged_out)
+        # Recorded as an *extension*, not a replacement, so replaying it
+        # re-merges against whatever the registry holds at that point rather
+        # than pinning the core declarations as they were at load.
+        self._manager._record_io_registration(
+            self._plugin, 'extend', entity_type,
             [d for d in inputs if d is not None],
-            [d for d in outputs if d is not None],
-        )
+            [d for d in outputs if d is not None])
 
     # -- property schema ----------------------------------------------------
     def register_properties(self, entity_type: str, specs: List[PropertySpec]):
@@ -466,6 +510,57 @@ class EditorAPI:
         """
         self._manager.register_property_tab(label, factory, entity_type)
 
+    def register_property_section(self, label: str, factory, entity_type=None,
+                                  expanded: bool = False) -> None:
+        """Add a collapsible section to the property panel's Properties tab
+        (API 1.5.0).
+
+        The same ``factory(thing) -> widget`` contract as
+        :meth:`register_property_tab`; the difference is placement. A section
+        sits among the entity's own properties, under a titled header that
+        collapses, rather than in a tab of its own. Use it for a small editor
+        that belongs with the other properties, and a tab for one that needs
+        the room. *expanded* is the section's initial state; a collapsed
+        section's factory does not run until the section is first opened. If
+        *entity_type* is given the section appears only for that type,
+        otherwise for every entity.
+        """
+        self._manager._record_property_section(
+            self._plugin, label, factory, entity_type, expanded)
+
+    def register_kv_suggestions(self, provider) -> None:
+        """Offer ready-made keys in the LogicState editor (API 1.5.0).
+
+        ``provider(store)`` is called when a LogicState panel is built, with
+        that LogicState entity, and returns rows of
+        ``(label, key, default_value)`` or ``(label, key, default_value,
+        tooltip)``. The editor lists them in a "Preset key" picker; inserting
+        one adds *key* with *default_value* as a designer default. Return
+        ``[]`` for stores the plugin has nothing to say about (the store's
+        ``store_name`` property tells them apart).
+        """
+        self._manager._record_kv_suggestions(self._plugin, provider)
+
+    def register_entity_inspector(self, provider, entity_type=None) -> None:
+        """Supply the live contents of the entity inspector (API 1.5.0).
+
+        ``provider(entity, logic) -> dict | None``. *logic* is the running
+        :class:`~engine.logic_thread.LogicThread`, or None outside Play Mode.
+        The returned dict is an inspection document::
+
+            {"title":    "Gate Keeper",
+             "subtitle": "patrolling · awake",
+             "sections": [("Vitals", [("Health", 80), ("Speed", 1.5)]),
+                          ("Goals",  [("Patrol", "", 0.9), ("Rest", "", 0.2)])]}
+
+        A row is ``(label, value)``, or ``(label, value, fraction)`` to draw a
+        0..1 bar beside it. The first provider that returns a non-empty
+        document for an entity is shown; with none, the inspector shows the
+        entity's public properties. If *entity_type* is given the provider is
+        asked only about entities of that type.
+        """
+        self._manager._record_entity_inspector(self._plugin, provider, entity_type)
+
     def register_singleton_entity(self, entity_type: str) -> None:
         """Mark *entity_type* as a per-map singleton (at most one instance).
 
@@ -489,16 +584,38 @@ class EditorAPI:
 
         Fio's viewport already selects its renderer from a class registry; this
         drops *cls* in so it appears as a render mode and can be activated. *cls*
-        must implement the renderer interface (``render_scene``, ``draw_models``,
-        ``cleanup``, a ``lod_manager``, …). Returns True if registered (False in
-        a headless/player context with no viewport). This is how a whole new
-        renderer — e.g. a deferred one — ships as a plugin.
+        must implement the renderer interface (``render_scene``,
+        ``draw_models_instanced``, ``render_shadow_maps``, ``cleanup``,
+        a ``lod_manager``, …).
+
+        The production shadow seam is
+        ``render_shadow_maps(shadow_lights, config, camera_pos=None)`` where
+        ``shadow_lights`` is the dense ``(EntityTable, light_slots)`` tuple.
+        Shadow caster selection and transforms come from ``RenderTable`` and
+        ``EntityTable`` slots; authored Brush/Thing/Light collections are not
+        part of the shadow API.
+
+        Returns True if registered (False in a headless/player context with no
+        viewport). This is how a whole new renderer — e.g. a deferred one —
+        ships as a plugin.
         """
         try:
             from engine.qt_game_view import register_renderer
         except Exception:
             return False
         return register_renderer(name, cls)
+
+    def register_tools_action(self, label: str, callback: Callable, tooltip: str = "") -> None:
+        """Register a Tools-menu action for an editor/developer plugin."""
+        self._manager._record_tools_action(self._plugin, label, callback, tooltip)
+
+    def register_menu_action(self, label: str, callback: Callable, tooltip: str = "") -> None:
+        """Register an action at the top of this plugin's editor menu."""
+        self._manager._record_menu_action(self._plugin, label, callback, tooltip)
+
+    def register_console_command(self, name: str, callback: Callable, help_text: str = "") -> None:
+        """Register a plugin-owned debug console command."""
+        self._manager._register_console_command(self._plugin, name, callback, help_text)
 
     # -- global store -------------------------------------------------------
     @property
@@ -660,6 +777,8 @@ class RuntimeAPI:
                 things.append(ent)
             except Exception:
                 pass
+            else:
+                self._entities_changed()
         try:
             self._manager.emit("entity_spawned", logic=self.logic, entity=ent,
                                by=self._plugin.name)
@@ -674,9 +793,29 @@ class RuntimeAPI:
             return False
         try:
             things.remove(entity)
-            return True
         except ValueError:
             return False
+        self._entities_changed()
+        return True
+
+    def _entities_changed(self):
+        """Tell a running session its thing list changed.
+
+        The logic thread indexes entities (monsters for the AI, names and ids
+        for I/O) when play starts; without a rebuild a spawned monster had no
+        AI and a despawned one kept being simulated -- and shooting -- from
+        the stale index. Outside play there is no index to rebuild.
+        """
+        logic = self.logic
+        build = getattr(logic, "_build_entity_caches", None)
+        if build is None or not getattr(logic, "play_mode", False):
+            return
+        lock = getattr(logic, "_tick_lock", None)
+        if lock is None:
+            build()
+        else:
+            with lock:
+                build()
 
     # -- global store -------------------------------------------------------
     @property
@@ -901,6 +1040,13 @@ class FioPlugin:
         """
 
     # -- play lifecycle -----------------------------------------------------
+    def map_uses_plugin(self, map_data: dict) -> bool:
+        """Return whether *map_data* needs this plugin to be active.
+
+        This is an optional activation hook for plugins whose runtime behaviour
+        attaches to core entities rather than defining a bespoke entity type.
+        """
+
     def on_play_start(self, logic) -> None:
         """Called when the user enters play mode. Initialise per-session state."""
 

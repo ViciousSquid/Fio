@@ -448,8 +448,8 @@ def test_the_asset_browser_owns_no_texture_controls(qt_app, tmp_path):
         assert not hasattr(tab, gone), "%s should have moved to the Inspector" % gone
 
 
-def test_the_asset_browser_action_bar_keeps_only_the_two_it_should(qt_app, tmp_path):
-    """The hamburger folder toggle stays; INSPECTOR is the only other button."""
+def test_the_asset_browser_action_bar_keeps_only_the_expected_buttons(qt_app, tmp_path):
+    """The hamburger folder toggle, INSPECTOR, and Tint button are the action bar."""
     from PyQt5.QtWidgets import QPushButton
 
     from editor.asset_browser import AssetBrowserTab
@@ -457,7 +457,7 @@ def test_the_asset_browser_action_bar_keeps_only_the_two_it_should(qt_app, tmp_p
     tab = AssetBrowserTab(str(tmp_path), ['.png'], editor=None)
     labels = [b.text() for b in tab.action_bar.findChildren(QPushButton)]
 
-    assert sorted(labels) == sorted(['\u2630', 'INSPECTOR'])
+    assert sorted(labels) == sorted(['\u2630', 'INSPECTOR', ''])
 
 
 def test_the_inspector_button_needs_no_texture_selected(qt_app, tmp_path):
@@ -947,6 +947,15 @@ def test_re_binding_can_leave_the_focus_alone(inspector):
     assert panel.isVisible()
 
 
+def test_the_surface_inspector_action_uses_window_shortcut_scope(qt_app):
+    from pathlib import Path
+    import editor.ui as ui_module
+
+    source = Path(ui_module.__file__).read_text(encoding='utf-8')
+    assert "MainWindow.surface_inspector_action.setShortcutContext(" in source
+    assert "Qt.WindowShortcut" in source
+
+
 # ────────────────────────────
 # The editor opening and re-binding it
 # ────────────────────────────
@@ -1072,3 +1081,46 @@ def test_a_closed_panel_is_not_woken_by_a_selection(qt_app):
     host.sync_surface_inspector()
 
     assert host.surface_inspector is None
+
+
+def test_undo_re_points_a_closed_inspector_without_reopening_it(inspector):
+    """Closing the panel is not an undoable action. Undo re-points the
+    inspector at the rebuilt brush, and that re-bind used to show() it."""
+    from editor.main_window import MainWindow
+
+    host, panel, brush = inspector
+    brush['id'] = 'box-1'
+    panel.hide()
+    assert not panel.isVisible()
+
+    # What undo leaves behind: the scene rebuilt from JSON, a new dict with
+    # the same stable id.
+    rebuilt = dict(brush)
+    host.state.brushes[:] = [rebuilt]
+    host.surface_inspector = panel
+    host.face_texture_target = None
+    MainWindow._rebind_face_targets(host)
+
+    assert not panel.isVisible(), "undo re-opened the closed Surface Inspector"
+    assert panel.target[0] is rebuilt, "the closed panel was not re-pointed"
+
+    # A brush that no longer exists unbinds it -- still without opening it.
+    host.state.brushes[:] = []
+    MainWindow._rebind_face_targets(host)
+    assert not panel.isVisible()
+    assert panel.target is None
+
+
+def test_undo_keeps_an_open_inspector_open(inspector):
+    from editor.main_window import MainWindow
+
+    host, panel, brush = inspector
+    brush['id'] = 'box-1'
+    panel.show()
+    rebuilt = dict(brush)
+    host.state.brushes[:] = [rebuilt]
+    host.surface_inspector = panel
+    host.face_texture_target = None
+    MainWindow._rebind_face_targets(host)
+    assert panel.isVisible()
+    assert panel.target[0] is rebuilt

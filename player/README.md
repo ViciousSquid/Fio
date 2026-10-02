@@ -196,8 +196,8 @@ Next milestones (seams are marked `TODO(port)` in the code):
       from `InputState` instead of the free-look camera (`app.py:_advance_simulation`).
 - [ ] **M5 — entities, lighting, portals**: `logic_thread.py`, `monster_ai.py`,
       shadow cube-maps, stencil portals on ES (stencil buffer already requested).
-- [ ] **M6 — audio**: back `engine/audio_manager.py` with `pygame.mixer`,
-      streaming sounds from the package via `FioPackage.open_asset`.
+- [ ] **M6 — audio**: play sounds with `pygame.mixer`, streaming them from the
+      package via `FioPackage.open_asset`.
 - [ ] **M7 — polish for Play**: on-screen control theming, settings, safe-area
       insets, store assets, signing.
 
@@ -210,3 +210,14 @@ python -m unittest discover -s player/tests -p "test_*.py" -v
 The suite is stdlib-only (no pygame/numpy/GPU needed) and builds `.fiopak`
 fixtures in memory, including one packaged from a real repository map when
 `maps/` is present.
+
+## `.fiopak` plugin boundary
+
+A `.fiopak` is a portable **world container only**. It cannot contain
+plugins or executable Python code.
+
+The player rejects any archive containing a top-level `plugins/` entry before
+the manifest is loaded. Plugin dependencies may be named in `metadata.json`,
+but the corresponding plugin must already be installed with the player runtime.
+There is no extraction, permission prompt, or import path for plugin code from
+a `.fiopak`.

@@ -9,7 +9,7 @@ never anticipated **without changing the engine**:
 
 * :class:`EventBus` — the engine emits named events at every meaningful moment
   (``play_start``, ``tick``, ``player_damage``, ``portal_transit``,
-  ``pickup_collected`` …). A plugin subscribes to any of them, including events
+  ``prop_collected`` …). A plugin subscribes to any of them, including events
   that don't exist yet — a subscription to an unknown event is simply dormant
   until something emits it. Adding a brand-new engine signal later is a single
   ``emit()`` call; no plugin-API change, no host change.

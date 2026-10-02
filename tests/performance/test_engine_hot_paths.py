@@ -19,7 +19,7 @@ pytest.importorskip("PyQt5", reason="these drive the real logic thread")
 from editor import io_system as io                  # noqa: E402
 from editor.editor_state import EditorState         # noqa: E402
 from editor.io_system import OutputConnection       # noqa: E402
-from editor.things import Monster                   # noqa: E402
+from editor.things import Light, Monster            # noqa: E402
 from engine.constants import brush_aabb_bounds      # noqa: E402
 from engine.logic_thread import LogicThread         # noqa: E402
 from engine.physics import SpatialGrid              # noqa: E402
@@ -56,14 +56,20 @@ def test_the_cull_buffers_are_built_once_per_session_not_per_frame(logic):
     thread = logic(brushes=pillar_grid(6, 6, spacing=300.0))
     thread.set_play_mode(True)
     try:
-        centers = thread._cull_centers
-        halves = thread._cull_halves
+        thread._prepare_render_state()
+        table = thread._render_table
+        bounds = table.bounds
+        generation = table.generation
         for _ in range(20):
             thread._prepare_render_state()
-        assert thread._cull_centers is centers, (
-            "the cull centre array was reallocated during a frame; it is built "
-            "once per play session")
-        assert thread._cull_halves is halves
+        assert table.bounds is bounds, (
+            "the projection's centre/half-extent block was reallocated during "
+            "a frame; it is built once and refreshed in place")
+        assert np.shares_memory(table.center, bounds)
+        assert np.shares_memory(table.half, bounds)
+        assert table.generation == generation, (
+            "the projection reconciled during a steady-state frame; the world "
+            "epoch has not moved, so sync should be a couple of comparisons")
     finally:
         thread.set_play_mode(False)
 
@@ -76,22 +82,117 @@ def test_only_dynamic_rows_are_refreshed_each_frame(logic):
     thread.set_play_mode(True)
     try:
         thread._prepare_render_state()
-        static_row = thread._cull_centers[0].copy()
+        table = thread._render_table
+        static_row = table.center[0].copy()
 
-        # Move both brushes behind the cache's back.  Only the mover's row is
-        # meant to follow, because only movers are refreshed per frame.
+        # Move both brushes. The static one behind the projection's back: its
+        # row must not follow, because nothing re-reads static rows per frame.
+        # The mover as anything outside the tick must, through the journal:
+        # its row comes from the dense mover table, not a per-frame re-read.
+        from engine.change_journal import moved
         static["pos"] = [9999.0, 0.0, -400.0]
         mover["pos"] = [8888.0, 0.0, -400.0]
+        moved(mover)
         thread._prepare_render_state()
 
-        assert np.array_equal(thread._cull_centers[0], static_row), (
-            "the static brush's cull row was refreshed; the per-frame loop is "
+        assert np.array_equal(table.center[0], static_row), (
+            "the static brush's row was refreshed; the per-frame loop is "
             "walking every brush, not just the movers")
-        assert thread._cull_centers[1][0] == pytest.approx(8888.0), (
-            "the mover's cull row was not refreshed, so it would be culled "
+        assert table.center[1][0] == pytest.approx(8888.0), (
+            "the mover's row was not refreshed, so it would be culled "
             "against its old position")
     finally:
         thread.set_play_mode(False)
+
+
+def test_classification_is_not_re_resolved_per_frame(logic):
+    """The cold columns are the expensive half; they must not move per frame.
+
+    This is the property the whole projection exists for: ``is_water_brush``
+    and the texture scan used to run per visible brush per frame.  Mutating a
+    classification field behind the projection's back and seeing the column
+    stay put is what proves the work is no longer happening.
+    """
+    brush = box_brush("wall", (0, 0, -400))
+    thread = logic(brushes=[brush])
+    thread.set_play_mode(True)
+    try:
+        thread._prepare_render_state()
+        table = thread._render_table
+        before = int(table.class_bits[0])
+
+        brush["shader"] = "Glass"          # no epoch bump: nobody was told
+        for _ in range(10):
+            thread._prepare_render_state()
+        assert int(table.class_bits[0]) == before, (
+            "the classification columns were re-resolved during a frame")
+
+        # ...and the editor's coarse change signal is what picks it up.
+        thread.editor_state.mark_world_changed()
+        thread._prepare_render_state()
+        from engine.render_table import CLASS_GLASS
+        assert int(table.class_bits[0]) & CLASS_GLASS, (
+            "a world-epoch bump did not re-resolve the cold columns")
+    finally:
+        thread.set_play_mode(False)
+
+
+def test_entity_classification_is_not_re_resolved_per_frame(logic):
+    """The entity projection's cold column, held to the same rule as the brush one.
+
+    ``_sort_objects`` asked every entity what it was on every frame -- four
+    isinstance tests, a ``str().lower()`` and a tuple compare each.  The column
+    answering instead is only worth having if it stays put between edits.
+    """
+    from engine import entity_table as et
+
+    thing = make_thing(Light, "lamp", (0, 100, 0))
+    thread = logic(things=[thing])
+    thread.set_play_mode(True)
+    try:
+        thread._prepare_render_state()
+        table = thread._entity_table
+        before = int(table.class_bits[0])
+
+        thing.properties["render_mode"] = "billboard"   # nobody was told
+        thing.properties["sprite_path"] = "s.png"
+        for _ in range(10):
+            thread._prepare_render_state()
+        assert int(table.class_bits[0]) == before, (
+            "the entity classification column was re-resolved during a frame")
+
+        thread.editor_state.mark_world_changed()
+        thread._prepare_render_state()
+        assert int(table.class_bits[0]) & et.ENT_MODE_BILLBOARD, (
+            "a world-epoch bump did not re-resolve the entity column")
+    finally:
+        thread.set_play_mode(False)
+
+
+def test_no_entity_is_copied_or_re_read_on_an_unchanged_frame(logic, monkeypatch):
+    """Entities are handed over by identity and resolved only when they change.
+
+    Monsters used to be republished as a fresh snapshot dict every frame, with
+    their sprite recipe rebuilt from it; the published table row is now what
+    the renderer reads, and a monster that did not change costs nothing.
+    """
+    from engine import entity_table as et_module
+
+    lamp = make_thing(Light, "lamp", (0, 100, 0))
+    grunt = make_thing(Monster, "grunt", (0, 96, -300))
+    # Editor mode: no AI thread, so nothing can legitimately change a row.
+    thread = logic(things=[lamp, grunt])
+    thread._prepare_render_state()
+    first = list(thread.game_state.get_write_state().visible_things)
+    resolved = []
+    monkeypatch.setattr(et_module, "sprite_candidates",
+                        lambda thing: resolved.append(thing) or ())
+    thread._prepare_render_state()
+    second = list(thread.game_state.get_write_state().visible_things)
+
+    assert first == second == [lamp, grunt]
+    assert resolved == [], "an unchanged entity was re-resolved"
+    assert list(thread._entity_table.monster_slots) == [1]
 
 
 def test_the_frustum_test_is_one_batched_numpy_pass(logic):
@@ -299,3 +400,112 @@ def test_the_tick_gate_answer_is_cached_across_frames(logic):
     assert manager._tick_work_gen == generation, (
         "the tick gate recomputed itself with nothing changed; it is meant to "
         "be one integer compare per frame")
+
+
+# ---------------------------------------------------------------------------
+# Portals
+# ---------------------------------------------------------------------------
+
+def test_portal_fades_tick_off_the_cache_not_the_thing_list(logic):
+    """``_update_portals`` runs every frame and used to isinstance-scan every
+    Thing in the map to find the portals — on a map with none at all."""
+    from editor.things import Portal
+    from engine.player import Player
+
+    portals = [Portal(pos=[0, 0, float(i) * 200.0],
+                      properties={'name': 'P%d' % i}) for i in range(3)]
+    filler = [make_thing(Light, "L%d" % i) for i in range(50)]
+    thread = logic(brushes=room(), things=filler + portals)
+    thread.set_player(Player(0.0, 0.0, 0.0))
+    thread.set_play_mode(True)
+    try:
+        assert thread._portal_things == portals
+        assert thread._portal_slots.tolist() == [50, 51, 52]
+        assert thread._portal_target_slots.tolist() == [-1, -1, -1]
+
+        # Fades still advance, and they advance for portals the name index
+        # cannot hold (an unnamed portal is still a portal).
+        unnamed = Portal(pos=[500, 0, 0])
+        thread.editor_state.things.append(unnamed)
+        thread._build_entity_caches()
+        assert unnamed in thread._portal_things
+        assert '' not in [p.properties.get('name', '') for p in thread._portal_things]
+
+        for p in thread._portal_things:
+            p._fade_alpha, p._fade_target = 0.0, 1.0
+        thread._update_portals(1.0 / 60.0)
+        assert all(p._fade_alpha > 0.0 for p in thread._portal_things)
+
+        # And the per-frame path must not walk the level to find them.
+        scanned = []
+        original = type(thread).things
+        try:
+            type(thread).things = property(
+                lambda self: (scanned.append(1), original.fget(self))[1])
+            thread._update_portals(1.0 / 60.0)
+        finally:
+            type(thread).things = original
+        assert scanned == [], (
+            "_update_portals read the full thing list %d times in one frame"
+            % len(scanned))
+    finally:
+        thread.set_play_mode(False)
+
+
+def test_portal_transit_keeps_player_at_mapped_plane_not_body_clearance(logic):
+    """Walking through a portal must not add a player-sized camera jump."""
+    from editor.things import Portal
+    from engine.player import Player
+    from engine.portal_transform import map_direction, map_point
+    import glm
+
+    portal_a = Portal(pos=[0.0, 0.0, 0.0], properties={
+        'name': 'A', 'portal_target': 'B',
+        'rotation': [0.0, 0.0, 0.0],
+    })
+    portal_b = Portal(pos=[100.0, 0.0, 0.0], properties={
+        'name': 'B', 'portal_target': 'A',
+        'rotation': [180.0, 0.0, 0.0],
+    })
+    thread = logic(brushes=[], things=[portal_a, portal_b])
+    player = Player(0.0, -10.0, 0.0)
+    player.pos = glm.vec3(0.0, 20.0, -4.0)
+    player.velocity = glm.vec3(0.0, 0.0, -120.0)
+    thread.set_player(player)
+    thread.set_play_mode(True)
+    try:
+        expected = map_point(
+            portal_a.pos, portal_a.get_basis(),
+            portal_b.pos, portal_b.get_basis(),
+            tuple(player.pos),
+        )
+        expected_velocity = map_direction(
+            portal_a.get_basis(), portal_b.get_basis(), tuple(player.velocity))
+
+        thread._execute_portal_transit(portal_a, portal_b)
+
+        actual = tuple(thread.player.pos)
+        displacement = ((actual[0] - expected[0]) * portal_b.get_normal()[0]
+                        + (actual[1] - expected[1]) * portal_b.get_normal()[1]
+                        + (actual[2] - expected[2]) * portal_b.get_normal()[2])
+        assert np.isclose(displacement, 0.05, atol=1e-6)
+        assert np.allclose(tuple(thread.player.velocity), expected_velocity)
+    finally:
+        thread.set_play_mode(False)
+
+
+def test_a_map_with_no_portals_pays_nothing_for_the_portal_system(logic):
+    from engine.player import Player
+
+    thread = logic(brushes=room(),
+                   things=[make_thing(Light, "L%d" % i) for i in range(20)])
+    thread.set_player(Player(0.0, 0.0, 0.0))
+    thread.set_play_mode(True)
+    try:
+        assert thread._portal_things == []
+        thread._portal_prev_player_pos = None
+        thread._update_portals(1.0 / 60.0)
+        assert thread._portal_prev_player_pos is None, (
+            "the portal system did per-frame work on a map with no portals")
+    finally:
+        thread.set_play_mode(False)

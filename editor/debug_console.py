@@ -2,9 +2,9 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextBrowser, QPushButton, 
     QLabel, QCheckBox, QComboBox, QFrame, QLineEdit, QSplitter, QScrollArea
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QUrl
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QUrl, QTimer
 from PyQt5 import sip
-from PyQt5.QtGui import QFont, QTextCursor, QColor, QDesktopServices, QPainter, QPixmap
+from PyQt5.QtGui import QFont, QTextCursor, QPainter, QPixmap, QDesktopServices
 from collections import deque
 import re
 
@@ -49,6 +49,14 @@ class DebugLogger(QObject):
         self._buffer.append((category, full_msg))
         self.message_logged.emit(category, full_msg)
 
+    def log_raw(self, message: str):
+        """Log a console line without adding a category prefix."""
+        if not self._enabled:
+            return
+
+        self._buffer.append(('', message))
+        self.message_logged.emit('', message)
+
     def set_enabled(self, enabled: bool):
         self._enabled = enabled
 
@@ -78,6 +86,38 @@ def get_debug_logger() -> DebugLogger:
 def debug_log(category: str, message: str):
     """Convenience function to log a debug message."""
     get_debug_logger().log(category, message)
+
+
+def debug_log_raw(message: str):
+    """Convenience function for an unprefixed console line."""
+    get_debug_logger().log_raw(message)
+
+
+def install_excepthook():
+    """Report exceptions that escape Qt callbacks instead of aborting.
+
+    PyQt5 calls ``qFatal`` -- ending the process -- when an exception escapes
+    a slot or a Qt virtual (``paintGL``, an event handler) and no
+    ``sys.excepthook`` is installed. One bad console argument or a paint error
+    would take the open, unsaved map with it. This prints the traceback, puts
+    it in the Debug Console, and lets the event loop carry on.
+    """
+    import sys
+    import traceback
+
+    def _report(exc_type, exc, tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        text = "".join(traceback.format_exception(exc_type, exc, tb))
+        sys.stderr.write(text)
+        try:
+            debug_log("Error", "Unhandled exception:\n" + text)
+        except Exception:
+            pass
+
+    sys.excepthook = _report
+    return _report
 
 
 class CommandInput(QLineEdit):
@@ -200,11 +240,11 @@ class DebugConsole(QWidget):
     _RE_ENTITY_DOT   = re.compile(r'(?<!=)\b([a-zA-Z0-9_]+)(?=\.)')
     _RE_ENTITY_TYPE  = re.compile(r'\b([a-zA-Z0-9_]+)(?=\s+\(type=)')
     _RE_ENTITY_QUOTE = re.compile(r"'([a-zA-Z0-9_]+)'")
+    _RE_HELP_QUOTE   = re.compile(r"(['\"])help\1")
     _RE_FIRE_OUTPUT  = re.compile(r'\b(fire_output)\b')
     _RE_NO_CONNS     = re.compile(r'(no connections|0 connections)')
     _RE_DELAYED      = re.compile(r'\[Delayed\]')
     _RE_ARROW        = re.compile(r' -> ')
-
     _instance = None
 
     @classmethod
@@ -231,6 +271,14 @@ class DebugConsole(QWidget):
 
         # Message count
         self.message_count = 0
+        #: Lines currently in the document (bounded; see MAX_DOCUMENT_LINES).
+        self._document_lines = 0
+        #: Logged messages not inserted yet; see FLUSH_INTERVAL_MS.
+        self._pending = []
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setSingleShot(True)
+        self._flush_timer.setInterval(self.FLUSH_INTERVAL_MS)
+        self._flush_timer.timeout.connect(self._flush_pending)
 
         # Current Entity Filter (None means show all)
         self.active_entity_filter = None
@@ -613,12 +661,23 @@ class DebugConsole(QWidget):
     def _load_buffer(self):
         """Load any buffered messages that were logged before the console opened."""
         logger = get_debug_logger()
-        for category, message in logger.get_buffer():
-            self._append_message(category, message)
+        lines = [self._format_message(category, message)
+                 for category, message in logger.get_buffer()]
+        self._insert_lines([line for line in lines if line is not None])
 
     def _on_message(self, category: str, message: str):
-        """Handle a new log message."""
+        """Show a message: at once when the console is idle, batched in a burst.
+
+        An isolated line -- a command's reply, a load message -- appears
+        immediately and opens a short window; lines arriving inside it are
+        queued and inserted together when it closes, and a flush that finds
+        more queued keeps the window open for as long as the burst lasts.
+        """
+        if self._flush_timer.isActive():
+            self._pending.append((category, message))
+            return
         self._append_message(category, message)
+        self._flush_timer.start()
 
     def _on_command_entered(self):
         """Handle command submission from the input line."""
@@ -644,11 +703,13 @@ class DebugConsole(QWidget):
         self.command_issued.emit(cmd)
 
     def _on_anchor_clicked(self, url: QUrl):
-        """Handle clicking on an entity name."""
+        """Handle clicking on an entity filter or an external URL."""
         link = url.toString()
         if link.startswith("filter:"):
             entity_name = link.split(":", 1)[1]
             self._apply_entity_filter(entity_name)
+        elif link.startswith(("http://", "https://")):
+            QDesktopServices.openUrl(url)
 
     def _apply_entity_filter(self, entity_name):
         """Updates the dropdown to filter by this entity."""
@@ -690,11 +751,69 @@ class DebugConsole(QWidget):
 
         self._refresh_console()
 
+    #: Messages logged from the logic and AI threads arrive as queued signals,
+    #: hundreds a second in a monster fight with I/O logging on. Formatting
+    #: and inserting each one as it came could not keep up -- the GUI thread
+    #: fell further behind every frame and the editor froze -- so they are
+    #: queued and inserted as one block per interval.
+    FLUSH_INTERVAL_MS = 100
+    #: Most lines one flush inserts; a burst beyond it shows its newest lines
+    #: and says how many it skipped (the log buffer still holds them).
+    MAX_LINES_PER_FLUSH = 200
+    #: The document is rebuilt from the log buffer past this many lines, so
+    #: it cannot grow without bound during a long session.
+    MAX_DOCUMENT_LINES = 5000
+
     def _append_message(self, category: str, message: str):
-        """Append a message to the console with highlighting."""
+        """Append a message to the console with highlighting, now."""
+        html = self._format_message(category, message)
+        if html is not None:
+            self._insert_lines([html])
+
+    def _insert_lines(self, lines):
+        """Insert formatted lines at the end in one edit, and scroll once."""
+        if not lines:
+            return
+        cursor = self.console.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        cursor.insertHtml(''.join(lines))
+        if self.auto_scroll:
+            self.console.setTextCursor(cursor)
+            self.console.ensureCursorVisible()
+        self.message_count += len(lines)
+        self._document_lines += len(lines)
+        self.count_label.setText(f"{self.message_count} messages")
+        if self._document_lines > self.MAX_DOCUMENT_LINES:
+            self._refresh_console()
+
+    def _flush_pending(self):
+        """Format and insert every message queued since the last flush."""
+        pending = self._pending
+        if not pending:
+            return                       # the burst is over; next line is immediate
+        self._pending = []
+        self._flush_timer.start()        # still bursting: keep batching
+        skipped = max(0, len(pending) - self.MAX_LINES_PER_FLUSH)
+        lines = []
+        if skipped:
+            pending = pending[skipped:]
+            lines.append('<span style="color: #888888;">&#8230; %d messages '
+                         'not shown (still in the log buffer)</span><br>'
+                         % skipped)
+        for category, message in pending:
+            html = self._format_message(category, message)
+            if html is not None:
+                lines.append(html)
+        self._insert_lines(lines)
+
+    def _format_message(self, category: str, message: str):
+        """One message as a highlighted HTML line, or ``None`` if filtered out."""
 
         # 1. Check Category Filter vs Entity Filter
         current_combo_text = self.filter_combo.currentText()
+        # Raw console lines still behave as Info for category filtering,
+        # but deliberately retain their unprefixed display form.
+        filter_category = category or 'Info'
 
         # If we are in "Entity: X" mode
         if self.active_entity_filter:
@@ -703,7 +822,7 @@ class DebugConsole(QWidget):
             if self.active_entity_filter not in message:
                 return
         # If we are in standard Category mode (and not "All")
-        elif current_combo_text != "All" and category != current_combo_text:
+        elif current_combo_text != "All" and filter_category != current_combo_text:
             return
 
         # 2. Filter specific entity types (Movers, Triggers, Doors)
@@ -742,14 +861,32 @@ class DebugConsole(QWidget):
                 return
 
         # Get color for category
-        color = self.CATEGORY_COLORS.get(category, '#FFFFFF')
+        color = self.CATEGORY_COLORS.get(filter_category, '#FFFFFF')
 
         # Plugin messages all share one category; recolour by content so
         # loads read green, errors red, and debug/init stay blue.
-        if category == 'Plugins':
+        if filter_category == 'Plugins':
             color = self._plugin_message_color(message)
 
         # --- HIGHLIGHTING LOGIC ---
+
+        # Render the startup version banner in one dedicated pass. Keeping its
+        # source text plain prevents the generic entity highlighter from
+        # rewriting its own filter anchors.
+        version_prefix = "[Info] Fio version "
+        if message.startswith(version_prefix):
+            version_text = message[len(version_prefix):].strip()
+            # The startup log currently says "Fio version version X.Y.Z.B".
+            # Treat both that form and the older "Fio version X.Y.Z.B" form
+            # as a single presentation-only banner so the generic entity
+            # highlighter cannot turn 2, 5, or 10 into filter links.
+            version_match = re.fullmatch(
+                r"(?:version\s+)?(\d+\.\d+\.\d+\.\d+)",
+                version_text,
+            )
+            if version_match:
+                version_html = self._version_banner_html(version_match.group(1))
+                return f'<span style="color: {color};">{version_html}</span><br>'
 
         # Protect any pre-existing HTML tags in the message so our regexes
         # don't corrupt entity links / colours injected by MonsterAI.
@@ -767,6 +904,31 @@ class DebugConsole(QWidget):
         def get_link_html(name):
             return f'<a href="filter:{name}" style="{ENT_STYLE}" title="Click to filter by {name}">{name}</a>'
 
+        def get_external_link_html(url):
+            return (
+                f'<a href="{url}" '
+                f'style="color: #2b6132; text-decoration: underline;" '
+                f'title="Open Fio on GitHub">{url}</a>'
+            )
+
+        # A raw startup URL is a real clickable link, not an entity filter.
+        # Protect the generated anchor too, so the normal entity pass cannot
+        # rewrite "github.com" as an entity link.
+        _external_links = []
+        def _protect_external_link(m):
+            _external_links.append(
+                get_external_link_html(
+                    m.group(0) if m.group(0).startswith('http') else
+                    'https://' + m.group(0))
+            )
+            return f"__EXTERNAL_LINK_{len(_external_links) - 1}__"
+
+        _msg_temp = re.sub(
+            r'(?<![\w/])https?://[^\s<]+|(?<![\w/])github\.com/[^\s<]+',
+            _protect_external_link,
+            _msg_temp
+        )
+
         # Apply Regex substitutions to _msg_temp (protected string)
 
         # A. Entity Names: "Name.Input"
@@ -781,54 +943,67 @@ class DebugConsole(QWidget):
             _msg_temp
         )
 
-        # C. Entity Names: "'Name'"
+        # C. The built-in "help" command is presentation-only here; keep
+        # its bold orange styling but do not make it an entity filter link.
+        _msg_temp = self._RE_HELP_QUOTE.sub(
+            lambda m: f"{m.group(1)}<span style=\"{ENT_STYLE}\">help</span>{m.group(1)}",
+            _msg_temp
+        )
+
+        # D. Entity Names: "'Name'"
         _msg_temp = self._RE_ENTITY_QUOTE.sub(
             lambda m: f"'{get_link_html(m.group(1))}'", 
             _msg_temp
         )
 
-        # D. "fire_output" -> Green
+        # E. "fire_output" -> Green
         _msg_temp = self._RE_FIRE_OUTPUT.sub(
             f'<span style="{FIRE_STYLE}">\1</span>',
             _msg_temp
         )
 
-        # E. "no connections" -> Red/Orange
+        # F. "no connections" -> Red/Orange
         _msg_temp = self._RE_NO_CONNS.sub(
             f'<span style="{EMPTY_STYLE}">\1</span>',
             _msg_temp
         )
 
-        # F. Style [Delayed] prefix (orange)
+        # G. Style [Delayed] prefix (orange)
         _msg_temp = self._RE_DELAYED.sub('<span style="color: #FFB74D;">[Delayed]</span>', _msg_temp)
 
-        # G. Style arrow -> as green arrow character
+        # H. Style arrow -> as green arrow character
         _msg_temp = self._RE_ARROW.sub(' <span style="color: #66BB6A;">→</span> ', _msg_temp)
 
-        # Restore protected HTML tags
+        # Restore protected HTML tags and generated external anchors.
         for _i, _tag in enumerate(_protected_tags):
             _msg_temp = _msg_temp.replace(f"__HTML_{_i}__", _tag)
+        for _i, _tag in enumerate(_external_links):
+            _msg_temp = _msg_temp.replace(f"__EXTERNAL_LINK_{_i}__", _tag)
         message = _msg_temp
 
         # ---------------------------
 
         # Format with HTML coloring for the main message body
-        html = f'<span style="color: {color};">{message}</span><br>'
+        return f'<span style="color: {color};">{message}</span><br>'
 
-        # Append to console
-        cursor = self.console.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        cursor.insertHtml(html)
+    def _version_banner_html(self, version: str) -> str:
+        """Render the startup version banner without entity-filter links."""
+        parts = version.split('.')
+        if len(parts) != 4:
+            return f'<b>Fio version</b> <b>{version}</b>'
 
-        # Auto-scroll if enabled
-        if self.auto_scroll:
-            self.console.setTextCursor(cursor)
-            self.console.ensureCursorVisible()
+        # The banner itself is white. Only major/minor/patch are orange;
+        # dots, the build number, and the surrounding label remain white.
+        white_style = 'color: #FFFFFF; font-weight: bold;'
+        version_style = 'color: #F08000; font-weight: bold;'
 
-        # Update count
-        self.message_count += 1
-        self.count_label.setText(f"{self.message_count} messages")
-
+        rendered = [f'<span style="{white_style}">Fio version</span> ']
+        for index, part in enumerate(parts):
+            style = version_style if index < 3 else white_style
+            rendered.append(f'<span style="{style}">{part}</span>')
+            if index < len(parts) - 1:
+                rendered.append(f'<span style="{white_style}">.</span>')
+        return ''.join(rendered)
     def _plugin_message_color(self, message: str) -> str:
         """Pick a colour for a 'Plugins' message based on its content.
 
@@ -847,10 +1022,14 @@ class DebugConsole(QWidget):
         """Reload console messages from buffer (triggered by filters or font size change)."""
         self.console.clear()
         self.message_count = 0
+        self._document_lines = 0
+        # Anything still queued is already in the buffer being reloaded.
+        self._pending = []
 
         logger = get_debug_logger()
-        for category, message in logger.get_buffer():
-            self._append_message(category, message)
+        lines = [self._format_message(category, message)
+                 for category, message in logger.get_buffer()]
+        self._insert_lines([line for line in lines if line is not None])
 
     def _on_auto_scroll_toggled(self, checked: bool):
         """Handle auto-scroll toggle."""
@@ -860,6 +1039,8 @@ class DebugConsole(QWidget):
         """Clear the console and buffer."""
         self.console.clear()
         self.message_count = 0
+        self._document_lines = 0
+        self._pending = []
         self.count_label.setText("0 messages")
         get_debug_logger().clear_buffer()
 

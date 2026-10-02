@@ -60,8 +60,8 @@ implements; `API_VERSION_INFO` is the same value as an `(int, int, int)` tuple.
 
 | Value | Introduced |
 |-------|------------|
-| `API_VERSION` | `"1.3.0"` |
-| `API_VERSION_INFO` | `(1, 3, 0)` |
+| `API_VERSION` | `"1.5.0"` |
+| `API_VERSION_INFO` | `(1, 5, 0)` |
 
 History:
 
@@ -70,6 +70,11 @@ History:
 - **1.3.0** — render hooks (`render.*` events), swappable-renderer registration
   (`register_renderer`), editor-UI extensions (extra property fields on any
   entity, custom property tabs), and the `FIO_NO_PLUGINS` kill-switch.
+- **1.4.0** — optional editor Tools actions and console-command registration for developer plugins.
+- **1.5.0** — [editor content extensions](#editor-content-extensions-api-150): collapsible
+  property sections, LogicState preset keys and entity inspectors; [world pause and
+  actor pick](#world-pause-and-actor-pick-api-150-play-mode). Additive: every 1.4.0
+  plugin loads and behaves unchanged.
 
 A plugin declares the minimum it needs with `FioPlugin.api_version`. If that is
 **newer** than the host's `API_VERSION`, the manager refuses to load the plugin
@@ -261,6 +266,14 @@ entity's `properties['type']` string. *inputs*/*outputs* are lists of
 [`io_def`](#helpers-io_def-key_code-prop) results; `None` entries (produced when
 the I/O system is unavailable) are filtered out.
 
+```python
+def extend_io(self, entity_type: str, inputs=(), outputs=()) -> None
+```
+Add I/O definitions to an entity type the plugin does not own. Existing
+ports are preserved and matching names are not duplicated. Unlike `register_io`,
+this is an additive merge and is recorded so the extension can be replayed if
+the editor's I/O registry is rebuilt.
+
 ### Property schema
 
 ```python
@@ -289,14 +302,131 @@ tab's widget. With *entity_type* the tab appears only for that type; otherwise
 for every entity.
 
 ```python
+def register_singleton_entity(self, entity_type: str) -> None
+```
+Mark *entity_type* as a per-map singleton. Placement paths refuse to add a
+second instance and select the existing one.
+
+```python
+def register_entity_wizard(self, entity_type: str, factory) -> None
+```
+Register a creation wizard. `factory(parent) -> dict | None` runs when the entity
+is placed and returns its initial properties, or `None` to cancel.
+
+```python
+def register_menu_action(self, label: str, callback, tooltip: str = "") -> None
+```
+Add an action to the top of the plugin's editor menu. The callback is dispatched
+only while the plugin is enabled.
+
+```python
 def register_renderer(self, name: str, cls) -> bool
 ```
 Register a swappable renderer class under *name*. Fio's viewport selects its
 renderer from a class registry; this drops *cls* in so it appears as a render
 mode. *cls* must implement the renderer interface (`render_scene`,
-`draw_models`, `cleanup`, a `lod_manager`, …). Returns `True` if registered,
-`False` in a headless/player context with no viewport. This is how a whole new
-renderer ships as a plugin.
+`draw_models_instanced`, `render_shadow_maps`, `cleanup`, a `lod_manager`, …).
+
+The production forward renderer's `render_shadow_maps` signature is:
+
+```python
+def render_shadow_maps(self, shadow_lights, config, camera_pos=None)
+```
+
+`shadow_lights` is the dense `(EntityTable, light_slots)` tuple published by
+the render state. Shadow casters are selected from `RenderTable` and
+`EntityTable` slots; the shadow pass does not accept or traverse authored
+`Brush`/`Thing`/`Light` collections. A custom renderer should preserve that
+dense execution boundary. Returns `True` if registered, `False` in a
+headless/player context with no viewport. This is how a whole new renderer
+ships as a plugin.
+
+### Developer/editor tools (API 1.4.0)
+
+```python
+def register_tools_action(self, label: str, callback, tooltip: str = "") -> None
+def register_console_command(self, name: str, callback, help_text: str = "") -> None
+```
+`register_tools_action` adds an action to Fio's **Tools** menu. Its callback
+receives `main_window`. `register_console_command` adds a plugin-owned debug
+console command; its callback receives `(args, main_window, logic, play_mode)`.
+Both are gated by the plugin's enabled state and are available from API 1.4.0.
+`register_menu_action` above is the plugin-specific menu counterpart for actions
+that belong with the plugin rather than in Tools.
+
+### Editor content extensions (API 1.5.0)
+
+Fio provides the mechanism; the plugin provides the content. All three are
+recorded with the registering plugin and drop out while it is disabled. A plugin
+that calls them should declare `api_version = "1.5.0"`, so an older host refuses
+it with a clear message rather than failing at `register()`.
+
+```python
+def register_property_section(self, label: str, factory, entity_type=None,
+                              expanded: bool = False) -> None
+```
+Add a collapsible section at the end of the entity's **Properties** tab. Same
+`factory(thing) -> widget` contract as `register_property_tab`; use a section for
+a small editor that belongs with the entity's other properties, a tab for one
+that needs the room. *expanded* is the initial state, and a collapsed section's
+factory does not run until it is first opened. With *entity_type* the section
+appears only for that type.
+
+```python
+def register_kv_suggestions(self, provider) -> None
+```
+Offer preset keys in the LogicState editor. `provider(store)` receives the
+LogicState being edited and returns rows of `(label, key, default_value)` or
+`(label, key, default_value, tooltip)`; the panel lists them in a **Preset key**
+picker, and **Insert** adds the key with its default as a designer default (or
+selects it if already present). Return `[]` for stores the plugin does not use;
+`store.properties["store_name"]` tells stores apart. When two providers offer the
+same key the first registered wins; malformed rows are skipped.
+
+```python
+def register_entity_inspector(self, provider, entity_type=None) -> None
+```
+Supply the contents of the **Entity Inspector**, a live, read-only panel opened
+from the Scene Hierarchy's **Inspect** action or by calling
+`main_window.show_entity_inspector(entity)` (for example from a console
+command). `provider(entity, logic) -> dict | None`, where *logic* is the running
+logic thread or `None` outside Play Mode, returns an inspection document:
+
+```python
+{"title":    "Gate Keeper",
+ "subtitle": "patrolling · awake",
+ "sections": [("Vitals", [("Health", 80), ("Speed", 1.5)]),
+              ("Goals",  [("Patrol", "", 0.9), ("Rest", "", 0.2)])]}
+```
+A row is `(label, value)`, or `(label, value, fraction)` to draw a 0..1 bar. The
+first provider returning a non-empty document is shown; with none the panel lists
+the entity's public properties. The panel refreshes about four times a second
+while visible. With *entity_type* the provider is only asked about that type.
+
+### World pause and actor pick (API 1.5.0, Play Mode)
+
+Called on the engine objects a plugin already receives (the logic thread in
+`on_tick`/console commands, the main window in Tools actions and console
+commands). Part of API 1.5.0: a plugin that uses them declares
+`api_version = "1.5.0"`.
+
+```python
+logic.set_world_paused(owner, paused=True)   # hold/release a pause for *owner*
+logic.world_paused                           # True while any owner holds one
+logic.world_pause_owners()                   # frozenset of the owners holding one
+main_window.begin_actor_pick(on_pick=None)   # arm click-to-pick of an actor
+main_window.view_3d.actor_pick_active        # True while a pick is armed
+```
+While any owner holds a world pause, a play tick advances nothing in the world
+(player, movers, doors, I/O timers, triggers, props, physics, projectiles, the
+monster AI thread) but plugins still tick, so a game's menus keep working. They
+tick exactly when an unpaused tick would reach them -- not during a cinematic, a
+death or the level-complete screen. Each owner releases only its own request;
+entering or leaving Play Mode drops them all. `begin_actor_pick` pauses the
+world, frees the cursor and calls `on_pick(entity)` for the next actor clicked
+(default: open the Entity Inspector); Esc or a right-click cancels. Solid
+brushes in front of an actor block the click (as drawn, rotation included);
+terrain does not.
 
 ### Global store & logging
 
@@ -404,7 +534,7 @@ Passed to `FioPlugin.on_tick` once per play-mode tick.
 | `delta` | `float` | Seconds since the previous tick. |
 | `use_pressed` | `bool` | The edge-triggered "use/interact" key for this tick (already consumed by the logic thread). Treat `True` as a single press. |
 | `keys` | `frozenset` | The raw held-key set (Qt key codes on the engine host). Prefer `key_down`. |
-| `interaction_consumed` | `bool` | `True` if the core already set a HUD prompt / consumed the use press this tick (door, pickup, level-changer). Avoid clobbering unless you own a crosshair target. |
+| `interaction_consumed` | `bool` | `True` if the core already set a HUD prompt / consumed the use press this tick (door, collectible Prop, level-changer). Avoid clobbering unless you own a crosshair target. |
 | `logic` | `Any` | The play session's logic object (set by the manager). |
 
 ### Input
@@ -554,7 +684,7 @@ def clear(self) -> None
 single int compare.
 
 Common event names include `play_start`, `tick`, `player_damage`,
-`portal_transit`, `pickup_collected`, `entity_spawned`, and the render hooks
+`portal_transit`, `prop_collected`, `entity_spawned`, and the render hooks
 `render.overlay` / `render.*`. Prefer subscribing through `host.on(...)` (which
 gates on `enabled`) over the raw bus.
 
@@ -616,8 +746,7 @@ api.register_properties("bigworldsettings", [
 
 Process-wide, cross-level key/value storage for plugins. When the editor package
 is present it binds to the **same** persistent registry that map `LogicState`
-entities use (`LogicKeyValueStore` before 2.4 — the same class under its old
-name), so a plugin's globals live alongside — and can share stores with — map
+entities use, so a plugin's globals live alongside — and can share stores with — map
 state, persisting across level loads within a session. In the dependency-light
 player it falls back to a plain process-local dict-of-dicts with the same API.
 
@@ -707,7 +836,7 @@ hooks are installed as small guarded monkey-patches in
 
 Saving and loading a **play session** is an engine-native capability, not part
 of the plugin API surface — adding it did **not** bump `API_VERSION` (still
-`1.3.0`). It is documented here because it builds directly on the same
+`1.4.0`). It is documented here because it builds directly on the same
 serialization a plugin already relies on, and because a plugin can drive it
 through the [`PluginHost`](#pluginhost--the-open-ended-engine-seam).
 
@@ -796,7 +925,7 @@ def connect(self, host):
     self._host = host
 
 def on_tick(self, logic, ctx):
-    if ctx.key_down("f5"):
+    if ctx.key_down("f"):
         ok, msg = self._host.logic.save_session("saves/plugin_quick.fiosave")
         ctx.toast(msg)
 ```

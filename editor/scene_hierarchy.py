@@ -4,14 +4,13 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
                              QLineEdit, QStyle)
 from PyQt5.QtGui import QIcon, QColor, QBrush, QFont, QPainter, QPixmap
 from PyQt5 import QtCore
-import os
 import re
 from PyQt5.QtCore import Qt, QTimer
 
-from editor.things import Light, Model, Monster
+from engine.change_journal import touch
+
 
 try:
-    from editor.io_system import get_connections
     IO_AVAILABLE = True
 except ImportError:
     IO_AVAILABLE = False
@@ -501,10 +500,6 @@ class SceneHierarchy(QWidget):
             terrain_item.setData(0, Qt.UserRole, ('terrain', 0))
             terrain_item.setForeground(0, QBrush(QColor("#8FBC8F")))  # Earthy green
 
-            # Show if terrain is selected
-            if 'terrain' in [getattr(obj, '_terrain_marker', None) for obj in selected_objects]:
-                terrain_item.setSelected(True)
-
         # =====================================================================
         # BRUSHES SECTION
         # =====================================================================
@@ -807,11 +802,13 @@ class SceneHierarchy(QWidget):
                 self.main_window.save_state()
                 for _, idx in brush_items:
                     self.main_window.state.brushes[idx]['hidden'] = True
+                    touch(self.main_window.state.brushes[idx])
                 self.main_window.update_all_ui()
             elif action == show_action:
                 self.main_window.save_state()
                 for _, idx in brush_items:
                     self.main_window.state.brushes[idx]['hidden'] = False
+                    touch(self.main_window.state.brushes[idx])
                 self.main_window.update_all_ui()
             return
         
@@ -839,11 +836,13 @@ class SceneHierarchy(QWidget):
                 self.main_window.save_state()
                 for _, idx in thing_items:
                     self.main_window.state.things[idx].properties['hidden'] = True
+                    touch(self.main_window.state.things[idx])
                 self.main_window.update_all_ui()
             elif action == show_action:
                 self.main_window.save_state()
                 for _, idx in thing_items:
                     self.main_window.state.things[idx].properties['hidden'] = False
+                    touch(self.main_window.state.things[idx])
                 self.main_window.update_all_ui()
             return
 
@@ -887,7 +886,11 @@ class SceneHierarchy(QWidget):
                 if brush_dict.get('color') == colour_name:
                     action.setChecked(True)
                 action.triggered.connect(lambda checked, c=colour_name: self.set_brush_colour(brush_dict, c, checked))
-            
+
+            menu.addSeparator()
+            properties_action = menu.addAction("Properties")
+            properties_action.setToolTip("Show this object in the Properties panel")
+
             action = menu.exec_(self.tree.viewport().mapToGlobal(position))
 
             if action == lock_action:
@@ -897,7 +900,10 @@ class SceneHierarchy(QWidget):
             elif action == hide_action:
                 self.main_window.save_state()
                 brush_dict['hidden'] = not is_hidden
+                touch(brush_dict)
                 self.main_window.update_all_ui()
+            elif action == properties_action:
+                self.show_properties_for(brush_dict)
         
         elif data and data[0] == 'thing':
             thing_obj = self.main_window.state.things[data[1]]
@@ -935,17 +941,43 @@ class SceneHierarchy(QWidget):
                 if thing_obj.properties.get('color') == colour_name:
                     action.setChecked(True)
                 action.triggered.connect(lambda checked, c=colour_name: self.set_thing_colour(thing_obj, c, checked))
-            
+
+            menu.addSeparator()
+            inspect_action = None
+            if hasattr(self.main_window, 'show_entity_inspector'):
+                inspect_action = menu.addAction("Inspect")
+                inspect_action.setToolTip("Open a live, read-only view of this entity")
+            properties_action = menu.addAction("Properties")
+            properties_action.setToolTip("Show this object in the Properties panel")
+
             action = menu.exec_(self.tree.viewport().mapToGlobal(position))
 
-            if action == lock_action:
+            if action is not None and action == inspect_action:
+                self.main_window.show_entity_inspector(thing_obj)
+            elif action == lock_action:
                 self.main_window.save_state()
                 thing_obj.properties['lock'] = not is_locked
                 self.main_window.update_all_ui()
             elif action == hide_action:
                 self.main_window.save_state()
                 thing_obj.properties['hidden'] = not is_hidden
+                touch(thing_obj)
                 self.main_window.update_all_ui()
+            elif action == properties_action:
+                self.show_properties_for(thing_obj)
+
+    def show_properties_for(self, obj):
+        """Select *obj* and bring the Properties panel to the front.
+
+        The selection is made explicitly rather than relied upon: ``open_menu``
+        selects the item under the cursor with signals blocked, so
+        ``handle_selection_change`` never ran and the panel could still be
+        showing whatever was selected before the right-click.
+        """
+        if obj is None:
+            return
+        self.main_window.set_selected_objects([obj])
+        self.main_window.show_properties_panel()
 
     def handle_selection_change(self):
         selected_items = self.tree.selectedItems()

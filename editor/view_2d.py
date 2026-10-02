@@ -5,10 +5,9 @@ import os
 from PyQt5.QtWidgets import QWidget, QMenu, QFileDialog, QApplication
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QFont, QPolygonF, QPixmap
 from PyQt5.QtCore import Qt, QRectF, QPointF, QPoint, QTimer
-from editor.things import (Thing, Light, PlayerStart, Pickup, Speaker, Model, Prop, Monster,
+from editor.things import (Thing, Light, PlayerStart, Speaker, Prop, Monster,
                           LogicGate, LogicRelay, LogicTimer, LogicCommand, LevelChanger, PathNode,
-                          LogicCamera, LogicSpawner, Portal, LogicState)
-from editor.scene_hierarchy import SceneHierarchy
+                          LogicCamera, LogicSpawner, Portal, LogicState, Effect)
 from engine import brush_geometry as bg  # convex/angled-brush geometry
 from engine.constants import brush_aabb_bounds
 from editor import component_edit as ce  # shared object/face/edge/vertex model
@@ -18,6 +17,9 @@ from editor import component_edit as ce  # shared object/face/edge/vertex model
 # zoom so the feel is the same at every zoom level.
 COMPONENT_GRAB_PIXELS = 9.0
 SIDE_GRAB_PIXELS = 7.0
+# Portal gizmos are deliberately easier to acquire than generic Thing icons.
+PORTAL_GIZMO_HANDLE_PIXELS = 12.0
+PORTAL_GIZMO_PICK_PIXELS = 10.0
 # I/O System imports for drawing connections
 try:
     from editor.io_system import get_connections
@@ -55,6 +57,7 @@ class View2D(QWidget):
         # whose point stays under the cursor.
         self.drag_group = []
         self.drag_primary = None
+        self._object_drag_undo_saved = False
 
         # --- Select tool: rubber-band marquee state ---
         # marquee_start/current are world-space (axis1, axis2) points; marquee
@@ -87,19 +90,10 @@ class View2D(QWidget):
         # Throttle tracker for 3D updates during drag
         self.last_3d_update_time = 0.0
 
-        # Add timer-based smooth updating
-        self.smooth_update_timer = QTimer(self)
-        self.smooth_update_timer.setInterval(33)  # ~30 FPS
-        self.smooth_update_timer.timeout.connect(self._smooth_update_tick)
-        self.smooth_update_timer_active = False
-        
-        # Camera tracking for efficient updates
-        self.last_camera_pos = None
-        self.last_camera_yaw = None
-        
         # Connection line animation state
         self.connection_animations = {}
-        self.last_connections = set()
+        self.last_io_connections = set()
+        self.last_patrol_connections = set()
         
         # Animated arrow state - arrows traveling along connection lines
         self.arrow_travel_progress = {}  # {conn_key: [arrow_positions]}
@@ -1049,38 +1043,6 @@ class View2D(QWidget):
             self._store_previous_tab_index()
             self.main_window.properties_tab_widget.setCurrentIndex(0)
 
-    def _restore_previous_tab(self):
-        """Restore focus to the previously active tab before Properties was focused."""
-        if hasattr(self.main_window, 'properties_tab_widget'):
-            prev_idx = getattr(self.main_window, '_previous_tab_index', None)
-            if prev_idx is not None and prev_idx < self.main_window.properties_tab_widget.count():
-                self.main_window.properties_tab_widget.setCurrentIndex(prev_idx)
-
-    def start_connection_mode(self, source_obj):
-        """Start connection mode programmatically (e.g., from property editor)."""
-        if not source_obj:
-            return
-        
-        self.is_connecting = True
-        self.connection_source = source_obj
-        self.connection_snap_target = None
-        
-        # Set initial drag position to object center
-        ax1, ax2 = self.get_axes()
-        ax_map = {'x': 0, 'y': 1, 'z': 2}
-        
-        # FIX: Handle Brush (dict) vs Thing (object)
-        if isinstance(source_obj, dict):
-            source_pos = source_obj['pos']
-        else:
-            source_pos = source_obj.pos
-            
-        self.connection_drag_pos = QPointF(source_pos[ax_map[ax1]], source_pos[ax_map[ax2]])
-        
-        self.setCursor(Qt.CrossCursor)
-        self.setFocus()  # Take focus so we can receive key events
-        self.update()
-
     def keyPressEvent(self, event):
         # --- Escape backs out of the innermost thing in progress ---
         if event.key() == Qt.Key_Escape:
@@ -1118,17 +1080,13 @@ class View2D(QWidget):
 
         # F1 Synchronization ---
         if event.key() == Qt.Key_F1:
-            # Toggle the global flag on the editor state
+            # Keep the View-menu action and the 2D/3D shortcut in sync.
             current_state = getattr(self.editor, 'show_logic_links', False)
-            self.editor.show_logic_links = not current_state
-
-            # Force redraw of both views (2D and 3D)
-            self.editor.update_views()
-
-            # Show toast
-            if hasattr(self.main_window, 'show_toast'):
-                status = "ON" if self.editor.show_logic_links else "OFF"
-                self.main_window.show_toast(f"Logic Links: {status}")
+            if hasattr(self.main_window, 'set_connection_links_enabled'):
+                self.main_window.set_connection_links_enabled(not current_state)
+            else:
+                self.editor.show_logic_links = not current_state
+                self.editor.update_views()
             return
 
         # --- Arrow Key Nudging ---
@@ -1259,61 +1217,6 @@ class View2D(QWidget):
         # full-scene save_state() on the very next nudge, which is exactly the
         # slowdown we are avoiding.  The idle timer ends the burst after a pause.
         super().keyReleaseEvent(event)
-
-    def _smooth_update_tick(self):
-        """Check for camera changes and repaint only when needed."""
-        if not self.isVisible():
-            return
-            
-        current_pos, current_yaw = self.get_camera_state_in_2d()
-        
-        # Only repaint if camera moved significantly
-        if (self.last_camera_pos is None or 
-            (self.last_camera_pos - current_pos).manhattanLength() > 0.5 or
-            self.last_camera_yaw != current_yaw):
-            
-            self.last_camera_pos = current_pos
-            self.last_camera_yaw = current_yaw
-            self.update()
-
-    def get_camera_state_in_2d(self):
-        """Get camera position and relevant rotation for this 2D view."""
-        ax1, ax2 = self.get_axes()
-        if not ax1 or not ax2:
-            return QPointF(0, 0), 0
-            
-        ax_map = {'x': 0, 'y': 1, 'z': 2}
-        camera = self.editor.view_3d.camera
-        
-        pos_2d = QPointF(camera.pos[ax_map[ax1]], camera.pos[ax_map[ax2]])
-        
-        # Extract relevant rotation
-        if self.view_type == 'top':
-            rotation = camera.yaw
-        elif self.view_type == 'front':
-            rotation = -camera.yaw
-        elif self.view_type == 'side':
-            rotation = -camera.pitch
-        else:
-            rotation = 0
-            
-        return pos_2d, rotation
-
-    def start_smooth_updates(self):
-        """Enable smooth 30 FPS updates when camera is moving."""
-        if not self.smooth_update_timer_active:
-            self.smooth_update_timer_active = True
-            # Initialize tracking
-            self.last_camera_pos, self.last_camera_yaw = self.get_camera_state_in_2d()
-            self.smooth_update_timer.start()
-
-    def stop_smooth_updates(self):
-        """Disable smooth updates when camera is stationary."""
-        if self.smooth_update_timer_active:
-            self.smooth_update_timer_active = False
-            self.smooth_update_timer.stop()
-            self.last_camera_pos = None
-            self.last_camera_yaw = None
 
     def get_visible_world_bounds(self):
         """Returns a QRectF of the visible world area in this 2D view."""
@@ -1524,6 +1427,47 @@ class View2D(QWidget):
         if self.is_connecting and self.connection_source:
             self.draw_connection_drag(painter)
 
+    @staticmethod
+    def _segment_intersects_rect(p1, p2, rect):
+        """Return True when a 2D line segment touches ``rect``.
+
+        Endpoint-only culling drops long I/O links when both entities are
+        outside the current view even though the link itself crosses the view.
+        Liang-Barsky keeps the test constant-time and avoids constructing Qt
+        paths for every connection.
+        """
+        rect = rect.normalized()
+        x1, y1 = float(p1.x()), float(p1.y())
+        x2, y2 = float(p2.x()), float(p2.y())
+        dx = x2 - x1
+        dy = y2 - y1
+
+        if dx == 0.0 and dy == 0.0:
+            return rect.contains(QPointF(x1, y1))
+
+        t0, t1 = 0.0, 1.0
+        for p, q in (
+            (-dx, x1 - rect.left()),
+            (dx, rect.right() - x1),
+            (-dy, y1 - rect.top()),
+            (dy, rect.bottom() - y1),
+        ):
+            if p == 0.0:
+                if q < 0.0:
+                    return False
+                continue
+            t = q / p
+            if p < 0.0:
+                if t > t1:
+                    return False
+                t0 = max(t0, t)
+            else:
+                if t < t0:
+                    return False
+                t1 = min(t1, t)
+
+        return t0 <= t1
+
     def draw_logic_connections(self, painter, visible_bounds):
         """
         Draws I/O connections between entities.
@@ -1536,20 +1480,39 @@ class View2D(QWidget):
         axis1_idx = ax_map[ax1]
         axis2_idx = ax_map[ax2]
         
-        # Precompute a name -> position lookup once (was an O(N) linear scan
-        # over every brush and thing per connection, i.e. O(N*M) per repaint).
+        # Resolve targets by stable id first. Names remain the fallback for
+        # older maps that predate target_id.
+        pos_by_id = {}
         pos_by_name = {}
         for b in self.editor.state.brushes:
+            b_id = b.get('id')
             b_name = b.get('name')
+            if b_id:
+                pos_by_id[b_id] = b['pos']
             if b_name and b_name not in pos_by_name:
                 pos_by_name[b_name] = b['pos']
         for t in self.editor.state.things:
-            t_name = getattr(t, 'name', t.properties.get('name'))
+            props = getattr(t, 'properties', {})
+            t_id = props.get('id')
+            t_name = props.get('name', '')
+            if t_id:
+                pos_by_id[t_id] = t.pos
             if t_name and t_name not in pos_by_name:
                 pos_by_name[t_name] = t.pos
 
-        def get_pos_by_name(name):
-            return pos_by_name.get(name)
+        def get_target_pos(conn):
+            target_id = getattr(conn, 'target_id', '') or ''
+            if target_id:
+                target = pos_by_id.get(target_id)
+                if target is not None:
+                    return target
+            return pos_by_name.get(getattr(conn, 'target_name', ''))
+
+        def entity_id(entity):
+            if isinstance(entity, dict):
+                return entity.get('id') or ('obj:%x' % id(entity))
+            props = getattr(entity, 'properties', {})
+            return props.get('id') or ('obj:%x' % id(entity))
 
         # Check Animation Setting
         should_animate = self.main_window.config.getboolean('Display', 'animate_connections', fallback=False)
@@ -1563,12 +1526,12 @@ class View2D(QWidget):
             for brush in self.editor.state.brushes:
                 io_conns = get_connections(brush)
                 for conn in io_conns:
-                    target_pos = get_pos_by_name(conn.target_name)
+                    target_pos = get_target_pos(conn)
                     if target_pos:
                         # Determine if this is a logic entity
                         is_logic = brush.get('is_trigger', False) or brush.get('is_mover', False) or brush.get('is_door', False)
                         connections_to_draw.append({
-                            'id': f"io_brush_{id(brush)}_{conn.output_name}",
+                            'id': f"io_{entity_id(brush)}_{conn.output_name}_{getattr(conn, 'target_id', '') or conn.target_name}_{conn.input_name}",
                             'target': conn.target_name,
                             'src': brush['pos'],
                             'dst': target_pos,
@@ -1579,11 +1542,11 @@ class View2D(QWidget):
             for thing in self.editor.state.things:
                 io_conns = get_connections(thing)
                 for conn in io_conns:
-                    target_pos = get_pos_by_name(conn.target_name)
+                    target_pos = get_target_pos(conn)
                     if target_pos:
                         is_logic = thing.properties.get('type') == 'logic_gate'
                         connections_to_draw.append({
-                            'id': f"io_thing_{id(thing)}_{conn.output_name}",
+                            'id': f"io_{entity_id(thing)}_{conn.output_name}_{getattr(conn, 'target_id', '') or conn.target_name}_{conn.input_name}",
                             'target': conn.target_name,
                             'src': thing.pos,
                             'dst': target_pos,
@@ -1595,11 +1558,12 @@ class View2D(QWidget):
             source_2d = QPointF(conn['src'][axis1_idx], conn['src'][axis2_idx])
             target_2d = QPointF(conn['dst'][axis1_idx], conn['dst'][axis2_idx])
             
-            # Culling
-            margin = 100.0 
-            s_rect = QRectF(source_2d.x()-margin, source_2d.y()-margin, margin*2, margin*2)
-            t_rect = QRectF(target_2d.x()-margin, target_2d.y()-margin, margin*2, margin*2)
-            if not (visible_bounds.intersects(s_rect) or visible_bounds.intersects(t_rect)):
+            # Cull against the whole line segment, not just its endpoints.
+            # This keeps long-distance links visible when both entities are
+            # outside the current view but the connection crosses the view.
+            margin = 100.0
+            link_bounds = visible_bounds.adjusted(-margin, -margin, margin, margin)
+            if not self._segment_intersects_rect(source_2d, target_2d, link_bounds):
                 continue
 
             conn_key = (conn['id'], conn['target'])
@@ -1630,12 +1594,12 @@ class View2D(QWidget):
                 # Draw a single static arrow head at the target end
                 self._draw_connection_arrow(painter, p1, p2, color)
         
-        self.last_connections = current_connections
+        self.last_io_connections = current_connections
 
     def draw_patrol_paths(self, painter, visible_bounds):
         """
-        Draw dashed teal lines between connected PathNodes (next_node chains)
-        and thin dotted lines from patrolling Monsters to their patrol_target.
+        Draw dashed olive lines between connected PathNodes (next_node chains)
+        and thin dotted teal lines from patrolling Monsters to their patrol_target.
         """
         ax1, ax2 = self.get_axes()
         if not ax1 or not ax2:
@@ -1652,10 +1616,11 @@ class View2D(QWidget):
                 if n:
                     node_lookup[n] = t
 
-        # --- 1. PathNode → next_node chain lines (teal, dashed) ----------
-        teal = QColor(38, 166, 154, 200)
-        teal_dim = QColor(38, 166, 154, 80)
-        chain_pen = QPen(teal, 2, Qt.DashLine)
+        # --- 1. PathNode → next_node chain lines (olive, dashed) ---------
+        # Navigation edges are deliberately distinct from entity I/O links.
+        olive = QColor(128, 128, 0, 200)
+        olive_dim = QColor(128, 128, 0, 80)
+        chain_pen = QPen(olive, 2, Qt.DashLine)
 
         for name, node in node_lookup.items():
             next_name = node.get_next_node_name()
@@ -1683,12 +1648,12 @@ class View2D(QWidget):
             painter.drawLine(p1, p2)
 
             # Small arrowhead at destination
-            self._draw_connection_arrow(painter, p1, p2, teal)
+            self._draw_connection_arrow(painter, p1, p2, olive)
 
             # Tiny "next" label at midpoint
             mid = QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
             painter.save()
-            painter.setPen(QPen(teal_dim))
+            painter.setPen(QPen(olive_dim))
             font = QFont()
             font.setPointSize(7)
             painter.setFont(font)
@@ -1918,10 +1883,8 @@ class View2D(QWidget):
             
             # Draw glow light direction arrow
             if brush.get('shader') == 'Glow':
-                # Hide arrows in play mode unless F5 toggle is enabled
-                play_mode = getattr(self.main_window.view_3d, 'play_mode', False)
-                show_arrows = getattr(self.main_window.view_3d, 'show_glow_arrows_in_play_mode', False)
-                if not play_mode or show_arrows:
+                # Editor-only guide: hidden in play mode.
+                if not getattr(self.main_window.view_3d, 'play_mode', False):
                     self.draw_glow_light_arrow(painter, brush, ax1, ax2, ax_map)
 
             # A lone selected brush keeps its own resize handles; when several
@@ -1930,41 +1893,6 @@ class View2D(QWidget):
                 self.draw_resize_handles(painter, screen_rect)
 
             self.draw_brush_color_tag(painter, brush, screen_rect)
-
-    def draw_mover_arrow(self, painter, brush, ax1, ax2, ax_map):
-        direction = brush.get('direction', [0, 1, 0])
-        distance = brush.get('distance', 128.0)
-
-        play_mode = getattr(self.main_window.view_3d, 'play_mode', False)
-        if play_mode and 'original_pos' in brush:
-            start_3d = brush['original_pos']
-        else:
-            start_3d = brush['pos']
-
-        d_vec = np.array(direction, dtype=float)
-        norm = np.linalg.norm(d_vec)
-        if norm == 0: return 
-        d_vec = d_vec / norm * distance
-        end_3d = [start_3d[0] + d_vec[0], start_3d[1] + d_vec[1], start_3d[2] + d_vec[2]]
-        
-        p_start = QPointF(start_3d[ax_map[ax1]], start_3d[ax_map[ax2]])
-        p_end = QPointF(end_3d[ax_map[ax1]], end_3d[ax_map[ax2]])
-        
-        if (p_start - p_end).manhattanLength() < 2: return 
-
-        s_start = self.world_to_screen(p_start)
-        s_end = self.world_to_screen(p_end)
-        
-        arrow_color = QColor(0, 255, 0)
-        painter.setPen(QPen(arrow_color, 2))
-        painter.drawLine(s_start, s_end)
-        
-        angle = math.atan2(s_end.y() - s_start.y(), s_end.x() - s_start.x())
-        arrow_size = 10
-        p1 = s_end - QPointF(math.cos(angle - math.pi / 6) * arrow_size, math.sin(angle - math.pi / 6) * arrow_size)
-        p2 = s_end - QPointF(math.cos(angle + math.pi / 6) * arrow_size, math.sin(angle + math.pi / 6) * arrow_size)
-        painter.setBrush(QBrush(arrow_color))
-        painter.drawPolygon(QPolygonF([s_end, p1, p2]))
 
     def draw_glow_light_arrow(self, painter, brush, ax1, ax2, ax_map):
         """Draw a wide colored arrow radiating from the glow brush's light emission face."""
@@ -2087,23 +2015,24 @@ class View2D(QWidget):
         """Helper to compute screen coordinates for a model's wireframe.
         Returns (pts_x, pts_y) numpy arrays, or None if failed."""
         model_path = model_thing.properties.get('model_path')
-        if not model_path: return None
+        if not model_path:
+            return None
 
-        # Access loaded model from renderer via main window reference
+        # 2D is a QPainter view, not the renderer's OpenGL context. Never load
+        # a model here: OBJ/GLB loading creates VAOs/VBOs and must happen in the
+        # 3D view's current GL context. The 3D renderer loads it on its next frame.
         if not hasattr(self.main_window, 'view_3d') or not self.main_window.view_3d.renderer:
             return None
-            
+
         renderer = self.main_window.view_3d.renderer
-        
-        if model_path not in renderer.loaded_models:
+        obj = renderer.get_loaded_model(model_path)
+        if not obj or not obj.is_loaded:
             return None
-            
-        obj = renderer.loaded_models.get(model_path)
         if not obj or not hasattr(obj, 'cpu_vertices') or obj.cpu_vertices is None or len(obj.cpu_vertices) == 0:
             return None
 
         # Optimization: Too many vertices check
-        if len(obj.cpu_vertices) > 2000:
+        if len(obj.cpu_vertices) > 50000:
             return None # Treat as box fallback elsewhere
 
         # Transform parameters
@@ -2157,10 +2086,6 @@ class View2D(QWidget):
     def _draw_model_wireframe(self, painter, model_thing, ax_map, ax1, ax2):
         """Draws the projected wireframe of a 3D model in the 2D view."""
         model_path = model_thing.properties.get('model_path')
-        if model_path and hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.renderer:
-            renderer = self.main_window.view_3d.renderer
-            if model_path not in renderer.loaded_models:
-                renderer.load_model(model_path)
 
         coords = self._compute_model_screen_coords(model_thing, ax_map, ax1, ax2)
 
@@ -2182,10 +2107,10 @@ class View2D(QWidget):
         # edges AND crashes when vertex_count % 3 != 0.
         obj = None
         if model_path and hasattr(self.main_window, 'view_3d') and self.main_window.view_3d.renderer:
-            obj = self.main_window.view_3d.renderer.loaded_models.get(model_path)
+            obj = self.main_window.view_3d.renderer.get_loaded_model(model_path)
         cpu_triangles = getattr(obj, 'cpu_triangles', None)
 
-        if cpu_triangles:
+        if cpu_triangles is not None and len(cpu_triangles):
             for tri in cpu_triangles:
                 i0, i1, i2 = tri
                 # Guard against malformed index data
@@ -2220,6 +2145,64 @@ class View2D(QWidget):
                 painter.drawLine(p1, p2)
                 painter.drawLine(p2, p0)
 
+    @staticmethod
+    def _point_segment_distance_sq(point, a, b):
+        """Squared 2D distance from a point to a line segment."""
+        abx = b.x() - a.x()
+        aby = b.y() - a.y()
+        denom = abx * abx + aby * aby
+        if denom <= 1e-9:
+            dx = point.x() - a.x()
+            dy = point.y() - a.y()
+            return dx * dx + dy * dy
+        t = ((point.x() - a.x()) * abx + (point.y() - a.y()) * aby) / denom
+        t = max(0.0, min(1.0, t))
+        px = a.x() + abx * t
+        py = a.y() + aby * t
+        dx = point.x() - px
+        dy = point.y() - py
+        return dx * dx + dy * dy
+
+    def _portal_gizmo_hit_test(self, thing, screen_pos, ax1, ax2):
+        """Hit the visible portal gizmo in screen space, independent of zoom."""
+        ax_map = {'x': 0, 'y': 1, 'z': 2}
+        center = self.world_to_screen(QPointF(
+            float(thing.pos[ax_map[ax1]]), float(thing.pos[ax_map[ax2]])))
+        dx = screen_pos.x() - center.x()
+        dy = screen_pos.y() - center.y()
+        if dx * dx + dy * dy <= PORTAL_GIZMO_HANDLE_PIXELS ** 2:
+            return True
+
+        yaw = thing.get_yaw_radians()
+        w2 = thing.get_width() * 0.5
+        if ax1 == 'x' and ax2 == 'z':
+            rx = math.cos(yaw)
+            rz = -math.sin(yaw)
+            left = self.world_to_screen(QPointF(
+                float(thing.pos[0]) - rx * w2,
+                float(thing.pos[2]) - rz * w2))
+            right = self.world_to_screen(QPointF(
+                float(thing.pos[0]) + rx * w2,
+                float(thing.pos[2]) + rz * w2))
+            return self._point_segment_distance_sq(
+                screen_pos, left, right) <= PORTAL_GIZMO_PICK_PIXELS ** 2
+
+        i1, i2 = ax_map[ax1], ax_map[ax2]
+        h2 = thing.get_height() * 0.5
+        proj_half_w = (w2 * abs(math.cos(yaw)) if ax1 == 'x'
+                       else w2 * abs(math.sin(yaw)))
+        proj_half_w = max(4.0, proj_half_w)
+        rect = QRectF(
+            self.world_to_screen(QPointF(
+                float(thing.pos[i1]) - proj_half_w,
+                float(thing.pos[i2]) + h2)),
+            self.world_to_screen(QPointF(
+                float(thing.pos[i1]) + proj_half_w,
+                float(thing.pos[i2]) - h2)),
+        ).normalized()
+        pad = PORTAL_GIZMO_PICK_PIXELS
+        return rect.adjusted(-pad, -pad, pad, pad).contains(screen_pos)
+
     def draw_things(self, painter, visible_bounds):
         ax1, ax2 = self.get_axes()
         if not ax1 or not ax2:
@@ -2244,14 +2227,20 @@ class View2D(QWidget):
             draw_rect = None
 
             # --- MODEL RENDERING ---
-            if isinstance(thing, Model) and thing.properties.get('model_path'):
+            # A Prop may retain its model_path while being represented as a
+            # billboard.  Representation, not asset history, decides what the
+            # 2D view draws.
+            render_mode = str(thing.properties.get('render_mode', 'model')).lower()
+            if thing.properties.get('model_path') and render_mode == 'model':
                 self._draw_model_wireframe(painter, thing, ax_map, ax1, ax2)
                 # Selection box for models
                 draw_rect = QRectF(s_pos.x() - 16, s_pos.y() - 16, 32, 32)
 
             # --- PORTAL RENDERING ---
             elif isinstance(thing, Portal):
-                draw_rect = self._draw_portal_gizmo(painter, thing, s_pos, axis1_idx, axis2_idx, ax_map, ax1, ax2, visible_bounds)
+                draw_rect = self._draw_portal_gizmo(
+                    painter, thing, s_pos, axis1_idx, axis2_idx,
+                    ax_map, ax1, ax2, visible_bounds)
 
             # --- SPRITE RENDERING ---
             else:
@@ -2412,6 +2401,24 @@ class View2D(QWidget):
         # Draw portal pair link lines on top of all things (F1 toggle respects this too)
         self._draw_portal_links(painter, axis1_idx, axis2_idx, visible_bounds)
 
+    def _draw_portal_center_handle(self, painter, center, color):
+        """Draw the center handle used to acquire a portal gizmo."""
+        size = 6.0
+        diamond = QPolygonF([
+            center + QPointF(0.0, -size),
+            center + QPointF(size, 0.0),
+            center + QPointF(0.0, size),
+            center + QPointF(-size, 0.0),
+        ])
+        painter.save()
+        painter.setPen(QPen(QColor(255, 255, 255, 230), 1.5))
+        painter.setBrush(QBrush(color))
+        painter.drawPolygon(diamond)
+        painter.setPen(QPen(QColor(255, 255, 255, 210), 1))
+        painter.drawLine(center + QPointF(-3, 0), center + QPointF(3, 0))
+        painter.drawLine(center + QPointF(0, -3), center + QPointF(0, 3))
+        painter.restore()
+
     def _draw_portal_gizmo(self, painter, thing, s_pos, axis1_idx, axis2_idx, ax_map, ax1, ax2, visible_bounds):
         """
         Draw the Portal aperture as a thick line segment in the 2D view,
@@ -2506,6 +2513,7 @@ class View2D(QWidget):
             ah2 = tip_s - QPointF(math.cos(angle + math.pi/6)*hs, math.sin(angle + math.pi/6)*hs)
             painter.setBrush(QBrush(portal_color))
             painter.drawPolygon(QPolygonF([tip_s, ah1, ah2]))
+            self._draw_portal_center_handle(painter, mid_s, portal_color)
 
             # Name label
             painter.setPen(QPen(portal_color.lighter(150)))
@@ -2551,6 +2559,8 @@ class View2D(QWidget):
             painter.setPen(QPen(portal_color, 2, pen_style))
             painter.setBrush(QBrush(dim_color))
             painter.drawRect(rect_s)
+            self._draw_portal_center_handle(
+                painter, self.world_to_screen(QPointF(px, py)), portal_color)
 
             # Name label
             painter.setPen(QPen(portal_color.lighter(150)))
@@ -2988,127 +2998,6 @@ class View2D(QWidget):
                 painter.drawRect(QRectF(h.x() - hs / 2, h.y() - hs / 2, hs, hs))
         painter.restore()
 
-    def draw_trigger_connections(self, painter, visible_bounds):
-        show_connections = self.main_window.config.getboolean('Display', 'show_connections', fallback=True)
-        
-        # Check play mode visibility
-        play_mode = getattr(self.main_window.view_3d, 'play_mode', False)
-        show_in_play = getattr(self.main_window.view_3d, 'show_connections_in_play_mode', False)
-        
-        if play_mode and not show_in_play:
-            return
-        
-        if not show_connections: 
-            return
-        
-        ax1, ax2 = self.get_axes()
-        if not ax1 or not ax2:
-            return
-            
-        ax_map = {'x': 0, 'y': 1, 'z': 2}
-        axis1_idx = ax_map[ax1]
-        axis2_idx = ax_map[ax2]
-        
-        current_connections = set()
-        connections_to_draw = []
-        
-        for i, brush in enumerate(self.editor.state.brushes):
-            target_name = brush.get('target')
-            if not target_name: 
-                continue
-            is_source = brush.get('is_trigger') or brush.get('is_mover')
-            if not is_source: 
-                continue
-            
-            # Get source position
-            source_pos = brush['pos']
-            source_2d = QPointF(source_pos[axis1_idx], source_pos[axis2_idx])
-            
-            # Find target position
-            target_pos = None
-            for b in self.editor.state.brushes:
-                if b.get('name') == target_name:
-                    target_pos = b['pos']
-                    break
-            if target_pos is None:
-                for t in self.editor.state.things:
-                    if hasattr(t, 'name') and t.name == target_name:
-                        target_pos = t.pos
-                        break
-            
-            if not target_pos:
-                continue
-                
-            target_2d = QPointF(target_pos[axis1_idx], target_pos[axis2_idx])
-            
-            # CULL connection if both source and target are outside visible bounds
-            margin = 10.0 / self.zoom_factor if self.zoom_factor > 0 else 10.0
-            source_rect = QRectF(source_2d.x() - margin, source_2d.y() - margin, margin * 2, margin * 2)
-            target_rect = QRectF(target_2d.x() - margin, target_2d.y() - margin, margin * 2, margin * 2)
-            
-            if not (visible_bounds.intersects(source_rect) or visible_bounds.intersects(target_rect)):
-                continue
-            
-            # Connection is visible - add to tracking and drawing list
-            source_id = f"brush_{id(brush)}"
-            conn_key = (source_id, target_name)
-            current_connections.add(conn_key)
-            connections_to_draw.append({
-                'key': conn_key,
-                'source_pos': source_2d,
-                'target_pos': target_2d,
-                'is_trigger': brush.get('is_trigger', False)
-            })
-        
-        # Animation tracking (only for visible connections)
-        for conn_key in current_connections - self.last_connections:
-            self.connection_animations[conn_key] = {'progress': 0.0, 'growing': True}
-            # Initialize traveling arrows for this connection
-            self.arrow_travel_progress[conn_key] = [0.0]  # Start with one arrow at 0
-        for conn_key in self.last_connections - current_connections:
-            if conn_key in self.connection_animations:
-                self.connection_animations[conn_key]['growing'] = False
-        
-        self.last_connections = current_connections
-        
-        # Draw visible connections
-        for conn in connections_to_draw:
-            conn_key = conn['key']
-            if conn_key not in self.connection_animations:
-                self.connection_animations[conn_key] = {'progress': 1.0, 'growing': True}
-                self.arrow_travel_progress[conn_key] = [0.0]
-            
-            anim = self.connection_animations[conn_key]
-            progress = anim['progress']
-            if progress <= 0: 
-                continue
-            
-            p1 = self.world_to_screen(conn['source_pos'])
-            p2 = self.world_to_screen(conn['target_pos'])
-            
-            animated_p2 = QPointF(p1.x() + (p2.x() - p1.x()) * progress, p1.y() + (p2.y() - p1.y()) * progress)
-            color = QColor(0, 255, 255, 180) if conn['is_trigger'] else QColor(139, 69, 19, 180)
-            
-            pen = QPen(color, 2, Qt.DotLine)
-            painter.setPen(pen)
-            painter.drawLine(p1, animated_p2)
-            
-            # Draw traveling arrows along the line
-            if progress >= 1.0 and conn_key in self.arrow_travel_progress:
-                self._draw_traveling_arrows(painter, p1, p2, color, conn_key)
-            elif progress > 0.1:
-                self._draw_connection_arrow(painter, p1, animated_p2, color)
-        
-        # Clean up finished animations
-        keys_to_remove = []
-        for conn_key, anim in self.connection_animations.items():
-            if conn_key not in current_connections and anim['progress'] <= 0:
-                keys_to_remove.append(conn_key)
-        for key in keys_to_remove: 
-            del self.connection_animations[key]
-            if key in self.arrow_travel_progress:
-                del self.arrow_travel_progress[key]
-    
     def _draw_traveling_arrows(self, painter, p1, p2, color, conn_key):
         """Draw arrows that travel along the connection line."""
         if conn_key not in self.arrow_travel_progress:
@@ -3460,6 +3349,7 @@ class View2D(QWidget):
                     self.drag_primary = clicked_object
 
                     self.is_dragging_object = True
+                    self._object_drag_undo_saved = False
                     self.drag_start_pos = world_pos
                     pos_ref = clicked_object['pos'] if isinstance(clicked_object, dict) else clicked_object.pos
                     obj_pos_2d = QPointF(pos_ref[i1], pos_ref[i2])
@@ -3601,6 +3491,12 @@ class View2D(QWidget):
                 d2 = new_primary_pos.y() - p_ref[i2]
 
                 if d1 != 0 or d2 != 0:
+                    # Stage the undo snapshot only once the drag actually moves.
+                    # A press/release click therefore creates no phantom undo step,
+                    # while every real brush move remains undoable.
+                    if not self._object_drag_undo_saved:
+                        self.main_window.save_state()
+                        self._object_drag_undo_saved = True
                     self._maybe_toggle_manip = False  # a real drag, not a toggle-click
                     for obj in group:
                         self._translate_object_2d(obj, d1, d2, i1, i2)
@@ -3689,6 +3585,7 @@ class View2D(QWidget):
                 self.is_dragging_object = False
                 self.drag_group = []
                 self.drag_primary = None
+                self._object_drag_undo_saved = False
                 # A click (no drag) inside an existing group flips scale/rotate.
                 if getattr(self, '_maybe_toggle_manip', False):
                     self._maybe_toggle_manip = False
@@ -3800,8 +3697,8 @@ class View2D(QWidget):
         
         # Standard Things
         add_light_action = menu.addAction("Light")
+        add_effect_action = menu.addAction("Effect")
         add_player_start_action = menu.addAction("PlayerStart")
-        add_pickup_action = menu.addAction("Pickup")
         add_prop_action = menu.addAction("Prop")
         add_monster_action = menu.addAction("Monster")
         add_speaker_action = menu.addAction("Speaker")
@@ -3823,7 +3720,7 @@ class View2D(QWidget):
         add_logic_timer_action = logic_menu.addAction("LogicTimer")
         add_logic_gate_action = logic_menu.addAction("LogicGate")
         add_logic_command_action = logic_menu.addAction("LogicCommand")
-        add_logic_keyvalue_action = logic_menu.addAction("State Store")
+        add_logic_state_action = logic_menu.addAction("State Store")
 
         # Node / Special submenu
         ai_menu = menu.addMenu("Nodes")
@@ -3862,12 +3759,12 @@ class View2D(QWidget):
         new_thing = None
         
         # Handle Object Creation
-        if action == add_light_action: 
+        if action == add_light_action:
             new_thing = Light(pos=pos_3d)
+        elif action == add_effect_action:
+            new_thing = Effect(pos=pos_3d)
         elif action == add_player_start_action: 
             new_thing = PlayerStart(pos=pos_3d)
-        elif action == add_pickup_action: 
-            new_thing = Pickup(pos=pos_3d)
         elif action == add_prop_action:
             new_thing = Prop(pos=pos_3d)
         elif action == add_speaker_action: 
@@ -3885,7 +3782,7 @@ class View2D(QWidget):
         elif action == add_logic_gate_action:
             new_thing = LogicGate(pos=pos_3d)
             new_thing.properties['logic_type'] = 'AND' 
-        elif action == add_logic_keyvalue_action:
+        elif action == add_logic_state_action:
             new_thing = LogicState(pos=pos_3d)
             new_thing.properties['initial_data'] = {}
         elif action == add_logic_camera_action:
@@ -3940,8 +3837,7 @@ class View2D(QWidget):
                 except Exception:
                     rel_path = filepath
                 
-                new_thing = Model(pos=pos_3d)
-                new_thing.properties['model_path'] = rel_path
+                new_thing = Prop.for_model(rel_path, pos=pos_3d)
 
         # Finalize Creation
         if new_thing:
@@ -4106,13 +4002,14 @@ class View2D(QWidget):
                 pos[i1] += d1
                 pos[i2] += d2
         else:
-            pos = obj.pos
-            if not isinstance(pos, list):
-                # glm vector or tuple — copy to a list so it stays serialisable.
-                pos = [pos[0], pos[1], pos[2]]
-                obj.pos = pos
+            # Assign a new list rather than editing obj.pos in place: the
+            # assignment is what journals the move (TrackedPosition), and
+            # without it the 3D view's entity table keeps drawing the sprite
+            # at its old position until something else forces a refresh.
+            pos = [float(obj.pos[0]), float(obj.pos[1]), float(obj.pos[2])]
             pos[i1] += d1
             pos[i2] += d2
+            obj.pos = pos
 
     def select_brushes_inside(self, container_brush):
         """Select every brush and entity enclosed by the drawn box, then delete
@@ -4246,8 +4143,13 @@ class View2D(QWidget):
             
             is_hit = False
             
+            # Portal gizmos are their own pick target; do not reduce them to
+            # the tiny generic Thing-icon hitbox.
+            if isinstance(thing, Portal):
+                is_hit = self._portal_gizmo_hit_test(thing, screen_pos, ax1, ax2)
+
             # Standard Thing Hit Test
-            if isinstance(thing, Model) and thing.properties.get('model_path'):
+            elif thing.properties.get('model_path'):
                 # Advanced Model Hit Test: Check Bounding Box of projected vertices
                 coords = self._compute_model_screen_coords(thing, ax_map, ax1, ax2)
                 if coords:
@@ -4433,10 +4335,3 @@ class View2D(QWidget):
         # the pan correction is a plain difference in world space.
         self.pan_offset += QPointF(before.x() - after.x(), before.y() - after.y())
         self.update()
-
-    def zoom_in(self):
-        # Zoom toward the view centre (used by buttons/keys without a cursor).
-        self.zoom_at(QPointF(self.width() / 2, self.height() / 2), 1.25)
-
-    def zoom_out(self):
-        self.zoom_at(QPointF(self.width() / 2, self.height() / 2), 0.8)

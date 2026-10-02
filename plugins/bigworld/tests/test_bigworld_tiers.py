@@ -12,6 +12,8 @@ import pytest
 from engine.spatial import (SIM_TIER_KEY, TIER_ACTIVE, TIER_DISTANT,
                             TIER_DORMANT, TIER_NAMES, TIER_NEAR,
                             tier_of)
+from engine.view_distance import ViewDistance
+from plugins.bigworld.config import effective_streaming_radii
 from plugins.bigworld.manager import BigWorldManager
 from plugins.bigworld.runtime import BigWorldSession
 from plugins.bigworld.tiers import TIER_HYSTERESIS, TierClassifier
@@ -33,10 +35,11 @@ class FakeThing:
 class FakeLogic:
     """Stand-in for the streaming host (see ``runtime.StreamingHost``)."""
 
-    def __init__(self, brushes=None, things=None, player=None):
+    def __init__(self, brushes=None, things=None, player=None, view_distance=None):
         self.brushes = brushes or []
         self.things = things or []
         self.player = player
+        self.view_distance = view_distance
 
 
 class FakePlayer:
@@ -62,9 +65,10 @@ def grid_world(cells_each_way=6, per_cell=4, cell_size=512.0):
 
 
 def started_session(things, brushes=None, activation=2048.0,
-                    deactivation=2304.0, near=1024.0, at=(0.0, 0.0)):
+                    deactivation=2304.0, near=1024.0, at=(0.0, 0.0),
+                    view_distance=None):
     logic = FakeLogic(brushes=brushes or [], things=things,
-                      player=FakePlayer(*at))
+                      player=FakePlayer(*at), view_distance=view_distance)
     session = BigWorldSession(logic, activation_radius=activation,
                               deactivation_radius=deactivation,
                               sim_near_radius=near)
@@ -172,6 +176,77 @@ def test_the_session_publishes_one_pair_of_radii():
     assert session.logic.sim_active_radius == 4096.0
     assert session.logic.sim_near_radius == 1024.0
     assert session.tiers.active_radius == session.manager.activation_radius
+
+
+def test_bigworld_residency_never_ends_inside_the_visual_horizon():
+    """Residency and visibility agree: nothing the camera can see is parked.
+
+    Agreement is reached by narrowing the camera to the world, not by widening
+    the world to the camera: the session limits the view to its activation
+    radius, so the horizon lands inside the authored radius and residency is
+    exactly what the map asked for.
+    """
+    things = [FakeThing(3000.0, 0.0, uuid="far")]
+    view_distance = ViewDistance(4096.0)
+    session = started_session(
+        things, activation=1024.0, deactivation=1280.0,
+        at=(0.0, 0.0), view_distance=view_distance
+    )
+    horizon = session.logic.view_distance.visual_horizon
+    expected_a, expected_d = effective_streaming_radii(1024.0, 1280.0, horizon)
+    assert session.manager.activation_radius == pytest.approx(expected_a)
+    assert session.manager.deactivation_radius == pytest.approx(expected_d)
+    assert horizon <= session.manager.activation_radius
+    assert session.manager.activation_radius == pytest.approx(1024.0), (
+        "the stock view distance widened residency past the authored radius"
+    )
+    assert not session.manager.is_thing_active(things[0])
+    assert view_distance.fog_factor(3000.0) == 1.0, (
+        "a parked object is still visible through the fog"
+    )
+
+
+def test_the_session_fades_the_camera_out_at_its_activation_radius():
+    view_distance = ViewDistance(4096.0)
+    session = started_session(
+        [FakeThing(0.0, 0.0)], activation=2048.0, deactivation=2304.0,
+        view_distance=view_distance,
+    )
+    assert view_distance.limit == 2048.0
+    assert view_distance.resolve()[1] == pytest.approx(2048.0)
+    assert view_distance.far_plane < 4096.0
+    assert view_distance.distance == 4096.0, "the player's setting is kept"
+
+    session.stop()
+    assert view_distance.limit is None
+    assert view_distance.far_plane == 4096.0
+
+
+def test_a_shorter_view_distance_is_left_alone():
+    view_distance = ViewDistance(1000.0)
+    started_session([FakeThing(0.0, 0.0)], activation=2048.0,
+                    view_distance=view_distance)
+    assert view_distance.far_plane == 1000.0
+
+
+def test_changing_view_distance_cannot_widen_bigworld_past_its_radius():
+    subject = FakeThing(3000.0, 0.0, uuid="far")
+    logic = FakeLogic(things=[subject], player=FakePlayer(0.0, 0.0))
+    logic.view_distance = ViewDistance(4096.0)
+    session = BigWorldSession(
+        logic, activation_radius=1024.0, deactivation_radius=1280.0
+    )
+    session.start()
+    assert not session.manager.is_thing_active(subject)
+
+    logic.view_distance.distance = 20000.0
+    session.tick()
+
+    assert logic.view_distance.visual_horizon <= 1024.0
+    assert session.manager.activation_radius == pytest.approx(1024.0)
+    assert not session.manager.is_thing_active(subject), (
+        "raising the view distance streamed in a cell past the authored radius"
+    )
 
 
 def test_persistent_globals_are_never_demoted_by_distance():

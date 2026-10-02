@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import abc
-from dataclasses import dataclass, field
-from typing import Callable, Optional
+from dataclasses import dataclass
+from typing import Callable
 
 from ..input.state import InputState
 

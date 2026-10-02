@@ -109,10 +109,10 @@ def test_editor_module_names_all_resolve(module_name):
 
 def test_the_natural_scale_helpers_are_importable():
     """The two names the textured-brush path calls on every natural face."""
-    renderer_F = importlib.import_module("engine.renderer_F")
+    brush_geometry = importlib.import_module("engine.brush_geometry")
 
-    assert callable(renderer_F.face_uses_natural_scale)
-    assert callable(renderer_F.natural_repeats)
+    assert callable(brush_geometry.face_uses_natural_scale)
+    assert callable(brush_geometry.natural_repeats)
 
 
 def test_detector_notices_a_module_referenced_without_importing_it(tmp_path):

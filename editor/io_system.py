@@ -9,10 +9,12 @@ Half-Life 2's Hammer Editor. Entities ("things") communicate through:
 Example: A trigger_once fires "OnTrigger" which calls "Open" on "door_main" after 0.5s
 """
 
+import threading
+from collections import deque
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Callable, Optional, Set
-from enum import Enum
-import time
+from typing import List, Dict, Callable, Optional, Set
+
+from engine.change_journal import touch
 
 # Import debug logger - with fallback to print if not available
 try:
@@ -135,18 +137,6 @@ def register_io(entity_type: str, inputs: List[IODef], outputs: List[IODef]):
 #: rather than a list of their own, so the exception is stated once, here,
 #: where anyone reading the declaration will see it.
 ABSTRACT_IO: Dict[tuple, str] = {}
-
-
-def register_io_alias(alias: str, entity_type: str):
-    """Make *alias* resolve to the same I/O definitions as *entity_type*.
-
-    Used when an entity is renamed: the old type token keeps answering, so a
-    map saved by an older Fio still shows its inputs and outputs in the editor
-    instead of an empty list.  The two names share one definition object, so
-    they cannot drift apart.
-    """
-    if entity_type in IO_REGISTRY:
-        IO_REGISTRY[alias] = IO_REGISTRY[entity_type]
 
 
 def is_registered_type(entity_type: str) -> bool:
@@ -306,6 +296,17 @@ class IOManager:
         # activator simply has none.
         self._activator_entity = None
         self._activator_id: str = ""
+
+        # The thread that runs play ticks (whoever last called update()), and
+        # the outputs other threads fired while play was running. The monster
+        # AI runs on its own thread and fires OnDeath, OnSeePlayer, OnAttack
+        # and patrol events; dispatching those in place raced the logic tick:
+        # update() rebuilds pending_events, so a delayed event appended
+        # meanwhile was lost, and the source/activator context above was
+        # interleaved between two chains. They are delivered, in order, at the
+        # start of the next update() instead -- on the tick's thread.
+        self._tick_thread = None
+        self._foreign_outputs = deque()
     
     def set_logic_thread(self, logic_thread):
         """Set reference to logic thread."""
@@ -371,13 +372,20 @@ class IOManager:
     def reset(self):
         """Reset for new play session."""
         self.pending_events.clear()
+        self._foreign_outputs.clear()
         self.current_time = 0.0
         self._source_entity = None
         self._source_id = ""
         self._activator_entity = None
         self._activator_id = ""
     
-    def fire_output(self, source_entity, output_name: str, value: str = None):
+    def fire_output(
+        self,
+        source_entity,
+        output_name: str,
+        value: str = None,
+        activator_entity=None,
+    ):
         """
         Fire an output from an entity (thing), triggering all connected inputs.
 
@@ -387,14 +395,23 @@ class IOManager:
         """
         if not io_enabled(source_entity):
             return
+        tick_thread = self._tick_thread
+        if (tick_thread is not None and tick_thread != threading.get_ident()
+                and getattr(self._logic_thread, 'play_mode', False)):
+            self._foreign_outputs.append(
+                (source_entity, output_name, value, activator_entity))
+            return
 
         connections = self._get_connections(source_entity)
         source_name = self._get_entity_name(source_entity)
         source_id = self._get_entity_id(source_entity)
-        # A chain that is already running keeps its activator; one starting here
-        # takes this entity as its own.  Read before dispatch, because dispatch
-        # rebinds it for the duration of each hop.
-        activator_id = self._activator_id or source_id
+        # An explicit activator starts a new chain context at this output. This
+        # preserves the actual entity that touched a trigger through all I/O hops.
+        explicit_activator_id = (
+            self._get_entity_id(activator_entity)
+            if activator_entity is not None else ""
+        )
+        activator_id = explicit_activator_id or self._activator_id or source_id
 
         # The mirror of the stale-declaration problem: an output the code fires
         # but no type declares is undiscoverable — it works perfectly for anyone
@@ -458,6 +475,10 @@ class IOManager:
             io_log(f"{source_name}.{output_name} (no connections)")
     
     def update(self, delta: float):
+        self._tick_thread = threading.get_ident()
+        foreign = self._foreign_outputs
+        while foreign:
+            self.fire_output(*foreign.popleft())
         self.current_time += delta
         
         still_pending = []
@@ -525,6 +546,10 @@ class IOManager:
                 and self._find_entity_by_id):
             self._activator_entity = self._find_entity_by_id(self._activator_id)
 
+        # A brush's authored visibility is what the collision grid is built
+        # from; the logic thread rebuilds it if an input changes it.
+        was_hidden = (authored_flag(target, 'hidden')
+                      if isinstance(target, dict) else None)
         try:
             if handler:
                 try:
@@ -536,6 +561,15 @@ class IOManager:
             else:
                 self._try_generic_input(target, input_name, parameter)
         finally:
+            # An input exists to change its target; whatever it changed, the
+            # render projection re-resolves that one row -- including when a
+            # handler failed part-way through its writes.
+            touch(target)
+            if (was_hidden is not None
+                    and authored_flag(target, 'hidden') != was_hidden):
+                mark = getattr(self._logic_thread, 'mark_collision_dirty', None)
+                if mark is not None:
+                    mark()
             (self._source_entity, self._source_id,
              self._activator_entity, self._activator_id) = previous
     
@@ -573,11 +607,14 @@ class IOManager:
             set_authored_flag(entity, 'disabled', True)
 
         elif input_lower == 'kill':
-            # Mark for removal (handled by logic thread)
-            if isinstance(entity, dict):
-                entity['_kill'] = True
-            elif hasattr(entity, 'properties'):
-                entity.properties['_kill'] = True
+            # Remove from the running world: nothing draws or collides with a
+            # hidden, disabled object. (Monsters have their own Kill handler.)
+            # Deleting it from the scene lists instead would destroy authored
+            # data the editor is showing, and the `_kill` marker this used to
+            # set was read by nothing but the monster AI, so a killed brush
+            # stayed solid and visible.
+            set_authored_flag(entity, 'hidden', True)
+            set_authored_flag(entity, 'disabled', True)
 
         # ---- Generic Hide / Show / ToggleVisibility --------------------------
         elif input_lower == 'hide':
@@ -723,8 +760,8 @@ def register_default_io():
             IODef('Enable', 'Enable this trigger'),
             IODef('Disable', 'Disable this trigger'),
             IODef('Toggle', 'Toggle enabled state'),
-            IODef('TouchTest', 'Fire OnTrigger if player is inside'),
-            IODef('Teleport', 'Teleport the touching player to target_node'),
+            IODef('TouchTest', 'Fire OnTrigger if a filtered activator is inside'),
+            IODef('Teleport', 'Teleport the touching activator to target_node'),
             IODef('SetTargetNode', 'Change the target PathNode name', 'string'),
             IODef('Hide', 'Hide this trigger'),
             IODef('Show', 'Show this trigger'),
@@ -734,9 +771,9 @@ def register_default_io():
         ],
         outputs=[
             IODef('OnTrigger', 'Fired when activated'),
-            IODef('OnStartTouch', 'Fired when player enters'),
-            IODef('OnEndTouch', 'Fired when player exits'),
-            IODef('OnTeleport', 'Fired after a player is teleported'),
+            IODef('OnStartTouch', 'Fired when a filtered activator enters'),
+            IODef('OnEndTouch', 'Fired when a filtered activator exits'),
+            IODef('OnTeleport', 'Fired after an activator is teleported'),
         ]
     )
     
@@ -836,23 +873,29 @@ def register_default_io():
         ]
     )
     
-    # === PICKUP ===
-    register_io('pickup',
+    # === PROP ===
+    register_io('prop',
         inputs=[
-            IODef('Enable', 'Enable pickup'),
-            IODef('Disable', 'Disable pickup'),
-            IODef('Respawn', 'Force respawn'),
-            IODef('SetValue', 'Set pickup value', 'int'),
-            IODef('Hide', 'Hide this pickup'),
-            IODef('Show', 'Show this pickup'),
-            IODef('ToggleVisibility', 'Toggle visibility'),
+            IODef('Enable', 'Enable this prop'),
+            IODef('Disable', 'Disable this prop'),
+            IODef('Collect', 'Collect this prop'),
+            IODef('Respawn', 'Respawn this prop'),
+            IODef('SetValue', 'Set collection value', 'int'),
+            IODef('Drop', 'Release this prop if it is being carried'),
+            IODef('Wake', 'Resume physics simulation'),
+            IODef('Hide', 'Hide this prop'),
+            IODef('Show', 'Show this prop'),
+            IODef('ToggleVisibility', 'Toggle this prop between hidden and shown'),
         ],
         outputs=[
-            IODef('OnPickedUp', 'Fired when collected'),
-            IODef('OnRespawn', 'Fired when respawned'),
+            IODef('OnCarried', 'Fired when the player carries this prop'),
+            IODef('OnDropped', 'Fired when the player drops this prop'),
+            IODef('OnRest', 'Fired when this prop comes to rest'),
+            IODef('OnCollected', 'Fired when the player collects this prop'),
+            IODef('OnRespawn', 'Fired when this prop respawns'),
         ]
     )
-    
+
     # === LOGIC_RELAY ===
     register_io('logic_relay',
         inputs=[
@@ -958,30 +1001,24 @@ def register_default_io():
     # === PROP ===
     register_io('prop',
         inputs=[
-            IODef('Enable', 'Make this prop pickable'),
-            IODef('Disable', 'Make this prop unavailable'),
+            IODef('Enable', 'Enable this prop'),
+            IODef('Disable', 'Disable this prop'),
+            IODef('Collect', 'Collect this prop'),
+            IODef('Respawn', 'Respawn this prop'),
+            IODef('SetValue', 'Set collection value', 'int'),
             IODef('Drop', 'Release this prop if it is being carried'),
             IODef('Wake', 'Resume physics simulation'),
+            IODef('Hide', 'Hide this prop'),
+            IODef('Show', 'Show this prop'),
+            IODef('ToggleVisibility', 'Toggle this prop between hidden and shown'),
         ],
         outputs=[
-            IODef('OnPickedUp', 'Fired when the player picks up this prop'),
+            IODef('OnCarried', 'Fired when the player carries this prop'),
             IODef('OnDropped', 'Fired when the player drops this prop'),
             IODef('OnRest', 'Fired when this prop comes to rest'),
+            IODef('OnCollected', 'Fired when the player collects this prop'),
+            IODef('OnRespawn', 'Fired when this prop respawns'),
         ]
-    )
-
-    # === MODEL ===
-    register_io('model',
-        inputs=[
-            IODef('Enable', 'Show model'),
-            IODef('Disable', 'Hide model'),
-            IODef('SetSkin', 'Set model skin', 'int'),
-            IODef('SetAnimation', 'Play animation', 'string'),
-            IODef('Hide', 'Hide this model'),
-            IODef('Show', 'Show this model'),
-            IODef('ToggleVisibility', 'Toggle visibility'),
-        ],
-        outputs=[]
     )
 
     # === LEVEL CHANGER ===
@@ -1009,6 +1046,7 @@ def register_default_io():
             IODef('OnMonsterLeft',    'Fires when a patrolling monster leaves this node\'s radius'),
             IODef('OnWaitStart',      'Fires when a monster begins waiting at this node'),
             IODef('OnWaitEnd',        'Fires when a monster finishes waiting and advances to next node'),
+            IODef('OnCameraArrived',  'Fires when a LogicCamera arrives at this node'),
         ]
     )
 
@@ -1021,6 +1059,7 @@ def register_default_io():
             IODef('Pause',    'Freeze camera at current chain position'),
             IODef('Resume',   'Continue a paused sequence'),
             IODef('SetSpeed', 'Override travel speed', 'float'),
+            IODef('LookAt',    'Smoothly face an entity by name or UUID', 'string'),
         ],
         outputs=[
             IODef('OnStart',       'Fired when sequence begins'),
@@ -1043,6 +1082,26 @@ def register_default_io():
         ],
         outputs=[
             IODef('OnCommand', 'Fired after a command is queued (param: the command line)'),
+        ]
+    )
+
+    # === EFFECT ===
+    # Effect TYPE selects the behaviour family. FIRE and ORB each have five
+    # authored GIF variants; those variants are independent of effect_type.
+    register_io('effect',
+        inputs=[
+            IODef('SetType', 'Set the Effect TYPE (FIRE, ORB, EXPLOSION, or CUSTOM)', 'string'),
+            IODef('SetFireTexture', 'Select FIRE variant number 1-5', 'string'),
+            IODef('SetOrbTexture', 'Select ORB variant number 1-5', 'string'),
+            IODef('SetCustomGif', 'Set the CUSTOM GIF path', 'string'),
+            IODef('SetLoop', 'Set whether a CUSTOM GIF loops', 'bool'),
+            IODef('Hide', 'Hide this Effect'),
+            IODef('Show', 'Show this Effect'),
+            IODef('ToggleVisibility', 'Toggle Effect visibility'),
+            IODef('Explode', 'Switch to EXPLOSION and play its animation once'),
+        ],
+        outputs=[
+            IODef('OnChanged', 'Fired when an authored Effect control changes (parameter: value)', 'string'),
         ]
     )
 
@@ -1143,11 +1202,6 @@ def register_default_io():
             IODef('OnCompareFalse','Legacy name for OnFalse (param: the value)'),
         ]
     )
-
-    # Pre-2.4 type token for the same entity: a map saved before the rename
-    # still resolves its inputs and outputs in the editor.
-    register_io_alias('logic_keyvalue', 'logic_state')
-
 
 
 # =============================================================================
@@ -1687,6 +1741,46 @@ def remove_connection(entity, connection: OutputConnection):
     if connection in connections:
         connections.remove(connection)
         bump_io_revision()
+
+
+#: What the old Model entity's inputs did, as the Prop inputs that do it. A
+#: Model's Enable/Disable showed and hid it; a Prop's toggle its gameplay, so a
+#: map written against a Model is re-aimed at Show/Hide when it loads. SetSkin
+#: and SetAnimation only ever recorded a value nothing read, and are left as
+#: authored.
+LEGACY_MODEL_INPUTS = {'enable': 'Show', 'disable': 'Hide'}
+
+
+def retarget_legacy_model_inputs(entities, models) -> int:
+    """Re-aim connections into loaded legacy models at the Prop inputs.
+
+    *entities* is every brush and Thing that can carry outputs; *models* the
+    Things that were read from an old ``model`` record. Returns how many
+    connections changed.
+    """
+    ids = {m.properties.get('id') for m in models if m.properties.get('id')}
+    names = {m.properties.get('name') for m in models if m.properties.get('name')}
+    if not ids and not names:
+        return 0
+    changed = 0
+    for entity in entities:
+        for conn in get_connections(entity):
+            is_dict = isinstance(conn, dict)
+            target_id = conn.get('target_id', '') if is_dict else conn.target_id
+            target_name = conn.get('target', '') if is_dict else conn.target_name
+            if not (target_id in ids if target_id else target_name in names):
+                continue
+            key = 'input' if is_dict else 'input_name'
+            current = conn.get(key, '') if is_dict else conn.input_name
+            replacement = LEGACY_MODEL_INPUTS.get(str(current).lower())
+            if replacement is None:
+                continue
+            if is_dict:
+                conn[key] = replacement
+            else:
+                conn.input_name = replacement
+            changed += 1
+    return changed
 
 
 def get_connections(entity) -> List[OutputConnection]:

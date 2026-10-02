@@ -5,7 +5,7 @@ Demonstrates how to attach a light entity to a moving brush to create a moving l
 
 ### `Key_Test.json`
 
-The player must pick up the blue key to open the blue door - _demonstrates the **pickup entity** and **door brush**_
+The player must pick up the blue key to open the blue door - _demonstrates a collectible **Prop** and a **door brush**_
 
 ### `Office_Corridor.json`
 
@@ -15,9 +15,9 @@ Hub map with doors, one of them leads to `map_test_Extended` - _demonstrates the
 
 Playable level with two rooms, pickups, a moving platform and a light that can be triggered on/off
 
-### `Maze.json`
+### `_SHOWCASE.json`
 
-Player spawn triggers a cutscene, demonstrating the Camera entity
+Demonstrates LogicCamera, Effects, Triggers, Messages and engine capabilities
 
 ### `MonsterTest.json`
 

@@ -3,14 +3,14 @@
     "brushes": [
         {
             "pos": [
-                64.0,
-                432.0,
-                576.0
+                64,
+                432,
+                576
             ],
             "size": [
-                1152.0,
-                992.0,
-                128.0
+                1152,
+                992,
+                128
             ],
             "textures": {
                 "north": "default.png",
@@ -25,14 +25,14 @@
         },
         {
             "pos": [
-                -448.0,
-                432.0,
-                -576.0
+                -448,
+                432,
+                -576
             ],
             "size": [
-                128.0,
-                992.0,
-                2176.0
+                128,
+                992,
+                2176
             ],
             "textures": {
                 "north": "default.png",
@@ -47,14 +47,14 @@
         },
         {
             "pos": [
-                576.0,
-                432.0,
-                -64.0
+                576,
+                432,
+                -64
             ],
             "size": [
-                128.0,
-                992.0,
-                1152.0
+                128,
+                992,
+                1152
             ],
             "textures": {
                 "north": "default.png",
@@ -69,14 +69,14 @@
         },
         {
             "pos": [
-                1040.0,
-                432.0,
-                -704.0
+                1040,
+                432,
+                -704
             ],
             "size": [
-                1056.0,
-                992.0,
-                128.0
+                1056,
+                992,
+                128
             ],
             "textures": {
                 "north": "default.png",
@@ -91,14 +91,14 @@
         },
         {
             "pos": [
-                588.0,
+                588,
                 0,
-                -1216.0
+                -1216
             ],
             "size": [
-                1944.0,
+                1944,
                 128,
-                896.0
+                896
             ],
             "textures": {
                 "north": "default.png",
@@ -118,9 +118,9 @@
                 -128
             ],
             "size": [
-                896.0,
+                896,
                 128,
-                1280.0
+                1280
             ],
             "textures": {
                 "north": "default.png",
@@ -135,14 +135,14 @@
         },
         {
             "pos": [
-                528.0,
-                432.0,
-                -1728.0
+                528,
+                432,
+                -1728
             ],
             "size": [
-                2080.0,
-                992.0,
-                128.0
+                2080,
+                992,
+                128
             ],
             "textures": {
                 "north": "default.png",
@@ -153,18 +153,19 @@
                 "down": "default.png"
             },
             "lock": false,
-            "id": "cfa15b28-cc11-452d-ab53-1fb76ba4c0f5"
+            "id": "cfa15b28-cc11-452d-ab53-1fb76ba4c0f5",
+            "hidden": false
         },
         {
             "pos": [
-                64.0,
-                344.0,
-                528.0
+                64,
+                344,
+                528
             ],
             "size": [
-                288.0,
-                560.0,
-                64.0
+                288,
+                560,
+                64
             ],
             "textures": {
                 "north": "door012.png",
@@ -178,14 +179,14 @@
         },
         {
             "pos": [
-                2880.0,
-                432.0,
-                4480.0
+                2880,
+                432,
+                4480
             ],
             "size": [
-                1152.0,
-                992.0,
-                256.0
+                1152,
+                992,
+                256
             ],
             "textures": {
                 "north": "default.png",
@@ -199,14 +200,14 @@
         },
         {
             "pos": [
-                64.0,
-                144.0,
-                448.0
+                64,
+                144,
+                448
             ],
             "size": [
-                288.0,
-                160.0,
-                80.0
+                288,
+                160,
+                80
             ],
             "textures": {
                 "north": "trigger.jpg",
@@ -239,9 +240,9 @@
                 -448
             ],
             "size": [
-                128.0,
                 128,
-                128.0
+                128,
+                128
             ],
             "textures": {
                 "north": "default.png",
@@ -253,21 +254,21 @@
             },
             "id": "072cd1af-a35b-44c0-b37c-db2aa9850ee6",
             "colour": [
-                1.0,
-                0.0,
-                1.0
+                1,
+                0,
+                1
             ]
         },
         {
             "pos": [
-                1592.0,
-                448.0,
-                -1200.0
+                1592,
+                448,
+                -1200
             ],
             "size": [
-                112.0,
-                1024.0,
-                1184.0
+                112,
+                1024,
+                1184
             ],
             "textures": {
                 "north": "default.png",
@@ -282,13 +283,13 @@
         {
             "pos": [
                 1184,
-                176.0,
-                -1552.0
+                176,
+                -1552
             ],
             "size": [
-                224.0,
-                224.0,
-                224.0
+                224,
+                224,
+                224
             ],
             "textures": {
                 "north": "WoodenCrate_512.jpg",
@@ -308,9 +309,9 @@
                 -1408
             ],
             "size": [
-                224.0,
-                224.0,
-                224.0
+                224,
+                224,
+                224
             ],
             "textures": {
                 "north": "WoodenCrate_512.jpg",
@@ -321,7 +322,7 @@
                 "down": "WoodenCrate_512.jpg"
             },
             "texture_tiling": false,
-            "id": "40c3955d-c363-4f4f-9837-b0f864611665"
+            "id": "0a6da21f-5a82-4238-ad7a-60bfda4e0eb1"
         },
         {
             "pos": [
@@ -330,9 +331,9 @@
                 -1472
             ],
             "size": [
-                128.0,
                 128,
-                128.0
+                128,
+                128
             ],
             "textures": {
                 "north": "WoodenCrate_512.jpg",
@@ -350,9 +351,9 @@
         {
             "type": "light",
             "pos": [
-                16.0,
-                480.0,
-                -224.0
+                16,
+                480,
+                -224
             ],
             "properties": {
                 "type": "light",
@@ -363,17 +364,18 @@
                     255
                 ],
                 "intensity": 1.5,
-                "radius": 1024.0,
+                "radius": 1024,
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
                 "id": "2d7f280b-48d5-4ba2-9b66-ce9c2cd39bb0",
                 "parent_mover": "",
                 "parent_offset": [
-                    0.0,
-                    0.0,
-                    0.0
-                ]
+                    0,
+                    0,
+                    0
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -392,33 +394,35 @@
                     255,
                     255
                 ],
-                "intensity": 1.0,
-                "radius": 1024.0,
+                "intensity": 1,
+                "radius": 1024,
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
                 "id": "4845eaff-e465-440e-9522-b3ece680b155",
                 "parent_mover": "",
                 "parent_offset": [
-                    0.0,
-                    0.0,
-                    0.0
-                ]
+                    0,
+                    0,
+                    0
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         },
         {
             "type": "playerstart",
             "pos": [
-                992.0,
-                304.0,
-                -928.0
+                992,
+                304,
+                -928
             ],
             "properties": {
                 "type": "playerstart",
                 "name": "PlayerStart_1",
-                "angle": 0.0,
-                "id": "5f4a744c-0acf-4862-98ec-e02efbcb407e"
+                "angle": 0,
+                "id": "5f4a744c-0acf-4862-98ec-e02efbcb407e",
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -433,12 +437,13 @@
                 "type": "levelchanger",
                 "name": "LevelChanger_1",
                 "target_map": "Simple_Map_Test_Extended.json",
-                "delay": 0.0,
+                "delay": 0,
                 "fade_time": 0.5,
                 "show_radius": false,
-                "radius": 128.0,
+                "radius": 128,
                 "id": "8e3f4a55-6824-4063-b67a-541b820551b4",
-                "usable": false
+                "usable": false,
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -446,7 +451,7 @@
             "type": "portal",
             "pos": [
                 1072,
-                192,
+                224,
                 -800
             ],
             "properties": {
@@ -454,30 +459,31 @@
                 "name": "Portal_2",
                 "id": "54bfcf4f-c761-4ce9-892b-485895533177",
                 "portal_target": "Portal_1",
-                "width": 128.0,
-                "height": 256.0,
+                "width": 200,
+                "height": 256,
                 "rotation": [
-                    180.0,
-                    0.0,
-                    0.0
+                    180,
+                    0,
+                    0
                 ],
-                "angle": 180.0,
+                "angle": 180,
                 "active": true,
                 "color": [
                     255,
                     255,
                     255
                 ],
-                "show_rim": true,
+                "show_rim": false,
                 "parent_mover": "",
                 "parent_offset": [
-                    0.0,
-                    0.0,
-                    0.0
+                    0,
+                    0,
+                    0
                 ],
                 "parent_local_pos": null,
-                "parent_local_yaw": 0.0,
-                "portal_direction": "both"
+                "parent_local_yaw": 0,
+                "portal_direction": "both",
+                "io_enabled": true
             },
             "io_connections": []
         },
@@ -485,7 +491,7 @@
             "type": "portal",
             "pos": [
                 480,
-                192,
+                224,
                 -448
             ],
             "properties": {
@@ -493,52 +499,101 @@
                 "name": "Portal_1",
                 "id": "778eaaae-0c3b-49d3-9635-7428cd0d2ec1",
                 "portal_target": "Portal_2",
-                "width": 128.0,
-                "height": 256.0,
+                "width": 200,
+                "height": 256,
                 "rotation": [
-                    270.0,
-                    0.0,
-                    0.0
+                    270,
+                    0,
+                    0
                 ],
-                "angle": 270.0,
+                "angle": 270,
                 "active": true,
                 "color": [
                     255,
                     255,
                     255
                 ],
-                "show_rim": true,
+                "show_rim": false,
                 "parent_mover": "",
                 "parent_offset": [
-                    0.0,
-                    0.0,
-                    0.0
+                    0,
+                    0,
+                    0
                 ],
                 "parent_local_pos": null,
-                "parent_local_yaw": 0.0,
-                "portal_direction": "both"
+                "parent_local_yaw": 0,
+                "portal_direction": "both",
+                "io_enabled": true
             },
             "io_connections": []
         },
         {
-            "type": "pickup",
+            "type": "prop",
             "pos": [
                 -112,
                 112,
                 -448
             ],
             "properties": {
-                "type": "pickup",
-                "name": "Pickup_1",
+                "type": "prop",
+                "name": "Prop_1",
                 "id": "b456370e-e459-4356-ae42-f8b1d0d10580",
-                "item_type": "health",
-                "value": 25,
-                "activation": "walk_over",
-                "collected": false,
-                "respawns": false,
-                "respawn_time": 20.0,
-                "key_name": "blue_key",
-                "custom_sprite": "assets/sprites/health.png"
+                "io_enabled": true,
+                "carry_enabled": false,
+                "collect_enabled": true,
+                "collect_type": "health",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "gun1",
+                "sprite_path": "assets/sprites/health.png",
+                "model_path": "",
+                "render_mode": "billboard",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "auto",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
             },
             "io_connections": []
         },
@@ -558,19 +613,21 @@
                     255,
                     255
                 ],
-                "intensity": 1.0,
-                "radius": 512.0,
+                "intensity": 1,
+                "radius": 512,
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
                 "parent_mover": "",
                 "parent_offset": [
-                    0.0,
-                    0.0,
-                    0.0
-                ]
+                    0,
+                    0,
+                    0
+                ],
+                "io_enabled": true
             },
             "io_connections": []
         }
-    ]
+    ],
+    "created": "2026-09-25T21:17:50"
 }

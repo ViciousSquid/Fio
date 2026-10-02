@@ -13,6 +13,8 @@ The pathological shapes get their own section: A->B->A, a target deleted during
 dispatch, several sources aimed at one object, and unbounded recursion.
 """
 
+import math
+
 import pytest
 
 pytest.importorskip("PyQt5", reason="editor.things needs PyQt5")
@@ -594,3 +596,155 @@ def test_handlers_are_keyed_case_insensitively(net):
     assert net.names == ["door"], (
         "input names are matched case-insensitively; 'fire' found %s"
         % (net.names,))
+
+
+# ---------------------------------------------------------------------------
+# LogicCamera path arrival and LookAt
+# ---------------------------------------------------------------------------
+
+class _CameraOutputRecorder:
+    def __init__(self):
+        self.calls = []
+
+    def fire_output(self, entity, output_name, value=None):
+        self.calls.append((entity, output_name, value))
+
+
+def _camera_logic(camera, nodes, recorder=None):
+    from engine.logic_thread import LogicThread
+    lookup = {node.properties['name']: node for node in nodes}
+    logic = LogicThread.__new__(LogicThread)
+    logic.cinematic_state = None
+    logic.io_manager = recorder or _CameraOutputRecorder()
+    logic._name_cache = lookup
+    logic._find_path_node_by_name = lambda name: lookup.get(name)
+    return logic
+
+
+def test_path_node_declares_camera_arrival_output():
+    assert 'OnCameraArrived' in io.get_output_names('path_node')
+
+
+def test_logic_camera_arrival_fires_the_individual_path_node_output():
+    from editor.things import LogicCamera, PathNode
+    from engine.logic_thread import LogicThread
+
+    a = PathNode([0.0, 0.0, 0.0], {'name': 'A'})
+    b = PathNode([10.0, 0.0, 0.0], {'name': 'B', 'next_node': 'C'})
+    c = PathNode([10.0, 0.0, 10.0], {'name': 'C'})
+    camera = LogicCamera([0.0, 0.0, 0.0], {'name': 'Camera', 'look_ahead': True})
+    recorder = _CameraOutputRecorder()
+    logic = _camera_logic(camera, [a, b, c], recorder)
+    logic.cinematic_state = {
+        'active': True, 'paused': False, 'entity': camera,
+        'current_node': 'B', 'lerp_t': 0.0,
+        'origin': list(a.pos), 'speed': 25.0,
+        'fov': None, 'look_ahead': True,
+        'cam_angle': 0.0, 'cam_pitch': 0.0,
+        '_look_initialized': True,
+    }
+
+    LogicThread._update_cinematic_camera(logic, 0.4)
+
+    assert [(e, n) for e, n, _ in recorder.calls if n == 'OnCameraArrived'] == [(b, 'OnCameraArrived')]
+    assert [(e, n) for e, n, _ in recorder.calls if n == 'OnReachNode'] == [(camera, 'OnReachNode')]
+    assert logic.cinematic_state['current_node'] == 'C'
+
+
+def test_logic_camera_look_ahead_turn_is_smoothed():
+    from editor.things import LogicCamera, PathNode
+    from engine.logic_thread import LogicThread
+
+    a = PathNode([0.0, 0.0, 0.0], {'name': 'A'})
+    b = PathNode([10.0, 0.0, 0.0], {'name': 'B', 'next_node': 'C'})
+    c = PathNode([10.0, 0.0, 10.0], {'name': 'C'})
+    camera = LogicCamera([0.0, 0.0, 0.0], {'name': 'Camera', 'look_ahead': True})
+    logic = _camera_logic(camera, [a, b, c])
+    logic.cinematic_state = {
+        'active': True, 'paused': False, 'entity': camera,
+        'current_node': 'B', 'lerp_t': 0.0,
+        'origin': list(a.pos), 'speed': 25.0,
+        'fov': None, 'look_ahead': True,
+        'cam_angle': 0.0, 'cam_pitch': 0.0,
+        '_look_initialized': True,
+    }
+
+    LogicThread._update_cinematic_camera(logic, 0.2)
+
+    assert 0.0 < logic.cinematic_state['cam_angle'] < (math.pi / 2.0)
+
+
+def test_logic_camera_lookat_accepts_uuid_and_defaults_to_five_seconds():
+    from types import SimpleNamespace
+    from editor.io_handlers import register_all_input_handlers
+    from editor.things import LogicCamera, PathNode
+
+    camera = LogicCamera([0.0, 0.0, 0.0], {'name': 'Camera'})
+    target = PathNode([0.0, 0.0, -100.0], {'name': 'Focus'})
+    manager = IOManager()
+    register_all_input_handlers(manager)
+    logic = SimpleNamespace(
+        cinematic_state={'active': True, 'entity': camera},
+        _find_entity_by_name=lambda name: target if name == 'Focus' else None,
+        _find_entity_by_id=lambda entity_id: target if entity_id == target.properties['id'] else None,
+    )
+    handler = manager._input_handlers[('logic_camera', 'lookat')]
+
+    handler(camera, target.properties['id'], logic)
+
+    assert logic.cinematic_state['lookat_target'] is target
+    assert logic.cinematic_state['lookat_return_remaining'] == pytest.approx(5.0)
+
+
+def test_logic_camera_lookat_zero_return_time_holds_focus():
+    from types import SimpleNamespace
+    from editor.io_handlers import register_all_input_handlers
+    from editor.things import LogicCamera, PathNode
+
+    camera = LogicCamera([0.0, 0.0, 0.0], {'name': 'Camera', 'lookat_return_time': 0.0})
+    target = PathNode([0.0, 0.0, -100.0], {'name': 'Focus'})
+    manager = IOManager()
+    register_all_input_handlers(manager)
+    logic = SimpleNamespace(
+        cinematic_state={'active': True, 'entity': camera},
+        _find_entity_by_name=lambda name: target if name == 'Focus' else None,
+        _find_entity_by_id=lambda entity_id: None,
+    )
+    handler = manager._input_handlers[('logic_camera', 'lookat')]
+
+    handler(camera, 'Focus', logic)
+
+    assert logic.cinematic_state['lookat_target'] is target
+    assert logic.cinematic_state['lookat_return_remaining'] is None
+
+
+def test_logic_camera_lookat_returns_to_path_focus_after_the_timer():
+    from editor.things import LogicCamera, PathNode
+    from engine.logic_thread import LogicThread
+
+    a = PathNode([0.0, 0.0, 0.0], {'name': 'A'})
+    b = PathNode([10.0, 0.0, 0.0], {'name': 'B', 'next_node': 'C'})
+    c = PathNode([10.0, 0.0, 10.0], {'name': 'C'})
+    focus = PathNode([0.0, 0.0, -100.0], {'name': 'Focus'})
+    camera = LogicCamera([0.0, 0.0, 0.0], {
+        'name': 'Camera',
+        'look_ahead': True,
+        'lookat_return_time': 0.1,
+    })
+    logic = _camera_logic(camera, [a, b, c])
+    logic.cinematic_state = {
+        'active': True, 'paused': False, 'entity': camera,
+        'current_node': 'B', 'lerp_t': 0.0,
+        'origin': list(a.pos), 'speed': 0.0,
+        'fov': None, 'look_ahead': True,
+        'cam_angle': 0.0, 'cam_pitch': 0.0,
+        '_look_initialized': True,
+        'lookat_target': focus,
+        'lookat_return_remaining': 0.1,
+    }
+
+    LogicThread._update_cinematic_camera(logic, 0.2)
+
+    assert logic.cinematic_state['lookat_target'] is None
+    assert logic.cinematic_state['lookat_return_remaining'] is None
+    assert 0.0 < logic.cinematic_state['cam_angle'] < (math.pi / 2.0)

@@ -1,304 +1,229 @@
 import os
+import posixpath
 import json
 import zipfile
-import shutil
-import traceback
-from pathlib import Path
-from typing import Set, List, Dict, Optional, Tuple
-from collections import deque
-
-from PyQt5.QtWidgets import QProgressDialog, QMessageBox, QApplication
-from PyQt5.QtCore import Qt
+from typing import Dict, List, Optional, Set
 
 
 class PackageExporter:
     """
-    Handles .fiopak creation: metadata collection, asset crawling,
-    recursive map dependency resolution, and ZIP assembly.
+    Builds a .fiopak: the current map, every map it reaches through a level
+    change, and the assets those maps reference, zipped with a metadata.json
+    whose ``map_path`` names the entry map inside the archive.
+
+    A package is a world container.  Everything written into it comes from
+    inside the project: a map or asset reference that resolves outside
+    ``<root>/maps`` / ``<root>/assets`` (an absolute path, or one climbing out
+    with ``..``) is reported and skipped, never copied.
     """
-    
+
     # Asset path patterns to scan for in map JSON
     ASSET_KEYS = {
-        'textures': ['textures', 'texture', 'texture_path', 'sprite_2d', 'custom_idle', 
+        'textures': ['textures', 'texture', 'texture_path', 'sprite_2d', 'custom_idle',
                      'custom_shoot', 'custom_dead'],
         'models': ['model_path', 'mesh'],
         'sounds': ['sound_file', 'sound', 'audio']
     }
-    
+
+    # Property keys that name another map a level can change to.
+    MAP_KEYS = ('target_map', 'map', 'next_map', 'next_level', 'target_level',
+                'level_name', 'map_name')
+
+    # Where a bare asset filename may live under assets/.
+    ASSET_SUBDIRS = ('textures', 'models', 'sounds', 'sprites', 'materials')
+
     def __init__(self, editor_state, root_dir: str):
         self.editor_state = editor_state
         self.root_dir = os.path.abspath(root_dir)
-        self._discovered_maps: Set[str] = set()
-        self._discovered_assets: Dict[str, Set[str]] = {
-            'textures': set(),
-            'models': set(),
-            'sounds': set()
-        }
         self.errors: List[str] = []
 
-
     def export(self, output_path, metadata, current_map_path, parent_widget=None):
+        """Export the current project as a .fiopak zip.
+
+        Returns ``(success, errors)``.  A package written with some assets
+        missing still succeeds; the misses are reported in *errors*.  The
+        archive is assembled beside *output_path* and moved into place only
+        once complete, so a failed export never damages an existing package.
         """
-        Export the current project as a .fiopak zip.
-        Now safe for Nuitka builds: all paths are absolute, errors are caught and shown.
-        """
-        import zipfile
-        import json
-        import os
         import traceback
-        from PyQt5.QtWidgets import QMessageBox
 
+        temporary = None
         try:
-            # ---- 1. Normalise all paths to absolute ----
-            root = os.path.abspath(self.root_dir)
-            current_map_abs = os.path.abspath(current_map_path)
-
-            # Ensure root directory exists
+            root = self.root_dir
             if not os.path.isdir(root):
                 raise FileNotFoundError(f"Project root not found: {root}")
 
-            # ---- 2. Collect all map dependencies ----
-            start_map_rel = metadata.get('map_path')
-            all_maps = set()
+            current_map_abs = os.path.abspath(current_map_path)
+            if not os.path.isfile(current_map_abs):
+                raise FileNotFoundError(f"Current map not found: {current_map_abs}")
 
-            # Resolve start map relative to root_dir
+            # ---- 1. The maps: the current one and everything it links to ----
+            all_maps = self._collect_map_dependencies(current_map_abs)
+            start_map_rel = metadata.get('map_path')
             if start_map_rel:
-                start_map_abs = os.path.join(self.root_dir, start_map_rel)
+                start_map_abs = os.path.join(root, start_map_rel)
                 if os.path.isfile(start_map_abs):
-                    all_maps = self._collect_map_dependencies(start_map_abs)
+                    self._collect_map_dependencies(start_map_abs, all_maps)
                 else:
                     self.errors.append(f"Start map not found: {start_map_abs}")
 
-            # ALWAYS include the current map if it exists (it is the authoritative source)
-            if os.path.isfile(current_map_abs):
-                all_maps.add(current_map_abs)
-            elif current_map_abs:
-                self.errors.append(f"Current map not found: {current_map_abs}")
+            # ---- 2. Archive names, fixed before anything is written ----
+            # The current map is named first so it keeps its own basename.
+            map_archive_paths: Dict[str, str] = {}
+            used = set()
+            for map_file in [current_map_abs] + sorted(all_maps - {current_map_abs}):
+                name, ext = os.path.splitext(os.path.basename(map_file))
+                archive_path = f"maps/{name}{ext}"
+                counter = 1
+                while archive_path in used:
+                    archive_path = f"maps/{name}_{counter}{ext}"
+                    counter += 1
+                used.add(archive_path)
+                map_archive_paths[map_file] = archive_path
 
-            if not all_maps:
-                tried = f"start_map={start_map_rel}, current_map={current_map_abs}"
-                raise Exception(f"No map files found to export. (Tried: {tried})")
+            manifest = dict(metadata)
+            manifest['map_path'] = map_archive_paths[current_map_abs]
 
-            # ---- 3. Gather referenced assets from ALL maps ----
-            referenced_assets = set()
-            for map_file in all_maps:
-                try:
-                    with open(map_file, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                except Exception as e:
-                    self.errors.append(f"Could not read {map_file}: {e}")
+            # ---- 3. Referenced assets from every map ----
+            referenced_assets: Set[str] = set()
+            for map_file in map_archive_paths:
+                data = self._read_map(map_file)
+                if data is not None:
+                    referenced_assets |= self._asset_references(data)
+
+            asset_entries: Dict[str, str] = {}   # arcname -> source
+            for asset_name in sorted(referenced_assets):
+                src_path = self._resolve_asset(asset_name)
+                if src_path is None:
                     continue
+                arcname = os.path.relpath(src_path, root).replace('\\', '/')
+                asset_entries.setdefault(arcname, src_path)
 
-                # Scan brushes for textures
-                for brush in data.get('brushes', []):
-                    textures = brush.get('textures', {})
-                    for face, tex in textures.items():
-                        if tex and isinstance(tex, str):
-                            referenced_assets.add(tex)
-
-                # Scan things for model paths, sprites, sounds, etc.
-                for thing in data.get('things', []):
-                    if not isinstance(thing, dict):
-                        continue
-                    props = thing.get('properties', {})
-                    for asset_keys in self.ASSET_KEYS.values():
-                        for key in asset_keys:
-                            val = props.get(key)
-                            if val and isinstance(val, str):
-                                referenced_assets.add(val)
-
-            # ---- 4. Build the .fiopak zip ----
-            with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                # Write metadata.json
-                zf.writestr('metadata.json', json.dumps(metadata, indent=2))
-
-                # Write each map into maps/ folder with clean archive paths
-                map_archive_paths = {}
-                for map_file in all_maps:
-                    basename = os.path.basename(map_file)
-                    archive_path = f"maps/{basename}"
-                    # Handle name collisions
-                    counter = 1
-                    while archive_path in map_archive_paths.values():
-                        name, ext = os.path.splitext(basename)
-                        archive_path = f"maps/{name}_{counter}{ext}"
-                        counter += 1
-                    map_archive_paths[map_file] = archive_path
+            # ---- 4. Assemble next to the destination, then swap it in ----
+            out_dir = os.path.dirname(os.path.abspath(output_path)) or "."
+            temporary = os.path.join(
+                out_dir, ".%s.tmp" % os.path.basename(output_path))
+            with zipfile.ZipFile(temporary, 'w', zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr('metadata.json', json.dumps(manifest, indent=2))
+                for map_file, archive_path in map_archive_paths.items():
                     zf.write(map_file, archive_path)
+                for arcname, src_path in sorted(asset_entries.items()):
+                    zf.write(src_path, arcname)
+            os.replace(temporary, output_path)
+            temporary = None
 
-                # Ensure metadata points to the correct archive-internal path
-                if current_map_abs in map_archive_paths:
-                    metadata['map_path'] = map_archive_paths[current_map_abs]
-                elif all_maps:
-                    first_map = next(iter(all_maps))
-                    metadata['map_path'] = map_archive_paths.get(first_map, 'maps/map.json')
-
-                # Write referenced assets
-                assets_dir = os.path.join(root, 'assets')
-                for asset_name in referenced_assets:
-                    found = False
-                    # Try multiple candidate locations
-                    candidates = []
-                    if os.path.isabs(asset_name):
-                        candidates.append(asset_name)
-                    else:
-                        for sub in ('textures', 'models', 'sounds', 'sprites', 'materials'):
-                            candidates.append(os.path.join(assets_dir, sub, asset_name))
-                        candidates.append(os.path.join(assets_dir, asset_name))
-
-                    for src_path in candidates:
-                        if os.path.isfile(src_path):
-                            arcname = os.path.relpath(src_path, root).replace('\\', '/')
-                            zf.write(src_path, arcname)
-                            found = True
-                            break
-
-                    if not found:
-                        self.errors.append(f"Missing asset: {asset_name}")
-
-            # ---- 4.5 Bundle plugins the maps depend on ----
-            # A .fiopak must carry the plugins its maps use, or it will only load
-            # on the machine that built it. This is a first-class step of the
-            # export: inject the required plugin code and assets into the archive
-            # (see plugins.packaging.augment_fiopak), then drop the cosmetic
-            # "Missing asset" warnings for files the plugin bundle actually
-            # supplied — plugin assets live outside the assets/ tree scanned above.
-            bundled = self._bundle_plugins(output_path)
-            if bundled:
-                norm = {a.lower().lstrip("/") for a in bundled}
-                self.errors = [e for e in self.errors
-                               if not self._is_bundled_missing(e, norm)]
-
-            # ---- 5. Report results ----
-            if self.errors:
-                return True, self.errors   # package created but with warnings
-            return True, []
+            metadata['map_path'] = manifest['map_path']
+            return True, list(self.errors)
 
         except Exception as e:
             error_msg = f"Export failed:\n{str(e)}\n\n{traceback.format_exc()}"
             self.errors.append(error_msg)
             if parent_widget:
+                from PyQt5.QtWidgets import QMessageBox
                 QMessageBox.critical(parent_widget, "Export Error", error_msg)
             return False, self.errors
+        finally:
+            if temporary is not None and os.path.exists(temporary):
+                try:
+                    os.remove(temporary)
+                except OSError:
+                    pass
 
-    @staticmethod
-    def _log(message: str):
-        """Route an export message to the editor debug console, else stdout."""
+    # ------------------------------------------------------------------
+    # Discovery
+    # ------------------------------------------------------------------
+
+    def _read_map(self, map_file) -> Optional[dict]:
         try:
-            from editor.debug_console import debug_log
-            debug_log("Plugins", message)
-        except Exception:
-            print(f"[Plugins] {message}")
+            with open(map_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            self.errors.append(f"Could not read {map_file}: {e}")
+            return None
+        if not isinstance(data, dict):
+            self.errors.append(f"Not a map document: {map_file}")
+            return None
+        return data
 
-    def _bundle_plugins(self, output_path) -> Set[str]:
-        """Inject the plugins the exported maps depend on into the .fiopak.
-
-        First-class, native step of the export: it makes the package
-        self-contained and portable. Guarded so a build without the optional
-        plugin system (or a headless/tool context where it can't import) simply
-        skips bundling rather than failing the export.
-
-        Returns the set of archive paths the plugin bundle added — empty when the
-        maps use no plugin entities or the plugin system is unavailable.
-        """
-        try:
-            from plugins.packaging import augment_fiopak
-        except Exception:
-            return set()  # plugin system not present in this build
-
-        try:
-            summary = augment_fiopak(output_path, log=self._log)
-        except Exception as exc:
-            self.errors.append(f"Plugin packaging failed: {exc}")
-            return set()
-
-        plugins = summary.get("plugins") or []
-        if plugins:
-            self._log("bundled plugin(s): " + ", ".join(plugins))
-        return set(summary.get("added_paths", set()))
-
-    @staticmethod
-    def _is_bundled_missing(error_text, bundled_norm) -> bool:
-        """True if *error_text* is a 'Missing asset: <p>' now supplied by a plugin."""
-        marker = "Missing asset:"
-        if marker not in str(error_text):
-            return False
-        asset = (str(error_text).split(marker, 1)[1].strip()
-                 .replace("\\", "/").lower().lstrip("/"))
-        if asset in bundled_norm:
-            return True
-        # Also match by basename in case the reference used a bare filename.
-        base = asset.rsplit("/", 1)[-1]
-        return any(b.rsplit("/", 1)[-1] == base for b in bundled_norm)
-
-    def _crawl_campaign(self, start_map_path: str) -> None:
-        """
-        Breadth-first crawl of all maps reachable via LevelChanger entities.
-        Populates self._discovered_maps and self._discovered_assets.
-        """
-        queue = deque([start_map_path])
-        
-        while queue:
-            map_rel_path = queue.popleft()
-            if map_rel_path in self._discovered_maps:
+    def _asset_references(self, data: dict) -> Set[str]:
+        """Every asset name a map's brushes and things refer to."""
+        refs: Set[str] = set()
+        for brush in data.get('brushes', []) or []:
+            if not isinstance(brush, dict):
                 continue
-            
-            self._discovered_maps.add(map_rel_path)
-            
-            # Load map JSON
-            map_full_path = os.path.join(self.root_dir, map_rel_path)
-            if not os.path.exists(map_full_path):
-                self.errors.append(f"Map file not found: {map_rel_path}")
-                continue
-            
-            try:
-                with open(map_full_path, 'r', encoding='utf-8') as f:
-                    map_data = json.load(f)
-            except (json.JSONDecodeError, IOError) as e:
-                self.errors.append(f"Failed to parse {map_rel_path}: {e}")
-                continue
-            
-            # Extract assets from this map
-            self._extract_map_assets(map_data)
-            
-            # Find LevelChangers to discover next maps
-            for thing in map_data.get('things', []):
-                if thing.get('type') == 'LevelChanger':
-                    target = thing.get('properties', {}).get('target_map', '')
-                    if target:
-                        # Normalize to maps/ relative path
-                        if not target.startswith('maps/'):
-                            target = f"maps/{target}"
-                        if not target.endswith('.json'):
-                            target += '.json'
-                        queue.append(target)
+            textures = brush.get('textures')
+            if isinstance(textures, dict):
+                refs.update(t for t in textures.values() if t and isinstance(t, str))
 
+        for thing in data.get('things', []) or []:
+            if not isinstance(thing, dict):
+                continue
+            props = thing.get('properties')
+            if not isinstance(props, dict):
+                continue
+            for asset_keys in self.ASSET_KEYS.values():
+                for key in asset_keys:
+                    val = props.get(key)
+                    if val and isinstance(val, str):
+                        refs.add(val)
+        return refs
+
+    def _inside(self, path: str, base: str) -> bool:
+        path = os.path.realpath(path)
+        base = os.path.realpath(base)
+        return path == base or path.startswith(base + os.sep)
+
+    def _resolve_asset(self, asset_name: str) -> Optional[str]:
+        """The project file an asset reference names, or None (reported)."""
+        assets_dir = os.path.join(self.root_dir, 'assets')
+        if os.path.isabs(asset_name):
+            self.errors.append(f"Skipped asset outside the project: {asset_name}")
+            return None
+        rel = asset_name.replace('\\', '/')
+        candidates = [os.path.join(assets_dir, sub, rel) for sub in self.ASSET_SUBDIRS]
+        candidates.append(os.path.join(assets_dir, rel))
+        candidates.append(os.path.join(self.root_dir, rel))
+        # The runtime (sounds by basename from assets/sounds) and the player's
+        # reader both fall back to the bare filename; so does the exporter.
+        base = posixpath.basename(rel)
+        if base and base != rel:
+            candidates += [os.path.join(assets_dir, sub, base)
+                           for sub in self.ASSET_SUBDIRS]
+        escaped = False
+        for src_path in candidates:
+            if not self._inside(src_path, assets_dir):
+                escaped = True
+                continue
+            if os.path.isfile(src_path):
+                return os.path.normpath(src_path)
+        if escaped and '..' in rel.split('/'):
+            self.errors.append(f"Skipped asset outside the project: {asset_name}")
+        else:
+            self.errors.append(f"Missing asset: {asset_name}")
+        return None
 
     def _collect_map_dependencies(self, map_path, collected=None):
-        import json, os
+        """*map_path* plus every project map it reaches by a level change."""
         if collected is None:
             collected = set()
         abs_path = os.path.abspath(map_path)
         if abs_path in collected or not os.path.isfile(abs_path):
             return collected
         collected.add(abs_path)
-        try:
-            with open(abs_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception as e:
-            self.errors.append(f"Could not scan {abs_path}: {e}")
+        data = self._read_map(abs_path)
+        if data is None:
             return collected
 
-        all_entities = data.get('things', []) + data.get('brushes', [])
+        all_entities = (data.get('things', []) or []) + (data.get('brushes', []) or [])
         for entity in all_entities:
             if not isinstance(entity, dict):
                 continue
             props = dict(entity)
-            if 'properties' in entity and isinstance(entity['properties'], dict):
+            if isinstance(entity.get('properties'), dict):
                 props.update(entity['properties'])
 
             target_map = None
-            for key in ('target_map', 'map', 'next_map', 'next_level', 'target_level', 'level_name', 'map_name'):
+            for key in self.MAP_KEYS:
                 val = props.get(key)
                 if val and isinstance(val, str) and val.strip():
                     target_map = val.strip()
@@ -306,128 +231,24 @@ class PackageExporter:
             if not target_map:
                 continue
 
-            # Resolve relative map path to absolute
-            candidates = []
+            # As LevelChanger resolves it at run time: ".json" is optional.
+            if not target_map.lower().endswith('.json'):
+                target_map += '.json'
             if os.path.isabs(target_map):
-                candidates.append(target_map)
-            else:
-                base_dir = os.path.dirname(abs_path)
-                candidates.extend([
-                    os.path.join(self.root_dir, 'maps', target_map),
-                    os.path.join(self.root_dir, target_map),
-                    os.path.join(base_dir, target_map)
-                ])
+                self.errors.append(
+                    f"Skipped map outside the project: '{target_map}' "
+                    f"referenced in {os.path.basename(abs_path)}")
+                continue
+            base_dir = os.path.dirname(abs_path)
+            candidates = [
+                os.path.join(self.root_dir, 'maps', target_map),
+                os.path.join(self.root_dir, target_map),
+                os.path.join(base_dir, target_map),
+            ]
             for candidate in candidates:
-                if os.path.isfile(candidate):
+                if self._inside(candidate, self.root_dir) and os.path.isfile(candidate):
                     self._collect_map_dependencies(candidate, collected)
                     break
             else:
                 self.errors.append(f"Missing dependency: map '{target_map}' referenced in {os.path.basename(abs_path)}")
         return collected
-    
-    def _extract_map_assets(self, map_data: dict) -> None:
-        """Scan map data structure for all asset references."""
-        def scan_value(value, context: str = ''):
-            if isinstance(value, dict):
-                for k, v in value.items():
-                    # Check if this key matches known asset patterns
-                    for asset_type, keys in self.ASSET_KEYS.items():
-                        if k in keys and isinstance(v, str) and v:
-                            self._discovered_assets[asset_type].add(v)
-                    # Recurse into nested structures
-                    scan_value(v, f"{context}.{k}")
-            elif isinstance(value, list):
-                for item in value:
-                    scan_value(item, context)
-            elif isinstance(value, str) and value:
-                # Heuristic: catch file extensions in string values
-                lower = value.lower()
-                if any(lower.endswith(ext) for ext in ['.png', '.jpg', '.tga', '.bmp']):
-                    self._discovered_assets['textures'].add(value)
-                elif lower.endswith('.obj'):
-                    self._discovered_assets['models'].add(value)
-                elif any(lower.endswith(ext) for ext in ['.wav', '.ogg', '.mp3']):
-                    self._discovered_assets['sounds'].add(value)
-        
-        scan_value(map_data)
-    
-    def _resolve_asset_paths(self) -> Dict[str, List[Tuple[str, str]]]:
-        """
-        Convert discovered relative paths to (archive_path, filesystem_path) tuples.
-        Returns organized dict for ZIP assembly.
-        """
-        manifest = {'maps': [], 'assets': {'textures': [], 'models': [], 'sounds': []}}
-        
-        # Maps
-        for map_rel in sorted(self._discovered_maps):
-            # Safety: ensure map path is relative, never absolute
-            clean_map_rel = map_rel.replace("\\", "/")
-            if os.path.isabs(clean_map_rel):
-                clean_map_rel = os.path.relpath(clean_map_rel, self.root_dir)
-                clean_map_rel = clean_map_rel.replace("\\", "/")
-            full = os.path.join(self.root_dir, clean_map_rel)
-            if os.path.exists(full):
-                manifest['maps'].append((clean_map_rel, full))
-        
-        # Assets by type
-        for asset_type, paths in self._discovered_assets.items():
-            for rel_path in sorted(paths):
-                # Normalize path to assets/ subdirectory
-                clean_path = rel_path.replace('\\', '/').lstrip('/')
-                if not clean_path.startswith('assets/'):
-                    archive_path = f"assets/{asset_type}/{os.path.basename(clean_path)}"
-                else:
-                    archive_path = clean_path
-                
-                full_path = os.path.join(self.root_dir, clean_path)
-                if not os.path.exists(full_path):
-                    # Try alternative resolution
-                    alt_path = os.path.join(self.root_dir, archive_path)
-                    if os.path.exists(alt_path):
-                        full_path = alt_path
-                    else:
-                        self.errors.append(f"Asset not found: {rel_path}")
-                        continue
-                
-                manifest['assets'][asset_type].append((archive_path, full_path))
-        
-        return manifest
-    
-    def _assemble_package(self, output_path: str, metadata: dict,
-                         asset_manifest: dict, progress: QProgressDialog) -> bool:
-        """Build the final ZIP archive with all contents."""
-        try:
-            with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                # Write manifest
-                manifest_json = json.dumps(metadata, indent=2, ensure_ascii=False)
-                zf.writestr('manifest.json', manifest_json)
-                
-                total_items = (len(asset_manifest['maps']) + 
-                              sum(len(v) for v in asset_manifest['assets'].values()))
-                processed = 0
-                
-                # Write maps
-                for archive_path, fs_path in asset_manifest['maps']:
-                    zf.write(fs_path, archive_path)
-                    processed += 1
-                    if processed % 5 == 0:
-                        progress.setValue(50 + int(40 * processed / max(total_items, 1)))
-                        QApplication.processEvents()
-                
-                # Write assets
-                for asset_type, items in asset_manifest['assets'].items():
-                    for archive_path, fs_path in items:
-                        zf.write(fs_path, archive_path)
-                        processed += 1
-                
-                # Copy banner if specified
-                banner_src = metadata.get('banner_source_path', '')
-                if banner_src and os.path.exists(banner_src):
-                    banner_ext = os.path.splitext(banner_src)[1]
-                    zf.write(banner_src, f"assets/package_banner{banner_ext}")
-            
-            return True
-            
-        except (IOError, OSError, zipfile.BadZipFile) as e:
-            self.errors.append(f"Package assembly failed: {e}")
-            return False

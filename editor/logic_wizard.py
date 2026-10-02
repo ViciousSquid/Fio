@@ -11,8 +11,8 @@ Built-in scenarios are grouped into four categories:
     Kill the Lights, Timed Patrol, Ambush Swarm
 
   Doors & Movers (7)
-    Button Door, Timed Door, Locked Door Hint, Pickup Unlocks Path,
-    Elevator, Light Switch, Respawning Pickup
+    Button Door, Timed Door, Locked Door Hint, Prop Unlocks Path,
+    Elevator, Light Switch, Respawning Prop
 
   Environment & Audio (5)
     Flickering Light, Ambient Soundscape, Trap Corridor,
@@ -41,10 +41,10 @@ from PyQt5.QtWidgets import (
     QWidget, QSpinBox, QApplication, QMessageBox, QPushButton
 )
 from PyQt5.QtCore import Qt, QSize
-from PyQt5.QtGui  import QFont, QFontMetrics
+from PyQt5.QtGui  import QFont
 
 try:
-    from .io_system import get_entity_type_for_io, IO_REGISTRY
+    from .io_system import get_entity_type_for_io
     IO_AVAILABLE = True
 except ImportError:
     IO_AVAILABLE = False
@@ -318,7 +318,7 @@ SCENARIOS: List[Dict[str, Any]] = [
         "desc":  (
             "When the player uses a locked door, instead of silence "
             "a speaker plays a hint sound (rattle, voice line, buzzer). "
-            "Pair with a key pickup elsewhere to unlock it."
+            "Pair with a key prop elsewhere to unlock it."
         ),
         "wiring": [
             ("door",    "OnLockedUse", "speaker", "PlaySound",
@@ -335,28 +335,28 @@ SCENARIOS: List[Dict[str, Any]] = [
         "params": [],
     },
     {
-        "id":    "pickup_unlocks_path",
-        "title": "Pickup Unlocks Path",
+        "id":    "prop_unlocks_path",
+        "title": "Prop Unlocks Path",
         "icon":  "🔑",
-        "short": "Collecting a pickup opens a door or moves a blocker",
+        "short": "Collecting a prop opens a door or moves a blocker",
         "desc":  (
-            "When the player picks up an item (key, collectible, etc.) "
+            "When the player collects an item (key, collectible, etc.) "
             "a door opens or a mover activates, revealing a new path.  "
             "A speaker can optionally play a 'path opened' chime."
         ),
         "wiring": [
-            ("pickup",  "OnPickedUp", "door",    "Open",
-             "Pickup collected → Door opens"),
-            ("pickup",  "OnPickedUp", "speaker", "PlaySound",
-             "Pickup collected → Chime plays"),
+            ("prop",  "OnCollected", "door",    "Open",
+             "Prop collected → Door opens"),
+            ("prop",  "OnCollected", "speaker", "PlaySound",
+             "Prop collected → Chime plays"),
         ],
         "roles": [
-            ("pickup",  "pickup",  "The pickup item to collect"),
+            ("prop",  "prop",  "The prop item to collect"),
             ("door",    "door",    "The door or mover to activate"),
             ("speaker", "speaker", "Optional chime or voice line"),
         ],
         "positions": {
-            "pickup": [0, 0, 0],
+            "prop": [0, 0, 0],
             "door": [0, 0, -384],
             "speaker": [64, 64, -384],
         },
@@ -366,7 +366,7 @@ SCENARIOS: List[Dict[str, Any]] = [
                 "label":   "One-shot",
                 "type":    "bool",
                 "default": True,
-                "help":    "Connection fires only once (pickup can only be collected once anyway).",
+                "help":    "Connection fires only once (prop can only be collected once anyway).",
             }
         ],
     },
@@ -424,30 +424,30 @@ SCENARIOS: List[Dict[str, Any]] = [
         "params": [],
     },
     {
-        "id":    "respawning_pickup",
-        "title": "Respawning Pickup",
+        "id":    "respawning_prop",
+        "title": "Respawning Prop",
         "icon":  "♻",
-        "short": "Pickup respawns after a timer delay",
+        "short": "Prop respawns after a timer delay",
         "desc":  (
-            "When the player collects the pickup it starts a timer.  "
-            "When the timer fires it respawns the pickup and stops "
+            "When the player collects the prop it starts a timer.  "
+            "When the timer fires it respawns the prop and stops "
             "itself.  Set the timer's interval in Properties to control "
             "the respawn delay (e.g. 10 seconds for health, 30 for ammo)."
         ),
         "wiring": [
-            ("pickup", "OnPickedUp", "timer",  "Enable",
-             "Pickup collected → Timer starts"),
-            ("timer",  "OnTimer",    "pickup", "Respawn",
-             "Timer fires → Pickup respawns"),
+            ("prop", "OnCollected", "timer",  "Enable",
+             "Prop collected → Timer starts"),
+            ("timer",  "OnTimer",    "prop", "Respawn",
+             "Timer fires → Prop respawns"),
             ("timer",  "OnTimer",    "timer",  "Disable",
              "Timer fires → Timer stops itself"),
         ],
         "roles": [
-            ("pickup", "pickup",      "The pickup item to respawn"),
+            ("prop", "prop",      "The prop item to respawn"),
             ("timer",  "logic_timer", "Timer controlling the respawn delay"),
         ],
         "positions": {
-            "pickup": [0, 0, 0],
+            "prop": [0, 0, 0],
             "timer": [192, 0, 0],
         },
         "params": [],
@@ -1039,7 +1039,7 @@ class EntitiesPage(QWizardPage):
         'light':         (False, 'Light'),
         'speaker':       (False, 'Speaker'),
         'monster':       (False, 'Monster'),
-        'pickup':        (False, 'Pickup'),
+        'prop':        (False, 'Prop'),
         'logic_relay':   (False, 'LogicRelay'),
         'logic_gate':    (False, 'LogicGate'),
         'logic_timer':   (False, 'LogicTimer'),

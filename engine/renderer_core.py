@@ -4,14 +4,14 @@ engine/renderer_core.py  –  Base renderer with shared logic for Forward/Deferr
 Provides:
     • Texture management (load_texture, preload_level_textures)
     • Grid drawing (update_grid_buffers, draw_grid)
-    • Sprite rendering (draw_sprites, with per‑instance textures)
-    • Model loading & drawing (draw_models)
+    • Sprite rendering (dense instanced EntityTable path)
+    • Model loading & dense instanced drawing
     • Water / Glass / Fog volume rendering
     • Terrain rendering
     • Editor helpers (gizmo, selection outline, face highlight, connection lines,
       path node cubes, portal wireframes)
     • Projected shadows
-    • Sorting / splitting helpers
+    • Dense slot classification / sorting helpers
     • VAO creation for cube, sprite, grid, gizmo, etc.
     • Shader management (compilation, hot‑reload, light upload)
 
@@ -19,24 +19,41 @@ Both Renderer_F and Renderer_D inherit from BaseRenderer.
 """
 
 import ctypes
+import functools
+import re
 import math
 import os
-from collections import defaultdict
+import io
+import time
+from dataclasses import dataclass
+
+from PyQt5.QtCore import QByteArray, QBuffer, QIODevice
+from PyQt5.QtGui import QImage, QImageReader
 
 import glm
 import numpy as np
 import OpenGL.GL as gl
 from OpenGL.GL.shaders import compileProgram, compileShader
+from OpenGL.raw.GL.VERSION.GL_2_0 import (
+    glVertexAttribPointer as _raw_vertex_attrib_pointer)
 
-from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX, is_water_brush, brush_aabb_bounds
+from engine.constants import brush_aabb_bounds, normalize_color
 from engine import brush_geometry
+from engine import render_table
+from engine import entity_table as entity_projection
+from engine.render_keys import KeyLayout, runs_in_order, sort_into_runs
+from engine.sprite_layers import SpriteLayers
 from engine import shaders
+
+_BASE_RENDERER_PREFIX = "\x1b[38;2;240;128;0m[BaseRenderer]\x1b[0m"
 from engine.shaders import DEFAULT_SHADERS
 from engine.terrain import TERRAIN_VERTEX_SHADER, TERRAIN_FRAGMENT_SHADER
 from engine.view_distance import ViewDistance
-from editor.things import (
-    Thing, PathNode, Portal, Pickup, Monster, LogicGate, LogicRelay,
-    LogicTimer, LevelChanger, Light, LogicSpawner, LogicCamera,
+from engine.portal_transform import (
+    map_point as _portal_map_point,
+    map_direction as _portal_map_direction,
+    corners as _portal_corners,
+    contains_point as _portal_contains_point,
 )
 
 # Try to import OBJ and GLB loaders
@@ -50,6 +67,21 @@ try:
 except ImportError:
     GLB = None
 
+
+@dataclass(frozen=True)
+class RenderView:
+    """Camera state for a secondary render view.
+
+    The main camera can use the same shape later; portals already use it so
+    aperture/clip/recursion state is carried alongside the camera instead of
+    being implicit renderer globals.
+    """
+    projection: object
+    view: object
+    camera_pos: object
+    aperture_slot: int = -1
+    clip_slot: int = -1
+    recursion_depth: int = 0
 
 # ---------- Utility classes ----------
 class UniformCache:
@@ -92,13 +124,85 @@ class LODManager:
 
 class RenderStats:
     __slots__ = ('total_brushes', 'culled_brushes', 'visible_brushes', 'draw_calls',
-                 'shadow_draw_calls', 'total_tris', 'visible_tris', 'batched_draws')
+                 'shadow_draw_calls', 'total_tris', 'visible_tris', 'batched_draws',
+                 'entity_candidates', 'culled_entities', 'pass_ms')
     def __init__(self):
+        #: CPU milliseconds spent submitting each pass this frame, measured by
+        #: :func:`timed_pass`. Inclusive: a pass that draws others (portals,
+        #: shadow maps) counts theirs too.
+        self.pass_ms = {}
         self.reset()
     def reset(self):
         self.total_brushes = self.culled_brushes = self.visible_brushes = 0
         self.draw_calls = self.shadow_draw_calls = self.batched_draws = 0
         self.total_tris = self.visible_tris = 0
+        #: Sprite and model rows offered to the main view's entity passes,
+        #: and how many of them its frustum rejected.
+        self.entity_candidates = self.culled_entities = 0
+        self.pass_ms.clear()
+
+
+def timed_pass(name):
+    """Accumulate a renderer pass's CPU time into ``render_stats.pass_ms``.
+
+    Two clock reads per call, a handful of calls per frame: what the Debug
+    Tables instrument shows as the per-pass submission cost.
+    """
+    def decorate(method):
+        @functools.wraps(method)
+        def timed(self, *args, **kwargs):
+            started = time.perf_counter()
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                ms = self.render_stats.pass_ms
+                ms[name] = ms.get(name, 0.0) + (time.perf_counter() - started) * 1000.0
+        return timed
+    return decorate
+
+
+def restore_default_pixel_store():
+    """Put the pixel-store state Qt's painter relies on back to GL defaults.
+
+    The renderer shares its context with the QPainter that draws the HUD,
+    and Qt uploads text glyphs into a texture assuming 4-byte row alignment
+    and no row length. Any pass that changes those for its own uploads and
+    leaves them changed shears every glyph that is not a multiple of four
+    pixels wide -- small HUD and ``message`` text came out garbled. Called
+    once before the painter opens, so no pass can leak into it.
+    """
+    gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
+    gl.glPixelStorei(gl.GL_PACK_ALIGNMENT, 4)
+    gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
+    gl.glPixelStorei(gl.GL_UNPACK_SKIP_ROWS, 0)
+    gl.glPixelStorei(gl.GL_UNPACK_SKIP_PIXELS, 0)
+
+
+#: Recipe lists whose GL resolution a renderer keeps parked: the two render
+#: buffers' entity tables, the editor's own, and a spare for a table replaced
+#: by a new play session.
+_PARKED_RECIPE_LISTS = 4
+
+
+def _swap_recipe_cache(parked, current, recipes, fresh):
+    """Park *current* (``(list, *state)``) and return *recipes*' state.
+
+    A renderer resolves each interned recipe list once, but the lists come
+    from several tables that take turns. Keyed by the list's identity, and
+    the entry holds the list, so a recycled ``id`` cannot alias another.
+    """
+    if current[0] is not None:
+        if len(parked) >= _PARKED_RECIPE_LISTS:
+            parked.clear()
+        parked[id(current[0])] = current
+    entry = parked.pop(id(recipes), None)
+    if entry is not None and entry[0] is recipes:
+        return entry
+    return (recipes,) + tuple(fresh)
+
+
+#: Seconds before a model path that failed to load is tried again.
+_MODEL_RETRY_S = 5.0
 
 
 class BrushGeoMesh:
@@ -165,7 +269,7 @@ class ShaderLoader:
     def compile_shader_program(self, vertex_file, fragment_file, geometry_file=None):
         try:
             vertex_src = self._read_source(vertex_file)
-            fragment_src = self._read_source(fragment_file)
+            fragment_src = shaders.light_ubo_source(self._read_source(fragment_file))
             vs = compileShader(vertex_src, gl.GL_VERTEX_SHADER)
             fs = compileShader(fragment_src, gl.GL_FRAGMENT_SHADER)
             if geometry_file:
@@ -180,7 +284,12 @@ class ShaderLoader:
             raise
 
     def compile_from_source(self, vertex_src, fragment_src):
+        if not vertex_src:
+            raise ValueError("empty vertex shader source")
+        if not fragment_src:
+            raise ValueError("empty fragment shader source")
         try:
+            fragment_src = shaders.light_ubo_source(fragment_src)
             vs = compileShader(vertex_src, gl.GL_VERTEX_SHADER)
             fs = compileShader(fragment_src, gl.GL_FRAGMENT_SHADER)
             return compileProgram(vs, fs, validate=False)
@@ -190,16 +299,10 @@ class ShaderLoader:
 
 
 # ---------- Helper ----------
-def normalize_color(rgb, default=None):
-    """Normalise an RGB colour to 0.0-1.0 floats.
-    Accepts [0-255] int or [0.0-1.0] float components.
-    Returns *default* (or [0.8, 0.8, 0.8]) if rgb is None or malformed.
-    """
-    if default is None:
-        default = [0.8, 0.8, 0.8]
-    if not rgb or not isinstance(rgb, (list, tuple)) or len(rgb) < 3:
-        return list(default)
-    return [c / 255.0 if c > 1.0 else c for c in rgb[:3]]
+#: Re-exported so ``from engine.renderer_core import normalize_color`` keeps
+#: working; it lives in engine.constants because the GL-free render projection
+#: needs it too.  See :func:`engine.constants.normalize_color`.
+normalize_color = normalize_color
 
 
 #: Light-array capacity of each lighting shader, so the renderer can never set
@@ -218,7 +321,20 @@ class BaseRenderer:
     # that shader declared room for.  Per-shader caps below cover the ones that
     # are deliberately smaller (water, terrain, the ARM variants).
     MAX_LIGHTS = shaders.MAX_LIGHTS
+    # CPU mirror of the std140 GLSL `struct Light` (shaders.py): four 16-byte
+    # fields per light, 64 bytes total. One upload feeds every lit shader.
+    LIGHT_UBO_DTYPE = np.dtype([
+        ('position', '<f4', (4,)),
+        ('color', '<f4', (4,)),
+        ('params', '<f4', (4,)),
+        ('indices', '<i4', (4,)),
+    ])
     MAX_PORTALS = 4      # maximum portal apertures rendered per frame
+    PORTAL_RENDER_DISTANCE = 2048.0
+    # Render-only inset for the portal aperture.  Physical portal size and
+    # transit geometry remain authored; this keeps coplanar floor/wall edges
+    # from bleeding into the portal image at its boundary.
+    PORTAL_APERTURE_INSET = 4.0
 
     # How many times a portal may be seen recursively through another portal.
     # 1 = classic single virtual view (default; identical to the original
@@ -244,9 +360,37 @@ class BaseRenderer:
     ENV_UNIFORMS = ('uFogEnabled', 'uFogColor', 'uFogStart', 'uFogEnd',
                     'uFogDensity', 'uFogCamPos', 'uAmbient')
 
+    #: Water rendering tiers. 'cheap': refraction, waves, sky reflection and
+    #: foam at the brush edges - no extra copies. 'expensive': additionally
+    #: copies the depth buffer once per water pass for depth-based colour,
+    #: shoreline foam, caustics and screen-space reflections.
+    WATER_QUALITIES = ('cheap', 'expensive')
+
+    @classmethod
+    def normalize_water_quality(cls, value) -> str:
+        value = str(value or '').strip().lower()
+        return value if value in cls.WATER_QUALITIES else 'expensive'
+
     def __init__(self, texture_loader, initial_grid_size, initial_world_size, config=None):
         self.texture_manager = {}
         self.loaded_models = {}
+        #: model path -> perf_counter() of its last failed load.
+        self._failed_models = {}
+
+        # Glass samples the already-rendered scene for screen-space transmission.
+        # Kept lazy because most frames contain no glass at all.
+        self._glass_scene_texture = 0
+        self._glass_scene_size = (0, 0)
+        self._glass_scene_texture_unit = 2
+        # 'expensive' water also samples the scene's depth (copied the same
+        # way) for depth absorption, soft shores, caustics and screen-space
+        # reflections; 'cheap' water skips the copy and the reflection trace.
+        # Chosen per water brush (its "High quality" property).
+        self._water_depth_texture = 0
+        self._water_depth_size = (0, 0)
+        self._water_depth_texture_unit = 3
+
+
         self.load_texture_callback = texture_loader
         self._identity_mat4 = glm.mat4(1.0)
         self._identity_mat3 = glm.mat3(1.0)
@@ -285,6 +429,11 @@ class BaseRenderer:
             self.lowpower_mode = is_low_power
             self.shadows_enabled = not is_low_power
             shadow_size = self.SHADOW_MAP_SIZE
+        #: Session-only debug cap on water quality (see WATER_QUALITIES).
+        #: Quality itself is per water brush (``water_high_quality``);
+        #: 'expensive' lets each brush choose, 'cheap' forces every brush
+        #: cheap. Set by the console's r_waterquality, never saved.
+        self.water_quality = 'expensive'
         # Clamp to a sane, power-of-two-ish range. Lower = faster, blockier.
         self.shadow_map_size = max(256, min(2048, int(shadow_size)))
 
@@ -293,6 +442,74 @@ class BaseRenderer:
 
         self._model_matrix = glm.mat4(1.0)
 
+        # GPU-instanced model data. One persistent VBO is shared by all model
+        # VAOs; each instance carries a model matrix and normal matrix (112 B).
+        # The shared brush-instance buffer and its VAO. One layout serves every
+        # pass that submits runs (see BRUSH_INSTANCE_ATTRS), so it lives here
+        # rather than on the forward renderer.
+        self._brush_instance_vbo = None
+        self._brush_instance_vao = None
+        self._sprite_instance_vbo = None
+        self._sprite_instance_vao = None
+        self._sprite_instance_capacity = 0
+        self._sprite_gl_by_id = np.zeros(0, dtype=np.int32)
+        self._sprite_gl_resolved = 0
+        self._sprite_instance_base = 0
+        self._sprite_recipes_seen = None
+        self._sprite_instance_data = np.empty(
+            (0, self.SPRITE_INSTANCE_FLOATS), dtype=np.float32)
+        #: Entity sprite images as layers of one texture array; created on
+        #: first use, on the thread that owns the context.
+        self._sprite_layers = None
+        #: Mesh bounding radius per interned model recipe (entity frustum cull).
+        self._model_radius_recipes_seen = None
+        self._model_radius_by_recipe = np.zeros(0, dtype=np.float64)
+        # GPU-instanced EXPLOSION buffer. FIRE uses the ordinary instanced
+        # billboard texture path, with one draw per animated texture frame.
+        self._effect_instance_vbo = None
+        self._effect_instance_vao = None
+        self._effect_instance_capacity = 0
+        self._effect_instance_data = np.empty((0, 16), dtype=np.float32)
+        self._effect_order_scratch = np.empty(0, dtype=np.int32)
+        self._effect_depth_scratch = np.empty(0, dtype=np.float64)
+        self._effect_depth_aux_scratch = np.empty(0, dtype=np.float64)
+        self._effect_expand_slots_scratch = np.empty(0, dtype=np.int32)
+        self._effect_expand_particle_scratch = np.empty(0, dtype=np.float32)
+        # Decoded animated Effect GIF frames, indexed by dense variant.
+        # FIRE and ORB share this normal-instanced billboard path.
+        self.effect_fire_frames = {}
+        self.effect_fire_cumulative = {}
+        self.effect_orb_frames = {}
+        self.effect_orb_cumulative = {}
+        self.effect_custom_frames = {}
+        self.effect_custom_cumulative = {}
+        # Capacity-stable scratch for the numeric sprite filter. The renderer
+        # owns these arrays so steady-state drawing does not allocate key/mask/
+        # texture arrays per frame.
+        self._sprite_key_scratch = np.empty(0, dtype=np.int32)
+        self._sprite_texture_scratch = np.empty(0, dtype=np.int32)
+        self._sprite_draw_mask = np.empty(0, dtype=bool)
+        self._sprite_depth_scratch = np.empty(0, dtype=np.float64)
+        self._sprite_depth_aux_scratch = np.empty(0, dtype=np.float64)
+        self._sprite_sorted_slots_scratch = np.empty(0, dtype=np.int32)
+        self._brush_instance_capacity = 0
+        self._brush_instance_data = np.empty((0, 32), dtype=np.float32)
+        # Reusable model/normal matrix buffers for the batched transform build.
+        self._brush_mat_buf = np.empty((0, 16), dtype=np.float32)
+        self._brush_nmat_buf = np.empty((0, 9), dtype=np.float32)
+        self._model_instance_vbo = None
+        self._model_instance_capacity = 0
+        self._model_instance_data = np.empty((0, 29), dtype=np.float32)
+        self._model_instanced_vaos = set()
+        self._model_recipe_scratch = np.empty(0, dtype=np.int32)
+        self._model_sorted_slots_scratch = np.empty(0, dtype=np.int32)
+
+        # Shared std140 light UBO. One upload feeds every lighting shader.
+        self._light_ubo = None
+        self._light_ubo_capacity = 0
+        self._light_ubo_key = None
+        self._light_ubo_dtype = self.LIGHT_UBO_DTYPE
+        self._light_ubo_data = np.zeros(self.MAX_LIGHTS, dtype=self._light_ubo_dtype)
         # Depth cube-map shadow-mapping state (created lazily once GL is ready).
         self._shadow_fbo = None
         self._shadow_cubemaps = []          # texture ids, one cube-map per shadow slot
@@ -302,29 +519,18 @@ class BaseRenderer:
         self._shadow_slot_owner = [None] * self.MAX_SHADOW_LIGHTS   # id(light) per slot
         self._shadow_slot_sig = [None] * self.MAX_SHADOW_LIGHTS     # last-rendered signature
 
+        # Cached editor-mode light collection. Threaded/play mode supplies
+        # an authoritative all_lights list through RenderState; this fallback
+        # avoids rescanning every Thing on every editor frame.
+
         # Per‑frame caches
-        self._frame_lights = []
-        # shader_name -> tuple of light ids uploaded this frame; cleared at
+        self._frame_lights = []        # shader_name -> tuple of light ids uploaded this frame; cleared at
         # the start of every render_scene() so animated lights stay fresh.
         self._frame_lights_uploaded = {}
         self._current_shader = None
 
-        # PERF: memoized monster-sprite texture-key strings, keyed by the
-        # (type, variant, sprite_type, custom) tuple that determines them —
-        # avoids rebuilding the same f-string every frame for every visible
-        # monster (draw_sprites runs once per visible monster per frame).
-        self._sprite_tex_key_cache = {}
-
-        # PERF: precomputed GLSL uniform names for each light slot. Building
-        # these f-strings on the hot path meant up to MAX_LIGHTS*5 string
-        # allocations per shader per frame inside _upload_lights_once; the
-        # names never change, so build them once here.
-        self._light_uniform_names = [
-            ('lights[%d].position' % i, 'lights[%d].color' % i,
-             'lights[%d].intensity' % i, 'lights[%d].radius' % i,
-             'lights[%d].shadowIndex' % i)
-            for i in range(self.MAX_LIGHTS)
-        ]
+        # Light data now travels through the shared std140 UBO; no per-slot
+        # uniform-name table is needed on the render path.
 
         # PERF: cache of texture-name -> "textures/<name>" cache-key path.
         # draw_textured_brushes_optimized resolves this for every drawn face
@@ -339,7 +545,6 @@ class BaseRenderer:
         self.vaos = {'cube': None, 'sprite': None, 'grid': None}
         self.grid_indices_count = 0
         self.sprite_textures = {}
-        self.instance_textures = {}
         self._edge_vao = None
         self._edge_vbo = None
         self._gizmo_lines_vbo = None
@@ -371,10 +576,18 @@ class BaseRenderer:
         self._water_surface_ebo = None
         self._water_surface_index_count = 0
 
-        # Angled-brush (convex geometry) meshes, keyed by id(brush).  Entries
-        # are rebuilt when a brush's plane set changes and dropped after going
-        # unused for a while (see _begin_geo_frame).
+        # Convex geometry meshes, owned by geometry signature. The signature
+        # carries the brush's geometry epoch, which every change to its shape
+        # or face mapping bumps, so it names the mesh's content exactly -- and
+        # it survives a table reconcile and is the same in both render
+        # buffers' tables. Keying by (table generation, geometry id) rebuilt
+        # every convex mesh, once per buffer, after any structural edit.
+        # Meshes are dropped after going unused for a while (_begin_geo_frame).
         self._geo_mesh_cache = {}
+        #: id(GeometryRecord) -> mesh: the per-frame lookup, which does not
+        #: hash the signature. Validated against the record's signature, so a
+        #: recycled id cannot alias; cleared with each stale-mesh sweep.
+        self._geo_mesh_by_record = {}
         self._geo_mesh_frame = 0
 
         self._shader_init_failed = False
@@ -394,6 +607,13 @@ class BaseRenderer:
         # destination portal, so the brush passes enable back-face culling for
         # this flag to hide the exposed interior faces (see the brush draws).
         self._portal_scene_pass = False
+        #: Cull the faces of opaque brushes that face away from the camera in
+        #: the main view, as the portal pass always has. A closed opaque solid
+        #: never shows its inside, so this changes no pixel; it halves what
+        #: reaches the rasteriser. Switchable so the effect can be measured.
+        self.cull_opaque_back_faces = True
+        #: True while the main view's opaque brush passes draw (render_scene).
+        self._opaque_cull_pass = False
         self._portal_mask_proj_loc = None
         self._portal_mask_view_loc = None
         self._portal_rim_proj_loc = None
@@ -409,9 +629,38 @@ class BaseRenderer:
         self.shader_loader = ShaderLoader()
         self._compile_common_shaders()
 
+        # EXPLOSION keeps its dedicated effect shader. FIRE is a plain animated
+        # texture and is rendered through the normal instanced sprite shader.
+        if not self._shader_init_failed:
+            self._compile_instanced_effect_shader()
+
         # Terrain normal map (water)
         self.water_normal_id = self.load_texture('water_normal.png', 'textures')
         self.noise_texture_id = 0
+
+        # Explosion animation atlas. The sheet is a 5x4 grid with 16 actual RGBA frames.
+        # Keep it un-mipmapped and clamp to the sheet edge so linear filtering
+        # cannot bleed neighbouring frames through transparent borders.
+        self.effect_explosion_texture = 0
+        explosion_path = os.path.join('assets', 'textures', 'effects', 'explosion.png')
+        if os.path.exists(explosion_path):
+            self.effect_explosion_texture = self.load_texture(
+                'explosion.png', 'textures/effects')
+            if self.effect_explosion_texture:
+                gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_explosion_texture)
+                gl.glTexParameteri(
+                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+                gl.glTexParameteri(
+                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+                gl.glTexParameteri(
+                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+                gl.glTexParameteri(
+                    gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+
+        # Animated FIRE/ORB texture sets. Each GIF is decoded once into
+        # individual GL textures; the render path only selects the current frame.
+        self._load_fire_effect_textures()
+        self._load_orb_effect_textures()
 
         # Create VAOs after shaders are ready
         if not self._shader_init_failed:
@@ -443,19 +692,34 @@ class BaseRenderer:
     # --------------------------------------------------------------------------
     # Shader compilation helpers
     # --------------------------------------------------------------------------
+    def _shader_source(self, name):
+        """Return an embedded shader or its loose asset-file fallback.
+
+        A few larger shaders intentionally live only in assets/shaders rather
+        than being duplicated in DEFAULT_SHADERS.  Never pass an empty string
+        to the GL compiler just because a default entry is absent.
+        """
+        source = DEFAULT_SHADERS.get(name)
+        if source:
+            return source
+        try:
+            return self.shader_loader._read_source(name)
+        except (FileNotFoundError, OSError):
+            return ''
+
     def _compile_common_shaders(self):
         """Compile shaders that are shared by both forward and deferred paths."""
         try:
             # simple (for grid, outlines, lines)
-            vs_src = DEFAULT_SHADERS.get('simple.vert', '')
-            fs_src = DEFAULT_SHADERS.get('simple.frag', '')
+            vs_src = self._shader_source('simple.vert')
+            fs_src = self._shader_source('simple.frag')
             self.shaders['simple'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['simple'] = UniformCache(self.shaders['simple'])
             self.uniforms['simple'].preload(['projection', 'view', 'model', 'color', 'alpha'])
 
             # sprite (billboards)
-            vs_src = DEFAULT_SHADERS.get('sprite.vert', '')
-            fs_src = DEFAULT_SHADERS.get('sprite.frag', '')
+            vs_src = self._shader_source('sprite.vert')
+            fs_src = self._shader_source('sprite.frag')
             self.shaders['sprite'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['sprite'] = UniformCache(self.shaders['sprite'])
             self.uniforms['sprite'].preload(['projection', 'view', 'sprite_texture', 'sprite_pos_world', 'sprite_size'])
@@ -463,32 +727,44 @@ class BaseRenderer:
 
             # depth_cube – renders scene depth into a point light's cube-map for
             # omnidirectional shadow mapping (replaces the old projected shadows).
-            vs_src = DEFAULT_SHADERS.get('depth_cube.vert', '')
-            fs_src = DEFAULT_SHADERS.get('depth_cube.frag', '')
+            vs_src = self._shader_source('depth_cube.vert')
+            fs_src = self._shader_source('depth_cube.frag')
             self.shaders['depth_cube'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['depth_cube'] = UniformCache(self.shaders['depth_cube'])
             self.uniforms['depth_cube'].preload(['model', 'lightSpaceMatrix', 'lightPos', 'far_plane'])
 
             # water
-            vs_src = DEFAULT_SHADERS.get('water.vert', '')
-            fs_src = DEFAULT_SHADERS.get('water.frag', '')
+            vs_src = self._shader_source('water.vert')
+            fs_src = self._shader_source('water.frag')
             self.shaders['water'] = self.shader_loader.compile_from_source(vs_src, fs_src)
             self.uniforms['water'] = UniformCache(self.shaders['water'])
             self._preload_water_uniforms()
 
             # glass
-            vs_src = DEFAULT_SHADERS.get('glass.vert', '')
-            fs_src = DEFAULT_SHADERS.get('glass.frag', '')
-            self.shaders['glass'] = self.shader_loader.compile_from_source(vs_src, fs_src)
-            self.uniforms['glass'] = UniformCache(self.shaders['glass'])
-            self.uniforms['glass'].preload(['projection', 'view', 'model', 'viewPos', 'waterColor',
-                                            'distortionStrength', 'causticStrength', 'glassOpacity',
-                                            'refractionIndex', 'roughness', 'normalMatrix'])
-            self.uniforms['glass'].preload(self.ENV_UNIFORMS)
-
+            # Glass is an optional visual effect. A driver/compiler rejection here
+            # must not abort common shader initialization and take the whole world
+            # renderer down with it; the glass pass already skips itself when no
+            # glass program is registered.
+            try:
+                vs_src = self._shader_source('glass.vert')
+                fs_src = self._shader_source('glass.frag')
+                glass_program = self.shader_loader.compile_from_source(vs_src, fs_src)
+                self.shaders['glass'] = glass_program
+                self.uniforms['glass'] = UniformCache(glass_program)
+                self.uniforms['glass'].preload([
+                    'projection', 'view', 'model', 'viewPos', 'waterColor',
+                    'distortionStrength', 'fresnelIntensity', 'glassOpacity',
+                    'refractionIndex', 'roughness', 'normalMatrix',
+                    'sceneColor', 'screenSize'
+                ])
+                self.uniforms['glass'].preload(self.ENV_UNIFORMS)
+            except Exception as e:
+                self.shaders.pop('glass', None)
+                self.uniforms.pop('glass', None)
+                print(f"Glass shader unavailable; continuing without glass: {e}")
             # fog – use ARM‑optimised fragment shader (works everywhere)
-            fog_vert = DEFAULT_SHADERS.get('fog.vert', '')
-            fog_frag = DEFAULT_SHADERS.get('fog_arm.frag', DEFAULT_SHADERS.get('fog.frag', ''))
+            fog_vert = self._shader_source('fog.vert')
+            fog_frag = self._shader_source('fog_arm.frag') or self._shader_source('fog.frag')
             self.shaders['fog'] = self.shader_loader.compile_from_source(fog_vert, fog_frag)
             self.uniforms['fog'] = UniformCache(self.shaders['fog'])
             self._preload_fog_uniforms()
@@ -496,21 +772,18 @@ class BaseRenderer:
             # terrain
             try:
                 terrain_vs = compileShader(TERRAIN_VERTEX_SHADER, gl.GL_VERTEX_SHADER)
-                terrain_fs = compileShader(TERRAIN_FRAGMENT_SHADER, gl.GL_FRAGMENT_SHADER)
+                terrain_fs = compileShader(
+                    shaders.light_ubo_source(TERRAIN_FRAGMENT_SHADER),
+                    gl.GL_FRAGMENT_SHADER,
+                )
                 terrain_program = compileProgram(terrain_vs, terrain_fs, validate=False)
                 self.shaders['terrain'] = terrain_program
                 self.uniforms['terrain'] = UniformCache(terrain_program)
                 self.uniforms['terrain'].preload([
                     'projection', 'view', 'active_lights',
                     'texGrass', 'texRock', 'texSand', 'texSnow',
-                    'biomeWeights', 'terrainHeightScale'
                 ])
                 self.uniforms['terrain'].preload(self.ENV_UNIFORMS)
-                for i in range(self.MAX_LIGHTS):
-                    self.uniforms['terrain'].preload([
-                        f'lights[{i}].position', f'lights[{i}].color',
-                        f'lights[{i}].intensity', f'lights[{i}].radius'
-                    ])
                 print("Terrain shader loaded")
             except Exception as e:
                 print(f"Terrain shader error: {e}")
@@ -522,6 +795,7 @@ class BaseRenderer:
             else:
                 self._compile_standard_shaders()
 
+            self._configure_light_ubo_programs()
             print("Base renderer shaders compiled successfully.")
         except Exception as e:
             print(f"FATAL: Shader Error in BaseRenderer: {e}")
@@ -543,6 +817,12 @@ class BaseRenderer:
         self.uniforms['textured'] = UniformCache(tex_shader)
         self._preload_lit_uniforms('textured')
         self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'tex_angle', 'tex_shift', 'normalMatrix'])
+        self._compile_instanced_model_shaders(lit_vert, lit_frag, tex_vert, tex_frag)
+        self._compile_instanced_brush_shader(tex_vert, tex_frag)
+        self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
+        self._compile_instanced_depth_shader()
+        self._compile_instanced_sprite_shader()
+        self._compile_instanced_effect_shader()
 
     def _compile_standard_shaders(self):
         lit_shader = self.shader_loader.compile_shader_program('lit.vert', 'lit.frag')
@@ -556,25 +836,1225 @@ class BaseRenderer:
         self.uniforms['textured'] = UniformCache(tex_shader)
         self._preload_lit_uniforms('textured')
         self.uniforms['textured'].preload(['texture_diffuse', 'tex_scale', 'tex_angle', 'tex_shift', 'normalMatrix'])
+        lit_vert = DEFAULT_SHADERS.get('lit.vert', '')
+        lit_frag = DEFAULT_SHADERS.get('lit.frag', '')
+        tex_vert = DEFAULT_SHADERS.get('textured.vert', '')
+        tex_frag = DEFAULT_SHADERS.get('textured.frag', '')
+        self._compile_instanced_model_shaders(lit_vert, lit_frag, tex_vert, tex_frag)
+        self._compile_instanced_brush_shader(tex_vert, tex_frag)
+        self._compile_instanced_lit_brush_shader(lit_vert, lit_frag)
+        self._compile_instanced_depth_shader()
+        self._compile_instanced_sprite_shader()
+        self._compile_instanced_effect_shader()
+
+    #: Floats per brush-face instance: a mat4 model matrix, a mat3 normal
+    #: matrix padded to three vec4 (with the face's UV rotation tucked into the
+    #: first spare w), and one vec4 of UV scale and shift.  Eight vec4s, so
+    #: attribute locations 3..10 -- 0..2 are the cube's own position, normal and
+    #: texture coordinate.
+    BRUSH_INSTANCE_FLOATS = 32
+
+    #: Attribute locations 3..10 carry one instance of a brush draw run, and
+    #: mean the same thing for every pass that uses them:
+    #:
+    #:   3..6   mat4 model
+    #:   7..9   mat3 normal matrix, padded to vec4; ``iNormal0.w`` is a spare
+    #:          scalar a pass may use (the textured pass puts the face's UV
+    #:          rotation there)
+    #:   10     vec4 payload, whose meaning is the pass's own (UV scale and
+    #:          shift for textured, colour and alpha for lit)
+    #:
+    #: One layout, one buffer and one VAO serve both passes, which is what
+    #: makes "a run describes the invariant GPU state, the instance array
+    #: describes everything that varies within it" a property of the renderer
+    #: rather than of one pass.
+    BRUSH_INSTANCE_ATTRS = """layout (location = 3) in vec4 iModel0;
+layout (location = 4) in vec4 iModel1;
+layout (location = 5) in vec4 iModel2;
+layout (location = 6) in vec4 iModel3;
+layout (location = 7) in vec4 iNormal0;
+layout (location = 8) in vec4 iNormal1;
+layout (location = 9) in vec4 iNormal2;
+layout (location = 10) in vec4 iPayload;
+
+"""
+
+    #: Vertex-shader uniforms the instanced variants drop, because the value is
+    #: per instance now rather than per draw.
+    _INSTANCED_VERT_DROP = ('uniform mat4 model;', 'uniform mat3 normalMatrix;',
+                            'uniform vec2 tex_scale', 'uniform float tex_angle',
+                            'uniform vec2 tex_shift')
+
+    def _instanced_vertex_source(self, vert, preamble, extra_out=''):
+        """A vertex shader rewritten to take its transform from instance data.
+
+        Shared by the textured and lit brush passes: both start from the
+        ordinary shader and differ only in what they pull out of the payload,
+        so neither can drift from the pass it accelerates.
+        """
+        kept = [line for line in vert.splitlines()
+                if not line.strip().startswith(self._INSTANCED_VERT_DROP)]
+        source = '\n'.join(kept)
+        if 'out vec3 FragPos;' not in source or 'void main() {' not in source:
+            return None
+        source = source.replace(
+            'out vec3 FragPos;',
+            self.BRUSH_INSTANCE_ATTRS + extra_out + 'out vec3 FragPos;', 1)
+        source = source.replace(
+            'void main() {',
+            'void main() {\n'
+            '    mat4 instanceModel = mat4(iModel0, iModel1, iModel2, iModel3);\n'
+            '    mat3 instanceNormal = mat3(iNormal0.xyz, iNormal1.xyz, iNormal2.xyz);\n'
+            + preamble, 1)
+        source = source.replace('model * vec4(aPos, 1.0)',
+                                'instanceModel * vec4(aPos, 1.0)')
+        source = source.replace('normalMatrix * aNormal',
+                                'instanceNormal * aNormal')
+        return source
+
+    def _register_instanced_shader(self, name, vertex_source, fragment_source,
+                                   extra_uniforms=()):
+        """Compile one instanced brush program, or leave it absent.
+
+        Absence is a supported state, not a failure: a driver that rejects the
+        attribute interface simply keeps the per-object path, which every pass
+        retains.
+        """
+        if not vertex_source or not fragment_source:
+            return False
+        try:
+            program = self.shader_loader.compile_from_source(vertex_source,
+                                                             fragment_source)
+        except Exception as exc:
+            print(f'[BaseRenderer] {name} instancing disabled: {exc}')
+            return False
+        self.shaders[name] = program
+        self.uniforms[name] = UniformCache(program)
+        self._preload_lit_uniforms(name)
+        if extra_uniforms:
+            self.uniforms[name].preload(list(extra_uniforms))
+        return True
+
+    def _compile_instanced_depth_shader(self):
+        """Compile the shadow depth shader with an instanced model matrix.
+
+        The depth pass is the purest run/instance split in the renderer: the
+        only thing that varies per caster is its model matrix, and the only
+        thing that varies per run is the cube face's ``lightSpaceMatrix``. So
+        the matrix becomes instance data and the face stays a uniform, and one
+        light's six faces cost six draws instead of six times its caster count.
+
+        The vertex shader takes the same instance attributes as the brush
+        passes, so the same buffer and the same VAO serve it; the normal and
+        payload slots go unused here, which costs a little upload bandwidth and
+        buys one layout for the whole renderer.
+        """
+        vert = self._shader_source('depth_cube.vert')
+        frag = self._shader_source('depth_cube.frag')
+        if not vert or not frag:
+            return
+        vertex = self._instanced_vertex_source(vert, preamble='')
+        if vertex is None:
+            return
+        if self._register_instanced_shader(
+                'depth_cube_instanced', vertex, frag,
+                extra_uniforms=['lightSpaceMatrix', 'lightPos', 'far_plane']):
+            print(f'{_BASE_RENDERER_PREFIX} Shadow depth instancing shader compiled successfully.')
+
+    #: Per-instance attributes: centre, world size, optional locked yaw, opacity.
+    #: Per-instance attributes: centre (3), world size (2), locked yaw,
+    #: opacity, and the texture-array layer the entity pass samples.  Eight
+    #: floats; a pass that does not use a column still writes it, because the
+    #: staging array is shared and a stale value is somebody else's sprite.
+    SPRITE_INSTANCE_FLOATS = 8
+
+    def _compile_instanced_sprite_shader(self):
+        """Compile the billboard shader with its centre and size per instance.
+
+        The sprite pass was the last one submitting per object: one
+        ``glDrawArrays`` and two uniform uploads for every billboard in range,
+        where the brush passes had long since collapsed to one draw per state
+        run.  Instancing it is the same trade they made -- what cannot vary
+        within a draw (the texture) stays a bind, and what does (where the
+        billboard is and how big) becomes instance data.
+
+        Derived from ``sprite.vert`` by rewriting the two uniforms into
+        attributes rather than written out again, so the billboard's
+        camera-facing maths cannot drift from the path it accelerates.
+        """
+        vert = self._shader_source('sprite.vert')
+        frag = self._shader_source('sprite.frag')
+        if not vert or not frag:
+            return
+        kept = [line for line in vert.splitlines()
+                if not line.strip().startswith(('uniform vec3 sprite_pos_world',
+                                                'uniform vec2 sprite_size'))]
+        source = '\n'.join(kept)
+        if 'out vec2 TexCoords;' not in source:
+            return
+        # sprite.vert already declares the fixed-facing input for the
+        # non-instanced path. Keep that declaration and only inject the
+        # position/size instance inputs that the instanced rewrite needs.
+        instance_decls = (
+            'layout (location = 1) in vec3 iSpritePos;\n'
+            'layout (location = 2) in vec2 iSpriteSize;\n'
+            'layout (location = 4) in float iSpriteAlpha;\n'
+        )
+        if 'iSpritePos' not in source:
+            source = source.replace(
+                'out vec2 TexCoords;',
+                instance_decls + 'out vec2 TexCoords;', 1)
+        source = source.replace('sprite_pos_world', 'iSpritePos')
+        source = source.replace('sprite_size.x', 'iSpriteSize.x')
+        source = source.replace('sprite_size.y', 'iSpriteSize.y')
+        source = source.replace('sprite_fixed_yaw', 'iSpriteFixedYaw')
+        if 'iSpritePos' not in source or 'iSpriteSize.x' not in source:
+            # The shader did not look the way this rewrite assumes; leaving the
+            # program absent keeps the per-sprite path, which every caller has.
+            return
+        source = source.replace(
+            'out vec2 TexCoords;',
+            'out vec2 TexCoords;\nflat out float InstanceAlpha;',
+            1,
+        )
+        source = source.replace(
+            'void main() {',
+            'void main() {\n    InstanceAlpha = iSpriteAlpha;',
+            1,
+        )
+        frag = frag.replace(
+            'in highp vec3 FragPos;',
+            'in highp vec3 FragPos;\nflat in float InstanceAlpha;',
+            1,
+        )
+        frag = frag.replace(
+            'FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a);',
+            'FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a * InstanceAlpha);',
+            1,
+        )
+        if self._register_instanced_shader('sprite_instanced', source, frag,
+                                           extra_uniforms=['projection', 'view',
+                                                           'sprite_texture',
+                                                           'use_fixed_facing']):
+            print(f'{_BASE_RENDERER_PREFIX} Sprite instancing shader compiled successfully.')
+        self._compile_layered_sprite_shader(source, frag)
+
+    def _compile_layered_sprite_shader(self, vertex, fragment):
+        """The instanced billboard shader, sampling a texture-array layer.
+
+        Derived from the instanced shader by rewriting its sampler, as that one
+        is derived from ``sprite.vert``: the billboard maths, fog and alpha
+        handling exist once.  The layer arrives as instance data, which is what
+        lets the entity sprite pass be one draw in depth order (see
+        :mod:`engine.sprite_layers`).
+        """
+        if ('uniform sampler2D sprite_texture;' not in fragment
+                or 'texture(sprite_texture, TexCoords)' not in fragment
+                or 'void main() {' not in vertex):
+            return
+        vertex = vertex.replace(
+            'out vec2 TexCoords;',
+            'layout (location = 5) in float iSpriteLayer;\n'
+            'flat out float InstanceLayer;\nout vec2 TexCoords;', 1)
+        vertex = vertex.replace(
+            'void main() {', 'void main() {\n    InstanceLayer = iSpriteLayer;', 1)
+        fragment = fragment.replace(
+            'uniform sampler2D sprite_texture;',
+            'uniform sampler2DArray sprite_layers;\nflat in float InstanceLayer;', 1)
+        fragment = fragment.replace(
+            'texture(sprite_texture, TexCoords)',
+            'texture(sprite_layers, vec3(TexCoords, InstanceLayer))', 1)
+        if self._register_instanced_shader('sprite_layered', vertex, fragment,
+                                           extra_uniforms=['projection', 'view',
+                                                           'sprite_layers',
+                                                           'use_fixed_facing']):
+            print(f'{_BASE_RENDERER_PREFIX} Layered sprite shader compiled successfully.')
+
+    # One Effect row expands into deterministic virtual flame cards.
+    EFFECT_INSTANCE_FLOATS = 16
+    FIRE_VIRTUAL_CARDS = 20
+
+    def _compile_instanced_effect_shader(self):
+        """Compile the single procedural FIRE/EXPLOSION instance shader."""
+        vert = DEFAULT_SHADERS.get('effect.vert', '')
+        frag = DEFAULT_SHADERS.get('effect.frag', '')
+        if not vert or not frag:
+            return
+        if self._register_instanced_shader(
+            'effect_instanced',
+            vert,
+            frag,
+            extra_uniforms=['projection', 'view', 'explosion_texture'],
+        ):
+            print(f'{_BASE_RENDERER_PREFIX} Effect instancing shader compiled successfully.')
+
+    @timed_pass('fire effects')
+    def draw_fire_effects_instanced(
+        self, projection, view, table, slots, hidden=None, camera_pos=None,
+    ):
+        """Draw FIRE and ORB as normal instanced billboards using decoded GIF frames."""
+        if 'sprite_instanced' not in self.shaders or not len(slots):
+            return 0
+
+        slots = np.asarray(slots, dtype=np.int32)
+        if hidden is not None:
+            live = ~np.asarray(hidden, dtype=bool)[slots]
+            slots = slots[live]
+        if not len(slots):
+            return 0
+
+        effect_types = table.effect_type[slots]
+        alive = table.effect_alive[slots]
+        animated = (effect_types != 1) & alive
+        slots = slots[animated]
+        effect_types = effect_types[animated]
+        if not len(slots):
+            return 0
+
+        count = len(slots)
+        if len(self._sprite_texture_scratch) < count:
+            grown = max(64, len(self._sprite_texture_scratch) * 2, count)
+            self._sprite_texture_scratch = np.empty(grown, dtype=np.int32)
+            self._sprite_draw_mask = np.empty(grown, dtype=bool)
+            self._sprite_depth_scratch = np.empty(grown, dtype=np.float64)
+            self._sprite_depth_aux_scratch = np.empty(grown, dtype=np.float64)
+            self._sprite_sorted_slots_scratch = np.empty(grown, dtype=np.int32)
+
+        textures = self._sprite_texture_scratch[:count]
+        drawn = self._sprite_draw_mask[:count]
+        textures.fill(0)
+
+        variants = table.effect_fire_variant[slots]
+        custom_ids = table.effect_custom_id[slots]
+        custom_loops = table.effect_custom_loop[slots]
+        # Animated GIFs are visual-time data. Sample the clock on the render
+        # thread rather than consuming the logic thread's per-frame elapsed
+        # snapshot. That removes visible frame quantisation when render and
+        # logic rates differ, while keeping the dense EntityTable as the source
+        # of the animation's spawn timestamps.
+        elapsed = np.maximum(
+            time.perf_counter() - table.effect_spawn_time[slots], 0.0
+        ).astype(np.float32, copy=False)
+
+        # There are only five authored variants per animated Effect family.
+        # This bounded 10-way loop replaces an entity-by-entity Python loop
+        # while allowing FIRE and ORB to use separate GIF sets.
+        for effect_kind, frame_store, cumulative_store in (
+            (0, self.effect_fire_frames, self.effect_fire_cumulative),
+            (2, self.effect_orb_frames, self.effect_orb_cumulative),
+        ):
+            kind_mask = effect_types == effect_kind
+            if not np.any(kind_mask):
+                continue
+            kind_variants = variants[kind_mask]
+            kind_elapsed = elapsed[kind_mask]
+            kind_positions = np.flatnonzero(kind_mask)
+            for variant in range(5):
+                mask = kind_variants == variant
+                if not np.any(mask):
+                    continue
+                frames = frame_store.get(variant, ())
+                cumulative = cumulative_store.get(variant)
+                if not frames or cumulative is None or not len(cumulative):
+                    continue
+
+                local_elapsed = np.mod(
+                    kind_elapsed[mask]
+                    + table.effect_phase[slots][kind_mask][mask] * cumulative[-1],
+                    cumulative[-1]
+                )
+                frame_indices = np.searchsorted(
+                    cumulative, local_elapsed, side='right'
+                )
+                frame_indices = np.minimum(
+                    frame_indices, len(frames) - 1
+                ).astype(np.int32, copy=False)
+                positions = kind_positions[np.flatnonzero(mask)]
+                textures[positions] = np.asarray(
+                    frames, dtype=np.int32
+                )[frame_indices]
+
+        # CUSTOM can use any GIF path. Iterate only over unique authored GIFs,
+        # never over entities; each path is decoded and uploaded once per renderer.
+        custom_mask = effect_types == 3
+        if np.any(custom_mask):
+            custom_positions = np.flatnonzero(custom_mask)
+            custom_values = custom_ids[custom_mask]
+            custom_elapsed = elapsed[custom_mask]
+            for custom_id in np.unique(custom_values):
+                custom_id = int(custom_id)
+                if custom_id <= 0:
+                    continue
+                frames = self.effect_custom_frames.get(custom_id)
+                cumulative = self.effect_custom_cumulative.get(custom_id)
+                if frames is None:
+                    path = table.effect_custom_path(custom_id)
+                    if path:
+                        frames, cumulative = self._load_fire_gif(path)
+                    else:
+                        frames, cumulative = (), np.empty(0, dtype=np.float32)
+                    self.effect_custom_frames[custom_id] = tuple(frames)
+                    self.effect_custom_cumulative[custom_id] = cumulative
+                if not frames or cumulative is None or not len(cumulative):
+                    continue
+
+                mask = custom_values == custom_id
+                loop_values = custom_loops[mask]
+                raw_elapsed = custom_elapsed[mask]
+                # CUSTOM follows its authored Loop flag. When looping is off,
+                # hold the final GIF frame instead of wrapping to frame 1.
+                phase_values = table.effect_phase[slots][custom_mask][mask]
+                local_elapsed = np.where(
+                    loop_values,
+                    np.mod(raw_elapsed + phase_values * cumulative[-1], cumulative[-1]),
+                    np.minimum(raw_elapsed + phase_values * cumulative[-1], cumulative[-1]),
+                )
+                frame_indices = np.searchsorted(
+                    cumulative, local_elapsed, side='right'
+                )
+                frame_indices = np.minimum(
+                    frame_indices, len(frames) - 1
+                ).astype(np.int32, copy=False)
+                positions = custom_positions[np.flatnonzero(mask)]
+                textures[positions] = np.asarray(
+                    frames, dtype=np.int32
+                )[frame_indices]
+
+        drawn[:] = textures > 0
+        valid_count = int(np.count_nonzero(drawn))
+        if valid_count == 0:
+            return 0
+        if valid_count != count:
+            slots = slots[drawn]
+            textures = textures[drawn]
+
+        if camera_pos is None:
+            order, run_starts = sort_into_runs(textures)
+            ordered_textures = textures[order]
+        else:
+            # Blended with depth writes off, like the entity sprites: the
+            # draw order is back to front and runs are only the equal-frame
+            # stretches that order happens to contain.
+            cx, _, cz = self._camera_xyz(camera_pos)
+            fire_count = len(slots)
+            depth_sq = self._sprite_depth_scratch[:fire_count]
+            depth_aux = self._sprite_depth_aux_scratch[:fire_count]
+            np.take(table.pos[:, 0], slots, out=depth_sq)
+            np.subtract(depth_sq, cx, out=depth_sq)
+            np.square(depth_sq, out=depth_sq)
+            np.take(table.pos[:, 2], slots, out=depth_aux)
+            np.subtract(depth_aux, cz, out=depth_aux)
+            np.square(depth_aux, out=depth_aux)
+            np.add(depth_sq, depth_aux, out=depth_sq)
+            np.negative(depth_sq, out=depth_aux)
+            order = np.argsort(depth_aux, kind='stable')
+            ordered_textures = textures[order]
+            run_starts = runs_in_order(ordered_textures)
+
+        count = len(order)
+        self._ensure_sprite_instance_buffer(count)
+        data = self._sprite_instance_data[:count]
+        sorted_slots = self._sprite_sorted_slots_scratch[:count]
+        np.take(slots, order, out=sorted_slots)
+        np.take(table.pos, sorted_slots, axis=0, out=data[:, 0:3])
+        np.take(table.sprite_size, sorted_slots, axis=0, out=data[:, 3:5])
+        # The staging array is shared with the entity sprite pass: columns
+        # this pass does not use must still be written, or each flame would
+        # inherit whatever yaw and opacity the last sprite at that index had.
+        data[:, 5] = -10000.0
+        data[:, 6] = 1.0
+        data[:, 7] = 0.0
+
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+
+        shader, uniforms = (
+            self.shaders['sprite_instanced'],
+            self.uniforms['sprite_instanced'],
+        )
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        self._upload_env_uniforms('sprite_instanced')
+        gl.glUniform1i(uniforms['use_fixed_facing'], 0)
+        gl.glUniformMatrix4fv(
+            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection)
+        )
+        gl.glUniformMatrix4fv(
+            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view)
+        )
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['sprite_texture'], 0)
+        gl.glBindVertexArray(self._ensure_sprite_instance_vao())
+
+        current_tex = None
+        for run in range(len(run_starts) - 1):
+            begin = int(run_starts[run])
+            length = int(run_starts[run + 1]) - begin
+            if length <= 0:
+                continue
+            tex_id = int(ordered_textures[begin])
+            if tex_id != current_tex:
+                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                current_tex = tex_id
+                self.render_stats.batched_draws += 1
+            self._point_sprite_instances_at(begin)
+            gl.glDrawArraysInstanced(
+                gl.GL_TRIANGLE_STRIP, 0, 4, length
+            )
+            self.render_stats.draw_calls += 1
+
+        gl.glBindVertexArray(0)
+        return count
+
+    @timed_pass('effects')
+    def draw_effects_instanced(
+        self, projection, view, table, slots, hidden=None,
+        play_mode=True, editor_time=0.0, camera_pos=None,
+    ):
+        """Draw FIRE/ORB as animated billboards and EXPLOSION through its existing shader."""
+        if not len(slots):
+            return 0
+
+        slots = np.asarray(slots, dtype=np.int32)
+        if hidden is not None:
+            live = ~np.asarray(hidden, dtype=bool)[slots]
+            slots = slots[live]
+        if not len(slots):
+            return 0
+
+        fire_count = self.draw_fire_effects_instanced(
+            projection, view, table, slots, hidden=None, camera_pos=camera_pos
+        )
+
+        explosion = table.effect_type[slots] == 1
+        alive = table.effect_alive[slots]
+        slots = slots[explosion & alive]
+        if not len(slots) or 'effect_instanced' not in self.shaders:
+            return fire_count
+
+        count = len(slots)
+        if len(self._effect_order_scratch) < count:
+            grown = max(64, len(self._effect_order_scratch) * 2, count)
+            self._effect_order_scratch = np.empty(grown, dtype=np.int32)
+            self._effect_depth_scratch = np.empty(grown, dtype=np.float64)
+            self._effect_depth_aux_scratch = np.empty(grown, dtype=np.float64)
+
+        depth = self._effect_depth_scratch[:count]
+        if camera_pos is None:
+            order = np.arange(count, dtype=np.int32)
+        else:
+            cx, _, cz = self._camera_xyz(camera_pos)
+            np.take(table.pos[:, 0], slots, out=depth)
+            np.subtract(depth, cx, out=depth)
+            np.square(depth, out=depth)
+            aux = self._effect_depth_aux_scratch[:count]
+            np.take(table.pos[:, 2], slots, out=aux)
+            np.subtract(aux, cz, out=aux)
+            np.square(aux, out=aux)
+            np.add(depth, aux, out=depth)
+            order = np.argsort(depth, kind='stable')[::-1]
+
+        sorted_slots = slots[order]
+        self._ensure_effect_instance_buffer(count)
+        data = self._effect_instance_data[:count]
+
+        np.take(table.pos, sorted_slots, axis=0, out=data[:, 0:3])
+        np.take(table.effect_params[:, :2], sorted_slots, axis=0,
+               out=data[:, 3:5])
+        np.take(table.effect_elapsed, sorted_slots, out=data[:, 5])
+        np.take(table.effect_lifetime, sorted_slots, out=data[:, 6])
+        np.take(table.effect_seed, sorted_slots, out=data[:, 7])
+        data[:, 8] = 1.0
+        data[:, 9:11] = 0.0
+        np.take(table.sprite_size[:, 1], sorted_slots, out=data[:, 10])
+        np.take(table.effect_color, sorted_slots, axis=0,
+               out=data[:, 11:14])
+        data[:, 14] = 1.0
+        data[:, 15] = table.effect_preview[sorted_slots]
+
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+
+        blend_was = bool(gl.glIsEnabled(gl.GL_BLEND))
+        cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
+        if not blend_was:
+            gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        if cull_was:
+            gl.glDisable(gl.GL_CULL_FACE)
+
+        shader = self.shaders['effect_instanced']
+        uniforms = self.uniforms['effect_instanced']
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        self._upload_env_uniforms('effect_instanced')
+        gl.glUniformMatrix4fv(
+            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection)
+        )
+        gl.glUniformMatrix4fv(
+            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view)
+        )
+        prev_active_texture = gl.glGetIntegerv(gl.GL_ACTIVE_TEXTURE)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        if self.effect_explosion_texture:
+            gl.glBindTexture(gl.GL_TEXTURE_2D, self.effect_explosion_texture)
+        gl.glUniform1i(uniforms['explosion_texture'], 0)
+
+        gl.glBindVertexArray(self._ensure_effect_instance_vao())
+        gl.glDrawArraysInstanced(
+            gl.GL_TRIANGLE_STRIP, 0, 4, count
+        )
+        self.render_stats.draw_calls += 1
+        self.render_stats.batched_draws += 1
+        gl.glBindVertexArray(0)
+        gl.glActiveTexture(prev_active_texture)
+        if cull_was:
+            gl.glEnable(gl.GL_CULL_FACE)
+        if not blend_was:
+            gl.glDisable(gl.GL_BLEND)
+        return fire_count + count
+
+    def _ensure_effect_instance_buffer(self, count):
+        if self._effect_instance_vbo is None:
+            self._effect_instance_vbo = gl.glGenBuffers(1)
+        if count <= self._effect_instance_capacity:
+            return
+        capacity = max(count, 64, self._effect_instance_capacity * 2)
+        self._effect_instance_capacity = capacity
+        self._effect_instance_data = np.empty(
+            (capacity, self.EFFECT_INSTANCE_FLOATS), dtype=np.float32
+        )
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
+        gl.glBufferData(
+            gl.GL_ARRAY_BUFFER,
+            self._effect_instance_data.nbytes,
+            None,
+            gl.GL_DYNAMIC_DRAW,
+        )
+
+    def _ensure_effect_instance_vao(self):
+        if self._effect_instance_vao is not None:
+            return self._effect_instance_vao
+        self._ensure_effect_instance_buffer(1)
+        vao = gl.glGenVertexArrays(1)
+        gl.glBindVertexArray(vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_vbo)
+        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+        gl.glEnableVertexAttribArray(0)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._effect_instance_vbo)
+        stride = self.EFFECT_INSTANCE_FLOATS * 4
+        for location, size, offset in (
+            (1, 3, 0),
+            (2, 4, 12),
+            (3, 4, 28),
+            (4, 4, 44),
+            (5, 1, 60),
+        ):
+            gl.glVertexAttribPointer(
+                location, size, gl.GL_FLOAT, gl.GL_FALSE,
+                stride, ctypes.c_void_p(offset)
+            )
+            gl.glEnableVertexAttribArray(location)
+            gl.glVertexAttribDivisor(location, 1)
+        gl.glBindVertexArray(0)
+        self._effect_instance_vao = vao
+        return vao
+
+    def _ensure_sprite_instance_buffer(self, count):
+        """Grow the sprite instance VBO and its staging array to *count* rows."""
+        if self._sprite_instance_vbo is None:
+            self._sprite_instance_vbo = gl.glGenBuffers(1)
+        if count <= self._sprite_instance_capacity:
+            return
+        capacity = max(count, 256, self._sprite_instance_capacity * 2)
+        self._sprite_instance_capacity = capacity
+        self._sprite_instance_data = np.empty(
+            (capacity, self.SPRITE_INSTANCE_FLOATS), dtype=np.float32)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, self._sprite_instance_data.nbytes,
+                        None, gl.GL_DYNAMIC_DRAW)
+        # As with the brush buffer, the VAO is left alone: glBufferData keeps
+        # the buffer's name and the VAO's pointers reference the name.
+
+    def _ensure_sprite_instance_vao(self):
+        """A VAO over the shared billboard quad plus the instance buffer.
+
+        Separate from ``vaos['sprite']`` for the reason the brush pass keeps
+        its own: the per-sprite path shares that one, and giving it two enabled
+        divisor-1 attributes would have every ordinary billboard draw read an
+        instance buffer it does not use.
+        """
+        if self._sprite_instance_vao is not None:
+            return self._sprite_instance_vao
+        self._ensure_sprite_instance_buffer(1)
+        vao = gl.glGenVertexArrays(1)
+        gl.glBindVertexArray(vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_vbo)
+        gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 0, None)
+        gl.glEnableVertexAttribArray(0)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
+        stride = self.SPRITE_INSTANCE_FLOATS * 4
+        for location, size, offset in (
+            (1, 3, 0), (2, 2, 12), (3, 1, 20), (4, 1, 24), (5, 1, 28)
+        ):
+            gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
+                                     stride, ctypes.c_void_p(offset))
+            gl.glEnableVertexAttribArray(location)
+            gl.glVertexAttribDivisor(location, 1)
+        gl.glBindVertexArray(0)
+        self._sprite_instance_vao = vao
+        return vao
+
+    def _point_sprite_instances_at(self, base):
+        """Re-aim the sprite instance attributes at instance *base*.
+
+        OpenGL 3.3 has no ``glDrawArraysInstancedBaseInstance``, so a run that
+        starts part way through the buffer is reached by moving the pointers --
+        the same two calls per run the brush pass makes eight of.
+        """
+        stride = self.SPRITE_INSTANCE_FLOATS * 4
+        base = int(base)
+        #: Which instance the attributes currently point at. Read by the
+        #: submission tests to recover what a run actually drew.
+        self._sprite_instance_base = base
+        origin = base * stride
+        # The raw entry point, as for brush runs: an integer offset into the
+        # bound buffer needs none of the wrapper's array handling.
+        for location, size, offset in (
+            (1, 3, 0), (2, 2, 12), (3, 1, 20), (4, 1, 24), (5, 1, 28)
+        ):
+            _raw_vertex_attrib_pointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
+                                       stride, ctypes.c_void_p(origin + offset))
+
+    def _compile_instanced_lit_brush_shader(self, lit_vert, lit_frag):
+        """Compile the flat-shaded brush shader with instanced colour.
+
+        The lit pass had no texture to batch by, so every brush was its own
+        draw carrying four uniform uploads -- model, normal, colour, alpha.
+        Colour and alpha are read in the *fragment* stage, so instancing them
+        means carrying them across as a varying; the rest of the lighting,
+        shadowing and fog code is untouched.
+        """
+        if not lit_vert or not lit_frag:
+            return
+        vertex = self._instanced_vertex_source(
+            lit_vert,
+            preamble='    vInstanceColor = iPayload;\n',
+            extra_out='out vec4 vInstanceColor;\n')
+        if vertex is None:
+            return
+
+        kept = [line for line in lit_frag.splitlines()
+                if not line.strip().startswith(('uniform vec3 object_color;',
+                                                'uniform float alpha;'))]
+        fragment = '\n'.join(kept)
+        if 'in vec3 Normal;' not in fragment:
+            return
+        fragment = fragment.replace('in vec3 Normal;',
+                                    'in vec3 Normal;\nin vec4 vInstanceColor;', 1)
+        fragment, colours = re.subn(r'\bobject_color\b', 'vInstanceColor.rgb',
+                                    fragment)
+        fragment, alphas = re.subn(r'\balpha\b', 'vInstanceColor.a', fragment)
+        if not colours or not alphas:
+            # The shader did not look the way this rewrite assumes; leaving the
+            # program absent keeps the per-brush path rather than compiling
+            # something subtly wrong.
+            return
+        if self._register_instanced_shader('lit_brush_instanced', vertex,
+                                           fragment):
+            print(f'{_BASE_RENDERER_PREFIX} Lit brush instancing shader compiled successfully.')
+
+    def _frame_transforms(self, table, slots):
+        """Model and normal matrices for *slots*, into reusable buffers.
+
+        One batched build per pass instead of one memoised glm matrix per brush
+        object.  The buffers are grown geometrically and never shrunk, so a
+        steady-state frame allocates nothing.
+        """
+        count = len(slots)
+        if len(self._brush_mat_buf) < count:
+            capacity = max(count, 16, len(self._brush_mat_buf) * 2)
+            self._brush_mat_buf = np.empty((capacity, 16), dtype=np.float32)
+            self._brush_nmat_buf = np.empty((capacity, 9), dtype=np.float32)
+        return render_table.model_matrices(
+            table, slots, self._brush_mat_buf, self._brush_nmat_buf)
+
+    
+
+    def _ensure_brush_instance_buffer(self, count):
+        """Grow the per-face instance VBO and its staging array to *count* rows."""
+        if self._brush_instance_vbo is None:
+            self._brush_instance_vbo = gl.glGenBuffers(1)
+        if count <= self._brush_instance_capacity:
+            return
+        capacity = max(count, 256, self._brush_instance_capacity * 2)
+        self._brush_instance_capacity = capacity
+        self._brush_instance_data = np.empty(
+            (capacity, self.BRUSH_INSTANCE_FLOATS), dtype=np.float32)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, self._brush_instance_data.nbytes,
+                        None, gl.GL_DYNAMIC_DRAW)
+        # The VAO is deliberately left alone. glBufferData reallocates the data
+        # store but keeps the buffer's name, and a VAO's attribute pointers
+        # reference the name with a stride and offset that have not changed --
+        # so the VAO stays valid across a growth. Deleting it here would also
+        # invalidate any handle a caller is holding, which the shadow pass does
+        # across its six faces.
+
+    def _ensure_brush_instance_vao(self):
+        """A VAO over the shared cube VBO plus the per-face instance buffer.
+
+        Deliberately separate from ``vaos['cube']``: the non-instanced path
+        shares that one, and giving it eight enabled divisor-1 attributes would
+        have every ordinary cube draw read an instance buffer it does not use.
+        """
+        if self._brush_instance_vao is not None:
+            return self._brush_instance_vao
+        # The shadow pass asks for the VAO during its setup, before anything
+        # has packed instances, so the buffer may not exist yet.
+        self._ensure_brush_instance_buffer(1)
+        vao = gl.glGenVertexArrays(1)
+        gl.glBindVertexArray(vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._cube_vbo)
+        for location, size, offset in ((0, 3, 0), (1, 3, 12), (2, 2, 24)):
+            gl.glVertexAttribPointer(location, size, gl.GL_FLOAT, gl.GL_FALSE,
+                                     32, ctypes.c_void_p(offset))
+            gl.glEnableVertexAttribArray(location)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
+        stride = self.BRUSH_INSTANCE_FLOATS * 4
+        for location in range(3, 11):
+            gl.glVertexAttribPointer(
+                location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
+                ctypes.c_void_p((location - 3) * 16))
+            gl.glEnableVertexAttribArray(location)
+            gl.glVertexAttribDivisor(location, 1)
+        gl.glBindVertexArray(0)
+        self._brush_instance_vao = vao
+        return vao
+
+    def _point_brush_instances_at(self, base):
+        """Re-aim the instance attributes at instance *base*.
+
+        OpenGL 3.3 has no ``glDrawArraysInstancedBaseInstance``, so a run that
+        starts part way through the buffer is reached by moving the attribute
+        pointers instead. Eight calls per run, against six vertices' worth of
+        draw -- and there are at most six runs per texture.
+        """
+        stride = self.BRUSH_INSTANCE_FLOATS * 4
+        origin = int(base) * stride
+        # The raw entry point: the offset is a plain integer into the bound
+        # buffer, so PyOpenGL's array handling and the pointer bookkeeping it
+        # keeps per context (a dict write per call) buy nothing here -- and
+        # they were most of the cost of a brush pass.
+        for location in range(3, 11):
+            _raw_vertex_attrib_pointer(
+                location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride,
+                ctypes.c_void_p(origin + (location - 3) * 16))
+
+    def _pack_brush_instances(self, models, normals, rows, spare, payload):
+        """Pack one instance row per draw item, straight from existing arrays.
+
+        The layout is :data:`BaseRenderer.BRUSH_INSTANCE_ATTRS`: the model
+        matrix, the normal matrix padded to three vec4 with one spare scalar,
+        and a payload vec4 whose meaning belongs to the calling pass.  Every
+        field is a vectorised take -- no Python loop, and no going back to an
+        object for a transform that already exists as a column.
+
+        *rows* selects which of *models* / *normals* each instance uses, so one
+        brush appearing as six faces costs six instance rows and one matrix
+        build.
+        """
+        count = len(rows)
+        self._ensure_brush_instance_buffer(count)
+        data = self._brush_instance_data[:count]
+        np.take(models, rows, axis=0, out=data[:, 0:16])
+        if payload is None:
+            payload = 0.0
+        if normals is None:
+            # A pass that writes only depth has no normal to carry; leaving the
+            # slots zero keeps one instance layout for the whole renderer at
+            # the cost of a little upload bandwidth.
+            data[:, 16:28] = 0.0
+        else:
+            item_normals = normals[rows]
+            data[:, 16:19] = item_normals[:, 0:3]
+            data[:, 19] = spare
+            data[:, 20:23] = item_normals[:, 3:6]
+            data[:, 23] = 0.0
+            data[:, 24:27] = item_normals[:, 6:9]
+            data[:, 27] = 0.0
+        data[:, 28:32] = payload
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._brush_instance_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+        return count
+
+    def _begin_instanced_pass(self, name, projection, view, lights):
+        """Bind an instanced brush program and its per-pass uniform state."""
+        program = self.shaders[name]
+        uniforms = self.uniforms[name]
+        gl.glUseProgram(program)
+        self._current_shader = program
+        self._upload_lights_once(name, lights)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
+                              glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
+                              glm.value_ptr(view))
+        return uniforms
+
+    def _compile_instanced_brush_shader(self, tex_vert, tex_frag):
+        """Compile the textured-brush shader with per-face instanced attributes.
+
+        The per-face state the pass used to upload as uniforms -- model matrix,
+        normal matrix, UV scale, rotation and shift -- becomes instance data,
+        so every face sharing a texture and a cube face index is one
+        ``glDrawArraysInstanced`` instead of one ``glDrawArrays`` and three or
+        four ``glUniform`` calls each.
+
+        The UV scale and shift ride in the payload vec4 and the rotation in the
+        spare ``iNormal0.w``; declaring locals of the shader's original uniform
+        names leaves the UV rotate/scale/shift maths in the body byte for byte
+        what the non-instanced path runs.  Both the desktop and ARM variants
+        have the same vertex interface, so one derivation serves both.
+        """
+        vertex = self._instanced_vertex_source(
+            tex_vert,
+            preamble=('    vec2 tex_scale = iPayload.xy;\n'
+                      '    vec2 tex_shift = iPayload.zw;\n'
+                      '    float tex_angle = iNormal0.w;\n'))
+        if vertex is None:
+            return
+        if self._register_instanced_shader('brush_instanced', vertex, tex_frag,
+                                           extra_uniforms=['texture_diffuse']):
+            print(f'{_BASE_RENDERER_PREFIX} Brush face instancing shader compiled successfully.')
+
+    def _compile_instanced_model_shaders(self, lit_vert, lit_frag, tex_vert, tex_frag):
+        """Compile GL 3.3 model shaders whose transforms come from instanced attributes."""
+        instance_attrs = """layout (location = 3) in vec4 iModel0;
+layout (location = 4) in vec4 iModel1;
+layout (location = 5) in vec4 iModel2;
+layout (location = 6) in vec4 iModel3;
+layout (location = 7) in vec4 iNormal0;
+layout (location = 8) in vec4 iNormal1;
+layout (location = 9) in vec4 iNormal2;
+layout (location = 10) in float iInstanceAlpha;
+
+"""
+
+        def make_vertex(source):
+            if not source:
+                raise ValueError('missing model vertex shader source')
+            source = source.replace('uniform mat4 model;\n', '')
+            source = source.replace('uniform mat3 normalMatrix;\n', '')
+            if 'out vec3 FragPos;' not in source:
+                raise ValueError('unexpected model vertex shader interface')
+            source = source.replace(
+                'out vec3 FragPos;',
+                instance_attrs + 'flat out float InstanceAlpha;\nout vec3 FragPos;',
+                1,
+            )
+            source = source.replace(
+                'void main() {',
+                'void main() {\n'
+                '    mat4 instanceModel = mat4(iModel0, iModel1, iModel2, iModel3);\n'
+                '    mat3 instanceNormal = mat3(iNormal0.xyz, iNormal1.xyz, iNormal2.xyz);\n'
+                '    InstanceAlpha = iInstanceAlpha;\n',
+                1,
+            )
+            source = source.replace('model * vec4(aPos, 1.0)', 'instanceModel * vec4(aPos, 1.0)')
+            source = source.replace('normalMatrix * aNormal', 'instanceNormal * aNormal')
+            return source
+        lit_instance_frag = lit_frag.replace(
+            'out vec4 FragColor;',
+            'out vec4 FragColor;\nflat in float InstanceAlpha;',
+            1,
+        ).replace(
+            'FragColor = vec4(applyFog(result, FragPos), alpha);',
+            'FragColor = vec4(applyFog(result, FragPos), alpha * InstanceAlpha);',
+            1,
+        )
+        textured_instance_frag = tex_frag.replace(
+            'out vec4 FragColor;',
+            'out vec4 FragColor;\nflat in float InstanceAlpha;',
+            1,
+        ).replace(
+            'uniform sampler2D texture_diffuse;',
+            'uniform sampler2D texture_diffuse;\nuniform float alpha;',
+            1,
+        ).replace(
+            'FragColor = vec4(applyFog(result, FragPos), texColor.a);',
+            'FragColor = vec4(applyFog(result, FragPos), texColor.a * alpha * InstanceAlpha);',
+            1,
+        )
+        try:
+            self.shaders['lit_instanced'] = self.shader_loader.compile_from_source(
+                make_vertex(lit_vert), lit_instance_frag)
+            self.uniforms['lit_instanced'] = UniformCache(self.shaders['lit_instanced'])
+            self._preload_lit_uniforms('lit_instanced')
+
+            self.shaders['textured_instanced'] = self.shader_loader.compile_from_source(
+                make_vertex(tex_vert), textured_instance_frag)
+            self.uniforms['textured_instanced'] = UniformCache(self.shaders['textured_instanced'])
+            self._preload_lit_uniforms('textured_instanced')
+            self.uniforms['textured_instanced'].preload(
+                ['texture_diffuse', 'tex_scale', 'tex_angle', 'tex_shift', 'normalMatrix'])
+            print(f'{_BASE_RENDERER_PREFIX} GPU model instancing shaders compiled successfully.')
+        except Exception as exc:
+            # The ordinary model shaders remain authoritative if an older/quirky
+            # driver rejects the instanced attribute interface.
+            for name in ('lit_instanced', 'textured_instanced'):
+                self.uniforms.pop(name, None)
+                program = self.shaders.pop(name, None)
+                if program:
+                    try:
+                        gl.glDeleteProgram(program)
+                    except Exception:
+                        pass
+            print(f'[BaseRenderer] GPU model instancing disabled: {exc}')
 
     def _preload_lit_uniforms(self, shader_name):
         uniforms = self.uniforms[shader_name]
         uniforms.preload(['projection', 'view', 'model', 'object_color', 'alpha', 'active_lights'])
         uniforms.preload(self.ENV_UNIFORMS)
-        for i in range(self.MAX_LIGHTS):
-            uniforms.preload([f'lights[{i}].position', f'lights[{i}].color',
-                              f'lights[{i}].intensity', f'lights[{i}].radius'])
 
     def _preload_water_uniforms(self):
         uniforms = self.uniforms['water']
-        uniforms.preload(['projection', 'view', 'model', 'time', 'viewPos', 'normalMap', 'waterOpacity',
-                          'waterReflectivity', 'waterTint', 'normalMatrix', 'waveAmp', 'brushSize'])
+        uniforms.preload([
+            'projection', 'view', 'model', 'time', 'viewPos',
+            'normalMap', 'sceneColor',
+            'screenSize', 'waterOpacity', 'waterReflectivity',
+            'waterTint', 'distortionStrength', 'refractionIndex',
+            'roughness', 'fresnelIntensity', 'normalMatrix',
+            'waveAmp', 'brushSize',
+            'sceneDepth', 'hasSceneDepth', 'ssrEnabled', 'invProjection',
+        ])
         uniforms.preload(self.ENV_UNIFORMS)
 
     def _preload_fog_uniforms(self):
         uniforms = self.uniforms['fog']
         uniforms.preload(['projection', 'view', 'model', 'viewPos', 'time', 'noiseTexture',
                           'density', 'fogColor', 'noiseScale', 'object_color', 'alpha', 'inverseModel'])
+
+    # --------------------------------------------------------------------------
+    # FIRE animation textures
+    # --------------------------------------------------------------------------
+    def _fire_asset_bytes(self, asset_path):
+        """Read an effect asset's bytes from the project directory."""
+        disk_path = os.path.join(os.getcwd(), asset_path)
+        if os.path.exists(disk_path):
+            try:
+                with open(disk_path, "rb") as handle:
+                    return handle.read()
+            except OSError:
+                pass
+        return None
+
+    def _upload_fire_frame(self, cache_key, image):
+        """Upload one already-decoded FIRE frame and return its GL texture id."""
+        cached = self.texture_manager.get(cache_key)
+        if cached:
+            return int(cached)
+
+        image = image.convertToFormat(QImage.Format_RGBA8888)
+        image = image.mirrored(False, True)
+        width, height = image.width(), image.height()
+        bits = image.constBits()
+        try:
+            bits.setsize(image.sizeInBytes())
+            pixels = bytes(bits)
+        except AttributeError:
+            pixels = image.bits().asstring(image.byteCount())
+
+        tex_id = gl.glGenTextures(1)
+        self.texture_manager[cache_key] = tex_id
+        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE
+        )
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE
+        )
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR
+        )
+        gl.glTexParameteri(
+            gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR
+        )
+
+        gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
+        try:
+            gl.glTexImage2D(
+                gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, width, height, 0,
+                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, pixels
+            )
+        finally:
+            gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 4)
+        return int(tex_id)
+
+    def _load_fire_gif(self, asset_path):
+        """Decode one FIRE GIF into persistent GL textures and frame timings.
+
+        Pillow is already a Fio texture dependency and gives us the decoded
+        animation frame sequence directly, including per-frame GIF durations.
+        Qt's QImageReader remains the fallback for a malformed/unusual asset.
+        """
+        data = self._fire_asset_bytes(asset_path)
+        if not data:
+            print(f"{_BASE_RENDERER_PREFIX} FIRE texture not found: {asset_path}")
+            return [], np.empty(0, dtype=np.float32)
+
+        frames = []
+        durations = []
+
+        # Primary animated-GIF path. ImageSequence.Iterator handles GIF
+        # disposal/compositing, so each uploaded texture is the complete frame
+        # the player should actually display.
+        try:
+            from PIL import Image, ImageSequence
+
+            with Image.open(io.BytesIO(data)) as gif:
+                if getattr(gif, 'is_animated', False):
+                    for frame_index, frame in enumerate(ImageSequence.Iterator(gif)):
+                        rgba = frame.convert("RGBA")
+                        qimage = QImage(
+                            rgba.tobytes(),
+                            rgba.width,
+                            rgba.height,
+                            rgba.width * 4,
+                            QImage.Format_RGBA8888,
+                        ).copy()
+                        frames.append(
+                            self._upload_fire_frame(
+                                f"{asset_path}#frame={frame_index}",
+                                qimage,
+                            )
+                        )
+                        try:
+                            delay_seconds = max(
+                                float(frame.info.get("duration", 100)) / 1000.0,
+                                0.01,
+                            )
+                        except (TypeError, ValueError):
+                            delay_seconds = 0.1
+                        durations.append(delay_seconds)
+                else:
+                    rgba = gif.convert("RGBA")
+                    qimage = QImage(
+                        rgba.tobytes(),
+                        rgba.width,
+                        rgba.height,
+                        rgba.width * 4,
+                        QImage.Format_RGBA8888,
+                    ).copy()
+                    frames.append(
+                        self._upload_fire_frame(
+                            f"{asset_path}#frame=0",
+                            qimage,
+                        )
+                    )
+                    durations.append(0.1)
+
+            if frames:
+                return frames, np.cumsum(
+                    np.asarray(durations, dtype=np.float32),
+                    dtype=np.float32,
+                )
+        except Exception as exc:
+            print(
+                f"{_BASE_RENDERER_PREFIX} Error decoding FIRE GIF "
+                f"with Pillow '{asset_path}': {exc}"
+            )
+
+        # Qt fallback for assets Pillow cannot decode.
+        try:
+            payload = QByteArray(data)
+            buffer = QBuffer()
+            buffer.setData(payload)
+            buffer.open(QIODevice.ReadOnly)
+            reader = QImageReader(buffer, b"gif")
+            reader.setDecideFormatFromContent(True)
+
+            image_count = reader.imageCount()
+            if image_count < 0:
+                image_count = 0
+
+            for frame_index in range(image_count):
+                if not reader.jumpToImage(frame_index):
+                    continue
+                image = reader.read()
+                if image.isNull():
+                    continue
+                frames.append(
+                    self._upload_fire_frame(
+                        f"{asset_path}#qt-frame={frame_index}",
+                        image,
+                    )
+                )
+                try:
+                    delay_seconds = max(
+                        float(reader.nextImageDelay()) / 1000.0,
+                        0.01,
+                    )
+                except (TypeError, ValueError):
+                    delay_seconds = 0.1
+                durations.append(delay_seconds)
+
+            buffer.close()
+
+            if frames:
+                return frames, np.cumsum(
+                    np.asarray(durations, dtype=np.float32),
+                    dtype=np.float32,
+                )
+        except Exception as exc:
+            print(
+                f"{_BASE_RENDERER_PREFIX} FIRE Qt fallback failed "
+                f"'{asset_path}': {exc}"
+            )
+
+        return [], np.empty(0, dtype=np.float32)
+
+    def _load_fire_effect_textures(self):
+        """Load the five authored FIRE variants once after the GL context exists."""
+        self.effect_fire_frames.clear()
+        self.effect_fire_cumulative.clear()
+
+        for variant in range(5):
+            asset_path = (
+                f"assets/textures/effects/fire{variant + 1:02d}.gif"
+            )
+            frames, cumulative = self._load_fire_gif(asset_path)
+
+            # Optional variants may not exist yet.  Keep the selector usable
+            # without inventing an asset: an absent variant falls back to FIRE 01.
+            if not frames and variant != 0:
+                frames = self.effect_fire_frames.get(0, ())
+                cumulative = self.effect_fire_cumulative.get(
+                    0, np.empty(0, dtype=np.float32)
+                )
+
+            self.effect_fire_frames[variant] = tuple(frames)
+            self.effect_fire_cumulative[variant] = cumulative
+
+    def _load_orb_effect_textures(self):
+        """Load the five authored ORB variants once after the GL context exists."""
+        self.effect_orb_frames.clear()
+        self.effect_orb_cumulative.clear()
+
+        for variant in range(5):
+            asset_path = (
+                f"assets/textures/effects/orb{variant + 1:02d}.gif"
+            )
+            frames, cumulative = self._load_fire_gif(asset_path)
+
+            if not frames and variant != 0:
+                frames = self.effect_orb_frames.get(0, ())
+                cumulative = self.effect_orb_cumulative.get(
+                    0, np.empty(0, dtype=np.float32)
+                )
+
+            self.effect_orb_frames[variant] = tuple(frames)
+            self.effect_orb_cumulative[variant] = cumulative
+
 
     # --------------------------------------------------------------------------
     # Texture management
@@ -704,6 +2184,7 @@ class BaseRenderer:
         self._grid_vbo = vbo
         self.vaos['grid'] = vao
 
+    @timed_pass('grid')
     def draw_grid(self, projection, view, grid_indices_count, play_mode=False, grid_visible=True):
         if not self.vaos['grid'] or play_mode or not grid_visible or 'simple' not in self.shaders:
             return
@@ -733,8 +2214,6 @@ class BaseRenderer:
             'texRock': self.uniforms['terrain']['texRock'],
             'texSand': self.uniforms['terrain']['texSand'],
             'texSnow': self.uniforms['terrain']['texSnow'],
-            'biomeWeights': self.uniforms['terrain']['biomeWeights'],
-            'terrainHeightScale': self.uniforms['terrain']['terrainHeightScale'],
         }
         for i in range(self.MAX_LIGHTS):
             terrain.uniforms[f'lights[{i}].position'] = self.uniforms['terrain'][f'lights[{i}].position']
@@ -752,18 +2231,40 @@ class BaseRenderer:
                 new_id = self.load_texture(filename, 'textures/terrain')
                 setattr(terrain, attr, new_id)
 
+    @timed_pass('terrain')
     def render_terrain(self, projection, view, camera_pos, terrain, lights, frustum_planes=None):
         if terrain is None or not terrain.enabled:
             return
         self._ensure_terrain_textures(terrain)
         if not terrain.shader_program:
             self.setup_terrain_shader(terrain)
-        active_lights_count = len(lights) if lights else 0
+        if not (isinstance(lights, tuple) and len(lights) == 2
+                and hasattr(lights[0], 'light_color')):
+            raise TypeError("terrain rendering requires (LightTable, slots)")
+        light_table, light_slots = lights
+        max_terrain_lights = shaders.MAX_LIGHTS_TERRAIN
+        terrain_lights = (light_table, light_slots)
+        if len(light_slots) > max_terrain_lights:
+            cx, cy, cz = self._camera_xyz(camera_pos)
+            dx = light_table.pos[light_slots, 0] - cx
+            dy = light_table.pos[light_slots, 1] - cy
+            dz = light_table.pos[light_slots, 2] - cz
+            order = np.argsort(dx * dx + dy * dy + dz * dz, kind='stable')
+            terrain_lights = (light_table, light_slots[order[:max_terrain_lights]])
+
+        # _upload_lights_once() writes regular uniforms as well as the shared
+        # light UBO, so the terrain program must be current before that call.
+        # Without this, glUniform1i/uFogEnabled can raise GL_INVALID_OPERATION
+        # when terrain follows a pass that has left another program bound.
+        gl.glUseProgram(terrain.shader_program)
+        self._current_shader = terrain.shader_program
+        self._upload_lights_once('terrain', terrain_lights)
+        active_lights_count = len(terrain_lights[1])
         gl.glDisable(gl.GL_CULL_FACE)
         if hasattr(terrain, 'get_tri_count'):
             self.render_stats.visible_tris += terrain.get_tri_count()
         terrain.update_and_render(
-            projection, view, camera_pos, frustum_planes, lights, active_lights_count,
+            projection, view, camera_pos, frustum_planes, terrain_lights, active_lights_count,
             shadow_cubemaps=(self._shadow_cubemaps if self.shadows_enabled else None),
             shadow_index_map=self._light_shadow_index,
             shadow_unit_base=self.SHADOW_TEXTURE_UNIT_BASE,
@@ -774,22 +2275,59 @@ class BaseRenderer:
     # Models
     # --------------------------------------------------------------------------
     def load_model(self, filename):
-        """Load a 3D model (OBJ or GLB)."""
-        if filename in self.loaded_models:
-            return self.loaded_models[filename]
+        """Load a 3D model (OBJ or GLB).
 
-        full_path = os.path.join('assets', 'models', filename)
-        if not os.path.exists(full_path):
-            full_path = filename
-
-        if not os.path.exists(full_path):
-            print(f"Failed to load model: {filename}")
+        The normal render-time case is an already-loaded model. Keep that path
+        to a single dictionary lookup; path normalisation and filesystem work
+        belong exclusively to cache misses.
+        """
+        if not filename:
             return None
+
+        # HOT PATH: model_path values are normally identical strings frame to
+        # frame, so this is the entire lookup on the common render path.
+        model = self.loaded_models.get(filename)
+        if model is not None:
+            return model
+
+        # A path that failed a moment ago is not retried every frame: every
+        # draw, cull and shadow pass asks for it, and each retry was a
+        # filesystem probe, a parse attempt and a log line. Retried after
+        # _MODEL_RETRY_S, so a model added while Fio runs still appears.
+        failed = self.__dict__.setdefault('_failed_models', {}).get(filename)
+        if failed is not None and time.perf_counter() - failed < _MODEL_RETRY_S:
+            return None
+
+        # Cache miss only: normalise alternate slash/absolute-path spellings
+        # so editor/package/file-dialog paths still collapse to one resource.
+        original_filename = str(filename)
+        normalized_filename = os.path.normpath(
+            original_filename.replace('/', os.sep).replace('\\', os.sep)
+        )
+        cache_key = os.path.normcase(normalized_filename)
+
+        model = self.loaded_models.get(cache_key)
+        if model is not None:
+            # Alias this exact authored path so subsequent frames stay on the
+            # one-dictionary-lookup path above.
+            self.loaded_models[filename] = model
+            return model
+
+        full_path = normalized_filename
+        if not os.path.isabs(full_path):
+            candidate = os.path.join('assets', 'models', full_path)
+            if os.path.exists(candidate):
+                full_path = candidate
+            elif os.path.exists(original_filename):
+                full_path = original_filename
+
+        if not os.path.exists(full_path):
+            return self._model_load_failed(filename)
 
         print(f"Loading model: {full_path}")
 
         # Determine format by extension
-        ext = os.path.splitext(filename)[1].lower()
+        ext = os.path.splitext(full_path)[1].lower()
 
         if ext == '.glb':
             if GLB is None:
@@ -806,486 +2344,1153 @@ class BaseRenderer:
             return None
 
         if model.is_loaded:
+            self.loaded_models[cache_key] = model
             self.loaded_models[filename] = model
+            self.__dict__.setdefault('_failed_models', {}).pop(filename, None)
             return model
 
-        print(f"Failed to load model: {filename}")
+        return self._model_load_failed(filename)
+
+    def _model_load_failed(self, filename):
+        """Remember a failed model path; report it the first time only."""
+        failed = self.__dict__.setdefault('_failed_models', {})
+        if filename not in failed:
+            print(f"Failed to load model: {filename}")
+        failed[filename] = time.perf_counter()
         return None
 
-    def draw_models(self, projection, view, camera_pos, models, lights, config):
-            if not models:
-                return
+    def get_loaded_model(self, filename):
+        """Return a model already loaded by this renderer without touching GL."""
+        if not filename:
+            return None
 
-            lit_shader = self.shaders.get('lit')
-            textured_shader = self.shaders.get('textured')
-            current_shader = None
-            cull_was_enabled = gl.glIsEnabled(gl.GL_CULL_FACE)
-            gl.glDisable(gl.GL_CULL_FACE)
+        model = self.loaded_models.get(filename)
+        if model is not None:
+            return model
 
-            for thing in models:
-                model_file = thing.properties.get('model_path')
-                if not model_file:
-                    continue
-                obj = self.load_model(model_file)
-                if not obj or not obj.is_loaded:
-                    continue
+        normalized_filename = os.path.normpath(
+            str(filename).replace('/', os.sep).replace('\\', os.sep)
+        )
+        cache_key = os.path.normcase(normalized_filename)
+        model = self.loaded_models.get(cache_key)
+        if model is not None:
+            self.loaded_models[filename] = model
+        return model
 
-                self.render_stats.visible_tris += (obj.vertex_count // 3)
+    def _ensure_model_instance_buffer(self, count):
+        if count <= 0:
+            return
+        if self._model_instance_vbo is None:
+            self._model_instance_vbo = gl.glGenBuffers(1)
+        if count > self._model_instance_capacity:
+            capacity = max(16, self._model_instance_capacity)
+            while capacity < count:
+                capacity *= 2
+            self._model_instance_capacity = capacity
+            self._model_instance_data = np.empty((capacity, 29), dtype=np.float32)
+            gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._model_instance_vbo)
+            gl.glBufferData(
+                gl.GL_ARRAY_BUFFER,
+                self._model_instance_data.nbytes,
+                None,
+                gl.GL_DYNAMIC_DRAW,
+            )
 
-                pos = thing.pos
-                scale = thing.properties.get('scale', 1.0)
-                if isinstance(scale, (int, float)):
-                    scale = [scale, scale, scale]
-                rot = thing.properties.get('rotation', [0, 0, 0])
+    def _ensure_model_instance_vao(self, vao):
+        key = int(vao)
+        if key in self._model_instanced_vaos:
+            return
+        if self._model_instance_vbo is None:
+            self._ensure_model_instance_buffer(1)
+        gl.glBindVertexArray(vao)
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._model_instance_vbo)
+        stride = 29 * 4
+        offsets = (0, 16, 32, 48, 64, 80, 96)
+        for location, offset in zip(range(3, 10), offsets):
+            gl.glVertexAttribPointer(
+                location, 4, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(offset))
+            gl.glEnableVertexAttribArray(location)
+            gl.glVertexAttribDivisor(location, 1)
+        gl.glVertexAttribPointer(
+            10, 1, gl.GL_FLOAT, gl.GL_FALSE, stride, ctypes.c_void_p(112))
+        gl.glEnableVertexAttribArray(10)
+        gl.glVertexAttribDivisor(10, 1)
+        gl.glBindVertexArray(0)
+        self._model_instanced_vaos.add(key)
 
-                mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
-                mat = glm.rotate(mat, glm.radians(rot[1]), glm.vec3(0, 1, 0))
-                mat = glm.rotate(mat, glm.radians(rot[0]), glm.vec3(1, 0, 0))
-                mat = glm.rotate(mat, glm.radians(rot[2]), glm.vec3(0, 0, 1))
-                mat = glm.scale(mat, glm.vec3(*scale))
+    def _fill_model_instance_buffer_numeric(self, table, slots):
+        """Gather model transforms directly from dense entity columns."""
+        count = len(slots)
+        self._ensure_model_instance_buffer(count)
+        out = self._model_instance_data[:count]
+        np.take(table.model_base_matrix, slots, axis=0, out=out[:, :16])
+        np.take(table.model_normal_matrix, slots, axis=0, out=out[:, 16:28])
+        np.take(table.render_alpha, slots, out=out[:, 28])
+        np.take(table.pos[:, 0], slots, out=out[:, 12])
+        np.take(table.pos[:, 1], slots, out=out[:, 13])
+        np.take(table.pos[:, 2], slots, out=out[:, 14])
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._model_instance_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, out)
 
-                gl.glBindVertexArray(obj.vao)
-                manual_texture = thing.properties.get('texture')
 
-                if obj.groups and not manual_texture:
-                    for group in obj.groups:
-                        mat_name = group['material']
-                        material = obj.materials.get(mat_name, {'color': [0.8,0.8,0.8], 'texture': None})
-                        use_texture = material.get('texture')
-                        if use_texture and textured_shader:
-                            if current_shader != textured_shader:
-                                gl.glUseProgram(textured_shader)
-                                current_shader = textured_shader
-                                u = self.uniforms['textured']
-                                gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-                                gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-                                self._upload_lights_once('textured', lights)
-                                gl.glActiveTexture(gl.GL_TEXTURE0)
-                                gl.glUniform1i(u['texture_diffuse'], 0)
-                                # Models use their own UVs — clear any brush
-                                # face transform left in the shared uniforms.
-                                if u.get('tex_angle', -1) != -1:
-                                    gl.glUniform1f(u['tex_angle'], 0.0)
-                                if u.get('tex_shift', -1) != -1:
-                                    gl.glUniform2f(u['tex_shift'], 0.0, 0.0)
-                            # Resolve texture path relative to MTL directory first
-                            resolved_path = self._resolve_model_texture_path(material, use_texture)
-                            if resolved_path and os.path.exists(resolved_path):
-                                # Load from resolved absolute path
-                                tex_cache_name = f"model_tex:{resolved_path}"
-                                if tex_cache_name in self.texture_manager:
-                                    tex_id = self.texture_manager[tex_cache_name]
-                                else:
-                                    from PIL import Image
-                                    img = Image.open(resolved_path).convert("RGBA")
-                                    img = img.transpose(Image.FLIP_TOP_BOTTOM)
-                                    tex_id = gl.glGenTextures(1)
-                                    self.texture_manager[tex_cache_name] = tex_id
-                                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                                    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
-                                    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
-                                    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)
-                                    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
-                                    gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, img.width, img.height, 0,
-                                                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, img.tobytes())
-                                    gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
-                            else:
-                                tex_id = self.load_texture(use_texture, 'textures')
-                            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                            gl.glUniformMatrix4fv(self.uniforms['textured']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
-                            # Upload normal matrix for correct lighting
-                            normal_mat = self._compute_normal_matrix(mat)
-                            normal_mat_loc = self.uniforms['textured'].get('normalMatrix', -1)
-                            if normal_mat_loc >= 0:
-                                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
-                        elif lit_shader:
-                            if current_shader != lit_shader:
-                                gl.glUseProgram(lit_shader)
-                                current_shader = lit_shader
-                                u = self.uniforms['lit']
-                                gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-                                gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-                                self._upload_lights_once('lit', lights)
-                            color = material.get('color', [0.8,0.8,0.8])
-                            gl.glUniform3fv(self.uniforms['lit']['object_color'], 1, color)
-                            gl.glUniform1f(self.uniforms['lit']['alpha'], 1.0)
-                            gl.glUniformMatrix4fv(self.uniforms['lit']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
-                            # Upload normal matrix for correct lighting
-                            normal_mat = self._compute_normal_matrix(mat)
-                            normal_mat_loc = self.uniforms['lit'].get('normalMatrix', -1)
-                            if normal_mat_loc >= 0:
-                                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
-                        # Draw the group - indexed or non-indexed
-                        if group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
-                            gl.glDrawElements(gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
-                                            ctypes.c_void_p(group['start'] * 4))
-                        else:
-                            gl.glDrawArrays(gl.GL_TRIANGLES, group['start'], group['count'])
-                else:
-                    tex_name = manual_texture
-                    target_shader = textured_shader if tex_name else lit_shader
-                    if target_shader == textured_shader:
-                        if current_shader != textured_shader:
-                            gl.glUseProgram(textured_shader)
-                            current_shader = textured_shader
-                            u = self.uniforms['textured']
-                            gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-                            gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-                            self._upload_lights_once('textured', lights)
-                            gl.glActiveTexture(gl.GL_TEXTURE0)
-                            gl.glUniform1i(u['texture_diffuse'], 0)
-                            # Models use their own UVs — clear any brush face
-                            # transform left in the shared uniforms.
-                            if u.get('tex_angle', -1) != -1:
-                                gl.glUniform1f(u['tex_angle'], 0.0)
-                            if u.get('tex_shift', -1) != -1:
-                                gl.glUniform2f(u['tex_shift'], 0.0, 0.0)
-                        resolved_path = self._resolve_model_texture_path({'texture': tex_name}, tex_name)
-                        if resolved_path and os.path.exists(resolved_path) and not resolved_path.startswith('assets'):
-                            # Load from resolved absolute path
-                            tex_cache_name = f"model_tex:{resolved_path}"
-                            if tex_cache_name in self.texture_manager:
-                                tex_id = self.texture_manager[tex_cache_name]
-                            else:
-                                from PIL import Image
-                                img = Image.open(resolved_path).convert("RGBA")
-                                img = img.transpose(Image.FLIP_TOP_BOTTOM)
-                                tex_id = gl.glGenTextures(1)
-                                self.texture_manager[tex_cache_name] = tex_id
-                                gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
-                                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
-                                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)
-                                gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
-                                gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, img.width, img.height, 0,
-                                            gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, img.tobytes())
-                                gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
-                        else:
-                            tex_id = self.load_texture(tex_name, 'textures')
-                        gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                        gl.glUniformMatrix4fv(self.uniforms['textured']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
-                        # Upload normal matrix for correct lighting
-                        normal_mat = self._compute_normal_matrix(mat)
-                        normal_mat_loc = self.uniforms['textured'].get('normalMatrix', -1)
-                        if normal_mat_loc >= 0:
-                            gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
-                    elif lit_shader:
-                        if current_shader != lit_shader:
-                            gl.glUseProgram(lit_shader)
-                            current_shader = lit_shader
-                            u = self.uniforms['lit']
-                            gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-                            gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-                            self._upload_lights_once('lit', lights)
-                        col = thing.properties.get('color', [0.8, 0.8, 0.8])
-                        gl.glUniform3fv(self.uniforms['lit']['object_color'], 1, col)
-                        gl.glUniform1f(self.uniforms['lit']['alpha'], 1.0)
-                        gl.glUniformMatrix4fv(self.uniforms['lit']['model'], 1, gl.GL_FALSE, glm.value_ptr(mat))
-                        # Upload normal matrix for correct lighting
-                        normal_mat = self._compute_normal_matrix(mat)
-                        normal_mat_loc = self.uniforms['lit'].get('normalMatrix', -1)
-                        if normal_mat_loc >= 0:
-                            gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
-                    gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
-                self.render_stats.draw_calls += 1
+    def _draw_dense_model_single(self, projection, view, table, slot, lights):
+        """Draw one dense model row through the proven uniform model path.
 
-            gl.glBindVertexArray(0)
+        A single model does not benefit from instancing. More importantly, this
+        keeps the one-model case independent of instanced-attribute driver
+        quirks while preserving the dense EntityTable boundary: no Thing is
+        materialised just to submit the draw.
+        """
+        slot = int(slot)
+        recipe_id = int(table.model_recipe_id[slot])
+        recipes = table.model_recipes()
+        if recipe_id < 0 or recipe_id >= len(recipes):
+            return 0
+
+        model_path, manual_texture, override_color = recipes[recipe_id]
+        obj = self.load_model(model_path)
+        if not obj or not obj.is_loaded:
+            return 0
+
+        groups = obj.groups or []
+        if manual_texture:
+            shader_kind = (
+                'textured' if self.shaders.get('textured') else
+                'lit' if self.shaders.get('lit') else None)
+            if shader_kind is None:
+                return 0
+            shader_name = shader_kind
+            current_shader = self._prepare_model_shader(
+                shader_name, projection, view, lights, None)
+            if current_shader != shader_name:
+                return 0
+            u = self.uniforms[shader_name]
+            if shader_kind == 'textured':
+                gl.glBindTexture(
+                    gl.GL_TEXTURE_2D,
+                    self._model_texture_id(manual_texture, manual=True))
+            else:
+                gl.glUniform3fv(
+                    u['object_color'], 1, override_color or (0.8, 0.8, 0.8))
+                gl.glUniform1f(u['alpha'], 1.0)
+            groups_to_draw = (None,)
+        elif groups:
+            groups_to_draw = groups
+        else:
+            groups_to_draw = (None,)
+
+        base = np.asarray(table.model_base_matrix[slot], dtype=np.float32).copy()
+        base[12:15] = np.asarray(table.pos[slot], dtype=np.float32)
+        normal = np.asarray(
+            table.model_normal_matrix[slot].reshape(3, 4)[:, :3],
+            dtype=np.float32,
+        ).reshape(-1).copy()
+
+        current_shader = None
+        draws = 0
+        for group in groups_to_draw:
+            material = (
+                obj.materials.get(
+                    group['material'],
+                    {'color': [0.8, 0.8, 0.8], 'texture': None})
+                if group is not None else
+                {'color': override_color or [0.8, 0.8, 0.8],
+                 'texture': manual_texture}
+            )
+            use_texture = material.get('texture')
+            shader_kind = (
+                'textured' if use_texture and self.shaders.get('textured') else
+                'lit' if self.shaders.get('lit') else None)
+            if shader_kind is None:
+                continue
+
+            shader_name = shader_kind
+            current_shader = self._prepare_model_shader(
+                shader_name, projection, view, lights, current_shader)
+            if current_shader != shader_name:
+                continue
+
+            u = self.uniforms[shader_name]
+            if shader_kind == 'textured':
+                gl.glBindTexture(
+                    gl.GL_TEXTURE_2D,
+                    self._model_texture_id(
+                        use_texture, material, manual=manual_texture is not None))
+            else:
+                color = tuple(material.get('color', [0.8, 0.8, 0.8]))
+                gl.glUniform3fv(u['object_color'], 1, color)
+                gl.glUniform1f(u['alpha'], 1.0)
+
+            gl.glUniformMatrix4fv(
+                u['model'], 1, gl.GL_FALSE, base)
+            normal_loc = u.get('normalMatrix', -1)
+            if normal_loc >= 0:
+                gl.glUniformMatrix3fv(
+                    normal_loc, 1, gl.GL_FALSE, normal)
+
+            gl.glBindVertexArray(obj.vao)
+            if group is None:
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
+            elif group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
+                gl.glDrawElements(
+                    gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
+                    ctypes.c_void_p(group['start'] * 4))
+            else:
+                gl.glDrawArrays(
+                    gl.GL_TRIANGLES, group['start'], group['count'])
+            self.render_stats.draw_calls += 1
+            draws += 1
+
+        gl.glBindVertexArray(0)
+        return draws
+
+
+    def _model_recipe_radii(self, table):
+        """Bounding-sphere radius of each interned model recipe's mesh.
+
+        Model space, measured once per recipe from the vertices the mesh was
+        uploaded from. A recipe whose mesh is not loaded yet is infinite, so
+        it is never culled before its bounds are known.
+        """
+        recipes = table.model_recipes()
+        if recipes is not self._model_radius_recipes_seen:
+            # As for sprites: park the other buffer's radii, do not re-measure
+            # every mesh each time the buffers alternate.
+            (self._model_radius_recipes_seen,
+             self._model_radius_by_recipe) = _swap_recipe_cache(
+                self.__dict__.setdefault('_model_radius_parked', {}),
+                (self._model_radius_recipes_seen, self._model_radius_by_recipe),
+                recipes, (np.zeros(0, dtype=np.float64),))
+        radii = self._model_radius_by_recipe
+        if len(radii) < len(recipes):
+            grown = np.full(len(recipes), np.inf, dtype=np.float64)
+            grown[:len(radii)] = radii
+            self._model_radius_by_recipe = radii = grown
+        for recipe_id in np.flatnonzero(np.isinf(radii)):
+            obj = self.load_model(recipes[int(recipe_id)][0])
+            vertices = getattr(obj, 'cpu_vertices', None) if obj else None
+            if obj is None or not getattr(obj, 'is_loaded', False):
+                continue
+            if vertices is None or not len(vertices):
+                radii[recipe_id] = 0.0
+                continue
+            radii[recipe_id] = float(np.sqrt(
+                (np.asarray(vertices, dtype=np.float64)[:, :3] ** 2)
+                .sum(axis=1).max()))
+        return radii
+
+    def _entity_radii(self, table, slots, models):
+        """Conservative world bounding-sphere radius of each entity row.
+
+        A billboard is a ``w x h`` rectangle centred on its position and turned
+        about it, to the camera or to a locked yaw, so half its diagonal bounds
+        it in every orientation. A model's mesh radius is scaled by the longest
+        axis of its rotation/scale matrix.
+        """
+        if not models:
+            sizes = table.sprite_size[slots].astype(np.float64)
+            return 0.5 * np.hypot(sizes[:, 0], sizes[:, 1])
+        recipe_radii = self._model_recipe_radii(table)
+        recipe_ids = table.model_recipe_id[slots]
+        local = np.full(len(slots), np.inf, dtype=np.float64)
+        known = (recipe_ids >= 0) & (recipe_ids < len(recipe_radii))
+        local[known] = recipe_radii[recipe_ids[known]]
+        basis = table.model_base_matrix[slots].astype(np.float64)
+        axes = np.stack([basis[:, 0:3], basis[:, 4:7], basis[:, 8:11]], axis=1)
+        scale = np.sqrt((axes ** 2).sum(axis=2)).max(axis=1)
+        return local * scale
+
+    def _cull_entity_rows(self, table, slots, planes, models=False):
+        """Keep the entity rows whose bounding sphere meets the frustum.
+
+        *planes* are six normalised ``(a, b, c, d)`` rows, inside when
+        ``n.p + d >= 0``. One product over the rows' centres: the entity-side
+        twin of the brush frustum mask, and exact-conservative, so no row that
+        could put a pixel on screen is dropped.
+        """
+        if not len(slots):
+            return slots
+        planes = np.asarray(planes, dtype=np.float64)
+        centres = table.pos[slots]
+        radii = self._entity_radii(table, slots, models)
+        distances = centres @ planes[:, :3].T + planes[:, 3]
+        inside = np.all(distances >= -radii[:, None], axis=1)
+        return slots[inside]
+
+    @timed_pass('models')
+    def draw_models_instanced(self, projection, view, camera_pos, table, slots,
+                              lights, config=None):
+        """Render model instances from dense EntityTable columns.
+
+        Entity objects are not touched here. Model resources are resolved once
+        per distinct cold recipe; instance transforms and visibility remain
+        numeric all the way to the reusable GPU staging buffer.
+        """
+        if not len(slots):
+            return 0
+        if not (self.shaders.get('lit_instanced') or self.shaders.get('textured_instanced')):
+            return 0
+
+        # Model rendering has always been double-sided at the renderer level.
+        # Brush passes are free to leave face culling enabled for their own
+        # geometry, but OBJ winding is authored per asset and must not make a
+        # valid model vanish in the entity pass.
+        cull_was_enabled = gl.glIsEnabled(gl.GL_CULL_FACE)
+        gl.glDisable(gl.GL_CULL_FACE)
+
+        count = len(slots)
+        if count == 1 and float(table.render_alpha[int(slots[0])]) >= 1.0:
+            # Opaque singletons do not benefit from instancing. A fading row must
+            # stay on the instanced path because opacity is per-instance data.
+            drawn = 1 if self._draw_dense_model_single(
+                projection, view, table, slots[0], lights) else 0
             if cull_was_enabled:
                 gl.glEnable(gl.GL_CULL_FACE)
             else:
                 gl.glDisable(gl.GL_CULL_FACE)
+            return drawn
+        if len(self._model_recipe_scratch) < count:
+            grown = max(64, len(self._model_recipe_scratch) * 2, count)
+            self._model_recipe_scratch = np.empty(grown, dtype=np.int32)
+            self._model_sorted_slots_scratch = np.empty(grown, dtype=np.int32)
 
-    def set_instance_textures(self, textures):
-        self.instance_textures = textures
+        recipe_ids = self._model_recipe_scratch[:count]
+        np.take(table.model_recipe_id, slots, out=recipe_ids)
+        order, starts = sort_into_runs(recipe_ids)
+        sorted_slots = self._model_sorted_slots_scratch[:count]
+        np.take(slots, order, out=sorted_slots)
 
-    def draw_sprites(self, projection, view, things_to_draw, sprite_textures, instance_textures=None):
-        if not things_to_draw or 'sprite' not in self.shaders:
-            return
-
-        shader, uniforms = self.shaders['sprite'], self.uniforms['sprite']
-        gl.glUseProgram(shader)
-        # Billboards are unlit, so they never reach _upload_lights_once — they
-        # still need fogging, or a distant monster would hang un-faded in front
-        # of fully fogged geometry.
-        self._upload_env_uniforms('sprite')
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-        gl.glActiveTexture(gl.GL_TEXTURE0)
-        gl.glUniform1i(uniforms['sprite_texture'], 0)
-        pos_loc, size_loc = uniforms['sprite_pos_world'], uniforms['sprite_size']
-        gl.glBindVertexArray(self.vaos['sprite'])
-
-        current_tex = None
-        for thing in things_to_draw:
-            if Portal is not None and isinstance(thing, Portal):
+        recipes = table.model_recipes()
+        current_shader = None
+        for start, end in zip(starts[:-1], starts[1:]):
+            if start == end:
+                continue
+            recipe_id = int(recipe_ids[order[start]])
+            if recipe_id < 0 or recipe_id >= len(recipes):
+                continue
+            model_path, manual_texture, override_color = recipes[recipe_id]
+            obj = self.load_model(model_path)
+            if not obj or not obj.is_loaded:
                 continue
 
-            # Monster snapshot dict
-            if isinstance(thing, dict) and 'dead' in thing:
-                if thing.get('dead'):
-                    custom = thing.get('custom_dead', '')
-                    sprite_type = 'dead'
-                elif thing.get('is_shooting'):
-                    custom = thing.get('custom_shoot', '')
-                    sprite_type = 'shoot'
-                else:
-                    custom = thing.get('custom_idle', '')
-                    sprite_type = 'idle'
+            run_slots = sorted_slots[start:end]
+            self.render_stats.visible_tris += (obj.vertex_count // 3) * len(run_slots)
+            self._fill_model_instance_buffer_numeric(table, run_slots)
+            self._ensure_model_instance_vao(obj.vao)
+            gl.glBindVertexArray(obj.vao)
 
-                mtype = thing.get('monster_type', 'human')
-                variant = thing.get('variant', '<None>')
-                key_tuple = (mtype, variant, sprite_type, custom)
-                tex_key = self._sprite_tex_key_cache.get(key_tuple)
-                if tex_key is None:
-                    tex_key = f"msprite_{mtype}_{variant}_{sprite_type}_{custom}"
-                    self._sprite_tex_key_cache[key_tuple] = tex_key
-                tex_id = sprite_textures.get(tex_key)
-                if tex_id is None:
-                    if custom:
-                        custom_clean = custom.replace('assets/', '', 1)
-                        subfolder = os.path.dirname(custom_clean)
-                        filename = os.path.basename(custom_clean)
-                    else:
-                        if variant and variant != '<None>':
-                            subfolder = f"sprites/monsters/{mtype}/{variant}"
-                        else:
-                            subfolder = f"sprites/monsters/{mtype}"
-                        filename = f"{sprite_type}.png"
-                    tex_id = self.load_texture(filename, subfolder)
-                    if not tex_id and variant and variant != '<None>':
-                        subfolder = f"sprites/monsters/{mtype}"
-                        tex_id = self.load_texture(filename, subfolder)
-                    if tex_id:
-                        self.sprite_textures[tex_key] = tex_id
-
-                if tex_id and tex_id != current_tex:
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                    current_tex = tex_id
-
-                gl.glUniform3fv(pos_loc, 1, thing['pos'])
-                w = thing.get('sprite_width', 128)
-                h = thing.get('sprite_height', 128)
-                gl.glUniform2f(size_loc, float(w), float(h))
-                gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
+            groups = obj.groups or []
+            if manual_texture:
+                shader_kind = (
+                    'textured' if self.shaders.get('textured_instanced')
+                    else 'lit' if self.shaders.get('lit_instanced') else None)
+                if not shader_kind:
+                    continue
+                shader_name = shader_kind + '_instanced'
+                current_shader = self._prepare_model_shader(
+                    shader_name, projection, view, lights, current_shader)
+                if current_shader != shader_name:
+                    continue
+                u = self.uniforms[shader_name]
+                gl.glBindTexture(
+                    gl.GL_TEXTURE_2D,
+                    self._model_texture_id(manual_texture, manual=True))
+                gl.glUniform1f(u['alpha'], 1.0)
+                if shader_kind != 'textured':
+                    colour = override_color or (0.8, 0.8, 0.8)
+                    gl.glUniform3fv(u['object_color'], 1, colour)
+                gl.glDrawArraysInstanced(
+                    gl.GL_TRIANGLES, 0, obj.vertex_count, len(run_slots))
+                self.render_stats.draw_calls += 1
+                self.render_stats.batched_draws += 1
                 continue
 
-            tex_id = None
-            if instance_textures:
-                tex_id = instance_textures.get(id(thing))
+            if not groups:
+                if not self.shaders.get('lit_instanced'):
+                    continue
+                shader_kind = 'lit'
+                shader_name = 'lit_instanced'
+                current_shader = self._prepare_model_shader(
+                    shader_name, projection, view, lights, current_shader)
+                if current_shader != shader_name:
+                    continue
+                u = self.uniforms[shader_name]
+                if shader_kind == 'lit':
+                    gl.glUniform3fv(u['object_color'], 1, (0.8, 0.8, 0.8))
+                    gl.glUniform1f(u['alpha'], 1.0)
+                gl.glDrawArraysInstanced(
+                    gl.GL_TRIANGLES, 0, obj.vertex_count, len(run_slots))
+                self.render_stats.draw_calls += 1
+                self.render_stats.batched_draws += 1
+                continue
 
-
-            if tex_id is None:
-                class_name = thing.__class__.__name__
-                tex_id = sprite_textures.get(class_name)
-                if tex_id is None:
-                    if isinstance(thing, LogicSpawner):
-                        tex_id = self.load_texture('logic_spawner.png', 'sprites')
-                        if tex_id: self.sprite_textures['LogicSpawner'] = tex_id
-                    elif isinstance(thing, LogicCamera):
-                        tex_id = self.load_texture('logic_camera.png', 'sprites')
-                        if tex_id: self.sprite_textures['LogicCamera'] = tex_id
-
-                    elif isinstance(thing, Pickup):
-                        sprite_path = thing.get_sprite_path()
-                        if sprite_path:
-                            subfolder = os.path.dirname(sprite_path.replace('assets/', '', 1))
-                            filename = os.path.basename(sprite_path)
-                            tex_id = self.load_texture(filename, subfolder)
-                            if tex_id:
-                                sprite_textures[class_name] = tex_id
-                    elif getattr(thing, 'properties', {}).get('sprite_path'):
-                        sprite_path = thing.properties.get('sprite_path')
-                        subfolder = os.path.dirname(sprite_path.replace('assets/', '', 1))
-                        filename = os.path.basename(sprite_path)
-                        tex_id = self.load_texture(filename, subfolder)
-                        if tex_id:
-                            sprite_textures[class_name] = tex_id
-                    elif isinstance(thing, Monster):
-                        sprite_path = thing.get_sprite_path()
-                        if sprite_path:
-                            subfolder = os.path.dirname(sprite_path.replace('assets/', '', 1))
-                            filename = os.path.basename(sprite_path)
-                            tex_id = self.load_texture(filename, subfolder)
-                            if tex_id:
-                                sprite_textures[class_name] = tex_id
-
-                    else:
-                        tex_id = sprite_textures.get(class_name)
-
-            if tex_id:
-                if tex_id != current_tex:
-                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
-                    current_tex = tex_id
-                gl.glUniform3fv(pos_loc, 1, thing.pos)
-                if isinstance(thing, Light):
-                    gl.glUniform2f(size_loc, 16.0, 16.0)
-                elif getattr(thing, 'properties', {}).get('sprite_path'):
-                    size = thing.properties.get('sprite_size', [32.0, 32.0])
-                    try:
-                        gl.glUniform2f(size_loc, float(size[0]), float(size[1]))
-                    except (TypeError, ValueError, IndexError):
-                        gl.glUniform2f(size_loc, 32.0, 32.0)
-                elif isinstance(thing, (LogicSpawner, LogicCamera)):
-                    gl.glUniform2f(size_loc, 32.0, 32.0)
+            for group in groups:
+                material = obj.materials.get(
+                    group['material'],
+                    {'color': [0.8, 0.8, 0.8], 'texture': None})
+                use_texture = material.get('texture')
+                shader_kind = (
+                    'textured' if use_texture and self.shaders.get('textured_instanced')
+                    else 'lit' if self.shaders.get('lit_instanced') else None)
+                if not shader_kind:
+                    continue
+                shader_name = shader_kind + '_instanced'
+                current_shader = self._prepare_model_shader(
+                    shader_name, projection, view, lights, current_shader)
+                if current_shader != shader_name:
+                    continue
+                u = self.uniforms[shader_name]
+                if shader_kind == 'textured':
+                    gl.glBindTexture(
+                        gl.GL_TEXTURE_2D,
+                        self._model_texture_id(use_texture, material, manual=False))
                 else:
-                    gl.glUniform2f(size_loc, 32.0, 32.0)
-                gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
+                    colour = tuple(material.get('color', [0.8, 0.8, 0.8]))
+                    gl.glUniform3fv(u['object_color'], 1, colour)
+                gl.glUniform1f(u['alpha'], 1.0)
+                if group.get('indexed', False) and getattr(obj, 'ebo', None) is not None:
+                    gl.glDrawElementsInstanced(
+                        gl.GL_TRIANGLES, group['count'], gl.GL_UNSIGNED_INT,
+                        ctypes.c_void_p(group['start'] * 4), len(run_slots))
+                else:
+                    gl.glDrawArraysInstanced(
+                        gl.GL_TRIANGLES, group['start'], group['count'], len(run_slots))
+                self.render_stats.draw_calls += 1
+                self.render_stats.batched_draws += 1
 
         gl.glBindVertexArray(0)
+        if cull_was_enabled:
+            gl.glEnable(gl.GL_CULL_FACE)
+        else:
+            gl.glDisable(gl.GL_CULL_FACE)
+        return count
+
+
+    def _model_texture_id(self, tex_name, material=None, manual=False):
+        if not tex_name:
+            return 0
+        resolved_path = self._resolve_model_texture_path(
+            material or {'texture': tex_name}, tex_name)
+        use_direct = bool(
+            resolved_path and os.path.exists(resolved_path) and
+            (not manual or not resolved_path.startswith('assets'))
+        )
+        if not use_direct:
+            return self.load_texture(tex_name, 'textures')
+        tex_cache_name = f'model_tex:{resolved_path}'
+        tex_id = self.texture_manager.get(tex_cache_name)
+        if tex_id is not None:
+            return tex_id
+        try:
+            from PIL import Image
+            img = Image.open(resolved_path).convert('RGBA')
+            img = img.transpose(Image.FLIP_TOP_BOTTOM)
+            tex_id = gl.glGenTextures(1)
+            self.texture_manager[tex_cache_name] = tex_id
+            gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+            gl.glTexImage2D(
+                gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, img.width, img.height, 0,
+                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, img.tobytes())
+            gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
+            return tex_id
+        except Exception as exc:
+            print(f'[Renderer] Model texture load failed for {resolved_path}: {exc}')
+            return self.load_texture(tex_name, 'textures')
+
+    def _prepare_model_shader(self, shader_name, projection, view, lights, current_shader):
+        program = self.shaders.get(shader_name)
+        if not program:
+            return current_shader
+        if current_shader != shader_name:
+            gl.glUseProgram(program)
+            u = self.uniforms[shader_name]
+            gl.glUniformMatrix4fv(u['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+            gl.glUniformMatrix4fv(u['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+            self._upload_lights_once(shader_name, lights)
+            if shader_name.startswith('textured'):
+                gl.glActiveTexture(gl.GL_TEXTURE0)
+                gl.glUniform1i(u['texture_diffuse'], 0)
+                if u.get('tex_scale', -1) != -1:
+                    gl.glUniform2f(u['tex_scale'], 1.0, 1.0)
+                if u.get('tex_angle', -1) != -1:
+                    gl.glUniform1f(u['tex_angle'], 0.0)
+                if u.get('tex_shift', -1) != -1:
+                    gl.glUniform2f(u['tex_shift'], 0.0, 0.0)
+            current_shader = shader_name
+        return current_shader
+
+    def _sprite_gl_ids(self, table):
+        """``sprite id -> GL texture id``, for every recipe the table interned.
+
+        The entity projection is GL-free, so it interns sprite *recipes* --
+        ordered candidate cache keys and how to load each -- and the resolution
+        to a GL id happens here, once per unique recipe, on the thread that has
+        a context.  Exactly the shape :meth:`Renderer_F._gl_texture_ids` has for
+        brush face textures.
+
+        Each candidate is tried in the order the object path tried it: look the
+        key up in the shared sprite-texture cache, and on a miss load the file
+        if the recipe names one.  A recipe no candidate satisfies resolves to
+        0, which is how the object path's "this sprite has no texture, draw
+        nothing" is said numerically.
+        """
+        recipes = table.sprite_recipes()
+        if recipes is not self._sprite_recipes_seen:
+            # A different projection, so a different id space. The two render
+            # buffers' tables alternate every frame, each with its own list,
+            # so the other list's resolution is parked rather than dropped --
+            # dropping it re-resolved every recipe on every frame, retrying
+            # the file load of any sprite that is missing.
+            (self._sprite_recipes_seen, self._sprite_gl_by_id,
+             self._sprite_gl_resolved) = _swap_recipe_cache(
+                self.__dict__.setdefault('_sprite_gl_parked', {}),
+                (self._sprite_recipes_seen, self._sprite_gl_by_id,
+                 self._sprite_gl_resolved),
+                recipes, (np.zeros(0, dtype=np.int32), 0))
+        cached = self._sprite_gl_by_id
+        resolved = self._sprite_gl_resolved
+        recipe_count = len(recipes)
+        if resolved < recipe_count:
+            if len(cached) < recipe_count:
+                capacity = max(16, len(cached) * 2, recipe_count)
+                grown = np.zeros(capacity, dtype=np.int32)
+                if resolved:
+                    grown[:resolved] = cached[:resolved]
+                self._sprite_gl_by_id = grown
+                cached = grown
+            for sprite_id in range(resolved, recipe_count):
+                cached[sprite_id] = self._resolve_sprite_recipe(recipes[sprite_id])
+            self._sprite_gl_resolved = recipe_count
+        return cached
+
+    def _resolve_sprite_recipe(self, candidates):
+        """The GL texture id for one interned candidate list, or 0."""
+        for key, filename, subfolder, cache in candidates:
+            if key:
+                tex_id = self.sprite_textures.get(key)
+                if tex_id:
+                    return int(tex_id)
+            if not filename:
+                continue
+            tex_id = self.load_texture(filename, subfolder)
+            if tex_id:
+                if cache and key:
+                    self.sprite_textures[key] = tex_id
+                return int(tex_id)
+        return 0
+
+    def draw_player_glasses(self, projection, view, positions,
+                           width=40.0, height=18.0, lift=40.0, sprites=()):
+        """Draw the player as the fixed glasses billboard.
+
+        Player bodies are deliberately not EntityTable rows, so this is the
+        small non-entity billboard path used only for player representation
+        (split-screen and portal virtual scenes). It reuses the existing sprite
+        shader/VAO and performs at most two draws in a normal split-screen view.
+        *positions* are the published ``player_glasses_positions``; each
+        billboard is raised by *lift* here so every view (split-screen halves
+        and portal scenes) places the glasses at the same height. *sprites*
+        holds the ``sprite_textures`` key each position wears (player 1's
+        chosen style, see :mod:`engine.glasses`); missing or unloaded keys
+        fall back to the default pair.
+        """
+        if not positions or 'sprite' not in self.shaders:
+            return 0
+        default_tex = self.sprite_textures.get('Glasses')
+        if not default_tex:
+            return 0
+        vao = self.vaos.get('sprite')
+        if not vao:
+            return 0
+
+        shader = self.shaders['sprite']
+        uniforms = self.uniforms['sprite']
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        gl.glUniformMatrix4fv(
+            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection)
+        )
+        gl.glUniformMatrix4fv(
+            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view)
+        )
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['sprite_texture'], 0)
+        gl.glBindVertexArray(vao)
+
+        gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDepthFunc(gl.GL_LESS)
+        gl.glDepthMask(gl.GL_FALSE)
+        gl.glEnable(gl.GL_BLEND)
+        gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+        pos_loc = uniforms['sprite_pos_world']
+        size_loc = uniforms['sprite_size']
+
+        count = 0
+        sprites = tuple(sprites or ())
+        bound = None
+        try:
+            for i, pos in enumerate(positions):
+                key = sprites[i] if i < len(sprites) else None
+                tex_id = int(self.sprite_textures.get(key) or default_tex)
+                if tex_id != bound:
+                    gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id)
+                    bound = tex_id
+                try:
+                    px, py, pz = float(pos.x), float(pos.y), float(pos.z)
+                except AttributeError:
+                    px, py, pz = float(pos[0]), float(pos[1]), float(pos[2])
+                gl.glUniform3f(pos_loc, px, py + float(lift), pz)
+                gl.glUniform2f(size_loc, float(width), float(height))
+                gl.glDrawArrays(gl.GL_TRIANGLE_STRIP, 0, 4)
+                count += 1
+        finally:
+            gl.glDepthMask(gl.GL_TRUE)
+            gl.glDisable(gl.GL_BLEND)
+            gl.glBindVertexArray(0)
+        return count
+
+    @timed_pass('sprites')
+    def draw_sprites_instanced(self, projection, view, table, slots,
+                               gl_ids=None, camera_pos=None):
+        """The sprite pass over dense columns: one draw, back to front.
+
+        *slots* are rows of an :class:`engine.entity_table.EntityTable`, already
+        classified into the sprite pass.  Everything this needs is a column
+        read: the centre from ``pos``, the size from ``sprite_size``, the
+        texture from ``sprite_key_id`` through :meth:`_sprite_gl_ids`.  No
+        entity is touched.
+
+        Rows whose texture resolves to 0 are dropped, which is what the object
+        path's ``if tex_id:`` did.  The rest are ordered back to front by XZ
+        distance when a camera is supplied -- the pass is blended with depth
+        writes off, so that order is part of the picture -- and each sprite's
+        image is a layer of one texture array (:mod:`engine.sprite_layers`), so
+        the ordered set is a single ``glDrawArraysInstanced``.  Grouping by
+        texture instead would draw a far sprite over a near one wherever two
+        different images overlap.
+
+        Returns the number of sprites submitted, so a caller can tell an empty
+        pass from a skipped one.
+        """
+        if 'sprite_instanced' not in self.shaders or not len(slots):
+            return 0
+        if gl_ids is None:
+            gl_ids = self._sprite_gl_ids(table)
+
+        slot_count = len(slots)
+        if len(self._sprite_key_scratch) < slot_count:
+            grown = max(64, len(self._sprite_key_scratch) * 2, slot_count)
+            self._sprite_key_scratch = np.empty(grown, dtype=np.int32)
+            self._sprite_texture_scratch = np.empty(grown, dtype=np.int32)
+            self._sprite_draw_mask = np.empty(grown, dtype=bool)
+            self._sprite_depth_scratch = np.empty(grown, dtype=np.float64)
+            self._sprite_depth_aux_scratch = np.empty(grown, dtype=np.float64)
+            self._sprite_sorted_slots_scratch = np.empty(grown, dtype=np.int32)
+
+        key_ids = self._sprite_key_scratch[:slot_count]
+        textures = self._sprite_texture_scratch[:slot_count]
+        drawn = self._sprite_draw_mask[:slot_count]
+
+        np.take(table.sprite_key_id, slots, out=key_ids)
+        drawn[:] = key_ids >= 0
+        if len(gl_ids):
+            np.maximum(key_ids, 0, out=key_ids)
+            np.take(gl_ids, key_ids, out=textures)
+            drawn &= textures > 0
+        else:
+            drawn.fill(False)
+
+        valid_count = int(np.count_nonzero(drawn))
+        if valid_count == 0:
+            return 0
+        if valid_count != slot_count:
+            slots = slots[drawn]
+            textures = textures[drawn]
+
+        # Back-to-front, by the XZ distance the pass has always used. This is
+        # the order the pass *must* draw in -- it is blended with depth writes
+        # off -- so nothing below is allowed to reorder it.
+        count = len(slots)
+        if camera_pos is None:
+            order = np.arange(count, dtype=np.intp)
+        else:
+            cx, _, cz = self._camera_xyz(camera_pos)
+            depth_sq = self._sprite_depth_scratch[:count]
+            depth_aux = self._sprite_depth_aux_scratch[:count]
+            np.take(table.pos[:, 0], slots, out=depth_sq)
+            np.subtract(depth_sq, cx, out=depth_sq)
+            np.square(depth_sq, out=depth_sq)
+            np.take(table.pos[:, 2], slots, out=depth_aux)
+            np.subtract(depth_aux, cz, out=depth_aux)
+            np.square(depth_aux, out=depth_aux)
+            np.add(depth_sq, depth_aux, out=depth_sq)
+            np.negative(depth_sq, out=depth_aux)
+            order = np.argsort(depth_aux, kind='stable')
+        ordered_textures = textures[order]
+
+        # The texture leaves the draw state when every image is a layer of one
+        # array: then the whole pass is a single draw in exactly that order.
+        layers = None
+        if 'sprite_layered' in self.shaders:
+            layers = self._sprite_layer_array().layers_for(ordered_textures)
+
+        self._ensure_sprite_instance_buffer(count)
+        data = self._sprite_instance_data[:count]
+        sorted_slots = self._sprite_sorted_slots_scratch[:count]
+        np.take(slots, order, out=sorted_slots)
+        # Gather directly into the reusable GPU staging buffer. The explicit
+        # out= avoids a temporary (N,3)/(N,2) array on every sprite frame.
+        np.take(table.pos, sorted_slots, axis=0, out=data[:, 0:3])
+        np.take(table.sprite_size, sorted_slots, axis=0, out=data[:, 3:5])
+        np.take(table.sprite_fixed_yaw, sorted_slots, out=data[:, 5])
+        np.take(table.render_alpha, sorted_slots, out=data[:, 6])
+        if layers is not None:
+            data[:, 7] = layers
+        else:
+            data[:, 7] = 0.0
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+
+        program = 'sprite_layered' if layers is not None else 'sprite_instanced'
+        shader, uniforms = self.shaders[program], self.uniforms[program]
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        # Billboards are unlit, so they never reach _upload_lights_once -- they
+        # still need fogging, exactly as the per-sprite path does.
+        self._upload_env_uniforms(program)
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
+                              glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
+                              glm.value_ptr(view))
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['use_fixed_facing'], 1)
+        gl.glBindVertexArray(self._ensure_sprite_instance_vao())
+
+        if layers is not None:
+            gl.glUniform1i(uniforms['sprite_layers'], 0)
+            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, self._sprite_layers.texture)
+            self._point_sprite_instances_at(0)
+            gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, count)
+            gl.glBindTexture(gl.GL_TEXTURE_2D_ARRAY, 0)
+            self.render_stats.draw_calls += 1
+            self.render_stats.batched_draws += 1
+        else:
+            # No array (a driver without the blit path, or more sprite images
+            # than it allows layers): one draw per equal-texture stretch *of
+            # the depth-ordered sequence*, which costs draws but never order.
+            gl.glUniform1i(uniforms['sprite_texture'], 0)
+            run_starts = runs_in_order(ordered_textures)
+            for run in range(len(run_starts) - 1):
+                begin = int(run_starts[run])
+                length = int(run_starts[run + 1]) - begin
+                gl.glBindTexture(gl.GL_TEXTURE_2D, int(ordered_textures[begin]))
+                self.render_stats.batched_draws += 1
+                self._point_sprite_instances_at(begin)
+                gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, length)
+                self.render_stats.draw_calls += 1
+        gl.glBindVertexArray(0)
+        return count
+
+    def draw_billboards_instanced(self, projection, view, positions, size, tex_id):
+        """Camera-facing billboards sharing one texture and size: one draw.
+
+        For the dense runtime populations that are not entities -- monster
+        projectiles -- which used to cost three GL calls each per frame.
+        """
+        positions = np.asarray(positions, dtype=np.float32).reshape(-1, 3)
+        count = len(positions)
+        if not count or 'sprite_instanced' not in self.shaders or not tex_id:
+            return 0
+        self._ensure_sprite_instance_buffer(count)
+        data = self._sprite_instance_data[:count]
+        data[:, 0:3] = positions
+        data[:, 3] = float(size[0])
+        data[:, 4] = float(size[1])
+        data[:, 5] = -10000.0
+        data[:, 6] = 1.0
+        data[:, 7] = 0.0
+        gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._sprite_instance_vbo)
+        gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, data)
+        shader, uniforms = (self.shaders['sprite_instanced'],
+                            self.uniforms['sprite_instanced'])
+        gl.glUseProgram(shader)
+        self._current_shader = shader
+        self._upload_env_uniforms('sprite_instanced')
+        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE,
+                              glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE,
+                              glm.value_ptr(view))
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        gl.glUniform1i(uniforms['sprite_texture'], 0)
+        gl.glUniform1i(uniforms['use_fixed_facing'], 0)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, int(tex_id))
+        gl.glBindVertexArray(self._ensure_sprite_instance_vao())
+        self._point_sprite_instances_at(0)
+        gl.glDrawArraysInstanced(gl.GL_TRIANGLE_STRIP, 0, 4, count)
+        gl.glBindVertexArray(0)
+        self.render_stats.draw_calls += 1
+        return count
+
+    def _sprite_layer_array(self):
+        """The entity sprite texture array, created on first use."""
+        if self._sprite_layers is None:
+            # Layers are square and shared, so their size is a memory
+            # decision: 512 holds every stock sprite at full resolution;
+            # low-power mode halves the edge and quarters the footprint.
+            self._sprite_layers = SpriteLayers(
+                max_size=256 if getattr(self, 'lowpower_mode', False) else 512)
+        return self._sprite_layers
 
     # --------------------------------------------------------------------------
     # Water / Glass / Fog
     # --------------------------------------------------------------------------
-    @staticmethod
-    def _water_wave_amplitude(brush):
-        """World-space wave amplitude for a brush, from its editor settings.
+    @timed_pass('water')
+    def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config,
+                           table):
+        """Draw water from dense RenderTable state.
 
-        water_wave_height is stored as a 0..1 fraction (legacy maps stored raw
-        slider ints up to 200 — treat anything > 2 as a percentage). Even with
-        waves disabled a whisper of swell remains so the surface never reads
-        as a frozen slab. Amplitude is capped so the surface stays inside the
-        brush volume.
+        The pass captures the opaque scene once for screen-space transmission.
+        Optional environment cubemaps are already rendered by Renderer_F before
+        this method is called; the hot loop consumes only dense columns and GL
+        texture handles.
         """
-        size = brush.get('size', [64, 64, 64])
-        h = float(brush.get('water_wave_height', 0.5))
-        if h > 2.0:
-            h = h / 100.0
-        if brush.get('water_wave_enabled', True):
-            amp = h * 30.0
-        else:
-            amp = 1.2
-        return min(amp, size[1] * 0.45, 30.0)
-
-    def draw_water_brushes(self, projection, view, camera_pos, brushes, lights, config):
-        if not brushes or 'water' not in self.shaders:
+        if len(brushes) == 0 or 'water' not in self.shaders:
             return
+        if table is None:
+            raise RuntimeError("draw_water_brushes requires RenderTable")
         if not getattr(self, 'water_enabled', True):
             return
+
         shader, uniforms = self.shaders['water'], self.uniforms['water']
         gl.glUseProgram(shader)
+        self._current_shader = shader
         self._upload_lights_once('water', lights)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
-        gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
+        gl.glUniformMatrix4fv(
+            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(
+            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glUniform3fv(
+            uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
         gl.glUniform1f(uniforms['time'], config.get('time', 0.0))
+
+        # Water uses the same scene capture as Glass, but captures before any
+        # water surface is submitted so transmission never contains the water
+        # itself.
+        scene_size = self._capture_glass_scene()
+        if scene_size is None:
+            viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+            scene_size = (
+                max(int(viewport[2]), 1),
+                max(int(viewport[3]), 1),
+            )
+        scene_width, scene_height = scene_size
+        # Quality is per brush ("High quality" in the property editor). The
+        # depth copy is made once, and only if some brush in the pass wants
+        # it; the renderer's water_quality is a session-only debug cap
+        # (r_waterquality cheap forces every brush cheap).
+        high_quality = table.water_high_quality[brushes]
+        if getattr(self, 'water_quality', 'expensive') != 'expensive':
+            high_quality = np.zeros_like(high_quality)
+        has_depth = bool(high_quality.any()) and self._capture_scene_depth()
+        depth_unit = self._water_depth_texture_unit
+        gl.glActiveTexture(gl.GL_TEXTURE0 + depth_unit)
+        gl.glBindTexture(gl.GL_TEXTURE_2D,
+                         self._water_depth_texture if has_depth else 0)
+        gl.glUniform1i(uniforms['sceneDepth'], depth_unit)
+        has_depth_loc = uniforms['hasSceneDepth']
+        ssr_loc = uniforms['ssrEnabled']
+        brush_depth = None
+        if not has_depth:
+            gl.glUniform1i(has_depth_loc, 0)
+            gl.glUniform1i(ssr_loc, 0)
+        # Keep the inverse alive: value_ptr() only borrows its storage.
+        inv_projection = glm.inverse(projection)
+        gl.glUniformMatrix4fv(
+            uniforms['invProjection'], 1, gl.GL_FALSE,
+            glm.value_ptr(inv_projection))
+
         gl.glActiveTexture(gl.GL_TEXTURE0)
         gl.glBindTexture(gl.GL_TEXTURE_2D, self.water_normal_id)
         gl.glUniform1i(uniforms['normalMap'], 0)
 
+        scene_unit = self._glass_scene_texture_unit
+        gl.glActiveTexture(gl.GL_TEXTURE0 + scene_unit)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
+        gl.glUniform1i(uniforms['sceneColor'], scene_unit)
+        gl.glUniform2f(
+            uniforms['screenSize'],
+            float(scene_width),
+            float(scene_height),
+        )
+
         opacity_loc = uniforms['waterOpacity']
         reflectivity_loc = uniforms['waterReflectivity']
-        tint_loc, model_loc = uniforms['waterTint'], uniforms['model']
-        normal_mat_loc = uniforms['normalMatrix']
+        fresnel_loc = uniforms['fresnelIntensity']
+        distortion_loc = uniforms['distortionStrength']
+        refraction_loc = uniforms['refractionIndex']
+        roughness_loc = uniforms['roughness']
+        tint_loc = uniforms['waterTint']
+        model_loc = uniforms['model']
+        normal_mat_loc = uniforms.get('normalMatrix', -1)
         wave_amp_loc = uniforms['waveAmp']
         brush_size_loc = uniforms['brushSize']
 
+        models, normals = self._frame_transforms(table, brushes)
+        sizes = table.half[brushes] * 2.0
+        params = table.water_params[brushes]
+        tints = table.water_tint[brushes]
+        planes = table.water_plane[brushes]
+        bits = table.class_bits[brushes]
+        geo = (bits & render_table.CLASS_HAS_GEOMETRY) != 0
+        geo_meshes = self._prepare_geo_meshes(table, brushes)
+
         surface_vao = self.vaos.get('water_surface')
         cube_vao = self.vaos['cube']
+
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
 
-        for brush in brushes:
-            model_matrix = self._brush_model_matrix(brush)
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+        for i, slot_value in enumerate(brushes):
+            slot = int(slot_value)
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
             if normal_mat_loc >= 0:
-                normal_mat = self._compute_normal_matrix(model_matrix, brush)
-                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
-            gl.glUniform1f(opacity_loc, brush.get('water_opacity', 0.5))
-            gl.glUniform1f(reflectivity_loc, brush.get('water_reflectivity', 0.5))
-            gl.glUniform3fv(tint_loc, 1, brush.get('water_tint', [0.0, 0.4, 0.6]))
-            size = brush.get('size', [64, 64, 64])
-            gl.glUniform3f(brush_size_loc, float(size[0]), float(size[1]), float(size[2]))
-            gl.glUniform1f(wave_amp_loc, self._water_wave_amplitude(brush))
+                gl.glUniformMatrix3fv(
+                    normal_mat_loc, 1, gl.GL_FALSE, normals[i])
 
-            mesh = self._get_geo_mesh(brush)
+            opacity = float(params[i, 0])
+            fresnel = float(params[i, 1])
+            if has_depth:
+                wants_depth = bool(high_quality[i])
+                if wants_depth != brush_depth:
+                    gl.glUniform1i(has_depth_loc, 1 if wants_depth else 0)
+                    gl.glUniform1i(ssr_loc, 1 if wants_depth else 0)
+                    brush_depth = wants_depth
+
+            gl.glUniform1f(opacity_loc, opacity)
+            gl.glUniform1f(reflectivity_loc, fresnel)
+            gl.glUniform1f(fresnel_loc, fresnel)
+            gl.glUniform1f(distortion_loc, float(params[i, 4]))
+            gl.glUniform1f(refraction_loc, max(float(params[i, 5]), 1.0))
+            gl.glUniform1f(roughness_loc, min(max(float(params[i, 6]), 0.0), 1.0))
+            gl.glUniform3fv(tint_loc, 1, tints[i])
+            gl.glUniform3f(
+                brush_size_loc,
+                float(sizes[i, 0]),
+                float(sizes[i, 1]),
+                float(sizes[i, 2]),
+            )
+
+            h = float(params[i, 2])
+            if h > 2.0:
+                h /= 100.0
+            amp = h * 30.0 if params[i, 3] != 0.0 else 1.2
+            amp = min(amp, float(sizes[i, 1]) * 0.45, 30.0)
+            gl.glUniform1f(wave_amp_loc, amp)
+
+            mesh = (
+                geo_meshes.get(int(table.geometry_id[slot]))
+                if geo[i] else None
+            )
             if mesh is not None:
-                # Angled water: draw the real convex faces.  When the top face
-                # is flat and spans the full AABB footprint the tessellated
-                # wave grid still caps it exactly; otherwise the mesh's own
-                # top faces are used (flat surface, shader-animated normals).
                 top_count = mesh.count - mesh.side_count
                 gl.glBindVertexArray(mesh.vao)
-                if not brush.get('water_plane', False):
+                if not bool(planes[i]):
                     gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.side_count)
                 if mesh.has_flat_top and surface_vao:
                     gl.glBindVertexArray(surface_vao)
-                    gl.glDrawElements(gl.GL_TRIANGLES, self._water_surface_index_count,
-                                      gl.GL_UNSIGNED_INT, None)
+                    gl.glDrawElements(
+                        gl.GL_TRIANGLES,
+                        self._water_surface_index_count,
+                        gl.GL_UNSIGNED_INT,
+                        None,
+                    )
                 elif top_count:
-                    gl.glDrawArrays(gl.GL_TRIANGLES, mesh.side_count, top_count)
-                elif brush.get('water_plane', False):
+                    gl.glDrawArrays(
+                        gl.GL_TRIANGLES,
+                        mesh.side_count,
+                        top_count,
+                    )
+                elif bool(planes[i]):
                     gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
                 self.render_stats.draw_calls += 1
                 continue
 
-            # Side walls first for full water volumes (edge-pinned waves keep
-            # the displaced surface meeting these exactly), then the surface
-            # composites over them for the common above-water view.
-            if not brush.get('water_plane', False):
+            if not bool(planes[i]):
                 gl.glBindVertexArray(cube_vao)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
-
-            # Tessellated top surface (the part the waves displace)
             if surface_vao:
                 gl.glBindVertexArray(surface_vao)
-                gl.glDrawElements(gl.GL_TRIANGLES, self._water_surface_index_count,
-                                  gl.GL_UNSIGNED_INT, None)
+                gl.glDrawElements(
+                    gl.GL_TRIANGLES,
+                    self._water_surface_index_count,
+                    gl.GL_UNSIGNED_INT,
+                    None,
+                )
             else:
                 gl.glBindVertexArray(cube_vao)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
             self.render_stats.draw_calls += 1
-        gl.glBindVertexArray(0)
 
-    def draw_glass_brushes(self, projection, view, camera_pos, brushes, lights, config):
-        if not brushes or 'glass' not in self.shaders:
+        gl.glBindVertexArray(0)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+        return
+
+    def _capture_glass_scene(self):
+        """Copy the current framebuffer into the glass transmission texture.
+
+        The copy happens once before the glass pass, so every glass surface
+        samples the same scene behind it. GL 3.3 supports this without adding
+        another permanent render target to the forward pipeline.
+        """
+        viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+        if viewport is None or len(viewport) < 4:
+            return None
+        x, y, width, height = (int(viewport[0]), int(viewport[1]),
+                               int(viewport[2]), int(viewport[3]))
+        if width <= 0 or height <= 0:
+            return None
+
+        if not self._glass_scene_texture:
+            self._glass_scene_texture = int(gl.glGenTextures(1))
+
+        unit = gl.GL_TEXTURE0 + self._glass_scene_texture_unit
+        gl.glActiveTexture(unit)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+
+        if self._glass_scene_size != (width, height):
+            gl.glTexImage2D(
+                gl.GL_TEXTURE_2D, 0, gl.GL_RGBA8, width, height, 0,
+                gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, None)
+            self._glass_scene_size = (width, height)
+
+        gl.glCopyTexSubImage2D(
+            gl.GL_TEXTURE_2D, 0, 0, 0, x, y, width, height)
+        return width, height
+
+    def _read_framebuffer_has_depth(self):
+        """Whether the bound read framebuffer has a single-sampled depth buffer.
+
+        Asked up front rather than by provoking a GL error, so an unrelated
+        error already queued by an earlier pass is never swallowed here.
+        """
+        try:
+            if int(gl.glGetIntegerv(gl.GL_SAMPLE_BUFFERS)) != 0:
+                return False
+            fbo = int(gl.glGetIntegerv(gl.GL_READ_FRAMEBUFFER_BINDING))
+            attachment = gl.GL_DEPTH if fbo == 0 else gl.GL_DEPTH_ATTACHMENT
+            kind = gl.glGetFramebufferAttachmentParameteriv(
+                gl.GL_READ_FRAMEBUFFER, attachment,
+                gl.GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE)
+            if int(kind) == gl.GL_NONE:
+                return False
+            bits = gl.glGetFramebufferAttachmentParameteriv(
+                gl.GL_READ_FRAMEBUFFER, attachment,
+                gl.GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE)
+            return int(bits) > 0
+        except Exception:
+            return False
+
+    def _capture_scene_depth(self):
+        """Copy the current depth buffer into the water depth texture.
+
+        Plain GL 3.3 core: one ``glCopyTexSubImage2D`` into a depth texture,
+        like the colour copy in :meth:`_capture_glass_scene`. Returns False
+        (and the water keeps its depth-less look) when there is no
+        single-sampled depth buffer to copy from.
+        """
+        viewport = gl.glGetIntegerv(gl.GL_VIEWPORT)
+        if viewport is None or len(viewport) < 4:
+            return False
+        x, y, width, height = (int(viewport[0]), int(viewport[1]),
+                               int(viewport[2]), int(viewport[3]))
+        if width <= 0 or height <= 0 or not self._read_framebuffer_has_depth():
+            return False
+
+        if not self._water_depth_texture:
+            self._water_depth_texture = int(gl.glGenTextures(1))
+        gl.glActiveTexture(gl.GL_TEXTURE0 + self._water_depth_texture_unit)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._water_depth_texture)
+        if self._water_depth_size != (width, height):
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+            gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_COMPARE_MODE, gl.GL_NONE)
+            gl.glTexImage2D(
+                gl.GL_TEXTURE_2D, 0, gl.GL_DEPTH_COMPONENT24, width, height, 0,
+                gl.GL_DEPTH_COMPONENT, gl.GL_FLOAT, None)
+            self._water_depth_size = (width, height)
+        gl.glCopyTexSubImage2D(gl.GL_TEXTURE_2D, 0, 0, 0, x, y, width, height)
+        return True
+
+    @timed_pass('glass')
+    def draw_glass_brushes(self, projection, view, camera_pos, brushes, lights, config,
+                           table):
+        if len(brushes) == 0 or 'glass' not in self.shaders:
             return
+        if table is None:
+            raise RuntimeError("draw_glass_brushes requires RenderTable")
         shader, uniforms = self.shaders['glass'], self.uniforms['glass']
         gl.glUseProgram(shader)
-        # Glass lights itself from the view angle rather than from the light
-        # list, so it never reaches _upload_lights_once — but a distant pane
-        # still has to fog with everything around it.
         self._upload_env_uniforms('glass')
         gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
         gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
         gl.glUniform3fv(uniforms['viewPos'], 1, glm.value_ptr(camera_pos))
 
+        # Capture once, before any glass surface is drawn.
+        scene_size = self._capture_glass_scene()
+        if scene_size is None:
+            return
+        scene_width, scene_height = scene_size
+        scene_tex_unit = self._glass_scene_texture_unit
+        gl.glActiveTexture(gl.GL_TEXTURE0 + scene_tex_unit)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._glass_scene_texture)
+        gl.glUniform1i(uniforms['sceneColor'], scene_tex_unit)
+        gl.glUniform2f(uniforms['screenSize'],
+                       float(scene_width), float(scene_height))
+        gl.glActiveTexture(gl.GL_TEXTURE0)
+
         model_loc = uniforms['model']
         water_color_loc = uniforms['waterColor']
         distortion_loc = uniforms['distortionStrength']
-        caustic_loc = uniforms['causticStrength']
+        fresnel_loc = uniforms['fresnelIntensity']
         opacity_loc = uniforms['glassOpacity']
         refraction_loc = uniforms['refractionIndex']
         roughness_loc = uniforms['roughness']
         normal_mat_loc = uniforms.get('normalMatrix', -1)
-        if normal_mat_loc is None: normal_mat_loc = -1
-
+        if normal_mat_loc is None:
+            normal_mat_loc = -1
         gl.glBindVertexArray(self.vaos['cube'])
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
         gl.glEnable(gl.GL_CULL_FACE)
         gl.glCullFace(gl.GL_BACK)
 
-        for brush in brushes:
-            model_matrix = self._brush_model_matrix(brush)
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
+        models, normals = render_table.model_matrices(table, brushes)
+        colors = table.glass_color[brushes]
+        params = table.glass_params[brushes]
+        geo = ((table.class_bits[brushes] & render_table.CLASS_HAS_GEOMETRY) != 0)
+        geo_meshes = self._prepare_geo_meshes(table, brushes)
+        for i, slot_value in enumerate(brushes):
+            slot = int(slot_value)
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
             if normal_mat_loc > 0:
-                normal_mat = self._compute_normal_matrix(model_matrix, brush)
-                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, glm.value_ptr(normal_mat))
-            glass_color = brush.get('glass_color', [0.7, 0.85, 0.95])
-            opacity = brush.get('glass_opacity', 0.3)
-            distortion = brush.get('glass_distortion', 0.5)
-            refraction = brush.get('glass_refraction', 1.5)
-            roughness = brush.get('glass_roughness', 0.0)
-            fresnel = brush.get('glass_fresnel', 0.5)
-
-            gl.glUniform3fv(water_color_loc, 1, glass_color)
-            gl.glUniform1f(distortion_loc, distortion)
-            gl.glUniform1f(caustic_loc, fresnel)
-            gl.glUniform1f(opacity_loc, opacity)
-            gl.glUniform1f(refraction_loc, refraction)
-            gl.glUniform1f(roughness_loc, roughness)
-
-            mesh = self._get_geo_mesh(brush)
+                gl.glUniformMatrix3fv(normal_mat_loc, 1, gl.GL_FALSE, normals[i])
+            gl.glUniform3fv(water_color_loc, 1, colors[i])
+            gl.glUniform1f(distortion_loc, float(params[i, 1]))
+            gl.glUniform1f(fresnel_loc, float(params[i, 4]))
+            gl.glUniform1f(opacity_loc, float(params[i, 0]))
+            gl.glUniform1f(refraction_loc, float(params[i, 2]))
+            gl.glUniform1f(roughness_loc, float(params[i, 3]))
+            mesh = geo_meshes.get(int(table.geometry_id[slot])) if geo[i] else None
             if mesh is not None:
                 gl.glBindVertexArray(mesh.vao)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
@@ -1293,12 +3498,12 @@ class BaseRenderer:
             else:
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
             self.render_stats.draw_calls += 1
-
         gl.glDisable(gl.GL_CULL_FACE)
         gl.glBindVertexArray(0)
-
-    def draw_fog_volumes(self, projection, view, camera_pos, brushes, lights, config):
-        if not brushes or 'fog' not in self.shaders:
+        return
+    @timed_pass('fog')
+    def draw_fog_volumes(self, projection, view, camera_pos, brushes, lights, config, *, table):
+        if len(brushes) == 0 or 'fog' not in self.shaders:
             return
         gl.glEnable(gl.GL_BLEND)
         gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
@@ -1323,19 +3528,34 @@ class BaseRenderer:
         object_color_loc = uniforms['object_color']
         alpha_loc = uniforms['alpha']
 
-        for brush in brushes:
-            model_matrix = self._brush_model_matrix(brush)
-            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
-            inv_matrix = glm.inverse(model_matrix)
-            gl.glUniformMatrix4fv(inv_model_loc, 1, gl.GL_FALSE, glm.value_ptr(inv_matrix))
-            f_color = brush.get('fog_color', [0.5, 0.6, 0.7])
-            gl.glUniform1f(density_loc, brush.get('fog_density', 0.01))
-            gl.glUniform3fv(fog_color_loc, 1, f_color)
-            gl.glUniform1f(noise_scale_loc, brush.get('fog_noise_scale', 0.01))
-            gl.glUniform3fv(object_color_loc, 1, f_color)
-            gl.glUniform1f(alpha_loc, 0.4)
+        # A fog volume's faces usually lie exactly on the floor, walls and
+        # ceiling that bound it. Pulled a hair towards the camera, they win
+        # that depth tie instead of fighting it pixel by pixel; a surface
+        # really in front of a face still hides it.
+        offset = getattr(self, 'fog_face_offset', True)
+        if offset:
+            gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
+            gl.glPolygonOffset(-1.0, -1.0)
 
-            mesh = self._get_geo_mesh(brush)
+        models, _ = render_table.model_matrices(table, brushes)
+        # model_matrices is column-major for GL; transpose into conventional
+        # matrices, invert the batch, then transpose back for glUniform.
+        mats = models.reshape(-1, 4, 4).transpose(0, 2, 1)
+        inv = np.linalg.inv(mats).transpose(0, 2, 1).reshape(-1, 16).astype(np.float32)
+        colors = table.fog_color[brushes]
+        params = table.fog_params[brushes]
+        geo = ((table.class_bits[brushes] & render_table.CLASS_HAS_GEOMETRY) != 0)
+        geo_meshes = self._prepare_geo_meshes(table, brushes)
+        for i, slot_value in enumerate(brushes):
+            slot = int(slot_value)
+            gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, models[i])
+            gl.glUniformMatrix4fv(inv_model_loc, 1, gl.GL_FALSE, inv[i])
+            gl.glUniform3fv(fog_color_loc, 1, colors[i])
+            gl.glUniform1f(density_loc, float(params[i, 0]))
+            gl.glUniform1f(noise_scale_loc, float(params[i, 1]))
+            gl.glUniform3fv(object_color_loc, 1, colors[i])
+            gl.glUniform1f(alpha_loc, 0.4)
+            mesh = geo_meshes.get(int(table.geometry_id[slot])) if geo[i] else None
             if mesh is not None:
                 gl.glBindVertexArray(mesh.vao)
                 gl.glCullFace(gl.GL_FRONT)
@@ -1344,106 +3564,112 @@ class BaseRenderer:
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
                 gl.glBindVertexArray(self.vaos['cube'])
             else:
+                # All six faces. The bottom used to be left out (a pattern
+                # copied from the water pass, where the floor hides it), so
+                # from inside a fog volume nothing covered the floor and it
+                # showed through unfogged while the walls and ceiling fogged.
                 gl.glCullFace(gl.GL_FRONT)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
                 gl.glCullFace(gl.GL_BACK)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 24)
-                gl.glDrawArrays(gl.GL_TRIANGLES, 30, 6)
-
+                gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
+        if offset:
+            gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
         gl.glDisable(gl.GL_CULL_FACE)
         gl.glBindVertexArray(0)
         gl.glActiveTexture(gl.GL_TEXTURE0)
+        return
+    def _classify_brush_slots(self, table, slots, config):
+        """Split visible brush slots into the render passes, numerically.
 
-    # --------------------------------------------------------------------------
-    # Helpers for sorting and matrix utilities
-    # --------------------------------------------------------------------------
-    def _sort_objects(self, brushes, things, config):
-        opaque, transparent, sprites, fog, water, glass, glow = [], [], [], [], [], [], []
-        is_play, show_sprites = config.get('play_mode', False), config.get('show_sprites_in_play_mode', False)
+        The array form of ``_sort_objects``' brush half.  That loop asked every
+        visible brush what it was, once per frame -- ``is_water_brush`` alone is
+        six ``str.lower()`` calls and six substring searches per brush -- to
+        reach a verdict that only changes when the brush is edited.  The
+        projection resolved it at edit time into ``class_bits``, so the same
+        split is one mask per class.
 
-        for brush in brushes:
-            if brush.get('hidden'):
-                continue
-            # Hoist the shader lookup: it was fetched up to three times per
-            # brush per frame for the Fog/Glass/Glow branches below.
-            shader = brush.get('shader')
-            if is_water_brush(brush):
-                water.append(brush)
-            elif brush.get('is_fog') or shader == 'Fog':
-                fog.append(brush)
-            elif shader == 'Glass':
-                glass.append(brush)
-            elif shader == 'Glow':
-                glow.append(brush)
-            elif brush.get('is_trigger'):
-                if not is_play:
-                    transparent.append(brush)
-            else:
-                opaque.append(brush)
+        The classes are mutually exclusive in the same order the Python chain
+        tried them (water, then fog, then glass, then glow, then trigger), so
+        ``_brush_class_bits`` sets at most one of them and the masks cannot
+        disagree with what the loop used to decide.
 
-        if not is_play:
-            sprites = [t for t in things if (isinstance(t, Thing) or (isinstance(t, dict) and 'monster_type' in t))
-                       and not (PathNode is not None and isinstance(t, PathNode))]
+        Returns int32 slot arrays -- no objects are materialised here.
+        """
+        empty = slots[:0]
+        if not len(slots):
+            return {'opaque': empty, 'textured': empty, 'solid': empty,
+                    'transparent': empty, 'water': empty, 'glass': empty,
+                    'fog': empty, 'glow': empty}
+
+        bits = table.class_bits[slots]
+        opaque_mask = (bits & render_table.CLASS_NON_OPAQUE) == 0
+        textured_mask = (bits & render_table.CLASS_TEXTURED) != 0
+        # A trigger volume is drawn as a wireframe while editing and not at all
+        # in play, which is what the old loop's `if not is_play` meant.
+        if config.get('play_mode', False):
+            trigger_mask = np.zeros(len(slots), dtype=bool)
         else:
-            for t in things:
-                if PathNode is not None and isinstance(t, PathNode):
-                    continue
-                if Portal is not None and isinstance(t, Portal):
-                    sprites.append(t)
-                    continue
-                if isinstance(t, dict) and 'monster_type' in t:
-                    sprites.append(t)
-                elif isinstance(t, Thing):
-                    if isinstance(t, Pickup):
-                        sprites.append(t)
-                    elif isinstance(t, (Monster, LogicGate, LogicRelay, LogicTimer, LevelChanger)):
-                        sprites.append(t)
-                    elif getattr(t, 'properties', {}).get('model_path'):
-                        # Always render models in play mode (3D geometry, not just editor sprites)
-                        sprites.append(t)
-                    elif getattr(t, 'properties', {}).get('sprite_path'):
-                        # Props may deliberately be camera-facing billboards.
-                        sprites.append(t)
-                    elif show_sprites:
-                        sprites.append(t)
-        return opaque, transparent, sprites, fog, water, glass, glow
+            trigger_mask = (bits & render_table.CLASS_TRIGGER) != 0
 
-    def _split_opaque(self, brushes):
-        textured, solid = [], []
-        for b in brushes:
-            if any(t and t not in ('default.png', 'caulk.jpg') for t in b.get('textures', {}).values()):
-                textured.append(b)
-            else:
-                solid.append(b)
-        return textured, solid
+        return {
+            'opaque': slots[opaque_mask],
+            'textured': slots[opaque_mask & textured_mask],
+            'solid': slots[opaque_mask & ~textured_mask],
+            'transparent': slots[trigger_mask],
+            'water': slots[(bits & render_table.CLASS_WATER) != 0],
+            'glass': slots[(bits & render_table.CLASS_GLASS) != 0],
+            'fog': slots[(bits & render_table.CLASS_FOG) != 0],
+            'glow': slots[(bits & render_table.CLASS_GLOW) != 0],
+        }
 
-    def _brush_model_matrix(self, brush):
-        pos = brush.get('pos', [0, 0, 0])
-        size = brush.get('size', [64, 64, 64])
-        mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
-        angle = brush.get('_rot_angle')
-        if angle:
-            axis_raw = brush.get('rot_axis', [0, 1, 0])
-            axis = glm.vec3(*axis_raw)
-            if glm.length(axis) > 0.001:
-                mat = glm.rotate(mat, glm.radians(float(angle)), glm.normalize(axis))
-        mat = glm.scale(mat, glm.vec3(*size))
-        return mat
+    @staticmethod
+    def _distance_cull_thing_slots(table, slots, cx, cz, limit_sq):
+        """:meth:`_distance_cull_slots` with the Thing pass's exemption.
 
-    def _compute_normal_matrix(self, model_matrix, brush=None):
-        # brush parameter is accepted for API compatibility with Renderer_F's
-        # caching override, but not used at the base-class level.
-        mat3 = glm.mat3(model_matrix)
-        try:
-            return glm.transpose(glm.inverse(mat3))
-        except Exception:
-            return self._identity_mat3
+        Lights and Portals survive the dense entity cull at any distance.
+        The object-path predicate is no longer part of Portal rendering;
+        the dense EntityTable ENT_CULL_EXEMPT mask is authoritative.
+        """
+        if not len(slots):
+            return slots
+        dx = table.pos[slots, 0] - cx
+        dz = table.pos[slots, 2] - cz
+        near = (dx * dx + dz * dz) <= limit_sq
+        exempt = (table.class_bits[slots]
+                  & entity_projection.ENT_CULL_EXEMPT) != 0
+        return slots[near | exempt]
 
-    def _distance_sq(self, pos1, pos2):
-        if isinstance(pos1, (list, tuple)):
-            return (pos1[0]-pos2.x)**2 + (pos1[1]-pos2.y)**2 + (pos1[2]-pos2.z)**2
-        return (pos1.x-pos2.x)**2 + (pos1.y-pos2.y)**2 + (pos1.z-pos2.z)**2
+    @staticmethod
+    def _distance_cull_slots(table, slots, cx, cz, limit_sq):
+        """Narrow *slots* to those within *limit_sq* on the XZ plane.
+
+        The broad-phase distance cull, as a mask rather than a compaction.  It
+        used to run over a Python list and rebuild another one an element at a
+        time (``render_cull.cull_by_distance``); the surviving slots are the
+        same answer with no object touched.
+        """
+        if not len(slots):
+            return slots
+        dx = table.center[slots, 0] - cx
+        dz = table.center[slots, 2] - cz
+        return slots[(dx * dx + dz * dz) <= limit_sq]
+
+    @staticmethod
+    def _sort_slots_by_distance(table, slots, cx, cz, reverse=True):
+        """Depth-order *slots* from the projection's centres.
+
+        Replaces reconstructing an array from a list of row views and then
+        rebuilding an object list from the sort order: the positions are
+        already dense, so the sort is one argsort over a gathered distance
+        vector and the result is still slots.
+        """
+        if len(slots) < 2:
+            return slots
+        dx = table.center[slots, 0] - cx
+        dz = table.center[slots, 2] - cz
+        distances = dx * dx + dz * dz
+        order = np.argsort(-distances if reverse else distances, kind="stable")
+        return slots[order]
 
     def _shader_light_cap(self, shader_name):
         """How many lights ``shader_name``'s ``lights[]`` array actually holds.
@@ -1455,7 +3681,9 @@ class BaseRenderer:
         for uniform storage.
         """
         cap = _SHADER_LIGHT_CAPS.get(shader_name, self.MAX_LIGHTS)
-        if self.lowpower_mode and shader_name in ('lit', 'textured'):
+        if self.lowpower_mode and shader_name in ('lit', 'textured', 'lit_instanced',
+                                                  'textured_instanced', 'brush_instanced',
+                                                  'lit_brush_instanced'):
             cap = min(cap, shaders.MAX_LIGHTS_ARM)
         return cap
 
@@ -1512,39 +3740,133 @@ class BaseRenderer:
             return (float(camera_pos.x), float(camera_pos.y), float(camera_pos.z))
         return (float(camera_pos[0]), float(camera_pos[1]), float(camera_pos[2]))
 
+    def _configure_light_ubo_program(self, shader_name):
+        """Bind a compiled lighting shader's std140 block to the shared slot."""
+        program = self.shaders.get(shader_name)
+        if not program:
+            return False
+        block_index = gl.glGetUniformBlockIndex(program, 'FioLightBlock')
+        invalid = getattr(gl, 'GL_INVALID_INDEX', 0xFFFFFFFF)
+        if block_index == invalid:
+            return False
+        gl.glUniformBlockBinding(program, block_index, shaders.LIGHT_UBO_BINDING)
+        return True
+
+    def _configure_light_ubo_programs(self):
+        for name in ('lit', 'textured', 'lit_instanced', 'textured_instanced',
+                     'brush_instanced', 'lit_brush_instanced', 'water', 'terrain'):
+            self._configure_light_ubo_program(name)
+        self._ensure_light_ubo(self.MAX_LIGHTS)
+
+    def _ensure_light_ubo(self, capacity):
+        capacity = max(1, int(capacity))
+        if self._light_ubo is None:
+            self._light_ubo = gl.glGenBuffers(1)
+        if capacity > self._light_ubo_capacity:
+            self._light_ubo_capacity = max(self.MAX_LIGHTS, capacity)
+            self._light_ubo_data = np.zeros(self._light_ubo_capacity,
+                                            dtype=self._light_ubo_dtype)
+            gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
+            gl.glBufferData(
+                gl.GL_UNIFORM_BUFFER,
+                self._light_ubo_data.nbytes,
+                None,
+                gl.GL_DYNAMIC_DRAW,
+            )
+        gl.glBindBufferBase(
+            gl.GL_UNIFORM_BUFFER,
+            shaders.LIGHT_UBO_BINDING,
+            self._light_ubo,
+        )
+    def _upload_light_ubo(self, lights, count):
+        """Pack the active light slice once and upload it to the shared UBO."""
+        count = min(int(count), self.MAX_LIGHTS)
+        self._ensure_light_ubo(count)
+        if count <= 0:
+            self._light_ubo_key = ()
+            return
+
+        if not (isinstance(lights, tuple) and len(lights) == 2
+                and hasattr(lights[0], 'light_color')):
+            raise TypeError("light upload requires (LightTable, slots)")
+        table, slots = lights
+        key = ('dense', id(table), table.generation, count, tuple(int(x) for x in slots[:count]))
+        if self._light_ubo_key == key:
+            return
+
+        active = self._light_ubo_data[:count]
+        active['position'].fill(0.0)
+        active['color'].fill(0.0)
+        active['params'].fill(0.0)
+        active['indices'].fill(0)
+
+        table, slots = lights
+        active_lights = slots[:count]
+        active['position'][:, :3] = table.pos[active_lights].astype(np.float32, copy=False)
+        active['position'][:, 3] = 1.0
+        active['color'][:, :3] = table.light_color[active_lights]
+        active['color'][:, 3] = 1.0
+        active['params'][:, :2] = table.light_params[active_lights]
+        shadow_indices = np.fromiter(
+            (self._light_shadow_index.get(int(slot), -1) for slot in active_lights),
+            dtype=np.int32,
+            count=count,
+        )
+
+        active['indices'][:, 0] = shadow_indices
+
+        # Respecify the whole store rather than sub-updating it: earlier draws
+        # still queued against the old contents would otherwise make the
+        # driver wait for them before the write. A fresh store (orphaning)
+        # lets them finish on the old one.
+        gl.glBindBuffer(gl.GL_UNIFORM_BUFFER, self._light_ubo)
+        gl.glBufferData(
+            gl.GL_UNIFORM_BUFFER,
+            self._light_ubo_data.nbytes,
+            self._light_ubo_data,
+            gl.GL_DYNAMIC_DRAW,
+        )
+        self._light_ubo_key = key
+
+    # --------------------------------------------------------------------------
+    # Light upload
+    # --------------------------------------------------------------------------
     def _upload_lights_once(self, shader_name, lights):
         if shader_name not in self.uniforms:
             return
-        # Fog and ambient ride along with the light upload: every lighting pass
-        # already calls this immediately after binding its program, and it must
-        # happen *before* the same-lights early-out below, or a frame that
-        # reuses last frame's light list would also reuse last frame's fog.
-        self._upload_env_uniforms(shader_name)
-        cap = self._shader_light_cap(shader_name)
-        # Skip if this shader already received this exact light list this
-        # frame (portal passes may use a different list, so key on ids).
-        key = tuple(map(id, lights[:cap]))
-        if self._frame_lights_uploaded.get(shader_name) == key:
-            return
-        self._frame_lights_uploaded[shader_name] = key
-        uniforms = self.uniforms[shader_name]
-        num_lights = min(len(lights), cap)
-        gl.glUniform1i(uniforms['active_lights'], num_lights)
-        shadow_index_map = self._light_shadow_index
-        light_names = self._light_uniform_names
-        for i in range(num_lights):
-            light = lights[i]
-            n_pos, n_col, n_int, n_rad, n_shadow = light_names[i]
-            gl.glUniform3fv(uniforms[n_pos], 1, light.pos)
-            gl.glUniform3fv(uniforms[n_col], 1, light.get_color())
-            gl.glUniform1f(uniforms[n_int], light.get_intensity())
-            gl.glUniform1f(uniforms[n_rad], light.get_radius())
-            loc = uniforms[n_shadow]
-            if loc != -1:
-                gl.glUniform1i(loc, shadow_index_map.get(id(light), -1))
-        # Bind the depth cube-maps so the shadow test can sample them.
-        self._bind_shadow_maps(uniforms)
 
+        # Fog/ambient remain regular uniforms because they are not shared light
+        # state.
+        self._upload_env_uniforms(shader_name)
+        if not (isinstance(lights, tuple) and len(lights) == 2
+                and hasattr(lights[0], 'light_color')):
+            raise TypeError("light upload requires (LightTable, slots)")
+        table, slots = lights
+        cap = self._shader_light_cap(shader_name)
+        num_lights = min(len(slots), cap)
+
+        self._ensure_light_ubo(num_lights)
+        gl.glBindBufferBase(
+            gl.GL_UNIFORM_BUFFER,
+            shaders.LIGHT_UBO_BINDING,
+            self._light_ubo,
+        )
+        self._frame_lights_uploaded[shader_name] = (
+            id(table), table.generation,
+            tuple(int(x) for x in slots[:cap]))
+        gl.glUniform1i(self.uniforms[shader_name]['active_lights'], num_lights)
+        # One upload serves every pass: the buffer holds the frame's light
+        # prefix up to MAX_LIGHTS, and each shader reads its own first
+        # ``active_lights`` entries of it. Uploading per shader cap re-sent
+        # the same lights once per pass.
+        self._upload_light_ubo(lights, min(len(slots), self.MAX_LIGHTS))
+
+        # Keep sampler2D and samplerCube uniforms on distinct texture units.
+        # This is one shader-pass operation, never part of the per-draw loop.
+        if shader_name in ('lit', 'textured', 'lit_instanced',
+                           'textured_instanced', 'brush_instanced',
+                           'lit_brush_instanced', 'terrain'):
+            self._bind_shadow_maps(self.uniforms[shader_name])
     # --------------------------------------------------------------------------
     # Depth cube-map shadow mapping
     # --------------------------------------------------------------------------
@@ -1594,156 +3916,280 @@ class BaseRenderer:
             self._shadow_fbo = None
             self._shadow_cubemaps = []
 
-    def _thing_model_matrix(self, thing):
-        """Model matrix for a model-carrying Thing, matching draw_models()."""
-        pos = thing.pos
-        scale = thing.properties.get('scale', 1.0)
-        if isinstance(scale, (int, float)):
-            scale = [scale, scale, scale]
-        rot = thing.properties.get('rotation', [0, 0, 0])
-        mat = glm.translate(self._identity_mat4, glm.vec3(*pos))
-        mat = glm.rotate(mat, glm.radians(rot[1]), glm.vec3(0, 1, 0))
-        mat = glm.rotate(mat, glm.radians(rot[0]), glm.vec3(1, 0, 0))
-        mat = glm.rotate(mat, glm.radians(rot[2]), glm.vec3(0, 0, 1))
-        mat = glm.scale(mat, glm.vec3(*scale))
-        return mat
-
     def _bind_shadow_maps(self, uniforms):
-        """Bind every depth cube-map to its reserved texture unit and point the
-        matching ``shadowMaps[i]`` sampler at it.  Unused slots are still bound
-        so the samplers stay valid; the shaders simply never sample a slot whose
-        ``shadowIndex`` no light references."""
-        if not self._shadow_cubemaps:
-            return
+        """Bind shadow samplers to dedicated texture units.
+
+        Lighting shaders contain both sampler2D and samplerCube uniforms.
+        OpenGL requires sampler uniforms of different types to reference
+        different texture units at draw time, even when no shadowing light
+        is active. Keep the cube samplers on their reserved units and bind
+        texture 0 when shadow resources are unavailable.
+        """
         base = self.SHADOW_TEXTURE_UNIT_BASE
-        for i, cm in enumerate(self._shadow_cubemaps):
+        cubemaps = self._shadow_cubemaps
+        for i in range(self.MAX_SHADOW_LIGHTS):
             loc = uniforms[f'shadowMaps[{i}]']
-            if loc != -1:
-                gl.glActiveTexture(gl.GL_TEXTURE0 + base + i)
-                gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
-                gl.glUniform1i(loc, base + i)
+            if loc == -1:
+                continue
+            gl.glActiveTexture(gl.GL_TEXTURE0 + base + i)
+            cm = cubemaps[i] if i < len(cubemaps) else 0
+            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
+            gl.glUniform1i(loc, base + i)
         gl.glActiveTexture(gl.GL_TEXTURE0)
 
-    def _collect_shadow_casters(self, brushes, models, lx, ly, lz, reach):
-        """Return the brushes/models within *reach* of a light plus a hashable
-        signature of their transforms (used to detect when a cube-map is stale).
-        Filtering once per light — rather than once per cube face — also cuts the
-        non-cached path's CPU work by 6x."""
-        in_brushes, bkeys = [], []
-        for b in brushes:
-            pos = b.get('pos', (0, 0, 0))
-            size = b.get('size', (64, 64, 64))
-            br = 0.5 * max(size[0], size[1], size[2])
-            dx = pos[0] - lx; dy = pos[1] - ly; dz = pos[2] - lz
-            limit = reach + br
-            if (dx * dx + dy * dy + dz * dz) > limit * limit:
-                continue
-            in_brushes.append(b)
-            axis = b.get('rot_axis')
-            bkeys.append((pos[0], pos[1], pos[2], size[0], size[1], size[2],
-                          b.get('_rot_angle'), tuple(axis) if axis else None))
+    @staticmethod
+    def _shadow_caster_slots(table, all_slots):
+        """The brushes eligible to cast a shadow, as slots.
 
-        in_models, mkeys = [], []
-        reach4_sq = reach * reach * 4.0
-        for t in models:
-            pos = t.pos
-            dx = pos[0] - lx; dy = pos[1] - ly; dz = pos[2] - lz
-            if (dx * dx + dy * dy + dz * dz) > reach4_sq:
-                continue
-            in_models.append(t)
-            props = t.properties
-            scale = props.get('scale', 1.0)
-            scale_key = scale if isinstance(scale, (int, float)) else tuple(scale)
-            mkeys.append((pos[0], pos[1], pos[2], props.get('model_path'),
-                          tuple(props.get('rotation', (0, 0, 0))), scale_key))
+        This filter used to be a Python walk over every brush in the level --
+        five dict lookups and ``is_water_brush``'s six-string search each --
+        run every frame, before anything had checked whether a single cube-map
+        actually needed re-rendering.  The verdict changes only when a brush is
+        edited, so the projection resolved it at edit time; here it is one mask.
+        """
+        if not len(all_slots):
+            return all_slots
+        bits = table.class_bits[all_slots]
+        return all_slots[(bits & render_table.CLASS_SHADOW_CASTER) != 0]
 
-        return in_brushes, in_models, (tuple(bkeys), tuple(mkeys))
+    @staticmethod
+    def _casters_in_reach(table, slots, lx, ly, lz, reach):
+        """Caster slots within *reach* of a light, and a signature of them.
 
-    def render_shadow_maps(self, shadow_lights, brushes, things, config, camera_pos=None):
-        """Refresh the depth cube-map for each shadow-casting point light.
+        Replaces rebuilding ``np.asarray([b['pos'] for b in brushes])`` and
+        ``[b['size'] ...]`` from the brush dicts every frame: the projection
+        already holds both, so the whole per-light test is
+        ``center[slots]`` and one comparison.
 
-        Cube-maps are cached per slot: a light's map is only re-rendered when the
-        light or one of its in-range casters actually moves.  A fully static scene
-        therefore does *zero* GPU shadow work after the first frame — only the
-        cheap CPU signature check runs.  Populates ``self._light_shadow_index``
-        (id(light) -> slot) every frame so the lighting shaders sample correctly.
+        The signature is the caster geometry itself rather than a tuple
+        reconstructed per brush.  A light's cube-map is valid exactly while the
+        casters in reach of it have not moved or changed shape, which is what
+        these bytes say -- and comparing them is a memcmp over a few kilobytes
+        instead of building thousands of Python tuples.
+        """
+        if not len(slots):
+            return slots, ()
+        center = table.center[slots]
+        dx = center[:, 0] - lx
+        dy = center[:, 1] - ly
+        dz = center[:, 2] - lz
+        # A brush counts when the light reaches its bounding sphere, whose
+        # radius is the largest half-extent -- the same test as before.
+        limit = reach + table.half[slots].max(axis=1)
+        sel = slots[(dx * dx + dy * dy + dz * dz) <= limit * limit]
+        if not len(sel):
+            return sel, ()
+        geometry = np.concatenate((table.center[sel].ravel(),
+                                   table.half[sel].ravel(),
+                                   table.rot[sel].ravel().astype(np.float64)))
+        return sel, (sel.tobytes(), geometry.tobytes())
+
+    @staticmethod
+    def _dense_shadow_model_slots(table, hidden=None):
+        """Return model-entity slots eligible to cast shadows.
+
+        This is the entity-table equivalent of the old Thing model scan.
+        Model identity, representation and transforms have already been
+        resolved at the dense projection boundary; the shadow pass only needs
+        slot masks here.
+        """
+        if table is None or not table.count:
+            return np.empty(0, dtype=np.int32)
+        bits = table.class_bits[:table.count]
+        mask = (
+            ((bits & entity_projection.ENT_SKIP) == 0)
+            & ((bits & entity_projection.ENT_ALWAYS_SPRITE) == 0)
+            & ((bits & entity_projection.ENT_HAS_MODEL) != 0)
+            & ((bits & entity_projection.ENT_MODE_MODEL) != 0)
+        )
+        if hidden is not None:
+            mask &= ~np.asarray(hidden[:table.count], dtype=bool)
+        return np.flatnonzero(mask).astype(np.int32)
+
+    @staticmethod
+    def _collect_dense_shadow_models(table, model_slots, lx, ly, lz, reach):
+        """Return dense model caster slots in light range plus a cache key.
+
+        The key contains only numerical projection state: slots, model recipe
+        identity, translation and the precomputed rotation/scale matrix. No
+        Thing or authored property dictionary is touched.
+        """
+        if not len(model_slots):
+            return model_slots, ()
+        positions = table.pos[model_slots]
+        dx = positions[:, 0] - lx
+        dy = positions[:, 1] - ly
+        dz = positions[:, 2] - lz
+        # Preserve the existing model-caster broad phase: models were treated
+        # as having a radius of 2 * light reach.
+        visible = (dx * dx + dy * dy + dz * dz) <= (reach * reach * 4.0)
+        indices = np.flatnonzero(visible)
+        slots = model_slots[indices]
+        if not len(slots):
+            return slots, ()
+        recipe_ids = table.model_recipe_id[slots]
+        positions = table.pos[slots]
+        transforms = table.model_base_matrix[slots]
+        signature = (
+            slots.tobytes(),
+            recipe_ids.tobytes(),
+            positions.tobytes(),
+            transforms.tobytes(),
+        )
+        return slots, signature
+
+    #: The shadow pass's render key. One field, because one thing cannot vary
+    #: within a depth draw: which cube face is being rendered, since that is
+    #: the light-space matrix. Everything else -- each caster's transform --
+    #: is instance data.
+    #:
+    #: Its items are its *runs*, which is the one place this differs from the
+    #: brush passes. There an item is a face of a brush and the key partitions
+    #: items into runs; here the caster set is identical for all six faces, so
+    #: the six runs share one instance array rather than carving it up. Packing
+    #: the casters once and drawing them six times is the whole saving.
+    SHADOW_RUN_KEY = KeyLayout([('face', 3)])
+
+    def _prepare_shadow_instances(self, table, in_brushes, instanced):
+        """Pack dense brush casters and return dense convex geometry slots.
+
+        All inputs are RenderTable slots. No Brush reference is reconstructed
+        here; geometry rows remain integer geometry_id handles and AABB rows
+        use the shared instanced cube buffer.
+        """
+        if table is None or not len(in_brushes):
+            return np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
+
+        slots = np.asarray(in_brushes, dtype=np.int32)
+        geometry = (
+            (table.class_bits[slots] & render_table.CLASS_HAS_GEOMETRY) != 0
+        )
+        cube_slots = slots[~geometry]
+        geo_slots = slots[geometry]
+
+        if instanced and len(cube_slots):
+            models, _normals = self._frame_transforms(table, cube_slots)
+            rows = np.arange(len(cube_slots), dtype=np.int32)
+            self._pack_brush_instances(models, None, rows, 0.0, 0.0)
+
+        return cube_slots, geo_slots
+    @timed_pass('shadow maps')
+    def render_shadow_maps(self, shadow_lights, config, camera_pos=None):
+        """Refresh depth cube-maps from dense RenderTable/EntityTable state.
+
+        The shadow renderer has one data boundary: authored objects are
+        projected first, then shadow selection, cache signatures and draw
+        transforms operate only on integer slots and NumPy columns.
         """
         self._light_shadow_index = {}
         if not self._shadow_cubemaps or 'depth_cube' not in self.shaders:
             return
-        lights = list(shadow_lights)
-        if not lights:
-            # Release every slot so a light enabled later re-renders cleanly.
+
+        if (not isinstance(shadow_lights, tuple)
+                or len(shadow_lights) != 2):
+            raise RuntimeError(
+                "Fio 2.5.6 shadow rendering requires dense EntityTable lights")
+        light_table, light_slots = shadow_lights
+        if not hasattr(light_table, 'light_color'):
+            raise RuntimeError(
+                "Fio 2.5.6 shadow rendering requires EntityTable light state")
+        lights = np.asarray(light_slots, dtype=np.int32)
+
+        if not len(lights):
             for s in range(self.MAX_SHADOW_LIGHTS):
                 self._shadow_slot_owner[s] = None
                 self._shadow_slot_sig[s] = None
             return
 
-        # Over budget? Keep the shadow lights nearest the camera.
+        table = config.get('render_table')
+        caster_slots = config.get('all_brush_slots')
+        entity_table = config.get('entity_table')
+        entity_hidden = config.get('thing_hidden')
+        if table is None or caster_slots is None:
+            raise RuntimeError(
+                "Fio 2.5.6 shadow rendering requires RenderTable state")
+        if entity_table is None:
+            raise RuntimeError(
+                "Fio 2.5.6 shadow rendering requires EntityTable state")
+
+        caster_slots = self._shadow_caster_slots(
+            table, np.asarray(caster_slots, dtype=np.int32))
+        dense_model_slots = self._dense_shadow_model_slots(
+            entity_table, entity_hidden)
+
         if len(lights) > self.MAX_SHADOW_LIGHTS:
             if camera_pos is not None:
-                cx, cy, cz = float(camera_pos.x), float(camera_pos.y), float(camera_pos.z)
-                lights.sort(key=lambda l: (l.pos[0] - cx) ** 2 + (l.pos[1] - cy) ** 2 + (l.pos[2] - cz) ** 2)
-            lights = lights[:self.MAX_SHADOW_LIGHTS]
+                cx, cy, cz = self._camera_xyz(camera_pos)
+                dx = light_table.pos[lights, 0] - cx
+                dy = light_table.pos[lights, 1] - cy
+                dz = light_table.pos[lights, 2] - cz
+                order = np.argsort(
+                    dx * dx + dy * dy + dz * dz, kind='stable')
+                lights = lights[order[:self.MAX_SHADOW_LIGHTS]]
+            else:
+                lights = lights[:self.MAX_SHADOW_LIGHTS]
 
-        # ---- Stable slot assignment (a light keeps its slot across frames) ---
-        current_ids = {id(l) for l in lights}
+        light_keys = [int(s) for s in lights]
+        current_ids = set(light_keys)
         for s in range(self.MAX_SHADOW_LIGHTS):
             if self._shadow_slot_owner[s] not in current_ids:
                 self._shadow_slot_owner[s] = None
                 self._shadow_slot_sig[s] = None
+
         light_slot = {}
-        for l in lights:                       # lights that already own a slot keep it
+        for key in light_keys:
             for s in range(self.MAX_SHADOW_LIGHTS):
-                if self._shadow_slot_owner[s] == id(l):
-                    light_slot[id(l)] = s
+                if self._shadow_slot_owner[s] == key:
+                    light_slot[key] = s
                     break
-        for l in lights:                       # remaining lights grab free slots
-            if id(l) in light_slot:
+
+        for key in light_keys:
+            if key in light_slot:
                 continue
             for s in range(self.MAX_SHADOW_LIGHTS):
                 if self._shadow_slot_owner[s] is None:
-                    self._shadow_slot_owner[s] = id(l)
+                    self._shadow_slot_owner[s] = key
                     self._shadow_slot_sig[s] = None
-                    light_slot[id(l)] = s
+                    light_slot[key] = s
                     break
 
-        # ---- Filter casters once & decide which lights are dirty ------------
-        caster_brushes = []
-        for b in brushes:
-            if b.get('hidden') or b.get('is_trigger') or b.get('is_fog') or b.get('operation') == 'subtract':
+        to_render = []
+        for light_key in light_keys:
+            shadow_slot = light_slot.get(light_key)
+            if shadow_slot is None:
                 continue
-            if is_water_brush(b) or b.get('shader') in ('Fog', 'Glass', 'Glow'):
+
+            light_slot_value = int(light_key)
+            lx = float(light_table.pos[light_slot_value, 0])
+            ly = float(light_table.pos[light_slot_value, 1])
+            lz = float(light_table.pos[light_slot_value, 2])
+            radius = max(
+                float(light_table.light_params[light_slot_value, 1]), 1.0)
+
+            in_slots, brush_keys = self._casters_in_reach(
+                table, caster_slots, lx, ly, lz, radius)
+            in_models, model_keys = self._collect_dense_shadow_models(
+                entity_table, dense_model_slots, lx, ly, lz, radius)
+
+            sig = (
+                round(lx, 3), round(ly, 3), round(lz, 3),
+                round(radius, 3), brush_keys, model_keys,
+            )
+            self._light_shadow_index[light_slot_value] = shadow_slot
+            if self._shadow_slot_sig[shadow_slot] == sig:
                 continue
-            caster_brushes.append(b)
-        caster_models = [t for t in things
-                         if isinstance(t, Thing) and t.properties.get('model_path')]
+            to_render.append((
+                light_slot_value, shadow_slot, in_slots, in_models, sig,
+                lx, ly, lz, radius,
+            ))
 
-        to_render = []   # (light, slot, in_brushes, in_models)
-        for l in lights:
-            slot = light_slot.get(id(l))
-            if slot is None:
-                continue
-            lx, ly, lz = float(l.pos[0]), float(l.pos[1]), float(l.pos[2])
-            radius = max(float(l.get_radius()), 1.0)
-            in_brushes, in_models, caster_keys = self._collect_shadow_casters(
-                caster_brushes, caster_models, lx, ly, lz, radius)
-            sig = (round(lx, 3), round(ly, 3), round(lz, 3), round(radius, 3), caster_keys)
-            self._light_shadow_index[id(l)] = slot
-            if self._shadow_slot_sig[slot] == sig:
-                continue                       # cube-map still valid -> skip GPU work
-            to_render.append((l, slot, in_brushes, in_models, sig))
-
-        if not to_render:
-            return                             # everything cached: no GL work this frame
-
-        # ---- Save GL state we are about to clobber -------------------------
         prev_fbo = int(gl.glGetIntegerv(gl.GL_FRAMEBUFFER_BINDING))
         prev_vp = gl.glGetIntegerv(gl.GL_VIEWPORT)
         scissor_was = bool(gl.glIsEnabled(gl.GL_SCISSOR_TEST))
         cull_was = bool(gl.glIsEnabled(gl.GL_CULL_FACE))
         blend_was = bool(gl.glIsEnabled(gl.GL_BLEND))
-
+        prev_program = int(gl.glGetIntegerv(gl.GL_CURRENT_PROGRAM))
+        prev_shader = self._current_shader
         shader = self.shaders['depth_cube']
         u = self.uniforms['depth_cube']
         gl.glUseProgram(shader)
@@ -1759,17 +4205,23 @@ class BaseRenderer:
         gl.glEnable(gl.GL_DEPTH_TEST)
         gl.glDepthMask(gl.GL_TRUE)
         gl.glDepthFunc(gl.GL_LESS)
-        # No face culling: brush cube winding isn't guaranteed and models may be
-        # single-sided/open. The shader-side depth bias handles self-shadowing.
         gl.glDisable(gl.GL_CULL_FACE)
 
         model_loc = u['model']
         lsm_loc = u['lightSpaceMatrix']
+        depth_instanced = self.shaders.get('depth_cube_instanced')
+        instance_vao = None
+        inst_lsm_loc = inst_lightpos_loc = inst_far_loc = -1
+        if depth_instanced is not None and self._cube_vbo is not None:
+            iu = self.uniforms['depth_cube_instanced']
+            inst_lsm_loc = iu['lightSpaceMatrix']
+            inst_lightpos_loc = iu['lightPos']
+            inst_far_loc = iu['far_plane']
+            instance_vao = self._ensure_brush_instance_vao()
         lightpos_loc = u['lightPos']
         far_loc = u['far_plane']
         cube_vao = self.vaos['cube']
 
-        # Cube-face look-at basis (standard GL cube-map orientation).
         face_dirs = (
             (glm.vec3( 1, 0, 0), glm.vec3(0, -1,  0)),
             (glm.vec3(-1, 0, 0), glm.vec3(0, -1,  0)),
@@ -1779,59 +4231,102 @@ class BaseRenderer:
             (glm.vec3( 0, 0,-1), glm.vec3(0, -1,  0)),
         )
 
-        for light, slot, in_brushes, in_models, sig in to_render:
-            lx, ly, lz = float(light.pos[0]), float(light.pos[1]), float(light.pos[2])
+        for (light_identity, slot, in_brushes, in_models, sig,
+             lx, ly, lz, far_plane) in to_render:
             center = glm.vec3(lx, ly, lz)
-            far_plane = max(float(light.get_radius()), 1.0)
+            far_plane = max(float(far_plane), 1.0)
             near_plane = max(far_plane * 0.002, 1.0)
-            proj = glm.perspective(glm.radians(90.0), 1.0, near_plane, far_plane)
+            proj = glm.perspective(
+                glm.radians(90.0), 1.0, near_plane, far_plane)
             cubemap = self._shadow_cubemaps[slot]
 
             gl.glUniform3f(lightpos_loc, lx, ly, lz)
             gl.glUniform1f(far_loc, far_plane)
 
-            # Resolve model objects once (not once per face).
+            recipes = entity_table.model_recipes()
             resolved_models = []
-            for t in in_models:
-                obj = self.load_model(t.properties.get('model_path'))
+            for slot_value in in_models:
+                slot_value = int(slot_value)
+                recipe_id = int(entity_table.model_recipe_id[slot_value])
+                if recipe_id < 0 or recipe_id >= len(recipes):
+                    continue
+                model_path = recipes[recipe_id][0]
+                obj = self.load_model(model_path)
                 if obj and obj.is_loaded:
-                    resolved_models.append((t, obj))
+                    resolved_models.append((slot_value, obj))
+
+            cube_slots, geo_slots = self._prepare_shadow_instances(
+                table, in_brushes, depth_instanced is not None)
 
             for face in range(6):
-                gl.glFramebufferTexture2D(gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
-                                          gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, cubemap, 0)
+                gl.glFramebufferTexture2D(
+                    gl.GL_FRAMEBUFFER, gl.GL_DEPTH_ATTACHMENT,
+                    gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, cubemap, 0)
                 gl.glClear(gl.GL_DEPTH_BUFFER_BIT)
-                lsm = proj * glm.lookAt(center, center + face_dirs[face][0], face_dirs[face][1])
-                gl.glUniformMatrix4fv(lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
+                lsm = proj * glm.lookAt(
+                    center, center + face_dirs[face][0], face_dirs[face][1])
+                gl.glUniformMatrix4fv(
+                    lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
 
-                # Brush casters (shared unit cube VAO, or the brush's own
-                # convex mesh for angled brushes), pre-filtered by reach.
-                gl.glBindVertexArray(cube_vao)
-                for b in in_brushes:
-                    gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE,
-                                          glm.value_ptr(self._brush_model_matrix(b)))
-                    mesh = self._get_geo_mesh(b)
-                    if mesh is not None:
-                        gl.glBindVertexArray(mesh.vao)
-                        gl.glDrawArrays(gl.GL_TRIANGLES, 0, mesh.count)
-                        gl.glBindVertexArray(cube_vao)
-                    else:
+                if len(cube_slots) and depth_instanced is not None:
+                    gl.glUseProgram(depth_instanced)
+                    gl.glUniformMatrix4fv(
+                        inst_lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
+                    gl.glUniform3f(inst_lightpos_loc, lx, ly, lz)
+                    gl.glUniform1f(inst_far_loc, far_plane)
+                    gl.glBindVertexArray(instance_vao)
+                    self._point_brush_instances_at(0)
+                    gl.glDrawArraysInstanced(
+                        gl.GL_TRIANGLES, 0, 36, len(cube_slots))
+                    gl.glUseProgram(shader)
+                    gl.glUniformMatrix4fv(
+                        lsm_loc, 1, gl.GL_FALSE, glm.value_ptr(lsm))
+                elif len(cube_slots):
+                    cube_models, _ = self._frame_transforms(table, cube_slots)
+                    gl.glBindVertexArray(cube_vao)
+                    for i in range(len(cube_slots)):
+                        gl.glUniformMatrix4fv(
+                            model_loc, 1, gl.GL_FALSE, cube_models[i])
                         gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
 
-                # Model casters.
-                for t, obj in resolved_models:
-                    gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE,
-                                          glm.value_ptr(self._thing_model_matrix(t)))
-                    gl.glBindVertexArray(obj.vao)
-                    if getattr(obj, 'ebo', None) is not None and getattr(obj, 'index_count', 0):
-                        gl.glDrawElements(gl.GL_TRIANGLES, obj.index_count, gl.GL_UNSIGNED_INT, None)
-                    else:
-                        gl.glDrawArrays(gl.GL_TRIANGLES, 0, obj.vertex_count)
+                gl.glBindVertexArray(cube_vao)
+                if len(geo_slots):
+                    geo_meshes = self._prepare_geo_meshes(table, geo_slots)
+                    geo_models, _geo_normals = self._frame_transforms(
+                        table, geo_slots)
+                    for geo_i, slot_value in enumerate(geo_slots):
+                        mesh = geo_meshes.get(
+                            int(table.geometry_id[int(slot_value)]))
+                        if mesh is None:
+                            continue
+                        gl.glUniformMatrix4fv(
+                            model_loc, 1, gl.GL_FALSE, geo_models[geo_i])
+                        gl.glBindVertexArray(mesh.vao)
+                        gl.glDrawArrays(
+                            gl.GL_TRIANGLES, 0, mesh.count)
+                        gl.glBindVertexArray(cube_vao)
 
-            # Mark the slot valid only once its 6 faces are actually drawn.
+                for slot_value, obj in resolved_models:
+                    slot_value = int(slot_value)
+                    base = np.asarray(
+                        entity_table.model_base_matrix[slot_value],
+                        dtype=np.float32).copy()
+                    base[12:15] = np.asarray(
+                        entity_table.pos[slot_value], dtype=np.float32)
+                    gl.glUniformMatrix4fv(
+                        model_loc, 1, gl.GL_FALSE, base)
+                    gl.glBindVertexArray(obj.vao)
+                    if (getattr(obj, 'ebo', None) is not None
+                            and getattr(obj, 'index_count', 0)):
+                        gl.glDrawElements(
+                            gl.GL_TRIANGLES, obj.index_count,
+                            gl.GL_UNSIGNED_INT, None)
+                    else:
+                        gl.glDrawArrays(
+                            gl.GL_TRIANGLES, 0, obj.vertex_count)
+
             self._shadow_slot_sig[slot] = sig
 
-        # ---- Restore state -------------------------------------------------
         gl.glBindVertexArray(0)
         gl.glCullFace(gl.GL_BACK)
         if cull_was:
@@ -1843,11 +4338,13 @@ class BaseRenderer:
         else:
             gl.glDisable(gl.GL_BLEND)
         gl.glBindFramebuffer(gl.GL_FRAMEBUFFER, prev_fbo)
-        gl.glViewport(int(prev_vp[0]), int(prev_vp[1]), int(prev_vp[2]), int(prev_vp[3]))
+        gl.glViewport(
+            int(prev_vp[0]), int(prev_vp[1]),
+            int(prev_vp[2]), int(prev_vp[3]))
         if scissor_was:
             gl.glEnable(gl.GL_SCISSOR_TEST)
-        self._current_shader = None
-
+        gl.glUseProgram(prev_program)
+        self._current_shader = prev_shader
     def _resolve_model_texture_path(self, material, texture_name):
         """
         Resolve a texture path from an MTL material.
@@ -1860,20 +4357,34 @@ class BaseRenderer:
         if not texture_name:
             return None
 
+        # Normalise separators from MTL files authored on another platform.
+        texture_name = (
+            str(texture_name)
+            .strip()
+            .strip('"')
+            .replace('\\', os.sep)
+            .replace('/', os.sep)
+        )
+
         # 1. Try relative to the MTL file's directory (most correct for MTL refs)
         mtl_dir = material.get('mtl_dir', '')
         if mtl_dir:
-            resolved = os.path.join(mtl_dir, texture_name)
+            mtl_dir = (
+                str(mtl_dir)
+                .replace('\\', os.sep)
+                .replace('/', os.sep)
+            )
+            resolved = os.path.normpath(os.path.join(mtl_dir, texture_name))
             if os.path.exists(resolved):
                 return resolved
 
         # 2. Try assets/textures/ (global fallback)
-        resolved = os.path.join('assets', 'textures', texture_name)
+        resolved = os.path.normpath(os.path.join('assets', 'textures', texture_name))
         if os.path.exists(resolved):
             return resolved
 
         # 3. Try assets/models/ (legacy fallback)
-        resolved = os.path.join('assets', 'models', texture_name)
+        resolved = os.path.normpath(os.path.join('assets', 'models', texture_name))
         if os.path.exists(resolved):
             return resolved
 
@@ -1939,7 +4450,7 @@ class BaseRenderer:
             return 1.0
         return clamped
 
-    def draw_selected_brush_outline(self, projection, view, brush):
+    def draw_selected_brush_outline(self, projection, view, brush, table=None):
         if 'simple' not in self.shaders:
             return
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
@@ -1971,7 +4482,20 @@ class BaseRenderer:
             gl.glBindVertexArray(0)
             self._edge_vbo = vbo
         gl.glLineWidth(1.0)
-        mesh = self._get_geo_mesh(brush)
+        # Editor selection is still represented by the authored selection dict,
+        # but convex geometry comes from the dense RenderTable geometry records.
+        # Do not reintroduce the removed object-based mesh lookup here.
+        mesh = None
+        if table is not None and isinstance(brush, dict):
+            slot = table.slot_of_id.get(brush.get('id'))
+            if slot is not None:
+                slot = int(slot)
+                gid = int(table.geometry_id[slot])
+                if gid >= 0 and gid < len(table.geometry_records):
+                    record = table.geometry_records[gid]
+                    mesh = self._get_geo_mesh_record(
+                        record, geometry_id=gid,
+                        geometry_generation=table.generation)
         if mesh is not None and mesh.edge_count:
             # Angled brush: outline its real convex edges instead of the AABB.
             gl.glBindVertexArray(mesh.edge_vao)
@@ -1980,6 +4504,76 @@ class BaseRenderer:
             gl.glBindVertexArray(self._edge_vao)
             gl.glDrawArrays(gl.GL_LINES, 0, 24)
         gl.glBindVertexArray(0)
+
+    def draw_effect_billboard_aabb(
+        self, projection, view, effect, explosion=False
+    ):
+        """Draw the selected Effect billboard's editor-only world AABB.
+
+        The bounds are derived from the same width/height and billboard basis
+        used by the Effect shaders. EXPLOSION frame 10 uses its current shader
+        growth factor so the preview box remains visually accurate.
+        """
+        props = getattr(effect, 'properties', {}) or {}
+        try:
+            width = max(0.01, float(props.get('width', 32.0)))
+        except (TypeError, ValueError):
+            width = 32.0
+        try:
+            height = max(0.01, float(props.get('height', 24.0)))
+        except (TypeError, ValueError):
+            height = 24.0
+
+        right = np.asarray(
+            (float(view[0][0]), float(view[1][0]), float(view[2][0])),
+            dtype=np.float32,
+        )
+        right_norm = float(np.linalg.norm(right))
+        if right_norm <= 1e-6:
+            right = np.asarray((1.0, 0.0, 0.0), dtype=np.float32)
+        else:
+            right /= right_norm
+
+        if explosion:
+            up = np.asarray((0.0, 1.0, 0.0), dtype=np.float32)
+            t = (10.0 - 0.5) / 16.0
+            smooth = t * t * (3.0 - 2.0 * t)
+            growth = 1.0 + 2.0 * smooth
+        else:
+            up = np.asarray(
+                (float(view[0][1]), float(view[1][1]), float(view[2][1])),
+                dtype=np.float32,
+            )
+            up_norm = float(np.linalg.norm(up))
+            if up_norm <= 1e-6:
+                up = np.asarray((0.0, 1.0, 0.0), dtype=np.float32)
+            else:
+                up /= up_norm
+            growth = 1.0
+
+        half_width = width * growth * 0.5
+        half_height = height * growth * 0.5
+        extents = (
+            np.abs(right) * half_width
+            + np.abs(up) * half_height
+        )
+
+        pos = np.asarray(
+            getattr(effect, 'pos', [0.0, 0.0, 0.0]),
+            dtype=np.float32,
+        )
+        center = pos.copy()
+        if explosion:
+            center += up * half_height
+
+        self.draw_aabb_bounds(
+            projection,
+            view,
+            {
+                'pos': center.tolist(),
+                'size': (extents * 2.0).tolist(),
+            },
+        )
 
     def draw_aabb_bounds(self, projection, view, brush):
         """Draw the exact world-space trigger AABB as orange dashed lines."""
@@ -2247,11 +4841,12 @@ class BaseRenderer:
         gl.glBindVertexArray(0)
         gl.glUseProgram(0)
 
-    def draw_path_node_cubes(self, projection, view, things):
-        if 'simple' not in self.shaders:
+    def draw_path_node_cubes(self, projection, view, table):
+        """The editor's PathNode markers, from the entity table's node rows."""
+        if 'simple' not in self.shaders or table is None:
             return
-        nodes = [t for t in things if isinstance(t, PathNode)]
-        if not nodes:
+        slots = table.path_node_slots
+        if not len(slots):
             return
 
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
@@ -2262,10 +4857,9 @@ class BaseRenderer:
         gl.glUniform1f(uniforms['alpha'], 1.0)
         cube_size = 16.0
         gl.glBindVertexArray(self.vaos['cube'])
-        for node in nodes:
-            pos = node.pos
+        for x, y, z in table.pos[slots].tolist():
             model_matrix = glm.scale(glm.translate(self._identity_mat4,
-                                                   glm.vec3(float(pos[0]), float(pos[1]), float(pos[2]))),
+                                                   glm.vec3(x, y, z)),
                                      glm.vec3(cube_size, cube_size, cube_size))
             gl.glUniformMatrix4fv(uniforms['model'], 1, gl.GL_FALSE, glm.value_ptr(model_matrix))
             gl.glDrawArrays(gl.GL_TRIANGLES, 0, 36)
@@ -2273,78 +4867,107 @@ class BaseRenderer:
         gl.glBindVertexArray(0)
         gl.glUseProgram(0)
 
-    def draw_portal_wireframes(self, projection, view, things, play_mode=False):
-        if 'simple' not in self.shaders:
+    def draw_portal_wireframes(self, projection, view, portal_table,
+                               portal_slots, play_mode=False):
+        """Draw portal editor wireframes directly from EntityTable columns.
+
+        Portal rendering has one numerical source of truth: topology, aperture
+        geometry, active/fade state, colour and rim visibility all live in the
+        dense entity projection. This overlay deliberately does not accept a
+        Thing collection, so the renderer cannot fall back to the old
+        Portal-object walk.
+        """
+        if 'simple' not in self.shaders or portal_table is None:
+            return
+        if portal_slots is None:
+            return
+        portal_slots = np.asarray(portal_slots, dtype=np.int32)
+        if not len(portal_slots):
             return
 
-        portal_things = [t for t in things if isinstance(t, Portal) and t.properties.get('show_rim', True)]
-        if not portal_things:
+        show = portal_table.portal_show_rim[portal_slots]
+        slots = portal_slots[show]
+        if not len(slots):
             return
 
         shader, uniforms = self.shaders['simple'], self.uniforms['simple']
         gl.glUseProgram(shader)
-        gl.glUniformMatrix4fv(uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
-        gl.glUniformMatrix4fv(uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glUniformMatrix4fv(
+            uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(
+            uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
         gl.glUniform1f(uniforms['alpha'], 1.0)
 
-        # Outline VAO
         if self._portal_outline_vao is None:
             self._portal_outline_vao = gl.glGenVertexArrays(1)
             self._portal_outline_vbo = gl.glGenBuffers(1)
             gl.glBindVertexArray(self._portal_outline_vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_outline_vbo)
-            gl.glBufferData(gl.GL_ARRAY_BUFFER, 4*3*4, None, gl.GL_DYNAMIC_DRAW)
-            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, 4 * 3 * 4,
+                            None, gl.GL_DYNAMIC_DRAW)
+            gl.glVertexAttribPointer(
+                0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
             gl.glEnableVertexAttribArray(0)
             gl.glBindVertexArray(0)
-        # Normal arrow VAO
+
         if self._portal_normal_vao is None:
             self._portal_normal_vao = gl.glGenVertexArrays(1)
             self._portal_normal_vbo = gl.glGenBuffers(1)
             gl.glBindVertexArray(self._portal_normal_vao)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_normal_vbo)
-            gl.glBufferData(gl.GL_ARRAY_BUFFER, 2*3*4, None, gl.GL_DYNAMIC_DRAW)
-            gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
+            gl.glBufferData(gl.GL_ARRAY_BUFFER, 2 * 3 * 4,
+                            None, gl.GL_DYNAMIC_DRAW)
+            gl.glVertexAttribPointer(
+                0, 3, gl.GL_FLOAT, gl.GL_FALSE, 12, ctypes.c_void_p(0))
             gl.glEnableVertexAttribArray(0)
             gl.glBindVertexArray(0)
 
         gl.glLineWidth(1.0)
         model_loc = uniforms['model']
         color_loc = uniforms['color']
-        gl.glUniformMatrix4fv(model_loc, 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
+        gl.glUniformMatrix4fv(
+            model_loc, 1, gl.GL_FALSE, glm.value_ptr(self._identity_mat4))
 
-        for portal in portal_things:
-            raw = portal.properties.get('color', [255, 255, 255])
-            color = normalize_color(raw, default=[1.0,1.0,1.0])
-            r,g,b = color
-            if not portal.is_active():
-                r,g,b = r*0.4, g*0.4, b*0.4
+        for slot_value in slots:
+            slot = int(slot_value)
+            r, g, b = portal_table.portal_color[slot]
+            if not bool(portal_table.portal_active[slot]):
+                r, g, b = r * 0.4, g * 0.4, b * 0.4
 
-            # Red wireframe for unlinked or broken portal pairs
-            target_name = portal.properties.get('portal_target', '')
-            target_exists = target_name and any(
-                isinstance(t, Portal) and t.properties.get('name') == target_name
-                for t in things
-                if t is not portal
-            )
-            if not target_exists:
-                r, g, b = 0.86, 0.24, 0.24  # red — no valid target
-            corners = portal.get_corners_world()
-            vdata = np.array(corners, dtype=np.float32).flatten()
+            # The target link is already resolved to an integer slot. A missing
+            # target is one scalar comparison, not a second Portal object scan.
+            if int(portal_table.portal_target_slot[slot]) < 0:
+                r, g, b = 0.86, 0.24, 0.24
+
+            corners = self._portal_slot_corners(portal_table, slot)
+            vdata = np.asarray(corners, dtype=np.float32).reshape(-1)
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_outline_vbo)
             gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, vdata.nbytes, vdata)
-            gl.glUniform3f(color_loc, r, g, b)
+            gl.glUniform3f(color_loc, float(r), float(g), float(b))
             gl.glBindVertexArray(self._portal_outline_vao)
             gl.glDrawArrays(gl.GL_LINE_LOOP, 0, 4)
 
-            # normal arrow
-            cx = float(portal.pos[0]); cy = float(portal.pos[1]); cz = float(portal.pos[2])
-            nx, ny, nz = portal.get_normal()
-            arrow_len = portal.get_width() * 0.4
-            nline = np.array([cx, cy, cz, cx+nx*arrow_len, cy+ny*arrow_len, cz+nz*arrow_len], dtype=np.float32)
+            basis = portal_table.portal_basis[slot]
+            normal = basis[2]
+            pos = portal_table.pos[slot]
+            arrow_len = float(portal_table.portal_width_height[slot, 0]) * 0.4
+            nline = np.asarray(
+                (
+                    float(pos[0]), float(pos[1]), float(pos[2]),
+                    float(pos[0] + normal[0] * arrow_len),
+                    float(pos[1] + normal[1] * arrow_len),
+                    float(pos[2] + normal[2] * arrow_len),
+                ),
+                dtype=np.float32,
+            )
             gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self._portal_normal_vbo)
             gl.glBufferSubData(gl.GL_ARRAY_BUFFER, 0, nline.nbytes, nline)
-            gl.glUniform3f(color_loc, min(1.0, r*1.6), min(1.0, g*1.6), min(1.0, b*1.6))
+            gl.glUniform3f(
+                color_loc,
+                min(1.0, float(r) * 1.6),
+                min(1.0, float(g) * 1.6),
+                min(1.0, float(b) * 1.6),
+            )
             gl.glBindVertexArray(self._portal_normal_vao)
             gl.glDrawArrays(gl.GL_LINES, 0, 2)
 
@@ -2573,71 +5196,95 @@ class BaseRenderer:
         while generated convex-geometry meshes are counter-clockwise-outward
         (interior == GL_BACK), so the caller says which it is drawing. No-op
         outside the portal pass, so the main scene is left untouched."""
-        if not getattr(self, '_portal_scene_pass', False):
+        if not self._culling_interiors():
             return
         gl.glEnable(gl.GL_CULL_FACE)
         gl.glCullFace(gl.GL_BACK if is_geo else gl.GL_FRONT)
 
     def _portal_set_cull(self, is_geo):
         """Switch the culled face mid-pass (cube batches vs. convex-geometry
-        meshes wind oppositely). No-op outside the portal pass."""
-        if not getattr(self, '_portal_scene_pass', False):
+        meshes wind oppositely). No-op unless interiors are being culled."""
+        if not self._culling_interiors():
             return
         gl.glCullFace(gl.GL_BACK if is_geo else gl.GL_FRONT)
 
     def _portal_end_cull(self):
-        """Restore the default (culling off, GL_BACK) after a portal brush pass."""
-        if not getattr(self, '_portal_scene_pass', False):
+        """Restore the default (culling off, GL_BACK) after a culled brush pass."""
+        if not self._culling_interiors():
             return
         gl.glDisable(gl.GL_CULL_FACE)
         gl.glCullFace(gl.GL_BACK)
 
-    def draw_portals(self, portal_things, projection, main_view, camera_pos,
-                     brushes, things, lights, config, draw_scene_fn):
-        if not self._portal_gl_ready or not portal_things:
+    def _culling_interiors(self):
+        """Whether the brush pass being drawn culls interior (away-facing)
+        faces: always inside a portal's virtual scene, and in the main view's
+        opaque passes (see :attr:`cull_opaque_back_faces`)."""
+        return (getattr(self, '_portal_scene_pass', False)
+                or getattr(self, '_opaque_cull_pass', False))
+
+
+    def _portal_candidate_slots(self, table, slots, camera_pos):
+        """Return active, linked portal slots near a camera using table columns."""
+        if table is None or slots is None or not len(slots):
+            return np.empty(0, dtype=np.int32)
+        slots = np.asarray(slots, dtype=np.int32)
+        target = table.portal_target_slot[slots]
+        keep = (target >= 0) & table.portal_active[slots] & (table.portal_fade[slots] > 0.01)
+        if camera_pos is not None:
+            delta = table.pos[slots] - np.asarray((float(camera_pos.x), float(camera_pos.y), float(camera_pos.z)), dtype=np.float64)
+            keep &= np.einsum('ij,ij->i', delta, delta) <= (self.PORTAL_RENDER_DISTANCE * self.PORTAL_RENDER_DISTANCE)
+        return slots[keep]
+
+    @staticmethod
+    def _portal_slot_basis(table, slot):
+        basis = table.portal_basis[int(slot)]
+        return basis[0], basis[1], basis[2]
+
+    @classmethod
+    def _portal_slot_corners(cls, table, slot, inset=0.0):
+        width = float(table.portal_width_height[int(slot), 0])
+        height = float(table.portal_width_height[int(slot), 1])
+        inset = max(0.0, float(inset))
+        # Keep the render aperture valid even for unusually small authored portals.
+        max_inset = max(0.0, 0.5 * min(width, height) - 8.0)
+        inset = min(inset, max_inset)
+        return _portal_corners(
+            table.pos[int(slot)],
+            cls._portal_slot_basis(table, slot),
+            width - inset * 2.0,
+            height - inset * 2.0,
+        )
+
+    @staticmethod
+    def _portal_slot_contains(table, slot, point):
+        return _portal_contains_point(table.pos[int(slot)], BaseRenderer._portal_slot_basis(table, slot),
+                                     table.portal_width_height[int(slot), 0], table.portal_width_height[int(slot), 1], point)
+
+    def _portal_direction(self, table, slot):
+        return int(table.portal_direction[int(slot)])
+
+    @timed_pass('portals (incl. their views)')
+    def draw_portals(self, portal_table, portal_slots, projection, main_view, camera_pos, config, draw_scene_fn):
+        """Render portal views from dense EntityTable topology."""
+        if not self._portal_gl_ready:
             return
-        by_name = {}
-        for p in portal_things:
-            name = p.properties.get('name', '')
-            if name:
-                by_name[name] = p
-        # Pre-multiplied view-projection for screen-space scissor rects.
+        portal_slots = self._portal_candidate_slots(portal_table, portal_slots, camera_pos)
+        if not len(portal_slots):
+            return
         pv = projection * main_view
         rendered = 0
-        for portal_a in portal_things:
-            # Render while any opacity remains (covers both fading-in and fading-out)
-            if getattr(portal_a, '_fade_alpha', 1.0) <= 0.01:
+        for portal_a in portal_slots:
+            portal_a = int(portal_a)
+            portal_b = int(portal_table.portal_target_slot[portal_a])
+            if portal_b < 0:
                 continue
-            target_name = portal_a.properties.get('portal_target', '')
-            if not target_name:
-                continue
-            portal_b = by_name.get(target_name)
-            if portal_b is None:
-                continue
-
-            a_direction = portal_a.properties.get('portal_direction', 'both')
-            # Forward: portal_a sees out of portal_b (render B's view into A's aperture)
-            render_forward = a_direction in ('forward', 'both')
-            # Reverse: portal_b sees out of portal_a (render A's view into B's aperture)
-            render_reverse = a_direction in ('reverse', 'both')
-
-            if render_forward:
-                if rendered >= self.MAX_PORTALS:
-                    break
-                self._draw_one_portal(portal_a, portal_b, projection, main_view, camera_pos,
-                                      brushes, things, lights, config, draw_scene_fn,
-                                      pv, portal_things, by_name, depth=1)
+            direction = self._portal_direction(portal_table, portal_a)
+            if direction in (entity_projection.PORTAL_DIRECTION_FORWARD, entity_projection.PORTAL_DIRECTION_BOTH) and rendered < self.MAX_PORTALS:
+                self._draw_one_portal(portal_table, portal_a, portal_b, projection, main_view, camera_pos, config, draw_scene_fn, pv, portal_slots, depth=1)
                 rendered += 1
-            if render_reverse:
-                if rendered >= self.MAX_PORTALS:
-                    break
-                self._draw_one_portal(portal_b, portal_a, projection, main_view, camera_pos,
-                                      brushes, things, lights, config, draw_scene_fn,
-                                      pv, portal_things, by_name, depth=1)
+            if direction in (entity_projection.PORTAL_DIRECTION_REVERSE, entity_projection.PORTAL_DIRECTION_BOTH) and rendered < self.MAX_PORTALS:
+                self._draw_one_portal(portal_table, portal_b, portal_a, projection, main_view, camera_pos, config, draw_scene_fn, pv, portal_slots, depth=1)
                 rendered += 1
-
-        # Restore global state and wipe the whole stencil buffer for the passes
-        # that follow (scissor is already off — each portal disables it).
         gl.glDisable(gl.GL_SCISSOR_TEST)
         gl.glDisable(gl.GL_STENCIL_TEST)
         gl.glStencilMask(0xFF)
@@ -2645,190 +5292,118 @@ class BaseRenderer:
         gl.glDepthMask(gl.GL_TRUE)
         gl.glClear(gl.GL_STENCIL_BUFFER_BIT)
 
-    def _draw_one_portal(self, portal_a, portal_b, projection, main_view, camera_pos,
-                         brushes, things, lights, config, draw_scene_fn,
-                         pv, portal_things, by_name, depth=1):
-        """Render portal_a's aperture showing the view out of portal_b.
+    def _portal_flatten_depth(self, corners, projection, view, stencil_level):
+        """Make the completed portal image occupy the source aperture's depth plane.
 
-        Stencil is level-based: a fragment inside the aperture at recursion
-        ``depth`` carries stencil value ``depth``.  The mask pass increments
-        from the parent level (depth-1) to ``depth`` — so at depth 1 it goes
-        0→1 exactly like the original REPLACE(1) scheme, and nested portals
-        (depth>1) stack cleanly without wiping their parent's mask.
+        The virtual scene needs its own depth buffer while it is rendered, but that
+        depth is in the *destination* camera space.  Leaving it in the main depth
+        buffer makes arbitrary destination geometry occlude main-world objects
+        such as a carried prop.  Once the portal colour is complete, replace those
+        virtual depths with the real source-aperture depth so the later main-scene
+        passes compare against the portal plane, not the destination scene.
         """
-        corners_a = portal_a.get_corners_world()
+        gl.glEnable(gl.GL_STENCIL_TEST)
+        gl.glStencilFunc(gl.GL_EQUAL, stencil_level, 0xFF)
+        gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
+        gl.glStencilMask(0x00)
+        gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
+        gl.glDepthMask(gl.GL_TRUE)
+        gl.glDepthFunc(gl.GL_ALWAYS)
+        gl.glDepthRange(0.0, 1.0)
+
+        self._portal_upload_quad(corners)
+        gl.glUseProgram(self._portal_mask_shader)
+        gl.glUniformMatrix4fv(
+            self._portal_mask_proj_loc, 1, gl.GL_FALSE, glm.value_ptr(projection))
+        gl.glUniformMatrix4fv(
+            self._portal_mask_view_loc, 1, gl.GL_FALSE, glm.value_ptr(view))
+        gl.glBindVertexArray(self._portal_quad_vao)
+        gl.glDrawArrays(gl.GL_TRIANGLE_FAN, 0, 4)
+
+        gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
+        gl.glDepthFunc(gl.GL_LESS)
+
+
+    def _draw_one_portal(self, portal_table, portal_a, portal_b, projection, main_view, camera_pos, config, draw_scene_fn, pv, portal_slots, depth=1):
+        corners_a = self._portal_slot_corners(
+            portal_table, portal_a, self.PORTAL_APERTURE_INSET)
         proj_ptr = glm.value_ptr(projection)
         view_ptr = glm.value_ptr(main_view)
-        fade_a = getattr(portal_a, '_fade_alpha', 1.0)
-
-        # --- Scissor to the aperture's screen rect (skips whole-screen overdraw
-        #     of the virtual scene). None => straddling the near plane. ---
+        fade_a = float(portal_table.portal_fade[portal_a])
         rect = self._portal_screen_rect(corners_a, pv)
         if rect is not None:
             if rect[2] <= 0 or rect[3] <= 0:
-                return  # aperture is entirely off-screen
+                return
             gl.glEnable(gl.GL_SCISSOR_TEST)
             gl.glScissor(*rect)
-
-        # --- Near-plane straddle: within PORTAL_NEAR_STRADDLE of the plane the
-        #     world-space mask quad would be near-clipped, revealing the wall
-        #     behind the portal. Cover the screen in NDC instead. ---
-        nrm = portal_a.get_normal()
-        cam_d = ((camera_pos.x - portal_a.pos[0]) * nrm[0] +
-                 (camera_pos.y - portal_a.pos[1]) * nrm[1] +
-                 (camera_pos.z - portal_a.pos[2]) * nrm[2])
-        straddle = (depth == 1 and self.PORTAL_NEAR_STRADDLE > 0.0 and
-                    abs(cam_d) < self.PORTAL_NEAR_STRADDLE and
-                    portal_a.contains_point(camera_pos.x - cam_d * nrm[0],
-                                            camera_pos.y - cam_d * nrm[1],
-                                            camera_pos.z - cam_d * nrm[2],
-                                            margin=0.0))
+        nrm = portal_table.portal_basis[portal_a, 2]
+        apos = portal_table.pos[portal_a]
+        cam_d = ((float(camera_pos.x)-apos[0])*nrm[0] + (float(camera_pos.y)-apos[1])*nrm[1] + (float(camera_pos.z)-apos[2])*nrm[2])
+        straddle = (depth == 1 and self.PORTAL_NEAR_STRADDLE > 0.0 and abs(cam_d) < self.PORTAL_NEAR_STRADDLE and
+                    self._portal_slot_contains(portal_table, portal_a,
+                        (float(camera_pos.x)-cam_d*nrm[0], float(camera_pos.y)-cam_d*nrm[1], float(camera_pos.z)-cam_d*nrm[2])))
         if straddle:
-            gl.glDisable(gl.GL_SCISSOR_TEST)  # cover the whole screen
-            mask_quad = [(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),
-                         (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)]
-            id_ptr = glm.value_ptr(self._identity_mat4)
-            mask_proj_ptr, mask_view_ptr = id_ptr, id_ptr
+            gl.glDisable(gl.GL_SCISSOR_TEST)
+            mask_quad=[(-1.0,-1.0,0.0),(1.0,-1.0,0.0),(1.0,1.0,0.0),(-1.0,1.0,0.0)]
+            id_ptr=glm.value_ptr(self._identity_mat4); mask_proj_ptr,mask_view_ptr=id_ptr,id_ptr
         else:
-            mask_quad = corners_a
-            mask_proj_ptr, mask_view_ptr = proj_ptr, view_ptr
-
-        parent_level = depth - 1
-        gl.glDisable(gl.GL_CULL_FACE)
-        gl.glEnable(gl.GL_STENCIL_TEST)
-        gl.glStencilMask(0xFF)
-        if depth == 1:
-            # Only the top level clears; nested levels must keep the parent mask.
-            gl.glClear(gl.GL_STENCIL_BUFFER_BIT)
-
-        # mask pass: stamp `depth` where the aperture is (and, for depth>1, only
-        # inside the parent aperture where stencil already == parent_level).
-        gl.glColorMask(gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE, gl.GL_FALSE)
-        gl.glDepthMask(gl.GL_FALSE)
-        if straddle:
-            gl.glDisable(gl.GL_DEPTH_TEST)
-        gl.glStencilFunc(gl.GL_EQUAL, parent_level, 0xFF)
-        gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_INCR)
-        self._portal_upload_quad(mask_quad)
-        gl.glUseProgram(self._portal_mask_shader)
-        gl.glUniformMatrix4fv(self._portal_mask_proj_loc, 1, gl.GL_FALSE, mask_proj_ptr)
-        gl.glUniformMatrix4fv(self._portal_mask_view_loc, 1, gl.GL_FALSE, mask_view_ptr)
-        gl.glBindVertexArray(self._portal_quad_vao)
-        gl.glDrawArrays(gl.GL_TRIANGLE_FAN, 0, 4)
-        if straddle:
-            gl.glEnable(gl.GL_DEPTH_TEST)
-
-        # depth prime to far, only where this level's mask was written
-        gl.glDepthMask(gl.GL_TRUE)
-        gl.glDepthFunc(gl.GL_ALWAYS)
-        gl.glStencilFunc(gl.GL_EQUAL, depth, 0xFF)
-        gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
-        gl.glDepthRange(1.0, 1.0)
-        self._portal_upload_quad(mask_quad)
-        gl.glDrawArrays(gl.GL_TRIANGLE_FAN, 0, 4)
-        gl.glDepthRange(0.0, 1.0)
-        gl.glDepthFunc(gl.GL_LESS)
-        gl.glColorMask(gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE, gl.GL_TRUE)
-
-        # --- virtual scene through portal_b ---
-        virtual_view, virtual_cam = self._portal_build_virtual_view(portal_a, portal_b, main_view, camera_pos)
-        # Oblique-clip away the wall behind portal B.
-        clip_proj = self._calculate_oblique_projection(projection, virtual_view, portal_b.pos, portal_b.get_normal())
-        self._portal_virtual_view = virtual_view
-        self._portal_virtual_proj = clip_proj
-
-        gl.glStencilFunc(gl.GL_EQUAL, depth, 0xFF)
-        gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
-        gl.glStencilMask(0x00)
-        old_proj_ptr = self._proj_ptr
-        old_view_ptr = self._view_ptr
-        self._proj_ptr = glm.value_ptr(self._portal_virtual_proj)
-        self._view_ptr = glm.value_ptr(self._portal_virtual_view)
-        self._current_shader = None
-        self._portal_scene_pass = True
+            mask_quad=corners_a; mask_proj_ptr,mask_view_ptr=proj_ptr,view_ptr
+        parent_level=depth-1
+        gl.glDisable(gl.GL_CULL_FACE); gl.glEnable(gl.GL_STENCIL_TEST); gl.glStencilMask(0xFF)
+        if depth==1: gl.glClear(gl.GL_STENCIL_BUFFER_BIT)
+        gl.glColorMask(gl.GL_FALSE,gl.GL_FALSE,gl.GL_FALSE,gl.GL_FALSE); gl.glDepthMask(gl.GL_FALSE)
+        if straddle: gl.glDisable(gl.GL_DEPTH_TEST)
+        gl.glStencilFunc(gl.GL_EQUAL,parent_level,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_INCR)
+        self._portal_upload_quad(mask_quad); gl.glUseProgram(self._portal_mask_shader)
+        gl.glUniformMatrix4fv(self._portal_mask_proj_loc,1,gl.GL_FALSE,mask_proj_ptr); gl.glUniformMatrix4fv(self._portal_mask_view_loc,1,gl.GL_FALSE,mask_view_ptr)
+        gl.glBindVertexArray(self._portal_quad_vao); gl.glDrawArrays(gl.GL_TRIANGLE_FAN,0,4)
+        if straddle: gl.glEnable(gl.GL_DEPTH_TEST)
+        gl.glDepthMask(gl.GL_TRUE); gl.glDepthFunc(gl.GL_ALWAYS); gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glDepthRange(1.0,1.0)
+        self._portal_upload_quad(mask_quad); gl.glDrawArrays(gl.GL_TRIANGLE_FAN,0,4)
+        gl.glDepthRange(0.0,1.0); gl.glDepthFunc(gl.GL_LESS); gl.glColorMask(gl.GL_TRUE,gl.GL_TRUE,gl.GL_TRUE,gl.GL_TRUE)
+        virtual_view,virtual_cam=self._portal_build_virtual_view(portal_table,portal_a,portal_b,main_view,camera_pos)
+        clip_proj=self._calculate_oblique_projection(projection,virtual_view,portal_table.pos[portal_b],portal_table.portal_basis[portal_b,2])
+        gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glStencilMask(0x00)
+        old_proj_ptr,old_view_ptr=self._proj_ptr,self._view_ptr; self._proj_ptr=glm.value_ptr(clip_proj); self._view_ptr=glm.value_ptr(virtual_view); self._current_shader=None; self._portal_scene_pass=True
         try:
-            draw_scene_fn(clip_proj, virtual_view, virtual_cam, brushes, things, lights, config)
+            draw_scene_fn(
+                RenderView(
+                    clip_proj, virtual_view, virtual_cam,
+                    aperture_slot=portal_a,
+                    clip_slot=portal_b,
+                    recursion_depth=depth,
+                ),
+                config,
+            )
         finally:
-            self._portal_scene_pass = False
-        self._proj_ptr = old_proj_ptr
-        self._view_ptr = old_view_ptr
-        self._current_shader = None
-        gl.glStencilMask(0xFF)
-
-        # --- recursion: portals visible from the virtual camera ---
+            self._portal_scene_pass=False
+        self._proj_ptr=old_proj_ptr; self._view_ptr=old_view_ptr; self._current_shader=None; gl.glStencilMask(0xFF)
         if depth < self.MAX_PORTAL_RECURSION:
-            self._draw_nested_portals(portal_a, portal_b, clip_proj, virtual_view, virtual_cam,
-                                      brushes, things, lights, config, draw_scene_fn,
-                                      portal_things, by_name, depth + 1)
+            self._draw_nested_portals(portal_table,portal_a,portal_b,clip_proj,virtual_view,virtual_cam,config,draw_scene_fn,portal_slots,depth+1)
 
-        # rim glow (border only) — drawn with real geometry/matrices
-        if portal_a.properties.get('show_rim', True):
-            gl.glEnable(gl.GL_STENCIL_TEST)
-            gl.glStencilFunc(gl.GL_EQUAL, depth, 0xFF)
-            gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
-            gl.glStencilMask(0x00)
-            gl.glEnable(gl.GL_BLEND)
-            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE)
-            raw_col = portal_a.properties.get('color', [255, 255, 255])
-            r, g, b = normalize_color(raw_col, default=[1.0, 1.0, 1.0])
-            self._portal_upload_quad(corners_a)
-            gl.glUseProgram(self._portal_rim_shader)
-            gl.glUniformMatrix4fv(self._portal_rim_proj_loc, 1, gl.GL_FALSE, proj_ptr)
-            gl.glUniformMatrix4fv(self._portal_rim_view_loc, 1, gl.GL_FALSE, view_ptr)
-            gl.glUniform4f(self._portal_rim_color_loc, r, g, b, 0.55 * fade_a)
-            gl.glBindVertexArray(self._portal_quad_vao)
-            gl.glDrawArrays(gl.GL_LINE_LOOP, 0, 4)
-            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-            gl.glDisable(gl.GL_BLEND)
-
-        # Fade overlay: black quad over the aperture, alpha = 1 − fade_a.
+        if bool(portal_table.portal_show_rim[portal_a]):
+            gl.glEnable(gl.GL_STENCIL_TEST); gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glStencilMask(0x00); gl.glEnable(gl.GL_BLEND); gl.glBlendFunc(gl.GL_SRC_ALPHA,gl.GL_ONE)
+            r,g,b=portal_table.portal_color[portal_a]; self._portal_upload_quad(corners_a); gl.glUseProgram(self._portal_rim_shader)
+            gl.glUniformMatrix4fv(self._portal_rim_proj_loc,1,gl.GL_FALSE,proj_ptr); gl.glUniformMatrix4fv(self._portal_rim_view_loc,1,gl.GL_FALSE,view_ptr); gl.glUniform4f(self._portal_rim_color_loc,float(r),float(g),float(b),0.55*fade_a)
+            gl.glBindVertexArray(self._portal_quad_vao); gl.glDrawArrays(gl.GL_LINE_LOOP,0,4); gl.glBlendFunc(gl.GL_SRC_ALPHA,gl.GL_ONE_MINUS_SRC_ALPHA); gl.glDisable(gl.GL_BLEND)
         if fade_a < 0.999:
-            gl.glEnable(gl.GL_STENCIL_TEST)
-            gl.glStencilFunc(gl.GL_EQUAL, depth, 0xFF)
-            gl.glStencilOp(gl.GL_KEEP, gl.GL_KEEP, gl.GL_KEEP)
-            gl.glStencilMask(0x00)
-            gl.glEnable(gl.GL_BLEND)
-            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
-            self._portal_upload_quad(corners_a)
-            gl.glUseProgram(self._portal_rim_shader)
-            gl.glUniformMatrix4fv(self._portal_rim_proj_loc, 1, gl.GL_FALSE, proj_ptr)
-            gl.glUniformMatrix4fv(self._portal_rim_view_loc, 1, gl.GL_FALSE, view_ptr)
-            gl.glUniform4f(self._portal_rim_color_loc, 0.0, 0.0, 0.0, 1.0 - fade_a)
-            gl.glBindVertexArray(self._portal_quad_vao)
-            gl.glDrawArrays(gl.GL_TRIANGLE_FAN, 0, 4)
-            gl.glDisable(gl.GL_BLEND)
+            gl.glEnable(gl.GL_STENCIL_TEST); gl.glStencilFunc(gl.GL_EQUAL,depth,0xFF); gl.glStencilOp(gl.GL_KEEP,gl.GL_KEEP,gl.GL_KEEP); gl.glStencilMask(0x00); gl.glEnable(gl.GL_BLEND); gl.glBlendFunc(gl.GL_SRC_ALPHA,gl.GL_ONE_MINUS_SRC_ALPHA)
+            self._portal_upload_quad(corners_a); gl.glUseProgram(self._portal_rim_shader); gl.glUniformMatrix4fv(self._portal_rim_proj_loc,1,gl.GL_FALSE,proj_ptr); gl.glUniformMatrix4fv(self._portal_rim_view_loc,1,gl.GL_FALSE,view_ptr); gl.glUniform4f(self._portal_rim_color_loc,0.0,0.0,0.0,1.0-fade_a)
+            gl.glBindVertexArray(self._portal_quad_vao); gl.glDrawArrays(gl.GL_TRIANGLE_FAN,0,4); gl.glDisable(gl.GL_BLEND)
 
-        gl.glDisable(gl.GL_STENCIL_TEST)
-        gl.glDisable(gl.GL_SCISSOR_TEST)
-        gl.glBindVertexArray(0)
+        # Replace destination-camera depth with the real source aperture depth
+        # after all portal colour/rim/fade work is complete.
+        self._portal_flatten_depth(corners_a, projection, main_view, depth)
+        gl.glDisable(gl.GL_STENCIL_TEST); gl.glDisable(gl.GL_SCISSOR_TEST); gl.glBindVertexArray(0)
 
-    def _draw_nested_portals(self, from_a, from_b, projection, view, cam,
-                             brushes, things, lights, config, draw_scene_fn,
-                             portal_things, by_name, depth):
-        """Render portals visible from a virtual camera, one recursion deeper.
-
-        Experimental (only reached when MAX_PORTAL_RECURSION > 1). Kept behind
-        that constant because it costs an extra scene pass per level and has not
-        been validated on-GPU in this build.
-        """
-        pv = projection * view
-        for portal_a in portal_things:
-            if getattr(portal_a, '_fade_alpha', 1.0) <= 0.01:
-                continue
-            # Skip the portal we are currently looking out of, to avoid an
-            # immediate degenerate self-reflection.
-            if portal_a is from_b:
-                continue
-            target_name = portal_a.properties.get('portal_target', '')
-            if not target_name:
-                continue
-            portal_b = by_name.get(target_name)
-            if portal_b is None:
-                continue
-            self._draw_one_portal(portal_a, portal_b, projection, view, cam,
-                                  brushes, things, lights, config, draw_scene_fn,
-                                  pv, portal_things, by_name, depth=depth)
-
+    def _draw_nested_portals(self, portal_table, from_a, from_b, projection, view, cam, config, draw_scene_fn, portal_slots, depth):
+        candidates=self._portal_candidate_slots(portal_table,portal_slots,cam); pv=projection*view
+        for portal_a in candidates:
+            portal_a=int(portal_a)
+            if portal_a==int(from_b): continue
+            portal_b=int(portal_table.portal_target_slot[portal_a])
+            if portal_b<0: continue
+            self._draw_one_portal(portal_table,portal_a,portal_b,projection,view,cam,config,draw_scene_fn,pv,portal_slots,depth=depth)
     def _portal_screen_rect(self, corners, pv):
         """Screen-space integer AABB (x, y, w, h) of the aperture, clamped to the
         viewport, for use as a scissor rect.  Returns None when any corner is at
@@ -2874,20 +5449,6 @@ class BaseRenderer:
             norm(m[0][3] + m[0][2], m[1][3] + m[1][2], m[2][3] + m[2][2], m[3][3] + m[3][2]),
             norm(m[0][3] - m[0][2], m[1][3] - m[1][2], m[2][3] - m[2][2], m[3][3] - m[3][2]),
         )
-
-    @staticmethod
-    def _brush_visible_in_frustum(planes, brush):
-        """Conservative bounding-sphere frustum test for a brush dict.  Sphere
-        (not AABB) so it stays correct for rotated brushes without inflating the
-        box."""
-        pos = brush.get('pos', (0.0, 0.0, 0.0))
-        size = brush.get('size', (64.0, 64.0, 64.0))
-        cx, cy, cz = float(pos[0]), float(pos[1]), float(pos[2])
-        radius = 0.5 * math.sqrt(float(size[0]) ** 2 + float(size[1]) ** 2 + float(size[2]) ** 2)
-        for a, b, c, d in planes:
-            if a * cx + b * cy + c * cz + d < -radius:
-                return False
-        return True
 
     def _portal_upload_quad(self, corners):
         # corners should be a list of 4 [x,y,z] points
@@ -2945,28 +5506,19 @@ class BaseRenderer:
             self._portal_proj_inv_sig = sig
         return self._portal_proj_inv
 
-    def _portal_build_virtual_view(self, portal_a, portal_b, current_view, camera_pos):
-        """Virtual camera for looking through portal_a out of portal_b.
 
-        Uses the SAME shared link transform (Portal.map_point / map_direction)
-        that the logic thread's teleport uses, so the view rendered through the
-        aperture and the frame the player lands in can never disagree — and
-        pitched / floor portals are handled because the up vector is mapped too,
-        not assumed to be (0,1,0)."""
-        vc = portal_a.map_point(portal_b, float(camera_pos.x), float(camera_pos.y), float(camera_pos.z))
-        virtual_cam = glm.vec3(*vc)
-        fwd = (-float(current_view[0][2]), -float(current_view[1][2]), -float(current_view[2][2]))
-        up  = ( float(current_view[0][1]),  float(current_view[1][1]),  float(current_view[2][1]))
-        nf = portal_a.map_direction(portal_b, fwd[0], fwd[1], fwd[2])
-        nu = portal_a.map_direction(portal_b, up[0], up[1], up[2])
-        new_fwd = glm.normalize(glm.vec3(*nf))
-        new_up = glm.vec3(*nu)
-        return glm.lookAt(virtual_cam, virtual_cam + new_fwd, new_up), virtual_cam
+    def _portal_build_virtual_view(self, portal_table, portal_a, portal_b, current_view, camera_pos):
+        """Build a portal camera from dense EntityTable columns."""
+        src_basis=self._portal_slot_basis(portal_table,portal_a)
+        dst_basis=self._portal_slot_basis(portal_table,portal_b)
+        virtual_cam=glm.vec3(*_portal_map_point(portal_table.pos[portal_a],src_basis,portal_table.pos[portal_b],dst_basis,
+                                                (float(camera_pos.x),float(camera_pos.y),float(camera_pos.z))))
+        fwd=(-float(current_view[0][2]),-float(current_view[1][2]),-float(current_view[2][2]))
+        up=(float(current_view[0][1]),float(current_view[1][1]),float(current_view[2][1]))
+        nf=_portal_map_direction(src_basis,dst_basis,fwd); nu=_portal_map_direction(src_basis,dst_basis,up)
+        new_fwd=glm.normalize(glm.vec3(*nf)); new_up=glm.normalize(glm.vec3(*nu))
+        return glm.lookAt(virtual_cam,virtual_cam+new_fwd,new_up),virtual_cam
 
-
-    # --------------------------------------------------------------------------
-    # Angled brushes (convex geometry meshes)
-    # --------------------------------------------------------------------------
     def _begin_geo_frame(self):
         """Advance the angled-brush mesh cache clock and drop stale meshes.
 
@@ -2981,6 +5533,9 @@ class BaseRenderer:
                  if self._geo_mesh_frame - m.frame > 240]
         for k in stale:
             self._delete_geo_mesh(self._geo_mesh_cache.pop(k))
+        # The fast index may name deleted meshes and records that no longer
+        # exist; it is only a shortcut into the cache, so rebuild it lazily.
+        self._geo_mesh_by_record.clear()
 
     @staticmethod
     def _delete_geo_mesh(mesh):
@@ -2996,50 +5551,57 @@ class BaseRenderer:
         except Exception:
             pass  # GL context may already be gone during shutdown
 
-    def _get_geo_mesh(self, brush):
-        """Cached :class:`BrushGeoMesh` for an angled brush, or ``None``.
+    def _prepare_geo_meshes(self, table, slots):
+        """Prepare convex meshes from dense geometry records."""
+        if table is None or slots is None or not len(slots):
+            return {}
+        slots = np.asarray(slots, dtype=np.int32)
+        gids = table.geometry_id[slots]
+        gids = gids[gids >= 0]
+        if not len(gids):
+            return {}
+        meshes = {}
+        records = table.geometry_records
+        for gid in np.unique(gids):
+            gid = int(gid)
+            if gid >= len(records):
+                continue
+            record = records[gid]
+            if record is None:
+                continue
+            mesh = self._get_geo_mesh_record(record, geometry_id=gid,
+                                             geometry_generation=table.generation)
+            if mesh is not None:
+                meshes[gid] = mesh
+        return meshes
 
-        Returns ``None`` for plain box brushes (callers fall back to the
-        shared cube VAO) and for degenerate plane sets.
-        """
-        if not brush_geometry.brush_has_geometry(brush):
+    def _get_geo_mesh_record(self, record, geometry_id=None, geometry_generation=None):
+        """Get or build a GPU mesh from a dense GeometryRecord."""
+        if record is None or record.convex is None or not record.convex.is_valid:
             return None
-        key = brush_geometry.geometry_signature(brush)
-        mesh = self._geo_mesh_cache.get(id(brush))
-        if mesh is not None and mesh.key == key:
+        key = record.signature
+        by_record = self._geo_mesh_by_record
+        mesh = by_record.get(id(record))
+        if mesh is not None and (mesh.key is key or mesh.key == key):
             mesh.frame = self._geo_mesh_frame
             return mesh
-        new = None
-        convex = brush_geometry.get_convex(brush)
-        if convex is not None and convex.is_valid:
+        mesh = self._geo_mesh_cache.get(key)
+        if mesh is None:
             try:
-                new = self._build_geo_mesh(brush, convex, key)
+                mesh = self._build_geo_mesh(record, record.convex, key)
             except Exception as e:
                 print(f"[GeoMesh] build failed: {e}")
-        if mesh is not None:
-            self._delete_geo_mesh(mesh)
-            self._geo_mesh_cache.pop(id(brush), None)
-        if new is not None:
-            new.frame = self._geo_mesh_frame
-            self._geo_mesh_cache[id(brush)] = new
-        return new
+                mesh = None
+            if mesh is None:
+                return None
+            self._geo_mesh_cache[key] = mesh
+        mesh.frame = self._geo_mesh_frame
+        by_record[id(record)] = mesh
+        return mesh
 
-    @staticmethod
-    def _geo_uv_axes(n):
-        """World axes a face's planar UVs project onto, by dominant normal
-        axis.  Matches the cube VAO's orientation (v runs up walls).
-
-        The rule itself lives in brush_geometry so the geometry layer can
-        materialise the same basis when it locks a face's texture to a
-        rotation; this stays as the renderer's name for it.
-        """
-        return brush_geometry.render_uv_axes(n)
-
-    def _build_geo_mesh(self, brush, convex, key):
-        pos = brush.get('pos', [0, 0, 0])
-        size = brush.get('size', [64, 64, 64])
-        origin = np.array([float(pos[0]), float(pos[1]), float(pos[2])])
-        scale = np.array([max(abs(float(s)), 1e-6) for s in size])
+    def _build_geo_mesh(self, record, convex, key):
+        origin = record.origin
+        scale = record.scale
 
         # A "top" face (flat, at the AABB top) is emitted last so water can
         # draw walls and surface separately, like its box path does.
@@ -3073,6 +5635,7 @@ class BaseRenderer:
             # along world axes when it does not — exactly as before.
             us, vs, (u0, eu), (v0, ev) = brush_geometry.face_uv_projection(
                 ring_w, face)
+            plane_meta = convex.planes[face['plane']]
             first = vert_count
             for k in range(1, len(idx) - 1):
                 for j in (0, k, k + 1):
@@ -3081,7 +5644,10 @@ class BaseRenderer:
                                  (us[j] - u0) / eu, (vs[j] - v0) / ev))
             vert_count += (len(idx) - 2) * 3
             runs.append({'face': face.get('face'), 'texture': face.get('texture'),
-                         'uv_scale': face.get('uv_scale'), 'plane': face.get('plane'),
+                         'uv_scale': face.get('uv_scale') or plane_meta.get('uv_scale'), 'plane': face.get('plane'),
+                         'uv_angle': plane_meta.get('uv_angle', 0.0),
+                         'uv_shift': plane_meta.get('uv_shift', (0.0, 0.0)),
+                         'natural_scale': bool(record.natural_scale.get(id(face), False)),
                          'first': first, 'count': vert_count - first,
                          'extent': (eu, ev)})
             if top:
@@ -3140,94 +5706,26 @@ class BaseRenderer:
         return mesh
 
     @staticmethod
-    def _geo_run_plane(brush, run):
-        """Live plane dict backing this run, or ``None``.
-
-        Reading the plane live (rather than the value baked into the mesh at
-        build time) lets the Face tool's texture / scale edits on a cut face
-        show immediately — the mesh signature ignores texture, so it isn't
-        rebuilt on a texture change.
-        """
-        pidx = run.get('plane')
-        if pidx is None:
-            return None
-        planes = brush.get('geometry', {}).get('planes')
-        if planes and 0 <= pidx < len(planes):
-            return planes[pidx]
-        return None
+    def _geo_run_texture(run):
+        """Texture name baked into this cold geometry run."""
+        return run.get('texture') or 'default.png'
 
     @staticmethod
-    def _geo_run_texture(brush, run):
-        """Texture name for one face of an angled brush.
+    def _geo_run_tex_transform(run):
+        """``(angle_radians, shift_u, shift_v)`` from cold run data."""
+        shift = run.get('uv_shift') or (0.0, 0.0)
+        return (math.radians(float(run.get('uv_angle', 0.0))),
+                float(shift[0]), float(shift[1]))
 
-        The brush's live ``textures`` dict wins for faces that kept their box
-        face tag (so editor texture changes apply immediately); cut faces read
-        the texture stored live on their plane, then any brush texture.
-        """
-        tag = run['face']
-        if tag:
-            return brush.get('textures', {}).get(tag) or run['texture'] or 'default.png'
-        plane = BaseRenderer._geo_run_plane(brush, run)
-        tex = (plane.get('texture') if plane else None) or run['texture']
-        if not tex:
-            # Untagged cut face with no stored texture: borrow any brush
-            # texture rather than showing the default checkerboard.
-            for t in brush.get('textures', {}).values():
-                if t:
-                    tex = t
-                    break
-        return tex or 'default.png'
-
-    def _geo_run_tex_transform(self, brush, run):
-        """``(angle_radians, shift_u, shift_v)`` for one angled-brush face.
-
-        Same precedence as :meth:`_geo_run_tex_scale`: a tagged side reads the
-        brush's per-tag dicts, a cut face reads its own plane live so Surface
-        Inspector edits show up without rebuilding the mesh.  Angled faces used
-        to have both of these forced to zero, which is why rotating or shifting
-        a texture did nothing once a brush stopped being a box.
-        """
-        tag = run['face']
-        if tag:
-            angle = brush.get('uv_angle', {}).get(tag, 0.0)
-            shift = brush.get('uv_shift', {}).get(tag, (0.0, 0.0))
-        else:
-            plane = BaseRenderer._geo_run_plane(brush, run)
-            if plane is None:
-                return 0.0, 0.0, 0.0
-            angle = plane.get('uv_angle', 0.0)
-            shift = plane.get('uv_shift', (0.0, 0.0))
-        return math.radians(float(angle)), float(shift[0]), float(shift[1])
-
-    def _geo_run_tex_scale(self, brush, run, tex_name):
-        """UV repeat factors for one face, mirroring the box-face priorities:
-        live per-face uv_scale, then the plane's stored uv_scale, then
-        texture_tiling (1px = 1 world unit over the face's extent), then FIT."""
-        tag = run['face']
-        plane = None if tag else BaseRenderer._geo_run_plane(brush, run)
-
-        # Natural is a live mode: the repeats come from the face's *current*
-        # extent every frame, so resizing the brush shows more of the texture
-        # at the same texel size rather than stretching it.  It therefore wins
-        # over any stored uv_scale (which is only kept as a fallback).
-        if brush_geometry.face_uses_natural_scale(brush, tag, plane):
+    def _geo_run_tex_scale(self, run, tex_name):
+        """UV repeat factors from cold convex-face data."""
+        if run.get('natural_scale'):
             return brush_geometry.natural_repeats(
                 run['extent'][0], run['extent'][1],
                 self._texture_pixel_size(tex_name))
-
-        uv = brush.get('uv_scale', {}).get(tag) if tag else None
-        if uv is None and plane is not None:
-            # Cut face: read its plane's uv_scale live so Surface Inspector
-            # edits apply without a mesh rebuild.
-            uv = plane.get('uv_scale')
-        if uv is None:
-            uv = run['uv_scale']
+        uv = run.get('uv_scale')
         if uv is not None:
             return float(uv[0]), float(uv[1])
-        if brush.get('texture_tiling', False):
-            eu, ev = run['extent']
-            return brush_geometry.natural_repeats(
-                eu, ev, self._texture_pixel_size(tex_name))
         return 1.0, 1.0
 
     def _texture_pixel_size(self, tex_name):
@@ -3361,6 +5859,9 @@ class BaseRenderer:
     # --------------------------------------------------------------------------
     def cleanup(self):
         """Release all OpenGL resources owned by the base renderer."""
+        if self._sprite_layers is not None:
+            self._sprite_layers.cleanup()
+            self._sprite_layers = None
         # Delete VAOs and VBOs
         for name, vao in self.vaos.items():
             if vao:
@@ -3389,9 +5890,17 @@ class BaseRenderer:
             gl.glDeleteVertexArrays(1, [self.face_highlight_vao])
         if self.face_highlight_vbo:
             gl.glDeleteBuffers(1, [self.face_highlight_vbo])
+        for attr in ('_glass_scene_texture', '_water_depth_texture'):
+            tex = getattr(self, attr, 0)
+            if tex:
+                gl.glDeleteTextures([tex])
+                setattr(self, attr, 0)
+        self._glass_scene_size = (0, 0)
+        self._water_depth_size = (0, 0)
         for mesh in self._geo_mesh_cache.values():
             self._delete_geo_mesh(mesh)
         self._geo_mesh_cache.clear()
+        self._geo_mesh_by_record.clear()
         # Shadow resources. These are owned by this renderer alone and nothing
         # outside it holds their names, so they have to be released here or a
         # renderer rebuild (a render-mode or shadow-quality change) strands the
@@ -3412,6 +5921,7 @@ class BaseRenderer:
         self._shadow_slot_owner = [None] * self.MAX_SHADOW_LIGHTS
         self._shadow_slot_sig = [None] * self.MAX_SHADOW_LIGHTS
         self._light_shadow_index = {}
+
         if self._cube_vbo:
             gl.glDeleteBuffers(1, [self._cube_vbo])
         if self._sprite_vbo:
@@ -3422,6 +5932,16 @@ class BaseRenderer:
             gl.glDeleteBuffers(1, [self._water_surface_vbo])
         if self._water_surface_ebo:
             gl.glDeleteBuffers(1, [self._water_surface_ebo])
+        if self._model_instance_vbo:
+            gl.glDeleteBuffers(1, [self._model_instance_vbo])
+            self._model_instance_vbo = None
+            self._model_instance_capacity = 0
+            self._model_instanced_vaos.clear()
+        if self._light_ubo:
+            gl.glDeleteBuffers(1, [self._light_ubo])
+            self._light_ubo = None
+            self._light_ubo_capacity = 0
+            self._light_ubo_key = None
         # Portal resources
         if self._portal_quad_vao:
             gl.glDeleteVertexArrays(1, [self._portal_quad_vao])
@@ -3441,5 +5961,6 @@ class BaseRenderer:
     # --------------------------------------------------------------------------
     # Abstract method (must be overridden by Forward/Deferred)
     # --------------------------------------------------------------------------
-    def render_scene(self, projection, view, camera_pos, brushes, things, selected_object, config):
+    def render_scene(self, projection, view, camera_pos, brushes, things,
+                     selected_object, config, clear=True, brush_slots=None):
         raise NotImplementedError("Derived renderer must implement render_scene()")

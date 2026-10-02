@@ -23,7 +23,7 @@ one place regardless of how many cells it touches.
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 
 from engine.spatial import (CELL_SIZE, CellIndex, cell_bounds, cell_distance_sq,
                             cell_of_point, cell_range, cells_for_aabb,

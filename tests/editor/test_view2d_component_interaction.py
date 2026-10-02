@@ -24,12 +24,13 @@ import configparser  # noqa: E402
 
 from PyQt5.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
 from PyQt5.QtGui import QMouseEvent  # noqa: E402
-from PyQt5.QtWidgets import QApplication, QWidget  # noqa: E402
+from PyQt5.QtWidgets import QApplication, QWidget, QInputDialog  # noqa: E402
 
 from editor import component_edit as ce  # noqa: E402
 from editor.editor_state import EditorState  # noqa: E402
 from editor.main_window import MainWindow  # noqa: E402
 from editor.view_2d import View2D  # noqa: E402
+from editor.things import Portal  # noqa: E402
 from engine import brush_geometry as bg  # noqa: E402
 
 # Qt tier: PyQt5 must be importable.  No display and no GPU - the suite runs
@@ -56,6 +57,14 @@ class _Stub3DView:
     selected_object = None
     face_mode_active = False
     grid_size = 16
+
+    def __init__(self):
+        # Read by View2D's 60 Hz camera-tracking timer, which starts with the
+        # view: a host that lacks it raises from that timer once the view is
+        # shown, inside a Qt slot, aborting the run.
+        import glm
+        self.camera = types.SimpleNamespace(pos=glm.vec3(0.0, 0.0, 0.0),
+                                            yaw=0.0, pitch=0.0)
 
     def update(self):
         pass
@@ -116,10 +125,17 @@ class FakeEditorWindow(QWidget):
     cancel_clone_placement = MainWindow.cancel_clone_placement
     _translate_object = staticmethod(MainWindow._translate_object)
     _copy_name = staticmethod(MainWindow._copy_name)
+    _drop_singleton_copies = MainWindow._drop_singleton_copies
     selection_centre = MainWindow.selection_centre
     selected_objects_list = MainWindow.selected_objects_list
     apply_rotation_to_selection = MainWindow.apply_rotation_to_selection
     apply_clip_to_selection = MainWindow.apply_clip_to_selection
+    perform_subtraction = MainWindow.perform_subtraction
+    hollow_selected_brush = MainWindow.hollow_selected_brush
+    # Cloning arms a 500 ms timer that calls this; without it the timer fires
+    # in whichever later test next processes events, raises, and -- with no
+    # Qt exception hook under pytest -- aborts the whole run.
+    _clear_flash = MainWindow._clear_flash
 
     def __init__(self):
         super().__init__()
@@ -222,6 +238,27 @@ def release(view, world_point, button=Qt.LeftButton, modifiers=Qt.NoModifier):
 
 def undo_depth(host):
     return len(host.state.undo_stack)
+
+
+def test_portal_gizmo_is_the_selection_target(editor):
+    """A portal is selectable on its visible aperture, not just its centre icon."""
+    host, view = editor
+    portal = Portal(pos=[0.0, 0.0, 0.0], properties={
+        'name': 'Portal_Test',
+        'width': 128.0,
+        'height': 256.0,
+        'rotation': [0.0, 0.0, 0.0],
+    })
+    host.state.things = [portal]
+
+    # Deliberately miss the old generic 12 px entity hitbox while landing
+    # close to the visible top-view aperture line.
+    screen = view.world_to_screen(QPointF(48.0, 8.0)).toPoint()
+    assert view.get_object_at(screen) is portal
+
+    # The dedicated centre gizmo handle is an independent pick target too.
+    centre = view.world_to_screen(QPointF(0.0, 0.0)).toPoint()
+    assert view.get_object_at(centre) is portal
 
 
 # ---------------------------------------------------------------------------
@@ -642,6 +679,40 @@ def test_subtract_can_fold_into_a_caller_s_undo_step(editor):
     host.perform_subtraction(push_undo=False)
 
     assert undo_depth(host) == before                # no second checkpoint
+
+
+def test_hollow_preserves_geometry_inside_outer_box(editor, monkeypatch):
+    """Hollow converts only the selected outer box into a shell."""
+    host, _ = editor
+    outer = make_box(pos=(0, 0, 0), size=(256, 256, 256), name="Outer")
+    enclosed = make_box(pos=(0, 0, 0), size=(64, 96, 80), name="ManySidedShape")
+    host.state.brushes.extend([outer, enclosed])
+    host.set_selected_object(outer)
+
+    monkeypatch.setattr(
+        QInputDialog,
+        "getInt",
+        staticmethod(lambda *args, **kwargs: (16, True)),
+    )
+
+    before = undo_depth(host)
+    host.hollow_selected_brush()
+
+    # Hollow is one undoable operation.
+    assert undo_depth(host) == before + 1
+
+    # The enclosed authored brush survives unchanged as a scene object.
+    assert enclosed in host.state.brushes
+    assert enclosed["name"] == "ManySidedShape"
+    assert enclosed["size"] == [64, 96, 80]
+
+    # The original outer box is replaced by its six shell slabs.
+    walls = [b for b in host.state.brushes if b is not enclosed]
+    assert outer not in walls
+    assert len(walls) == 6
+    assert all(b.get("operation") == "add" for b in walls)
+    assert all(b.get("name", "").startswith("Outer_") for b in walls)
+    assert len(host.state.selected_objects) == 6
 
 
 # ---------------------------------------------------------------------------
@@ -1283,6 +1354,28 @@ def test_a_nudge_burst_is_one_undo_step(editor):
     assert a['pos'][0] == pytest.approx(80.0)
 
 
+def test_every_nudge_of_a_sprite_reaches_the_3d_entity_table(editor):
+    """A nudge burst bumps the world epoch only once (its one save_state), so
+    the later nudges reach the 3D view only through the change journal.
+    Editing ``thing.pos`` in place skipped the journal, and the sprite stayed
+    put in the 3D view while the gizmo moved, until the camera moved."""
+    from engine.entity_table import EntityTable
+    from engine.prop_entity import Prop
+
+    host, view = editor
+    sprite = Prop(pos=[0.0, 0.0, 0.0], properties={
+        'sprite_path': 'assets/sprites/health.png'})
+    host.state.things.append(sprite)
+    host.set_selected_object(sprite)
+
+    table = EntityTable()
+    for expected_x in (16.0, 32.0, 48.0):
+        arrow(view, Qt.Key_Right)
+        table.begin_frame([sprite], host.state.world_epoch)
+        assert sprite.pos[0] == pytest.approx(expected_x)
+        assert table.pos[0][0] == pytest.approx(expected_x)
+
+
 # ---------------------------------------------------------------------------
 # Round trips through history (Fio 2.4 hardening)
 # ---------------------------------------------------------------------------
@@ -1426,3 +1519,20 @@ def test_component_mode_survives_a_history_step_without_stale_handles(editor):
         assert any(ref.brush is b for b in host.state.brushes)
     overlay = host.components.overlay(host.component_drag_targets())
     assert len(overlay['hot_points']) <= len(overlay['points']) + len(overlay['hot_points'])
+
+
+def test_the_host_serves_every_timer_callback_of_a_shown_view(editor):
+    """Invariant: a stand-in host must serve every deferred callback it can
+    receive, not only what its own test calls. A View2D starts its timers in
+    its constructor; the camera tracker reads the host's 3D camera whenever
+    the view is visible, and the stand-in had no camera."""
+    host, view = editor
+    view.window().show()
+    assert view.isVisible()
+    try:
+        view._check_camera_changed()
+        view._update_connection_animations()
+        view._end_nudge_burst()
+        assert view._last_camera_pos == (0.0, 0.0, 0.0)
+    finally:
+        view.window().hide()

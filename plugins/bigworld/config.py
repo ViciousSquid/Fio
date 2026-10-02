@@ -25,6 +25,7 @@ all three can read without any of them paying for the others.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, NamedTuple, Optional
 
 
@@ -130,6 +131,79 @@ def coerce(key: str, value: Any) -> Any:
     if field.kind == "float":
         return _as_float(value, float(field.default))
     return value
+
+
+def effective_streaming_radii(
+    activation_radius: float,
+    deactivation_radius: float,
+    visual_horizon: Optional[float] = None,
+) -> tuple[float, float]:
+    """Return runtime residency radii after cooperating with visibility.
+
+    The authored activation radius remains the minimum residency radius. The
+    renderer's visual horizon can only widen it, so Big World never parks
+    geometry while the camera can still reasonably show it. The authored
+    hysteresis width is preserved when the visual horizon becomes the active
+    boundary.
+    """
+    authored_activation = max(0.0, float(activation_radius))
+    authored_deactivation = max(
+        authored_activation, float(deactivation_radius)
+    )
+    if visual_horizon is None:
+        return authored_activation, authored_deactivation
+
+    try:
+        horizon = float(visual_horizon)
+    except (TypeError, ValueError):
+        return authored_activation, authored_deactivation
+    if not math.isfinite(horizon):
+        return authored_activation, authored_deactivation
+
+    effective_activation = max(authored_activation, horizon)
+    hysteresis = max(0.0, authored_deactivation - authored_activation)
+    effective_deactivation = max(
+        authored_deactivation,
+        effective_activation + hysteresis,
+    )
+    return effective_activation, effective_deactivation
+
+
+def bound_view_horizon(logic, radius: float):
+    """Keep the host camera from seeing past *radius*; return an undo callable.
+
+    Residency and visibility have to agree, and there are two ways to make
+    them.  :func:`effective_streaming_radii` widens residency out to whatever
+    the camera can see, which is the safe fallback -- but on its own it means
+    the authored activation radius does nothing on any map whose view distance
+    is the stock 4096: the camera's fog end (~3770) wins and every cell out to
+    it stays live, drawn and simulated.
+
+    So a session also narrows the camera to the world: the shared view-distance
+    object is given a ``limit`` of the activation radius, which pulls the fog
+    end and the far plane in to it.  Objects then fade into fog exactly where
+    the map says they stop, the widening above becomes a no-op, and the
+    renderer's far plane culls everything past the streamed region.  A
+    requested view distance already inside the radius is left alone.
+
+    Returns a zero-argument callable that restores the previous limit.  A host
+    with no view-distance object (a head-less test, a benchmark) gets a no-op.
+    """
+    view_distance = getattr(logic, "view_distance", None)
+    if view_distance is None or not hasattr(view_distance, "limit"):
+        return lambda: None
+    previous = view_distance.limit
+    try:
+        radius = float(radius)
+    except (TypeError, ValueError):
+        return lambda: None
+    if radius > 0.0 and math.isfinite(radius):
+        view_distance.limit = (radius if previous is None
+                               else min(previous, radius))
+
+    def restore():
+        view_distance.limit = previous
+    return restore
 
 
 def config_from_properties(props: Optional[dict]) -> Dict[str, Any]:

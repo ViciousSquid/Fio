@@ -3,12 +3,24 @@
 
 import sys
 import os
-import shutil
-import argparse
 
 
 os.environ["QT_PLUGIN_PATH"] = ""
 os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = ""
+
+# PyOpenGL calls glGetError after every GL call unless told not to, which on a
+# frame of a few hundred calls is a measurable share of the paint. It must be
+# decided before anything imports OpenGL.GL. FIO_GL_DEBUG=1 keeps the checks
+# (the test suite never comes through here, so it always runs with them).
+if os.environ.get("FIO_GL_DEBUG") != "1":
+    os.environ.setdefault("PYOPENGL_ERROR_CHECKING", "0")
+
+# Fio runs the UI/renderer, the logic thread and the monster AI as Python
+# threads. Whenever one releases the GIL (every GL call, every large NumPy
+# operation) and another takes it, the first waits up to the switch interval to
+# get it back -- 5 ms by default, a third of a frame. Measured on a 24k-brush
+# map, 1 ms cuts the logic thread's p95 frame preparation from ~59 to ~25 ms.
+sys.setswitchinterval(0.001)
 
 
 # Dark theme
@@ -140,7 +152,7 @@ if __name__ == "__main__":
             import ctypes
             myappid = 'fio.editor.v1'  # arbitrary string
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-        except:
+        except Exception:
             pass
     # ---------------------------------------------------------
 
@@ -211,6 +223,10 @@ if __name__ == "__main__":
 
     # Create app
     app = QApplication(sys.argv)
+    # Without this PyQt5 aborts the process on any exception escaping a Qt
+    # callback, losing the open map.
+    from editor.debug_console import install_excepthook
+    install_excepthook()
     app.setStyleSheet(dark_stylesheet)
 
     # Set application icon
@@ -249,7 +265,7 @@ if __name__ == "__main__":
             icon_file = os.path.join(root_directory, 'assets', 'icon.icns')
             if os.path.exists(icon_file):
                 bundle.setInfoDictionary_({'CFBundleIconFile': 'icon'})
-        except:
+        except Exception:
             pass
 
     splash.set_progress(100, "Ready.")

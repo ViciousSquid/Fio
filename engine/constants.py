@@ -61,6 +61,49 @@ def is_water_brush(brush):
     return False
 
 
+def water_high_quality(brush):
+    """A water brush's "High quality" flag (``water_high_quality``, default on).
+
+    High-quality water copies the scene depth for depth-based colour,
+    shoreline foam, caustics and screen-space reflections; off, it is the
+    cheap look (waves, refraction, sky reflection). Authored per brush, so
+    hand-edited maps may hold strings like ``"false"`` or ``"0"``.
+    """
+    value = brush.get('water_high_quality', True)
+    if isinstance(value, str):
+        return value.strip().lower() not in ('0', 'false', 'no', 'off', '')
+    return bool(value)
+
+
+def is_solid_world_brush(brush):
+    """Single source of truth for "is this brush part of the solid world?".
+
+    The rule every collision consumer shares: a brush is solid unless it is
+    hidden, fog, water, or a trigger volume that is not also a mover or a door.
+    It was written out identically in five places -- the monster AI's three
+    no-grid fallbacks, the monster wall query in the logic thread, and the
+    player's own predicate -- which is how paths that are *supposed* to agree
+    about what a wall is end up disagreeing.
+
+    Two nearby predicates deliberately do not use this, and should not be
+    folded into it:
+
+    * ``SpatialGrid.populate`` asks ``authored_hidden`` rather than ``hidden``,
+      because it builds a durable index that has to outlive a streaming layer
+      parking a cell (see ``engine.spatial``), and it files water separately
+      rather than discarding it.
+    * ``Player._blocks_player`` adds ``disabled`` and ``_physics_body`` on top
+      of this, because it classifies movers and doors -- which never went
+      through the grid -- and because a dynamic body is simulated rather than
+      collided with as a wall.
+    """
+    if brush.get('hidden') or brush.get('is_fog'):
+        return False
+    if brush.get('is_trigger') and not (brush.get('is_mover') or brush.get('is_door')):
+        return False
+    return not is_water_brush(brush)
+
+
 # Runtime-only keys written to brush dicts by the cached-AABB helper below.
 # Stripped on serialisation alongside the renderer's own private keys.
 AABB_RUNTIME_KEYS = ('_aabb_sig', '_aabb_bounds')
@@ -104,3 +147,20 @@ def brush_aabb_bounds(brush):
     brush['_aabb_bounds'] = bounds
     brush['_aabb_sig'] = sig
     return bounds
+
+def normalize_color(rgb, default=None):
+    """Normalise an RGB colour to 0.0-1.0 floats.
+
+    Accepts [0-255] int or [0.0-1.0] float components.  Returns *default* (or
+    ``[0.8, 0.8, 0.8]``) if *rgb* is None or malformed.
+
+    Lives here rather than in the renderer because the dense render projection
+    resolves brush colours at edit time and must not import a module that pulls
+    in OpenGL.  ``engine.renderer_core`` re-exports it, so every existing
+    caller is unaffected and there is still one definition.
+    """
+    if default is None:
+        default = [0.8, 0.8, 0.8]
+    if not rgb or not isinstance(rgb, (list, tuple)) or len(rgb) < 3:
+        return list(default)
+    return [c / 255.0 if c > 1.0 else c for c in rgb[:3]]

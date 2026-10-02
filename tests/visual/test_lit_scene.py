@@ -52,7 +52,8 @@ def _render(renderer, context, brushes, things, **config_overrides):
                                **config_overrides)
     context.bind()
     gl.glClearColor(0.0, 0.0, 0.0, 1.0)
-    renderer.render_scene(projection, view, eye, brushes, things, None, config)
+    renderer.render_scene(projection, view, eye, brushes, things, None, config,
+                          brush_slots=config["all_brush_slots"])
     gl.glFinish()
     return context.read_pixels()
 
@@ -132,19 +133,27 @@ def test_a_lit_scene_differs_from_an_unlit_one(renderer, context):
         "lighting path is not affecting the image" % difference.mean())
 
 
-def test_the_shadow_pass_collects_the_cube_and_the_floor(renderer):
-    """Shadow-caster collection is CPU-side; check what it selects."""
-    brushes, things = glh.lit_cube_scene()
-    light = things[0]
-    in_brushes, in_models, signature = renderer._collect_shadow_casters(
-        brushes, [], light.pos[0], light.pos[1], light.pos[2],
-        light.get_radius())
+def _shadow_brush_projection(brushes):
+    from engine.render_table import RenderTable
+    table = RenderTable()
+    table.sync(brushes, 1)
+    slots = np.arange(table.count, dtype=np.int32)
+    return table, slots
 
-    names = {b["name"] for b in in_brushes}
+
+def test_the_shadow_pass_collects_the_cube_and_the_floor(renderer):
+    """Shadow-caster collection operates on dense RenderTable slots."""
+    brushes, things = glh.lit_cube_scene()
+    table, slots = _shadow_brush_projection(brushes)
+    light = things[0]
+    caster_slots, signature = renderer._casters_in_reach(
+        table, renderer._shadow_caster_slots(table, slots),
+        light.pos[0], light.pos[1], light.pos[2], light.get_radius())
+
+    names = {brushes[int(slot)]["name"] for slot in caster_slots}
     assert names == {"floor", "cube"}, (
         "the shadow pass collected %s; both the floor and the cube are within "
         "the light's %.0f-unit reach" % (sorted(names), light.get_radius()))
-    assert in_models == []
     assert isinstance(signature, tuple) and signature[0], (
         "the caster signature is empty, so the cube-map cache could never "
         "detect a change")
@@ -154,13 +163,14 @@ def test_a_caster_outside_the_lights_reach_is_not_collected(renderer):
     from tests.helpers.worlds import box_brush
     brushes, things = glh.lit_cube_scene()
     brushes.append(box_brush("distant", (50000, 0, 0), (64, 64, 64)))
+    table, slots = _shadow_brush_projection(brushes)
     light = things[0]
 
-    in_brushes, _models, _sig = renderer._collect_shadow_casters(
-        brushes, [], light.pos[0], light.pos[1], light.pos[2],
-        light.get_radius())
+    caster_slots, _sig = renderer._casters_in_reach(
+        table, renderer._shadow_caster_slots(table, slots),
+        light.pos[0], light.pos[1], light.pos[2], light.get_radius())
 
-    assert "distant" not in {b["name"] for b in in_brushes}, (
+    assert "distant" not in {brushes[int(slot)]["name"] for slot in caster_slots}, (
         "a brush 50000 units away was collected for a light with a %.0f-unit "
         "reach" % light.get_radius())
 
@@ -169,17 +179,26 @@ def test_the_caster_signature_changes_when_a_caster_moves(renderer):
     """What stops a static scene re-rendering its cube-maps every frame."""
     brushes, things = glh.lit_cube_scene()
     light = things[0]
-    args = (brushes, [], light.pos[0], light.pos[1], light.pos[2],
-            light.get_radius())
-
-    _b, _m, first = renderer._collect_shadow_casters(*args)
-    _b, _m, again = renderer._collect_shadow_casters(*args)
+    table, slots = _shadow_brush_projection(brushes)
+    active = renderer._shadow_caster_slots(table, slots)
+    first_slots, first = renderer._casters_in_reach(
+        table, active, light.pos[0], light.pos[1], light.pos[2],
+        light.get_radius())
+    again_slots, again = renderer._casters_in_reach(
+        table, active, light.pos[0], light.pos[1], light.pos[2],
+        light.get_radius())
+    assert np.array_equal(again_slots, first_slots)
     assert again == first, (
         "the caster signature changed with nothing moving; every frame would "
         "re-render every shadow cube-map")
 
     brushes[1]["pos"] = [64.0, 64.0, 0.0]
-    _b, _m, moved = renderer._collect_shadow_casters(*args)
+    table.sync(brushes, 2)
+    active = renderer._shadow_caster_slots(
+        table, np.arange(table.count, dtype=np.int32))
+    _moved_slots, moved = renderer._casters_in_reach(
+        table, active, light.pos[0], light.pos[1], light.pos[2],
+        light.get_radius())
     assert moved != first, (
         "moving the cube did not change the caster signature; its shadow would "
         "stay where the cube used to be")
@@ -344,8 +363,61 @@ def test_resizing_the_target_between_frames_is_harmless(renderer, context):
     _render(renderer, context, brushes, things)
     gl.glViewport(0, 0, SIZE // 2, SIZE // 2)
     with glh.no_gl_errors("rendering after a viewport change"):
+        config = glh.render_config(all_brushes=brushes, all_things=things)
         renderer.render_scene(*glh.camera_matrices(aspect=1.0),
-                              brushes, things, None,
-                              glh.render_config(all_brushes=brushes,
-                                                all_things=things))
+                              brushes, things, None, config,
+                              brush_slots=config["all_brush_slots"])
     gl.glViewport(0, 0, SIZE, SIZE)
+
+
+def test_a_structural_edit_does_not_rebuild_unchanged_geometry_meshes(
+        renderer, context):
+    """Both render buffers' tables, across a reconcile, share one mesh per
+    unchanged angled brush. The cache was keyed by (table generation,
+    geometry id), and every reconcile moves the generation: adding one box
+    rebuilt every convex mesh on the map, once per buffer."""
+    import numpy as np
+    from engine import brush_geometry as bg
+    from engine.render_table import RenderTable
+    from tests.helpers.worlds import box_brush
+
+    ramps = []
+    for i in range(6):
+        ramp = box_brush("ramp%d" % i, (200 * i, 32, 0), (128, 64, 128))
+        bg.clip_brush(ramp, (0.0, 1.0, 1.0), 20.0)
+        ramps.append(ramp)
+
+    built = []
+    original = renderer._build_geo_mesh
+
+    def counting(record, convex, key):
+        built.append(key)
+        return original(record, convex, key)
+
+    renderer._build_geo_mesh = counting
+    context.bind()
+    front, back = RenderTable(), RenderTable()
+    front.sync(ramps, 1)
+    back.sync(ramps, 1)
+    for table in (front, back):
+        renderer._prepare_geo_meshes(table, np.arange(table.count, dtype=np.int32))
+    assert len(built) == len(ramps), (
+        "the two buffers' tables built %d meshes for %d identical angled "
+        "brushes; each brush's mesh must be built once" % (len(built), len(ramps)))
+
+    # A structural edit: one new box. Both tables reconcile.
+    scene = ramps + [box_brush("new", (0, 500, 0))]
+    for table in (front, back):
+        generation = table.generation
+        table.sync(scene, 2, dirty_objects={id(scene[-1])})
+        assert table.generation != generation
+        renderer._prepare_geo_meshes(table, np.arange(table.count, dtype=np.int32))
+    assert len(built) == len(ramps), (
+        "adding one box rebuilt %d unchanged convex meshes"
+        % (len(built) - len(ramps)))
+
+    # A real shape change still builds a new mesh for that brush alone.
+    bg.clip_brush(ramps[0], (1.0, 0.0, 0.0), 10.0)
+    front.sync(scene, 3, dirty_objects={id(ramps[0])})
+    renderer._prepare_geo_meshes(front, np.arange(front.count, dtype=np.int32))
+    assert len(built) == len(ramps) + 1

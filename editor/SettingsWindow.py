@@ -1,13 +1,17 @@
 from PyQt5.QtWidgets import (
     QDialog, QCheckBox, QVBoxLayout, QDialogButtonBox, QGroupBox, QHBoxLayout,
     QLabel, QSpinBox, QPushButton, QTabWidget, QWidget, QFormLayout, QSlider,
-    QMessageBox, QComboBox
+    QMessageBox, QComboBox, QGridLayout, QToolButton, QButtonGroup
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtGui import QIcon, QPixmap
 import sys
 import os
 
 from engine import shaders
+from engine.glasses import (
+    DEFAULT_GLASSES, GLASSES_STYLES, glasses_path, normalize_glasses,
+)
 
 class SettingsWindow(QDialog):
     """
@@ -29,6 +33,7 @@ class SettingsWindow(QDialog):
         self._create_play_modes_tab()
         self._create_controls_tab()
         self._create_split_screen_tab()   # new tab
+        self._create_appearance_tab()
         
         button_layout = QHBoxLayout()
         
@@ -232,7 +237,7 @@ class SettingsWindow(QDialog):
             "Disable for better performance on slower devices."
         )
         renderer_layout.addWidget(self.shadows_enabled_checkbox)
-        
+
         auto_detect_btn = QPushButton("Auto-Detect Best Settings")
         auto_detect_btn.clicked.connect(self._auto_detect_renderer_settings)
         renderer_layout.addWidget(auto_detect_btn)
@@ -303,6 +308,23 @@ class SettingsWindow(QDialog):
         
         self.show_hud_checkbox = QCheckBox("Show HUD (health, etc.)")
         gameplay_layout.addWidget(self.show_hud_checkbox)
+
+        self.show_glasses_checkbox = QCheckBox("Show glasses")
+        self.show_glasses_checkbox.setToolTip(
+            "Show the player's glasses representation in play mode, "
+            "including split-screen and portal views."
+        )
+        gameplay_layout.addWidget(self.show_glasses_checkbox)
+
+        self.restore_world_checkbox = QCheckBox("Restore the world when leaving Play")
+        self.restore_world_checkbox.setToolTip(
+            "When on, Stop puts every brush and entity back exactly as it was "
+            "when Play started: anything killed, hidden, moved or collected "
+            "during the session is undone.\n"
+            "When off, the editor keeps showing what happened in play "
+            "(dead monsters, killed or hidden objects) until the next Play."
+        )
+        gameplay_layout.addWidget(self.restore_world_checkbox)
 
         gameplay_group.setLayout(gameplay_layout)
         layout.addWidget(gameplay_group)
@@ -423,6 +445,67 @@ class SettingsWindow(QDialog):
         layout.addWidget(p2_group)
         layout.addStretch()
 
+    def _create_appearance_tab(self):
+        """Appearance tab: the glasses that represent player 1 in the world."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        self.tabs.addTab(widget, "Appearance")
+
+        group = QGroupBox("Glasses (Player 1)")
+        group_layout = QVBoxLayout()
+        note = QLabel(
+            "Choose the glasses other players see you as - in split-screen\n"
+            "and reflected in portals. Player 2 always wears the classic pair."
+        )
+        note.setStyleSheet("color: #9fb7b5;")
+        group_layout.addWidget(note)
+
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        self.glasses_buttons = QButtonGroup(self)
+        self.glasses_buttons.setExclusive(True)
+        self._glasses_button_for = {}
+        columns = 3
+        for index, (style, label, _fname) in enumerate(GLASSES_STYLES):
+            button = QToolButton()
+            button.setCheckable(True)
+            button.setToolTip(label)
+            button.setIcon(QIcon(QPixmap(glasses_path(style))))
+            button.setIconSize(QSize(150, 64))
+            button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            button.setMinimumSize(170, 84)
+            button.setProperty('glasses_style', style)
+            button.setStyleSheet("""
+                QToolButton {
+                    background-color: #d8e2e1;
+                    color: #1e2b2a;
+                    border: 2px solid #555;
+                    border-radius: 6px;
+                    padding: 6px;
+                }
+                QToolButton:hover { border: 2px solid #4A6B73; }
+                QToolButton:checked { border: 3px solid #F08000; }
+            """)
+            self.glasses_buttons.addButton(button, index)
+            self._glasses_button_for[style] = button
+            grid.addWidget(button, index // columns, index % columns)
+        group_layout.addLayout(grid)
+        group.setLayout(group_layout)
+        layout.addWidget(group)
+        layout.addStretch()
+
+    def _set_glasses(self, style):
+        button = self._glasses_button_for.get(normalize_glasses(style))
+        if button is not None:
+            button.setChecked(True)
+
+    def selected_glasses(self):
+        """The glasses style currently picked on the Appearance tab."""
+        button = self.glasses_buttons.checkedButton()
+        if button is None:
+            return DEFAULT_GLASSES
+        return normalize_glasses(button.property('glasses_style'))
+
     def _apply_stylesheet(self):
         self.setStyleSheet("""
             QCheckBox::indicator:checked {
@@ -504,7 +587,14 @@ class SettingsWindow(QDialog):
         self.shadows_enabled_checkbox.setChecked(self.config.getboolean('Renderer', 'shadows_enabled', fallback=default_shadows))
 
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
+        self.restore_world_checkbox.setChecked(
+            self.config.getboolean('Settings', 'restore_world_on_stop', fallback=False))
         self.show_hud_checkbox.setChecked(self.config.getboolean('Display', 'show_hud', fallback=True))
+        self.show_glasses_checkbox.setChecked(
+            self.config.getboolean('Display', 'show_glasses', fallback=True)
+        )
+        self._set_glasses(self.config.get(
+            'Appearance', 'glasses', fallback=DEFAULT_GLASSES))
 
         save_mode = str(self.config.get('Settings', 'save_mode', fallback='full')).strip().lower()
         idx = self.save_mode_combo.findData(save_mode)
@@ -612,12 +702,21 @@ class SettingsWindow(QDialog):
             self.config.add_section('Renderer')
         self.config.set('Renderer', 'lowpower_mode', str(self.lowpower_mode_checkbox.isChecked()))
         self.config.set('Renderer', 'shadows_enabled', str(self.shadows_enabled_checkbox.isChecked()))
+        # Water quality is per water brush now; drop the old global key.
+        self.config.remove_option('Renderer', 'water_quality')
         
         self.config.set('Display', 'show_hud', str(self.show_hud_checkbox.isChecked()))
+        self.config.set('Display', 'show_glasses', str(self.show_glasses_checkbox.isChecked()))
+
+        if not self.config.has_section('Appearance'):
+            self.config.add_section('Appearance')
+        self.config.set('Appearance', 'glasses', self.selected_glasses())
         
         if not self.config.has_section('Settings'):
             self.config.add_section('Settings')
         self.config.set('Settings', 'physics', str(self.physics_checkbox.isChecked()))
+        self.config.set('Settings', 'restore_world_on_stop',
+                        str(self.restore_world_checkbox.isChecked()))
         self.config.set('Settings', 'save_mode',
                         self.save_mode_combo.currentData() or 'full')
 
@@ -639,7 +738,6 @@ class SettingsWindow(QDialog):
                 str(self.place_camera_at_player_start_checkbox.isChecked()))
 
     def _restart_application(self):
-        from PyQt5.QtWidgets import QApplication
         
         python = sys.executable
         script = sys.argv[0]

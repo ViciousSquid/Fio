@@ -1,0 +1,11 @@
+# Fio oil drum material.
+# The texture atlas contains the painted cylindrical body plus separate
+# top/bottom cap, rolled-rim, and fitting UV islands.
+newmtl OilDrumSG
+illum 2
+Ka 0.08 0.09 0.09
+Kd 1.00 1.00 1.00
+Ks 0.12 0.12 0.12
+Ns 18.0
+d 1.0
+map_Kd Oil_Drum_Texture.ppm

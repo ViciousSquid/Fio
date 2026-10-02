@@ -3,14 +3,14 @@
     "brushes": [
         {
             "pos": [
-                -504.0,
-                192.0,
-                24.0
+                -504,
+                192,
+                24
             ],
             "size": [
-                16.0,
-                512.0,
-                816.0
+                16,
+                512,
+                816
             ],
             "operation": "add",
             "textures": {
@@ -26,14 +26,14 @@
         },
         {
             "pos": [
-                728.0,
-                192.0,
-                32.0
+                728,
+                192,
+                32
             ],
             "size": [
-                16.0,
-                512.0,
-                816.0
+                16,
+                512,
+                816
             ],
             "operation": "add",
             "textures": {
@@ -49,14 +49,14 @@
         },
         {
             "pos": [
-                112.0,
-                -56.0,
-                32.0
+                112,
+                -56,
+                32
             ],
             "size": [
-                1216.0,
-                16.0,
-                816.0
+                1216,
+                16,
+                816
             ],
             "operation": "add",
             "textures": {
@@ -72,14 +72,14 @@
         },
         {
             "pos": [
-                112.0,
-                440.0,
-                24.0
+                112,
+                440,
+                24
             ],
             "size": [
-                1216.0,
-                16.0,
-                816.0
+                1216,
+                16,
+                816
             ],
             "operation": "add",
             "textures": {
@@ -95,14 +95,14 @@
         },
         {
             "pos": [
-                112.0,
-                192.0,
-                -376.0
+                112,
+                192,
+                -376
             ],
             "size": [
-                1216.0,
-                480.0,
-                16.0
+                1216,
+                480,
+                16
             ],
             "operation": "add",
             "textures": {
@@ -117,14 +117,14 @@
         },
         {
             "pos": [
-                112.0,
-                192.0,
-                424.0
+                112,
+                192,
+                424
             ],
             "size": [
-                1216.0,
-                480.0,
-                16.0
+                1216,
+                480,
+                16
             ],
             "operation": "add",
             "textures": {
@@ -139,14 +139,14 @@
         },
         {
             "pos": [
-                -16.0,
+                -16,
                 -48,
-                -128.0
+                -128
             ],
             "size": [
-                128.0,
-                32.0,
-                128.0
+                128,
+                32,
+                128
             ],
             "textures": {
                 "north": "default.png",
@@ -157,22 +157,22 @@
                 "down": "default.png"
             },
             "colour": [
-                1.0,
-                0.0,
+                1,
+                0,
                 0.4980392156862745
             ],
             "id": "97db6644-0e88-46f4-862b-a4e4da85de7f"
         },
         {
             "pos": [
-                0.0,
-                -48.0,
-                192.0
+                0,
+                -48,
+                192
             ],
             "size": [
-                256.0,
-                32.0,
-                128.0
+                256,
+                32,
+                128
             ],
             "textures": {
                 "north": "default.png",
@@ -191,14 +191,14 @@
         },
         {
             "pos": [
-                0.0,
-                32.0,
-                192.0
+                0,
+                32,
+                192
             ],
             "size": [
-                240.0,
-                128.0,
-                128.0
+                240,
+                128,
+                128
             ],
             "textures": {
                 "north": "trigger.jpg",
@@ -218,7 +218,7 @@
                     "target": "LogicSpawner_1",
                     "input": "Spawn",
                     "parameter": "",
-                    "delay": 0.0,
+                    "delay": 0,
                     "fire_once": false
                 }
             ]
@@ -228,9 +228,9 @@
         {
             "type": "light",
             "pos": [
-                -192.0,
-                208.0,
-                24.0
+                -192,
+                208,
+                24
             ],
             "properties": {
                 "type": "light",
@@ -241,16 +241,16 @@
                     255,
                     255
                 ],
-                "intensity": 1.0,
-                "radius": 512.0,
+                "intensity": 1,
+                "radius": 512,
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
                 "parent_mover": "",
                 "parent_offset": [
-                    0.0,
-                    0.0,
-                    0.0
+                    0,
+                    0,
+                    0
                 ]
             },
             "io_connections": []
@@ -258,9 +258,9 @@
         {
             "type": "light",
             "pos": [
-                416.0,
-                208.0,
-                24.0
+                416,
+                208,
+                24
             ],
             "properties": {
                 "type": "light",
@@ -271,16 +271,16 @@
                     255,
                     255
                 ],
-                "intensity": 1.0,
-                "radius": 512.0,
+                "intensity": 1,
+                "radius": 512,
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
                 "parent_mover": "",
                 "parent_offset": [
-                    0.0,
-                    0.0,
-                    0.0
+                    0,
+                    0,
+                    0
                 ]
             },
             "io_connections": []
@@ -317,29 +317,32 @@
                 "type": "playerstart",
                 "name": "PlayerStart_1",
                 "id": "12805398-cad5-4e18-8a66-a2a80a08abb2",
-                "angle": 0.0
+                "angle": 0
             },
             "io_connections": []
         },
         {
-            "type": "pickup",
+            "type": "prop",
             "pos": [
-                -352.0,
+                -352,
                 16,
-                368.0
+                368
             ],
             "properties": {
-                "type": "pickup",
-                "name": "Pickup_1",
+                "type": "prop",
+                "name": "Prop_1",
                 "id": "9fdef6c9-070d-4089-9afa-607550896c6f",
-                "item_type": "gun2",
-                "value": 25,
-                "activation": "walk_over",
-                "collected": true,
-                "respawns": false,
-                "respawn_time": 20.0,
-                "key_name": "blue_key",
-                "custom_sprite": "assets/sprites/gun2.png"
+                "carry_enabled": false,
+                "collect_enabled": true,
+                "collect_type": "weapon",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": true,
+                "collect_respawns": false,
+                "collect_respawn_time": 20,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "gun2",
+                "sprite_path": "assets/sprites/gun2.png"
             },
             "io_connections": []
         }

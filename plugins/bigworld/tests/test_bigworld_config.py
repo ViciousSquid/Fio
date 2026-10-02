@@ -20,6 +20,10 @@ other — so the copies cannot come back.
 import os
 import sys
 
+import pytest
+
+pytestmark = pytest.mark.qt
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 from plugins.bigworld import config, persistence          # noqa: E402
@@ -33,12 +37,16 @@ class _RecordingAPI:
     def __init__(self):
         self.entities = []
         self.properties = {}
+        self.singletons = []
 
     def register_entity(self, cls, menu_label=""):
         self.entities.append((cls, menu_label))
 
     def register_properties(self, entity_type, specs):
         self.properties[entity_type] = list(specs)
+
+    def register_singleton_entity(self, entity_type):
+        self.singletons.append(entity_type)
 
 
 def _registered_schema():
@@ -66,6 +74,33 @@ def test_there_is_exactly_one_bigworld_settings_class():
     assert BigWorldSettings.TYPE == BigWorldPlugin.SETTINGS_TYPE, (
         "the entity's type string and the plugin's opt-in test disagree, so a "
         "map carrying the entity would not switch streaming on")
+
+
+def test_bigworld_settings_exposes_schema_fields_to_the_property_editor():
+    """Schema fields must be explicitly classified so the Properties tab invokes the plugin renderer."""
+    assert BigWorldSettings.EDITOR_PRIMARY_PROPERTIES == tuple(config.BY_KEY)
+
+
+def test_marker_and_io_plumbing_is_not_shown_in_the_property_panel(qt_app):
+    from PyQt5.QtWidgets import QFormLayout, QLabel
+    from plugins.integration import _render_schema_rows
+
+    class _Editor:
+        def update_object_prop(self, *args):
+            pass
+
+    form = QFormLayout()
+    _render_schema_rows(_Editor(), form, BigWorldSettings(),
+                        _registered_schema())
+    labels = [form.itemAt(row, QFormLayout.LabelRole).widget().text()
+              for row in range(form.rowCount())
+              if form.itemAt(row, QFormLayout.LabelRole) is not None
+              and isinstance(form.itemAt(row, QFormLayout.LabelRole).widget(),
+                             QLabel)]
+    assert "Activation radius:" in labels
+    for hidden in ("Render Mode:", "Sprite Path:", "Sprite Size:",
+                   "Io Enabled:"):
+        assert hidden not in labels
 
 
 def test_the_entity_the_schema_and_the_coercer_describe_the_same_keys():
@@ -133,6 +168,18 @@ def test_values_that_survived_a_json_round_trip_still_read_correctly():
     assert cfg["terrain_fill"] is True
     assert cfg["terrain_stream_radius"] == 0.0, (
         "an unparseable value should fall back to the field's default, not raise")
+
+
+def test_effective_streaming_radius_respects_the_visual_horizon():
+    assert config.effective_streaming_radii(
+        2048.0, 2304.0, 3768.32
+    ) == pytest.approx((3768.32, 4024.32))
+
+
+def test_effective_streaming_radius_never_shrinks_an_authored_world():
+    assert config.effective_streaming_radii(
+        4096.0, 4608.0, 2048.0
+    ) == pytest.approx((4096.0, 4608.0))
 
 
 def test_the_deactivation_radius_can_never_sit_inside_the_activation_radius():

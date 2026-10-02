@@ -3,14 +3,14 @@
     "brushes": [
         {
             "pos": [
-                1024.0,
-                200.0,
-                448.0
+                1024,
+                200,
+                448
             ],
             "size": [
-                512.0,
-                400.0,
-                640.0
+                512,
+                400,
+                640
             ],
             "textures": {
                 "north": "default.png",
@@ -24,14 +24,14 @@
         },
         {
             "pos": [
-                680.0,
-                320.0,
-                504.0
+                680,
+                320,
+                504
             ],
             "size": [
-                176.0,
-                32.0,
-                48.0
+                176,
+                32,
+                48
             ],
             "textures": {
                 "north": "default.png",
@@ -45,14 +45,14 @@
         },
         {
             "pos": [
-                684.0,
-                320.0,
-                304.0
+                684,
+                320,
+                304
             ],
             "size": [
-                168.0,
-                32.0,
-                48.0
+                168,
+                32,
+                48
             ],
             "textures": {
                 "north": "default.png",
@@ -66,14 +66,14 @@
         },
         {
             "pos": [
-                384.0,
-                104.0,
-                -760.0
+                384,
+                104,
+                -760
             ],
             "size": [
-                1792.0,
-                208.0,
-                496.0
+                1792,
+                208,
+                496
             ],
             "textures": {
                 "north": "default.png",
@@ -87,14 +87,14 @@
         },
         {
             "pos": [
-                1024.0,
-                104.0,
-                -192.0
+                1024,
+                104,
+                -192
             ],
             "size": [
-                512.0,
-                208.0,
-                640.0
+                512,
+                208,
+                640
             ],
             "textures": {
                 "north": "default.png",
@@ -108,13 +108,13 @@
         },
         {
             "pos": [
-                536.0,
-                104.0,
+                536,
+                104,
                 -266.1333333333333
             ],
             "size": [
-                464.0,
-                208.0,
+                464,
+                208,
                 491.73333333333335
             ],
             "textures": {
@@ -129,67 +129,67 @@
                 "planes": [
                     {
                         "n": [
-                            1.0,
-                            0.0,
-                            0.0
+                            1,
+                            0,
+                            0
                         ],
-                        "d": 768.0,
+                        "d": 768,
                         "texture": "default.png",
                         "face": "east"
                     },
                     {
                         "n": [
-                            -1.0,
-                            0.0,
-                            0.0
+                            -1,
+                            0,
+                            0
                         ],
-                        "d": -432.0,
+                        "d": -432,
                         "texture": "default.png",
                         "face": "west"
                     },
                     {
                         "n": [
-                            0.0,
-                            1.0,
-                            0.0
+                            0,
+                            1,
+                            0
                         ],
-                        "d": 208.0,
+                        "d": 208,
                         "texture": "default.png",
                         "face": "top"
                     },
                     {
                         "n": [
-                            0.0,
-                            -1.0,
-                            0.0
+                            0,
+                            -1,
+                            0
                         ],
-                        "d": 0.0,
+                        "d": 0,
                         "texture": "default.png",
                         "face": "down"
                     },
                     {
                         "n": [
-                            0.0,
-                            0.0,
-                            1.0
+                            0,
+                            0,
+                            1
                         ],
-                        "d": 0.0,
+                        "d": 0,
                         "texture": "default.png",
                         "face": "north"
                     },
                     {
                         "n": [
-                            0.0,
-                            0.0,
-                            -1.0
+                            0,
+                            0,
+                            -1
                         ],
-                        "d": 512.0,
+                        "d": 512,
                         "texture": "default.png",
                         "face": "south"
                     },
                     {
                         "n": [
-                            -0.0,
+                            0,
                             0.9149178015729321,
                             0.40364020657629357
                         ],
@@ -205,14 +205,14 @@
         {
             "type": "playerstart",
             "pos": [
-                784.0,
-                272.0,
-                -784.0
+                784,
+                272,
+                -784
             ],
             "properties": {
                 "type": "playerstart",
                 "name": "PlayerStart_1",
-                "angle": 0.0,
+                "angle": 0,
                 "id": "55f41b17-d732-434a-859c-19ac8a0c3f1e"
             },
             "io_connections": [
@@ -221,7 +221,7 @@
                     "target": "LogicCommand_1",
                     "input": "RunCommand",
                     "parameter": "",
-                    "delay": 0.0,
+                    "delay": 0,
                     "fire_once": false,
                     "target_id": "117b2871-4c0f-4304-a6e3-6d077daa7b95"
                 }
@@ -230,9 +230,9 @@
         {
             "type": "light",
             "pos": [
-                -160.0,
+                -160,
                 40,
-                -160.0
+                -160
             ],
             "properties": {
                 "type": "light",
@@ -242,17 +242,17 @@
                     255,
                     255
                 ],
-                "intensity": 1.0,
-                "radius": 512.0,
+                "intensity": 1,
+                "radius": 512,
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
                 "id": "0e6d6d40-9014-470d-9c6c-cc420b102421",
                 "parent_mover": "",
                 "parent_offset": [
-                    0.0,
-                    0.0,
-                    0.0
+                    0,
+                    0,
+                    0
                 ]
             },
             "io_connections": []
@@ -260,9 +260,9 @@
         {
             "type": "light",
             "pos": [
-                448.0,
-                48.0,
-                464.0
+                448,
+                48,
+                464
             ],
             "properties": {
                 "type": "light",
@@ -272,17 +272,17 @@
                     255,
                     255
                 ],
-                "intensity": 1.0,
-                "radius": 512.0,
+                "intensity": 1,
+                "radius": 512,
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
                 "id": "87495dce-29ce-4b69-892c-11a8a8a3e7ec",
                 "parent_mover": "",
                 "parent_offset": [
-                    0.0,
-                    0.0,
-                    0.0
+                    0,
+                    0,
+                    0
                 ]
             },
             "io_connections": []
@@ -290,9 +290,9 @@
         {
             "type": "light",
             "pos": [
-                432.0,
+                432,
                 40,
-                -176.0
+                -176
             ],
             "properties": {
                 "type": "light",
@@ -302,17 +302,17 @@
                     255,
                     255
                 ],
-                "intensity": 1.0,
-                "radius": 512.0,
+                "intensity": 1,
+                "radius": 512,
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
                 "id": "3a8db2f4-6ab5-4e4a-96ba-07c25a96e3cd",
                 "parent_mover": "",
                 "parent_offset": [
-                    0.0,
-                    0.0,
-                    0.0
+                    0,
+                    0,
+                    0
                 ]
             },
             "io_connections": []
@@ -320,9 +320,9 @@
         {
             "type": "light",
             "pos": [
-                -192.0,
+                -192,
                 40,
-                544.0
+                544
             ],
             "properties": {
                 "type": "light",
@@ -332,17 +332,17 @@
                     255,
                     255
                 ],
-                "intensity": 1.0,
-                "radius": 512.0,
+                "intensity": 1,
+                "radius": 512,
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
                 "id": "305ca295-fe60-4d09-97dc-c417fa43818b",
                 "parent_mover": "",
                 "parent_offset": [
-                    0.0,
-                    0.0,
-                    0.0
+                    0,
+                    0,
+                    0
                 ]
             },
             "io_connections": []
@@ -350,9 +350,9 @@
         {
             "type": "light",
             "pos": [
-                368.0,
-                304.0,
-                -752.0
+                368,
+                304,
+                -752
             ],
             "properties": {
                 "type": "light",
@@ -363,16 +363,16 @@
                     255,
                     255
                 ],
-                "intensity": 1.0,
-                "radius": 512.0,
+                "intensity": 1,
+                "radius": 512,
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
                 "parent_mover": "",
                 "parent_offset": [
-                    0.0,
-                    0.0,
-                    0.0
+                    0,
+                    0,
+                    0
                 ]
             },
             "io_connections": []
@@ -380,9 +380,9 @@
         {
             "type": "monster",
             "pos": [
-                176.0,
+                176,
                 210.9107666015625,
-                352.0
+                352
             ],
             "properties": {
                 "type": "monster",
@@ -414,24 +414,27 @@
             "io_connections": []
         },
         {
-            "type": "pickup",
+            "type": "prop",
             "pos": [
                 784,
                 272,
                 -784
             ],
             "properties": {
-                "type": "pickup",
-                "name": "Pickup_1",
+                "type": "prop",
+                "name": "Prop_1",
                 "id": "5cf93f3a-a699-4c62-8579-0bb6758efe7a",
-                "item_type": "gun2",
-                "value": 25,
-                "activation": "walk_over",
-                "collected": true,
-                "respawns": false,
-                "respawn_time": 20.0,
-                "key_name": "blue_key",
-                "custom_sprite": "assets/sprites/gun2.png"
+                "carry_enabled": false,
+                "collect_enabled": true,
+                "collect_type": "weapon",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": true,
+                "collect_respawns": false,
+                "collect_respawn_time": 20,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "gun2",
+                "sprite_path": "assets/sprites/gun2.png"
             },
             "io_connections": []
         },
@@ -454,9 +457,9 @@
         {
             "type": "monster",
             "pos": [
-                -480.0,
+                -480,
                 169.32176208496094,
-                1136.0
+                1136
             ],
             "properties": {
                 "type": "monster",
@@ -492,11 +495,11 @@
         "solid": true,
         "seed": 42,
         "biome": "Low Poly Valley",
-        "chunk_size": 256.0,
+        "chunk_size": 256,
         "base_resolution": 48,
-        "offset_x": 0.0,
-        "offset_z": 0.0,
-        "offset_y": 0.0,
+        "offset_x": 0,
+        "offset_z": 0,
+        "offset_y": 0,
         "min_chunk_x": -5,
         "max_chunk_x": 5,
         "min_chunk_z": -5,
@@ -505,8 +508,8 @@
         "flat_mode": true,
         "custom_biome": {
             "name": "Low Poly Valley",
-            "base_height": 10.0,
-            "height_scale": 250.0,
+            "base_height": 10,
+            "height_scale": 250,
             "hills_scale": 0.004,
             "hills_intensity": 0.8,
             "mountains_enabled": true,
@@ -524,7 +527,7 @@
             "tree_density": 0.15,
             "color_gradient": [
                 [
-                    0.0,
+                    0,
                     [
                         0.38,
                         0.6,
@@ -548,7 +551,7 @@
                     ]
                 ],
                 [
-                    1.0,
+                    1,
                     [
                         0.65,
                         0.45,
@@ -557,10 +560,10 @@
                 ]
             ],
             "blend_weights": [
-                1.0,
-                0.0,
-                0.0,
-                0.0
+                1,
+                0,
+                0,
+                0
             ],
             "terrain_height_scale": 0.003
         }

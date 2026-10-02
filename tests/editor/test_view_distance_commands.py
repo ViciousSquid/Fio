@@ -75,6 +75,10 @@ class _MainWindow:
         self.view_3d = _View3D()
         self.cull_dist_spinbox = _Spinbox(int(self.view_3d.view_distance.distance))
 
+    def set_cull_distance(self, distance):
+        self.view_3d.set_cull_distance(distance)
+        self.cull_dist_spinbox.setValue(int(round(self.view_3d.view_distance.distance)))
+
 
 @pytest.fixture
 def handler():
@@ -96,7 +100,8 @@ def run(handler, line):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("name", [
-    "r_viewdistance", "r_culldistance", "viewdistance", "culldistance", "farplane",
+    "r_viewdistance", "r_culldistance", "r_cullfogdist", "r_cullfogdistance",
+    "viewdistance", "culldistance", "cullfogdist", "cullfogdistance", "farplane",
     "r_distancefog", "distancefog",
     "r_fogdistance", "fogdistance", "fogdist",
     "r_fogstart", "fogstart", "r_fogend", "fogend",
@@ -161,6 +166,12 @@ def test_aliases_reach_the_same_setting(handler, vd):
     assert vd.distance == 1800.0
     run(handler, "culldistance 2600")
     assert vd.distance == 2600.0
+    run(handler, "cullfogdist 3000")
+    assert vd.distance == 3000.0
+    assert handler.main_window.cull_dist_spinbox.value() == 3000
+    run(handler, "cullfogdistance 3500")
+    assert vd.distance == 3500.0
+    assert handler.main_window.cull_dist_spinbox.value() == 3500
 
 
 # ---------------------------------------------------------------------------

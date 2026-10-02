@@ -8,10 +8,20 @@ import copy
 import os
 import math
 import uuid
-from PyQt5.QtGui import QPixmap, QColor
+import importlib
+
+from engine.change_journal import TrackedAttribute, TrackedPosition, touch
+from engine.portal_transform import (
+    basis_from_rotation as _portal_basis_from_rotation,
+    map_point as _portal_map_point,
+    map_direction as _portal_map_direction,
+    corners as _portal_corners,
+    contains_point as _portal_contains_point,
+)
+from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt
-import json
 import ast
+import posixpath
 
 from . import state_values as _sv
 
@@ -53,7 +63,7 @@ def update_all_counters_from_entities(entities):
         else:
             name = entity.properties.get('name', '')
 
-        if not name:
+        if not name or not isinstance(name, str):
             continue
 
         # Names are typically "ClassName_number" (e.g., "Monster_5", "Light_12")
@@ -64,7 +74,9 @@ def update_all_counters_from_entities(entities):
             if num > max_indices[class_name]:
                 max_indices[class_name] = num
 
-    # Update counters for all Thing subclasses
+    # Update counters for all Thing subclasses (including core entities
+    # defined outside this module, e.g. Prop).
+    _load_core_entity_types()
     for cls in find_subclasses(Thing):
         class_name = cls.__name__
         if class_name in max_indices:
@@ -74,8 +86,59 @@ def update_all_counters_from_entities(entities):
             cls._counters[class_name] = 0
 
 
+#: Entity class -> its default properties, learned once from a probe instance.
+_CLASS_DEFAULTS = {}
+
+
+def _class_defaults(cls):
+    """The properties a fresh *cls* declares, keyed by name.
+
+    Learned from one probe instance per class.  The probe is given a name and
+    id so that constructing it neither advances the naming counters nor
+    generates a UUID.
+    """
+    defaults = _CLASS_DEFAULTS.get(cls)
+    if defaults is None:
+        try:
+            probe = cls(pos=[0.0, 0.0, 0.0],
+                        properties={'name': '\x00probe', 'id': '\x00probe'})
+            defaults = dict(probe.properties)
+        except Exception:
+            defaults = {}
+        _CLASS_DEFAULTS[cls] = defaults
+    return defaults
+
+
+def _heal_legacy_strings(cls, properties):
+    """*properties* with legacy string-encoded values restored to their type.
+
+    Old maps stored numbers, booleans and lists as their text (``"0.5"``,
+    ``"True"``).  Such a string is parsed back only where *cls* declares a
+    non-string default for that property: a property that is text by
+    declaration (a name, a message, a map path) or that the class does not
+    declare at all keeps exactly what was authored.  Parsing every string
+    turned an entity named ``"2"`` into the integer 2 on save, and the next
+    load of that map crashed.
+    """
+    defaults = _class_defaults(cls)
+    healed = {}
+    for key, value in properties.items():
+        default = defaults.get(key)
+        if (isinstance(value, str) and default is not None
+                and not isinstance(default, str)):
+            try:
+                value = ast.literal_eval(value)
+            except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+                pass  # Genuinely a string — keep it
+        healed[key] = value
+    return healed
+
+
 class Thing:
     """Base class for all placeable entities."""
+    #: Assigning ``pos`` tells the render projection the entity moved; see
+    #: :mod:`engine.change_journal`. Assign a new list rather than mutating it.
+    pos = TrackedPosition()
     pixmap_path = None
     _pixmap_cache = {}  # Class-level cache for loaded pixmaps
     _counters = {}      # Class-level counter for unique naming
@@ -175,6 +238,23 @@ class Thing:
         """
         return self.__class__.get_pixmap()
 
+    def _pixmap_for_path(self, sprite_path):
+        """Cached QPixmap for an authored sprite path (project-relative or absolute).
+
+        Returns None when the file is missing or unreadable. Shared by any
+        entity whose 2D icon comes from an authored path rather than its class.
+        """
+        cache_key = ('sprite_path', sprite_path)
+        if cache_key in self._pixmap_cache:
+            return self._pixmap_cache[cache_key]
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        absolute_path = sprite_path if os.path.isabs(sprite_path) else os.path.join(project_root, sprite_path)
+        pixmap = QPixmap(absolute_path) if os.path.exists(absolute_path) else None
+        if pixmap is not None and pixmap.isNull():
+            pixmap = None
+        self._pixmap_cache[cache_key] = pixmap
+        return pixmap
+
     def duplicate(self, existing_names=()):
         """An independent copy of this entity, ready to place.
 
@@ -208,17 +288,11 @@ class Thing:
     def to_dict(self):
         """Serialize to dictionary for saving."""
         props_copy = {k: v for k, v in self.properties.items() if k != '_io_connections'}
-        
+
+        # Heal legacy string-typed values on save, so old map files are
+        # repaired by the next save (see _heal_legacy_strings).
         serializable_props = {}
-        for k, v in props_copy.items():
-            # Coerce legacy string-typed values to their native types on save.
-            # This heals old map files automatically on next save.
-            if isinstance(v, str):
-                try:
-                    v = ast.literal_eval(v)
-                except (ValueError, SyntaxError):
-                    pass  # Genuinely a string — keep it
-            
+        for k, v in _heal_legacy_strings(type(self), props_copy).items():
             if isinstance(v, (str, int, float, bool, list, dict, type(None))):
                 serializable_props[k] = v
             else:
@@ -247,43 +321,60 @@ class Thing:
     def from_dict(data):
         """Deserialize from dictionary."""
         thing_type = data.get('type')
+
+        # Untouched copy for opaque preservation of unresolvable types.
+        original_record = copy.deepcopy(data)
+
         if not thing_type:
+            # Deliberately *not* preserved, unlike an unresolvable type token.
+            # Preservation exists so an entity whose plugin is missing survives
+            # a load/save round trip; that entity is identifiable, carries
+            # authored content, and a plugin may supply its class later. A
+            # record with no type at all is none of those things -- there is
+            # nothing to resolve it to and nothing to show the author but a
+            # nameless ghost. Skipping it (without stopping the load) is the
+            # contract test_a_thing_with_no_type_is_skipped_rather_than_
+            # crashing_the_load pins.
             return None
 
         properties = data.get('properties', {})
-        for key, value in properties.items():
-            if isinstance(value, str):
-                try:
-                    properties[key] = ast.literal_eval(value)
-                except (ValueError, SyntaxError):
-                    pass
+        if not isinstance(properties, dict):
+            properties = {}
 
         # A subclass may declare `map_type` when its serialised type token
-        # differs from its class name; otherwise the class name is used, so
-        # every existing entity resolves exactly as before.  `legacy_map_types`
-        # lists tokens an *older* Fio wrote for the same entity, so a map saved
-        # before a rename still loads into the renamed class rather than being
-        # dropped with a warning.  Current tokens are matched across every class
-        # first, so a legacy alias can never shadow a live entity type.
+        # differs from its class name; otherwise the class name is used.
         thing = None
         token = thing_type.replace('_', '').lower()
+        _load_core_entity_types()
+        legacy_model = token == 'model'
+        if legacy_model:
+            # There is no Model entity: every model is a Prop. A map written
+            # before that keeps what its models were -- solid scenery the
+            # player does not pick up -- under whatever the record authors.
+            from engine.prop_entity import legacy_model_properties
+            properties = legacy_model_properties(properties)
+            token = 'prop'
         subclasses = find_subclasses(Thing)
         match = next((c for c in subclasses
                       if token == getattr(c, 'map_type', c.__name__.lower())), None)
-        if match is None:
-            match = next((c for c in subclasses
-                          if token in getattr(c, 'legacy_map_types', ())), None)
+        if match is None and thing_type == 'thing':
+            match = Thing
         if match is not None:
-            thing = match(pos=data.get('pos'), properties=properties)
+            thing = match(pos=data.get('pos'),
+                          properties=_heal_legacy_strings(match, properties))
+            if legacy_model:
+                # Transient: lets the map loader re-aim I/O written against the
+                # old Model inputs (see io_system.retarget_legacy_model_inputs).
+                thing._legacy_model = True
 
         if thing is None:
-            if thing_type == 'thing':
-                thing = Thing(pos=data.get('pos'), properties=properties)
-            else:
-                print(f"Warning: Unknown thing type '{thing_type}' found in map file.")
-                return None
+            # Never drop an entity: a later save would erase it for good.
+            # Keep the record opaque so it round-trips byte-for-byte.
+            print(f"Warning: Unknown thing type '{thing_type}' found in map file; "
+                  f"preserved unchanged (is a plugin missing or disabled?).")
+            return UnresolvedThing(original_record)
         
-        io_data = data.get('io_connections', [])
+        io_data = copy.deepcopy(data.get('io_connections', []))
         if io_data:
             try:
                 from .io_system import OutputConnection
@@ -349,6 +440,50 @@ class PlayerStart(Thing):
 
     def get_angle(self):
         return float(self.properties.get('angle', 0.0))
+
+
+class UnresolvedThing(Thing):
+    """Opaque stand-in for an entity whose type this build cannot resolve.
+
+    Typically a plugin entity whose plugin is missing or disabled, or a type
+    from a newer/older Fio with no migration. The original map record is kept
+    verbatim and written back unchanged on save (only ``pos`` follows edits,
+    so it can still be moved or deleted in the editor). It has no runtime
+    behaviour: no class-specific handling matches it, and it declares no I/O.
+
+    ``map_type`` is set to a token no map can contain, so the from_dict
+    subclass walk can never resolve a record *to* this class.
+    """
+    map_type = '\x00unresolved'
+
+    def __init__(self, record=None, pos=None, properties=None):
+        record = copy.deepcopy(record) if isinstance(record, dict) else {}
+        self._record = record
+        raw_props = record.get('properties')
+        props = copy.deepcopy(raw_props) if isinstance(raw_props, dict) else {}
+        if properties:
+            props.update(properties)
+        super().__init__(pos=list(record.get('pos') or pos or [0, 0, 0]),
+                         properties=props)
+        self.properties['type'] = record.get('type') or self.properties.get('type')
+
+    @property
+    def unresolved_type(self):
+        return self._record.get('type')
+
+    def to_dict(self):
+        data = copy.deepcopy(self._record)
+        data['pos'] = [float(v) for v in self.pos]
+        return data
+
+    def duplicate(self, existing_names=()):
+        """Copies need their own identity inside the preserved record too."""
+        clone = super().duplicate(existing_names)
+        props = clone._record.setdefault('properties', {})
+        if isinstance(props, dict):
+            props['id'] = clone.properties['id']
+            props['name'] = clone.properties['name']
+        return clone
 
 
 class Light(Thing):
@@ -447,8 +582,8 @@ class Monster(Thing):
     _icon_cache = {}       # 1.2.6.0: cache for 2D view icons (60×60)
 
     # PERF: get_sprite_path used to run up to 5 os.path.isfile() calls every
-    # time it was called — and it is called per-Monster per-frame from
-    # qt_game_view.update_instance_textures. This cache memoises the resolved
+    # time it was called — and it is called per Monster whenever the entity
+    # projection resolves a monster's sprite. This cache memoises the resolved
     # (idle, dead, shoot) default paths by (monster_type, variant) so the
     # filesystem only sees the stats once per distinct monster configuration.
     # Keyed tuple: (mtype, variant)
@@ -465,7 +600,13 @@ class Monster(Thing):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties.setdefault('type', 'monster')
-        self.properties.setdefault('monster_type', 'human')  # 'human' or 'flying'
+
+        from engine.monster_constants import MONSTER_TYPES, MONSTER_VARIANTS
+        monster_type = self.properties.get('monster_type', 'human')
+        if monster_type not in MONSTER_TYPES:
+            monster_type = 'human'
+        self.properties['monster_type'] = monster_type
+
         self.properties.setdefault('monster_id', 0)
         self.properties.setdefault('health', 100)
         self.properties.setdefault('damage', 10)
@@ -490,11 +631,15 @@ class Monster(Thing):
         # --- Sprite variant (alternate skin) ---
         # '<None>' = base sprites in assets/sprites/monsters/<type>/
         # 'variant1' etc = assets/sprites/monsters/<type>/variant1/
-        self.properties.setdefault('variant', '<None>')
+        variant = self.properties.get('variant', '<None>')
+        valid_variants = ('<None>', *MONSTER_VARIANTS.get(monster_type, ()))
+        if variant not in valid_variants:
+            variant = '<None>'
+        self.properties['variant'] = variant
 
         # --- Set default sprite dimensions based on monster_type ---
         from engine.monster_constants import MONSTER_SPRITE_SIZES, MONSTER_SPRITE_SIZE_DEFAULT
-        mtype = self.properties.get('monster_type', 'human')
+        mtype = monster_type
         default_w, default_h = MONSTER_SPRITE_SIZES.get(mtype, MONSTER_SPRITE_SIZE_DEFAULT)
         self.properties.setdefault('sprite_width', default_w)
         self.properties.setdefault('sprite_height', default_h)
@@ -574,21 +719,6 @@ class Monster(Thing):
                 return custom_path
             print(f"[Monster] Custom sprite not found, using default: {custom_path}")
         return default_path
-
-    def get_render_snapshot(self):
-        """Return a lightweight dictionary snapshot for the renderer."""
-        return {
-            'pos': list(self.pos),                         # copy list
-            'dead': self.properties.get('dead', False),
-            'is_shooting': self.properties.get('is_shooting', False),
-            'monster_type': self.properties.get('monster_type', 'human'),
-            'variant': self.properties.get('variant', '<None>'),
-            'sprite_width': self.properties.get('sprite_width', 128),
-            'sprite_height': self.properties.get('sprite_height', 128),
-            'custom_idle': self.properties.get('custom_idle', ''),
-            'custom_shoot': self.properties.get('custom_shoot', ''),
-            'custom_dead': self.properties.get('custom_dead', ''),
-        }
 
     def get_sprite_path(self) -> str:
         """
@@ -697,137 +827,6 @@ class Monster(Thing):
         cls._icon_cache.clear()
 
 
-class Pickup(Thing):
-    """Collectible item entity."""
-    pixmap_path = "assets/sprites/pickup.png"
-    EDITOR_PRIMARY_PROPERTIES = (
-        'item_type',
-        'value',
-        'activation',
-        'collected',
-    )
-    
-    KEY_SPRITES = {
-        'blue_key': 'assets/sprites/bluekey.png',
-        'red_key': 'assets/sprites/redkey.png',
-        'yellow_key': 'assets/sprites/yellowkey.png',
-        'green_key': 'assets/sprites/greenkey.png',
-    }
-    
-    GUN_SPRITES = {
-        'gun1': 'assets/sprites/gun1.png',
-        'gun2': 'assets/sprites/gun2.png',
-        'cig': 'assets/sprites/cig.png'
-    }
-    
-    _dynamic_sprite_cache = {}
-    
-    def __init__(self, pos=None, properties=None):
-        super().__init__(pos, properties)
-        self.properties.setdefault('type', 'pickup')
-        self.properties.setdefault('item_type', 'health')
-        self.properties.setdefault('value', 25)
-        self.properties.setdefault('activation', 'walk_over')
-        self.properties.setdefault('collected', False)
-        self.properties.setdefault('respawns', False)
-        self.properties.setdefault('respawn_time', 20.0)
-        self.properties.setdefault('key_name', 'blue_key')
-        self.properties.setdefault('custom_sprite', '')
-
-    def is_gun(self):
-        return self.properties.get('item_type') in ['gun1', 'gun2', 'cig']
-    
-    def is_key(self):
-        return self.properties.get('item_type') == 'key'
-    
-    def get_key_name(self):
-        return self.properties.get('key_name', 'blue_key')
-    
-    def get_sprite_path(self):
-        custom = self.properties.get('custom_sprite', '')
-        if custom and not self.is_key() and not self.is_gun():
-            return custom
-        
-        if self.is_key():
-            key_name = self.get_key_name()
-            return self.KEY_SPRITES.get(key_name, 'assets/sprites/pickup.png')
-        
-        item_type = self.properties.get('item_type')
-        if item_type in self.GUN_SPRITES:
-            return self.GUN_SPRITES[item_type]
-        
-        if custom:
-            return custom
-        
-        return 'assets/sprites/pickup.png'
-    
-    def get_instance_pixmap(self):
-        sprite_path = self.get_sprite_path()
-        
-        if sprite_path in Pickup._dynamic_sprite_cache:
-            return Pickup._dynamic_sprite_cache[sprite_path]
-        
-        try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
-        except NameError:
-            project_root = os.path.abspath(os.path.join(os.getcwd()))
-        
-        if os.path.isabs(sprite_path):
-            absolute_path = sprite_path
-        else:
-            absolute_path = os.path.join(project_root, sprite_path)
-        
-        pixmap = None
-        if os.path.exists(absolute_path):
-            loaded_pixmap = QPixmap(absolute_path)
-            if not loaded_pixmap.isNull():
-                custom = self.properties.get('custom_sprite', '')
-                if custom and loaded_pixmap.width() != 75:
-                    pixmap = loaded_pixmap.scaled(75, 75)
-                else:
-                    pixmap = loaded_pixmap
-            else:
-                print(f"Error: QPixmap failed to load sprite from {absolute_path}")
-        else:
-            print(f"Warning: Sprite file not found at: {absolute_path}")
-            pixmap = Pickup.get_pixmap()
-        
-        Pickup._dynamic_sprite_cache[sprite_path] = pixmap
-        return pixmap
-    
-    @classmethod
-    def get_key_sprite_path(cls, key_name):
-        return cls.KEY_SPRITES.get(key_name, 'assets/sprites/pickup.png')
-    
-    @classmethod
-    def get_key_pixmap(cls, key_name):
-        sprite_path = cls.get_key_sprite_path(key_name)
-        
-        if sprite_path in cls._dynamic_sprite_cache:
-            return cls._dynamic_sprite_cache[sprite_path]
-        
-        try:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
-        except NameError:
-            project_root = os.path.abspath(os.path.join(os.getcwd()))
-        
-        absolute_path = os.path.join(project_root, sprite_path)
-        
-        pixmap = None
-        if os.path.exists(absolute_path):
-            loaded_pixmap = QPixmap(absolute_path)
-            if not loaded_pixmap.isNull():
-                pixmap = loaded_pixmap
-        
-        cls._dynamic_sprite_cache[sprite_path] = pixmap
-        return pixmap
-    
-    @classmethod
-    def clear_sprite_cache(cls):
-        cls._dynamic_sprite_cache.clear()
-
 
 class Trigger(Thing):
     """Non-visible trigger volume (for point-entity triggers)."""
@@ -842,94 +841,9 @@ class Trigger(Thing):
         self.properties.setdefault('action', 'on_enter')
 
 
-class Model(Thing):
-    """Represents a 3D model placed in the world."""
-    pixmap_path = "assets/sprites/pickup.png"
-    EDITOR_PRIMARY_PROPERTIES = (
-        'model_path',
-        'scale',
-        'rotation',
-        'no_collision',
-        'collision_size',
-    )
-    
-    def __init__(self, pos=None, properties=None):
-        super().__init__(pos, properties)
-        self.properties.setdefault('type', 'model')
-        self.properties.setdefault('model_path', "")
-        self.properties.setdefault('rotation', [0, 0, 0])
-        self.properties.setdefault('scale', [1, 1, 1])
-
-
-class Prop(Model):
-    """A generic carryable world object.
-
-    A prop uses ``model_path`` when it is set; otherwise ``sprite_path`` is
-    rendered as a camera-facing billboard.  Its data-only defaults are kept on
-    the entity so maps serialize through :class:`Thing` without a special
-    format and runtimes can opt into the same carry/physics contract.
-    """
-    pixmap_path = "assets/sprites/pickup.png"
-    EDITOR_PRIMARY_PROPERTIES = (
-        'sprite_path',
-        'sprite_size',
-        'mass',
-        'collision_size',
-        'no_collision',
-        'physics_enabled',
-        'gravity',
-        'friction',
-        'linear_damping',
-        'angular_damping',
-        'pickup_enabled',
-        'pickup_reach',
-        'carry_distance',
-        'carry_offset',
-        'drop_velocity',
-        'drop_angular_velocity',
-        'disabled',
-    )
-
-    def __init__(self, pos=None, properties=None):
-        super().__init__(pos, properties)
-        self.properties['type'] = 'prop'
-        self.properties.setdefault('sprite_path', 'assets/sprites/pickup.png')
-        self.properties.setdefault('sprite_size', [32.0, 32.0])
-        self.properties.setdefault('mass', 1.0)
-        self.properties.setdefault('collision_size', [0.0, 0.0, 0.0])
-        self.properties.setdefault('no_collision', True)
-        self.properties.setdefault('physics_enabled', False)
-        self.properties.setdefault('gravity', True)
-        self.properties.setdefault('friction', 0.55)
-        self.properties.setdefault('linear_damping', 0.08)
-        self.properties.setdefault('angular_damping', 0.12)
-        self.properties.setdefault('pickup_enabled', True)
-        self.properties.setdefault('pickup_reach', 110.0)
-        self.properties.setdefault('carry_distance', 55.0)
-        self.properties.setdefault('carry_offset', [0.0, -6.0, 0.0])
-        self.properties.setdefault('drop_velocity', 0.0)
-        self.properties.setdefault('drop_angular_velocity', [0.0, 0.0, 0.0])
-        self.properties.setdefault('disabled', False)
-
-    def get_sprite_path(self):
-        """Return the authored billboard texture path, if this prop has one."""
-        return self.properties.get('sprite_path', '')
-
-    def get_instance_pixmap(self):
-        """Load the authored billboard for 2D editor views."""
-        sprite_path = self.get_sprite_path()
-        if not sprite_path:
-            return super().get_instance_pixmap()
-        cache_key = ('prop_sprite', sprite_path)
-        if cache_key in self._pixmap_cache:
-            return self._pixmap_cache[cache_key]
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-        absolute_path = sprite_path if os.path.isabs(sprite_path) else os.path.join(project_root, sprite_path)
-        pixmap = QPixmap(absolute_path) if os.path.exists(absolute_path) else None
-        if pixmap is not None and pixmap.isNull():
-            pixmap = None
-        self._pixmap_cache[cache_key] = pixmap
-        return pixmap
+# Prop is a core engine primitive shared with the headless player, so it is
+# defined once in engine/prop_entity.py and exposed here lazily (see the
+# module-level __getattr__ at the end of this file).
 
 
 # =============================================================================
@@ -1048,7 +962,7 @@ class LogicCommand(Thing):
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
         self.properties['type'] = 'logic_command'
-        self.properties.setdefault('command', 'cam')
+        self.properties.setdefault('command', '')
         self.properties.setdefault('disabled', False)
 
     def get_instance_pixmap(self):
@@ -1080,16 +994,11 @@ class LevelChanger(Thing):
         self.properties.setdefault('radius', 128.0)
         self.properties.setdefault('usable', False)
         
-        # Store direct reference to MainWindow for reliable level changing
+        # An explicit window to signal (tests set one). Otherwise it is found
+        # when the level change fires: an entity holding the MainWindow could
+        # not be cloned or copied (deepcopy reached the window), and kept the
+        # window alive from the world.
         self._main_window = None
-        try:
-            from PyQt5.QtWidgets import QApplication
-            for widget in QApplication.topLevelWidgets():
-                if widget.__class__.__name__ == 'MainWindow':
-                    self._main_window = widget
-                    break
-        except Exception:
-            pass
 
     def on_input(self, input_name: str, parameter: str = ""):
         """Called by I/O system and by ent_fire."""
@@ -1116,9 +1025,17 @@ class LevelChanger(Thing):
         if not target_map.lower().endswith('.json'):
             target_map += '.json'
 
-        # ENFORCE MAPS FOLDER: Prepend maps/ if not already present
-        if not (target_map.startswith('maps/') or target_map.startswith('maps\\')):
+        # ENFORCE MAPS FOLDER: Prepend maps/ if not already present, and
+        # refuse a target that climbs back out of it.  target_map is authored
+        # map data (packages included), and the loaded map becomes the
+        # editor's save target.
+        target_map = target_map.replace('\\', '/')
+        if not target_map.startswith('maps/'):
             target_map = f"maps/{target_map}"
+        target_map = posixpath.normpath(target_map)
+        if not target_map.startswith('maps/'):
+            debug_log("Error", f"LevelChanger target '{target_map}' is outside the maps folder")
+            return False
 
         debug_log("IO", f"LevelChanger target resolved → '{target_map}'")
 
@@ -1131,7 +1048,6 @@ class LevelChanger(Thing):
                 for w in QApplication.topLevelWidgets():
                     if w.__class__.__name__ == 'MainWindow':
                         main_window = w
-                        self._main_window = w
                         break
             except Exception as e:
                 debug_log("Error", f"LevelChanger QApplication lookup failed: {e}")
@@ -1280,8 +1196,11 @@ class LogicCamera(Thing):
         # If set, overrides the player's FOV during the sequence
         self.properties.setdefault('fov_override', 0.0)
         # If True the camera looks at the *next* node; if False it
-        # follows the tangent of the spline (forward direction).
+        # follows the path's forward direction.
         self.properties.setdefault('look_ahead', True)
+        # Seconds to keep an explicit LookAt focus before returning to the path.
+        # 0 means hold the target indefinitely.
+        self.properties.setdefault('lookat_return_time', 5.0)
 
 
 class LogicSpawner(Thing):
@@ -1334,6 +1253,8 @@ class Portal(Thing):
                            Toggle at runtime via Enable/Disable/Toggle inputs.
     color          (list)  [r, g, b] 0-255 rim/glow tint.  Default white.
     show_rim       (bool)  Draw outline.
+    glasses        (bool)  Looking into this portal shows your own glasses
+                           reflected back at you, like a mirror.  Default on.
 
     I/O outputs
     -----------
@@ -1371,6 +1292,7 @@ class Portal(Thing):
     'portal_direction',
     'color',
     'show_rim',
+    'glasses',
     )
 
     DEFAULT_WIDTH  = 128.0
@@ -1380,11 +1302,14 @@ class Portal(Thing):
     TRANSIT_COOLDOWN = 0.5
 
     # Duration of a full fade-in or fade-out transition (seconds).
+    #: Rendered opacity, advanced per tick; journalled so the render
+    #: projection re-reads it only while it is actually changing.
+    _fade_alpha = TrackedAttribute(1.0)
+
     FADE_DURATION = 0.35
 
-    # Minimum clearance (world units) pushed along the destination normal when a
-    # body emerges, so it never spawns embedded in the wall behind portal B.
-    # Call sites add the body's own half-depth on top of this.
+    # Minimum projectile exit clearance along the destination normal. Player
+    # transit uses a near-zero plane epsilon so crossing remains visually continuous.
     EXIT_CLEARANCE = 8.0
 
     def __init__(self, pos=None, properties=None):
@@ -1414,6 +1339,9 @@ class Portal(Thing):
         # Visual rim
         self.properties.setdefault('color',    [255, 255, 255])
         self.properties.setdefault('show_rim', True)
+
+        # Reflect the viewer's own glasses when they look into this portal.
+        self.properties.setdefault('glasses', True)
 
         # Parenting: attach this portal to a mover brush by name.
         # When parent_mover is non-empty the logic thread moves this
@@ -1484,29 +1412,17 @@ class Portal(Thing):
     def set_yaw_degrees(self, yaw: float) -> None:
         self.properties['rotation'][0] = yaw
         self.properties['angle'] = yaw
+        touch(self)
+
 
     def get_basis(self):
-        """
-        Return the portal's orthonormal frame as ``(right, up, normal)`` where
-        each axis is a 3-tuple of floats.  Built from yaw/pitch/roll via
-        ``R = Ry(yaw) @ Rx(pitch) @ Rz(roll)`` applied to the base frame
-        right=(1,0,0), up=(0,1,0), normal=(0,0,1).
-
-        With pitch = roll = 0 this reduces exactly to the historical
-        horizontal-facing portal: normal = (sin yaw, 0, cos yaw),
-        right = (cos yaw, 0, -sin yaw), up = (0, 1, 0).  ``normal`` points out
-        of the front face (toward the viewer that approaches the portal).
-        """
-        yaw = self.get_yaw_radians()
-        pitch = self.get_pitch_radians()
-        roll = self.get_roll_radians()
-        cy, sy = math.cos(yaw), math.sin(yaw)
-        cp, sp = math.cos(pitch), math.sin(pitch)
-        cr, sr = math.cos(roll), math.sin(roll)
-        right  = (cy * cr + sy * sp * sr,  cp * sr,  -sy * cr + cy * sp * sr)
-        up     = (-cy * sr + sy * sp * cr, cp * cr,   sy * sr + cy * sp * cr)
-        normal = (sy * cp,                 -sp,       cy * cp)
-        return right, up, normal
+        """Return the portal frame from the shared engine-level transform."""
+        return _portal_basis_from_rotation(
+            self.properties.get(
+                'rotation',
+                [self.properties.get('angle', 0.0), 0.0, 0.0],
+            )
+        )
 
     def set_parent_local_transform(self, mover_pos, mover_yaw) -> None:
         """Compute and store local position and yaw offset from the mover's current transform."""
@@ -1527,82 +1443,33 @@ class Portal(Thing):
         """
         return self.get_basis()[2]
 
+
     def get_corners_world(self):
-        """
-        Return the four world-space corners of the portal aperture as a list
-        of [x, y, z] triples, winding counter-clockwise when viewed from the
-        front:  [bottom-left, bottom-right, top-right, top-left].
-        Used by the renderer to build the stencil mask quad.
-        """
-        px, py, pz = self.pos
-        w2 = self.get_width()  / 2.0
-        h2 = self.get_height() / 2.0
-        (rx, ry, rz), (ux, uy, uz), _ = self.get_basis()
-
-        return [
-            [px - rx * w2 - ux * h2, py - ry * w2 - uy * h2, pz - rz * w2 - uz * h2],
-            [px + rx * w2 - ux * h2, py + ry * w2 - uy * h2, pz + rz * w2 - uz * h2],
-            [px + rx * w2 + ux * h2, py + ry * w2 + uy * h2, pz + rz * w2 + uz * h2],
-            [px - rx * w2 + ux * h2, py - ry * w2 + uy * h2, pz - rz * w2 + uz * h2],
-        ]
-
-    # ── Shared portal link transform ──────────────────────────────────────────
-    # These two methods are the single source of truth for how space maps from
-    # this portal to its destination.  BOTH the renderer's virtual camera and
-    # the logic thread's teleport call them, so the view you look *through* and
-    # the frame you *teleport into* can never disagree (previously each computed
-    # its own, subtly different, rotation).
-    #
-    # The map is the standard portal transform  M_dest · flip · M_self^-1  where
-    # flip is a 180° rotation about the aperture's up axis — i.e. mirror the
-    # right and normal local components.  A point just past this portal's plane
-    # therefore lands just in front of the destination, and a velocity heading
-    # into this portal emerges heading out of the destination.
-
-    def _local_of(self, x: float, y: float, z: float):
-        """World point → (right, up, normal) coordinates in this portal's frame."""
-        r, u, n = self.get_basis()
-        dx = x - self.pos[0]
-        dy = y - self.pos[1]
-        dz = z - self.pos[2]
-        return (dx * r[0] + dy * r[1] + dz * r[2],
-                dx * u[0] + dy * u[1] + dz * u[2],
-                dx * n[0] + dy * n[1] + dz * n[2])
+        """Return the shared engine-level aperture corners."""
+        return _portal_corners(
+            self.pos, self.get_basis(), self.get_width(), self.get_height()
+        )
 
     def map_point(self, dest, x: float, y: float, z: float):
-        """Map a world-space point through this portal to ``dest``."""
-        lr, lu, ln = self._local_of(x, y, z)
-        lr, ln = -lr, -ln  # 180° about up
-        r, u, n = dest.get_basis()
-        return (dest.pos[0] + lr * r[0] + lu * u[0] + ln * n[0],
-                dest.pos[1] + lr * r[1] + lu * u[1] + ln * n[1],
-                dest.pos[2] + lr * r[2] + lu * u[2] + ln * n[2])
+        """Map a world point through the shared engine transform."""
+        return _portal_map_point(
+            self.pos, self.get_basis(), dest.pos, dest.get_basis(), (x, y, z)
+        )
+
 
     def map_direction(self, dest, x: float, y: float, z: float):
-        """Map a world-space direction/velocity through this portal to ``dest``
-        (rotation only, no translation)."""
-        r, u, n = self.get_basis()
-        lr = x * r[0] + y * r[1] + z * r[2]
-        lu = x * u[0] + y * u[1] + z * u[2]
-        ln = x * n[0] + y * n[1] + z * n[2]
-        lr, ln = -lr, -ln
-        r2, u2, n2 = dest.get_basis()
-        return (lr * r2[0] + lu * u2[0] + ln * n2[0],
-                lr * r2[1] + lu * u2[1] + ln * n2[1],
-                lr * r2[2] + lu * u2[2] + ln * n2[2])
+        """Map a world direction through the shared engine transform."""
+        return _portal_map_direction(
+            self.get_basis(), dest.get_basis(), (x, y, z)
+        )
+
 
     def contains_point(self, x: float, y: float, z: float, margin: float = 0.0) -> bool:
-        """True when the world point projects inside the aperture rectangle.
-
-        ``margin`` grows the rectangle on every side — pass the transiting
-        body's radius so something is only considered "through" once its centre
-        clears the frame, avoiding half-in/half-out pops.  Uses the full
-        yaw/pitch/roll basis so tilted portals test correctly.
-        """
-        lr, lu, _ = self._local_of(x, y, z)
-        hw = self.get_width()  / 2.0 + margin
-        hh = self.get_height() / 2.0 + margin
-        return abs(lr) <= hw and abs(lu) <= hh
+        """Return whether a point lies inside the shared aperture shape."""
+        return _portal_contains_point(
+            self.pos, self.get_basis(), self.get_width(), self.get_height(),
+            (x, y, z), margin,
+        )
 
     def tick_fade(self, delta: float) -> None:
         """Advance _fade_alpha toward _fade_target.  Called every logic tick."""
@@ -1700,14 +1567,10 @@ class LogicState(Thing):
     Inputs and outputs are declared in :mod:`editor.io_system` and implemented
     in :mod:`editor.io_handlers`; see ``editor/LOGIC.md`` for the whole model.
     """
-    pixmap_path = "assets/sprites/logic_keyvalue.png"
+    pixmap_path = "assets/sprites/logic_state.png"
 
     #: Type token written to map files.
     map_type = 'logicstate'
-    #: Tokens older Fio versions wrote for this same entity.  Listed so maps
-    #: and saves made before the rename load into this class instead of being
-    #: dropped as an unknown type.
-    legacy_map_types = ('logickeyvalue', 'logickeyvaluestore')
 
     # Class-level registry of persistent stores across level transitions.
     # Keyed by store_name, stores the dict of values. Survives as long as
@@ -2077,11 +1940,6 @@ def _same_value(a, b) -> bool:
     return type(a) is type(b) and a == b
 
 
-#: Pre-2.4 name for the state entity.  Kept as an alias so existing imports,
-#: plugins and the persistent-registry attribute path keep resolving; the two
-#: names are the same class, so ``isinstance`` checks written either way agree.
-LogicKeyValueStore = LogicState
-
 
 # =============================================================================
 # ENTITY REGISTRY
@@ -2093,8 +1951,6 @@ ENTITY_TYPES = {
     'Light': Light,
     'Speaker': Speaker,
     'Monster': Monster,
-    'Pickup': Pickup,
-    'Model': Model,
     'LogicRelay': LogicRelay,
     'LogicGate': LogicGate,
     'LogicTimer': LogicTimer,
@@ -2107,10 +1963,65 @@ ENTITY_TYPES = {
     'LogicState': LogicState,
 }
 
+# Effect is a core primitive defined in engine/ (the head-less player needs it)
+# and it imports this module, so it can only be fetched now that Thing exists.
+# When the process imported engine.effect_entity *first*, this module is being
+# run by that import and the class does not exist yet; effect_entity then
+# registers itself as soon as it is defined (see the end of that module).
+_effect_class = getattr(importlib.import_module('engine.effect_entity'), 'Effect', None)
+if _effect_class is not None:
+    ENTITY_TYPES['Effect'] = _effect_class
+
 # Categories for editor UI
 ENTITY_CATEGORIES = {
-    'Gameplay': ['PlayerStart', 'Monster', 'Pickup', 'LevelChanger'],
-    'Environment': ['Light', 'Speaker', 'Model', 'Portal'],
+    'Gameplay': ['PlayerStart', 'Monster', 'Prop', 'LevelChanger'],
+    'Environment': ['Light', 'Effect', 'Speaker', 'Portal'],
     'Logic': ['LogicRelay', 'LogicGate', 'LogicTimer', 'LogicCommand', 'LogicCamera', 'LogicSpawner', 'LogicState'],
     'AI': ['PathNode'],
 }
+
+
+# =============================================================================
+# CORE ENTITIES DEFINED OUTSIDE THIS MODULE
+# =============================================================================
+#
+# Core primitives that the headless player also needs (currently Prop) live in
+# engine/, subclassing this module's Thing when the editor tier is present.
+# They cannot be imported at the top of this file (they import it), so they are
+# loaded on first use: by name via __getattr__ (``from editor.things import
+# Prop``), and before map deserialization via _load_core_entity_types() so the
+# subclass walk in Thing.from_dict can resolve their type tokens.
+
+_CORE_ENTITY_MODULES = {
+    'Prop': 'engine.prop_entity',
+    'Effect': 'engine.effect_entity',
+}
+
+
+def _load_core_entity_types():
+    import importlib
+    for module_name in set(_CORE_ENTITY_MODULES.values()):
+        importlib.import_module(module_name)
+
+
+def __getattr__(name):
+    if name == 'Model':
+        # There is no Model entity any more: a model is a Prop with
+        # render_mode='model'. Plugins written against the old base still
+        # import; they get the plain Thing base, which is what a non-Prop
+        # entity carrying a model_path always needed.
+        import warnings
+        warnings.warn("editor.things.Model is gone: subclass Thing (or use a "
+                      "Prop) and set model_path", DeprecationWarning,
+                      stacklevel=2)
+        return Thing
+    module_name = _CORE_ENTITY_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+    value = getattr(importlib.import_module(module_name), name)
+    globals()[name] = value
+    registry = globals().get('ENTITY_TYPES')
+    if isinstance(registry, dict):
+        registry[name] = value
+    return value

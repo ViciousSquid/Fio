@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import math
 
+from .change_journal import touch
+
 #: Cell edge length in world units.  512 is the size the collision grid has
 #: always used; Big World streams the same columns.
 CELL_SIZE = 512.0
@@ -159,6 +161,7 @@ def set_authored_flag(obj, flag, value):
         props[mark] = bool(value)
     else:
         props[flag] = bool(value)
+    touch(obj)
     return True
 
 
@@ -185,6 +188,21 @@ def cell_of_point(x, z, cell_size=CELL_SIZE):
     """The integer cell containing world point ``(x, z)``."""
     inv = 1.0 / cell_size
     return (int(math.floor(x * inv)), int(math.floor(z * inv)))
+
+
+def cells_of_points(xs, zs, cell_size=CELL_SIZE):
+    """:func:`cell_of_point` for whole arrays of points at once.
+
+    The batched form of the same convention, kept here beside the scalar one so
+    there is still exactly one definition of which cell a coordinate is in.
+
+    Deliberately duck-typed rather than NumPy-typed: floor division is the whole
+    of the maths, and NumPy arrays already floor-divide elementwise, so this
+    stays inside the module's stdlib-only promise while serving the vectorised
+    callers. Returns whatever type it was handed; an integer cast is the
+    caller's business, because a caller comparing two results does not need one.
+    """
+    return xs // cell_size, zs // cell_size
 
 
 def cell_range(min_x, min_z, max_x, max_z, cell_size=CELL_SIZE):
@@ -281,6 +299,28 @@ class CellIndex:
             self.cells[coord] = [obj]
         else:
             bucket.append(obj)
+
+    def remove_point(self, obj, coord):
+        """Unfile ``obj`` from the cell it was filed under by ``insert_point``.
+
+        The caller passes the coordinate the object was filed at rather than its
+        current position: a moving object is re-filed *after* it has moved, and
+        by then its position no longer names the bucket it is in.
+
+        Removal is by identity, not equality — entities are free to define
+        ``__eq__`` (two Props with the same properties compare equal), and
+        unfiling the wrong one would leave a live object out of the index.
+        """
+        bucket = self.cells.get(coord)
+        if not bucket:
+            return False
+        for i, existing in enumerate(bucket):
+            if existing is obj:
+                del bucket[i]
+                if not bucket:
+                    del self.cells[coord]
+                return True
+        return False
 
     def cell(self, coord):
         """The bucket for one cell (an empty tuple when nothing is filed)."""

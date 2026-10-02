@@ -18,14 +18,22 @@ pytest.importorskip("PyQt5", reason="Qt is not available in this environment")
 
 import configparser  # noqa: E402
 
+from PyQt5.QtCore import QEvent, QObject  # noqa: E402
 from PyQt5.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
 
 from editor import io_system  # noqa: E402
 from editor.editor_state import EditorState  # noqa: E402
 from editor.io_system import OutputConnection  # noqa: E402
-from editor.property_editor import PropertyEditor  # noqa: E402
-from editor.things import Light  # noqa: E402
+from editor.property_editor import (  # noqa: E402
+    PropertyEditor,
+    _normalise_project_asset_path,
+)
+from editor.things import Light, Speaker  # noqa: E402
+from engine.prop_entity import Prop  # noqa: E402
 from engine import brush_geometry as bg  # noqa: E402
+from engine.render_table import (  # noqa: E402
+    RenderTable, CLASS_FOG, CLASS_TRIGGER,
+)
 
 # Qt tier: PyQt5 must be importable.  No display and no GPU - the suite runs
 # against the offscreen platform plugin.
@@ -61,6 +69,8 @@ class FakeHost(QWidget):
         super().__init__()
         self.state = EditorState()
         self.state.selected_objects = []
+        initial_dirty = self.state.render_dirty_snapshot()
+        self.state.clear_render_dirty(initial_dirty)
         self.config = configparser.ConfigParser()
         self.grid_size = 16
         self.saves = 0
@@ -78,8 +88,113 @@ class FakeHost(QWidget):
     def update_all_ui(self):
         pass
 
+    # on_trigger_changed() refreshes the hierarchy after retyping a brush.
+    # Part of the slice the panel talks to, so the fake carries it.
+    class _FakeHierarchy:
+        def __init__(self):
+            self.refreshes = 0
+
+        def refresh_list(self):
+            self.refreshes += 1
+
+    @property
+    def scene_hierarchy(self):
+        if not hasattr(self, "_scene_hierarchy"):
+            self._scene_hierarchy = FakeHost._FakeHierarchy()
+        return self._scene_hierarchy
+
     def show_toast(self, message, is_error=False, duration=None):
         pass
+
+
+class _TopLevelShowSpy(QObject):
+    def __init__(self, app, baseline):
+        super().__init__(app)
+        self.baseline = baseline
+        self.shown = []
+
+    def eventFilter(self, obj, event):
+        if (
+            event.type() == QEvent.Show
+            and isinstance(obj, QWidget)
+            and obj.window() is obj
+            and obj not in self.baseline
+        ):
+            self.shown.append(obj)
+        return False
+
+
+def test_selecting_a_prop_does_not_show_a_transient_top_level_window(panel, qt_app):
+    """A Prop page must never exist as a top-level Qt window while it is built."""
+    host, editor = panel
+    prop = Prop(pos=[0, 0, 0])
+    host.state.things = [prop]
+
+    baseline = set(qt_app.topLevelWidgets())
+    spy = _TopLevelShowSpy(qt_app, baseline)
+    qt_app.installEventFilter(spy)
+    try:
+        editor.set_object(prop, force=True)
+        qt_app.processEvents()
+    finally:
+        qt_app.removeEventFilter(spy)
+
+    assert not spy.shown, (
+        "selecting a Prop showed transient top-level Qt widgets: %r"
+        % [type(widget).__name__ for widget in spy.shown]
+    )
+    assert editor._page is not None
+    assert editor._page.parentWidget() is editor
+    assert not editor._page.isWindow()
+
+
+def test_custom_gif_path_is_project_relative_and_uses_forward_slashes(monkeypatch):
+    root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..")
+    )
+    selected = os.path.join(
+        root, "assets", "textures", "effects", "custom", "magic.gif"
+    )
+    # The simulated Qt path uses Windows separators even when this test runs
+    # on a POSIX CI worker.
+    selected = selected.replace(os.sep, "\\")
+    monkeypatch.chdir(os.path.dirname(root))
+
+    assert _normalise_project_asset_path(selected) == (
+        "assets/textures/effects/custom/magic.gif"
+    )
+
+
+
+def test_speaker_sound_file_has_browse_button_and_normalises_selected_path(
+    panel, monkeypatch
+):
+    host, editor = panel
+    speaker = Speaker(properties={"sound_file": ""})
+    host.state.things.append(speaker)
+    editor.set_object(speaker)
+
+    from PyQt5.QtWidgets import QPushButton
+
+    browse = next(
+        button for button in editor._page.findChildren(QPushButton)
+        if button.text() == "Browse..."
+    )
+    monkeypatch.setattr(
+        "editor.property_editor.QFileDialog.getOpenFileName",
+        lambda *args, **kwargs: (
+            os.path.join(
+                os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")),
+                "assets", "sounds", "test.wav",
+            ).replace(os.sep, "\\"),
+            "Sound Files (*.wav)",
+        ),
+    )
+
+    browse.click()
+
+    assert speaker.properties["sound_file"] == "assets/sounds/test.wav"
+
 
 
 def make_brush(name='wall', **extra):
@@ -166,6 +281,78 @@ def test_a_displayed_property_change_does_rebuild(panel):
     assert editor._widgets['name_input'].text() == 'renamed'
 
 
+def test_property_edit_marks_the_dense_render_row_dirty(panel):
+    """Cold RenderTable material columns must see live Surface Inspector edits."""
+    host, editor = panel
+    brush = make_brush(
+        glass_color=[0.7, 0.85, 0.95],
+        glass_opacity=0.3,
+        glass_distortion=0.5,
+        glass_refraction=1.5,
+        glass_roughness=0.0,
+        glass_fresnel=0.5,
+        shader='Glass',
+    )
+    host.state.brushes.append(brush)
+
+    editor.set_object(brush)
+    before_epoch = host.state.world_epoch
+    editor.update_object_prop('glass_refraction', 2.4)
+
+    epoch, dirty = host.state.render_dirty_snapshot()
+    assert epoch == before_epoch + 1
+    assert id(brush) in dirty
+    assert brush['glass_refraction'] == 2.4
+
+    table = RenderTable()
+    table.begin_frame(host.state.brushes, epoch, dirty_objects=dirty)
+    assert table.glass_params[0].tolist() == pytest.approx([0.3, 0.5, 2.4, 0.0, 0.5], rel=1e-6)
+
+
+def test_shader_change_immediately_invalidates_dense_brush_classification(panel):
+    host, editor = panel
+    brush = make_brush()
+    host.state.brushes.append(brush)
+    editor.set_object(brush)
+    initial = host.state.render_dirty_snapshot()
+    host.state.clear_render_dirty(initial)
+
+    editor.on_shader_changed('Fog')
+    epoch, dirty = host.state.render_dirty_snapshot()
+    table = RenderTable()
+    table.begin_frame(host.state.brushes, epoch, dirty_objects=dirty)
+
+    assert id(brush) in dirty
+    assert brush['shader'] == 'Fog'
+    assert table.class_bits[0] & CLASS_FOG
+
+    host.state.clear_render_dirty((epoch, dirty))
+    editor.on_shader_changed('<None>')
+    epoch, dirty = host.state.render_dirty_snapshot()
+    table.begin_frame(host.state.brushes, epoch, dirty_objects=dirty)
+
+    assert id(brush) in dirty
+    assert not (table.class_bits[0] & CLASS_FOG)
+
+
+def test_trigger_change_immediately_invalidates_dense_brush_classification(panel):
+    host, editor = panel
+    brush = make_brush()
+    host.state.brushes.append(brush)
+    editor.set_object(brush)
+    initial = host.state.render_dirty_snapshot()
+    host.state.clear_render_dirty(initial)
+
+    editor.on_trigger_changed(True)
+    epoch, dirty = host.state.render_dirty_snapshot()
+    table = RenderTable()
+    table.begin_frame(host.state.brushes, epoch, dirty_objects=dirty)
+
+    assert id(brush) in dirty
+    assert brush['is_trigger'] is True
+    assert table.class_bits[0] & CLASS_TRIGGER
+
+
 def test_toggling_a_behaviour_rebuilds_for_the_new_tabs(panel):
     host, editor = panel
     brush = make_brush()
@@ -205,6 +392,28 @@ def test_skipping_a_rebuild_leaves_the_panel_usable(panel):
 # ---------------------------------------------------------------------------
 # Reusing a page built earlier
 # ---------------------------------------------------------------------------
+
+def test_switching_between_props_does_not_use_a_deleted_collection_form(panel, qt_app):
+    """Rapid Prop reselection must never call into a deleted QFormLayout."""
+    host, editor = panel
+    first = Prop(pos=[0, 0, 0])
+    second = Prop(pos=[64, 0, 0])
+    host.state.things.extend([first, second])
+
+    for _ in range(3):
+        editor.set_object(first)
+        qt_app.processEvents()
+        editor.set_object(second)
+        qt_app.processEvents()
+
+    # Exercise the stale-wrapper guard directly as well.  The old form has
+    # either been parked or deleted by this point; it must be harmless to probe.
+    old_form = getattr(editor, '_prop_form', None)
+    editor.set_object(first)
+    qt_app.processEvents()
+    if old_form is not None:
+        editor._set_form_row_visible(old_form, 0, True)
+
 
 def test_switching_back_to_an_object_reuses_its_page(panel):
     host, editor = panel
@@ -699,11 +908,18 @@ def test_light_show_radius_row_labels_itself(panel):
 
     editor.set_object(light)
 
-    cb = editor._widgets.get('light_show_radius_cb')
+    cb = _show_radius_cb(editor)
     assert cb is not None, "the Show Radius checkbox was not built"
     assert cb.text() == "Show Radius"
     assert cb.isChecked()
     assert _row_label_for(editor, cb) == ""
+
+
+def _show_radius_cb(editor):
+    """The Light panel's Show Radius checkbox, found by what the user sees."""
+    from PyQt5.QtWidgets import QCheckBox
+    return next((cb for cb in editor.findChildren(QCheckBox)
+                 if cb.text() == "Show Radius"), None)
 
 
 def test_light_show_radius_accepts_a_string_value(panel):
@@ -715,7 +931,7 @@ def test_light_show_radius_accepts_a_string_value(panel):
 
     editor.set_object(light)
 
-    cb = editor._widgets['light_show_radius_cb']
+    cb = _show_radius_cb(editor)
     assert cb.isChecked()
 
 
@@ -726,6 +942,84 @@ def test_light_show_radius_writes_back(panel):
     host.state.things = [light]
 
     editor.set_object(light)
-    editor._widgets['light_show_radius_cb'].setChecked(True)
+    _show_radius_cb(editor).setChecked(True)
 
     assert light.properties['show_radius'] is True
+
+
+# ---------------------------------------------------------------------------
+# Selecting an object must not author into it.
+#
+# The panel builds every tab for every object and hides the ones that do not
+# apply, so a setdefault() inside a tab builder writes that tab's properties
+# onto objects the tab is not even for. _create_trigger_tab did exactly that
+# with trigger_filters and trigger_poll_interval: selecting a plain wall
+# stamped trigger keys into it -- map data mutated by a read-only action -- and
+# because the page-cache signature is computed from the object's own keys, a
+# build that adds keys guarantees the next lookup misses, so the whole panel
+# rebuilt on every selection, drag and rotate.
+#
+# Defaults belong in on_trigger_changed, where the user has actually made the
+# brush a trigger. Every reader already uses .get(..., default), in both the
+# panel and LogicThread.
+# ---------------------------------------------------------------------------
+
+def test_selecting_a_brush_does_not_author_properties_into_it(panel):
+    host, editor = panel
+    brush = make_brush()
+    host.state.brushes.append(brush)
+
+    before = dict(brush)
+    editor.set_object(brush)
+
+    added = set(brush) - set(before)
+    assert added == set(), (
+        "selection authored new keys into the brush: %s" % sorted(added))
+    changed = {k for k in before if brush[k] != before[k]}
+    assert changed == set(), (
+        "selection changed existing keys: %s" % sorted(changed))
+
+
+def test_selecting_a_thing_does_not_author_properties_into_it(panel):
+    host, editor = panel
+    light = Light(pos=[0, 0, 0])
+    host.state.things = [light]
+
+    before = dict(light.properties)
+    editor.set_object(light)
+
+    added = set(light.properties) - set(before)
+    assert added == set(), (
+        "selection authored new keys into the Thing: %s" % sorted(added))
+
+
+def test_the_page_cache_actually_hits_on_reselect(panel):
+    """The rebuild avoidance the cache exists for, asserted end to end."""
+    host, editor = panel
+    brush = make_brush()
+    host.state.brushes.append(brush)
+
+    editor.set_object(brush)
+    first = page_of(editor)
+    signature = editor._signature
+
+    editor.set_object(brush)
+
+    assert editor._signature == signature, (
+        "the panel's own build changed its cache signature, so the cache can "
+        "never hit")
+    assert page_of(editor) is first
+
+
+def test_turning_a_brush_into_a_trigger_does_author_its_defaults(panel):
+    """The other half of the contract: the defaults must land somewhere."""
+    host, editor = panel
+    brush = make_brush()
+    host.state.brushes.append(brush)
+    editor.set_object(brush)
+
+    editor.on_trigger_changed(True)
+
+    assert brush['is_trigger'] is True
+    assert brush['trigger_filters'] == ['player']
+    assert brush['trigger_poll_interval'] == 1.0

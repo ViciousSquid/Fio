@@ -1,7 +1,7 @@
 import os
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit,
-    QPushButton, QFileDialog, QMessageBox, QFormLayout, QWidget, QApplication
+    QPushButton, QMessageBox, QFormLayout, QApplication
 )
 from PyQt5.QtCore import Qt
 
@@ -152,7 +152,6 @@ class PackageMetadataDialog(QDialog):
             'author': self.author_edit.text().strip(),
             'version': self.version_edit.text().strip(),
             'description': self.desc_edit.toPlainText().strip(),
-            'banner_source_path': ''
         }
         self.accept()
     
@@ -175,7 +174,6 @@ class PackageMetadataDialog(QDialog):
             'author': self.author_edit.text().strip(),
             'version': self.version_edit.text().strip(),
             'description': self.desc_edit.toPlainText().strip(),
-            'banner_source_path': ''
         }
     
     def closeEvent(self, event):

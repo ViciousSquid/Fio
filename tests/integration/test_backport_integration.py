@@ -12,6 +12,8 @@ import pathlib
 import re
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -37,38 +39,67 @@ def _render_scene_source():
     raise AssertionError("render_scene not found")
 
 
-def test_cull_output_feeds_only_sort_objects():
-    """cull_brushes/cull_things must reach _sort_objects and nothing else."""
+def test_cull_output_feeds_the_dense_brush_pipeline():
+    """The main camera consumes cull output as dense slots, then classifies/sorts them."""
     body = _render_scene_source()
-    uses = re.findall(r"cull_brushes|cull_things", body)
-    # 2 assignments (tuple target), 2 in the reassignment, 2 in the _sort_objects call.
-    assert "self._sort_objects(cull_brushes, cull_things, config)" in body
-    # No other call site may consume the culled lists.
-    other = re.findall(r"\w+\((?:[^()]*\b(?:cull_brushes|cull_things)\b[^()]*)\)", body)
-    for call in other:
-        assert "_sort_objects" in call or "_camera_distance_cull" in call, \
-            f"culled list leaked into another call: {call}"
-    assert len(uses) >= 4
+    assert "slots = brush_slots" in body
+    assert "self._distance_cull_slots(" in body
+    assert "self._classify_brush_slots(table, slots, config)" in body
+    assert "self._sort_slots_by_distance(" in body
+    assert "_sort_objects" not in body
 
 
-def test_shadow_and_portal_passes_use_the_unculled_collections():
-    """The shadow/portal passes must still see the full scene."""
+def test_split_screen_second_view_passes_dense_brush_slots():
+    """The P2 split-screen camera must use the shared dense brush projection."""
+    src = _read("engine/qt_game_view.py")
+    tree = ast.parse(src)
+
+    render_calls = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "render_scene":
+            render_calls.append(node)
+
+    split_calls = [
+        node for node in render_calls
+        if any(isinstance(arg, ast.Name) and arg.id == "_p2_view" for arg in node.args)
+    ]
+    assert len(split_calls) == 1, "expected exactly one split-screen P2 render_scene call"
+
+    call = split_calls[0]
+    brush_slots = {
+        kw.arg: kw.value
+        for kw in call.keywords
+        if kw.arg == "brush_slots"
+    }
+    value = brush_slots.get("brush_slots")
+    assert isinstance(value, ast.Name)
+    assert value.id == "_p2_brush_slots"
+
+    # The P2 slot source must be the complete world projection, not P1's
+    # camera-visible subset.
+    src_body = ast.get_source_segment(src, call)
+    assert 'self._render_config.get("all_brush_slots")' in src
+    assert "_p2_brush_slots" in src_body
+
+
+def test_shadow_and_portal_passes_use_dense_unculled_collections():
+    """Shadow maps use the full dense caster projections, not camera-cull output."""
     body = _render_scene_source()
-    # Locate the shadow-map render call and confirm it uses the originals.
-    assert "render_shadow_maps(shadow_lights, shadow_brushes, shadow_things" in body
-    # shadow_brushes/shadow_things must not be derived from the culled lists.
-    for line in body.splitlines():
-        s = line.strip()
-        if s.startswith("shadow_brushes") or s.startswith("shadow_things"):
-            assert "cull_brushes" not in s and "cull_things" not in s, \
-                f"shadow collection built from culled data: {s}"
+    assert "self.render_shadow_maps(" in body
+    assert "(light_table, shadow_slots), config, camera_pos" in body
+    assert "shadow_brushes" not in body
+    assert "shadow_things" not in body
 
 
 def test_cull_is_opt_in_and_defaults_to_play_mode():
+    """Distance culling is applied only through the dense slot pipeline."""
     body = _render_scene_source()
-    assert "config.get('camera_distance_cull', config.get('play_mode', False))" in body
-    # When the flag is absent and not in play mode, the originals pass through.
-    assert "cull_brushes, cull_things = brushes, things" in body
+    guard = "config.get('camera_distance_cull', config.get('play_mode', False))"
+    assert body.count(guard) >= 2
+    assert "slots = brush_slots" in body
+    assert "tslots = thing_slots" in body
+    assert "cull_brushes = brushes" not in body
+    assert "cull_things = things" not in body
 
 
 def test_cull_does_not_mutate_its_input_lists():
@@ -81,15 +112,83 @@ def test_cull_does_not_mutate_its_input_lists():
     assert len(out) == 1
 
 
-def test_light_and_portal_exemption_predicate():
-    """_cull_keep_thing must exempt Light and Portal and nothing else."""
-    src = _read("engine/renderer_F.py")
-    assert "def _cull_keep_thing(t):" in src
-    assert "isinstance(t, Light)" in src
-    assert "isinstance(t, Portal)" in src
-    # The predicate is passed for things only, never for brushes.
-    assert "out=tbuf, keep=self._cull_keep_thing" in src
-    assert "out=bbuf)" in src
+@pytest.mark.gl
+def test_camera_cull_exempts_lights_and_portals_and_tracks_positions():
+    """The dense entity cull keeps lights/portals while dropping distant actors."""
+    import numpy as np
+    from editor.things import Light, Monster, Portal, Thing
+    from engine.entity_table import EntityTable
+    from engine.renderer_core import BaseRenderer
+
+    far = [50000.0, 0.0, 0.0]
+    things = [Thing(pos=list(far)), Light(pos=list(far)), Portal(pos=list(far)),
+              Monster(pos=list(far)), Thing(pos=[5.0, 0.0, 5.0])]
+    table = EntityTable()
+    hidden = table.begin_frame(things, epoch=1)
+    slots = np.arange(table.count, dtype=np.int32)
+    kept = BaseRenderer._distance_cull_thing_slots(
+        table, slots, 0.0, 0.0, 1000.0 * 1000.0)
+    assert [int(i) for i in kept] == [1, 2, 4]
+    assert not hidden[0]
+
+
+@pytest.mark.gl
+def test_the_slot_cull_exempts_the_same_lights_and_portals():
+    """The numeric path states the exemption as a mask; same answer required.
+
+    ``_cull_keep_thing`` is what kept lighting and portal rendering out of the
+    distance cull on the object path.  The entity projection expresses it as
+    :data:`engine.entity_table.ENT_CULL_EXEMPT`, and an exemption that drifted
+    would silently unlight a scene at range -- or, the other way, keep every
+    monster in the world alive in the sprite pass.
+    """
+    import numpy as np
+    from editor.things import Light, Monster, Portal, Thing
+    from engine import entity_table as et
+    from engine.renderer_core import BaseRenderer
+
+    far = [50000.0, 0.0, 0.0]
+    things = [Thing(pos=list(far)), Light(pos=list(far)), Portal(pos=list(far)),
+              Monster(pos=list(far)), Thing(pos=[5.0, 0.0, 5.0])]
+    table = et.EntityTable()
+    table.begin_frame(things, epoch=1)
+    slots = np.arange(table.count, dtype=np.int32)
+
+    kept = BaseRenderer._distance_cull_thing_slots(
+        table, slots, 0.0, 0.0, 1000.0 * 1000.0)
+
+    assert [int(i) for i in kept] == [1, 2, 4], (
+        "kept rows %s; the far Light (1) and Portal (2) are exempt and the "
+        "near Thing (4) is in range, but the far Thing (0) and the far "
+        "Monster (3) are not" % ([int(i) for i in kept],))
+
+
+def test_shadow_lights_use_entity_slots_on_numeric_path():
+    """Shadow-map selection remains an EntityTable slot operation."""
+    body = _render_scene_source()
+    assert "light_table, light_slots = lights" in body
+    assert "shadow_slots = light_slots[" in body
+    assert "self.render_shadow_maps(" in body
+    assert "light_refs = config.get('entity_refs')" not in body
+    assert "shadow_lights = [light_refs[int(s)]" not in body
+
+
+def test_legacy_per_object_sprite_renderer_is_gone():
+    """Sprite rendering has one execution boundary: EntityTable -> instancing."""
+    core = _read("engine/renderer_core.py")
+    forward = _read("engine/renderer_F.py")
+    assert "def draw_sprites(" not in core
+    assert ".draw_sprites(" not in forward
+    assert "self.draw_sprites_instanced(" in _render_scene_source()
+    assert "entity_projection.classify_slots(" in _render_scene_source()
+
+
+def test_entity_projection_is_the_sprite_renderer_input():
+    """The forward renderer must submit sprites through draw_sprites_instanced."""
+    body = _render_scene_source()
+    assert "self.draw_sprites_instanced(" in body
+    assert "self.draw_sprites(" not in body
+    assert "entity_projection.classify_slots(" in body
 
 
 # ---------------------------------------------------------------------------
@@ -253,13 +352,23 @@ def test_keyvalue_defaults_are_json_serialisable():
 
 
 def test_keyvalue_group_is_generic():
-    """No game-supplied suggestion hook may exist in the generic editor."""
+    """The generic editor carries no game's keys or vocabulary.
+
+    Preset keys exist since plugin API 1.5.0, but only as a plugin extension:
+    the LogicState panel lists whatever ``EditorAPI.register_kv_suggestions``
+    providers return, asked through the plugin manager, and knows no key of
+    its own. (Before 1.5.0 this guard banned the hook outright, to keep a
+    game-specific copy of it out of Fio.)
+    """
     src = _read("editor/property_editor.py")
-    assert "_kv_suggestions" not in src
-    assert "kv_key_suggestions" not in src
-    assert "Preset key" not in src
+    assert "kv_key_suggestions" not in src          # the old game-side name
+    assert "get_manager().kv_suggestions(store)" in src
     for banned in ("quest", "faction", "miniwind"):
         assert banned not in src.lower(), f"RPG term '{banned}' in property_editor"
+    start = src.index("def _kv_suggestions(store):")
+    helper = src[start:src.index("\nclass ", start)]
+    assert "return [(" not in helper and "append((" not in helper, (
+        "the generic editor must not supply preset keys of its own")
 
 
 def test_keyvalue_group_has_its_helpers():
@@ -368,3 +477,37 @@ def test_mover_position_types_survive_a_json_round_trip():
     pos = [original[i] + (direction[i] * distance) * factor for i in range(3)]
     text = json.dumps({"pos": pos})          # would raise on np.float64
     assert json.loads(text)["pos"] == pos
+
+
+def test_water_shader_controls_match_dense_projection():
+    src = _read("editor/property_editor.py")
+    assert '"Enable Waves"' in src
+    assert '"Reflections"' not in src
+    assert '_hbox(plane_cb, reflection_cb' not in src
+    assert 'water_refraction' in src
+    assert 'water_roughness' in src
+    assert 'water_fresnel' in src
+    assert 'reflection_cb' not in src
+    assert 'Cubemap height' not in src
+    assert 'water_reflection_height' not in src
+
+
+def test_special_brush_passes_do_not_materialise_dense_slots():
+    """Water, glass and fog must stay in RenderTable through render submission."""
+    src = _read("engine/renderer_F.py")
+    assert "water_brushes = groups['water']" in src
+    assert "glass_brushes = groups['glass']" in src
+    assert "fog_volumes = groups['fog']" in src
+    assert "water_brushes = _objs('water')" not in src
+    assert "glass_brushes = _objs('glass')" not in src
+    assert "fog_volumes = _objs('fog')" not in src
+
+    core = _read("engine/renderer_core.py")
+    assert "table.water_params[brushes]" in core
+    assert "water_reflections" not in core
+    assert "table.glass_params[brushes]" in core
+    assert "table.fog_params[brushes]" in core
+    assert "brush.get('water_opacity'" not in core
+    assert "brush.get('water_wave_height'" not in core
+    assert "brush.get('glass_opacity'" not in core
+    assert "brush.get('fog_density'" not in core

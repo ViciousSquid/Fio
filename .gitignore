@@ -6,3 +6,6 @@ __pycache__/
 # constructed (see ShaderLoader._ensure_defaults), so it is build output rather
 # than source. The visual test tier creates it too.
 assets/shaders/
+
+# Audit working files (regenerate with git rev-list)
+audit/_commits*.txt

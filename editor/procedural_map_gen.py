@@ -9,7 +9,6 @@ import os
 import json
 import random
 import argparse
-from datetime import datetime
 
 # Add the project root to sys.path so we can import from editor
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -17,7 +16,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 # Import the core generation function and required constants
-from editor.procedural_generator import create_map_data, CELL_SIZE, FLOOR_SURFACE, ENTITY_Y_OFFSET
+from editor.procedural_generator import create_map_data
 
 
 def generate_map_to_file(params, output_file):

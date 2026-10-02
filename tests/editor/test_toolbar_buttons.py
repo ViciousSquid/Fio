@@ -15,12 +15,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 pytest.importorskip("PyQt5", reason="Qt is not available in this environment")
 
+from PyQt5.QtCore import Qt  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
     QAction, QApplication, QMainWindow, QPushButton,
 )
 
 from editor.main_window import MainWindow  # noqa: E402
-from editor.ui import Ui_MainWindow  # noqa: E402
+from editor.ui import LAYOUT_VERSION, RotatablePlayButton, Ui_MainWindow  # noqa: E402
 
 # Qt tier: PyQt5 must be importable.  No display and no GPU - the suite runs
 # against the offscreen platform plugin.
@@ -51,12 +52,12 @@ class FakeEditorWindow(QMainWindow):
     to look at, not to drive.
     """
 
-    tool_mode = 'select'
+    tool_mode = 'brush'
 
     def __init__(self):
         super().__init__()
         self.config = configparser.ConfigParser()
-        self.play_button = QPushButton("Play")
+        self.play_button = RotatablePlayButton("Play")
         self.terrain_action = QAction("Terrain", self)
         self.procedural_action = QAction("Procedural", self)
 
@@ -69,6 +70,73 @@ def toolbar(qt_app):
     window = FakeEditorWindow()
     Ui_MainWindow().create_tool_toolbar(window)
     return window
+
+# ────────────────────────────
+# Toolbar docking topology
+# ────────────────────────────
+
+def test_the_tool_toolbar_allows_top_bottom_right_and_floating(toolbar):
+    allowed = toolbar.tool_toolbar.allowedAreas()
+
+    assert allowed & Qt.TopToolBarArea
+    assert allowed & Qt.BottomToolBarArea
+    assert allowed & Qt.RightToolBarArea
+    assert not (allowed & Qt.LeftToolBarArea)
+    assert toolbar.tool_toolbar.isMovable()
+    assert toolbar.tool_toolbar.isFloatable()
+
+
+def test_the_tool_toolbar_round_trips_as_a_vertical_right_dock(toolbar):
+    window = toolbar
+    state_version = LAYOUT_VERSION
+
+    window.addToolBar(Qt.RightToolBarArea, window.tool_toolbar)
+    assert window.toolBarArea(window.tool_toolbar) == Qt.RightToolBarArea
+    assert window.tool_toolbar.orientation() == Qt.Vertical
+
+    saved = window.saveState(state_version)
+
+    window.addToolBar(Qt.TopToolBarArea, window.tool_toolbar)
+    assert window.toolBarArea(window.tool_toolbar) == Qt.TopToolBarArea
+
+    assert window.restoreState(saved, state_version)
+    assert window.toolBarArea(window.tool_toolbar) == Qt.RightToolBarArea
+    assert window.tool_toolbar.orientation() == Qt.Vertical
+
+
+def test_the_play_button_rotates_and_narrows_when_toolbar_is_vertical(toolbar):
+    window = toolbar
+    window.addToolBar(Qt.RightToolBarArea, window.tool_toolbar)
+
+    assert window.tool_toolbar.orientation() == Qt.Vertical
+    assert window.play_button.property("_vertical") is True
+    assert window.play_button.width() < window.play_button.height()
+
+
+def test_the_play_button_returns_to_horizontal_shape_when_toolbar_is_top(toolbar):
+    window = toolbar
+    window.addToolBar(Qt.RightToolBarArea, window.tool_toolbar)
+    window.addToolBar(Qt.TopToolBarArea, window.tool_toolbar)
+
+    assert window.tool_toolbar.orientation() == Qt.Horizontal
+    assert window.play_button.property("_vertical") is False
+    assert window.play_button.width() > window.play_button.height()
+
+
+def test_the_tool_toolbar_round_trips_while_remaining_floatable(toolbar):
+    """QToolBar exposes floating as read-only; setFloatable() controls whether
+    the user may tear it off, while saveState() persists its dock position."""
+    window = toolbar
+    state_version = 3
+
+    window.addToolBar(Qt.RightToolBarArea, window.tool_toolbar)
+    saved = window.saveState(state_version)
+
+    window.addToolBar(Qt.TopToolBarArea, window.tool_toolbar)
+
+    assert window.restoreState(saved, state_version)
+    assert window.toolBarArea(window.tool_toolbar) == Qt.RightToolBarArea
+    assert window.tool_toolbar.isFloatable()
 
 
 # ────────────────────────────
@@ -169,7 +237,7 @@ def test_only_one_tool_button_is_checked_at_a_time(qt_app):
         def __init__(self):
             super().__init__()
             self.components = ce.ComponentController()
-            self.tool_mode = 'select'
+            self.tool_mode = 'brush'
 
     window = SyncingWindow()
     Ui_MainWindow().create_tool_toolbar(window)

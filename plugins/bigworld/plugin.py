@@ -69,6 +69,9 @@ class BigWorldPlugin(FioPlugin):
         from .config import FIELDS
         from .entities import BigWorldSettings  # lazy: pulls in editor.things
         api.register_entity(BigWorldSettings, menu_label="Big World Settings")
+        # One per map: a second would leave the session's config ambiguous
+        # (only the first is ever read). Placement, clone and paste refuse it.
+        api.register_singleton_entity(self.SETTINGS_TYPE)
         # The schema is derived, not written out again: the entity's defaults
         # and the runtime's coercion read the same table, so a field can't be
         # editable here and invisible to the session (see .config).
@@ -109,6 +112,9 @@ class BigWorldPlugin(FioPlugin):
     # -- play lifecycle -----------------------------------------------------
     def on_play_start(self, logic):
         logic._bigworld = None
+        # Only a running session publishes a camera-fitted view (see the runtime).
+        logic.sim_view_rect = None
+        logic.overhead_height_limit = None
         things = getattr(logic, "things", None) or []
         if not self.map_uses_bigworld(things):
             # No opt-in: behave as ordinary Fio, and in particular leave the
@@ -139,6 +145,13 @@ class BigWorldPlugin(FioPlugin):
                 )
                 session.start()
             except Exception:
+                # Undo whatever a half-started session already claimed (the
+                # camera-horizon limit, above all) before falling back.
+                try:
+                    if session is not None:
+                        session.stop()
+                except Exception:
+                    pass
                 session = None
         if session is None:
             session = BigWorldSession(
@@ -201,17 +214,20 @@ class BigWorldPlugin(FioPlugin):
             pass  # never let a debug draw take down the frame
 
     def _paint_debug(self, painter, session, width, height):
-        from PyQt5.QtCore import Qt, QRect
+        from PyQt5.QtCore import QRect
         from PyQt5.QtGui import QColor, QFont
 
         s = session.stats()
         pc = s.get("player_cell")
         pc_txt = f"{pc[0]}, {pc[1]}" if pc else "-"
+        horizon = s.get("visual_horizon")
         lines = [
             ("Player Cell", pc_txt),
             ("Active Cells", f"{s['active_cells']}"),
             ("Loaded Cells", f"{s['loaded_cells']}"),
-            ("Activation Radius", f"{s['activation_radius']:.0f}"),
+            ("Configured Radius", f"{s['configured_activation_radius']:.0f}"),
+            ("Visual Horizon", f"{horizon:.0f}" if horizon is not None else "-"),
+            ("Effective Radius", f"{s['activation_radius']:.0f}"),
             ("Active Brushes", f"{s['active_brushes']:,}"),
             ("Total Brushes", f"{s['total_brushes']:,}"),
             ("Active Entities", f"{s['active_entities']:,}"),

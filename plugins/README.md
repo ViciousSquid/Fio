@@ -1,6 +1,6 @@
-# The Fio Plugin System
+# Fio Plugin System
 
-Plugins add new gameplay to Fio — new placeable entity types, their I/O, and
+Plugins add new concepts to Fio: new placeable entity types, their I/O, and
 runtime behaviour — **without editing the core editor or engine**. Drop a Python
 package into this `plugins/` directory and it is discovered automatically at
 startup, wired into the editor's menus, property panel, I/O editor, serializer
@@ -31,13 +31,14 @@ the standalone `.fiopak` player.
 
 ## What ships
 
-Two example plugins live in this directory, and they are deliberately different
-in kind:
+Three example plugins live in this directory, and they deliberately cover
+different kinds of extension:
 
 | Plugin | Kind | What it demonstrates |
 |--------|------|----------------------|
 | [`tidy`](tidy/) | **Gameplay** | Pick-up-and-put-away games (books back on the shelf, tidy the museum, sort the warehouse). Entities, I/O ports, a carry/place runtime, a HUD goal. |
 | [`bigworld`](bigworld/) | **Runtime layer** | Cell streaming that keeps only the area around the player active in maps of hundreds of thousands of brushes. Uses the event bus, cross-plugin services, and host wrapping rather than adding entities to place. See its own [README](bigworld/README.md). |
+| [`benchmark`](benchmark/) | **Developer tooling** | Optional live runtime benchmark tooling. Registers the `benchmark` console command and launches the benchmark manager against the existing editor `MainWindow`. |
 
 Between them they exercise nearly the whole API: entity registration and I/O
 (`tidy`), and the open-ended [`PluginHost`](API.md#pluginhost--the-open-ended-engine-seam)
@@ -124,8 +125,7 @@ tiny bootstrap in `editor/__init__.py`.
 | `engine/logic_thread.py` | **Native** plugin hooks: `attach_runtime` (`__init__`), play-start/stop (`set_play_mode`), per-tick dispatch (`_tick_play_mode`). All guarded and optional. |
 | `editor/__init__.py` | Bootstrap: `load_plugins()` + `integration.apply()`, run once when the editor package is first imported (before any map loads). |
 | [`integration.py`](integration.py) | Installs the editor hooks: auto-enable/disable of disabled-by-default plugins onto `EditorState` (`load_from_data` enables for a level's entities, `clear_scene` reverts on File ▸ New); a **Plugins ▸ &lt;plugin&gt;** submenu onto `View2D`'s right-click menu; and a top-level **Plugins** menu onto `Ui_MainWindow`. |
-| `editor/package_exporter.py` | **Native** plugin bundling: `PackageExporter.export` calls `plugins.packaging.augment_fiopak` as a first-class final step once the base `.fiopak` is written. Guarded, so a build without the plugin system just skips it. |
-| [`packaging.py`](packaging.py) | Bundles the plugins a `.fiopak`'s maps depend on (code + assets + manifest) so exported packages are self-contained. |
+| `editor/package_exporter.py` | Exports world/maps/assets only; plugin code is never added to the archive. |
 
 > The right-click **Plugins ▸ &lt;plugin&gt;** submenu is injected by temporarily
 > swapping `QMenu.exec_` on the class while the 2D view builds its menu. That
@@ -190,7 +190,7 @@ are in [`API.md`](API.md); here is what each is *for*:
 
 | Object | Handed to | Use it for |
 |--------|-----------|------------|
-| [`EditorAPI`](API.md#editorapi--load-time-registration) | `register(api)` | declare entity types, I/O, property schemas, extra property fields/tabs, renderers |
+| [`EditorAPI`](API.md#editorapi--load-time-registration) | `register(api)` | declare entity types, I/O, property schemas, editor actions/wizards, extra property fields/tabs, renderers |
 | [`RuntimeAPI`](API.md#runtimeapi--per-session-services) | `register_runtime(api)` | register I/O input handlers; query the scene (`entities_of_type`, `things_near`, `raycast_from_crosshair`); `spawn`/`despawn` |
 | [`PluginHost`](API.md#pluginhost--the-open-ended-engine-seam) | `connect(host)` | subscribe to engine events (`host.on(...)`); reach any subsystem (`host.get(...)`); publish/consume services; guarded `host.wrap(...)` |
 | [`TickContext`](API.md#tickcontext--the-per-tick-object) | `on_tick(logic, ctx)` | read input (`ctx.use_pressed`, `ctx.key_down('e')`); drive the HUD (`ctx.set_prompt`, `ctx.toast`) |
@@ -207,18 +207,26 @@ cross-level state through the [`GlobalStore`](API.md#globalstore--cross-level-st
   the keys you pass to `register_io` and `register_input_handler`. If you
   subclass `Thing` directly, the base defaults `type` to the lowercased class
   name; set it explicitly to be safe.
-- **Want 3D geometry in play mode?** Subclass the engine's `Model` (as `tidy`'s
-  `TidyObject` does) or set a `model_path` property — any `Thing` with a
-  `model_path` is rendered by the existing model pipeline. Things without one are
-  editor-only sprites.
+- **Want 3D geometry in play mode?** Use a `Prop` with `render_mode='model'`
+  (every model in a Fio world is one), or set a `model_path` property on your
+  own `Thing` subclass — any `Thing` with a `model_path` is rendered by the
+  existing model pipeline. Things without one are editor-only sprites. There is
+  no `Model` base class; importing it still works but warns and gives `Thing`.
 - **Keep `register()` UI-free.** It runs in headless/engine contexts too — no Qt,
-  no OpenGL.
+  no OpenGL. Registration can declare editor actions and wizards; the callbacks
+  themselves run later in the editor.
 - **Do per-tick work in `on_tick`, and keep it cheap.** `ctx.use_pressed` is the
   edge-triggered interact key for that tick; `ctx.interaction_consumed` tells you
   whether the core already claimed the HUD/use this tick.
 - **Use the HUD helpers, not `logic.current_hud_message`.** `ctx.set_prompt`
   respects priority and won't clobber the core's prompt; `ctx.toast` shows a
   timed message.
+- **Use `extend_io()` when adding I/O to a core entity.** `register_io()`
+  replaces the declarations for an entity type; `extend_io()` preserves the
+  existing ports and adds only missing names.
+- **Use singleton/wizard registration for authoring constraints.**
+  `register_singleton_entity()` prevents duplicate per-map instances, while
+  `register_entity_wizard()` can collect initial properties before placement.
 - **Restore what you mutate.** If you move, hide or disable entities during play,
   put them back in `on_play_stop` so the edited map is unchanged (see
   `TidySession.stop`).
@@ -277,38 +285,23 @@ are always shown).
 
 ---
 
-## Packaging plugins into a [`.fiopak`](https://github.com/ViciousSquid/Fio/wiki/.fiopak-archive)
+## Plugins and `.fiopak`
 
-`.fiopak` exports are **plugin-aware**. When you export a package (File →
-Export…), the exporter scans the maps it bundles, works out which plugins their
-entities come from, and injects those plugins — **code and assets** — plus the
-plugin-system core into the archive, recording them in `metadata.json` under
-`"plugins"`. The package is then self-contained and loads on another machine.
+A `.fiopak` is a portable **world container**, not a code distribution.
+Plugin code is never copied into a `.fiopak`.
 
-- Plugin assets keep their repo-relative paths (e.g.
-  `plugins/tidy/assets/tidy_object.obj`), so a map's `model_path` resolves
-  straight out of the package — no rewriting.
-- Packages that use no plugin entities are unaffected (the step is a no-op)
-  unless a **global plugin** is in play (below).
+A package may record plugin dependency names in `metadata.json`, but the named
+plugins must already be installed in the player/editor environment. The player
+rejects any archive containing a top-level `plugins/` payload before loading its
+manifest. This removes executable-code loading from world containers entirely.
+
 - **Global plugins** (no placeable entities — which sets `global_plugin = True`)
-  can't be found from a map's `things`. They are bundled when they are *enabled*
-  at export time, or when a map names them under a top-level
-  `"required_plugins": [...]` (with optional `"plugin_config": {name: {...}}`).
-  The exporter bundles them, records them in the manifest, and bakes
-  `required_plugins` / `plugin_config` into each map so the standalone player
-  (which only sees map data) enables and configures them without any entity to
-  trigger auto-enable.
+  can't be found from a map's `things`. A map names them under a top-level
+  `"required_plugins": [...]` (with optional `"plugin_config": {name: {...}}`)
+  so the standalone player (which only sees map data) enables and configures
+  them without any entity to trigger auto-enable.
 - The player side exposes the dependency: `FioPackage.required_plugins` reads the
-  manifest list, and `plugins.packaging.load_package_plugins(root)` loads the
-  bundled plugins from an extracted package.
-
-The mechanics live in [`packaging.py`](packaging.py) (`augment_fiopak`,
-`load_package_plugins`). Bundling is a native step of
-[`editor/package_exporter.py`](../editor/package_exporter.py) —
-`PackageExporter.export` calls `augment_fiopak` itself once the base archive is
-written; it is **not** monkey-patched on by `integration.py`.
-
----
+  manifest list; the plugins themselves come from the player's own install.
 
 ## Running plugins outside the editor
 
@@ -317,13 +310,13 @@ Plugin gameplay runs in **both** hosts:
 - **Editor Play mode** — the logic thread dispatches the plugin lifecycle/tick
   (via `plugins.integration`).
 - **Standalone `.fiopak` player** (`player/`, incl. the Android build) — the
-  `player.plugin_host.PlayerPluginHost` loads the package's plugins, builds
+  `player.plugin_host.PlayerPluginHost` loads the installed plugins, builds
   entity instances from the map, and drives the same lifecycle/tick from the
   player's frame loop against a camera→player bridge (USE = interact).
 
 To make this work everywhere, the plugin runtime is **dependency-free**: no
 PyGLM (plain-Python vector math) and no PyQt. Plugin entities normally subclass
-the editor's `Thing`/`Model`, but when the editor package is absent (the player)
+the editor's `Thing`, but when the editor package is absent (the player)
 they fall back to [`entitybase.py`](entitybase.py), a tiny PyQt-free base. So the
 same plugin loads in the editor, the desktop player, and the APK.
 
@@ -336,13 +329,9 @@ same plugin loads in the editor, the desktop player, and the APK.
 
 ## Android APK
 
-`player/buildozer.spec` includes `plugins/*`, so the plugin system + bundled
-plugins (code and `.obj`/`.mtl` assets) ship inside the APK. The **Android Player
-Build** workflow (`.github/workflows/android-build.yml`) bundles
-`maps/Tidy_Test.json` as the sample `game.fiopak` (self-contained — the plugin
-travels with it), so the on-device build exercises the plugin loader and runtime.
-Trigger it from **Actions → Android Player Build → Run workflow**; the APK is
-uploaded as the `fio-player-debug-apk` artifact.
+`player/buildozer.spec` includes `plugins/*`, so the plugin system and the
+installed plugins (code and `.obj`/`.mtl` assets) ship inside the APK. Packages
+played on the device name the plugins they need; they never carry them.
 
 ---
 
@@ -356,7 +345,7 @@ The tests are headless — no display / OpenGL required:
 ```bash
 # Tidy plugin (gameplay)
 QT_QPA_PLATFORM=offscreen python plugins/tidy/tests/test_smoke.py       # runtime + integration
-QT_QPA_PLATFORM=offscreen python plugins/tidy/tests/test_packaging.py   # .fiopak bundling
+QT_QPA_PLATFORM=offscreen python plugins/tidy/tests/test_packaging.py   # .fiopak plugin boundary
 python plugins/tidy/tests/test_player.py                                # player path (editor/PyQt/glm blocked)
 
 # Big World plugin (runtime scalability)
@@ -370,11 +359,12 @@ python -m plugins.bigworld.tests.test_bigworld
 | Want to… | Read |
 |----------|------|
 | Understand the whole system | this file |
+| Add editor actions, singleton entities or creation wizards | [`API.md`](API.md#editorapi--load-time-registration) |
+| Add I/O to a core entity without replacing its ports | [`API.md`](API.md#editorapi--load-time-registration) |
 | Look up a class/method/signature | [`API.md`](API.md) |
 | See the annotated API source | [`api.py`](api.py) |
 | Use the open-ended engine seam | [`host.py`](host.py) / [API §PluginHost](API.md#pluginhost--the-open-ended-engine-seam) |
 | Read a complete gameplay plugin | [`tidy/`](tidy/) |
 | Read a runtime-layer plugin | [`bigworld/README.md`](bigworld/README.md) |
 | Understand editor wiring | [`integration.py`](integration.py) |
-| Understand `.fiopak` bundling | [`packaging.py`](packaging.py) |
 | Write for the PyQt-free player | [`entitybase.py`](entitybase.py) |

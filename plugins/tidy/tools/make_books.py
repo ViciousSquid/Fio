@@ -7,9 +7,8 @@ Produces, under ``plugins/tidy/assets/``:
                                  edges = page region of the texture)
     covers/cover_NN.png          N distinct book covers (art + cream page edge)
 
-Each :class:`TidyObject` picks a random cover at creation and renders it via the
-engine's per-instance ``texture`` override, so a shelf of books shows many
-different covers instead of identical grey boxes.
+A tidyable core Prop can use one of these covers through the engine's per-instance
+``texture`` override, so a shelf of books shows varied covers instead of identical grey boxes.
 
 The book's UVs map the front and back faces to the left ~72% of the texture (the
 cover art) and every edge face to a cream strip on the right (the pages), so one

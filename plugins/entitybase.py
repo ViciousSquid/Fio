@@ -1,13 +1,13 @@
 """
 A PyQt-free fallback base for plugin entities.
 
-Plugin entity classes normally subclass ``editor.things.Model`` / ``Thing`` so
-they slot into the editor's palette, property panel and serializer. But the
-editor package pulls in PyQt5, which is intentionally absent from the
-standalone ``.fiopak`` player and its Android build. When ``editor.things``
-can't be imported, plugins fall back to the tiny, dependency-free ``Thing`` /
-``Model`` defined here so their entities still construct and their gameplay
-still runs.
+Plugin entity classes normally subclass ``editor.things.Thing`` so they slot
+into the editor's palette, property panel and serializer. But the editor
+package pulls in PyQt5, which is intentionally absent from the standalone
+``.fiopak`` player and its Android build. When ``editor.things`` can't be
+imported, plugins fall back to the tiny, dependency-free ``Thing`` defined here
+so their entities still construct and their gameplay still runs.  (There is
+no ``Model`` base: a model is a Prop, or any Thing with a ``model_path``.)
 
 The surface mirrors just enough of ``editor.things`` for runtime use: a
 ``properties`` dict, ``pos``, a ``name`` accessor, ``type`` handling and simple
@@ -20,10 +20,14 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
+from engine.change_journal import TrackedPosition
+
 
 class Thing:
     """Minimal placeable-entity base (no editor/PyQt dependency)."""
 
+    #: Assignment notifies the render projection; see engine.change_journal.
+    pos = TrackedPosition()
     pixmap_path = None
     _counters: dict = {}
 
@@ -71,6 +75,12 @@ class Thing:
         if not ttype:
             return None
         target = str(ttype).replace("_", "").lower()
+        properties = dict(data.get("properties", {}))
+        if target == "model":
+            # A model is a Prop; see engine.prop_entity.legacy_model_properties.
+            from engine.prop_entity import legacy_model_properties
+            properties = legacy_model_properties(properties)
+            target = "prop"
 
         def _walk(c):
             for sub in c.__subclasses__():
@@ -79,40 +89,25 @@ class Thing:
 
         for sub in _walk(Thing):
             if sub.__name__.lower() == target:
-                return sub(pos=data.get("pos"), properties=dict(data.get("properties", {})))
+                return sub(pos=data.get("pos"), properties=properties)
         return None
 
 
-class Model(Thing):
-    """Fallback for a model-carrying entity."""
+def __getattr__(name):
+    """``plugins.entitybase.Prop`` is an alias, not a second implementation.
 
-    pixmap_path = None
-
-    def __init__(self, pos=None, properties=None):
-        super().__init__(pos, properties)
-        self.properties.setdefault("type", "model")
-        self.properties.setdefault("model_path", "")
-        self.properties.setdefault("rotation", [0, 0, 0])
-        self.properties.setdefault("scale", [1, 1, 1])
-
-
-class Prop(Model):
-    """PyQt-free counterpart of :class:`editor.things.Prop`."""
-
-    def __init__(self, pos=None, properties=None):
-        super().__init__(pos, properties)
-        self.properties['type'] = 'prop'
-        for key, value in {
-            'sprite_path': 'assets/sprites/pickup.png', 'sprite_size': [32.0, 32.0], 'mass': 1.0,
-            'collision_size': [0.0, 0.0, 0.0], 'no_collision': True,
-            'physics_enabled': False, 'gravity': True, 'friction': 0.55,
-            'linear_damping': 0.08, 'angular_damping': 0.12,
-            'pickup_enabled': True, 'pickup_reach': 110.0,
-            'carry_distance': 55.0, 'carry_offset': [0.0, -6.0, 0.0],
-            'drop_velocity': 0.0, 'drop_angular_velocity': [0.0, 0.0, 0.0],
-            'disabled': False,
-        }.items():
-            self.properties.setdefault(key, value)
-
-    def get_sprite_path(self):
-        return self.properties.get('sprite_path', '')
+    Prop is a core engine primitive defined once in :mod:`engine.prop_entity`
+    (on this module's Thing when the editor tier is absent). Resolved lazily
+    because that module imports this one.
+    """
+    if name == 'Model':
+        import warnings
+        warnings.warn("plugins.entitybase.Model is gone: subclass Thing (or "
+                      "use a Prop) and set model_path", DeprecationWarning,
+                      stacklevel=2)
+        return Thing
+    if name == 'Prop':
+        from engine.prop_entity import Prop
+        globals()['Prop'] = Prop
+        return Prop
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

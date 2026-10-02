@@ -14,17 +14,17 @@ playing. On mobile that is wasteful (storage + startup latency), so this reader
 streams every entry **directly out of the ZIP** and never touches disk. It is
 pure-stdlib so it can be unit-tested without a GPU or any third-party package.
 
-The path-resolution fallbacks intentionally mirror both
-``engine/resource_manager.py`` and ``editor/package_exporter.py`` so that any
-package the editor can export, the player can open — including older packages
-that used the ``manifest.json`` name or stored assets without the ``assets/``
-prefix.
+The path-resolution fallbacks mirror ``editor/package_exporter.py`` so that
+any package the editor can export, the player can open — including older
+packages that used the ``manifest.json`` name or stored assets without the
+``assets/`` prefix.
 """
 
 from __future__ import annotations
 
 import io
 import json
+import posixpath
 import zipfile
 from typing import BinaryIO, Dict, List, Optional
 
@@ -63,6 +63,11 @@ class FioPackage:
         self._zf = zf
         self._source = source
         self._names = set(zf.namelist())
+        if any(_is_plugin_payload(n) for n in self._names):
+            raise PackageError(
+                "Bundled plugins are not permitted in .fiopak archives; "
+                "install required plugins separately."
+            )
         # Index entries by basename so a map that references an asset by bare
         # filename ("floor.png") resolves to wherever the exporter filed it
         # ("assets/textures/floor.png"). First match wins deterministically.
@@ -103,7 +108,11 @@ class FioPackage:
             zf = zipfile.ZipFile(io.BytesIO(data), "r")
         except zipfile.BadZipFile as exc:
             raise PackageError("Not a valid .fiopak (bad zip)") from exc
-        return cls(zf, source=source)
+        try:
+            return cls(zf, source=source)
+        except Exception:
+            zf.close()
+            raise
 
     # ------------------------------------------------------------------
     # Context manager / lifecycle
@@ -155,33 +164,19 @@ class FioPackage:
 
     @property
     def required_plugins(self) -> List[str]:
-        """Names of plugins this package depends on (from the manifest).
-
-        Populated by the exporter when a map uses plugin-provided entities; the
-        plugins' code/assets are bundled under ``plugins/`` in the archive. Use
-        :func:`plugins.packaging.load_package_plugins` on the extracted package
-        root to make them available.
-        """
+        """Names of separately-installed plugins this package depends on."""
         return list(self._manifest.get("plugins", []) or [])
-
-    def has_bundled_plugins(self) -> bool:
-        return any(n.startswith("plugins/") for n in self._names)
 
     # ------------------------------------------------------------------
     # Map discovery
     # ------------------------------------------------------------------
     def list_maps(self) -> List[str]:
-        """All map JSON entries in the archive, sorted, manifest excluded.
-
-        Bundled plugin files (under ``plugins/``) are excluded so a plugin that
-        happens to ship a ``.json`` is never mistaken for a level.
-        """
+        """All map JSON entries in the archive, sorted, manifest excluded."""
         maps = [
             n
             for n in self._names
             if n.lower().endswith(".json")
             and _basename(n) not in _MANIFEST_NAMES
-            and not _normalize(n).startswith("plugins/")
         ]
         return sorted(maps)
 
@@ -190,7 +185,7 @@ class FioPackage:
 
         Prefers the manifest's ``map_path``/``start_map``/``main_map`` key,
         verifying the entry actually exists; otherwise auto-detects the first
-        map file (mirroring ``ResourceManager._ensure_start_map_exists``).
+        map file.
         """
         for key in _START_MAP_KEYS:
             raw = self._manifest.get(key)
@@ -323,6 +318,19 @@ def _normalize(path: str) -> str:
     while p.startswith("./"):
         p = p[2:]
     return p
+
+
+def _is_plugin_payload(name: str) -> bool:
+    """True for an entry that would land under a top-level ``plugins/``.
+
+    Compared case-insensitively, both as written and after resolving ``..``:
+    either spelling is where the entry can end up once extracted on a
+    case-insensitive filesystem.
+    """
+    written = _normalize(name).lower()
+    resolved = posixpath.normpath(written)
+    return any(p == "plugins" or p.startswith("plugins/")
+               for p in (written, resolved))
 
 
 def _basename(path: str) -> str:

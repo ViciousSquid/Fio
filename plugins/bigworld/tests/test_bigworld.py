@@ -349,6 +349,39 @@ def test_streaming_moves_active_set():
     _check(not brushes[20].get("hidden", False), "a brush by the destination is streamed in")
 
 
+def test_moved_entity_survives_combined_radius_shrink_and_cell_crossing():
+    print("[10b] moved entities are refiled before a simultaneous residency shrink")
+    mover = FakeThing(3000.0, 0.0, 0.0, ttype="monster")
+    logic = FakeLogic([], [mover], player_pos=(0.0, 0.0, 0.0))
+    logic.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 4096.0})()
+    session = BigWorldSession(
+        logic,
+        activation_radius=1024.0,
+        deactivation_radius=1536.0,
+    )
+    session.start()
+
+    uuid = mover.properties["id"]
+    old_cell = session.manager._thing_cell[uuid]
+    _check(session.manager.is_thing_active(mover), "mover starts resident under the expanded horizon")
+
+    # The player crosses a cell while the visible horizon shrinks back to the
+    # authored activation radius. The mover simultaneously walks into a cell
+    # that remains active after the shrink.
+    logic.view_distance.visual_horizon = 1024.0
+    logic.player.pos = [512.0, 0.0, 0.0]
+    mover.pos = [1000.0, 0.0, 0.0]
+    session.tick()
+
+    new_cell = session.manager._thing_cell[uuid]
+    _check(new_cell != old_cell, "mover was refiled into its current cell before the shrink")
+    _check(session.manager.is_thing_active(mover),
+           "mover remains active because its current cell stayed resident")
+    _check(not mover.properties.get("disabled", False),
+           "mover was not parked by the forced residency update")
+    session.stop()
+
+
 # --------------------------------------------------------------------------
 # 11. UUID stability across a full streaming round-trip
 # --------------------------------------------------------------------------
@@ -552,6 +585,35 @@ def test_terrain_fill_opt_in_and_safe():
     _check(terrain3.stream_radius == 777.0, "explicit terrain_stream_radius honoured")
     s3.stop()
 
+    # (d) the default-derived radius follows a live visual-horizon increase.
+    terrain4 = FakeTerrain()
+    logic4 = FakeLogic(brushes, [], player_pos=(0, 0, 0), terrain=terrain4)
+    logic4.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 2048.0})()
+    s4 = BigWorldSession(logic4, activation_radius=2048.0, terrain_fill=True)
+    s4.start()
+    _check(terrain4.stream_radius == 2048.0,
+           "default terrain radius starts at the effective activation radius")
+    logic4.view_distance.visual_horizon = 4096.0
+    s4.tick()
+    _check(terrain4.stream_radius == 4096.0,
+           "default terrain radius grows with an increased visual horizon")
+    s4.stop()
+
+    # (e) an explicitly authored radius remains authoritative across a horizon increase.
+    terrain5 = FakeTerrain()
+    logic5 = FakeLogic(brushes, [], player_pos=(0, 0, 0), terrain=terrain5)
+    logic5.view_distance = type("ViewDistanceStub", (), {"visual_horizon": 4096.0})()
+    s5 = BigWorldSession(logic5, activation_radius=2048.0, terrain_fill=True,
+                         terrain_stream_radius=5000.0)
+    s5.start()
+    _check(terrain5.stream_radius == 5000.0,
+           "larger explicit terrain radius is preserved over the effective activation")
+    logic5.view_distance.visual_horizon = 8192.0
+    s5.tick()
+    _check(terrain5.stream_radius == 5000.0,
+           "explicit terrain radius remains fixed after another horizon increase")
+    s5.stop()
+
 
 def test_terrain_config_roundtrips():
     print("[17] terrain fill config round-trips through the settings entity")
@@ -615,25 +677,26 @@ def test_real_terrain_streaming_math():
     t.offset_x = t.offset_z = t.offset_y = 0.0
     t.min_chunk_x, t.max_chunk_x = -100000, 100000
     t.min_chunk_z, t.max_chunk_z = -100000, 100000
-    t.chunks = {}
+    from engine.terrain_table import TerrainTable
+    t.table = TerrainTable()
     t.streaming = True
     t.stream_radius = 600.0
     t.stream_evict_padding = 256.0
-    t.HEIGHT_CACHE_RESOLUTION = Terrain.HEIGHT_CACHE_RESOLUTION
 
     t._stream_chunks(_Vec(0, 0, 0))
-    near = set(t.chunks.keys())
+    near = set(t.table.resident_coords())
     _check(0 < len(near) < 100, f"a bounded ring of chunks streams in ({len(near)})")
     _check((0, 0) in near, "the chunk under the camera is resident")
 
     # Walk far away: the origin chunks must be evicted, new ones stream in.
     far_x = 50000.0
     t._stream_chunks(_Vec(far_x, 0, 0))
-    _check((0, 0) not in t.chunks, "distant origin chunk evicted after moving away")
+    resident = t.table.resident_coords()
+    _check((0, 0) not in resident, "distant origin chunk evicted after moving away")
     far_cx = int(far_x // t.chunk_size)
-    _check(any(abs(cx - far_cx) <= 3 for (cx, cz) in t.chunks),
+    _check(any(abs(cx - far_cx) <= 3 for (cx, cz) in resident),
            "chunks stream in around the new camera position")
-    _check(len(t.chunks) < 100, "resident chunk count stays bounded regardless of travel")
+    _check(len(resident) < 100, "resident chunk count stays bounded regardless of travel")
 
 
 def main():
@@ -646,6 +709,7 @@ def main():
     test_persistent_entities()
     test_session_effects_and_restore()
     test_streaming_moves_active_set()
+    test_moved_entity_survives_combined_radius_shrink_and_cell_crossing()
     test_uuid_stability()
     test_backwards_compatibility()
     test_scaling_active_is_local()

@@ -72,7 +72,11 @@ def test_direction_cache_in_logic_thread_is_a_float_tuple():
     """Guard the regression: a numpy _direction_np would poison brush['pos']."""
     src = read_source("engine", "logic_thread.py")
     assert "'_direction_np': (float(direction[0])" in src
-    assert "direction = (float(d[0]), float(d[1]), float(d[2]))" in src
+    # Resolved lazily on the first tick, now in the dense mover table.
+    from engine.mover_table import _unit_direction
+    direction = _unit_direction([0, 3, 4])
+    assert type(direction) is tuple and all(type(v) is float for v in direction)
+    assert direction == (0.0, 0.6, 0.8)
     # The old allocating form must be gone from the two mover/door sites.
     assert "offset = direction * distance" not in src
     assert "np.array(brush['original_pos'])" not in src
@@ -226,6 +230,35 @@ def test_legacy_request_without_action_still_plays():
     host._process_sound_queue()
     assert snd.plays[0][0] == 0
     assert snd.plays[0][1].volume == 0.8
+
+
+def test_speaker_handlers_queue_spatial_radius_data():
+    src = read_source("editor", "io_handlers.py")
+    assert "'position': position," in src
+    assert "'radius': radius," in src
+    assert "'global': global_sound," in src
+
+
+def test_speaker_start_on_is_consumed_at_player_spawn():
+    src = read_source("engine", "logic_thread.py")
+    assert "if not bool(thing.properties.get('play_on_start', False)):" in src
+    assert "self.io_manager._execute_input(" in src
+    assert "'PlaySound'," in src
+
+
+def test_sound_radius_gain_is_linear_and_zero_at_edge():
+    src = read_source("engine", "qt_game_view.py")
+    assert "return 1.0 - (distance / radius)" in src
+    assert "if distance >= radius:" in src
+    assert "meta.get('radius', 512.0)" in src
+
+
+def test_global_and_looping_are_independent_speaker_flags():
+    src = read_source("editor", "io_handlers.py")
+    # Both authored flags are forwarded independently; Global must not disable
+    # looping, and Looping must not make a local speaker global.
+    assert "'looping': looping," in src
+    assert "'global': global_sound," in src
 
 
 def test_speaker_handlers_send_looping_and_stop():

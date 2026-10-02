@@ -75,6 +75,9 @@ DEFAULT_FOG_DENSITY = 0.0
 
 
 def _clamp(value, low, high):
+    # NaN compares false both ways and would pass straight through.
+    if value != value:
+        return low
     return low if value < low else (high if value > high else value)
 
 
@@ -104,7 +107,7 @@ class ViewDistance:
     """
 
     __slots__ = ('_distance', 'fog_enabled', '_fog_start', '_fog_end',
-                 '_fog_density', '_fog_color', '_ambient')
+                 '_fog_density', '_fog_color', '_ambient', '_limit')
 
     def __init__(self, distance=DEFAULT_VIEW_DISTANCE):
         self._distance = _clamp(float(distance), MIN_VIEW_DISTANCE, MAX_VIEW_DISTANCE)
@@ -114,21 +117,72 @@ class ViewDistance:
         self._fog_density = DEFAULT_FOG_DENSITY
         self._fog_color = tuple(DEFAULT_FOG_COLOR)
         self._ambient = (0.0, 0.0, 0.0)
+        self._limit = None
 
     # -- view distance ----------------------------------------------------
     @property
     def distance(self):
-        """Maximum render distance in world units. Nothing is drawn past it."""
+        """The *requested* render distance in world units -- what the spinbox
+        and ``r_viewdistance`` set. What is actually drawn is
+        :attr:`effective_distance`, which a :attr:`limit` can pull in."""
         return self._distance
 
     @distance.setter
     def distance(self, value):
-        self._distance = _clamp(float(value), MIN_VIEW_DISTANCE, MAX_VIEW_DISTANCE)
+        value = float(value)
+        if value != value:
+            return              # NaN: keep the distance the view already has
+        self._distance = _clamp(value, MIN_VIEW_DISTANCE, MAX_VIEW_DISTANCE)
+
+    @property
+    def limit(self):
+        """A horizon imposed by the world rather than chosen by the player.
+
+        ``None`` (the default) means no limit. Big World sets it to its
+        activation radius for the length of a play session: geometry beyond
+        that radius is parked, so the camera must not be able to see that far
+        or the parking edge is a visible pop. With a limit set, fog is opaque
+        by the limit and the far plane follows it in, which is also what stops
+        the renderer paying for terrain and geometry nobody can see.
+
+        A limit only ever *narrows* the view: a requested distance already
+        inside it is left alone.
+        """
+        return self._limit
+
+    @limit.setter
+    def limit(self, value):
+        if value is None:
+            self._limit = None
+            return
+        value = float(value)
+        if value != value or value <= 0.0:
+            return              # NaN / non-positive: keep the current limit
+        self._limit = value
+
+    @property
+    def effective_distance(self):
+        """The render distance actually in force: :attr:`distance`, narrowed
+        by :attr:`limit` when one is set.
+
+        With fog on, the far plane sits far enough past the limit that the
+        automatic fog end (:data:`AUTO_FOG_END_FRAC` of it) lands exactly on
+        the limit, so the scene fades out at the limit instead of being cut at
+        it. With fog off there is no fade to leave room for, and the far plane
+        is the limit itself.
+        """
+        distance = self._distance
+        limit = self._limit
+        if limit is None:
+            return distance
+        cap = limit / AUTO_FOG_END_FRAC if self.fog_enabled else limit
+        return cap if cap < distance else distance
 
     @property
     def distance_sq(self):
         """Squared view distance -- what the per-object XZ cull compares."""
-        return self._distance * self._distance
+        distance = self.effective_distance
+        return distance * distance
 
     @property
     def far_plane(self):
@@ -141,9 +195,22 @@ class ViewDistance:
         surface is what makes "nothing renders past the view distance" true of
         whole objects and of individual fragments alike.
         """
-        return self._distance
+        return self.effective_distance
 
     # -- fog --------------------------------------------------------------
+    @property
+    def visual_horizon(self):
+        """The distance at which camera-visible geometry is no longer useful.
+
+        With distance fog enabled this is the resolved fog end, because
+        geometry beyond that point is already fully blended into the fog colour.
+        With fog disabled there is no soft visual hand-off, so the far plane is
+        the horizon Big World must respect.
+        """
+        if not self.fog_enabled:
+            return self.far_plane
+        return self.resolve()[1]
+
     @property
     def fog_start(self):
         """Where fog begins, or ``None`` when it tracks the view distance."""
@@ -215,12 +282,18 @@ class ViewDistance:
         * ``start`` is at least :data:`MIN_FOG_BAND` below ``end``, so the ramp
           is never a hard line.
 
+        * ``end`` never exceeds :attr:`limit`, so a world-imposed horizon is
+          honoured even by an explicitly pinned fog distance.
+
         Clamping ``end`` first and ``start`` second means an over-large
         ``fog_start`` is pulled back with the band rather than inverting it.
         """
-        far = self._distance
+        far = self.effective_distance
+        ceiling = far * MAX_FOG_END_FRAC
+        if self._limit is not None and self._limit < ceiling:
+            ceiling = self._limit
         end = self._fog_end if self._fog_end is not None else far * AUTO_FOG_END_FRAC
-        end = _clamp(end, MIN_FOG_BAND, far * MAX_FOG_END_FRAC)
+        end = _clamp(end, MIN_FOG_BAND, max(MIN_FOG_BAND, ceiling))
 
         start = self._fog_start if self._fog_start is not None else far * AUTO_FOG_START_FRAC
         start = _clamp(start, 0.0, end - MIN_FOG_BAND)
@@ -255,8 +328,11 @@ class ViewDistance:
         auto_e = "" if self._fog_end is not None else " (auto)"
         r, g, b = self._fog_color
         ar, ag, ab = self._ambient
-        return [
-            ("View Distance", f"{self._distance:.0f}"),
+        rows = [("View Distance", f"{self._distance:.0f}")]
+        if self._limit is not None:
+            rows.append(("View Limit", f"{self._limit:.0f} "
+                         f"(effective {self.effective_distance:.0f})"))
+        return rows + [
             ("Distance Fog", "ON" if self.fog_enabled else "OFF"),
             ("Fog Start", f"{start:.0f}{auto_s}"),
             ("Fog End", f"{end:.0f}{auto_e}"),

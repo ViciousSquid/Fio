@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QMenu, QAction, QSizePolicy
 )
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtGui import QColor
 
 try:
     from .io_system import (
@@ -374,13 +374,6 @@ class IOConnectionDialog(QDialog):
         if sender:
             menu.exec_(sender.mapToGlobal(sender.rect().bottomLeft()))
 
-    def _set_target_from_dropdown(self, name):
-        """Set the target entity name from the dropdown selection (legacy)."""
-        self.target_edit.setText(name)
-        self.target_edit.editingFinished.emit()
-        # Trigger input options update
-        self._update_input_options(name)
-
     def _set_target_from_entity(self, entity):
         """Set the target from an entity reference, auto-naming if unnamed.
 
@@ -395,12 +388,6 @@ class IOConnectionDialog(QDialog):
         # Trigger input options update (do not clear the freshly-picked entity)
         self._update_input_options(name)
 
-    def _start_pick_mode(self):
-        QMessageBox.information(
-            self, "Pick Mode",
-            "Click on an entity in the 2D or 3D view to select it as the target."
-        )
-    
     def _populate_from_connection(self, conn):
         self.output_combo.setCurrentText(conn.output_name)
         self.target_edit.setText(conn.target_name)
@@ -821,20 +808,6 @@ class IOEditorWidget(QWidget):
             return state.find_entity_by_name(target_name)
         return None
 
-    def _target_exists(self, target_name):
-        if not self.editor or not target_name:
-            return False
-
-        for brush in self.editor.state.brushes:
-            if brush.get('name') == target_name:
-                return True
-
-        for thing in self.editor.state.things:
-            if thing.properties.get('name') == target_name:
-                return True
-
-        return False
-    
     def _update_button_states(self):
         has_selection = len(self.table.selectedItems()) > 0
         self.edit_btn.setEnabled(has_selection)

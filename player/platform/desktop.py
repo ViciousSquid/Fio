@@ -13,7 +13,7 @@ without pygame or a display.
 from __future__ import annotations
 
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 from .base import PlatformHost, HostConfig, FrameCallbacks
 from .lifecycle import LifecycleState

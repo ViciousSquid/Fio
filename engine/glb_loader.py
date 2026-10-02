@@ -87,7 +87,7 @@ class GLBLoader:
         self.animations: List[Dict[str, Any]] = []
 
     def load(self, filepath: str) -> bool:
-        """Load a GLB file from disk or ResourceManager fallback."""
+        """Load a GLB file from disk; False if it cannot be read or parsed."""
         data = self._read_file(filepath)
         if data is None:
             print(f"[GLBLoader] Failed to load: {filepath}")
@@ -102,23 +102,12 @@ class GLBLoader:
             return False
 
     def _read_file(self, filepath: str) -> Optional[bytes]:
-        """Try direct file read, then ResourceManager fallback."""
-        if os.path.exists(filepath):
-            try:
-                with open(filepath, 'rb') as f:
-                    return f.read()
-            except IOError:
-                pass
-
-        # Fallback to ResourceManager (package mode)
+        """The file's bytes, or None when it is missing or unreadable."""
         try:
-            from engine.resource_manager import ResourceManager
-            rm = ResourceManager()
-            return rm.get_binary_asset(filepath)
-        except ImportError:
-            pass
-
-        return None
+            with open(filepath, 'rb') as f:
+                return f.read()
+        except OSError:
+            return None
 
     def _parse_glb(self, data: bytes):
         """Parse GLB header and chunks."""
@@ -661,8 +650,8 @@ def _render_glb_thumbnail_impl(filepath: str, width: int, height: int):
     Generate a wireframe thumbnail from a GLB file for the asset browser.
     Falls back to bounding-box preview if mesh is too complex.
     """
-    from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QPen, QPolygonF
-    from PyQt5.QtCore import Qt, QRect, QPointF
+    from PyQt5.QtGui import QPixmap, QColor, QPainter, QPen
+    from PyQt5.QtCore import QPointF
     import math
 
     loader = GLBLoader()

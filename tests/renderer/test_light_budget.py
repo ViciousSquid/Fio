@@ -2,9 +2,9 @@
 
 Two things that were written down in more than one place and had drifted apart:
 
-* the renderer's light budget (32) and the light array its shaders declared (8),
-  so a scene with more than eight lights made ``lit.frag`` index past the end of
-  its array — undefined behaviour, and 24 of the "32" lights never worked;
+* the renderer's light budget and the light array its shaders declared had
+  previously drifted apart, so a scene with more lights than the shader array
+  could index past the end of the array;
 * "is this machine low-power?", detected separately by the renderer and the
   Settings window, and defaulting to *yes* on every machine regardless.
 """
@@ -87,9 +87,18 @@ def test_water_and_terrain_are_capped_to_what_they_declare():
     assert caps['terrain'] == array_size(shaders.DEFAULT_SHADERS['terrain.frag'])
 
 
-def test_terrain_clamps_against_the_shader_constant_not_a_literal():
-    source = read_source('engine', 'terrain.py')
-    assert 'MAX_LIGHTS_TERRAIN as MAX_TERRAIN_LIGHTS' in source
+def test_terrain_light_subset_uses_the_shader_constant():
+    source = read_source('engine', 'renderer_core.py')
+    assert 'max_terrain_lights = shaders.MAX_LIGHTS_TERRAIN' in source
+
+
+def test_light_shader_sources_are_rewritten_to_the_shared_ubo():
+    source = shaders.light_ubo_source(shaders.DEFAULT_SHADERS['lit.frag'])
+    assert 'layout(std140) uniform FioLightBlock' in source
+    assert 'uniform Light lights[' not in source
+    assert '.position.xyz' in source
+    assert '.params.x' in source
+    assert 'int(lights[' in source
 
 
 # ---------------------------------------------------------------------------
@@ -164,3 +173,26 @@ def test_the_old_settings_key_is_still_honoured():
     renderer_src = read_source('engine', 'renderer_core.py')
     assert "'arm_mode'" in renderer_src
     assert "'lowpower_mode'" in renderer_src
+
+
+def test_light_ubo_cpu_layout_matches_std140_light_struct():
+    """CPU record must byte-match the GLSL std140 `struct Light`."""
+    import numpy as np
+    from engine.renderer_core import BaseRenderer
+    dt = BaseRenderer.LIGHT_UBO_DTYPE
+    assert dt.itemsize == 64
+    assert [dt.fields[n][1] for n in dt.names] == [0, 16, 32, 48]
+
+    legacy = (
+        "struct Light { highp vec3 position; vec3 color; float intensity; "
+        "highp float radius; int shadowIndex; };\n"
+        "uniform Light lights[8];\nvoid main(){}"
+    )
+    glsl = shaders.light_ubo_source(legacy)
+    assert 'layout(std140) uniform FioLightBlock' in glsl
+    struct = re.search(r"struct Light \{(.*?)\};", glsl, re.S).group(1)
+    fields = re.findall(r"(i?vec4)\s+(\w+);", struct)
+    glsl_kinds = {'vec4': np.dtype('<f4'), 'ivec4': np.dtype('<i4')}
+    assert [(name, glsl_kinds[kind]) for kind, name in fields] == [
+        (name, dt[name].base) for name in dt.names]
+    assert BaseRenderer.MAX_LIGHTS == shaders.MAX_LIGHTS

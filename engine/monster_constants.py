@@ -23,6 +23,13 @@ MONSTER_MOVE_SPEED = 90.0
 MONSTER_STOP_DISTANCE = 85.0
 
 # ---------------------------------------------------------------------------
+# Monster types
+# ---------------------------------------------------------------------------
+# This is the complete authored type vocabulary.  Variants are selected
+# independently within each type.
+MONSTER_TYPES = ('human', 'flying')
+
+# ---------------------------------------------------------------------------
 # Sprite frame filenames (relative to assets/sprites/monsters/<type>/)
 # ---------------------------------------------------------------------------
 

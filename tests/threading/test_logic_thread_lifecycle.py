@@ -242,19 +242,127 @@ def test_leaving_play_mode_removes_the_model_collision_pseudo_brushes(logic):
     thread.set_play_mode(False)
     assert thread._model_collision_brushes == [], (
         "model collision brushes built for the session were left behind")
+    # The session's collision set is rebuilt when Play starts; kept past
+    # Stop it pinned the session's brushes (see test_final_audit).
+    assert thread._collision_brushes_cache == []
+    thread.set_play_mode(True)
     assert thread._collision_brushes_cache == thread.brushes
 
 
-def test_the_cull_cache_is_invalidated_when_play_mode_ends(logic):
-    thread = logic(brushes=room())
+def test_the_render_projection_survives_the_play_mode_round_trip(logic):
+    """The projection is not a play-session artefact.
+
+    The cull buffers it replaced were built on entering play and released on
+    leaving, because they only served the play-mode fast path.  The projection
+    serves both modes, so it is not torn down -- but it must still describe the
+    world correctly on the other side of the switch.
+    """
+    brushes = room()
+    thread = logic(brushes=brushes)
     thread.set_play_mode(True)
-    assert thread._cull_valid is True, "the cull cache was not built on entry"
+    thread._prepare_render_state()
+    table = thread._render_table
+    assert table.count == len(brushes)
 
     thread.set_play_mode(False)
+    thread._prepare_render_state()
 
-    assert thread._cull_valid is False
-    assert thread._cull_centers is None, (
-        "the cull buffers still hold arrays sized for the finished session")
+    assert table.count == len(brushes)
+    for index, brush in enumerate(brushes):
+        assert table.ids[index] == brush["id"]
+        assert list(table.center[index]) == pytest.approx(brush["pos"])
+
+
+
+# ---------------------------------------------------------------------------
+# Health HUD opacity
+# ---------------------------------------------------------------------------
+
+def test_health_hud_fades_in_on_spawn_then_settles_at_50_percent(logic):
+    thread = logic(brushes=room())
+    thread.set_play_mode(True)
+    try:
+        start = thread._hud_health_fade_started
+        assert start is not None
+        assert thread._hud_health_fade_phase == "in"
+        assert thread._hud_health_alpha == 0.0
+
+        alpha = thread._update_hud_health_alpha(start + 0.75)
+        assert alpha == pytest.approx(0.5)
+
+        alpha = thread._update_hud_health_alpha(start + 1.5)
+        assert alpha == pytest.approx(1.0)
+        assert thread._hud_health_fade_phase == "out"
+
+        alpha = thread._update_hud_health_alpha(start + 3.5)
+        assert alpha == pytest.approx(0.75)
+
+        alpha = thread._update_hud_health_alpha(start + 5.5)
+        assert alpha == pytest.approx(0.5)
+        assert thread._hud_health_fade_phase == "idle"
+    finally:
+        thread.set_play_mode(False)
+
+
+def test_health_change_uses_fast_fade_in_then_slow_fade_out(logic):
+    thread = logic(brushes=room())
+    thread.set_play_mode(True)
+    try:
+        start = thread._hud_health_fade_started
+        assert start is not None
+        thread._update_hud_health_alpha(start + 5.5)
+        assert thread._hud_health_alpha == pytest.approx(0.5)
+
+        change = start + 10.0
+        thread.player_health = 75
+
+        alpha = thread._update_hud_health_alpha(change)
+        assert alpha == pytest.approx(0.5)
+        assert thread._hud_health_fade_phase == "in"
+
+        alpha = thread._update_hud_health_alpha(change + 0.75)
+        assert alpha == pytest.approx(0.75)
+
+        alpha = thread._update_hud_health_alpha(change + 1.5)
+        assert alpha == pytest.approx(1.0)
+        assert thread._hud_health_fade_phase == "out"
+
+        alpha = thread._update_hud_health_alpha(change + 3.5)
+        assert alpha == pytest.approx(0.75)
+
+        alpha = thread._update_hud_health_alpha(change + 5.5)
+        assert alpha == pytest.approx(0.5)
+        assert thread._hud_health_fade_phase == "idle"
+    finally:
+        thread.set_play_mode(False)
+
+
+def test_further_health_changes_restart_the_fast_fade_from_current_opacity(logic):
+    thread = logic(brushes=room())
+    thread.set_play_mode(True)
+    try:
+        start = thread._hud_health_fade_started
+        assert start is not None
+        thread._update_hud_health_alpha(start + 5.5)
+        assert thread._hud_health_alpha == pytest.approx(0.5)
+
+        first_change = start + 8.0
+        thread.player_health = 90
+        thread._update_hud_health_alpha(first_change)
+        thread._update_hud_health_alpha(first_change + 1.5)
+        assert thread._hud_health_alpha == pytest.approx(1.0)
+
+        second_change = first_change + 3.0
+        thread.player_health = 80
+        alpha = thread._update_hud_health_alpha(second_change)
+        assert alpha == pytest.approx(0.8125)
+        assert thread._hud_health_fade_phase == "in"
+
+        alpha = thread._update_hud_health_alpha(second_change + 1.5)
+        assert alpha == pytest.approx(1.0)
+        assert thread._hud_health_fade_phase == "out"
+    finally:
+        thread.set_play_mode(False)
 
 
 # ---------------------------------------------------------------------------

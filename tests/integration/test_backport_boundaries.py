@@ -64,7 +64,7 @@ def test_generic_modules_carry_no_rpg_vocabulary():
     # Pre-existing Fio prose that merely *mentions* an RPG concept as an
     # example is not RPG machinery and predates this back-port.
     ALLOWED = {
-        ("editor/things.py", "quest"),   # LogicKeyValueStore docstring example
+        ("editor/things.py", "quest"),   # LogicState docstring example
     }
     offenders = []
     for rel in GENERIC_MODULES:
@@ -151,9 +151,17 @@ def test_console_has_no_rpg_commands():
 
 
 def test_manager_has_no_rpg_inspector_provider():
+    """The manager's only inspector hook is the generic API 1.5.0 one.
+
+    ``register_entity_inspector`` / ``inspect_entity`` take any plugin's
+    provider and return its document unread; the game-side names this guard
+    was written against must not come back, and the manager stays free of RPG
+    vocabulary (see ``test_generic_modules_carry_no_rpg_vocabulary``).
+    """
     src = _read("plugins/manager.py")
     assert "register_inspector_provider" not in src
     assert "inspector_snapshot" not in src
+    assert "def inspect_entity(self, entity, logic=None):" in src
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +179,7 @@ def test_cut_face_highlight_and_texturing_survive():
     core = _read("engine/renderer_core.py")
     assert "_geo_face_highlight_verts" in core
     assert "_draw_face_highlight_verts" in core
-    assert "_geo_run_plane" in core
+    assert "def draw_face_highlight(" in core
 
     # Addressing a cut face's texture moved out of the Surface Inspector into
     # a shared, Qt-free layer, so the inspector and anything else reach a cut
@@ -189,7 +197,7 @@ def test_cut_face_highlight_and_texturing_survive():
 def test_procedural_map_generation_survives():
     mw = _read("editor/main_window.py")
     assert "def show_procedural_map_generator(" in mw
-    assert "def load_procedural_map(" in mw
+    assert "def _on_procedural_map_generated(" in mw
     ui = _read("editor/ui.py")
     assert "procedural_action" in ui
     assert (ROOT / "editor" / "procedural_generator.py").exists()

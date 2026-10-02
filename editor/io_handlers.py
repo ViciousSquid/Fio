@@ -11,21 +11,41 @@ from .io_system import IOManager, authored_flag, set_authored_flag
 from . import state_values as _sv
 import glm
 import os
+import time
+
+from engine.effect_entity import EFFECT_FIRE_TEXTURES, EFFECT_ORB_TEXTURES
 
 # Import debug logger - with fallback to print if not available
 try:
-    from .debug_console import debug_log
+    from .debug_console import debug_log, debug_log_raw
 except ImportError:
     try:
-        from editor.debug_console import debug_log
+        from editor.debug_console import debug_log, debug_log_raw
     except ImportError:
         def debug_log(category, message):
             print(f"[{category}] {message}")
+        def debug_log_raw(message):
+            print(message)
 
 try:
     from editor.things import ENTITY_TYPES
 except ImportError:
     ENTITY_TYPES = {}
+
+
+def _finite(param) -> float:
+    """``float(param)``, refusing NaN and infinity with ``ValueError``.
+
+    An I/O parameter is mapper- or console-supplied text, and ``float``
+    happily parses ``"nan"`` and ``"inf"``: a mover given speed ``inf`` spins
+    to a NaN angle and its brush leaves the world. Every handler that parses a
+    number goes through here, so a bad value is ignored like any other
+    malformed parameter.
+    """
+    value = float(param)
+    if value != value or value in (float('inf'), float('-inf')):
+        raise ValueError("non-finite I/O parameter %r" % (param,))
+    return value
 
 
 def register_all_input_handlers(io_manager: IOManager):
@@ -52,9 +72,9 @@ def register_all_input_handlers(io_manager: IOManager):
     
     def light_set_brightness(entity, param, logic):
         try:
-            value = float(param) if param else 1.0
+            value = _finite(param) if param else 1.0
             entity.properties['intensity'] = max(0.0, min(10.0, value))
-        except ValueError:
+        except (TypeError, ValueError):
             pass
     
     def light_set_color(entity, param, logic):
@@ -109,7 +129,7 @@ def register_all_input_handlers(io_manager: IOManager):
         if not hasattr(logic, 'light_fade_states'):
             logic.light_fade_states = {}
         try:
-            duration = max(0.0, float(duration))
+            duration = max(0.0, _finite(duration))
         except (ValueError, TypeError):
             duration = 1.0
         start = float(entity.properties.get('intensity', 0.0))
@@ -156,6 +176,110 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('light', 'fadeout', light_fade_out)
     
     # ==========================================================================
+    # EFFECT INPUTS
+    # ==========================================================================
+
+    def _effect_bool_param(param, default=True):
+        value = str(param or "").strip().lower()
+        if not value:
+            return bool(default)
+        if value in ("1", "true", "yes", "on"):
+            return True
+        if value in ("0", "false", "no", "off"):
+            return False
+        return bool(default)
+
+    def _effect_texture_path(param, textures):
+        """Resolve a FIRE/ORB variant from the public numeric value 1-5."""
+        value = str(param if param is not None else "").strip()
+        if value not in {"1", "2", "3", "4", "5"}:
+            return None
+        return textures[int(value) - 1]
+
+    # Every Effect input writes the Effect itself -- its authored properties
+    # and, for SetType and Explode, its playback runtime -- and nothing else.
+    # The I/O dispatcher journals the target afterwards, and each render buffer
+    # re-resolves the row from the entity. Writing a render table from here
+    # would reach only the one buffer the logic thread happened to be holding.
+
+    def effect_set_type(entity, param, logic):
+        """Set the Effect TYPE by name and notify connected outputs."""
+        effect_type = str(param or "").strip().upper()
+        if not entity.set_effect_type(effect_type):
+            return
+        logic.io_manager.fire_output(
+            entity, 'OnChanged', value=entity.properties['effect_type']
+        )
+
+    def effect_set_fire_texture(entity, param, logic):
+        path = _effect_texture_path(param, EFFECT_FIRE_TEXTURES)
+        if path is None:
+            return
+        entity.properties["fire_texture"] = path
+        logic.io_manager.fire_output(entity, 'OnChanged', value=path)
+
+    def effect_set_orb_texture(entity, param, logic):
+        path = _effect_texture_path(param, EFFECT_ORB_TEXTURES)
+        if path is None:
+            return
+        entity.properties["orb_texture"] = path
+        logic.io_manager.fire_output(entity, 'OnChanged', value=path)
+
+    def effect_set_custom_gif(entity, param, logic):
+        path = os.path.normpath(
+            str(param or "").strip().replace("\\", "/")
+        ).replace("\\", "/")
+        if not path:
+            return
+        entity.properties["custom_gif"] = path
+        logic.io_manager.fire_output(entity, 'OnChanged', value=path)
+
+    def effect_set_loop(entity, param, logic):
+        loop = _effect_bool_param(param, True)
+        entity.properties["custom_loop"] = loop
+        logic.io_manager.fire_output(
+            entity, 'OnChanged', value=str(loop).lower()
+        )
+
+    def effect_explode(entity, param, logic):
+        """Switch an Effect to EXPLOSION permanently and play it once."""
+        if not entity.trigger_explosion(time.perf_counter()):
+            return
+
+        game_state = getattr(logic, 'game_state', None)
+        if game_state is None and hasattr(logic, 'io_manager'):
+            game_state = logic.io_manager.get_game_state()
+        if (
+            game_state is not None
+            and not bool(entity.properties.get('silent', False))
+        ):
+            try:
+                source_position = [
+                    float(entity.pos.x),
+                    float(entity.pos.y),
+                    float(entity.pos.z),
+                ]
+            except AttributeError:
+                source_position = [
+                    float(entity.pos[0]),
+                    float(entity.pos[1]),
+                    float(entity.pos[2]),
+                ]
+            game_state.queue_sound({
+                'action': 'play',
+                'file': 'assets/sounds/explode.mp3',
+                'volume': 1.0,
+                'position': source_position,
+            })
+        logic.io_manager.fire_output(entity, 'OnChanged', value='EXPLOSION')
+
+    io_manager.register_input_handler('effect', 'settype', effect_set_type)
+    io_manager.register_input_handler('effect', 'setfiretexture', effect_set_fire_texture)
+    io_manager.register_input_handler('effect', 'setorbtexture', effect_set_orb_texture)
+    io_manager.register_input_handler('effect', 'setcustomgif', effect_set_custom_gif)
+    io_manager.register_input_handler('effect', 'setloop', effect_set_loop)
+    io_manager.register_input_handler('effect', 'explode', effect_explode)
+
     # DOOR INPUTS
     # ==========================================================================
     
@@ -255,8 +379,8 @@ def register_all_input_handlers(io_manager: IOManager):
     
     def door_set_speed(entity, param, logic):
         try:
-            entity['speed'] = float(param) if param else 128.0
-        except ValueError:
+            entity['speed'] = _finite(param) if param else 128.0
+        except (TypeError, ValueError):
             pass
     
     io_manager.register_input_handler('door', 'open', door_open)
@@ -292,10 +416,10 @@ def register_all_input_handlers(io_manager: IOManager):
         if idx < 0:
             return
         try:
-            value = max(0.0, min(1.0, float(param)))
+            value = max(0.0, min(1.0, _finite(param)))
             if idx in logic.mover_states:
                 logic.mover_states[idx]['progress'] = value
-        except ValueError:
+        except (TypeError, ValueError):
             pass
     
     def mover_enable(entity, param, logic):
@@ -306,7 +430,7 @@ def register_all_input_handlers(io_manager: IOManager):
 
     def mover_set_speed(entity, param, logic):
         try:
-            entity['speed'] = max(0.0, float(param)) if param else 64.0
+            entity['speed'] = max(0.0, _finite(param)) if param else 64.0
         except (ValueError, TypeError):
             pass
 
@@ -433,6 +557,9 @@ def register_all_input_handlers(io_manager: IOManager):
         logic.player.pos = dest
         # Zero velocity to prevent carry-over momentum
         logic.player.velocity = glm.vec3(0, 0, 0)
+        teleported = getattr(logic, 'note_player_teleported', None)
+        if teleported is not None:
+            teleported()
         if logic.io_manager:
             logic.io_manager.fire_output(entity, 'OnTeleport')
         debug_log("IO", f"Trigger teleported player → '{target_name}' ({dest.x:.0f}, {dest.y:.0f}, {dest.z:.0f})")
@@ -487,8 +614,18 @@ def register_all_input_handlers(io_manager: IOManager):
             debug_log('Error', f"Could not find game_state for speaker '{entity_name}'!")
             return
 
-        # Queue the sound for the main thread to play (thread-safe). ``looping``
-        # asks the mixer to repeat it until an explicit StopSound; ``entity_id``
+        # Speaker position/radius are consumed on the render thread so audio
+        # attenuation follows the authored radius in the editor. Global
+        # speakers remain non-spatial.
+        global_sound = bool(entity.properties.get('global', False))
+        try:
+            radius = max(0.0, float(entity.properties.get('radius', 512.0)))
+        except (TypeError, ValueError):
+            radius = 512.0
+        position = None if global_sound else list(entity.pos)
+
+        # Queue the sound for the main thread to play (thread-safe). looping
+        # asks the mixer to repeat it until an explicit StopSound; entity_id
         # lets that stop find and silence this speaker's channel.
         game_state.queue_sound({
             'action': 'play',
@@ -496,12 +633,20 @@ def register_all_input_handlers(io_manager: IOManager):
             'volume': volume,
             'looping': looping,
             'entity_id': speaker_id,
+            'position': position,
+            'radius': radius,
+            'global': global_sound,
         })
-        debug_log('Speaker', f"  Queued '{sound_file}'" + (" (looping)" if looping else ""))
+        debug_log(
+            'Speaker',
+            f"  Queued '{sound_file}'"
+            + (" (looping)" if looping else "")
+            + (f" (radius={radius:g})" if not global_sound else " (global)")
+        )
 
         # Fire output event
         logic.io_manager.fire_output(entity, 'OnSoundStarted')
-    
+
     def speaker_stop(entity, param, logic):
         entity.properties['state'] = 'off'
         speaker_id = id(entity)
@@ -523,41 +668,14 @@ def register_all_input_handlers(io_manager: IOManager):
     
     def speaker_set_volume(entity, param, logic):
         try:
-            entity.properties['volume'] = max(0.0, min(1.0, float(param)))
-        except ValueError:
+            entity.properties['volume'] = max(0.0, min(1.0, _finite(param)))
+        except (TypeError, ValueError):
             pass
     
     io_manager.register_input_handler('speaker', 'playsound', speaker_play)
     io_manager.register_input_handler('speaker', 'stopsound', speaker_stop)
     io_manager.register_input_handler('speaker', 'toggle', speaker_toggle)
     io_manager.register_input_handler('speaker', 'setvolume', speaker_set_volume)
-    
-    # ==========================================================================
-    # PICKUP INPUTS
-    # ==========================================================================
-    
-    def pickup_enable(entity, param, logic):
-        entity.properties['disabled'] = False
-    
-    def pickup_disable(entity, param, logic):
-        entity.properties['disabled'] = True
-    
-    def pickup_respawn(entity, param, logic):
-        entity.properties['collected'] = False
-        # FIX#3: use id(entity) — matches new collected_pickups key scheme
-        logic.collected_pickups.discard(id(entity))
-        logic.io_manager.fire_output(entity, 'OnRespawn')
-    
-    def pickup_set_value(entity, param, logic):
-        try:
-            entity.properties['value'] = int(param)
-        except ValueError:
-            pass
-    
-    io_manager.register_input_handler('pickup', 'enable', pickup_enable)
-    io_manager.register_input_handler('pickup', 'disable', pickup_disable)
-    io_manager.register_input_handler('pickup', 'respawn', pickup_respawn)
-    io_manager.register_input_handler('pickup', 'setvalue', pickup_set_value)
     
     # ==========================================================================
     # PROP INPUTS
@@ -569,15 +687,34 @@ def register_all_input_handlers(io_manager: IOManager):
     def prop_disable(entity, param, logic):
         entity.properties['disabled'] = True
 
+    def prop_collect(entity, param, logic):
+        session = getattr(logic, '_props', None)
+        if session is not None:
+            session.collect_prop(entity)
+
+    def prop_respawn(entity, param, logic):
+        session = getattr(logic, '_props', None)
+        if session is not None:
+            session.respawn_prop(entity)
+
+    def prop_set_value(entity, param, logic):
+        try:
+            entity.properties['collect_value'] = int(param)
+        except (TypeError, ValueError):
+            pass
+
     def prop_wake(entity, param, logic):
         entity.properties['_physics_awake'] = True
 
     def prop_drop(entity, param, logic):
-        # The active prop runtime observes this one-shot request on its next tick.
+        # The active Prop runtime observes this one-shot request on its next tick.
         entity.properties['_drop_requested'] = True
 
     io_manager.register_input_handler('prop', 'enable', prop_enable)
     io_manager.register_input_handler('prop', 'disable', prop_disable)
+    io_manager.register_input_handler('prop', 'collect', prop_collect)
+    io_manager.register_input_handler('prop', 'respawn', prop_respawn)
+    io_manager.register_input_handler('prop', 'setvalue', prop_set_value)
     io_manager.register_input_handler('prop', 'wake', prop_wake)
     io_manager.register_input_handler('prop', 'drop', prop_drop)
 
@@ -811,7 +948,7 @@ def register_all_input_handlers(io_manager: IOManager):
 
     def timer_set_time(entity, param, logic):
         try:
-            entity.properties['interval'] = max(0.01, float(param))
+            entity.properties['interval'] = max(0.01, _finite(param))
         except (TypeError, ValueError):
             pass
 
@@ -828,32 +965,6 @@ def register_all_input_handlers(io_manager: IOManager):
     io_manager.register_input_handler('logic_timer', 'settime', timer_set_time)
     io_manager.register_input_handler('logic_timer', 'resettimer', timer_reset)
     
-    # ==========================================================================
-    # MODEL INPUTS
-    # ==========================================================================
-    
-    def model_enable(entity, param, logic):
-        entity.properties['hidden'] = False
-
-    def model_disable(entity, param, logic):
-        entity.properties['hidden'] = True
-
-    def model_set_skin(entity, param, logic):
-        """Record the requested skin index (read by the model renderer)."""
-        try:
-            entity.properties['skin'] = int(param)
-        except (ValueError, TypeError):
-            pass
-
-    def model_set_animation(entity, param, logic):
-        """Record the requested animation name (read by the model renderer)."""
-        if param:
-            entity.properties['animation'] = param.strip()
-
-    io_manager.register_input_handler('model', 'enable', model_enable)
-    io_manager.register_input_handler('model', 'disable', model_disable)
-    io_manager.register_input_handler('model', 'setskin', model_set_skin)
-    io_manager.register_input_handler('model', 'setanimation', model_set_animation)
 
     # ==========================================================================
     # PATH NODE INPUTS
@@ -902,7 +1013,7 @@ def register_all_input_handlers(io_manager: IOManager):
         version of it.
         """
         try:
-            entity.properties['health'] = int(float(param))
+            entity.properties['health'] = int(_finite(param))
         except (TypeError, ValueError):
             debug_log('Error', f"Monster.SetHealth: bad parameter '{param}'")
 
@@ -919,7 +1030,7 @@ def register_all_input_handlers(io_manager: IOManager):
         health = None
         if param:
             try:
-                health = int(float(param))
+                health = int(_finite(param))
             except (TypeError, ValueError):
                 health = None
         if health is None:
@@ -1015,7 +1126,7 @@ def register_all_input_handlers(io_manager: IOManager):
 
     # ==========================================================================
     # THING (ENTITY) HIDE / SHOW INPUTS
-    # (Things have .properties dict — covers monster, light, speaker, pickup, model)
+    # (Things have .properties dict — covers monster, light, speaker, model, prop)
     # ==========================================================================
 
     def thing_hide(entity, param, logic):
@@ -1038,7 +1149,7 @@ def register_all_input_handlers(io_manager: IOManager):
         debug_log('IO', f"Entity '{name}' toggled → {state}")
 
     # Register for every thing-based type that declares Hide/Show
-    for ttype in ('monster', 'light', 'speaker', 'pickup', 'model', 'prop'):
+    for ttype in ('monster', 'light', 'speaker', 'prop'):
         io_manager.register_input_handler(ttype, 'hide', thing_hide)
         io_manager.register_input_handler(ttype, 'show', thing_show)
         io_manager.register_input_handler(ttype, 'togglevisibility', thing_toggle_vis)
@@ -1101,15 +1212,78 @@ def register_all_input_handlers(io_manager: IOManager):
         """Override travel speed."""
         if logic.cinematic_state:
             try:
-                logic.cinematic_state['speed'] = max(1.0, float(param))
+                logic.cinematic_state['speed'] = max(1.0, _finite(param))
             except (TypeError, ValueError):
                 pass
+
+    def _camera_target_position(target):
+        if isinstance(target, dict):
+            pos = target.get('pos')
+        else:
+            pos = getattr(target, 'pos', None)
+        if pos is None:
+            return None
+        try:
+            return [float(pos[0]), float(pos[1]), float(pos[2])]
+        except (TypeError, ValueError, IndexError):
+            return None
+
+    def camera_look_at(entity, param, logic):
+        """Smoothly focus the active camera on an entity named by name or UUID.
+
+        The authored LogicCamera 'lookat_return_time' controls when the
+        normal path-facing target resumes. Zero keeps the explicit focus
+        indefinitely.
+        """
+        cs = logic.cinematic_state
+        if not cs or cs.get('entity') is not entity:
+            debug_log(
+                "IO",
+                f"LogicCamera '{entity.name}': LookAt ignored because the camera is not active."
+            )
+            return
+
+        target_ref = (param or '').strip()
+        if not target_ref:
+            debug_log("IO", f"LogicCamera '{entity.name}': LookAt requires a target name or UUID.")
+            return
+
+        target = None
+        if hasattr(logic, '_find_entity_by_id'):
+            target = logic._find_entity_by_id(target_ref)
+        if target is None and hasattr(logic, '_find_entity_by_name'):
+            target = logic._find_entity_by_name(target_ref)
+
+        target_pos = _camera_target_position(target)
+        if target is None or target_pos is None:
+            debug_log(
+                "IO",
+                f"LogicCamera '{entity.name}': LookAt target '{target_ref}' not found or has no position."
+            )
+            return
+
+        try:
+            return_time = max(
+                0.0,
+                float(entity.properties.get('lookat_return_time', 5.0)),
+            )
+        except (TypeError, ValueError):
+            return_time = 5.0
+
+        cs['lookat_target'] = target
+        cs['lookat_return_remaining'] = None if return_time == 0.0 else return_time
+        debug_log(
+            "IO",
+            f"LogicCamera '{entity.name}': focusing on '{target_ref}'"
+            + (" indefinitely" if return_time == 0.0 else f" for {return_time:g}s")
+        )
 
     io_manager.register_input_handler('logic_camera', 'start',    camera_start)
     io_manager.register_input_handler('logic_camera', 'stop',     camera_stop)
     io_manager.register_input_handler('logic_camera', 'pause',    camera_pause)
     io_manager.register_input_handler('logic_camera', 'resume',   camera_resume)
     io_manager.register_input_handler('logic_camera', 'setspeed', camera_set_speed)
+    io_manager.register_input_handler('logic_camera', 'lookat',   camera_look_at)
 
     # ==========================================================================
     # LOGIC COMMAND INPUTS
@@ -1527,11 +1701,8 @@ def register_all_input_handlers(io_manager: IOManager):
         'clearobjectstate': state_clear_object_state,
     }
 
-    # Registered under the current type token and the pre-2.4 one, so a store
-    # loaded from an old map dispatches through exactly the same handlers.
-    for _state_type in ('logic_state', 'logic_keyvalue'):
-        for _input_name, _handler in _STATE_INPUTS.items():
-            io_manager.register_input_handler(_state_type, _input_name, _handler)
+    for _input_name, _handler in _STATE_INPUTS.items():
+        io_manager.register_input_handler('logic_state', _input_name, _handler)
 
     # ==========================================================================
     # PORTAL INPUTS
@@ -1584,6 +1755,9 @@ def register_all_input_handlers(io_manager: IOManager):
         """Change the paired portal target by name."""
         if param:
             entity.properties['portal_target'] = param.strip()
+            relink = getattr(logic, '_rebuild_portal_links', None)
+            if relink is not None:
+                relink()
             name = entity.properties.get('name', 'unnamed')
             debug_log('IO', f"Portal '{name}' target set to '{param.strip()}'")
 
@@ -1595,13 +1769,13 @@ def register_all_input_handlers(io_manager: IOManager):
 
     def portal_set_width(entity, param, logic):
         try:
-            entity.properties['width'] = max(16.0, float(param))
+            entity.properties['width'] = max(16.0, _finite(param))
         except (ValueError, TypeError):
             pass
 
     def portal_set_height(entity, param, logic):
         try:
-            entity.properties['height'] = max(16.0, float(param))
+            entity.properties['height'] = max(16.0, _finite(param))
         except (ValueError, TypeError):
             pass
 
@@ -1630,7 +1804,12 @@ def register_all_input_handlers(io_manager: IOManager):
     except (OSError, IOError):
         pass
 
-    debug_log('Info', f"<b>Fio {version_str}</b>")
+    # Keep the startup banner as plain text. DebugConsole renders the
+    # version components with presentation-only styling in one dedicated pass;
+    # embedding HTML here would send that markup back through the console's
+    # generic highlighter.
+    debug_log('Info', f'Fio version {version_str}')
+    debug_log_raw("github.com/vicioussquid/Fio")
     debug_log('Info', f"Registered {len(io_manager._input_handlers)} input handlers")
     debug_log('Info', f"Type 'help' to see all available commands")
 
@@ -1640,9 +1819,28 @@ def register_all_input_handlers(io_manager: IOManager):
 # =============================================================================
 
 def _get_brush_index(brush: dict, logic) -> int:
-    """Get the index of a brush in the brushes list."""
+    """Get the index of a brush in the brushes list.
+
+    Nearly every caller is a door or mover input, and the session's mover
+    table already maps those brushes to their index: a list scan compares the
+    brush dict with every brush before it (about a millisecond per input at
+    40k brushes). The table's answer is used only if the list confirms it.
+    """
+    brushes = logic.brushes
+    table_of = getattr(logic, '_movers', None)
+    if table_of is not None:
+        try:
+            table = table_of()
+            for group in (table.movers, table.doors):
+                row = group.row_of_obj.get(id(brush))
+                if row is not None:
+                    index = group.index[row]
+                    if 0 <= index < len(brushes) and brushes[index] is brush:
+                        return index
+        except Exception:
+            pass
     try:
-        return logic.brushes.index(brush)
+        return brushes.index(brush)
     except ValueError:
         return -1
 

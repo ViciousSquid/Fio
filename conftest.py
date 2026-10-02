@@ -17,6 +17,7 @@ rules:
 See ``tests/README.md`` for how the tiers are meant to be run.
 """
 
+import ast
 import os
 import random
 import sys
@@ -33,6 +34,9 @@ if _ROOT not in sys.path:
 # an OpenGL context — the visual tier needs the real one (under Xvfb in CI).
 if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    # PyOpenGL defaults to GLX, but the editor Qt tier intentionally runs without X11.
+    # Use EGL for context-free imports in that tier; the actual GL tier runs under Xvfb.
+    os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
 # Qt writes its runtime files here; without it every Qt test prints a warning.
 os.environ.setdefault("XDG_RUNTIME_DIR", os.path.join("/tmp", "fio-test-runtime"))
 try:
@@ -67,6 +71,34 @@ def pytest_collection_modifyitems(config, items):
 
 
 # ---------------------------------------------------------------------------
+# Collection isolation
+# ---------------------------------------------------------------------------
+
+def pytest_ignore_collect(collection_path, config):
+    """Do not import Qt/GL test modules in the dependency-light CI tier."""
+    if not os.environ.get("FIO_HEADLESS_TIER"):
+        return False
+    try:
+        if not collection_path.is_file() or collection_path.suffix != ".py":
+            return False
+        tree = ast.parse(collection_path.read_text(encoding="utf-8"),
+                         filename=str(collection_path))
+    except (OSError, UnicodeDecodeError, SyntaxError):
+        return False
+    nodes = ast.walk(tree)
+    for node in nodes:
+        if isinstance(node, ast.Import):
+            roots = [alias.name.split('.')[0] for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            roots = [node.module.split('.')[0]] if node.module else []
+        else:
+            continue
+        if "PyQt5" in roots or "OpenGL" in roots:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Determinism
 # ---------------------------------------------------------------------------
 
@@ -88,8 +120,38 @@ def _deterministic_rngs():
     yield
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _plugins_loaded_before_isolation():
+    """Load the plugins once, before any per-test registry snapshot is taken.
+
+    ``_isolate_process_singletons`` restores ``IO_REGISTRY`` to whatever it held
+    at the *start of each test*, so a test that registers a fake entity type
+    cannot leak it into the next one. But plugin registration is a
+    once-per-process event: ``PluginManager.discover_and_load`` early-outs on
+    ``self._loaded``. So if the first ``load_plugins()`` of the process happened
+    inside a test, that test's teardown rolled the registry back to before the
+    plugins registered and nothing ever registered them again -- every later
+    test saw a plugin that is loaded and enabled but whose I/O and entity
+    declarations had silently vanished.
+
+    That is why ``plugins/tidy/tests/test_smoke.py::test_plugin_loads_and_registers``
+    passes alone and fails when another tidy test runs first. Loading here, at
+    session scope, puts the plugin registrations *inside* every per-test
+    snapshot, so restoring a snapshot preserves them while still dropping
+    anything an individual test added.
+
+    Guarded: the headless CI tier has no PyQt5, so plugin import can fail there.
+    That tier simply runs without plugins, exactly as before.
+    """
+    try:
+        from plugins.manager import load_plugins
+        load_plugins()
+    except Exception:
+        pass
+
+
 @pytest.fixture(autouse=True)
-def _isolate_process_singletons():
+def _isolate_process_singletons(_plugins_loaded_before_isolation):
     """Undo the process-wide state a test can leave behind.
 
     Fio keeps several deliberate singletons: the plugin manager, the I/O
@@ -135,10 +197,27 @@ def _isolate_process_singletons():
             # Derived from the registry, so it has to go back with it.
             if hasattr(io_system, "_declared_outputs_cache"):
                 io_system._declared_outputs_cache.clear()
+            # Restoring the registry to its pre-test state also undoes anything
+            # the plugins declared into it, and plugin registration is a
+            # once-per-process event that will not run again. Ask the manager
+            # to replay its recorded registrations so a plugin can never be
+            # left loaded and enabled but silently undeclared.
+            _reapply_plugin_registrations()
     things = sys.modules.get("editor.things")
     if things is not None and counters is not None:
         things.Thing._counters.clear()
         things.Thing._counters.update(counters)
+
+
+def _reapply_plugin_registrations():
+    """Put back the declarations a registry restore stripped from the plugins."""
+    manager_module = sys.modules.get("plugins.manager")
+    if manager_module is None:
+        return
+    try:
+        manager_module.get_manager().reapply_registrations()
+    except Exception:  # pragma: no cover - defensive
+        pass
 
 
 def _snapshot_plugin_state():
@@ -159,17 +238,29 @@ def _snapshot_plugin_state():
     return (manager,
             {plugin: bool(getattr(plugin, "enabled", True))
              for plugin in manager.plugins},
-            set(manager._auto_enabled))
+            set(manager._auto_enabled),
+            # The manager's recorded registrations are process-wide state like
+            # any other singleton here. A test that registers something -- the
+            # plugin-API tests do -- would otherwise have it replayed into
+            # every later test by reapply_registrations(), which is a leak the
+            # replay itself makes permanent.
+            list(getattr(manager, "_io_registrations", [])))
 
 
 def _restore_plugin_state(snapshot):
     if snapshot is None:
         return
-    manager, enabled, auto_enabled = snapshot
+    manager, enabled, auto_enabled, io_registrations = snapshot
     for plugin, was_enabled in enabled.items():
         plugin.enabled = was_enabled
+    # Written directly, so the manager's caches keyed on the enabled set (the
+    # wants_tick() answer above all) must be told it changed.
+    if hasattr(manager, "_enabled_generation"):
+        manager._enabled_generation += 1
     manager._auto_enabled.clear()
     manager._auto_enabled.update(auto_enabled)
+    if hasattr(manager, "_io_registrations"):
+        manager._io_registrations[:] = io_registrations
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +278,85 @@ def qt_app():
     from PyQt5.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+@pytest.fixture(autouse=True)
+def _deferred_callbacks_belong_to_their_test(request):
+    """Run, at teardown, every single-shot callback a test armed and left.
+
+    Invariant: a fake QObject/window that can receive a deferred callback must
+    implement the whole interface that callback uses -- not only the
+    synchronous methods its own test calls.  Tests bind real MainWindow
+    methods onto stand-in hosts, and some of those methods arm
+    ``QTimer.singleShot`` (clone's 500 ms flash, a level load's camera
+    re-centre, a toast's clear).  Left pending, such a timer fires in whichever
+    later test next processes events; if the stand-in lacks what it calls, it
+    raises there, and PyQt -- with no exception hook under pytest -- aborts
+    the whole run.  So each callback is tracked, the ones still pending when
+    the test ends are run then, and one that raises fails *the test that
+    armed it*.  A drained callback is disarmed, so it never runs twice.
+
+    Qt's own rule is kept: a callback bound to a QObject that has since been
+    destroyed is dropped, as Qt drops it.  Only ``qt`` tests (and tests using
+    ``qt_app``) are watched, so the headless tier never imports Qt.
+    """
+    if (request.node.get_closest_marker("qt") is None
+            and "qt_app" not in request.fixturenames):
+        yield
+        return
+    try:
+        from PyQt5 import sip
+        from PyQt5.QtCore import QObject, QTimer
+    except ImportError:
+        yield
+        return
+
+    original = QTimer.singleShot
+    pending = []
+
+    def _receiver_gone(callback):
+        owner = getattr(callback, "__self__", None)
+        return isinstance(owner, QObject) and sip.isdeleted(owner)
+
+    def single_shot(*args):
+        callback = args[-1]
+        if not callable(callback) or not isinstance(args[0], int):
+            return original(*args)
+        entry = {"callback": callback, "done": False}
+
+        def proxy():
+            if entry["done"] or _receiver_gone(callback):
+                return
+            entry["done"] = True
+            callback()
+
+        pending.append(entry)
+        return original(*args[:-1], proxy)
+
+    QTimer.singleShot = staticmethod(single_shot)
+    try:
+        yield
+        failures = []
+        for _ in range(10):                  # a callback may arm another
+            due = [e for e in pending if not e["done"]]
+            if not due:
+                break
+            for entry in due:
+                entry["done"] = True
+                if _receiver_gone(entry["callback"]):
+                    continue
+                try:
+                    entry["callback"]()
+                except Exception as exc:  # noqa: BLE001 - reported below
+                    failures.append("%r raised %s: %s" % (
+                        entry["callback"], type(exc).__name__, exc))
+        if failures:
+            pytest.fail(
+                "deferred callback(s) this test armed would raise when they "
+                "fire -- in a later test, aborting the run:\n  "
+                + "\n  ".join(failures), pytrace=False)
+    finally:
+        QTimer.singleShot = original
 
 
 # ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@ render path has no PyGLM dependency.
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict
 
 from .gles_context import build_program_set
 from .overlay import OverlayRenderer

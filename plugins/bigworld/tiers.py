@@ -197,6 +197,10 @@ class TierClassifier:
         #: "no relevance information" — an editor preview, a head-less test, a
         #: session that has not started — in which case every entity reads NEAR.
         self.authoritative = False
+        #: ``(hx, hz)``: when set, NEAR is the cells meeting this axis-aligned
+        #: box around the player -- the screen of an overhead camera -- rather
+        #: than the near circle. See :meth:`set_near_rect`.
+        self.near_rect: Optional[Tuple[float, float]] = None
         self.set_radii(near_radius, active_radius)
 
     # ------------------------------------------------------------------
@@ -222,6 +226,21 @@ class TierClassifier:
         # The boundaries moved even though the player did not: every cached cell
         # tier is stale, so forget them and let the next pass restamp.
         self._cell_tier.clear()
+
+    def set_near_rect(self, rect) -> None:
+        """Make NEAR the cells meeting the box ``player +/- (hx, hz)``, or go
+        back to the near circle with ``None``.
+
+        A top-down camera shows a rectangle, and a circle around its corners
+        holds nearly twice the screen's area: with the box, NEAR is what the
+        player can see and everything else resident is ACTIVE. No hysteresis
+        band: the session re-tiers as the player moves, and the box it passes
+        already carries the margin that movement needs.
+        """
+        rect = None if rect is None else (max(0.0, float(rect[0])), max(0.0, float(rect[1])))
+        if rect != self.near_rect:
+            self.near_rect = rect
+            self._cell_tier.clear()
 
     # ------------------------------------------------------------------
     # Tier arithmetic
@@ -274,11 +293,24 @@ class TierClassifier:
         for coord in [c for c in previous if c not in active]:
             del previous[coord]
 
+        rect = self.near_rect
         for coord in active:
             delta.evaluated_cells += 1
             prev = previous.get(coord)
-            tier = self.tier_for_distance_sq(
-                cell_distance_sq(coord[0], coord[1], px, pz, cell_size), prev)
+            d2 = cell_distance_sq(coord[0], coord[1], px, pz, cell_size)
+            if rect is None:
+                tier = self.tier_for_distance_sq(d2, prev)
+            else:
+                x0 = coord[0] * cell_size
+                z0 = coord[1] * cell_size
+                dx = max(x0 - px, 0.0, px - (x0 + cell_size))
+                dz = max(z0 - pz, 0.0, pz - (z0 + cell_size))
+                if dx <= rect[0] and dz <= rect[1]:
+                    tier = TIER_NEAR
+                else:
+                    act_limit = self._act2 if (prev is not None
+                                               and prev > TIER_ACTIVE) else self._act_out2
+                    tier = TIER_ACTIVE if d2 <= act_limit else TIER_DISTANT
             delta.counts[tier] += 1
             if prev == tier:
                 continue

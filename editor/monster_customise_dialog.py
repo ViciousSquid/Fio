@@ -15,7 +15,6 @@ from PyQt5.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QSpinBox, QGroupBox,
     QDialogButtonBox, QFileDialog, QMessageBox, QWidget,
 )
-from PyQt5.QtCore import Qt
 
 # All monster sprites must live under this directory (relative to project root)
 from engine.monster_constants import MONSTER_SPRITE_SIZES, MONSTER_SPRITE_SIZE_DEFAULT

@@ -1,13 +1,13 @@
 import os
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStatusBar, QToolBar,
-    QLabel, QSpinBox, QCheckBox, QComboBox, QAction, QMessageBox, QFrame,
-    QDockWidget, QTabWidget, QPushButton, QActionGroup, QDialog,
-    QDialogButtonBox, QApplication, QSizePolicy, QInputDialog, QMenu
+    QMainWindow, QWidget, QHBoxLayout, QStatusBar, QToolBar,
+    QLabel, QSpinBox, QComboBox, QAction, QMessageBox, QFrame,
+    QDockWidget, QTabWidget, QPushButton, QActionGroup,
+    QApplication, QSizePolicy, QInputDialog, QMenu,
+    QStyle, QStyleOptionButton
 )
-from PyQt5.QtCore import Qt, QSize
-from PyQt5.QtGui import QFont, QIcon, QKeySequence, QPixmap
-from PyQt5.QtGui import QPalette, QColor
+from PyQt5.QtCore import Qt, QSize, QByteArray, QRect
+from PyQt5.QtGui import QIcon, QKeySequence, QPainter
 
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
@@ -16,7 +16,6 @@ from engine.view_distance import (
 from editor.property_editor import PropertyEditor
 from editor.scene_hierarchy import SceneHierarchy
 from editor.asset_browser import AssetBrowser
-from editor.SettingsWindow import SettingsWindow
 from editor.debug_console import DebugConsole
 
 import math
@@ -48,27 +47,45 @@ class PowerOfTwoSpinBox(QSpinBox):
             return 1
         return int(2 ** round(math.log2(n)))
 
-class GenerateTilemapDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Generate Tilemap")
-        layout = QVBoxLayout(self)
-        self.save_png_checkbox = QCheckBox("Save a PNG copy of the tilemap")
-        layout.addWidget(self.save_png_checkbox)
-        
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-        
-    def save_png_checked(self):
-        return self.save_png_checkbox.isChecked()
+class RotatablePlayButton(QPushButton):
+    """Play button that rotates its complete presentation for a vertical toolbar."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._vertical = False
+
+    def set_vertical(self, vertical):
+        vertical = bool(vertical)
+        if self._vertical != vertical:
+            self._vertical = vertical
+            self.setProperty("_vertical", vertical)
+            self.update()
+
+    def paintEvent(self, event):
+        if not self._vertical:
+            super().paintEvent(event)
+            return
+
+        # Draw the normal QPushButton in a transposed coordinate system.
+        # This rotates both icon and label instead of forcing a 250px-wide
+        # horizontal button into a narrow right-hand toolbar.
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        painter.translate(self.width(), 0)
+        painter.rotate(90)
+
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        option.rect = QRect(0, 0, self.height(), self.width())
+        self.style().drawControl(QStyle.CE_PushButton, option, painter, self)
+        painter.end()
+
 
 #: Bumped whenever the default dock arrangement changes.  A layout saved by
 #: an older version is dropped once, so a new default actually reaches an
 #: install that has been opened before -- settings.ini stores the layout on
 #: every close, and restoreState() would otherwise win forever.
-LAYOUT_VERSION = 2
+LAYOUT_VERSION = 3
 
 
 class Ui_MainWindow(object):
@@ -92,9 +109,18 @@ class Ui_MainWindow(object):
         MainWindow.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
 
         # Scene Hierarchy Dock (Left)
-        MainWindow.scene_hierarchy_dock = QDockWidget("Scene", MainWindow)
+        #
+        # Keep a useful windowTitle for toggleViewAction() in View, but replace
+        # the visible dock title bar with a zero-height widget.  The hierarchy
+        # itself should start at the top instead of wasting a row on "Scene".
+        MainWindow.scene_hierarchy_dock = QDockWidget("Scene Hierarchy", MainWindow)
         MainWindow.scene_hierarchy_dock.setObjectName("SceneDock")
         MainWindow.scene_hierarchy_dock.setWidget(MainWindow.scene_hierarchy)
+        scene_title_bar = QWidget()
+        scene_title_bar.setFixedHeight(0)
+        scene_title_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        MainWindow.scene_hierarchy_dock.setTitleBarWidget(scene_title_bar)
+        MainWindow.scene_hierarchy_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         MainWindow.addDockWidget(Qt.LeftDockWidgetArea, MainWindow.scene_hierarchy_dock)
         
         screen_width = QApplication.primaryScreen().geometry().width()
@@ -104,6 +130,7 @@ class Ui_MainWindow(object):
         MainWindow.view_3d_dock = QDockWidget("3D View", MainWindow)
         MainWindow.view_3d_dock.setObjectName("View3DDock")
         MainWindow.view_3d_dock.setWidget(MainWindow.view_3d)
+        MainWindow.view_3d_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.view_3d_dock)
 
         # 2D Views Dock (Right, Tabbed)
@@ -115,6 +142,7 @@ class Ui_MainWindow(object):
         MainWindow.right_tabs.addTab(MainWindow.view_side, "Side (YZ)")
         MainWindow.right_tabs.addTab(MainWindow.view_front, "Front (XY)")
         MainWindow.right_dock.setWidget(MainWindow.right_tabs)
+        MainWindow.right_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.right_dock)
         
         # Properties Dock (Right, Bottom) — tabbed with Debug Console
@@ -132,6 +160,7 @@ class Ui_MainWindow(object):
         MainWindow.properties_dock = QDockWidget(" ", MainWindow)
         MainWindow.properties_dock.setObjectName("PropertiesDock")
         MainWindow.properties_dock.setWidget(MainWindow.properties_tab_widget)
+        MainWindow.properties_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         toggle_action = MainWindow.properties_dock.toggleViewAction()
         toggle_action.setText("Properties/Console")
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.properties_dock)
@@ -209,6 +238,7 @@ class Ui_MainWindow(object):
         select_menu = menubar.addMenu('Select')
         view_menu = menubar.addMenu('View')
         MainWindow.tools_menu = menubar.addMenu('Tools')
+        MainWindow.debug_menu = menubar.addMenu('Debug')
         help_menu = menubar.addMenu('Help')
 
         MainWindow.file_menu.addAction(QAction('New Map', MainWindow, shortcut='Ctrl+N', triggered=MainWindow.new_map))
@@ -236,6 +266,18 @@ class Ui_MainWindow(object):
         MainWindow.redo_action.setToolTip("Redo last action")
         MainWindow.redo_action.triggered.connect(MainWindow.redo)
         edit_menu.addAction(MainWindow.redo_action)
+
+        MainWindow.copy_action = QAction('Copy', MainWindow)
+        MainWindow.copy_action.setShortcut('Ctrl+C')
+        MainWindow.copy_action.setToolTip('Copy the selected brush or objects')
+        MainWindow.copy_action.triggered.connect(MainWindow.copy_selection)
+        edit_menu.addAction(MainWindow.copy_action)
+
+        MainWindow.paste_action = QAction('Paste', MainWindow)
+        MainWindow.paste_action.setShortcut('Ctrl+V')
+        MainWindow.paste_action.setToolTip('Paste the copied brush or objects')
+        MainWindow.paste_action.triggered.connect(MainWindow.paste_selection)
+        edit_menu.addAction(MainWindow.paste_action)
 
         edit_menu.addSeparator()
         edit_menu.addAction(QAction('Hide Brush', MainWindow, shortcut='H', triggered=MainWindow.hide_selected_brush))
@@ -272,6 +314,12 @@ class Ui_MainWindow(object):
         # T is the primary key; Shift+S is kept as Radiant's own binding.
         MainWindow.surface_inspector_action.setShortcuts(
             [QKeySequence('T'), QKeySequence('Shift+S')])
+        # T must work from every editor child, including OpenGL views and
+        # docked/floating panels.  WindowShortcut is the correct scope for a
+        # MainWindow action; WidgetWithChildrenShortcut is too narrow once
+        # focus moves through Qt's dock/toolbar hierarchy.
+        MainWindow.surface_inspector_action.setShortcutContext(
+            Qt.WindowShortcut)
         MainWindow.surface_inspector_action.setToolTip(
             'Texture the hovered face, or the selected brush (T)')
         MainWindow.surface_inspector_action.triggered.connect(
@@ -315,11 +363,24 @@ class Ui_MainWindow(object):
         
         view_menu.addAction(self.action_asset_browser)
 
-        system_monitor_action = QAction('System Monitor', MainWindow, checkable=True)
-        system_monitor_action.setShortcut('F3')
-        system_monitor_action.triggered.connect(MainWindow.toggle_system_monitor)
-        view_menu.addAction(system_monitor_action)
-        
+        MainWindow.surface_inspector_view_action = QAction(
+            'Surface Inspector (T)', MainWindow)
+        MainWindow.surface_inspector_view_action.setToolTip(
+            'Show or hide the Surface Inspector (T)')
+        MainWindow.surface_inspector_view_action.triggered.connect(
+            MainWindow.toggle_surface_inspector)
+        view_menu.addAction(MainWindow.surface_inspector_view_action)
+
+        MainWindow.connection_links_action = QAction(
+            'Connection Links', MainWindow, checkable=True)
+        MainWindow.connection_links_action.setChecked(
+            getattr(MainWindow, 'show_logic_links', True))
+        MainWindow.connection_links_action.setToolTip(
+            'Show I/O connection links in the editor views (F1)')
+        MainWindow.connection_links_action.triggered.connect(
+            MainWindow.set_connection_links_enabled)
+        view_menu.addAction(MainWindow.connection_links_action)
+
         view_menu.addSeparator()
         MainWindow.save_layout_action = QAction("Save Layout", MainWindow)
         MainWindow.save_layout_action.triggered.connect(MainWindow.save_layout)
@@ -333,12 +394,25 @@ class Ui_MainWindow(object):
         MainWindow.reset_layout_action.triggered.connect(MainWindow.reset_layout)
         view_menu.addAction(MainWindow.reset_layout_action)
 
+        # --- Debug Menu Actions ---
+
+        MainWindow.system_monitor_action = QAction(
+            'Sysmon (F3)', MainWindow, checkable=True)
+        MainWindow.system_monitor_action.setShortcut('F3')
+        MainWindow.system_monitor_action.setChecked(
+            MainWindow.view_3d.sysmon.is_active())
+        MainWindow.system_monitor_action.triggered.connect(
+            MainWindow.toggle_system_monitor)
+        MainWindow.debug_menu.addAction(MainWindow.system_monitor_action)
+
         # --- Tools Menu Actions ---
 
         autocaulk_action = QAction("Autocaulk", MainWindow)
         autocaulk_action.setToolTip("Apply nodraw to all invisible brush faces")
         autocaulk_action.triggered.connect(MainWindow.autocaulk)
         MainWindow.tools_menu.addAction(autocaulk_action)
+
+        # Benchmark action is inserted by MainWindow immediately below Autocaulk.
 
         MainWindow.logic_graph_action = QAction('Logic Graph Editor…', MainWindow)
         MainWindow.logic_graph_action.setShortcut('Ctrl+L')
@@ -372,12 +446,24 @@ class Ui_MainWindow(object):
         
         MainWindow.tools_menu.addAction(MainWindow.logic_graph_action)
         MainWindow.tools_menu.addAction(MainWindow.logic_wizard_action)
-        MainWindow.tools_menu.addAction(MainWindow.project_overview_action)
-        MainWindow.tools_menu.addAction(MainWindow.validate_action)
         MainWindow.tools_menu.addSeparator()
         MainWindow.tools_menu.addAction(MainWindow.terrain_action)
         MainWindow.tools_menu.addAction(MainWindow.procedural_action)
         MainWindow.tools_menu.addSeparator()
+
+        # Debug Tables is deliberately lazy: importing/constructing the
+        # numerical instrument happens only after the user asks for it.
+        MainWindow.debug_tables_action = QAction("Debug Tables", MainWindow)
+        MainWindow.debug_tables_action.setToolTip(
+            "Live RenderTable / EntityTable numerical instrument panel")
+        def _open_debug_tables():
+            from tools.debug_tables import show_debug_tables
+            show_debug_tables(MainWindow)
+        MainWindow.debug_tables_action.triggered.connect(_open_debug_tables)
+        MainWindow.debug_menu.addAction(MainWindow.project_overview_action)
+        MainWindow.debug_menu.addAction(MainWindow.validate_action)
+        MainWindow.debug_menu.addSeparator()
+        MainWindow.debug_menu.addAction(MainWindow.debug_tables_action)
 
         view_menu.addSeparator()
         toggle_triggers_action = QAction('Opaque Triggers', MainWindow, checkable=True)
@@ -399,9 +485,9 @@ class Ui_MainWindow(object):
         big_toolbar_buttons = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
         icon_size_val = 45 if big_toolbar_buttons else 35
 
-        MainWindow.play_button = QPushButton(QIcon("assets/b_test.png"), "Play", MainWindow)
+        MainWindow.play_button = RotatablePlayButton(
+            QIcon("assets/b_test.png"), "Play", MainWindow)
         MainWindow.play_button.setIconSize(QSize(icon_size_val, icon_size_val))
-        # Remove setFixedSize here — we drive width via stylesheet instead
         MainWindow.play_button.setToolTip("Drop in and play (F5)")
         MainWindow.play_button.setShortcut("f5")
         MainWindow.play_button.clicked.connect(MainWindow.enter_play_mode)
@@ -417,8 +503,6 @@ class Ui_MainWindow(object):
                 border: 1px solid #1a8f3d;
                 border-radius: 4px;
                 padding: 5px 15px;
-                min-width: 250px;
-                max-width: 250px;
             }
             QPushButton:hover {
                 background-color: #28d157;
@@ -433,7 +517,10 @@ class Ui_MainWindow(object):
         tool_toolbar = QToolBar("Tools")
         tool_toolbar.setObjectName("ToolToolbar")
         tool_toolbar.setMovable(True)
-        tool_toolbar.setAllowedAreas(Qt.TopToolBarArea | Qt.BottomToolBarArea)
+        tool_toolbar.setFloatable(True)
+        tool_toolbar.setAllowedAreas(
+            Qt.TopToolBarArea | Qt.BottomToolBarArea | Qt.RightToolBarArea)
+        tool_toolbar.setOrientation(Qt.Horizontal)
         MainWindow.addToolBar(Qt.TopToolBarArea, tool_toolbar)
         # Kept so Settings > Editor > Tooltips can reach its buttons.
         MainWindow.tool_toolbar = tool_toolbar
@@ -608,8 +695,6 @@ class Ui_MainWindow(object):
 
         # --- Procedural / View actions (Blue Strip) ---
         group_3_color = "#00A2E8"
-        make_btn("assets/tint.png", "Tint brush",
-                 on_click=MainWindow.tint_selected_brush, bottom_color=group_2_color)
 
         tool_toolbar.addSeparator()
 
@@ -628,6 +713,26 @@ class Ui_MainWindow(object):
 
         tool_toolbar.addSeparator()
         tool_toolbar.addWidget(MainWindow.play_button)
+
+        def sync_play_button_orientation(orientation):
+            vertical = orientation == Qt.Vertical
+            # The real MainWindow uses RotatablePlayButton. Keep the toolbar
+            # builder tolerant of lightweight test/fake windows too.
+            if hasattr(MainWindow.play_button, "set_vertical"):
+                MainWindow.play_button.set_vertical(vertical)
+            if vertical:
+                MainWindow.play_button.setFixedSize(icon_size_val + 16, 250)
+            else:
+                MainWindow.play_button.setFixedSize(250, icon_size_val + 16)
+
+        tool_toolbar.orientationChanged.connect(sync_play_button_orientation)
+        sync_play_button_orientation(tool_toolbar.orientation())
+
+        # Capture this exact arrangement once.  View > Reset Layout restores
+        # this Qt state instead of trying to reconstruct a nested dock tree
+        # after the user has moved/floated panels around.
+        MainWindow._default_layout_state = QByteArray(
+            MainWindow.saveState(LAYOUT_VERSION))
 
     def create_status_bar(self, MainWindow):
         status_bar = QStatusBar()
@@ -671,8 +776,8 @@ class Ui_MainWindow(object):
         MainWindow.cull_dist_spinbox.setToolTip(
             "Maximum render distance. Nothing is drawn beyond it, and the fog "
             "fades geometry out before the clip so there is no pop-out.\n"
-            "Updates live. Console: r_viewdistance / r_fogdistance / "
-            "r_fogdensity / r_fogcolor.")
+            "Updates live. Console: r_viewdistance / cullfogdist / "
+            "cullfogdistance / r_fogdistance / r_fogdensity / r_fogcolor.")
         MainWindow.cull_dist_spinbox.valueChanged.connect(MainWindow.set_cull_distance)
         bottom_layout.addWidget(MainWindow.cull_dist_spinbox)
 

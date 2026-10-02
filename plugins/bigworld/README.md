@@ -266,27 +266,64 @@ The amount of work therefore depends on the region whose residency changed, rath
 
 # Camera independence
 
-Big World residency is driven by the **player/world position**, not the camera.
+Big World residency is driven by the **player/world position**, not by where
+the camera happens to look. A camera looking far across the map never streams
+distant cells in, and moving a camera independently of the player cannot be
+used to change the simulation region.
 
-This is intentional.
+There is one deliberate refinement, for the overhead camera.
 
-Changing from:
+## The overhead camera
 
-- first-person
-- top-down
-- another camera angle
+A top-down camera shows a known rectangle of ground around the player, so while
+a Big World session runs with the play camera overhead, residency and tiers are
+fitted to that screen:
 
-does not move the streamed world around or change simulation tiers.
+- **Residency** is a circle just past the screen's farthest ground corner
+  (plus 256 units), and is refreshed every 256 units of movement as well as on
+  cell crossings. It is measured from the corner's distance, so a camera that
+  turns with the player does not change it.
+- **It never grows past the map's authored activation radius.** A screen that
+  reaches further (a raked camera, a very wide window) keeps the authored
+  residency, and the camera sees down to its edge at the player's ground; fog
+  hides the rest.
+- **The overhead camera never floats higher than the activation radius.** The
+  session publishes `logic.overhead_height_limit` and the camera uses
+  `min(overhead_height, limit)` (`logic.effective_overhead_height()`). The
+  game's own `overhead_height` is left as set, saved as set, and applies again
+  once the session stops; any change of Play Mode drops the ceiling.
+- **NEAR** is the screen's box (with a margin), not the near circle; everything
+  else resident is ACTIVE (or DISTANT past the active band). Tiers are refreshed
+  every 128 units of movement.
+- The session publishes the box as `logic.sim_view_rect = (hx, hz)` -- half
+  extents around the player, `None` when not fitted. Inside it is on screen.
 
-The camera determines what Fio renders.
+Fio's own monster AI reads `sim_view_rect`: parked monsters are left out of its
+pass, and monsters outside the box are thought about once every 0.2 s with the
+time they sat out, so they cover the same ground at a fraction of the cost. A
+monster that walks onto the screen runs at full rate from the next tick.
 
-The player/world position determines what Big World considers resident.
+With a first-person camera, or with Big World off, none of this applies, and
+switching back to first person restores the authored radii.
 
-This is particularly important for Fio because the same engine supports both first-person and top-down games.
+---
 
-A top-down camera looking far across the map does not suddenly cause distant cells to stream in.
+## View distance and fog
 
-Likewise, moving the camera independently of the player cannot be used to change the simulation region.
+Residency is camera-independent, but what the camera *sees* is bounded by it.
+
+While a Big World session runs, the camera's view is limited to the
+**activation radius**: distance fog becomes fully opaque at that radius and the
+far plane follows it in. Objects therefore fade into the fog exactly where the
+map says they stop being active, rather than visibly popping when a cell is
+parked.
+
+The editor's cull distance / `r_viewdistance` still works as before, but can
+only pull the view *further in* than the activation radius, never push it out.
+The player's own setting is kept and comes back when play stops.
+
+The same far plane culls terrain chunks, so terrain beyond the view is never
+submitted to the GPU.
 
 ---
 

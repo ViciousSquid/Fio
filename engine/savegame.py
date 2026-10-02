@@ -37,7 +37,7 @@ Snapshot shape::
       "runtime": {
         "god_mode", "buddha_mode", "notarget",
         "camera_mode", "overhead_height", "overhead_tilt", "overhead_orientation",
-        "active_weapon", "current_hud_message",
+        "active_weapon", "gun2_obtained", "player_ammo", "current_hud_message",
         "player_health", "player_max_health", "player_dead",
         "player2_health", "player2_max_health", "player2_dead",
         "collected_keys": [ ... ],
@@ -80,8 +80,10 @@ import hashlib
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
+from .change_journal import moved, touch
+from .fileio import write_json_atomic
 from .spatial import PARKED_DISABLED_KEY, PARKED_HIDDEN_KEY
 
 #: Bump only when the snapshot layout changes incompatibly. This is the *save
@@ -300,6 +302,54 @@ def _apply_player(player, data: Optional[dict]) -> None:
 # snapshot build / restore
 # ---------------------------------------------------------------------------
 
+def _capture_moving_brushes(logic) -> dict:
+    """Where every mover and door brush is, by UUID, and whether it runs.
+
+    The level record restores no brush transform (delta saves carry none at
+    all), and a mover or door is only repositioned from its restored
+    ``progress`` while it is moving: a door saved closed but open at load
+    time stayed open -- drawn and solid in the wrong place -- and a path
+    mover, whose position is not a function of any saved state, stayed
+    wherever it had got to.
+    """
+    out = {}
+    for brush in getattr(logic, "brushes", []) or []:
+        if not (brush.get("is_mover") or brush.get("is_door")):
+            continue
+        bid = brush.get("id")
+        if not bid or brush.get("pos") is None:
+            continue
+        out[str(bid)] = {
+            "pos": _vec3(brush["pos"]),
+            "rot": float(brush.get("_rot_angle") or 0.0),
+            "start_on": bool(brush.get("start_on", False)),
+        }
+    return out
+
+
+def _restore_moving_brushes(logic, saved) -> None:
+    """Put mover and door brushes back where :func:`_capture_moving_brushes`
+    found them. Journalled as moves, which is how the mover table and the
+    render tables learn of a move made outside the tick."""
+    if not saved:
+        return
+    for brush in getattr(logic, "brushes", []) or []:
+        entry = saved.get(str(brush.get("id")))
+        if not entry:
+            continue
+        try:
+            brush["pos"] = _vec3(entry["pos"])
+            rot = float(entry.get("rot", 0.0))
+            if rot or brush.get("_rot_angle"):
+                brush["_rot_angle"] = rot
+                brush["rotation_yaw"] = rot
+            if "start_on" in entry:
+                brush["start_on"] = bool(entry["start_on"])
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+        moved(brush)
+
+
 def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
     """Capture the live play session on *logic* (a ``LogicThread``) as a dict.
 
@@ -339,6 +389,8 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "overhead_tilt": float(getattr(logic, "overhead_tilt", 0.0)),
         "overhead_orientation": getattr(logic, "overhead_orientation", "north"),
         "active_weapon": getattr(logic, "active_weapon", None),
+        "gun2_obtained": bool(getattr(logic, "gun2_obtained", False)),
+        "player_ammo": max(0, int(getattr(logic, "player_ammo", 0))),
         "current_hud_message": getattr(logic, "current_hud_message", ""),
         "player_health": getattr(logic, "player_health", 100),
         "player_max_health": getattr(logic, "player_max_health", 100),
@@ -353,6 +405,10 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "timer_states": {str(k): dict(s)
                          for k, s in (getattr(logic, "timer_states", {}) or {}).items()},
         "pending_io_events": _capture_pending_events(logic),
+        "moving_brushes": _capture_moving_brushes(logic),
+        "mover_path_states": {
+            str(i): _jsonify(_public_state(s))
+            for i, s in (getattr(logic, "mover_path_states", {}) or {}).items()},
     }
 
     return {
@@ -576,11 +632,37 @@ def build_snapshot(logic, *, map_name: str = "",
     return common
 
 
-def _overlay_entities(logic, level: dict) -> None:
+#: Runtime-only monster keys a restored record may lack: the AI's aggro
+#: target (an ``id()``), a corpse's fall velocity, a pending kill input.
+_TRANSIENT_THING_KEYS = frozenset({"_aggro_target", "_vel_y", "_kill"})
+
+
+def _drop_absent_keys(live_props: dict, saved_props: dict) -> None:
+    """Remove what the object gained after the record was taken.
+
+    A restored record is the object's whole property dict, so a public key
+    it lacks did not exist then: a monster killed after a save stayed
+    ``dead`` through loading it. Other underscore keys are engine runtime
+    state set when play started (a parented light's ``_original_pos``) and
+    are left alone, as are connections and the streaming layer's marks.
+    """
+    for key in [k for k in live_props if k not in saved_props]:
+        name = str(key)
+        if key == "_io_connections" or key in _PARKABLE_KEYS:
+            continue
+        if name.startswith("_") and key not in _TRANSIENT_THING_KEYS:
+            continue
+        del live_props[key]
+
+
+def _overlay_entities(logic, level: dict, *, complete: bool = False) -> None:
     """Restore live entity state (position + properties) from a saved level.
 
     Matches by stable UUID so it survives a full scene reload; entities present
     in the save but not the live scene (or vice-versa) are skipped quietly.
+    *complete* says each thing record is the object's whole property dict (a
+    save's level, a delta's records, the base map), so what a record lacks is
+    removed (:func:`_drop_absent_keys`); otherwise records are merged.
     """
     if not level:
         return
@@ -591,6 +673,11 @@ def _overlay_entities(logic, level: dict) -> None:
         tid = _thing_id(t)
         if tid:
             live_things[tid] = t
+    # A restore teleports entities, so the Prop domain's spatial index has to
+    # be told about the Props among them.  Collected and handed over as a batch
+    # rather than one call per Thing: a save restores the whole level at once.
+    prop_session = getattr(logic, "_props", None)
+    restored_props = []
     for t_data in level.get("things", []):
         props = t_data.get("properties", {}) or {}
         tid = props.get("id", "")
@@ -600,10 +687,14 @@ def _overlay_entities(logic, level: dict) -> None:
         try:
             if "pos" in t_data and t_data["pos"] is not None:
                 live.pos = list(t_data["pos"])
+                if prop_session is not None:
+                    restored_props.append(live)
             for k, v in props.items():
                 if k == "_io_connections" or k in _PARKABLE_KEYS:
                     continue
                 live.properties[k] = v
+            if complete:
+                _drop_absent_keys(live.properties, props)
             # hidden/disabled last, and through the parking-aware writer: they
             # are the two flags a streaming layer borrows, and the two a stale
             # restore leaves visibly wrong.
@@ -611,6 +702,11 @@ def _overlay_entities(logic, level: dict) -> None:
                 _overlay_parkable(live.properties, k, props)
         except Exception:
             continue
+        finally:
+            touch(live)
+
+    if prop_session is not None and restored_props:
+        prop_session.refile(restored_props)
 
     # -- brushes: restore only genuinely gameplay-mutable state by id ------
     # Static geometry (pos/size/direction/…) comes from the freshly-loaded map
@@ -628,6 +724,7 @@ def _overlay_entities(logic, level: dict) -> None:
                 live[k] = b_data[k]
             else:
                 live.pop(k, None)
+        touch(live)
 
 
 def _restore_runtime_and_players(logic, data: dict) -> None:
@@ -642,12 +739,16 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     # Player(s)
     _apply_player(getattr(logic, "player", None), data.get("player"))
     _apply_player(getattr(logic, "player2", None), data.get("player2"))
+    # The player was put back, not walked back: no portal crossing.
+    teleported = getattr(logic, "note_player_teleported", None)
+    if teleported is not None and data.get("player"):
+        teleported()
 
     # Player stats / cheat flags
     for attr in (
         "god_mode", "buddha_mode", "notarget",
         "camera_mode", "overhead_height", "overhead_tilt", "overhead_orientation",
-        "active_weapon", "current_hud_message",
+        "active_weapon", "gun2_obtained", "player_ammo", "current_hud_message",
         "player_health", "player_max_health", "player_dead",
         "player2_health", "player2_max_health", "player2_dead",
     ):
@@ -660,16 +761,18 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     except Exception:
         pass
 
-    # Collected-pickup set is keyed by id(thing) and can't be persisted across a
-    # reload; rebuild it from the entity 'collected' flags we just overlaid.
+    # Mover/door brush transforms first: the states below animate from them.
     try:
-        collected = set()
-        for t in getattr(logic, "things", []) or []:
-            if t.properties.get("collected"):
-                collected.add(id(t))
-        logic.collected_pickups = collected
+        _restore_moving_brushes(logic, runtime.get("moving_brushes"))
     except Exception:
         pass
+    if "mover_path_states" in runtime:
+        try:
+            logic.mover_path_states = {
+                int(i): dict(s)
+                for i, s in (runtime.get("mover_path_states") or {}).items()}
+        except Exception:
+            pass
 
     # Door / mover animation state (keys serialize as strings → back to int).
     # _public_state drops any cached _-prefixed fields (e.g. a mover's
@@ -779,21 +882,37 @@ def restore_snapshot(logic, data: dict) -> None:
     if not isinstance(data, dict) or not data.get(_MAGIC):
         raise ValueError("not a Fio save file")
     # Live entity state first, so anything derived from it below is consistent.
-    _overlay_entities(logic, data.get("level", {}) or {})
+    _overlay_entities(logic, data.get("level", {}) or {}, complete=True)
     _restore_runtime_and_players(logic, data)
 
 
-def restore_delta(logic, data: dict) -> None:
+def restore_delta(logic, data: dict, base_level: Optional[dict] = None) -> None:
     """Apply a delta save onto a *freshly-loaded base map* live session.
 
     The delta's partial level (only the changed entities/brushes) is fed to the
     very same UUID overlay a full restore uses; entities the base map doesn't
     have are skipped safely. Player/runtime state is then restored as usual.
+
+    A delta holds only what differed from the base map, so applied to a
+    session that has moved on since (a quickload in play) everything it does
+    not mention keeps its later state: a monster alive at the save and killed
+    since stayed dead. Given *base_level* (the normalized base map), those
+    entities are first put back to the base.
     """
     if not isinstance(data, dict) or not data.get(_MAGIC):
         raise ValueError("not a Fio save file")
     delta_level = ((data.get("delta") or {}).get("level")) or {}
-    _overlay_entities(logic, delta_level)
+    if base_level:
+        in_delta = {(t.get("properties") or {}).get("id")
+                    for t in delta_level.get("things", [])}
+        in_delta_brushes = {b.get("id") for b in delta_level.get("brushes", [])}
+        _overlay_entities(logic, {
+            "things": [t for t in base_level.get("things", [])
+                       if (t.get("properties") or {}).get("id") not in in_delta],
+            "brushes": [b for b in base_level.get("brushes", [])
+                        if b.get("id") not in in_delta_brushes],
+        }, complete=True)
+    _overlay_entities(logic, delta_level, complete=True)
     _restore_runtime_and_players(logic, data)
 
 
@@ -852,17 +971,15 @@ def classify_base_map(data: dict, current_level: dict,
         for t in (current_level or {}).get("things", [])
     }
     live_ids.discard(None)
-    if not base_ids:
-        overlap = 0.0
-    else:
-        overlap = len(base_ids & live_ids) / float(len(base_ids))
+    overlap = len(base_ids & live_ids) / float(len(base_ids))
 
     if same_name or overlap >= 0.5:
         return BASE_RELATED
     return BASE_INCOMPATIBLE
 
 
-def restore_auto(logic, data: dict, *, current_map_name: str = "") -> dict:
+def restore_auto(logic, data: dict, *, current_map_name: str = "",
+                 base_level: Optional[dict] = None) -> dict:
     """Restore *data* automatically, choosing the path from its ``save_mode``.
 
     Returns a small report ``{"mode": <mode actually used>, "warning": str}``.
@@ -888,10 +1005,15 @@ def restore_auto(logic, data: dict, *, current_map_name: str = "") -> dict:
         return {"mode": SAVE_MODE_FULL, "warning": ""}
 
     # delta / both both need the current map assessed against the base identity.
-    try:
-        current_level = logic.editor_state.get_level_data()
-    except Exception:
-        current_level = {}
+    # The map as loaded (*base_level*) when known: mid-session the live level
+    # has moved on, which is not the map having changed.
+    if base_level:
+        current_level = base_level
+    else:
+        try:
+            current_level = logic.editor_state.get_level_data()
+        except Exception:
+            current_level = {}
     cls = classify_base_map(data, current_level, current_map_name)
 
     if mode == SAVE_MODE_DELTA:
@@ -901,7 +1023,7 @@ def restore_auto(logic, data: dict, *, current_map_name: str = "") -> dict:
                 f"('{(data.get('base_map') or {}).get('name', '?')}'); "
                 "load that map first, or use a full/both save"
             )
-        restore_delta(logic, data)
+        restore_delta(logic, data, base_level)
         warning = ""
         if cls == BASE_RELATED:
             warning = ("base map has changed since this delta was saved; "
@@ -911,7 +1033,7 @@ def restore_auto(logic, data: dict, *, current_map_name: str = "") -> dict:
     if mode == SAVE_MODE_BOTH:
         if cls in (BASE_EXACT, BASE_RELATED):
             try:
-                restore_delta(logic, data)
+                restore_delta(logic, data, base_level)
                 warning = ("" if cls == BASE_EXACT else
                            "base map changed; applied delta by UUID, missing "
                            "entities skipped")
@@ -1029,8 +1151,9 @@ def write(path: str, snapshot: dict) -> None:
     directory = os.path.dirname(os.path.abspath(path))
     if directory:
         os.makedirs(directory, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(snapshot, fh, indent=2, default=_json_default)
+    # Atomic: a quicksave overwrites the same slot every time, and a failure
+    # part-way through must not cost the player the save they already had.
+    write_json_atomic(path, snapshot, indent=2, default=_json_default)
 
 
 def read(path: str) -> dict:
@@ -1040,6 +1163,8 @@ def read(path: str) -> dict:
     if not isinstance(data, dict) or not data.get(_MAGIC):
         raise ValueError(f"'{path}' is not a Fio save file")
     ver = data.get("save_version", 0)
+    if isinstance(ver, bool) or not isinstance(ver, (int, float)):
+        raise ValueError(f"'{path}' has an invalid save_version: {ver!r}")
     if ver > SAVE_VERSION:
         raise ValueError(
             f"save '{path}' is version {ver}, newer than this build supports "

@@ -1,8 +1,8 @@
 import os
 import platform
+import re
 import sys
 
-SHADER_DIR = os.path.join(os.path.dirname(__file__), 'shaders')
 
 
 # ==============================================================================
@@ -155,6 +155,57 @@ MAX_LIGHTS_ARM = 16
 # renderer clamps `active_lights` to match (see BaseRenderer._shader_light_cap).
 MAX_LIGHTS_WATER = 8
 MAX_LIGHTS_TERRAIN = 8
+
+# GL 3.3 UBO binding used by every lighting shader.  The binding is assigned
+# from Python with glUniformBlockBinding rather than using a GLSL 4.2-style
+# explicit binding qualifier, keeping this portable to the engine's GL 3.3
+# target.
+LIGHT_UBO_BINDING = 2
+
+_LIGHT_DECL_RE = re.compile(
+    r"struct\s+Light\s*\{.*?\};\s*uniform\s+Light\s+lights\s*\[\s*(\d+)\s*\]\s*;",
+    re.DOTALL,
+)
+
+
+def light_ubo_source(source):
+    """Rewrite a legacy Light[] fragment shader to the shared std140 UBO.
+
+    The original shader interface is intentionally accepted here so the source
+    files remain readable and the same transform applies to loose shaders,
+    fallback strings, ARM variants and instanced variants alike.
+    """
+    if not source or 'uniform Light lights[' not in source:
+        return source
+
+    match = _LIGHT_DECL_RE.search(source)
+    if match is None:
+        return source
+
+    count = int(match.group(1))
+    block = (
+        "struct Light {\n"
+        "    highp vec4 position;\n"
+        "    vec4 color;\n"
+        "    vec4 params;       // x=intensity, y=radius\n"
+        "    ivec4 indices;     // x=shadow index\n"
+        "};\n"
+        "layout(std140) uniform FioLightBlock {\n"
+        f"    Light lights[{count}];\n"
+        "};"
+    )
+    result = _LIGHT_DECL_RE.sub(block, source, count=1)
+
+    result = re.sub(r"lights\[([^]]+)\]\.position\b", r"lights[\1].position.xyz", result)
+    result = re.sub(r"lights\[([^]]+)\]\.color\b", r"lights[\1].color.xyz", result)
+    result = re.sub(r"lights\[([^]]+)\]\.intensity\b", r"lights[\1].params.x", result)
+    result = re.sub(r"lights\[([^]]+)\]\.radius\b", r"lights[\1].params.y", result)
+    result = re.sub(
+        r"lights\[([^]]+)\]\.shadowIndex\b",
+        r"int(lights[\1].indices.x)",
+        result,
+    )
+    return result
 
 SHADOW_GLSL = """
 #define MAX_SHADOW_LIGHTS 4
@@ -406,12 +457,19 @@ uniform mat4 projection;
 uniform mat4 view;
 uniform vec3 sprite_pos_world;
 uniform vec2 sprite_size;
+uniform bool use_fixed_facing;
+layout (location = 3) in float sprite_fixed_yaw;
 void main() {
     TexCoords = aPos + 0.5;
     vec3 cameraRight = vec3(view[0][0], view[1][0], view[2][0]);
     vec3 cameraUp = vec3(view[0][1], view[1][1], view[2][1]);
-    vec3 worldPos = sprite_pos_world 
-                  + cameraRight * aPos.x * sprite_size.x 
+    if (use_fixed_facing && sprite_fixed_yaw > -9999.0) {
+        float yaw = sprite_fixed_yaw;
+        cameraRight = vec3(cos(yaw), 0.0, -sin(yaw));
+        cameraUp = vec3(0.0, 1.0, 0.0);
+    }
+    vec3 worldPos = sprite_pos_world
+                  + cameraRight * aPos.x * sprite_size.x
                   + cameraUp * aPos.y * sprite_size.y;
     FragPos = worldPos;
     gl_Position = projection * view * vec4(worldPos, 1.0);
@@ -428,6 +486,142 @@ void main() {
     FragColor = vec4(applyFog(texColor.rgb, FragPos), texColor.a);
 }""",
 
+    'effect.vert': """#version 330 core
+precision highp float;
+
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec3 iEffectPos;
+layout (location = 2) in vec4 iEffectParams;  // width, intensity, elapsed, lifetime
+layout (location = 3) in vec4 iEffectMeta;    // seed, type, height, spare
+layout (location = 4) in vec4 iEffectColor;
+layout (location = 5) in float iParticleIndex;
+
+uniform mat4 projection;
+uniform mat4 view;
+
+out vec2 TexCoords;
+out vec3 FragPos;
+out vec4 EffectParams;
+out vec4 EffectMeta;
+out vec3 EffectColor;
+
+void main() {
+    float width = max(iEffectParams.x, 0.01);
+    float height = max(iEffectMeta.z, 0.01);
+    float elapsed = max(iEffectParams.z, 0.0);
+    float lifetime = max(iEffectParams.w, 0.001);
+    float t = clamp(elapsed / lifetime, 0.0, 1.0);
+    if (iEffectMeta.w > 0.5) {
+        // Keep editor Preview visually locked to animation frame 10.
+        t = (9.5 / 16.0);
+    }
+    float growth = mix(1.0, 3.0, smoothstep(0.0, 0.28, t));
+
+    vec3 cameraRight = normalize(vec3(view[0][0], view[1][0], view[2][0]));
+    const vec3 worldUp = vec3(0.0, 1.0, 0.0);
+    float vertical = aPos.y + 0.5;
+
+    vec3 worldPos = iEffectPos
+                  + cameraRight * aPos.x * width * growth
+                  + worldUp * vertical * height * growth;
+
+    TexCoords = aPos + 0.5;
+    FragPos = worldPos;
+    EffectParams = iEffectParams;
+    EffectMeta = iEffectMeta;
+    EffectColor = iEffectColor.rgb;
+    gl_Position = projection * view * vec4(worldPos, 1.0);
+}
+""",
+
+    'effect.frag': """#version 330 core
+precision mediump float;
+
+out vec4 FragColor;
+
+in highp vec2 TexCoords;
+in highp vec3 FragPos;
+in highp vec4 EffectParams;
+in highp vec4 EffectMeta;
+in highp vec3 EffectColor;
+
+uniform sampler2D explosion_texture;
+
+uniform int uFogEnabled;
+uniform vec3 uFogColor;
+uniform float uFogStart;
+uniform float uFogEnd;
+uniform float uFogDensity;
+uniform highp vec3 uFogCamPos;
+uniform vec3 uAmbient;
+
+const float EXPLOSION_SHEET_COLUMNS = 5.0;
+const float EXPLOSION_SHEET_ROWS = 4.0;
+const float EXPLOSION_FRAME_COUNT = 16.0;
+const float EXPLOSION_PREVIEW_FRAME_INDEX = 9.0; // authoring frame 10
+
+float fogFactor(highp vec3 fragPos) {
+    if (uFogEnabled == 0) return 0.0;
+    highp float d = length(fragPos - uFogCamPos);
+    float band = max(uFogEnd - uFogStart, 1e-4);
+    float f = clamp((d - uFogStart) / band, 0.0, 1.0);
+    if (uFogDensity > 0.0) {
+        float e = uFogDensity * max(d - uFogStart, 0.0);
+        f = max(f, clamp(1.0 - exp(-e * e), 0.0, 1.0));
+    }
+    return f;
+}
+
+vec3 applyFog(vec3 color, highp vec3 fragPos) {
+    return mix(color, uFogColor, fogFactor(fragPos));
+}
+
+vec2 explosionAtlasUV(vec2 localUV, float frameIndex) {
+    float column = mod(frameIndex, EXPLOSION_SHEET_COLUMNS);
+    float rowTop = floor(frameIndex / EXPLOSION_SHEET_COLUMNS);
+    float rowBottom = EXPLOSION_SHEET_ROWS - 1.0 - rowTop;
+    vec2 cellSize = vec2(
+        1.0 / EXPLOSION_SHEET_COLUMNS,
+        1.0 / EXPLOSION_SHEET_ROWS
+    );
+    return (vec2(column, rowBottom) + localUV) * cellSize;
+}
+
+void main() {
+    float visualIntensity = max(EffectParams.y, 0.0);
+    float elapsed = max(EffectParams.z, 0.0);
+    float lifetime = max(EffectParams.w, 0.001);
+    float t = clamp(elapsed / lifetime, 0.0, 1.0);
+    if (EffectMeta.w > 0.5) {
+        // Keep the visual envelope aligned with the static frame-10 preview.
+        t = (9.5 / 16.0);
+    }
+
+    float frame;
+    if (EffectMeta.w > 0.5) {
+        // Editor Preview is deliberately static: always show authoring frame 10.
+        frame = EXPLOSION_PREVIEW_FRAME_INDEX;
+    } else {
+        frame = min(
+            floor(t * EXPLOSION_FRAME_COUNT),
+            EXPLOSION_FRAME_COUNT - 1.0
+        );
+    }
+    vec4 sheet = texture(explosion_texture, explosionAtlasUV(TexCoords, frame));
+
+    if (sheet.a < 0.02 || visualIntensity <= 0.0) discard;
+
+    float envelope = 1.0 - smoothstep(0.70, 1.0, t);
+    float flash = exp(-t * t * 48.0);
+    float burst = 1.0 + flash * 2.2;
+    vec3 tint = mix(vec3(1.0), max(EffectColor, vec3(0.001)), 0.35);
+    vec3 rgb = sheet.rgb * tint * visualIntensity * burst;
+    float alpha = sheet.a * envelope;
+
+    if (alpha < 0.01) discard;
+    FragColor = vec4(applyFog(rgb, FragPos), alpha);
+}
+""",
     'fog.vert': """#version 330 core
 precision highp float;
 layout (location = 0) in vec3 a_pos;
@@ -446,7 +640,6 @@ void main() {
     'fog.frag': """#version 330 core
 precision mediump float;
 out vec4 FragColor;
-
 in highp vec3 localPos;
 
 uniform highp mat4 model;
@@ -507,6 +700,7 @@ out vec2 TexCoords;
 out mediump vec3 Normal;
 out mediump float WaveCrest;
 out mediump float ShoreDist;
+out highp float RestY;       // height of the still surface under this vertex
 
 uniform mat4 model;
 uniform mat4 view;
@@ -536,6 +730,7 @@ void addWave(vec2 dir, float wavelength, float amp, float speed, vec2 p,
 void main()
 {
     vec3 worldPos = vec3(model * vec4(aPos, 1.0));
+    RestY = worldPos.y;
 
     // World-space distance from this vertex to the nearest lateral brush edge.
     // Waves are pinned to zero at the edges so the surface always meets the
@@ -582,6 +777,7 @@ in highp vec2 TexCoords;
 in vec3 Normal;
 in float WaveCrest;
 in float ShoreDist;
+in highp float RestY;
 
 struct Light {
     highp vec3 position;
@@ -593,13 +789,33 @@ struct Light {
 #define MAX_LIGHTS """ + str(MAX_LIGHTS_WATER) + """
 uniform Light lights[MAX_LIGHTS];
 uniform int active_lights;
+// highp as in the vertex stage: GLSL ES links a shared uniform only when
+// both stages declare the same precision (the player's GLES path).
+uniform highp mat4 view;
+uniform highp mat4 projection;
 uniform highp vec3 viewPos;
 uniform sampler2D normalMap;
+uniform sampler2D sceneColor;
 uniform highp float time;
 
 uniform float waterOpacity;
 uniform float waterReflectivity;
-uniform vec3 waterTint;""" + FOG_GLSL + """
+uniform float distortionStrength;
+uniform float refractionIndex;
+uniform float roughness;
+uniform float fresnelIntensity;
+uniform vec2 screenSize;
+uniform vec3 waterTint;
+
+// Scene depth, copied once per water pass alongside sceneColor. With it the
+// water knows how much of it lies in front of the bed: colour absorption by
+// depth, soft foamy shorelines, caustics and screen-space reflections. With
+// hasSceneDepth == 0 (no depth buffer to copy) the shader falls back to the
+// depth-less look.
+uniform highp sampler2D sceneDepth;
+uniform int hasSceneDepth;
+uniform int ssrEnabled;
+uniform highp mat4 invProjection;""" + FOG_GLSL + """
 
 const vec3 SUN_DIR   = vec3(0.4767, 0.6555, 0.5859);  // pre-normalized
 const vec3 SUN_COLOR = vec3(1.00, 0.95, 0.82);
@@ -618,12 +834,72 @@ highp float vnoise(highp vec2 p) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// Procedural sky used for reflections: horizon haze -> blue zenith + sun.
+highp vec3 viewPosFromDepth(highp vec2 uv, highp float depth) {
+    highp vec4 p = invProjection * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+    return p.xyz / p.w;
+}
+
+highp vec2 viewToUV(highp vec3 p) {
+    highp vec4 c = projection * vec4(p, 1.0);
+    return c.xy / c.w * 0.5 + 0.5;
+}
+
+// Screen-space reflection: march the reflected ray through the copied depth
+// buffer and return the scene colour it hits (rgb) and a confidence (a).
+// 20 linear steps with a growing stride, then a short binary refinement.
+vec4 traceReflection(highp vec3 originView, highp vec3 dirView) {
+    highp float stride = max(2.0, -originView.z * 0.02);
+    highp vec3 p = originView;
+    highp vec3 prev = p;
+    for (int i = 0; i < 20; i++) {
+        prev = p;
+        p += dirView * stride;
+        stride *= 1.22;
+        if (p.z > -0.5) break;
+        highp vec2 uv = viewToUV(p);
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
+        // textureLod: no implicit derivatives inside the loop.
+        highp float d = textureLod(sceneDepth, uv, 0.0).r;
+        if (d >= 0.99999) continue;
+        highp float sceneZ = viewPosFromDepth(uv, d).z;
+        highp float gap = sceneZ - p.z;
+        // Only a ray that has just gone behind a surface hits it. Without a
+        // cap on how far behind, a ray passing behind a thin object (a box
+        // standing in the water) counted as hitting it and smeared a long
+        // streak of it across the water.
+        highp float thickness = clamp(stride * 1.5, 2.0, 48.0);
+        if (gap > 0.0 && gap < thickness) {
+            highp vec3 lo = prev;
+            highp vec3 hi = p;
+            for (int j = 0; j < 5; j++) {
+                highp vec3 mid = (lo + hi) * 0.5;
+                highp vec2 muv = viewToUV(mid);
+                highp float mz = viewPosFromDepth(muv, textureLod(sceneDepth, muv, 0.0).r).z;
+                if (mz > mid.z) hi = mid; else lo = mid;
+            }
+            highp vec2 huv = viewToUV(hi);
+            highp float hz = viewPosFromDepth(huv, textureLod(sceneDepth, huv, 0.0).r).z;
+            if (hz - hi.z > thickness) return vec4(0.0);
+            vec2 edge = smoothstep(vec2(0.0), vec2(0.08), huv)
+                      * smoothstep(vec2(0.0), vec2(0.08), vec2(1.0) - huv);
+            float fade = edge.x * edge.y * (1.0 - smoothstep(14.0, 20.0, float(i)));
+            return vec4(textureLod(sceneColor, huv, 0.0).rgb, fade);
+        }
+    }
+    return vec4(0.0);
+}
+
+// Procedural sky remains the zero-cost fallback when reflections are disabled.
 vec3 skyColor(vec3 dir) {
     float h = clamp(dir.y, 0.0, 1.0);
-    vec3 sky = mix(vec3(0.66, 0.76, 0.83), vec3(0.19, 0.38, 0.66), pow(h, 0.55));
+    vec3 sky = mix(vec3(0.66, 0.76, 0.83),
+                   vec3(0.19, 0.38, 0.66),
+                   pow(h, 0.55));
     float sunAmount = max(dot(dir, SUN_DIR), 0.0);
-    sky += SUN_COLOR * (pow(sunAmount, 350.0) * 3.0 + pow(sunAmount, 24.0) * 0.18);
+    sky += SUN_COLOR * (
+        pow(sunAmount, 350.0) * 3.0 +
+        pow(sunAmount, 24.0) * 0.18
+    );
     return sky;
 }
 
@@ -634,21 +910,22 @@ void main()
     vec3 viewDir = toView / max(viewDist, 0.0001);
 
     vec3 geoN = normalize(Normal);
-    bool backside = dot(geoN, viewDir) < 0.0;   // camera inside the volume
+    // Above or below the water is decided against the still surface, not
+    // per pixel: with the eye near the waterline, wave crests rise above it,
+    // and a per-pixel test flipped those crests to the underwater look.
+    bool topSurface = abs(geoN.y) > 0.5;
+    bool backside = topSurface ? (viewPos.y < RestY) : (dot(geoN, viewDir) < 0.0);
     if (backside) geoN = -geoN;
 
-    // Horizontal surface vs. vertical side wall (side normals have y ~= 0)
     float topFace = step(0.35, abs(geoN.y));
 
-    // ---- Detail ripples: three scrolling normal-map layers projected in
-    //      world space, so ripple scale is constant regardless of brush size.
-    //      Side walls project onto their own plane or the pattern collapses
-    //      into 1D streaks. ----
+    // World-space animated normal-map detail.  This is also the normal used
+    // by Snell/Fresnel, so the optical effects follow the visible ripples.
     highp vec2 wuv;
     if (topFace > 0.5) {
         wuv = FragPos.xz;
     } else if (abs(geoN.x) > abs(geoN.z)) {
-        wuv = vec2(FragPos.z, FragPos.y - time * 6.0);   // slow downward drift
+        wuv = vec2(FragPos.z, FragPos.y - time * 6.0);
     } else {
         wuv = vec2(FragPos.x, FragPos.y - time * 6.0);
     }
@@ -657,46 +934,229 @@ void main()
     vec2 r3 = texture(normalMap, wuv * 0.0310 + time * vec2( 0.016, -0.029)).xy - 0.5;
     vec2 ripple = r1 + r2 * 0.65 + r3 * 0.35;
 
-    // Fade fine detail with distance to stop specular aliasing shimmer
     float detailFade = 1.0 / (1.0 + viewDist * 0.0009);
     float rippleStrength = (0.34 + WaveCrest * 0.18) * detailFade;
 
-    // Perturb tangentially to the face so ripples work on walls too
     vec3 N;
     if (topFace > 0.5) {
-        N = normalize(vec3(geoN.x + ripple.x * rippleStrength,
-                           geoN.y,
-                           geoN.z + ripple.y * rippleStrength));
+        N = normalize(vec3(
+            geoN.x + ripple.x * rippleStrength,
+            geoN.y,
+            geoN.z + ripple.y * rippleStrength
+        ));
     } else {
         vec3 up = vec3(0.0, 1.0, 0.0);
         vec3 tangent = normalize(cross(up, geoN));
-        N = normalize(geoN + (tangent * ripple.x + up * ripple.y) * rippleStrength * 0.6);
+        N = normalize(
+            geoN +
+            (tangent * ripple.x + up * ripple.y) *
+            rippleStrength * 0.6
+        );
     }
 
-    // ---- Fresnel (Schlick, R0 of water = 0.02) with the real normal ----
+    // ------------------------------------------------------------------
+    // Refraction / transmission: the same screen-space optical treatment
+    // used by Glass, but driven by the water's perturbed surface normal.
+    // ------------------------------------------------------------------
+    float ior = max(refractionIndex, 1.0);
+    // Air -> water above the surface; water -> air when viewed from below.
+    float eta = backside ? ior : (1.0 / ior);
+    highp vec3 straightDir = -viewDir;
+    highp vec3 refractDir = refract(straightDir, N, eta);
+    // Past the critical angle (looking up at the surface from below at a
+    // grazing angle) there is no refracted ray: total internal reflection.
+    // refract() returns zero there, which used to fling the screen-space
+    // offset across the frame; look straight through instead and let the
+    // water body colour take over (see totalInternal below).
+    float totalInternal = 0.0;
+    if (dot(refractDir, refractDir) < 0.25) {
+        refractDir = straightDir;
+        totalInternal = 1.0;
+    }
+    highp vec3 refractDeltaView = mat3(view) * (refractDir - straightDir);
+    highp float refractDeltaLen = length(refractDeltaView);
+    if (refractDeltaLen > 1.0e-5) {
+        refractDeltaView /= refractDeltaLen;
+    } else {
+        refractDeltaView = vec3(0.0);
+    }
+
+    highp vec2 projectionScale =
+        vec2(projection[0][0], projection[1][1]);
+    highp vec2 normalView =
+        normalize(mat3(view) * N).xy;
+    highp float grazing =
+        1.0 - clamp(abs(dot(viewDir, N)), 0.0, 1.0);
+
+    highp vec2 refractionWarp =
+        refractDeltaView.xy *
+        projectionScale *
+        (0.055 + 0.035 * grazing);
+    highp vec2 normalWarp =
+        normalView *
+        (0.012 + 0.010 * grazing);
+
+    highp float nWarp1 =
+        vnoise(FragPos.xz * 0.08 + TexCoords * 3.0);
+    highp float nWarp2 =
+        vnoise(FragPos.xy * 0.11 + TexCoords * 5.0);
+    highp vec2 microWarp =
+        (vec2(nWarp1, nWarp2) - 0.5) * 0.020;
+
+    highp vec2 screenUV =
+        gl_FragCoord.xy / max(screenSize, vec2(1.0));
+    highp vec2 uvOffset =
+        (refractionWarp + normalWarp + microWarp) *
+        distortionStrength;
+    highp vec2 refractUV = clamp(
+        screenUV + uvOffset,
+        vec2(0.001),
+        vec2(0.999)
+    );
+
+    // How much water the view ray crosses before it reaches the bed, and
+    // where that bed is (for caustics). Refracted samples of anything in
+    // front of the water - a bank, a wading monster - would smear it into
+    // the surface, so those fall back to the unrefracted pixel.
+    bool haveDepth = hasSceneDepth == 1 && !backside;
+    highp vec3 surfaceView = (view * vec4(FragPos, 1.0)).xyz;
+    highp float thickness = 1.0e4;
+    highp float bedDepth = 1.0e4;       // vertical depth of the bed below the surface
+    highp vec3 bedWorld = FragPos - vec3(0.0, 1.0e4, 0.0);
+    bool bedVisible = false;
+    if (haveDepth) {
+        highp float dRefract = textureLod(sceneDepth, refractUV, 0.0).r;
+        if (viewPosFromDepth(refractUV, dRefract).z > surfaceView.z) {
+            refractUV = clamp(screenUV, vec2(0.001), vec2(0.999));
+        }
+        highp float dBed = textureLod(sceneDepth, refractUV, 0.0).r;
+        if (dBed < 0.99999) {
+            highp vec3 bedView = viewPosFromDepth(refractUV, dBed);
+            thickness = max(length(bedView) - length(surfaceView), 0.0);
+            bedWorld = viewPos - viewDir * length(bedView);
+            bedDepth = max(FragPos.y - bedWorld.y, 0.0);
+            bedVisible = true;
+        }
+    }
+
+    vec3 transmitted = texture(sceneColor, refractUV).rgb;
+    if (roughness > 0.001) {
+        highp vec2 blurStep = roughness * 4.0 / max(screenSize, vec2(1.0));
+        transmitted += texture(
+            sceneColor,
+            clamp(refractUV + vec2(blurStep.x, 0.0),
+                  vec2(0.001), vec2(0.999))).rgb;
+        transmitted += texture(
+            sceneColor,
+            clamp(refractUV - vec2(blurStep.x, 0.0),
+                  vec2(0.001), vec2(0.999))).rgb;
+        transmitted += texture(
+            sceneColor,
+            clamp(refractUV + vec2(0.0, blurStep.y),
+                  vec2(0.001), vec2(0.999))).rgb;
+        transmitted /= 4.0;
+    }
+
+    // ------------------------------------------------------------------
+    // Water body / shallow colour and subsurface-looking crest scatter.
+    // ------------------------------------------------------------------
     float NdV = max(dot(N, viewDir), 0.0);
-    float fresnel = 0.02 + 0.98 * pow(1.0 - NdV, 5.0);
-    fresnel = clamp(fresnel * clamp(waterReflectivity * 2.0, 0.0, 1.6), 0.0, 1.0);
+    vec3 deepCol = waterTint * 0.55;
+    vec3 shallowCol =
+        waterTint * 1.25 +
+        vec3(0.02, 0.10, 0.09);
+    vec3 bodyCol =
+        mix(deepCol, shallowCol,
+            pow(1.0 - NdV, 1.5) * 0.7 + 0.15);
 
-    // ---- Sky reflection ----
+    float sss =
+        pow(WaveCrest, 2.0) *
+        pow(
+            max(
+                dot(
+                    viewDir,
+                    -normalize(vec3(SUN_DIR.x, 0.0, SUN_DIR.z))
+                ),
+                0.0
+            ),
+            2.0
+        );
+    bodyCol +=
+        (waterTint * 0.8 + vec3(0.05, 0.22, 0.18)) * sss;
+
+    bodyCol *=
+        0.45 + 0.55 * max(dot(N, SUN_DIR), 0.0);
+
+    vec3 transmission;
+    // Caustics: light focused by the ripples dances over the bed, strongest
+    // in the shallows. Sampled unconditionally so the mipmapped lookups stay
+    // in uniform control flow.
+    highp vec2 cuv = bedWorld.xz * 0.03;
+    float c1 = texture(normalMap, cuv + time * vec2(0.031, 0.022)).x;
+    float c2 = texture(normalMap, cuv * 1.37 - time * vec2(0.024, 0.037)).y;
+    if (haveDepth) {
+        if (bedVisible && topFace > 0.5) {
+            float caustic = pow(1.0 - abs(c1 + c2 - 1.0), 10.0);
+            transmitted *= 1.0 + caustic * 0.55 * exp(-bedDepth * 0.03) * detailFade;
+        }
+        // Beer-Lambert absorption: red goes first, so the shallows stay clear
+        // and deeper water turns to the tint colour.
+        // Authored opacity sets how murky the water is: 0.5 is the default.
+        vec3 absorb = ((vec3(1.0) - clamp(waterTint, 0.0, 1.0)) * 0.018 + 0.002)
+                    * clamp(waterOpacity, 0.05, 1.0) * 2.0;
+        vec3 extinction = exp(-absorb * thickness);
+        transmission = transmitted * extinction + bodyCol * (vec3(1.0) - extinction);
+    } else {
+        // Mix the refracted scene with the water's own body colour so shallow
+        // geometry remains visible instead of replacing the water with a flat
+        // post-process image.
+        vec3 transmittedTinted =
+            transmitted * mix(vec3(1.0), waterTint, 0.35);
+        transmission =
+            mix(transmittedTinted, bodyCol, 0.45);
+    }
+
+    // ------------------------------------------------------------------
+    // Fresnel: physical R0 for water (~0.0204), multiplied by the authored
+    // Fresnel/reflectivity intensity so existing maps retain their control.
+    // ------------------------------------------------------------------
+    float f0 = 0.020373;
+    float fresnel =
+        f0 + (1.0 - f0) * pow(1.0 - NdV, 5.0);
+    fresnel = clamp(
+        fresnel * clamp(fresnelIntensity, 0.0, 4.0),
+        0.0, 1.0
+    );
+
     vec3 R = reflect(-viewDir, N);
-    R.y = abs(R.y);   // reflections that would sample "below horizon" mirror upward
     vec3 reflection = skyColor(R);
+    float sceneReflection = 0.0;
+    if (haveDepth && ssrEnabled == 1 && topFace > 0.5) {
+        // Reflect the scene itself where the ray finds it on screen; the sky
+        // fills in everywhere else. Rougher water blurs towards the sky.
+        vec4 ssr = traceReflection(surfaceView, normalize(mat3(view) * R));
+        sceneReflection = ssr.a * (1.0 - roughness * 0.6);
+        reflection = mix(reflection, ssr.rgb, sceneReflection);
+    }
 
-    // ---- Water body: deep tint straight down, brighter scatter at angles,
-    //      subsurface glow through wave crests ----
-    vec3 deepCol    = waterTint * 0.55;
-    vec3 shallowCol = waterTint * 1.25 + vec3(0.02, 0.10, 0.09);
-    vec3 bodyCol = mix(deepCol, shallowCol, pow(1.0 - NdV, 1.5) * 0.7 + 0.15);
+    // Keep authored reflectivity visible at normal viewing angles. Physical
+    // water Fresnel starts around 2%, which is too weak to make the optional
+    // reflection perceptible from above on its own; grazing angles still get
+    // the full Fresnel response.
+    float reflectionWeight = max(
+        fresnel,
+        clamp(waterReflectivity, 0.0, 1.0) * 0.5
+    );
+    // Reflections of the scene are what make water read as water from
+    // normal viewing heights, where physical Fresnel is only a few percent:
+    // let the authored reflectivity carry them further.
+    reflectionWeight = max(reflectionWeight,
+        clamp(waterReflectivity, 0.0, 1.0) * 0.8 * sceneReflection);
+    vec3 color = mix(transmission, reflection, reflectionWeight);
 
-    float sss = pow(WaveCrest, 2.0)
-              * pow(max(dot(viewDir, -normalize(vec3(SUN_DIR.x, 0.0, SUN_DIR.z))), 0.0), 2.0);
-    bodyCol += (waterTint * 0.8 + vec3(0.05, 0.22, 0.18)) * sss;
-
-    // Constant sun term so water reads correctly even with no point lights
-    bodyCol *= (0.45 + 0.55 * max(dot(N, SUN_DIR), 0.0));
-
-    // ---- Dynamic point lights: wide diffuse + tight Blinn specular ----
+    // ------------------------------------------------------------------
+    // Dynamic lights / specular / foam.
+    // ------------------------------------------------------------------
     vec3 diffuseAcc = vec3(0.0);
     vec3 specAcc = vec3(0.0);
     for (int i = 0; i < active_lights && i < MAX_LIGHTS; i++) {
@@ -704,48 +1164,100 @@ void main()
         highp float dist = length(toL);
         if (dist < lights[i].radius) {
             vec3 Ldir = toL / dist;
-            float att = 1.0 - smoothstep(0.0, lights[i].radius, dist);
-            vec3 lc = lights[i].color * lights[i].intensity * att;
+            float att =
+                1.0 - smoothstep(0.0, lights[i].radius, dist);
+            vec3 lc =
+                lights[i].color * lights[i].intensity * att;
             diffuseAcc += max(dot(N, Ldir), 0.0) * lc;
             vec3 Hl = normalize(Ldir + viewDir);
             float ndh = max(dot(N, Hl), 0.0);
-            specAcc += (pow(ndh, 240.0) * 1.6 + pow(ndh, 28.0) * 0.15) * lc;
+            specAcc +=
+                (pow(ndh, 240.0) * 1.6 +
+                 pow(ndh, 28.0) * 0.15) * lc;
         }
     }
-    bodyCol += bodyCol * diffuseAcc * 0.9;
+    color += color * diffuseAcc * 0.45;
 
-    // ---- Sun glint with sparkle (twinkling micro-facets) ----
     vec3 Hs = normalize(SUN_DIR + viewDir);
-    float sunSpec = pow(max(dot(N, Hs), 0.0), 320.0);
-    float sparkle = vnoise(wuv * 0.9 + vec2(time * 1.7, -time * 1.3))
-                  * vnoise(wuv * 1.7 - vec2(time * 0.9, -time * 1.1));
-    sunSpec *= (1.0 + sparkle * 6.0) * detailFade;
-    vec3 specular = SUN_COLOR * sunSpec * 2.2 + specAcc;
+    float sunSpec =
+        pow(max(dot(N, Hs), 0.0), 320.0);
+    float sparkle =
+        vnoise(wuv * 0.9 +
+               vec2(time * 1.7, -time * 1.3)) *
+        vnoise(wuv * 1.7 -
+               vec2(time * 0.9, -time * 1.1));
+    sunSpec *=
+        (1.0 + sparkle * 6.0) *
+        detailFade;
+    vec3 specular =
+        SUN_COLOR * sunSpec * 2.2 + specAcc;
 
-    // ---- Foam: breaking wave crests + lapping at the shore/walls
-    //      (horizontal surface only — walls get none) ----
-    float foamNoise = vnoise(wuv * 0.16 + vec2(time * 0.05, -time * 0.04)) * 0.6
-                    + vnoise(wuv * 0.45 - vec2(time * 0.07, time * 0.06)) * 0.4;
-    float crestFoam = smoothstep(0.68, 0.92, WaveCrest) * smoothstep(0.35, 0.75, foamNoise);
-    float shoreWave = 0.5 + 0.5 * sin(ShoreDist * 0.30 - time * 1.8);
-    float shoreFoam = (1.0 - smoothstep(2.0, 26.0, ShoreDist))
-                    * (0.30 + 0.70 * shoreWave)
-                    * smoothstep(0.25, 0.60, foamNoise + 0.15);
-    float foam = clamp(crestFoam + shoreFoam, 0.0, 1.0) * topFace;
+    float foamNoise =
+        vnoise(wuv * 0.16 +
+               vec2(time * 0.05, -time * 0.04)) * 0.6 +
+        vnoise(wuv * 0.45 -
+               vec2(time * 0.07, time * 0.06)) * 0.4;
+    float crestFoam =
+        smoothstep(0.68, 0.92, WaveCrest) *
+        smoothstep(0.35, 0.75, foamNoise);
+    float shoreWave =
+        0.5 + 0.5 * sin(ShoreDist * 0.30 - time * 1.8);
+    float shoreFoam =
+        (1.0 - smoothstep(2.0, 26.0, ShoreDist)) *
+        (0.30 + 0.70 * shoreWave) *
+        smoothstep(0.25, 0.60, foamNoise + 0.15);
+    if (haveDepth) {
+        // Foam along the line where the water touches anything, not only at
+        // the brush edges. Measured vertically, so a shallow flat stays clear
+        // and only the waterline itself foams.
+        float contact = 1.0 - smoothstep(0.0, 2.5, bedDepth);
+        float lapping = 0.5 + 0.5 * sin(bedDepth * 2.5 - time * 2.2);
+        shoreFoam = max(shoreFoam,
+                        contact * (0.35 + 0.65 * lapping) *
+                        smoothstep(0.2, 0.55, foamNoise + 0.1));
+    }
+    float foam =
+        clamp(crestFoam + shoreFoam, 0.0, 1.0) *
+        topFace;
 
-    // ---- Combine ----
-    vec3 color = mix(bodyCol, reflection, fresnel);
     color += specular * (0.35 + 0.65 * waterReflectivity);
-    color = mix(color, vec3(0.90, 0.95, 0.96), foam * 0.85);
+    color = mix(
+        color,
+        vec3(0.90, 0.95, 0.96),
+        foam * 0.85
+    );
 
-    // ---- Alpha: more transparent looking straight down, opaque at glancing
-    //      angles; foam and glints always read solid ----
-    float alpha = clamp(waterOpacity, 0.05, 1.0) * (0.60 + 0.40 * (1.0 - NdV));
-    alpha = clamp(alpha + fresnel * 0.35 + foam * 0.45 + sunSpec * 0.4, 0.05, 1.0);
+    float alpha =
+        clamp(waterOpacity, 0.05, 1.0) *
+        (0.60 + 0.40 * (1.0 - NdV));
+    alpha = clamp(
+        alpha +
+        fresnel * 0.35 +
+        foam * 0.45 +
+        sunSpec * 0.4,
+        0.05,
+        1.0
+    );
+
+    if (haveDepth && topFace > 0.5) {
+        // The refracted, absorbed scene is already in the colour, so the
+        // surface is opaque - blending it over the scene again would let the
+        // unabsorbed bed show through. It only fades out where the water
+        // meets the shore, so there is no hard seam.
+        alpha = smoothstep(0.0, 1.5, bedDepth);
+    }
+
+    if (backside && totalInternal > 0.5) {
+        // Total internal reflection mirrors the underwater world, which is
+        // mostly the water's own body colour.
+        color = mix(color, bodyCol, 0.85);
+    }
 
     if (backside) {
-        // Seen from underwater: milkier, brighter surface (approx. Snell window)
-        color = mix(color, waterTint * 1.4 + vec3(0.10, 0.18, 0.20), 0.35);
+        color = mix(
+            color,
+            waterTint * 1.4 + vec3(0.10, 0.18, 0.20),            0.35
+        );
         alpha = min(alpha + 0.15, 1.0);
     }
 
@@ -758,9 +1270,10 @@ layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec2 aTexCoords;
 
-out vec3 FragPos;
+out highp vec3 FragPos;
 out mediump vec3 Normal;
-out vec2 TexCoords;
+out highp vec2 TexCoords;
+out highp vec3 ViewFragPos;
 
 uniform mat4 model;
 uniform mat4 view;
@@ -771,7 +1284,8 @@ void main() {
     FragPos     = vec3(model * vec4(aPos, 1.0));
     Normal      = normalize(normalMatrix * aNormal);
     TexCoords   = aTexCoords;
-    gl_Position = projection * view * vec4(FragPos, 1.0);
+    ViewFragPos = vec3(view * vec4(FragPos, 1.0));
+    gl_Position = projection * vec4(ViewFragPos, 1.0);
 }""",
 
     'glass.frag': """#version 330 core
@@ -781,107 +1295,115 @@ out vec4 FragColor;
 in highp vec3 FragPos;
 in vec3 Normal;
 in highp vec2 TexCoords;
+in highp vec3 ViewFragPos;
 
 uniform highp vec3 viewPos;
+// highp as in the vertex stage: GLSL ES links a shared uniform only when
+// both stages declare the same precision (the player's GLES path).
+uniform highp mat4 view;
+uniform highp mat4 projection;
 uniform vec3 waterColor;
 uniform float distortionStrength;
-uniform float causticStrength;
+uniform float fresnelIntensity;
 uniform float glassOpacity;
 uniform float refractionIndex;
-uniform float roughness;""" + FOG_GLSL + """
-
-highp float random(in highp vec2 st) {
-    return fract(sin(dot(st, vec2(12.9898, 78.233))) * 43758.5453123);
-}
-
-highp float noise(in highp vec2 st) {
-    highp vec2 i = floor(st);
-    highp vec2 f = fract(st);
-    float a = random(i);
-    float b = random(i + vec2(1.0, 0.0));
-    float c = random(i + vec2(0.0, 1.0));
-    float d = random(i + vec2(1.0, 1.0));
-    highp vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
-}
-
-#define NUM_OCTAVES 3
-highp float fbm(in highp vec2 st) {
-    float v = 0.0;
-    float a = 0.5;
-    highp vec2 shift = vec2(100.0);
-    mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
-    for (int i = 0; i < NUM_OCTAVES; ++i) {
-        v  += a * noise(st);
-        st  = rot * st * 2.0 + shift;
-        a  *= 0.5;
-    }
-    return v;
-}
-
-highp float pattern(in highp vec2 p) {
-    return fbm(p + vec2(fbm(p)));
-}
+uniform float roughness;
+uniform sampler2D sceneColor;
+uniform vec2 screenSize;""" + FOG_GLSL + """
 
 void main() {
-    vec3 viewDir    = normalize(viewPos - FragPos);
-    vec3 baseNormal = normalize(Normal);
-    vec3 lightDir   = normalize(vec3(0.5, 1.0, 0.3));
+    highp vec3 viewDir = normalize(viewPos - FragPos);
+    highp vec3 baseNormal = normalize(Normal);
 
-    highp vec2 surfaceUV = FragPos.xz * 0.5 + FragPos.xy * 0.3;
-    
-    float iorRatio  = 1.0 / max(refractionIndex, 1.0);
-    vec3 refractDir = refract(-viewDir, baseNormal, iorRatio);
-    highp vec2 refractUV  = surfaceUV + refractDir.xy * distortionStrength * 0.2;
+    // Screen-space transmission needs an authored, visible warp. The old
+    // implementation projected a unit ray delta and then divided it by
+    // scene depth, which leaves the resulting UV displacement well below a
+    // pixel on normal editor/game distances. Keep the Snell direction so the
+    // IOR slider still has a physical relationship to the result, but map the
+    // angular change into a bounded screen-space offset controlled directly by
+    // the distortion slider.
+    float ior = max(refractionIndex, 1.0);
+    float eta = 1.0 / ior;
+    highp vec3 straightDir = -viewDir;
+    highp vec3 refractDir = refract(straightDir, baseNormal, eta);
+    highp vec3 refractDeltaView = mat3(view) * (refractDir - straightDir);
+    highp float refractDeltaLen = length(refractDeltaView);
+    if (refractDeltaLen > 1.0e-5) {
+        refractDeltaView /= refractDeltaLen;
+    } else {
+        refractDeltaView = vec3(0.0);
+    }
 
-    float bumpScale     = 1.5 + roughness * 8.0;
-    float surfaceHeight = pattern(refractUV * bumpScale);
-    float epsilon       = 0.015;
-    float hA = pattern((refractUV + vec2(epsilon, 0.0)) * bumpScale);
-    float hB = pattern((refractUV + vec2(0.0, epsilon)) * bumpScale);
+    highp vec2 projectionScale = vec2(projection[0][0], projection[1][1]);
+    highp vec2 normalView = normalize(mat3(view) * baseNormal).xy;
+    highp float grazing = 1.0 - clamp(abs(dot(viewDir, baseNormal)), 0.0, 1.0);
 
-    float distortMul = (distortionStrength * 4.0) + roughness * 2.0;
-    vec3 perturbedNormal = normalize(vec3(
-        (surfaceHeight - hA) * distortMul,
-        1.0 / max(distortMul * 3.0, 0.1),
-        (surfaceHeight - hB) * distortMul
-    ));
-    
-    float normalMix  = 0.5 + roughness * 0.4 + distortionStrength * 0.3;
-    vec3 finalNormal = normalize(baseNormal + perturbedNormal * normalMix);
+    // The refracted direction supplies the broad warp; the view-space normal
+    // keeps a flat sheet of glass visibly responsive even when the ray delta is
+    // tiny; grazing angles get a little more displacement, like real glass.
+    highp vec2 refractionWarp =
+        refractDeltaView.xy * projectionScale * (0.055 + 0.035 * grazing);
+    highp vec2 normalWarp = normalView * (0.012 + 0.010 * grazing);
 
-    float combinedPattern = pattern(surfaceUV * 2.0) * 0.7 + pattern(surfaceUV * 8.0) * 0.3;
-    
-    float fresnelPower       = mix(1.5, 10.0, causticStrength);
-    float fresnel            = pow(1.0 - max(dot(viewDir, finalNormal), 0.0), fresnelPower);
-    float fresnelWithPattern = fresnel * (0.8 + combinedPattern * 0.4);
+    highp vec2 screenUV = gl_FragCoord.xy / screenSize;
 
-    vec3  reflectDir  = reflect(-lightDir, finalNormal);
-    float shininess   = mix(256.0, 16.0, roughness);
-    float spec        = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
-    vec3  reflectDir2 = reflect(-viewDir, finalNormal);
-    float envSpec     = pow(max(dot(reflectDir2, vec3(0.0, 1.0, 0.0)), 0.0), 32.0);
-    vec3  specular    = vec3(1.0) * (spec * causticStrength * 4.0 + envSpec * 0.5);
+    // Keep the warp entirely on the core refraction/normal path. The former
+    // procedural hash/noise helper triggered an Intel GLSL compiler failure on
+    // some older integrated-GPU drivers.
+    highp vec2 uvOffset =
+        (refractionWarp + normalWarp) * distortionStrength;
 
-    vec3 surfaceColor    = waterColor * (0.85 + combinedPattern * 0.3);
-    vec3 reflectionColor = vec3(0.95, 0.98, 1.0) + vec3(combinedPattern * 0.1);
-    vec3 baseMix         = mix(surfaceColor, reflectionColor, fresnelWithPattern * min(causticStrength * 2.5, 1.0));
-    vec3 angleColor      = vec3(0.9, 0.95, 1.0) * fresnel * 0.2;
-    vec3 finalRGB        = baseMix + angleColor;
-    finalRGB += specular * (2.5 - roughness * 1.2);
-    finalRGB += vec3(combinedPattern * 0.15 * (1.0 - glassOpacity)) * waterColor;
-
-    float alpha = clamp(
-        glassOpacity
-        + fresnelWithPattern * (0.2 + roughness * 0.1) * (1.0 - glassOpacity)
-        + roughness * 0.25
-        + combinedPattern * 0.08,
-        0.05, 1.0
+    highp vec2 refractUV = clamp(
+        screenUV + uvOffset,
+        vec2(0.001),
+        vec2(0.999)
     );
-    
+
+    // Roughness is a real filter over the transmitted scene rather than merely
+    // changing a highlight exponent. Four taps are cheap, deterministic, and
+    // make the control visibly useful on GL 3.3 hardware.
+    highp vec2 blurStep = roughness * 4.0 / screenSize;
+    vec3 transmitted = texture(sceneColor, refractUV).rgb;
+    if (roughness > 0.001) {
+        transmitted += texture(sceneColor, clamp(refractUV + vec2(blurStep.x, 0.0),
+                                                 vec2(0.001), vec2(0.999))).rgb;
+        transmitted += texture(sceneColor, clamp(refractUV - vec2(blurStep.x, 0.0),
+                                                 vec2(0.001), vec2(0.999))).rgb;
+        transmitted += texture(sceneColor, clamp(refractUV + vec2(0.0, blurStep.y),
+                                                 vec2(0.001), vec2(0.999))).rgb;
+        transmitted /= 4.0;
+    }
+
+    // Tint the transmitted scene without replacing it with a flat glass colour.
+    vec3 filteredScene = transmitted * mix(vec3(1.0), waterColor, 0.35);
+
+    // Schlick Fresnel: refractionIndex supplies the physically derived F0, while
+    // the authored Fresnel slider controls its strength.
+    float cosTheta = clamp(dot(viewDir, baseNormal), 0.0, 1.0);
+    float f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+    float fresnel = f0 + (1.0 - f0) * pow(1.0 - cosTheta, 5.0);
+    fresnel = clamp(fresnel * fresnelIntensity, 0.0, 1.0);
+
+    vec3 reflectionColor = vec3(0.96, 0.99, 1.0);
+    vec3 finalRGB = mix(filteredScene, reflectionColor, fresnel);
+
+    // A compact view-dependent glint keeps Fresnel readable without requiring
+    // the glass pass to upload the whole light table a second time.
+    highp vec3 halfDir = normalize(viewDir + vec3(0.35, 0.9, 0.2));
+    float shininess = mix(128.0, 12.0, roughness);
+    float specular = pow(max(dot(baseNormal, halfDir), 0.0), shininess);
+    finalRGB += vec3(specular * (0.15 + 0.55 * fresnel));
+
+    float edgeAlpha = fresnel * 0.65 + roughness * 0.20;
+    float alpha = clamp(
+        glassOpacity + edgeAlpha * (1.0 - glassOpacity),
+        0.05,
+        1.0
+    );
+
     FragColor = vec4(applyFog(finalRGB, FragPos), alpha);
 }""",
-    
+
     # Depth cube-map pass: renders scene geometry from a point light's position
     # into one cube face, storing linear distance (0..1 = 0..far_plane) so the
     # lighting shaders can do an omnidirectional shadow test.  One draw per face
@@ -906,6 +1428,130 @@ void main() {
 }""",
 
     'terrain.vert': """#version 330 core
+precision highp float;
+precision highp int;
+// Terrain drawn from a heightfield: no vertex buffer at all.
+//
+// Each chunk is drawn as 6 vertices per quad, in exactly the order the CPU
+// mesh used -- quad q = ix * res + iz, triangle 1 at (ix,iz)(ix+1,iz)(ix,iz+1)
+// and triangle 2 at (ix+1,iz)(ix+1,iz+1)(ix,iz+1) -- and every attribute the
+// 14-float vertex carried is rebuilt here from the chunk's height grid:
+// position, the flat face normal, the per-triangle colour, the UV and the
+// smooth normal. The arithmetic follows the old NumPy builder step by step
+// (float32 throughout), including its quirks, which are preserved on purpose:
+// the face normal points down (cross(+x, +z) = -y), colour is normalised by
+// the chunk's own height range, and the "variation" seed reduces to iz.
+out vec3 FragPos;
+out mediump vec3 Normal;
+out mediump vec3 VertexColor;
+out vec2 TexCoords;
+out mediump vec3 SmoothNormal;
+
+uniform mat4 projection;
+uniform mat4 view;
+
+// Height grid of the chunk: texel (x = k + 1, y = i + 1) holds grid point
+// (i, k). The one-texel ring around it (i or k = -1 or res + 1) lies beyond
+// the chunk's edges and is sampled only for smooth normals.
+uniform highp sampler2DArray uHeights;
+uniform ivec2 uChunkI;     // (quads per side, texture layer)
+uniform vec3  uChunkX;     // (world x, world z, grid step), as float32
+uniform vec2  uChunkY;     // (chunk min height, height range; 1 when flat)
+uniform float uTiling;     // Terrain.TILING_SCALE
+uniform int   uFlatMode;
+
+// The biome colour gradient, pre-cast exactly as the CPU cast it: stop
+// heights and colours, and per segment the float32 width (h1 - h0, or 0 when
+// h1 <= h0) and colour delta (c1 - c0).
+#define MAX_GRADIENT_STOPS 32
+uniform int   uGradCount;
+uniform float uGradH[MAX_GRADIENT_STOPS];
+uniform vec3  uGradC[MAX_GRADIENT_STOPS];
+uniform float uGradW[MAX_GRADIENT_STOPS];
+uniform vec3  uGradD[MAX_GRADIENT_STOPS];
+
+float heightAt(int i, int k) {
+    return texelFetch(uHeights, ivec3(k + 1, i + 1, uChunkI.y), 0).r;
+}
+
+vec3 gridPoint(ivec2 p) {
+    return vec3(uChunkX.x + float(p.x) * uChunkX.z,
+                heightAt(p.x, p.y),
+                uChunkX.y + float(p.y) * uChunkX.z);
+}
+
+// Central differences everywhere, the chunk's edge included: the border ring
+// supplies the sample beyond it, so both chunks sharing an edge compute the
+// same smooth normal there. (The CPU mesh took one-sided differences at the
+// edge -- np.gradient's edge_order=1 -- which kinked the normal by a few
+// degrees and showed as a seam in the texture blend.)
+float gradientAlong(int i, int k, bool alongX) {
+    ivec2 a = alongX ? ivec2(i - 1, k) : ivec2(i, k - 1);
+    ivec2 b = alongX ? ivec2(i + 1, k) : ivec2(i, k + 1);
+    return (heightAt(b.x, b.y) - heightAt(a.x, a.y)) / (2.0 * uChunkX.z);
+}
+
+vec3 gradientColour(float h) {
+    if (uGradCount == 0) return vec3(0.5);
+    vec3 result = vec3(0.0);
+    for (int s = 0; s < uGradCount - 1; ++s) {
+        if (h >= uGradH[s] && h <= uGradH[s + 1]) {
+            float t = uGradW[s] > 0.0 ? (h - uGradH[s]) / uGradW[s] : 0.0;
+            result = uGradC[s] + t * uGradD[s];
+        }
+    }
+    if (h > uGradH[uGradCount - 1]) result = uGradC[uGradCount - 1];
+    return result;
+}
+
+void main() {
+    int res = uChunkI.x;
+    int quad = gl_VertexID / 6;
+    int corner = gl_VertexID - quad * 6;
+    int ix = quad / res;
+    int iz = quad - ix * res;
+    bool second = corner >= 3;
+
+    ivec2 a = second ? ivec2(ix + 1, iz)     : ivec2(ix, iz);
+    ivec2 b = second ? ivec2(ix + 1, iz + 1) : ivec2(ix + 1, iz);
+    ivec2 c = ivec2(ix, iz + 1);
+    int own = second ? corner - 3 : corner;
+    ivec2 me = own == 0 ? a : (own == 1 ? b : c);
+
+    vec3 pa = gridPoint(a);
+    vec3 pb = gridPoint(b);
+    vec3 pc = gridPoint(c);
+    vec3 p  = own == 0 ? pa : (own == 1 ? pb : pc);
+
+    // Flat face normal: cross(v1 - v0, v2 - v0) / |.|, as stored.
+    vec3 n = cross(pb - pa, pc - pa);
+    float nlen = sqrt(dot(n, n));
+    Normal = nlen == 0.0 ? n : n / nlen;
+
+    if (uFlatMode != 0) {
+        VertexColor = vec3(0.7);
+    } else {
+        float meanHeight = (pa.y + pb.y + pc.y) / 3.0;   // "centroid" is reserved
+        float norm = clamp((meanHeight - uChunkY.x) / uChunkY.y, 0.0, 1.0);
+        int seed = second ? ((ix + 1000) * 1000 + iz + 1000) % 100
+                          : (ix * 1000 + iz) % 100;
+        float variation = (float(seed) / 100.0 - 0.5) * 0.08;
+        VertexColor = clamp(gradientColour(norm) + variation, 0.0, 1.0);
+    }
+
+    float gx = gradientAlong(me.x, me.y, true);
+    float gz = gradientAlong(me.x, me.y, false);
+    SmoothNormal = vec3(-gx, 1.0, -gz) / sqrt(gx * gx + 1.0 + gz * gz);
+
+    TexCoords = p.xz / uTiling;
+    FragPos = p;
+    gl_Position = projection * view * vec4(p, 1.0);
+}""",
+
+    # Blocks terracing: square land columns and their walls, built on the
+    # CPU per chunk (engine.terrain_style.build_block_mesh), because a height
+    # grid cannot hold vertical walls. Same outputs as terrain.vert.
+    'terrain_mesh.vert': """#version 330 core
 precision highp float;
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec3 aNormal;
@@ -945,9 +1591,37 @@ uniform sampler2D texGrass;
 uniform sampler2D texRock;
 uniform sampler2D texSand;
 uniform sampler2D texSnow;
-uniform vec4 biomeWeights;
-uniform float terrainHeightScale;
 uniform int use_textures;
+
+// Height texture layers. uHeightRange is the terrain's world-space height
+// range; uLayerHeights are the sand->grass, grass->rock and rock->snow
+// boundaries as fractions of it.
+uniform highp vec2 uHeightRange;
+uniform vec3 uLayerHeights;
+uniform float uLayerBlend;
+uniform float uSlopeRock;
+
+// Appearance options (engine/terrain_style.py). Each one is independent.
+uniform int uColorMode;              // 0 natural, 1 palette by height, 2 bands
+uniform vec3 uPalette[8];
+uniform int uPaletteSize;
+uniform highp float uBandHeight;
+uniform float uContour;
+uniform float uContourWidth;
+uniform float uGrid;
+uniform highp float uGridSize;
+uniform highp vec2 uGridOrigin;
+uniform float uCellVariation;
+uniform vec3 uWallColor;
+uniform float uWall;
+uniform float uWallStripes;
+uniform vec3 uSpeckleColor;
+uniform float uSpeckle;
+uniform vec3 uPatchColor;
+uniform float uPatch;
+uniform int uSmoothShading;
+uniform int uLightSteps;
+uniform int uDither;
 
 struct Light {
     highp vec3 position;
@@ -973,61 +1647,181 @@ highp float noise(highp vec2 p) {
     highp vec2 u = f * f * (3.0 - 2.0 * f);
     return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
 }
+float fbm2(highp vec2 p) {
+    return noise(p) * 0.6 + noise(p * 2.03 + 17.1) * 0.3 + noise(p * 4.1 + 5.3) * 0.1;
+}
 
-vec4 get_splat_weights(highp vec3 worldPos, vec3 smoothNorm) {
-    float height = clamp(worldPos.y * terrainHeightScale, 0.0, 1.0);
-    float slope  = 1.0 - max(smoothNorm.y, 0.0);  
-    float n      = noise(worldPos.xz * 0.02 + height * 5.0) * 0.5 + 0.5;
+float heightFraction(highp float y) {
+    return clamp((y - uHeightRange.x) / max(uHeightRange.y - uHeightRange.x, 1e-3), 0.0, 1.0);
+}
 
-    float grass_w = (1.0 - slope * 1.5) * (1.0 - height * 0.6) * biomeWeights.r;
-    float rock_w  = slope * 0.8 + n * 0.4 * biomeWeights.g;
-    float sand_w  = (1.0 - height * 0.4) * (1.0 - slope * 0.5) * biomeWeights.b;
-    float snow_w  = smoothstep(0.6, 1.0, height) * biomeWeights.a;
+// Sand, grass, rock and snow weights. Each boundary is a smoothstep, so the
+// weights always sum to one; a little noise wobbles the edges so they read
+// as natural rather than as contour lines. Steep ground turns to rock.
+vec4 layerWeights(highp vec3 worldPos, float slope) {
+    float h = heightFraction(worldPos.y)
+            + (fbm2(worldPos.xz * 0.01) - 0.5) * uLayerBlend * 2.0;
+    float b = max(uLayerBlend, 1e-3);
+    float s0 = smoothstep(uLayerHeights.x - b, uLayerHeights.x + b, h);
+    float s1 = smoothstep(uLayerHeights.y - b, uLayerHeights.y + b, h);
+    float s2 = smoothstep(uLayerHeights.z - b, uLayerHeights.z + b, h);
+    vec4 w = vec4(1.0 - s0, s0 - s1, s1 - s2, s2);
+    float steep = smoothstep(0.25, 0.5, slope) * uSlopeRock;
+    return mix(w, vec4(0.0, 0.0, 1.0, 0.0), steep);
+}
 
-    vec4 weights = vec4(grass_w, rock_w, sand_w, snow_w);
-    return weights / (dot(weights, vec4(1.0)) + 0.001);
+vec3 paletteAt(float t) {
+    int n = max(uPaletteSize, 1);
+    float x = clamp(t, 0.0, 1.0) * float(n - 1);
+    int i = int(floor(x));
+    int j = min(i + 1, n - 1);
+    return mix(uPalette[i], uPalette[j], fract(x));
+}
+
+// Index of the colour band / terrace a height belongs to. Terrace flats sit
+// exactly on multiples of the band height; the offset keeps each riser with
+// the level below it until just under the lip, where the contour line runs.
+highp float bandIndex(highp float y) {
+    return floor(y / max(uBandHeight, 1e-3) + 0.12);
+}
+
+// Ordered-dither threshold in [0, 1) from a 4x4 Bayer matrix, computed
+// arithmetically (no arrays, no integer maths) for the widest driver support.
+float bayer2(vec2 a) {
+    a = floor(a);
+    return fract(dot(a, vec2(0.5, a.y * 0.75)));
+}
+float bayer4(vec2 fragCoord) {
+    return bayer2(fragCoord * 0.5) * 0.25 + bayer2(fragCoord);
 }
 
 void main() {
-    vec3 norm = normalize(Normal);
+    vec3 smoothNorm = normalize(SmoothNormal);
+    vec3 faceNorm = normalize(Normal);
+    // The ground is seen from above: keep the face normal on the same side
+    // as the (always upward) smooth normal.
+    if (dot(faceNorm, smoothNorm) < 0.0) faceNorm = -faceNorm;
+    vec3 norm = (uSmoothShading == 1) ? smoothNorm : faceNorm;
+    float faceSlope = 1.0 - clamp(faceNorm.y, 0.0, 1.0);
+    float flatness = 1.0 - smoothstep(0.15, 0.35, faceSlope);
     vec3 texColor;
-    
-    if (use_textures == 1) {
-        vec3 smoothNorm = normalize(SmoothNormal);
-        vec4 splat = get_splat_weights(FragPos, smoothNorm);
-        
+
+    // ---- Base colour --------------------------------------------------
+    if (uColorMode == 1) {
+        // Palette graded by height, stepped with the terraces.
+        highp float y = bandIndex(FragPos.y) * uBandHeight;
+        texColor = paletteAt(heightFraction(y));
+    } else if (uColorMode == 2) {
+        // Strata: each band is one flat colour taken from the palette at
+        // the band's height, so colours climb the terrain in order (shore,
+        // grass, earth, rock, ...). Neighbouring bands alternate slightly
+        // lighter and darker, with a little jitter, so the layers read as
+        // separate beds of the same material rather than a smooth ramp.
+        highp float band = bandIndex(FragPos.y);
+        texColor = paletteAt(heightFraction(band * uBandHeight));
+        float alternate = mod(band, 2.0) < 0.5 ? 1.0 : 0.93;
+        float jitter = 0.97 + 0.06 * hash(vec2(band, 3.7));
+        texColor *= alternate * jitter;
+    } else if (use_textures == 1) {
+        vec4 splat = layerWeights(FragPos, 1.0 - max(smoothNorm.y, 0.0));
+
         vec4 grass_col = texture(texGrass, TexCoords * 1.0);
-        vec4 rock_col  = texture(texRock,  TexCoords * 0.5 + vec2(splat.g * 0.5, 0.0));
-        vec4 sand_col  = texture(texSand,  TexCoords * 1.5 + vec2(splat.b * 0.3, splat.b * 0.2));
+        vec4 rock_col  = texture(texRock,  TexCoords * 0.5);
+        vec4 sand_col  = texture(texSand,  TexCoords * 1.5);
         vec4 snow_col  = texture(texSnow,  TexCoords * 0.8);
-        
+
         vec3 splatColor = (
-            grass_col.rgb * splat.r +
-            rock_col.rgb  * splat.g +
-            sand_col.rgb  * splat.b +
-            snow_col.rgb  * splat.a
+            sand_col.rgb  * splat.x +
+            grass_col.rgb * splat.y +
+            rock_col.rgb  * splat.z +
+            snow_col.rgb  * splat.w
         );
-        texColor = splatColor * VertexColor * 1.1;
+        // The splat textures are the surface colour. (They used to be
+        // multiplied by the biome vertex colour as well, which roughly
+        // squared the darkness -- green grass times green vertex colour --
+        // and carried the vertex colour's per-chunk seams into textured mode.)
+        texColor = splatColor * 1.1;
     } else {
-        texColor = VertexColor;
+        texColor = VertexColor * 1.1;
     }
-    
+
+    // ---- Surface details ---------------------------------------------
+    highp vec2 cellCoord = (FragPos.xz - uGridOrigin) / max(uGridSize, 1e-3);
+    if (uCellVariation > 0.0) {
+        float jitter = hash(floor(cellCoord) + vec2(0.37, 0.71)) - 0.5;
+        texColor *= 1.0 + jitter * uCellVariation * 0.5;
+    }
+
+    if (uPatch > 0.0) {
+        float n = fbm2(FragPos.xz * 0.006);
+        float m = smoothstep(0.50, 0.58, n) * uPatch * flatness;
+        float grain = mix(0.88, 1.06, noise(FragPos.xz * 0.45));
+        vec3 patchCol = uPatchColor * grain * mix(0.8, 1.0, smoothstep(0.5, 0.62, n));
+        texColor = mix(texColor, patchCol, m);
+    }
+
+    if (uWall > 0.0) {
+        float wallMask = smoothstep(0.35, 0.7, faceSlope) * uWall;
+        highp float yb = FragPos.y / max(uBandHeight, 1e-3);
+        vec3 wallCol = uWallColor * mix(0.78, 1.06, fract(yb));
+        float stripe = step(fract(yb * 2.0), 0.18);
+        wallCol *= 1.0 - stripe * uWallStripes * 0.35;
+        texColor = mix(texColor, wallCol, wallMask);
+    }
+
+    if (uSpeckle > 0.0) {
+        highp vec2 sc = FragPos.xz / 3.0;
+        vec2 ci = floor(sc);
+        vec2 cf = fract(sc);
+        float density = uSpeckle * smoothstep(0.3, 0.7, noise(FragPos.xz * 0.02)) * flatness;
+        vec2 centre = vec2(hash(ci + 7.3), hash(ci + 19.1)) * 0.6 + 0.2;
+        float dotMask = step(hash(ci), density)
+                      * (1.0 - smoothstep(0.16, 0.26, length(cf - centre)));
+        // Far away the dots are smaller than a pixel: use their average.
+        float farFade = smoothstep(0.15, 0.5, length(fwidth(sc)));
+        float amount = mix(dotMask, density * 0.15, farFade);
+        texColor = mix(texColor, uSpeckleColor * mix(0.8, 1.1, hash(ci + 3.1)), amount);
+    }
+
+    if (uGrid > 0.0) {
+        vec2 fw = max(fwidth(cellCoord), vec2(1e-4));
+        vec2 d = abs(fract(cellCoord - 0.5) - 0.5) / fw;
+        float line = 1.0 - smoothstep(0.5, 1.5, min(d.x, d.y));
+        line *= 1.0 - smoothstep(0.15, 0.4, max(fw.x, fw.y));
+        texColor *= 1.0 - line * uGrid * (1.0 - smoothstep(0.3, 0.6, faceSlope));
+    }
+
+    if (uContour > 0.0) {
+        highp float coord = FragPos.y / max(uBandHeight, 1e-3) + 0.12;
+        float fw = max(fwidth(coord), 1e-4);
+        float f = fract(coord);
+        float d = min(f, 1.0 - f) / fw;
+        float line = 1.0 - smoothstep(uContourWidth * 0.5 - 0.5, uContourWidth * 0.5 + 0.5, d);
+        line *= 1.0 - smoothstep(0.3, 0.6, fw);
+        texColor *= 1.0 - line * uContour;
+    }
+
+    // ---- Lighting -----------------------------------------------------
     vec3 skyColor    = vec3(0.6, 0.75, 0.9);
     vec3 groundColor = vec3(0.3, 0.25, 0.2);
     float skyFactor  = (norm.y + 1.0) * 0.5;
     vec3 ambient     = (mix(groundColor, skyColor, skyFactor) * 0.3 + uAmbient) * texColor;
-    
+
     vec3 result  = ambient;
     vec3 sunDir  = normalize(vec3(0.4, 0.7, 0.3));
     vec3 sunColor = vec3(1.0, 0.95, 0.85);
     float sunDiff    = max(dot(norm, sunDir), 0.0);
     float wrappedDiff = (sunDiff + 0.3) / 1.3;
+    if (uLightSteps > 0) {
+        float steps = float(uLightSteps);
+        wrappedDiff = floor(wrappedDiff * steps + 0.5) / steps;
+    }
     result += wrappedDiff * sunColor * 0.7 * texColor;
-    
+
     vec3 fillDir  = normalize(vec3(-0.3, 0.2, -0.4));
     float fillDiff = max(dot(norm, fillDir), 0.0) * 0.2;
     result += fillDiff * skyColor * texColor;
-    
+
     for (int i = 0; i < active_lights && i < """ + str(MAX_LIGHTS_TERRAIN) + """; i++) {
         highp vec3  toLight  = lights[i].position - FragPos;
         highp float distance = length(toLight);
@@ -1040,12 +1834,259 @@ void main() {
             result += (1.0 - shadow) * diff * lights[i].color * lights[i].intensity * attenuation * texColor;
         }
     }
-    
+
     float gray = dot(result, vec3(0.299, 0.587, 0.114));
     result = mix(vec3(gray), result, 1.15);
-    
-    FragColor = vec4(applyFog(result, FragPos), 1.0);
-}"""
+
+    result = applyFog(result, FragPos);
+    if (uDither > 0) {
+        float levels = float(uDither);
+        result = floor(clamp(result, 0.0, 1.0) * levels + bayer4(gl_FragCoord.xy)) / levels;
+    }
+    FragColor = vec4(result, 1.0);
+}""",
+
+    'grass.vert': """#version 330 core
+
+// One instance is one grass blade. The CPU supplies the root position (already
+// sitting on the terrain surface), a size, a yaw/seed and a colour variation;
+// the GPU builds the tapered blade from gl_VertexID.
+//
+// A blade with S segments is (S - 1) quads followed by a tip triangle, so a
+// draw uses (S - 1) * 6 + 3 vertices per instance. Near chunks draw several
+// segments; far chunks draw the S = 1 blade, which is the tip triangle alone.
+// Between uLodStart and uLodEnd every blade morphs its width, bend and wind
+// profile onto that single triangle, so the swap is invisible.
+layout (location = 2) in vec3 iPosition;
+layout (location = 3) in float iSize;
+layout (location = 4) in float iPhase;
+layout (location = 5) in float iVariation;
+layout (location = 6) in vec3 iGround;     // colour of the ground under the blade
+
+out vec3 FragPos;
+out vec3 BladeNormal;
+out float BladeHeight;
+out vec3 BladeTint;
+out vec3 GroundColor;
+
+uniform mat4 projection;
+uniform mat4 view;
+uniform float time;
+uniform float windStrength;
+uniform vec3 cameraPos;
+uniform int uSegments;
+uniform float uLodStart;
+uniform float uLodEnd;
+uniform float uFadeStart;
+uniform float uFadeEnd;
+uniform float uBladeHeight;
+uniform float uBladeWidth;
+
+float hash1(float n) {
+    return fract(sin(n) * 43758.5453123);
+}
+
+// Classic Perlin 2D noise by Stefan Gustavson (MIT).
+vec4 permute(vec4 x) { return mod(((x * 34.0) + 1.0) * x, 289.0); }
+vec2 fade(vec2 t) { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); }
+float cnoise(vec2 P) {
+    vec4 Pi = floor(P.xyxy) + vec4(0.0, 0.0, 1.0, 1.0);
+    vec4 Pf = fract(P.xyxy) - vec4(0.0, 0.0, 1.0, 1.0);
+    Pi = mod(Pi, 289.0);
+    vec4 ix = Pi.xzxz;
+    vec4 iy = Pi.yyww;
+    vec4 fx = Pf.xzxz;
+    vec4 fy = Pf.yyww;
+    vec4 i = permute(permute(ix) + iy);
+    vec4 gx = 2.0 * fract(i * 0.0243902439) - 1.0;
+    vec4 gy = abs(gx) - 0.5;
+    vec4 tx = floor(gx + 0.5);
+    gx = gx - tx;
+    vec2 g00 = vec2(gx.x, gy.x);
+    vec2 g10 = vec2(gx.y, gy.y);
+    vec2 g01 = vec2(gx.z, gy.z);
+    vec2 g11 = vec2(gx.w, gy.w);
+    vec4 norm = 1.79284291400159 - 0.85373472095314 *
+                vec4(dot(g00, g00), dot(g01, g01), dot(g10, g10), dot(g11, g11));
+    g00 *= norm.x; g01 *= norm.y; g10 *= norm.z; g11 *= norm.w;
+    float n00 = dot(g00, vec2(fx.x, fy.x));
+    float n10 = dot(g10, vec2(fx.y, fy.y));
+    float n01 = dot(g01, vec2(fx.z, fy.z));
+    float n11 = dot(g11, vec2(fx.w, fy.w));
+    vec2 fade_xy = fade(Pf.xy);
+    vec2 n_x = mix(vec2(n00, n01), vec2(n10, n11), fade_xy.x);
+    return 2.3 * mix(n_x.x, n_x.y, fade_xy.y);
+}
+
+// Quadratic bezier from 0 to 1 with a low control point: a blade that stays
+// upright at the root and curls over towards the tip.
+float bezier(float t, float p1) {
+    float it = 1.0 - t;
+    return 2.0 * it * t * p1 + t * t;
+}
+
+float bendT(float h, float bendStart) {
+    return clamp((h - bendStart) / (1.0 - bendStart), 0.0, 1.0);
+}
+
+// Horizontal displacement of the blade's centre line at height fraction h.
+vec2 centreOffset(float h, float lod, vec2 forward, vec2 windDir,
+                  float bendStrength, float bendStart, float strong, float gentle) {
+    float bend = mix(bezier(bendT(h, bendStart), 0.1), h, lod);
+    float sway = mix(bendT(h, bendStart), h, lod);
+    float windProfile = mix(h * h, h, lod);
+    return forward * (bendStrength * bend + gentle * sway)
+         + windDir * (strong * windProfile);
+}
+
+void main() {
+    int segments = max(uSegments, 1);
+    int bodyQuads = segments - 1;
+    int quad = gl_VertexID / 6;
+    int corner = gl_VertexID - quad * 6;
+
+    float level;
+    float side;
+    if (quad < bodyQuads) {
+        // (L,i) (R,i) (L,i+1) / (L,i+1) (R,i) (R,i+1)
+        int up = (corner == 2 || corner == 3 || corner == 5) ? 1 : 0;
+        side = (corner == 1 || corner == 4 || corner == 5) ? 1.0 : -1.0;
+        level = float(quad + up) / float(segments);
+    } else {
+        level = (corner == 2) ? 1.0 : float(bodyQuads) / float(segments);
+        side = (corner == 0) ? -1.0 : ((corner == 1) ? 1.0 : 0.0);
+    }
+
+    float dist = distance(cameraPos.xz, iPosition.xz);
+    float lod = (segments == 1) ? 1.0 : smoothstep(uLodStart, uLodEnd, dist);
+    float distanceScale = 1.0 - smoothstep(uFadeStart, uFadeEnd, dist);
+
+    float seedA = hash1(iPhase * 12.9898 + iVariation * 78.233);
+    float seedB = hash1(seedA * 91.7 + 3.1);
+    float seedC = hash1(seedB * 47.3 + 7.9);
+
+    float height = uBladeHeight * iSize * mix(0.7, 1.3, seedC) * distanceScale;
+    float halfWidth = uBladeWidth * mix(0.8, 1.2, seedB) * (0.5 + 0.5 * distanceScale);
+
+    // Static curl direction is fixed in the world. The flat side of the
+    // blade turns towards the camera (with a stable per-blade offset) so a
+    // field never shows its blades edge-on.
+    vec2 forward = vec2(cos(iPhase), sin(iPhase));
+    vec2 toCamera = cameraPos.xz - iPosition.xz;
+    toCamera = dot(toCamera, toCamera) > 1e-6 ? normalize(toCamera) : vec2(0.0, 1.0);
+    float turn = (seedA - 0.5) * 1.2;
+    vec2 cameraSide = vec2(-toCamera.y, toCamera.x);
+    vec2 sideDir = vec2(cameraSide.x * cos(turn) - cameraSide.y * sin(turn),
+                        cameraSide.x * sin(turn) + cameraSide.y * cos(turn));
+
+    // Wind: a slow Perlin field rolling across the world, biased downwind,
+    // plus a small per-blade flutter.
+    vec2 windDir = normalize(vec2(1.0, 0.35));
+    float wave = cnoise(iPosition.xz * 0.012 - windDir * time * 0.6);
+    float strong = (wave * 0.5 + 0.2) * windStrength * height;
+    float gentle = sin(time * 1.9 + seedA * 10.0) * 0.08 * height;
+    float bendStrength = mix(0.15, 0.45, seedA) * height;
+    float bendStart = mix(0.0, 0.3, seedB);
+
+    // Taper: the detailed blade narrows gently and then closes in the tip
+    // triangle; the far blade is a plain triangle. Morph between the two.
+    float widthHigh = halfWidth * (1.0 - 0.45 * level);
+    float widthLow = halfWidth * (1.0 - level);
+    float width = mix(widthHigh, widthLow, lod);
+
+    vec2 offset = centreOffset(level, lod, forward, windDir,
+                               bendStrength, bendStart, strong, gentle);
+    // Keep the blade roughly its own length as it leans over.
+    float rise = level * height;
+    float y = sqrt(max(rise * rise - dot(offset, offset) * 0.6, 0.2 * rise * rise));
+
+    vec3 root = iPosition;
+    vec3 p = vec3(root.x + offset.x + sideDir.x * side * width,
+                  root.y + y,
+                  root.z + offset.y + sideDir.y * side * width);
+
+    // Surface normal from the bent centre line and the blade's width axis,
+    // then tilted across the width so the flat card shades like a rounded
+    // blade.
+    float h2 = min(level + 0.05, 1.0);
+    float h1 = h2 - 0.05;
+    vec2 o1 = centreOffset(h1, lod, forward, windDir, bendStrength, bendStart, strong, gentle);
+    vec2 o2 = centreOffset(h2, lod, forward, windDir, bendStrength, bendStart, strong, gentle);
+    vec3 tangent = vec3(o2.x - o1.x, (h2 - h1) * height, o2.y - o1.y);
+    vec3 side3 = vec3(sideDir.x, 0.0, sideDir.y);
+    vec3 n = cross(side3, tangent);
+    n = dot(n, n) > 1e-10 ? normalize(n) : vec3(0.0, 1.0, 0.0);
+    if (dot(n, cameraPos - p) < 0.0) n = -n;
+    BladeNormal = normalize(n + side3 * side * 0.6);
+
+    // Colour variation: a large-scale patchiness across the field and a few
+    // sun-dried blades.
+    float fieldPatch = cnoise(iPosition.xz * 0.0035) * 0.5 + 0.5;
+    float dry = smoothstep(0.78, 1.0, seedC) * 0.7;
+    BladeTint = mix(vec3(1.0), vec3(1.25, 1.1, 0.55), dry)
+              * mix(0.82, 1.12, fieldPatch) * iVariation;
+
+    GroundColor = iGround;
+    FragPos = p;
+    BladeHeight = level;
+    gl_Position = projection * view * vec4(p, 1.0);
+}
+
+""",
+
+    'grass.frag': """#version 330 core
+out vec4 FragColor;
+
+in vec3 FragPos;
+in vec3 BladeNormal;
+in float BladeHeight;
+in vec3 BladeTint;
+in vec3 GroundColor;
+
+uniform vec3 grassColor;       // blade colour, when one was chosen
+uniform vec3 grassTipColor;    // tip colour, when one was chosen
+uniform int uMatchGround;      // 1: blades take the colour of their ground
+uniform int uTipAuto;          // 1: tips are a sun-bleached shade of the blade
+uniform vec3 cameraPos;
+""" + FOG_GLSL + """
+void main() {
+    // Shaded roots rising through the blade colour to the tip colour.
+    float g = smoothstep(0.0, 1.0, BladeHeight);
+    vec3 bladeColor = (uMatchGround == 1) ? GroundColor : grassColor;
+    vec3 tipColor = (uTipAuto == 1)
+        ? mix(min(bladeColor * 1.3, vec3(1.0)), vec3(0.80, 0.78, 0.55), 0.3)
+        : grassTipColor;
+    vec3 rootColor = bladeColor * 0.45;
+    vec3 albedo = (g < 0.5 ? mix(rootColor, bladeColor, g * 2.0)
+                           : mix(bladeColor, tipColor, g * 2.0 - 1.0)) * BladeTint;
+
+    vec3 n = normalize(BladeNormal);
+    // Lean the lighting normal towards the ground normal so a field reads
+    // as one surface lit the same way as the terrain under it.
+    vec3 nLight = normalize(mix(n, vec3(0.0, 1.0, 0.0), 0.45));
+    vec3 viewDir = normalize(cameraPos - FragPos);
+
+    vec3 sunDir = normalize(vec3(0.4, 0.7, 0.3));
+    vec3 sunColor = vec3(1.0, 0.95, 0.85);
+    vec3 skyColor = vec3(0.6, 0.75, 0.9);
+    vec3 groundColor = vec3(0.3, 0.25, 0.2);
+
+    float diffuse = (max(dot(nLight, sunDir), 0.0) + 0.3) / 1.3;
+    // Light shining through the blade when looking towards the sun.
+    float translucency = pow(max(dot(-viewDir, sunDir), 0.0), 4.0) * 0.45 * g;
+    float specular = pow(max(dot(reflect(-sunDir, n), viewDir), 0.0), 24.0) * 0.12 * g;
+    float occlusion = mix(0.55, 1.0, g);
+
+    vec3 ambient = mix(groundColor, skyColor, (nLight.y + 1.0) * 0.5) * 0.3 + uAmbient;
+    vec3 color = albedo * (ambient * occlusion + sunColor * (diffuse * 0.7 + translucency))
+               + sunColor * specular;
+
+    float gray = dot(color, vec3(0.299, 0.587, 0.114));
+    color = mix(vec3(gray), color, 1.15);
+    FragColor = vec4(applyFog(color, FragPos), 1.0);
+}
+""",
+
 }
 
 # ----- Low-power shaders (used by BaseRenderer when lowpower_mode is True) ----
@@ -1128,8 +2169,7 @@ in vec2 TexCoords;
 uniform sampler2D texture_diffuse;
 struct Light { vec3 position; vec3 color; float intensity; float radius; int shadowIndex; };
 uniform Light lights[""" + str(MAX_LIGHTS_ARM) + """];
-uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """
-void main() {
+uniform int active_lights;""" + SHADOW_GLSL + FOG_GLSL + """void main() {
     vec4 texColor = texture(texture_diffuse, TexCoords);
     if(texColor.a < 0.1) discard;
     vec3 norm = normalize(Normal);
@@ -1248,16 +2288,3 @@ SHADER_MAP = {
     # Procedural is available but not yet integrated into the main render loop
     'procedural':    ('procedural_vert.glsl', 'procedural_frag.glsl'),
 }
-
-def load_shader_source(filename):
-    """Loads a shader source string from the shader directory."""
-    filepath = os.path.join(SHADER_DIR, filename)
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            return f.read()
-    except FileNotFoundError:
-        print(f"FATAL: Shader file not found: {filepath}")
-        return ""
-    except Exception as e:
-        print(f"FATAL: Error reading shader file {filepath}: {e}")
-        return ""

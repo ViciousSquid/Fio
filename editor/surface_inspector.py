@@ -322,7 +322,7 @@ class SurfaceInspector(QDialog):
     # ------------------------------------------------------------------ #
     # Public API                                                          #
     # ------------------------------------------------------------------ #
-    def set_target(self, brush, face_key, raise_window=True):
+    def set_target(self, brush, face_key, raise_window=True, reveal=True):
         """Bind the inspector to a face, or to nothing, and show it.
 
         ``brush`` of None leaves the panel open with its controls disabled,
@@ -331,10 +331,16 @@ class SurfaceInspector(QDialog):
         ``raise_window`` is False when the editor re-binds the panel behind
         the user's back -- following a selection change, say -- since taking
         the focus away from the viewport on every click would be intolerable.
+
+        ``reveal`` is False for a re-bind that must not change whether the
+        panel is open at all: undo/redo re-point it at the rebuilt brush, and
+        a panel the user closed must stay closed.
         """
         self.target = (brush, face_key) if brush is not None else None
         self._fill_face_combo()
         self.refresh_from_face()
+        if not reveal and not self.isVisible():
+            return
         self.show()
         if raise_window:
             self.raise_()
@@ -571,7 +577,17 @@ class SurfaceInspector(QDialog):
     def _commit(self):
         """Push the change to the views and mark the map dirty."""
         self.editor.unsaved_changes = True
-        self.editor.state.mark_lighting_dirty()
+
+        # The Surface Inspector can edit a picked face whose brush is not in
+        # the editor's object selection. Pass the actual affected brushes so
+        # RenderTable invalidates the correct cold rows.
+        targets = self.target_faces()
+        dirty_brushes = list({id(brush): brush for brush, _ in targets}.values())
+        if dirty_brushes:
+            self.editor.state.mark_lighting_dirty(dirty_brushes)
+        else:
+            self.editor.state.mark_lighting_dirty()
+
         self.editor.update_views()
 
     # ------------------------------------------------------------------ #

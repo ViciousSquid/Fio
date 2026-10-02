@@ -21,7 +21,7 @@ try:
 except Exception:  # pragma: no cover - exercised only in the PyQt-free player
     from plugins.entitybase import Thing
 
-from .config import BY_KEY, coerce, defaults
+from .config import BY_KEY, FIELDS, coerce, defaults
 
 
 class BigWorldSettings(Thing):
@@ -42,10 +42,26 @@ class BigWorldSettings(Thing):
     #: Reused by the property panel / manager to key its schema.
     TYPE = "bigworldsettings"
 
+    # The property editor only asks an entity for its explicit primary
+    # properties before invoking the plugin schema renderer. BigWorldSettings
+    # has no bespoke widget group, so derive that classification directly from
+    # the same field table instead of maintaining a second list of keys.
+    EDITOR_PRIMARY_PROPERTIES = tuple(field.key for field in FIELDS)
+
+    #: How the marker is drawn and the generic I/O switch are not Big World
+    #: configuration, so they stay out of the property panel.
+    EDITOR_HIDDEN_PROPERTIES = ("render_mode", "sprite_path", "sprite_size",
+                                "io_enabled")
+
     #: 2D-view sprite. Without this the entity draws nothing and is invisible /
     #: unselectable in the top/front/side views; the plugin ships its own icon
     #: (project-root-relative, like every other plugin entity's ``pixmap_path``).
     pixmap_path = "plugins/bigworld/assets/bigworldsettings.png"
+    # The editor icon is 2D-only. Give the entity an explicit billboard
+    # representation so the same settings marker is visible in 3D views.
+    sprite_path = pixmap_path
+    sprite_size = [64.0, 64.0]
+    render_mode = "billboard"
 
     def __init__(self, pos=None, properties=None):
         super().__init__(pos, properties)
@@ -55,6 +71,9 @@ class BigWorldSettings(Thing):
         # about what this map is configured to do.
         for key, value in defaults().items():
             self.properties.setdefault(key, value)
+        self.properties.setdefault("render_mode", self.render_mode)
+        self.properties.setdefault("sprite_path", self.sprite_path)
+        self.properties.setdefault("sprite_size", list(self.sprite_size))
 
     # -- typed accessors ----------------------------------------------------
     #
