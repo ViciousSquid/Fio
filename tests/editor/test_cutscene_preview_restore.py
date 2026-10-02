@@ -136,3 +136,68 @@ def test_preview_pause_restores_and_clears_baseline():
     assert wizard._preview_camera_baseline is None
     assert wizard._preview_rate == 0.0
     assert wizard._preview_timer.stop_calls == 1
+
+
+class _CurrentItem:
+    def __init__(self, aid):
+        self._aid = aid
+
+    def data(self, _role):
+        return self._aid
+
+
+class _ActorList:
+    def __init__(self, aid):
+        self._item = _CurrentItem(aid)
+
+    def currentItem(self):
+        return self._item
+
+
+def test_removing_actor_cleans_all_cutscene_references():
+    """Deleting an actor cannot leave IDs pointing at a nonexistent actor."""
+    wizard = types.SimpleNamespace(
+        actor_list=_ActorList("gone"),
+        actor_meta={
+            "gone": {"id": "gone", "name": "Gone"},
+            "survivor": {"id": "survivor", "name": "Survivor"},
+        },
+        actor_objects={"gone": object(), "survivor": object()},
+        temporary_actor_ids=set(),
+        actor_tracks={
+            "survivor": [{"time": 1.0, "pos": [1, 2, 3], "target_id": "gone"}],
+            "gone": [{"time": 0.0, "pos": [0, 0, 0]}],
+        },
+        camera_keys=[
+            {"time": 0.0, "pos": [0, 0, 0], "look_at": {"actor": "gone"}},
+            {"time": 1.0, "pos": [1, 1, 1]},
+        ],
+        events=[
+            {"time": 0, "type": "fight", "attackers": ["gone", "survivor"], "defenders": ["survivor"]},
+            {"time": 1, "type": "fight", "attackers": ["survivor"], "defenders": ["gone"]},
+            {"time": 2, "type": "dialogue", "speaker_id": "gone", "text": "Hello"},
+            {"time": 3, "type": "message", "line": "message", "text": "Still here"},
+        ],
+        _refresh_actor_lists=lambda: None,
+        _refresh_waypoints=lambda: None,
+        _refresh_event_list=lambda: None,
+        _refresh_camera_list=lambda: None,
+        main_window=types.SimpleNamespace(
+            state=types.SimpleNamespace(things=[]),
+            update_all_ui=lambda: None,
+        ),
+        _refresh_summary=lambda: None,
+    )
+
+    CutsceneWizard._remove_selected_actors(wizard)
+
+    assert "gone" not in wizard.actor_meta
+    assert "gone" not in wizard.actor_objects
+    assert "gone" not in wizard.actor_tracks
+    assert wizard.actor_tracks["survivor"][0].get("target_id") is None
+    assert all(row.get("look_at", {}).get("actor") != "gone" for row in wizard.camera_keys)
+    assert len(wizard.events) == 2
+    fight = next(e for e in wizard.events if e["type"] == "fight")
+    assert fight["attackers"] == ["survivor"]
+    dialogue = next(e for e in wizard.events if e["type"] == "dialogue")
+    assert dialogue["speaker_id"] == ""
