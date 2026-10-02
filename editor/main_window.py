@@ -4731,6 +4731,11 @@ class MainWindow(QMainWindow):
     def open_cutscene_wizard(self):
         """Open the live cutscene authoring wizard."""
         from editor.cutscene_wizard import CutsceneWizard
+        existing = getattr(self, "_cutscene_wizard", None)
+        if existing is not None and existing.isVisible():
+            existing.raise_()
+            existing.activateWindow()
+            return
         wiz = CutsceneWizard(self, parent=self)
         wiz.show()
         wiz.raise_()
