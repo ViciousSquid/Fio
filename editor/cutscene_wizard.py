@@ -593,7 +593,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._refresh_io_outputs()
 
     def _refresh_io_outputs(self):
-        from .io_system import declared_outputs
+        from .io_system import get_output_names
         current = self.io_output.currentText()
         self.io_output.blockSignals(True)
         self.io_output.clear()
@@ -602,7 +602,7 @@ class CutsceneWizard(QtWidgets.QDialog):
                        if str(getattr(t, "properties", {}).get("id", "")) == source_id), None)
         if source is not None:
             entity_type = str(source.properties.get("type", ""))
-            for output in sorted(declared_outputs(entity_type)):
+            for output in sorted(get_output_names(entity_type)):
                 self.io_output.addItem(output)
         self.io_output.setCurrentText(current)
         self.io_output.blockSignals(False)
