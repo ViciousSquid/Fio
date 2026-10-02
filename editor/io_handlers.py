@@ -1180,6 +1180,28 @@ def register_all_input_handlers(io_manager: IOManager):
             return
         speed = float(entity.properties.get('speed', 200.0))
         fov   = float(entity.properties.get('fov_override', 0.0))
+        io_events = []
+        for event in entity.properties.get('cutscene_io_events', []) or []:
+            if not isinstance(event, dict) or event.get('type') != 'io':
+                continue
+            try:
+                event_time = max(0.0, float(event.get('time', 0.0)))
+            except (TypeError, ValueError):
+                continue
+            source_id = str(event.get('source_id', '') or '')
+            source_name = str(event.get('source_name', '') or '')
+            output = str(event.get('output', '') or '').strip()
+            if not output or not (source_id or source_name):
+                continue
+            io_events.append({
+                'time': event_time,
+                'source_id': source_id,
+                'source_name': source_name,
+                'output': output,
+                'parameter': event.get('parameter'),
+            })
+        io_events.sort(key=lambda event: event['time'])
+
         logic.cinematic_state = {
             'active':       True,
             'paused':       False,
@@ -1190,6 +1212,9 @@ def register_all_input_handlers(io_manager: IOManager):
             'speed':        speed,
             'fov':          fov if fov > 0 else None,
             'look_ahead':   entity.properties.get('look_ahead', True),
+            'elapsed':      0.0,
+            'io_events':    io_events,
+            'next_io_event': 0,
         }
         if logic.io_manager:
             logic.io_manager.fire_output(entity, 'OnStart')
