@@ -141,7 +141,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         setup_help.setMinimumHeight(55)
         setup_layout.addWidget(setup_help)
         setup_layout.addStretch(1)
-        tabs.addTab(setup_page, "1. Setup")
+        tabs.addTab(setup_page, "Setup")
 
         # -----------------------------------------------------------------
         # Actors + waypoints — the main authoring workflow.
@@ -238,7 +238,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         wv.addWidget(self.waypoint_list)
         actors_layout.addWidget(waypoint_box, 1)
 
-        tabs.addTab(actors_page, "2. Actors & Waypoints")
+        tabs.addTab(actors_page, "Actors && Waypoints")
 
         # -----------------------------------------------------------------
         # Camera
@@ -274,7 +274,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         cv.addWidget(self.camera_keys_list)
         camera_layout.addWidget(camera_box)
         camera_layout.addStretch(1)
-        tabs.addTab(camera_page, "3. Camera")
+        tabs.addTab(camera_page, "Camera")
 
         # -----------------------------------------------------------------
         # Events / dialogue. Advanced functionality remains available, but
@@ -283,9 +283,6 @@ class CutsceneWizard(QtWidgets.QDialog):
         events_page = QtWidgets.QWidget()
         events_layout = QtWidgets.QVBoxLayout(events_page)
         events_tabs = QtWidgets.QTabWidget()
-        self._build_fight_tab(events_tabs)
-        self._build_blood_tab(events_tabs)
-        self._build_dialogue_tab(events_tabs)
         self._build_message_tab(events_tabs)
         self._build_io_tab(events_tabs)
         events_layout.addWidget(events_tabs, 1)
@@ -338,7 +335,7 @@ class CutsceneWizard(QtWidgets.QDialog):
             )
 
         advanced_toggle.toggled.connect(toggle_advanced)
-        tabs.addTab(events_page, "4. Events (optional)")
+        tabs.addTab(events_page, "Events")
 
         footer = QtWidgets.QHBoxLayout()
         self.summary = QtWidgets.QLabel("No actors created yet.")
