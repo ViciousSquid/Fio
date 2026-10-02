@@ -1,6 +1,4 @@
 """
-HL2-Style Input/Output System for RStudio
-
 This module implements an event-driven entity communication system inspired by
 Half-Life 2's Hammer Editor. Entities ("things") communicate through:
 
@@ -105,18 +103,22 @@ class OutputConnection:
     
     When the source entity fires 'output_name', it calls 'input_name' on 
     the entity named 'target_name' after 'delay' seconds, passing 'parameter'.
+    
+    target_id is the stable UUID of the target entity. The runtime prefers
+    target_id for lookup and falls back to target_name for legacy maps.
     """
     output_name: str          # Which output triggers this connection
-    target_name: str          # Name of target entity
+    target_name: str          # Name of target entity (display / legacy fallback)
     input_name: str           # Which input to call on target
     parameter: str = ""       # Optional parameter to pass
     delay: float = 0.0        # Delay in seconds before firing
     fire_once: bool = False   # If True, connection is removed after firing
+    target_id: str = ""       # Stable UUID of target entity
     _fired: bool = field(default=False, repr=False)  # Internal tracking
     
     def to_dict(self) -> dict:
         """Serialize to dictionary for saving."""
-        return {
+        d = {
             'output': self.output_name,
             'target': self.target_name,
             'input': self.input_name,
@@ -124,6 +126,9 @@ class OutputConnection:
             'delay': self.delay,
             'fire_once': self.fire_once
         }
+        if self.target_id:
+            d['target_id'] = self.target_id
+        return d
     
     @staticmethod
     def from_dict(data: dict) -> 'OutputConnection':
@@ -134,7 +139,8 @@ class OutputConnection:
             input_name=data.get('input', ''),
             parameter=data.get('parameter', ''),
             delay=float(data.get('delay', 0.0)),
-            fire_once=bool(data.get('fire_once', False))
+            fire_once=bool(data.get('fire_once', False)),
+            target_id=data.get('target_id', '')
         )
     
     def reset(self):
@@ -155,6 +161,7 @@ class PendingEvent:
     parameter: str            # Parameter to pass
     source_name: str          # Who fired this (for debugging)
     connection: OutputConnection = None  # Original connection (for fire_once tracking)
+    target_id: str = ""       # Stable UUID of target entity
 
 
 # =============================================================================
@@ -181,6 +188,7 @@ class IOManager:
         
         # Entity lookup function - set by logic_thread
         self._find_entity: Optional[Callable] = None
+        self._find_entity_by_id: Optional[Callable] = None
         
         self._logic_thread = None
         self._game_state = None
@@ -203,6 +211,13 @@ class IOManager:
         finder(name: str) -> entity or None
         """
         self._find_entity = finder
+
+    def set_entity_finder_by_id(self, finder: Callable):
+        """
+        Set the function used to find entities by stable ID.
+        finder(entity_id: str) -> entity or None
+        """
+        self._find_entity_by_id = finder
     
     def register_input_handler(self, entity_type: str, input_name: str, 
                                 handler: Callable):
@@ -219,19 +234,17 @@ class IOManager:
         self.pending_events.clear()
         self.current_time = 0.0
     
-    def fire_output(self, source_entity, output_name: str):
+    def fire_output(self, source_entity, output_name: str, value: str = None):
         """
-        Fire an output from an entity, triggering all connected inputs.
-        
-        source_entity: The entity firing the output (Thing or brush dict)
-        output_name: Name of the output being fired
+        Fire an output from an entity (thing), triggering all connected inputs.
+
+        If 'value' is given, it is passed to any connection whose editor-authored
+        parameter is blank (Source-engine style parameter pass-through). A
+        connection with an explicit parameter always keeps its own parameter.
         """
-        # Get connections from the entity
         connections = self._get_connections(source_entity)
         source_name = self._get_entity_name(source_entity)
-        
-        io_log(f"fire_output: {source_name}.{output_name} ({len(connections)} connections)")
-        
+
         matching_count = 0
         for conn in connections:
             if conn.output_name.lower() != output_name.lower():
@@ -239,73 +252,75 @@ class IOManager:
             
             matching_count += 1
             
-            # Check fire_once
             if conn.fire_once and conn._fired:
-                io_log(f"  -> {conn.target_name}.{conn.input_name} SKIPPED (fire_once)")
+                io_log(f"{source_name}.{output_name} -> {conn.target_name}.{conn.input_name} SKIPPED (fire_once)")
                 continue
             
-            # Mark as fired
             conn._fired = True
             
-            delay_str = f" (delay={conn.delay}s)" if conn.delay > 0 else ""
-            io_log(f"  -> {conn.target_name}.{conn.input_name}{delay_str}")
+            # Parameter pass-through: blank editor parameter inherits the
+            # dynamic value fired with this output (if any).
+            effective_param = conn.parameter
+            if not effective_param and value is not None:
+                effective_param = value
+            
+            delay_str = f" (delay {conn.delay}s)" if conn.delay > 0 else ""
+            io_log(f"{source_name}.{output_name} -> {conn.target_name}.{conn.input_name}{delay_str}")
             
             if conn.delay > 0:
-                # Queue for delayed execution
                 event = PendingEvent(
                     fire_time=self.current_time + conn.delay,
                     target_name=conn.target_name,
                     input_name=conn.input_name,
-                    parameter=conn.parameter,
+                    parameter=effective_param,
                     source_name=source_name,
-                    connection=conn
+                    connection=conn,
+                    target_id=conn.target_id
                 )
                 self.pending_events.append(event)
             else:
-                # Execute immediately
                 self._execute_input(conn.target_name, conn.input_name, 
-                                   conn.parameter, source_name)
+                                effective_param, source_name,
+                                target_id=conn.target_id)
         
         if matching_count == 0:
-            io_log(f"  (no connections for output '{output_name}')")
+            io_log(f"{source_name}.{output_name} (no connections)")
     
     def update(self, delta: float):
-        """
-        Update the I/O manager, processing delayed events.
-        Call this every logic tick.
-        """
         self.current_time += delta
         
-        # Process pending events
         still_pending = []
         for event in self.pending_events:
             if self.current_time >= event.fire_time:
-                io_log(f"Delayed event firing: {event.target_name}.{event.input_name}")
+                io_log(f"[Delayed] {event.target_name}.{event.input_name} (from {event.source_name})")
                 self._execute_input(event.target_name, event.input_name,
-                                   event.parameter, event.source_name)
+                                event.parameter, event.source_name,
+                                target_id=event.target_id)
             else:
                 still_pending.append(event)
         
         self.pending_events = still_pending
     
     def _execute_input(self, target_name: str, input_name: str, 
-                       parameter: str, source_name: str):
-        """Execute an input on a target entity."""
+                   parameter: str, source_name: str, target_id: str = ""):
+        """Execute an input on a target entity.  Prefers ID lookup, falls back to name."""
         if not self._find_entity:
-            io_log("ERROR: No entity finder set!")
+            debug_log("Error", "I/O: No entity finder set!")
             return
         
-        target = self._find_entity(target_name)
+        target = None
+        # Prefer stable-ID lookup when available
+        if target_id and self._find_entity_by_id:
+            target = self._find_entity_by_id(target_id)
+        # Fallback to name lookup (legacy maps or missing ID)
         if target is None:
-            io_log(f"ERROR: Target '{target_name}' not found!")
+            target = self._find_entity(target_name)
+        if target is None:
+            debug_log("Error", f"I/O: Target '{target_name}' (id={target_id}) not found!")
             return
         
-        # Get entity type
         entity_type = self._get_entity_type(target)
         
-        io_log(f"execute_input: {target_name} (type={entity_type}).{input_name}")
-        
-        # Look up handler
         handler_key = (entity_type.lower(), input_name.lower())
         handler = self._input_handlers.get(handler_key)
         
@@ -317,8 +332,6 @@ class IOManager:
                 import traceback
                 traceback.print_exc()
         else:
-            io_log(f"  No handler for {handler_key}, trying generic...")
-            # Fallback: try generic handlers
             self._try_generic_input(target, input_name, parameter)
     
     def _try_generic_input(self, entity, input_name: str, parameter: str):
@@ -344,6 +357,54 @@ class IOManager:
                 entity['_kill'] = True
             elif hasattr(entity, 'properties'):
                 entity.properties['_kill'] = True
+
+        # ---- Generic Hide / Show / ToggleVisibility --------------------------
+        elif input_lower == 'hide':
+            if isinstance(entity, dict):
+                entity['hidden'] = True
+            elif hasattr(entity, 'properties'):
+                entity.properties['hidden'] = True
+
+        elif input_lower == 'show':
+            if isinstance(entity, dict):
+                entity['hidden'] = False
+            elif hasattr(entity, 'properties'):
+                entity.properties['hidden'] = False
+
+        elif input_lower == 'togglevisibility':
+            if isinstance(entity, dict):
+                entity['hidden'] = not entity.get('hidden', False)
+            elif hasattr(entity, 'properties'):
+                entity.properties['hidden'] = not entity.properties.get('hidden', False)
+
+        # ---- Generic SetTint / ClearTint ------------------------------------
+        elif input_lower == 'settint':
+            self._apply_tint(entity, parameter)
+
+        elif input_lower == 'cleartint':
+            if isinstance(entity, dict):
+                entity.pop('tint', None)
+            elif hasattr(entity, 'properties'):
+                entity.properties.pop('tint', None)
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _apply_tint(entity, parameter: str):
+        """Parse 'R G B' (0-255) and store as tint list."""
+        try:
+            parts = parameter.split()
+            if len(parts) >= 3:
+                r, g, b = int(parts[0]), int(parts[1]), int(parts[2])
+                tint = [max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b))]
+            else:
+                return
+        except (ValueError, IndexError):
+            return
+        if isinstance(entity, dict):
+            entity['tint'] = tint
+        elif hasattr(entity, 'properties'):
+            entity.properties['tint'] = tint
+    # ------------------------------------------------------------------
     
     def _get_connections(self, entity) -> List[OutputConnection]:
         """Get output connections from an entity."""
@@ -385,6 +446,40 @@ class IOManager:
         return 'unknown'
 
 
+    def query_keyvalue(self, store_name: str, key: str, default: str = "<missing>") -> str:
+        """
+        Query a value from a LogicKeyValueStore by store_name.
+        This is a convenience method for other systems (not I/O handlers)
+        to read persistent state without going through the entity system.
+        """
+        # First try to find the actual entity
+        if self._find_entity:
+            entity = self._find_entity(store_name)
+            if entity and hasattr(entity, 'get_value'):
+                return entity.get_value(key, default)
+
+        # Fallback to the class-level persistent registry
+        try:
+            from editor.things import LogicKeyValueStore
+            if store_name in LogicKeyValueStore._persistent_registry:
+                return LogicKeyValueStore._persistent_registry[store_name].get(key, default)
+        except ImportError:
+            pass
+
+        return default
+
+    def set_keyvalue(self, store_name: str, key: str, value: str) -> bool:
+        """
+        Set a value in a LogicKeyValueStore by store_name.
+        Returns True on success, False if store is full or not found.
+        """
+        if self._find_entity:
+            entity = self._find_entity(store_name)
+            if entity and hasattr(entity, 'set_value'):
+                return entity.set_value(key, value)
+        return False
+
+
 # =============================================================================
 # DEFAULT I/O DEFINITIONS
 # =============================================================================
@@ -399,11 +494,19 @@ def register_default_io():
             IODef('Disable', 'Disable this trigger'),
             IODef('Toggle', 'Toggle enabled state'),
             IODef('TouchTest', 'Fire OnTrigger if player is inside'),
+            IODef('Teleport', 'Teleport the touching player to target_node'),
+            IODef('SetTargetNode', 'Change the target PathNode name', 'string'),
+            IODef('Hide', 'Hide this trigger'),
+            IODef('Show', 'Show this trigger'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
+            IODef('SetTint', 'Set tint colour (R G B, 0-255)', 'color'),
+            IODef('ClearTint', 'Remove tint override'),
         ],
         outputs=[
             IODef('OnTrigger', 'Fired when activated'),
             IODef('OnStartTouch', 'Fired when player enters'),
             IODef('OnEndTouch', 'Fired when player exits'),
+            IODef('OnTeleport', 'Fired after a player is teleported'),
         ]
     )
     
@@ -416,6 +519,11 @@ def register_default_io():
             IODef('Lock', 'Lock the door'),
             IODef('Unlock', 'Unlock the door'),
             IODef('SetSpeed', 'Set movement speed', 'float'),
+            IODef('Hide', 'Hide this door'),
+            IODef('Show', 'Show this door'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
+            IODef('SetTint', 'Set tint colour (R G B, 0-255)', 'color'),
+            IODef('ClearTint', 'Remove tint override'),
         ],
         outputs=[
             IODef('OnOpen', 'Fired when door starts opening'),
@@ -426,7 +534,7 @@ def register_default_io():
         ]
     )
     
-    # === MOVER (func_movelinear equivalent) ===
+    # === MOVER ===
     register_io('mover',
         inputs=[
             IODef('Open', 'Move to end position'),
@@ -436,10 +544,19 @@ def register_default_io():
             IODef('SetSpeed', 'Set movement speed', 'float'),
             IODef('Enable', 'Enable movement'),
             IODef('Disable', 'Disable movement'),
+            IODef('FollowPath', 'Start following a PathNode chain (param = node name)', 'string'),
+            IODef('StopPath', 'Stop PathNode following and hold position'),
+            IODef('SetPathTarget', 'Set PathNode name to follow', 'string'),
+            IODef('Hide', 'Hide this mover'),
+            IODef('Show', 'Show this mover'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
+            IODef('SetTint', 'Set tint colour (R G B, 0-255)', 'color'),
+            IODef('ClearTint', 'Remove tint override'),
         ],
         outputs=[
             IODef('OnFullyOpen', 'Fired when reaching end position'),
             IODef('OnFullyClosed', 'Fired when reaching start position'),
+            IODef('OnPathNodeReached', 'Fired each time mover arrives at a PathNode'),
         ]
     )
     
@@ -451,12 +568,20 @@ def register_default_io():
             IODef('Toggle', 'Toggle on/off state'),
             IODef('SetBrightness', 'Set intensity (0-10)', 'float'),
             IODef('SetColor', 'Set color (R G B)', 'color'),
+            IODef('EnableShadows', 'Start casting depth cube-map shadows'),
+            IODef('DisableShadows', 'Stop casting shadows'),
+            IODef('ToggleShadows', 'Toggle shadow casting on/off'),
             IODef('FadeIn', 'Fade in over time', 'float'),
             IODef('FadeOut', 'Fade out over time', 'float'),
+            IODef('Hide', 'Hide this light entity'),
+            IODef('Show', 'Show this light entity'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
         ],
         outputs=[
             IODef('OnTurnedOn', 'Fired when light turns on'),
             IODef('OnTurnedOff', 'Fired when light turns off'),
+            IODef('OnShadowsEnabled', 'Fired when shadow casting is enabled'),
+            IODef('OnShadowsDisabled', 'Fired when shadow casting is disabled'),
         ]
     )
     
@@ -467,6 +592,9 @@ def register_default_io():
             IODef('StopSound', 'Stop playing sound'),
             IODef('Toggle', 'Toggle playback'),
             IODef('SetVolume', 'Set volume (0-1)', 'float'),
+            IODef('Hide', 'Hide this speaker entity'),
+            IODef('Show', 'Show this speaker entity'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
         ],
         outputs=[
             IODef('OnSoundStarted', 'Fired when sound starts'),
@@ -481,6 +609,9 @@ def register_default_io():
             IODef('Disable', 'Disable pickup'),
             IODef('Respawn', 'Force respawn'),
             IODef('SetValue', 'Set pickup value', 'int'),
+            IODef('Hide', 'Hide this pickup'),
+            IODef('Show', 'Show this pickup'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
         ],
         outputs=[
             IODef('OnPickedUp', 'Fired when collected'),
@@ -488,7 +619,7 @@ def register_default_io():
         ]
     )
     
-    # === LOGIC_RELAY (replaces basic LogicGate) ===
+    # === LOGIC_RELAY ===
     register_io('logic_relay',
         inputs=[
             IODef('Trigger', 'Fire the OnTrigger output'),
@@ -522,23 +653,28 @@ def register_default_io():
         inputs=[],
         outputs=[
             IODef('OnPlayerSpawn', 'Fired when player spawns here'),
+            IODef('OnPlayerDeath', 'Fired when the player dies'),
         ]
     )
     
     # === MONSTER ===
     register_io('monster',
         inputs=[
-            IODef('Enable', 'Enable AI'),
-            IODef('Disable', 'Disable AI'),
-            IODef('Kill', 'Kill this monster'),
-            IODef('SetTarget', 'Set pursuit target', 'string'),
-            IODef('Wake', 'Wake from idle'),
+            IODef('Enable',    'Enable AI'),
+            IODef('Disable',   'Disable AI'),
+            IODef('Kill',      'Kill this monster'),
+            IODef('SetTarget', 'Set pursuit target (entity name, blank = player)', 'string'),
+            IODef('Wake',      'Wake from dormant state'),
+            IODef('Hide',      'Hide this monster'),
+            IODef('Show',      'Show this monster'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
         ],
         outputs=[
-            IODef('OnDeath', 'Fired when killed'),
-            IODef('OnDamaged', 'Fired when taking damage'),
-            IODef('OnSeePlayer', 'Fired when player spotted'),
-            IODef('OnLostPlayer', 'Fired when player lost'),
+            IODef('OnDeath',      'Fired when killed'),
+            IODef('OnDamaged',    'Fired when taking damage'),
+            IODef('OnSeePlayer',  'Fired on first sight of the player'),
+            IODef('OnLostPlayer', 'Fired when player leaves sight range'),
+            IODef('OnAttack',     'Fired each time the monster attacks'),
         ]
     )
     
@@ -549,11 +685,16 @@ def register_default_io():
             IODef('Disable', 'Disable (make non-solid)'),
             IODef('Toggle', 'Toggle solid state'),
             IODef('Kill', 'Remove from world'),
+            IODef('Hide', 'Hide this brush'),
+            IODef('Show', 'Show this brush'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
+            IODef('SetTint', 'Set tint colour (R G B, 0-255)', 'color'),
+            IODef('ClearTint', 'Remove tint override'),
         ],
         outputs=[]
     )
     
-    # === LOGIC_GATE (legacy, now more like multi-input relay) ===
+    # === LOGIC_GATE ===
     register_io('logic_gate',
         inputs=[
             IODef('Trigger', 'Send input signal'),
@@ -573,8 +714,133 @@ def register_default_io():
             IODef('Disable', 'Hide model'),
             IODef('SetSkin', 'Set model skin', 'int'),
             IODef('SetAnimation', 'Play animation', 'string'),
+            IODef('Hide', 'Hide this model'),
+            IODef('Show', 'Show this model'),
+            IODef('ToggleVisibility', 'Toggle visibility'),
         ],
         outputs=[]
+    )
+
+    # === LEVEL CHANGER ===
+    register_io('levelchanger',
+        inputs=[
+            IODef('Trigger', 'Trigger level change'),
+            IODef('ChangeLevel', 'Change to the target map (optional parameter overrides map name)'),
+        ],
+        outputs=[
+            IODef('OnUse', 'Fired when the player uses this level changer'),
+        ]
+    )
+
+    # === PATH NODE ===
+    # Navigation waypoint for monster patrol. Can be enabled/disabled so
+    # designers can dynamically re-route patrols from a trigger/relay.
+    register_io('path_node',
+        inputs=[
+            IODef('Enable',  'Allow monsters to patrol to this node'),
+            IODef('Disable', 'Prevent monsters from patrolling to this node'),
+            IODef('Toggle',  'Toggle whether this node accepts patrolling monsters'),
+        ],
+        outputs=[
+            IODef('OnMonsterArrived', 'Fires when a patrolling monster enters this node\'s radius'),
+            IODef('OnMonsterLeft',    'Fires when a patrolling monster leaves this node\'s radius'),
+            IODef('OnWaitStart',      'Fires when a monster begins waiting at this node'),
+            IODef('OnWaitEnd',        'Fires when a monster finishes waiting and advances to next node'),
+        ]
+    )
+
+    # === LOGIC CAMERA ===
+    # Cinematic camera that lerps along a PathNode chain.
+    register_io('logic_camera',
+        inputs=[
+            IODef('Start',    'Begin the cinematic camera sequence'),
+            IODef('Stop',     'Abort and return camera to the player'),
+            IODef('Pause',    'Freeze camera at current chain position'),
+            IODef('Resume',   'Continue a paused sequence'),
+            IODef('SetSpeed', 'Override travel speed', 'float'),
+        ],
+        outputs=[
+            IODef('OnStart',       'Fired when sequence begins'),
+            IODef('OnReachNode',   'Fired each time the camera arrives at a PathNode'),
+            IODef('OnFinished',    'Fired when the camera reaches the last node'),
+        ]
+    )
+
+    # === LOGIC COMMAND ===
+    # Runs a console command when fired (e.g. a trigger brush -> "cam 2").
+    register_io('logic_command',
+        inputs=[
+            IODef('RunCommand', 'Run a console command (param: the command line, '
+                                'e.g. "cam 2"); blank uses the command property', 'string'),
+            IODef('SetCommand', 'Set the default command string', 'string'),
+            IODef('Enable',     'Allow this entity to run commands'),
+            IODef('Disable',    'Prevent this entity from running commands'),
+        ],
+        outputs=[
+            IODef('OnCommand', 'Fired after a command is queued (param: the command line)'),
+        ]
+    )
+
+    # === PORTAL ===
+    # Prey 2006-style portal that links two named portal entities.
+    register_io('portal',
+        inputs=[
+            IODef('Enable',      'Activate the portal (renders and teleports)'),
+            IODef('Disable',     'Deactivate the portal'),
+            IODef('Toggle',      'Toggle active state'),
+            IODef('SetColor',    'Set rim/glow color (R G B, 0-255)', 'color'),
+            IODef('SetTarget',   'Change the paired portal target name', 'string'),
+            IODef('ShowRim',     'Show the rim glow border'),
+            IODef('HideRim',     'Hide the rim glow border'),
+            IODef('SetWidth',    'Set portal width in units', 'float'),
+            IODef('SetHeight',   'Set portal height in units', 'float'),
+        ],
+        outputs=[
+            IODef('OnEnabled',    'Fired when portal is activated'),
+            IODef('OnDisabled',   'Fired when portal is deactivated'),
+            IODef('OnToggled',    'Fired when portal is toggled'),
+            IODef('OnTeleport',   'Fired when an entity passes through'),
+            IODef('OnPlayerEnter','Fired once per transit when the player passes through'),
+        ]
+    )
+
+    # === LOGIC SPAWNER ===
+    # Instantiates entities at a PathNode when triggered.
+    register_io('logic_spawner',
+        inputs=[
+            IODef('Spawn',         'Spawn one entity at the target PathNode'),
+            IODef('Enable',        'Allow spawning'),
+            IODef('Disable',       'Prevent spawning'),
+            IODef('SetTargetNode', 'Change spawn location to a different PathNode', 'string'),
+        ],
+        outputs=[
+            IODef('OnSpawn',       'Fired each time an entity is spawned'),
+            IODef('OnMaxReached',  'Fired when max_spawn limit is hit'),
+        ]
+    )
+
+    # === LOGIC KEYVALUE STORE ===
+    # Persistent key/value store that survives level transitions.
+    register_io('logic_keyvalue',
+        inputs=[
+            IODef('SetValue',      'Set a key/value pair (param: "key=value")', 'string'),
+            IODef('GetValue',      'Read a key and fire OnValueRead (param: key name)', 'string'),
+            IODef('ClearKey',      'Remove a single key (param: key name)', 'string'),
+            IODef('ClearAll',      'Remove all keys'),
+            IODef('CopyFrom',      'Copy all keys from another store by name', 'string'),
+            IODef('Increment',     'Increment integer value (param: "key,amount")', 'string'),
+            IODef('Decrement',     'Decrement integer value (param: "key,amount")', 'string'),
+            IODef('TestValue',     'Compare a key against a value (param: "key==val", also != > < >= <=)', 'string'),
+        ],
+        outputs=[
+            IODef('OnValueSet',    'Fired when any key is set (param: "key=value")'),
+            IODef('OnValueRead',   'Fired by GetValue (param: value)'),
+            IODef('OnKeyCleared',  'Fired when a key is removed (param: key name)'),
+            IODef('OnStoreFull',   'Fired when trying to add beyond 25 keys'),
+            IODef('OnKeyNotFound', 'Fired when GetValue/TestValue targets a missing key'),
+            IODef('OnCompareTrue', 'Fired when TestValue comparison passes (param: actual value)'),
+            IODef('OnCompareFalse','Fired when TestValue comparison fails (param: actual value)'),
+        ]
     )
 
 
@@ -634,7 +900,11 @@ def get_entity_type_for_io(entity) -> str:
             return 'mover'
         return 'brush'
     elif hasattr(entity, 'properties'):
-        return entity.properties.get('type', 'thing')
+        # Check for Portal type first
+        etype = entity.properties.get('type', 'thing')
+        if etype == 'portal':
+            return 'portal'
+        return etype
     return 'unknown'
 
 

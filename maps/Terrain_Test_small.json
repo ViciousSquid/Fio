@@ -1,14 +1,14 @@
 {
-    "fingerprint": "RStudio",
+    "version": 3,
     "brushes": [
         {
             "pos": [
-                872.0,
+                1024.0,
                 200.0,
                 448.0
             ],
             "size": [
-                208.0,
+                512.0,
                 400.0,
                 640.0
             ],
@@ -19,7 +19,8 @@
                 "west": "default.png",
                 "top": "default.png",
                 "down": "default.png"
-            }
+            },
+            "id": "2e0dcbcd-d74f-4225-bfa9-904107907005"
         },
         {
             "pos": [
@@ -39,7 +40,8 @@
                 "west": "default.png",
                 "top": "default.png",
                 "down": "default.png"
-            }
+            },
+            "id": "46220f80-4f6f-4a45-bd6c-df6fb8cba8dd"
         },
         {
             "pos": [
@@ -59,22 +61,161 @@
                 "west": "default.png",
                 "top": "default.png",
                 "down": "default.png"
-            }
+            },
+            "id": "9c17a961-6625-4076-b05e-7b0e83fd9edb"
+        },
+        {
+            "pos": [
+                384.0,
+                104.0,
+                -760.0
+            ],
+            "size": [
+                1792.0,
+                208.0,
+                496.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "9670efa1-6557-477d-97fb-ad6f194f0cbf"
+        },
+        {
+            "pos": [
+                1024.0,
+                104.0,
+                -192.0
+            ],
+            "size": [
+                512.0,
+                208.0,
+                640.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "0e7b4c63-a288-460e-93de-ae70bb62ce80"
+        },
+        {
+            "pos": [
+                536.0,
+                104.0,
+                -266.1333333333333
+            ],
+            "size": [
+                464.0,
+                208.0,
+                491.73333333333335
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "geometry": {
+                "planes": [
+                    {
+                        "n": [
+                            1.0,
+                            0.0,
+                            0.0
+                        ],
+                        "d": 768.0,
+                        "texture": "default.png",
+                        "face": "east"
+                    },
+                    {
+                        "n": [
+                            -1.0,
+                            0.0,
+                            0.0
+                        ],
+                        "d": -432.0,
+                        "texture": "default.png",
+                        "face": "west"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            1.0,
+                            0.0
+                        ],
+                        "d": 208.0,
+                        "texture": "default.png",
+                        "face": "top"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            -1.0,
+                            0.0
+                        ],
+                        "d": 0.0,
+                        "texture": "default.png",
+                        "face": "down"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            0.0,
+                            1.0
+                        ],
+                        "d": 0.0,
+                        "texture": "default.png",
+                        "face": "north"
+                    },
+                    {
+                        "n": [
+                            0.0,
+                            0.0,
+                            -1.0
+                        ],
+                        "d": 512.0,
+                        "texture": "default.png",
+                        "face": "south"
+                    },
+                    {
+                        "n": [
+                            -0.0,
+                            0.9149178015729321,
+                            0.40364020657629357
+                        ],
+                        "d": -8.180441519946216,
+                        "texture": "default.png"
+                    }
+                ]
+            },
+            "id": "1a817c94-928c-4005-88c9-6619876b168c"
         }
     ],
     "things": [
         {
             "type": "playerstart",
             "pos": [
-                448.0,
-                192.0,
-                -16.0
+                384.0,
+                272.0,
+                -704.0
             ],
             "properties": {
                 "type": "playerstart",
                 "name": "PlayerStart_1",
-                "angle": "0.0"
-            }
+                "angle": 0.0,
+                "id": "55f41b17-d732-434a-859c-19ac8a0c3f1e"
+            },
+            "io_connections": []
         },
         {
             "type": "light",
@@ -86,13 +227,25 @@
             "properties": {
                 "type": "light",
                 "name": "Light_2",
-                "colour": "[255, 255, 255]",
-                "intensity": "1.0",
-                "radius": "512.0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "False"
-            }
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "0e6d6d40-9014-470d-9c6c-cc420b102421",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
         },
         {
             "type": "light",
@@ -104,13 +257,25 @@
             "properties": {
                 "type": "light",
                 "name": "Light_3",
-                "colour": "[255, 255, 255]",
-                "intensity": "1.0",
-                "radius": "512.0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "False"
-            }
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "87495dce-29ce-4b69-892c-11a8a8a3e7ec",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
         },
         {
             "type": "light",
@@ -122,13 +287,25 @@
             "properties": {
                 "type": "light",
                 "name": "Light_4",
-                "colour": "[255, 255, 255]",
-                "intensity": "1.0",
-                "radius": "512.0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "False"
-            }
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "3a8db2f4-6ab5-4e4a-96ba-07c25a96e3cd",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
         },
         {
             "type": "light",
@@ -140,13 +317,55 @@
             "properties": {
                 "type": "light",
                 "name": "Light_5",
-                "colour": "[255, 255, 255]",
-                "intensity": "1.0",
-                "radius": "512.0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "False"
-            }
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "305ca295-fe60-4d09-97dc-c417fa43818b",
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "light",
+            "pos": [
+                368.0,
+                304.0,
+                -752.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_2",
+                "id": "fdf452f0-2f07-40f2-908d-70bdfa200c2e",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
+                "state": "on",
+                "show_radius": false,
+                "casts_shadows": false,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
         }
     ],
     "terrain_data": {

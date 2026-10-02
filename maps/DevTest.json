@@ -1,5 +1,5 @@
 {
-    "fingerprint": "RStudio",
+    "version": 3,
     "brushes": [
         {
             "pos": [
@@ -19,7 +19,8 @@
                 "west": "water_normal.png",
                 "top": "water_normal.png",
                 "down": "water_normal.png"
-            }
+            },
+            "id": "554437a8-e828-4992-8fed-993fcbb506fe"
         },
         {
             "pos": [
@@ -56,7 +57,8 @@
                 0.45098039215686275,
                 0.7372549019607844,
                 0.8
-            ]
+            ],
+            "id": "2fae4b70-f0ff-4156-8444-6cf38cdc82a6"
         },
         {
             "pos": [
@@ -76,7 +78,8 @@
                 "west": "concrete02.png",
                 "top": "concrete02.png",
                 "down": "concrete02.png"
-            }
+            },
+            "id": "b91d0f18-ba61-43be-92f4-c42c1ad2cb70"
         },
         {
             "pos": [
@@ -96,7 +99,8 @@
                 "west": "concrete02.png",
                 "top": "concrete02.png",
                 "down": "concrete02.png"
-            }
+            },
+            "id": "2cbba995-cc88-4eb6-93c4-d2298b9987db"
         }
     ],
     "things": [
@@ -110,13 +114,19 @@
             "properties": {
                 "type": "light",
                 "name": "Light_1",
-                "colour": "[255, 255, 255]",
-                "intensity": "1.0",
-                "radius": "512.0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "False"
-            }
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "8e2975d6-b7de-4c4c-81bf-0b743f9206c3"
+            },
+            "io_connections": []
         },
         {
             "type": "playerstart",
@@ -128,8 +138,10 @@
             "properties": {
                 "type": "playerstart",
                 "name": "PlayerStart_1",
-                "angle": "0.0"
-            }
+                "angle": 0.0,
+                "id": "343e5fb3-76bf-4bcf-bbb2-ba384684e84e"
+            },
+            "io_connections": []
         },
         {
             "type": "model",
@@ -142,9 +154,19 @@
                 "type": "model",
                 "name": "LowPoly_Tree_v1",
                 "model_path": "assets/models/LowPoly_Tree_v1.obj",
-                "rotation": "[270.0, 0, 0]",
-                "scale": "[1, 1, 1]"
-            }
+                "rotation": [
+                    270.0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ],
+                "id": "58eae7f7-9a62-413b-b422-b30f802b282f"
+            },
+            "io_connections": []
         },
         {
             "type": "light",
@@ -156,13 +178,19 @@
             "properties": {
                 "type": "light",
                 "name": "Light_2",
-                "colour": "[255, 255, 255]",
-                "intensity": "1.5",
-                "radius": "1024.0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.5,
+                "radius": 1024.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "False"
-            }
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "56cd02ab-6304-4aeb-b8e9-192c32980c8b"
+            },
+            "io_connections": []
         }
     ]
 }

@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (
     QDialog, QCheckBox, QVBoxLayout, QDialogButtonBox, QGroupBox, QHBoxLayout,
     QLabel, QSpinBox, QPushButton, QTabWidget, QWidget, QFormLayout, QSlider,
-    QMessageBox, QKeySequenceEdit, QFrame, QGridLayout
+    QMessageBox, QKeySequenceEdit, QFrame, QGridLayout, QComboBox
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence
@@ -15,27 +15,24 @@ class SettingsWindow(QDialog):
     def __init__(self, config, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setMinimumWidth(600)  # Slightly wider to accommodate two columns
+        self.setMinimumWidth(600)
         self.config = config
         self.main_window = parent
         self.binding_in_progress = None
 
-        # --- Main Layout ---
         self.layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
         self.layout.addWidget(self.tabs)
         
-        # --- Create Tabs ---
         self._create_editor_tab()
         self._create_display_tab()
-        self._create_play_mode_tab()
+        self._create_play_modes_tab()
         self._create_controls_tab()
         self._create_keyboard_tab()
+        self._create_split_screen_tab()   # new tab
         
-        # --- Button Row ---
         button_layout = QHBoxLayout()
         
-        # Apply and Restart button
         self.restart_button = QPushButton("Apply && Restart")
         self.restart_button.setToolTip("Save settings and restart the application")
         self.restart_button.clicked.connect(self._apply_and_restart)
@@ -60,7 +57,6 @@ class SettingsWindow(QDialog):
         
         button_layout.addStretch()
         
-        # OK and Cancel Buttons
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
@@ -72,12 +68,10 @@ class SettingsWindow(QDialog):
         self._apply_stylesheet()
 
     def _create_editor_tab(self):
-        """Editor tab: 2D/3D view settings and selection behavior."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         self.tabs.addTab(widget, "Editor")
         
-        # Autosave Section
         autosave_group = QGroupBox("Autosave")
         autosave_layout = QHBoxLayout()
         
@@ -93,7 +87,6 @@ class SettingsWindow(QDialog):
         autosave_group.setLayout(autosave_layout)
         layout.addWidget(autosave_group)
 
-        # 3D View Section
         view_3d_group = QGroupBox("3D View")
         view_3d_layout = QVBoxLayout()
         
@@ -106,8 +99,14 @@ class SettingsWindow(QDialog):
         self.click_select_3d_checkbox = QCheckBox("Click to select in 3D view")
         self.click_select_3d_checkbox.setToolTip("Allow selecting brushes/things by clicking in the 3D view (without Shift)")
         view_3d_layout.addWidget(self.click_select_3d_checkbox)
+
+        self.place_camera_at_player_start_checkbox = QCheckBox("Focus Player_Start on load")
+        self.place_camera_at_player_start_checkbox.setToolTip(
+            "When enabled, loading a map moves the 3D editor camera to the Player Start location\n"
+            "and centers the 2D views on it. This helps preview the map from the player's perspective."
+        )
+        view_3d_layout.addWidget(self.place_camera_at_player_start_checkbox)
         
-        # Selection transparency slider
         selection_trans_layout = QHBoxLayout()
         selection_trans_layout.addWidget(QLabel("Selection Transparency:"))
         self.selection_transparency_slider = QSlider(Qt.Horizontal)
@@ -125,7 +124,6 @@ class SettingsWindow(QDialog):
         view_3d_group.setLayout(view_3d_layout)
         layout.addWidget(view_3d_group)
         
-        # --- 2D Views Section ---
         view_2d_group = QGroupBox("2D Views")
         view_2d_layout = QVBoxLayout()
         
@@ -135,7 +133,6 @@ class SettingsWindow(QDialog):
         self.locked_not_selectable_checkbox = QCheckBox("Locked items not selectable")
         view_2d_layout.addWidget(self.locked_not_selectable_checkbox)
         
-        # Glow arrow scale slider
         glow_arrow_layout = QHBoxLayout()
         glow_arrow_layout.addWidget(QLabel("Glow Arrow Scale:"))
         self.glow_arrow_scale_slider = QSlider(Qt.Horizontal)
@@ -156,7 +153,6 @@ class SettingsWindow(QDialog):
         layout.addStretch()
 
     def _create_display_tab(self):
-        """Display tab: Visual settings and UI scaling."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         
@@ -166,7 +162,6 @@ class SettingsWindow(QDialog):
         self.always_show_sysmon_checkbox = QCheckBox("Always Show System Monitor (F3)")
         layout.addWidget(self.always_show_sysmon_checkbox)
         
-        # NEW: Option to control IO Debug Console at launch
         self.always_show_io_debug_checkbox = QCheckBox("Always Show IO Debug Console")
         self.always_show_io_debug_checkbox.setToolTip("If enabled, the debug console will open automatically when the app starts.")
         layout.addWidget(self.always_show_io_debug_checkbox)
@@ -190,7 +185,6 @@ class SettingsWindow(QDialog):
         self.big_toolbar_buttons_checkbox = QCheckBox("Large Toolbar Buttons")
         layout.addWidget(self.big_toolbar_buttons_checkbox)
         
-        # --- Connection Visualization Group ---
         conn_group = QGroupBox("Connection Visualization")
         conn_layout = QVBoxLayout()
         
@@ -200,11 +194,9 @@ class SettingsWindow(QDialog):
         conn_group.setLayout(conn_layout)
         layout.addWidget(conn_group)
         
-        # --- Renderer Performance Group ---
         renderer_group = QGroupBox("Renderer Performance")
         renderer_layout = QVBoxLayout()
         
-        # Auto-detect label
         self.arm_detected_label = QLabel()
         self._update_arm_detection_label()
         renderer_layout.addWidget(self.arm_detected_label)
@@ -219,12 +211,11 @@ class SettingsWindow(QDialog):
         
         self.shadows_enabled_checkbox = QCheckBox("Enable Dynamic Shadows")
         self.shadows_enabled_checkbox.setToolTip(
-            "Enable projected shadows from lights with 'casts_shadows' enabled.\n"
+            "Enable depth cube-map shadows from lights with 'casts_shadows' enabled.\n"
             "Disable for better performance on slower devices."
         )
         renderer_layout.addWidget(self.shadows_enabled_checkbox)
         
-        # Auto-detect button
         auto_detect_btn = QPushButton("Auto-Detect Best Settings")
         auto_detect_btn.clicked.connect(self._auto_detect_renderer_settings)
         renderer_layout.addWidget(auto_detect_btn)
@@ -236,23 +227,18 @@ class SettingsWindow(QDialog):
         self.tabs.addTab(tab, "Display")
     
     def _detect_arm_platform(self):
-        """Detect if running on ARM or under x64 emulation."""
         import platform
         machine = platform.machine().lower()
         
-        # Direct ARM detection
         if 'arm' in machine or 'aarch' in machine:
             return True, "ARM processor detected"
         
-        # Check for Windows ARM emulation markers
         if sys.platform == 'win32':
-            # Check environment variable set by Windows on ARM
             if os.environ.get('PROCESSOR_ARCHITECTURE', '').upper() == 'ARM64':
                 return True, "Windows ARM64 detected"
             if os.environ.get('PROCESSOR_ARCHITEW6432', '').upper() == 'ARM64':
                 return True, "Running under x64 emulation on ARM64"
             
-            # Check for Qualcomm/Snapdragon in processor name
             proc_id = os.environ.get('PROCESSOR_IDENTIFIER', '').lower()
             if 'qualcomm' in proc_id or 'snapdragon' in proc_id or 'arm' in proc_id:
                 return True, "Qualcomm/ARM processor detected"
@@ -260,17 +246,15 @@ class SettingsWindow(QDialog):
         return False, "x64/x86 processor detected"
     
     def _update_arm_detection_label(self):
-        """Update the ARM detection status label."""
         is_arm, reason = self._detect_arm_platform()
         if is_arm:
             self.arm_detected_label.setText(f"⚠️ {reason} - optimizations recommended")
-            self.arm_detected_label.setStyleSheet("color: #FFA500;")  # Orange
+            self.arm_detected_label.setStyleSheet("color: #FFA500;")
         else:
             self.arm_detected_label.setText(f"✓ {reason}")
-            self.arm_detected_label.setStyleSheet("color: #90EE90;")  # Light green
+            self.arm_detected_label.setStyleSheet("color: #90EE90;")
     
     def _auto_detect_renderer_settings(self):
-        """Auto-detect and apply optimal renderer settings for this platform."""
         is_arm, reason = self._detect_arm_platform()
         
         if is_arm:
@@ -286,7 +270,7 @@ class SettingsWindow(QDialog):
                 "These settings improve performance on ARM devices."
             )
         else:
-            self.arm_mode_checkbox.setChecked(True)  # Still beneficial, no downside
+            self.arm_mode_checkbox.setChecked(True)
             self.shadows_enabled_checkbox.setChecked(True)
             QMessageBox.information(
                 self,
@@ -298,13 +282,11 @@ class SettingsWindow(QDialog):
                 "Full quality rendering enabled."
             )
 
-    def _create_play_mode_tab(self):
-        """Play Mode tab: Physics and gameplay settings."""
+    def _create_play_modes_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        self.tabs.addTab(widget, "Play Mode")
+        self.tabs.addTab(widget, "Play Modes")
         
-        # --- Gameplay Section ---
         gameplay_group = QGroupBox("Gameplay")
         gameplay_layout = QVBoxLayout()
         
@@ -313,19 +295,84 @@ class SettingsWindow(QDialog):
         
         self.show_hud_checkbox = QCheckBox("Show HUD (health, etc.)")
         gameplay_layout.addWidget(self.show_hud_checkbox)
-        
+
         gameplay_group.setLayout(gameplay_layout)
         layout.addWidget(gameplay_group)
+
+        save_group = QGroupBox("Play-session Save Mode")
+        save_form = QFormLayout()
+        self.save_mode_combo = QComboBox()
+        # userData carries the value persisted to settings.ini.
+        self.save_mode_combo.addItem("Full", "full")
+        self.save_mode_combo.addItem("Delta", "delta")
+        self.save_mode_combo.addItem("Both", "both")
+        self.save_mode_combo.setToolTip(
+            "How save / quicksave writes a play session:\n"
+            "• Full — Complete, self-contained save. Largest file size.\n"
+            "• Delta — Saves only changes from the original level. Smallest file\n"
+            "   size but requires the base map to load.\n"
+            "• Both — Saves a compact delta plus a complete fallback snapshot."
+        )
+        save_form.addRow("Default save mode:", self.save_mode_combo)
+        self.save_mode_desc = QLabel()
+        self.save_mode_desc.setWordWrap(True)
+        self.save_mode_desc.setStyleSheet("color: #9fb7b5;")
+        save_form.addRow(self.save_mode_desc)
+        self.save_mode_combo.currentIndexChanged.connect(self._update_save_mode_desc)
+        save_group.setLayout(save_form)
+        layout.addWidget(save_group)
         
+        mode_group = QGroupBox("Window Mode (Fullscreen Mode F12)")
+        mode_layout = QFormLayout()
+        self.kiosk_mode_combo = QComboBox()
+        self.kiosk_mode_combo.addItems(["Fullscreen", "Borderless", "Windowed"])
+        mode_layout.addRow("Display Mode:", self.kiosk_mode_combo)
+        mode_group.setLayout(mode_layout)
+        layout.addWidget(mode_group)
+
+        self.res_group = QGroupBox("Resolution (Windowed Only)")
+        res_layout = QFormLayout()
+        self.kiosk_res_w = QSpinBox()
+        self.kiosk_res_w.setRange(640, 7680)
+        self.kiosk_res_h = QSpinBox()
+        self.kiosk_res_h.setRange(480, 4320)
+        res_layout.addRow("Width:", self.kiosk_res_w)
+        res_layout.addRow("Height:", self.kiosk_res_h)
+        self.res_group.setLayout(res_layout)
+        layout.addWidget(self.res_group)
+
+        self.launch_in_editor_checkbox = QCheckBox("Launch packages in editor mode")
+        self.launch_in_editor_checkbox.setToolTip(
+            "When enabled, opening a .fiopak loads the map in the editor\n"
+            "instead of launching kiosk mode."
+        )
+        layout.addWidget(self.launch_in_editor_checkbox)
+
+        self.kiosk_mode_combo.currentTextChanged.connect(self._toggle_resolution_visibility)
+        self._toggle_resolution_visibility()
+
         layout.addStretch()
 
+    _SAVE_MODE_DESCS = {
+        "full": "Complete, self-contained save. Largest file size.",
+        "delta": ("Saves only changes from the original level. Smallest file "
+                  "size but requires the base map."),
+        "both": "Saves a compact delta plus a complete fallback snapshot.",
+    }
+
+    def _update_save_mode_desc(self):
+        mode = self.save_mode_combo.currentData() or "full"
+        self.save_mode_desc.setText(self._SAVE_MODE_DESCS.get(mode, ""))
+
+    def _toggle_resolution_visibility(self):
+        mode = self.kiosk_mode_combo.currentText()
+        self.res_group.setVisible(mode == "Windowed")
+
     def _create_controls_tab(self):
-        """Controls tab: Mouse and input settings."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        self.tabs.addTab(widget, "Controls")
+        self.tabs.addTab(widget, "Mouse")
         
-        # --- Mouse Section ---
         mouse_group = QGroupBox("Mouse")
         mouse_layout = QVBoxLayout()
         
@@ -335,57 +382,51 @@ class SettingsWindow(QDialog):
         self.middle_click_drag_checkbox = QCheckBox("Middle Click to Drag in 2D Views")
         mouse_layout.addWidget(self.middle_click_drag_checkbox)
         
+        # Player 2 sensitivity has been moved to the Split Screen tab.
+        
         mouse_group.setLayout(mouse_layout)
         layout.addWidget(mouse_group)
         
         layout.addStretch()
 
     def _create_keyboard_tab(self):
-        """Keyboard Shortcuts tab - Split into columns for compactness."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         self.tabs.addTab(widget, "Keyboard")
 
-        # --- Static Shortcuts Section (Split into two columns) ---
         columns_layout = QHBoxLayout()
         left_form = QFormLayout()
         right_form = QFormLayout()
         
-        # Adjust spacing
         left_form.setContentsMargins(0, 0, 10, 0)
         right_form.setContentsMargins(10, 0, 0, 0)
 
-        # 1. Asset Browser (First item)
         asset_browser_label = QLabel("T")
         left_form.addRow("Asset Browser:", asset_browser_label)
 
-        # 2. Dictionary Items
         shortcut_definitions = {
-            "apply_texture": "Shift+T",
-            "Clone Brush": "SPACE",
-            "Delete Brush": "DEL",
+            "Clone Selected": "SPACE",
+            "Delete Selected": "DEL",
             "reset_layout": "Ctrl+Shift+R",
             "save_layout": "Ctrl+Shift+S",
+            "Logic Graph Editor": "Ctrl+L",
+            "Logic Wizard": "Ctrl+Shift+W",
             "Hide Brush": "H",
             "Unhide All Brushes": "Shift+H",
             "Decrease Grid Size": "[",
             "Increase Grid Size": "]",
-            "Toggle play mode": "F5",
             "Use (play mode)": "E",
             "Show connections": "F1",
             "Show sprites": "F3",
-            "Connect trigger": "Ctrl+Drag",
             "Light Radius": "Shift+Wheel",
             "Light Intensity": "Ctrl+Wheel",
             "Free Camera": "R-Click+WASD",
-            "Move Camera": "SPACE+C",
         }
         
         self.shortcut_labels = {}
         
-        # Split items into left and right columns
         items = list(shortcut_definitions.items())
-        mid_point = (len(items) // 2) + 1  # Offset slightly to balance Asset Browser
+        mid_point = (len(items) // 2) + 1
         
         for i, (action_name, shortcut_text) in enumerate(items):
             label_text = action_name.replace('_', ' ').title() + ":"
@@ -397,16 +438,13 @@ class SettingsWindow(QDialog):
             else:
                 right_form.addRow(label_text, shortcut_label)
 
-        # 3. Switch 2D Views (Last item)
-        switch_2d_views_label = QLabel("Shift+Tab")
+        switch_2d_views_label = QLabel("Ctrl+Tab")
         right_form.addRow("Switch 2D Views:", switch_2d_views_label)
 
-        # Add columns to main layout
         columns_layout.addLayout(left_form)
         columns_layout.addLayout(right_form)
         layout.addLayout(columns_layout)
 
-        # --- SEPARATOR ---
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
         line.setFrameShadow(QFrame.Sunken)
@@ -418,26 +456,21 @@ class SettingsWindow(QDialog):
         header_label.setStyleSheet("font-weight: bold;")
         layout.addWidget(header_label)
 
-        # --- Rebindable Fields (Grid Layout 2x2) ---
         rebind_grid = QGridLayout()
         rebind_grid.setSpacing(10)
         
-        # F1: Show Connections
         self.key_f1_edit = QKeySequenceEdit()
         rebind_grid.addWidget(QLabel("Show Logic Links:"), 0, 0)
         rebind_grid.addWidget(self.key_f1_edit, 0, 1)
         
-        # F2: Toggle Wireframe
         self.key_f2_edit = QKeySequenceEdit()
         rebind_grid.addWidget(QLabel("Toggle Wireframe:"), 0, 2)
         rebind_grid.addWidget(self.key_f2_edit, 0, 3)
 
-        # F3: System Monitor
         self.key_f3_edit = QKeySequenceEdit()
         rebind_grid.addWidget(QLabel("System Monitor:"), 1, 0)
         rebind_grid.addWidget(self.key_f3_edit, 1, 1)
         
-        # F5: Play Mode
         self.key_f5_edit = QKeySequenceEdit()
         rebind_grid.addWidget(QLabel("Toggle Play Mode:"), 1, 2)
         rebind_grid.addWidget(self.key_f5_edit, 1, 3)
@@ -445,8 +478,33 @@ class SettingsWindow(QDialog):
         layout.addLayout(rebind_grid)
         layout.addStretch()
 
+    def _create_split_screen_tab(self):
+        """Split Screen settings tab."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        self.tabs.addTab(widget, "Split Screen")
+        
+        p2_group = QGroupBox("Player 2 (Split‑Screen)")
+        p2_layout = QVBoxLayout()
+        
+        # Turn sensitivity
+        sens_layout = QHBoxLayout()
+        sens_layout.addWidget(QLabel("Turn Sensitivity:"))
+        self.p2_turn_sensitivity_spin = QSpinBox()
+        self.p2_turn_sensitivity_spin.setRange(30, 500)
+        self.p2_turn_sensitivity_spin.setSuffix(" °/s")
+        self.p2_turn_sensitivity_spin.setValue(10)
+        self.p2_turn_sensitivity_spin.setToolTip(
+            "How many degrees per second Player 2 turns when pressing Left/Right or using the gamepad right stick."
+        )
+        sens_layout.addWidget(self.p2_turn_sensitivity_spin)
+        p2_layout.addLayout(sens_layout)
+        
+        p2_group.setLayout(p2_layout)
+        layout.addWidget(p2_group)
+        layout.addStretch()
+
     def _apply_stylesheet(self):
-        """Apply the checkbox styling."""
         self.setStyleSheet("""
             QCheckBox::indicator:checked {
                 background-color: #F08000;
@@ -487,7 +545,6 @@ class SettingsWindow(QDialog):
         """)
 
     def load_settings(self):
-        # Editor settings
         self.show_caulk_checkbox.setChecked(self.config.getboolean('Display', 'show_caulk', fallback=True))
         self.sync_selection_checkbox.setChecked(self.config.getboolean('Display', 'sync_selection', fallback=True))
         self.click_select_3d_checkbox.setChecked(self.config.getboolean('Display', 'click_select_3d', fallback=False))
@@ -500,12 +557,9 @@ class SettingsWindow(QDialog):
         self.glow_arrow_scale_slider.setValue(glow_arrow_scale)
         self.glow_arrow_scale_label.setText(f"{glow_arrow_scale}%")
         
-        # Display settings
         self.show_fps_checkbox.setChecked(self.config.getboolean('Display', 'show_fps', fallback=True))
         self.always_show_sysmon_checkbox.setChecked(self.config.getboolean('Display', 'always_show_sysmon', fallback=False))
-        # NEW: Load IO Debug setting
         self.always_show_io_debug_checkbox.setChecked(self.config.getboolean('Display', 'always_show_io_debug', fallback=True))
-        
         self.disable_toasts_checkbox.setChecked(self.config.getboolean('Display', 'disable_toasts', fallback=False))
         self.font_size_spinbox.setValue(self.config.getint('Display', 'font_size', fallback=10))
         self.vsync_checkbox.setChecked(self.config.getboolean('Display', 'vsync', fallback=False))
@@ -513,29 +567,47 @@ class SettingsWindow(QDialog):
         self.big_toolbar_buttons_checkbox.setChecked(self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False))
         self.animate_connections_checkbox.setChecked(self.config.getboolean('Display', 'animate_connections', fallback=False))
         
-        # Renderer Performance settings - auto-detect defaults based on platform
         is_arm, _ = self._detect_arm_platform()
-        default_arm_mode = True  # Always beneficial
-        default_shadows = not is_arm  # Off by default on ARM, On otherwise
+        default_arm_mode = True
+        default_shadows = not is_arm
         self.arm_mode_checkbox.setChecked(self.config.getboolean('Renderer', 'arm_mode', fallback=default_arm_mode))
         self.shadows_enabled_checkbox.setChecked(self.config.getboolean('Renderer', 'shadows_enabled', fallback=default_shadows))
 
-        # Play Mode settings
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
         self.show_hud_checkbox.setChecked(self.config.getboolean('Display', 'show_hud', fallback=True))
 
-        # Controls settings
+        save_mode = str(self.config.get('Settings', 'save_mode', fallback='full')).strip().lower()
+        idx = self.save_mode_combo.findData(save_mode)
+        self.save_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._update_save_mode_desc()
+
         self.invert_mouse_checkbox.setChecked(self.config.getboolean('Controls', 'invert_mouse', fallback=False))
-        self.middle_click_drag_checkbox.setChecked(self.config.getboolean('Controls', 'MiddleClickDrag', fallback=False))
+        self.middle_click_drag_checkbox.setChecked(self.config.getboolean('Controls', 'middle_click_drag', fallback=False))
+
+        self.place_camera_at_player_start_checkbox.setChecked(
+        self.config.getboolean('Display', 'place_camera_at_player_start', fallback=True)
+        )
         
-        # Shortcuts
+        self.p2_turn_sensitivity_spin.setValue(
+            self.config.getint('Controls', 'p2_turn_sensitivity', fallback=10)
+        )
+        
         self.key_f1_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_show_connections', fallback='F1')))
         self.key_f2_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_toggle_wireframe', fallback='F2')))
         self.key_f3_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_sysmon', fallback='F3')))
         self.key_f5_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_play_mode', fallback='F5')))
 
+        k_mode = self.config.get('Kiosk', 'window_mode', fallback='Fullscreen')
+        idx = self.kiosk_mode_combo.findText(k_mode)
+        if idx >= 0:
+            self.kiosk_mode_combo.setCurrentIndex(idx)
+        self.kiosk_res_w.setValue(self.config.getint('Kiosk', 'res_width', fallback=1280))
+        self.kiosk_res_h.setValue(self.config.getint('Kiosk', 'res_height', fallback=720))
+        self.launch_in_editor_checkbox.setChecked(
+            self.config.getboolean('Kiosk', 'launch_in_editor', fallback=False)
+        )
+
     def accept(self):
-        """Saves the current UI state back to the config object."""
         self._save_settings()
         super().accept()
 
@@ -546,7 +618,6 @@ class SettingsWindow(QDialog):
         super().keyPressEvent(event)
 
     def _has_unsaved_work(self):
-        """Check if the main window has unsaved work."""
         if not self.main_window:
             return False
         
@@ -565,7 +636,6 @@ class SettingsWindow(QDialog):
         return (has_content and no_file) or has_undo_history
 
     def _apply_and_restart(self):
-        """Save settings and restart the application."""
         if self._has_unsaved_work():
             reply = QMessageBox.warning(
                 self,
@@ -585,11 +655,9 @@ class SettingsWindow(QDialog):
         self._restart_application()
 
     def _save_settings(self):
-        """Save settings without closing the dialog."""
         if not self.config.has_section('Display'): 
             self.config.add_section('Display')
         
-        # Editor settings
         self.config.set('Display', 'show_caulk', str(self.show_caulk_checkbox.isChecked()))
         self.config.set('Display', 'sync_selection', str(self.sync_selection_checkbox.isChecked()))
         self.config.set('Display', 'click_select_3d', str(self.click_select_3d_checkbox.isChecked()))
@@ -598,12 +666,9 @@ class SettingsWindow(QDialog):
         self.config.set('Display', 'locked_not_selectable_2d', str(self.locked_not_selectable_checkbox.isChecked()))
         self.config.set('Display', 'glow_arrow_scale', str(self.glow_arrow_scale_slider.value()))
         
-        # Display settings
         self.config.set('Display', 'show_fps', str(self.show_fps_checkbox.isChecked()))
         self.config.set('Display', 'always_show_sysmon', str(self.always_show_sysmon_checkbox.isChecked()))
-        # NEW: Save IO Debug setting
         self.config.set('Display', 'always_show_io_debug', str(self.always_show_io_debug_checkbox.isChecked()))
-        
         self.config.set('Display', 'disable_toasts', str(self.disable_toasts_checkbox.isChecked()))
         self.config.set('Display', 'font_size', str(self.font_size_spinbox.value()))
         self.config.set('Display', 'vsync', str(self.vsync_checkbox.isChecked()))
@@ -611,26 +676,25 @@ class SettingsWindow(QDialog):
         self.config.set('Display', 'big_toolbar_buttons', str(self.big_toolbar_buttons_checkbox.isChecked()))
         self.config.set('Display', 'animate_connections', str(self.animate_connections_checkbox.isChecked()))
         
-        # Renderer Performance settings
         if not self.config.has_section('Renderer'): 
             self.config.add_section('Renderer')
         self.config.set('Renderer', 'arm_mode', str(self.arm_mode_checkbox.isChecked()))
         self.config.set('Renderer', 'shadows_enabled', str(self.shadows_enabled_checkbox.isChecked()))
         
-        # Play Mode settings
         self.config.set('Display', 'show_hud', str(self.show_hud_checkbox.isChecked()))
         
-        if not self.config.has_section('Settings'): 
+        if not self.config.has_section('Settings'):
             self.config.add_section('Settings')
         self.config.set('Settings', 'physics', str(self.physics_checkbox.isChecked()))
+        self.config.set('Settings', 'save_mode',
+                        self.save_mode_combo.currentData() or 'full')
 
-        # Controls settings
         if not self.config.has_section('Controls'): 
             self.config.add_section('Controls')
         self.config.set('Controls', 'invert_mouse', str(self.invert_mouse_checkbox.isChecked()))
-        self.config.set('Controls', 'MiddleClickDrag', str(self.middle_click_drag_checkbox.isChecked()))
+        self.config.set('Controls', 'middle_click_drag', str(self.middle_click_drag_checkbox.isChecked()))
+        self.config.set('Controls', 'p2_turn_sensitivity', str(self.p2_turn_sensitivity_spin.value()))
         
-        # Shortcuts
         if not self.config.has_section('Shortcuts'):
             self.config.add_section('Shortcuts')
         self.config.set('Shortcuts', 'key_show_connections', self.key_f1_edit.keySequence().toString())
@@ -638,8 +702,18 @@ class SettingsWindow(QDialog):
         self.config.set('Shortcuts', 'key_sysmon', self.key_f3_edit.keySequence().toString())
         self.config.set('Shortcuts', 'key_play_mode', self.key_f5_edit.keySequence().toString())
 
+        if not self.config.has_section('Kiosk'):
+            self.config.add_section('Kiosk')
+        self.config.set('Kiosk', 'window_mode', self.kiosk_mode_combo.currentText())
+        self.config.set('Kiosk', 'res_width', str(self.kiosk_res_w.value()))
+        self.config.set('Kiosk', 'res_height', str(self.kiosk_res_h.value()))
+        self.config.set('Kiosk', 'launch_in_editor',
+                        str(self.launch_in_editor_checkbox.isChecked()))
+
+        self.config.set('Display', 'place_camera_at_player_start',
+                str(self.place_camera_at_player_start_checkbox.isChecked()))
+
     def _restart_application(self):
-        """Restart the application."""
         from PyQt5.QtWidgets import QApplication
         
         python = sys.executable
@@ -650,7 +724,7 @@ class SettingsWindow(QDialog):
             try:
                 self.main_window.closeEvent = lambda e: e.accept()
                 self.main_window.close()
-            except:
+            except Exception:
                 pass
         
         os.execl(python, python, script, *args)

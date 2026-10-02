@@ -1,5 +1,5 @@
 {
-    "fingerprint": "RStudio",
+    "version": 3,
     "brushes": [
         {
             "pos": [
@@ -19,7 +19,8 @@
                 "west": "default.png",
                 "top": "default.png",
                 "down": "default.png"
-            }
+            },
+            "id": "2dc05c48-dbf4-406a-bee3-b05f20c8f412"
         },
         {
             "pos": [
@@ -48,7 +49,8 @@
             ],
             "glass_opacity": 0.11,
             "glass_distortion": 0.5,
-            "is_trigger": false
+            "is_trigger": false,
+            "id": "7250323f-2694-42f7-82c3-cdc2ebbacdb6"
         }
     ],
     "things": [
@@ -62,13 +64,19 @@
             "properties": {
                 "type": "light",
                 "name": "Light_1",
-                "colour": "[255, 255, 255]",
-                "intensity": "1.0",
-                "radius": "512.0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "False"
-            }
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "82d0b28e-687e-44d8-9a6b-b118c2ffb91b"
+            },
+            "io_connections": []
         }
     ]
 }

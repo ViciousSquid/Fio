@@ -319,6 +319,23 @@ class HeightCache:
                 wz = self.world_z + iz * self.step
                 self.heights[ix, iz] = height_func(wx, wz)
         self.is_valid = True
+
+    def build_batch(self, height_func_batch):
+        """Vectorised equivalent of build(): evaluate the whole grid in one
+        batched call instead of resolution*resolution scalar Python calls.
+        The scalar path evaluates a few fbm/ridge octaves per point, so the
+        pure-Python double loop dominates chunk upload time and stalls the
+        render thread; the batched noise path is 1-2 orders of magnitude
+        faster for the same result."""
+        ix = np.arange(self.resolution, dtype=np.float32)
+        iz = np.arange(self.resolution, dtype=np.float32)
+        ixg, izg = np.meshgrid(ix, iz, indexing='ij')
+        wx = (self.world_x + ixg * self.step).ravel()
+        wz = (self.world_z + izg * self.step).ravel()
+        heights = height_func_batch(wx, wz)
+        self.heights = np.asarray(heights, dtype=np.float32).reshape(
+            (self.resolution, self.resolution))
+        self.is_valid = True
     
     def get_height(self, world_x: float, world_z: float) -> Optional[float]:
         if not self.is_valid or self.heights is None:
@@ -405,11 +422,37 @@ class Terrain:
         self.enabled: bool = True
         self.wireframe: bool = False
         self.solid: bool = True
+        # Sculpt deformation map — sparse dict of (grid_x, grid_z) -> height offset
+        self.sculpt_offsets: Dict[Tuple[int, int], float] = {}
+        self.sculpt_grid_resolution: float = 4.0  # world units per grid cell
+        # Heightmap overlay
+        self.heightmap_data: Optional[np.ndarray] = None  # 2D float32, 0..1
+        self.heightmap_strength: float = 100.0
+        self.heightmap_blend: str = 'additive'  # 'additive' or 'replace'
         self._update_queue: List[Tuple[int, int]] = []
+        # -- Chunk streaming (Big World "fill world with terrain") -----------
+        # When ``streaming`` is on, only the chunks within ``stream_radius`` of
+        # the camera are kept resident; chunks beyond ``stream_radius +
+        # stream_evict_padding`` are freed. This lets a world-spanning terrain
+        # (bounds widened by ``set_world_extent``) render without tessellating
+        # the whole grid up-front — meshes appear around the camera as it moves.
+        self.streaming: bool = False
+        self.stream_radius: float = 1536.0
+        self.stream_evict_padding: float = 512.0
+        self.streamed_chunks: int = 0
+        # A ``set_bounds(..., prune=False)`` defers its out-of-bounds chunk
+        # deletion (a GL op) to the next render on the GL thread.
+        self._pending_prune: bool = False
+        # Authored chunk bounds / enabled flag stashed while the editor is
+        # previewing a world fill, so the expansion is reversible and never
+        # saved to the map file.
+        self._authored_bounds: Optional[Tuple[int, int, int, int]] = None
+        self._authored_enabled: Optional[bool] = None
         self.grass_tex = 0
         self.rock_tex = 0
         self.sand_tex = 0
         self.snow_tex = 0
+        self._placeholder_cubemap = 0
         if texture_manager:
             self.load_terrain_textures(texture_manager)
         self._init_shader()
@@ -420,7 +463,7 @@ class Terrain:
             fragment_code = shaders.DEFAULT_SHADERS['terrain.frag']
             vertex_shader = compileShader(vertex_code, gl.GL_VERTEX_SHADER)
             fragment_shader = compileShader(fragment_code, gl.GL_FRAGMENT_SHADER)
-            self.shader_program = compileProgram(vertex_shader, fragment_shader)
+            self.shader_program = compileProgram(vertex_shader, fragment_shader, validate=False)
             if not self.shader_program:
                 print("ERROR: Failed to compile terrain shader program!")
                 self.shader_program = 0
@@ -431,23 +474,28 @@ class Terrain:
             return
         
         self.uniforms = {
-            'projection': gl.glGetUniformLocation(self.shader_program, 'projection'),
-            'view': gl.glGetUniformLocation(self.shader_program, 'view'),
-            'active_lights': gl.glGetUniformLocation(self.shader_program, 'active_lights'),
-            'use_textures': gl.glGetUniformLocation(self.shader_program, 'use_textures'),
-            'texGrass': gl.glGetUniformLocation(self.shader_program, 'texGrass'),
-            'texRock': gl.glGetUniformLocation(self.shader_program, 'texRock'),
-            'texSand': gl.glGetUniformLocation(self.shader_program, 'texSand'),
-            'texSnow': gl.glGetUniformLocation(self.shader_program, 'texSnow'),
-            'biomeWeights': gl.glGetUniformLocation(self.shader_program, 'biomeWeights'),
+            'projection':        gl.glGetUniformLocation(self.shader_program, 'projection'),
+            'view':              gl.glGetUniformLocation(self.shader_program, 'view'),
+            'active_lights':     gl.glGetUniformLocation(self.shader_program, 'active_lights'),
+            'use_textures':      gl.glGetUniformLocation(self.shader_program, 'use_textures'),
+            'lod_level':         gl.glGetUniformLocation(self.shader_program, 'lod_level'),
+            'texGrass':          gl.glGetUniformLocation(self.shader_program, 'texGrass'),
+            'texRock':           gl.glGetUniformLocation(self.shader_program, 'texRock'),
+            'texSand':           gl.glGetUniformLocation(self.shader_program, 'texSand'),
+            'texSnow':           gl.glGetUniformLocation(self.shader_program, 'texSnow'),
+            'biomeWeights':      gl.glGetUniformLocation(self.shader_program, 'biomeWeights'),
             'terrainHeightScale': gl.glGetUniformLocation(self.shader_program, 'terrainHeightScale'),
         }
         for i in range(8):
             base = f'lights[{i}]'
-            self.uniforms[f'{base}.position'] = gl.glGetUniformLocation(self.shader_program, f'{base}.position')
-            self.uniforms[f'{base}.color'] = gl.glGetUniformLocation(self.shader_program, f'{base}.color')
+            self.uniforms[f'{base}.position']  = gl.glGetUniformLocation(self.shader_program, f'{base}.position')
+            self.uniforms[f'{base}.color']     = gl.glGetUniformLocation(self.shader_program, f'{base}.color')
             self.uniforms[f'{base}.intensity'] = gl.glGetUniformLocation(self.shader_program, f'{base}.intensity')
-            self.uniforms[f'{base}.radius'] = gl.glGetUniformLocation(self.shader_program, f'{base}.radius')
+            self.uniforms[f'{base}.radius']    = gl.glGetUniformLocation(self.shader_program, f'{base}.radius')
+            self.uniforms[f'{base}.shadowIndex'] = gl.glGetUniformLocation(self.shader_program, f'{base}.shadowIndex')
+        # Depth cube-map samplers for point-light shadows.
+        for i in range(shaders.MAX_SHADOW_LIGHTS):
+            self.uniforms[f'shadowMaps[{i}]'] = gl.glGetUniformLocation(self.shader_program, f'shadowMaps[{i}]')
     
     def load_terrain_textures(self, tex_manager):
         self.grass_tex = tex_manager.get('assets/textures/terrain/grass.jpg')
@@ -483,7 +531,12 @@ class Terrain:
             height = height + plateau_h * self.biome.plateaus_intensity
         height = (height + 1.0) * 0.5
         height = max(0.0, min(1.0, height))
-        return self.biome.base_height + height * self.biome.height_scale + self.offset_y
+        base = self.biome.base_height + height * self.biome.height_scale + self.offset_y
+        # Heightmap contribution
+        base += self._sample_heightmap_scalar(world_x, world_z, base)
+        # Sculpt deformation contribution
+        base += self._sample_sculpt_scalar(world_x, world_z)
+        return base
     
     def get_height_at(self, world_x: float, world_z: float) -> float:
         chunk_x = int(math.floor((world_x - self.offset_x) / self.chunk_size))
@@ -524,12 +577,136 @@ class Terrain:
         self.features = TerrainFeatures(self.noise, seed)
         self.mark_all_dirty()
     
-    def set_bounds(self, min_x: int, max_x: int, min_z: int, max_z: int):
+    def set_bounds(self, min_x: int, max_x: int, min_z: int, max_z: int,
+                   prune: bool = True):
         self.min_chunk_x = min_x
         self.max_chunk_x = max_x
         self.min_chunk_z = min_z
         self.max_chunk_z = max_z
-        self._remove_out_of_bounds_chunks()
+        if prune:
+            self._remove_out_of_bounds_chunks()
+        else:
+            # Defer the GL chunk deletion to the render thread's next frame.
+            self._pending_prune = True
+
+    def set_streaming(self, enabled: bool, radius: Optional[float] = None):
+        """Turn chunk streaming on/off (see :attr:`streaming`).
+
+        ``radius`` (world units) sets how far terrain is kept resident around
+        the camera; ``None``/0 leaves the current radius untouched.
+        """
+        self.streaming = bool(enabled)
+        if radius is not None and radius > 0:
+            self.stream_radius = float(radius)
+
+    def set_world_extent(self, min_wx: float, min_wz: float,
+                         max_wx: float, max_wz: float, prune: bool = True):
+        """Widen (or shrink) the terrain to cover a world-space XZ rectangle.
+
+        Converts world coordinates to chunk indices and calls :meth:`set_bounds`,
+        so the terrain height field — a pure function of world position — spans
+        the whole rectangle. Paired with :meth:`set_streaming` this fills a Big
+        World map's terrain without meshing the entire grid at once.
+        """
+        cs = self.chunk_size
+        self.set_bounds(
+            int(math.floor((min_wx - self.offset_x) / cs)),
+            int(math.floor((max_wx - self.offset_x) / cs)),
+            int(math.floor((min_wz - self.offset_z) / cs)),
+            int(math.floor((max_wz - self.offset_z) / cs)),
+            prune=prune,
+        )
+
+    def _stream_chunks(self, camera_pos):
+        """Keep only the chunks near ``camera_pos`` resident (streaming mode).
+
+        Ensures every in-bounds chunk whose nearest point is within
+        ``stream_radius`` of the camera, and evicts any resident chunk beyond
+        ``stream_radius + stream_evict_padding``. Bounded work per call and
+        bounded residency regardless of how far the camera has travelled, so a
+        world-spanning terrain never tessellates its whole grid. Touches no GL
+        for chunks that were never uploaded (``_delete_chunk`` guards on the
+        chunk's VAO/VBO), so the maths is exercisable headlessly.
+        """
+        cam_x = float(camera_pos.x) - self.offset_x
+        cam_z = float(camera_pos.z) - self.offset_z
+        cs = self.chunk_size
+        radius = self.stream_radius
+        keep = radius + self.stream_evict_padding
+        r2 = radius * radius
+        keep2 = keep * keep
+
+        cam_cx = int(math.floor(cam_x / cs))
+        cam_cz = int(math.floor(cam_z / cs))
+        reach = int(math.ceil(radius / cs)) + 1
+        lo_x = max(self.min_chunk_x, cam_cx - reach)
+        hi_x = min(self.max_chunk_x, cam_cx + reach)
+        lo_z = max(self.min_chunk_z, cam_cz - reach)
+        hi_z = min(self.max_chunk_z, cam_cz + reach)
+
+        def _nearest_dist_sq(cx: int, cz: int) -> float:
+            chunk_min_x = cx * cs
+            chunk_min_z = cz * cs
+            nx = min(max(cam_x, chunk_min_x), chunk_min_x + cs)
+            nz = min(max(cam_z, chunk_min_z), chunk_min_z + cs)
+            dx = nx - cam_x
+            dz = nz - cam_z
+            return dx * dx + dz * dz
+
+        for cx in range(lo_x, hi_x + 1):
+            for cz in range(lo_z, hi_z + 1):
+                if _nearest_dist_sq(cx, cz) <= r2:
+                    self._ensure_chunk(cx, cz)
+
+        to_evict = [key for key, chunk in self.chunks.items()
+                    if _nearest_dist_sq(chunk.chunk_x, chunk.chunk_z) > keep2]
+        for key in to_evict:
+            self._delete_chunk(key)
+        self.streamed_chunks = len(self.chunks)
+
+    # -- Editor "fill world with terrain" preview -------------------------
+    def editor_fill_world(self, min_wx: float, min_wz: float,
+                          max_wx: float, max_wz: float, stream_radius: float):
+        """Expand + stream the terrain in the editor, reversibly.
+
+        Unlike the runtime session (which snapshots/restores across play), the
+        editor preview must not persist the widened bounds: the authored bounds
+        are stashed the first time this runs and re-emitted by :meth:`to_dict`,
+        so saving a filled map writes exactly the terrain the author set up.
+        Idempotent — safe to call every repaint.
+        """
+        cs = self.chunk_size
+        new_bounds = (
+            int(math.floor((min_wx - self.offset_x) / cs)),
+            int(math.floor((max_wx - self.offset_x) / cs)),
+            int(math.floor((min_wz - self.offset_z) / cs)),
+            int(math.floor((max_wz - self.offset_z) / cs)),
+        )
+        if self._authored_bounds is None:
+            self._authored_bounds = (self.min_chunk_x, self.max_chunk_x,
+                                     self.min_chunk_z, self.max_chunk_z)
+            self._authored_enabled = self.enabled
+        cur = (self.min_chunk_x, self.max_chunk_x,
+               self.min_chunk_z, self.max_chunk_z)
+        if new_bounds != cur:
+            self.set_bounds(*new_bounds, prune=False)
+        # The user asked to see terrain — make sure it's drawn during the
+        # preview (the authored enabled flag is restored on unfill / save).
+        self.enabled = True
+        self.set_streaming(True, stream_radius)
+
+    def editor_unfill_world(self):
+        """Undo :meth:`editor_fill_world`, restoring the authored bounds/state."""
+        if self._authored_bounds is None:
+            return
+        mnx, mxx, mnz, mxz = self._authored_bounds
+        authored_enabled = self._authored_enabled
+        self._authored_bounds = None
+        self._authored_enabled = None
+        self.set_bounds(mnx, mxx, mnz, mxz, prune=False)
+        if authored_enabled is not None:
+            self.enabled = authored_enabled
+        self.set_streaming(False)
     
     def mark_all_dirty(self):
         for chunk in self.chunks.values():
@@ -581,7 +758,12 @@ class Terrain:
             height = height + plateau_h * self.biome.plateaus_intensity
         height = (height + 1.0) * 0.5
         height = np.clip(height, 0.0, 1.0)
-        return self.biome.base_height + height * self.biome.height_scale + self.offset_y
+        result = self.biome.base_height + height * self.biome.height_scale + self.offset_y
+        # Heightmap contribution (batch)
+        result = result + self._sample_heightmap_batch(world_x, world_z, result)
+        # Sculpt deformation contribution (batch)
+        result = result + self._sample_sculpt_batch(world_x, world_z)
+        return result
     
     def _get_colors_batch(self, heights: np.ndarray, normalized_heights: np.ndarray) -> np.ndarray:
         colors = self.biome.color_gradient
@@ -589,12 +771,14 @@ class Terrain:
             return np.full((len(heights), 3), 0.5, dtype=np.float32)
         h = np.clip(normalized_heights, 0.0, 1.0)
         result = np.zeros((len(h), 3), dtype=np.float32)
+        # FIX: allocate t once outside the loop; reset in-place each iteration
+        t = np.zeros(len(h), dtype=np.float32)
         for i in range(len(colors) - 1):
             h0, c0 = colors[i]
             h1, c1 = colors[i + 1]
             mask = (h >= h0) & (h <= h1)
             if not np.any(mask): continue
-            t = np.zeros_like(h)
+            t[:] = 0.0
             if h1 > h0:
                 t[mask] = (h[mask] - h0) / (h1 - h0)
             for j in range(3):
@@ -727,7 +911,7 @@ class Terrain:
     
     def _upload_chunk(self, chunk: TerrainChunk, resolution: int):
         if chunk.height_cache and not chunk.height_cache.is_valid:
-            chunk.height_cache.build(self._get_height_scalar)
+            chunk.height_cache.build_batch(self._get_heights_batch)
         vertex_data = self._generate_chunk_mesh(chunk, resolution)
         chunk.vertex_count = len(vertex_data) // 14
         if not chunk.vao:
@@ -771,45 +955,131 @@ class Terrain:
             if a * px + b * py + c * pz + d < 0: return False
         return True
     
-    def update_and_render(self, projection: glm.mat4, view: glm.mat4, camera_pos: glm.vec3, frustum_planes=None, lights=None, active_lights_count=0):
+    def _ensure_placeholder_cubemap(self) -> int:
+        """Lazily create a 1x1 complete cube-map used for shadow sampler units
+        that have no real depth cube-map (shadows off, or fewer cube-maps than
+        sampler slots).  A complete texture on every unit guarantees no
+        samplerCube is left referencing texture unit 0 or an incomplete texture,
+        either of which can make glDrawArrays raise GL_INVALID_OPERATION."""
+        if self._placeholder_cubemap:
+            return self._placeholder_cubemap
+        tex = int(gl.glGenTextures(1))
+        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, tex)
+        black = (ctypes.c_ubyte * 4)(0, 0, 0, 255)
+        for face in range(6):
+            gl.glTexImage2D(gl.GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, gl.GL_RGBA,
+                            1, 1, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, black)
+        gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST)
+        gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST)
+        gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+        gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+        gl.glTexParameteri(gl.GL_TEXTURE_CUBE_MAP, gl.GL_TEXTURE_WRAP_R, gl.GL_CLAMP_TO_EDGE)
+        gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, 0)
+        self._placeholder_cubemap = tex
+        return self._placeholder_cubemap
+
+    def update_and_render(self, projection: glm.mat4, view: glm.mat4, camera_pos: glm.vec3, frustum_planes=None, lights=None, active_lights_count=0,
+                          shadow_cubemaps=None, shadow_index_map=None, shadow_unit_base=4):
         if not self.enabled: return
         if not self.shader_program:
             self._init_shader()
             if not self.shader_program: return
-        if 'use_textures' not in self.uniforms:
-            self.uniforms['use_textures'] = gl.glGetUniformLocation(self.shader_program, 'use_textures')
+
+        # Re-resolve late-bound uniforms against the *current* program.  The
+        # renderer can swap in an externally-compiled program whose uniform
+        # table only covers a subset of locations (see
+        # Renderer.setup_terrain_shader), so any sampler we rely on must be
+        # looked up here or it stays unbound.  An unassigned ``samplerCube``
+        # defaults to texture unit 0, collides with the ``sampler2D`` terrain
+        # textures bound there, and makes glDrawArrays raise
+        # GL_INVALID_OPERATION.
+        for name in ('use_textures', 'lod_level'):
+            if name not in self.uniforms:
+                self.uniforms[name] = gl.glGetUniformLocation(self.shader_program, name)
+        for i in range(8):
+            key = f'lights[{i}].shadowIndex'
+            if key not in self.uniforms:
+                self.uniforms[key] = gl.glGetUniformLocation(self.shader_program, key)
+        for i in range(shaders.MAX_SHADOW_LIGHTS):
+            key = f'shadowMaps[{i}]'
+            if key not in self.uniforms:
+                self.uniforms[key] = gl.glGetUniformLocation(self.shader_program, key)
 
         self.visible_chunks = 0
         self.culled_chunks = 0
         self.total_triangles = 0
-        
-        for cz in range(self.min_chunk_z, self.max_chunk_z + 1):
-            for cx in range(self.min_chunk_x, self.max_chunk_x + 1):
-                self._ensure_chunk(cx, cz)
+
+        # Apply any bounds change that deferred its prune to the GL thread.
+        if self._pending_prune:
+            self._remove_out_of_bounds_chunks()
+            self._pending_prune = False
+
+        if self.streaming:
+            # Stream only the chunks around the camera; a world-spanning terrain
+            # never tessellates its whole grid up-front.
+            self._stream_chunks(camera_pos)
+        else:
+            for cz in range(self.min_chunk_z, self.max_chunk_z + 1):
+                for cx in range(self.min_chunk_x, self.max_chunk_x + 1):
+                    self._ensure_chunk(cx, cz)
         
         gl.glUseProgram(self.shader_program)
         gl.glUniformMatrix4fv(self.uniforms['projection'], 1, gl.GL_FALSE, glm.value_ptr(projection))
         gl.glUniformMatrix4fv(self.uniforms['view'], 1, gl.GL_FALSE, glm.value_ptr(view))
         gl.glActiveTexture(gl.GL_TEXTURE0); gl.glBindTexture(gl.GL_TEXTURE_2D, self.grass_tex); gl.glUniform1i(self.uniforms['texGrass'], 0)
-        gl.glActiveTexture(gl.GL_TEXTURE1); gl.glBindTexture(gl.GL_TEXTURE_2D, self.rock_tex); gl.glUniform1i(self.uniforms['texRock'], 1)
-        gl.glActiveTexture(gl.GL_TEXTURE2); gl.glBindTexture(gl.GL_TEXTURE_2D, self.sand_tex); gl.glUniform1i(self.uniforms['texSand'], 2)
-        gl.glActiveTexture(gl.GL_TEXTURE3); gl.glBindTexture(gl.GL_TEXTURE_2D, self.snow_tex); gl.glUniform1i(self.uniforms['texSnow'], 3)
+        gl.glActiveTexture(gl.GL_TEXTURE1); gl.glBindTexture(gl.GL_TEXTURE_2D, self.rock_tex);  gl.glUniform1i(self.uniforms['texRock'],  1)
+        gl.glActiveTexture(gl.GL_TEXTURE2); gl.glBindTexture(gl.GL_TEXTURE_2D, self.sand_tex);  gl.glUniform1i(self.uniforms['texSand'],  2)
+        gl.glActiveTexture(gl.GL_TEXTURE3); gl.glBindTexture(gl.GL_TEXTURE_2D, self.snow_tex);  gl.glUniform1i(self.uniforms['texSnow'],  3)
         gl.glUniform4f(self.uniforms['biomeWeights'], *self.biome.blend_weights)
         gl.glUniform1f(self.uniforms['terrainHeightScale'], self.biome.terrain_height_scale)
         
-        # --- FIXED: Force textures off if flat_mode is enabled ---
-        use_tex = 0 if self.flat_mode else (1 if getattr(self, 'use_textures', True) else 0)
+        # Force textures off if flat_mode is enabled or textures aren't loaded
+        textures_loaded = (self.grass_tex != 0 and self.rock_tex != 0
+                           and self.sand_tex != 0 and self.snow_tex != 0)
+        use_tex = 0 if self.flat_mode or not textures_loaded else (1 if getattr(self, 'use_textures', True) else 0)
         gl.glUniform1i(self.uniforms['use_textures'], use_tex)
         
         gl.glUniform1i(self.uniforms['active_lights'], active_lights_count)
+        shadow_index_map = shadow_index_map or {}
         for i in range(active_lights_count):
             light = lights[i]
             base = f'lights[{i}]'
             gl.glUniform3fv(self.uniforms[f'{base}.position'], 1, light.pos)
-            gl.glUniform3fv(self.uniforms[f'{base}.color'], 1, light.get_color())
-            gl.glUniform1f(self.uniforms[f'{base}.intensity'], light.get_intensity())
-            gl.glUniform1f(self.uniforms[f'{base}.radius'], light.get_radius())
+            gl.glUniform3fv(self.uniforms[f'{base}.color'],    1, light.get_color())
+            gl.glUniform1f(self.uniforms[f'{base}.intensity'],    light.get_intensity())
+            gl.glUniform1f(self.uniforms[f'{base}.radius'],       light.get_radius())
+            sidx_loc = self.uniforms.get(f'{base}.shadowIndex', -1)
+            if sidx_loc is not None and sidx_loc != -1:
+                gl.glUniform1i(sidx_loc, shadow_index_map.get(id(light), -1))
+
+        # Bind depth cube-maps so terrain receives point-light shadows.
+        #
+        # Every ``samplerCube shadowMaps[i]`` uniform must be pointed at its own
+        # reserved texture unit *unconditionally*.  GLSL samplers default to
+        # texture unit 0, which already holds a ``sampler2D`` (texGrass).  The
+        # spec forbids two different sampler types referencing the same texture
+        # image unit, so leaving the cube samplers on unit 0 makes the driver
+        # raise GL_INVALID_OPERATION on the very next draw call.  We therefore
+        # always assign the units and bind a *complete* cube-map to each — the
+        # real depth cube-map when available, otherwise a 1x1 placeholder — even
+        # when shadows are disabled or fewer cube-maps than sampler slots are
+        # supplied.  Binding the incomplete default texture (name 0) would leave
+        # an active samplerCube pointing at an incomplete texture, which some
+        # drivers also reject at draw time.
+        shadow_cubemaps = shadow_cubemaps or []
+        placeholder = self._ensure_placeholder_cubemap()
+        for i in range(shaders.MAX_SHADOW_LIGHTS):
+            loc = self.uniforms.get(f'shadowMaps[{i}]', -1)
+            if loc is None or loc == -1:
+                continue
+            cm = shadow_cubemaps[i] if (i < len(shadow_cubemaps) and shadow_cubemaps[i]) else placeholder
+            gl.glActiveTexture(gl.GL_TEXTURE0 + shadow_unit_base + i)
+            gl.glBindTexture(gl.GL_TEXTURE_CUBE_MAP, cm)
+            gl.glUniform1i(loc, shadow_unit_base + i)
+        gl.glActiveTexture(gl.GL_TEXTURE0)
         
+        lod_level_loc = self.uniforms.get('lod_level', -1)
+
         if self.wireframe: gl.glPolygonMode(gl.GL_FRONT_AND_BACK, gl.GL_LINE)
         chunks_to_update = []
         for key, chunk in self.chunks.items():
@@ -834,6 +1104,10 @@ class Terrain:
             if needs_update:
                 chunks_to_update.append((key, target_resolution, dist_sq))
             if chunk.vao and chunk.vertex_count > 0:
+                # Upload the chunk's current LOD level so the fragment shader
+                # can choose the appropriate shading path.
+                if lod_level_loc != -1:
+                    gl.glUniform1i(lod_level_loc, chunk.lod_level)
                 gl.glBindVertexArray(chunk.vao)
                 gl.glDrawArrays(gl.GL_TRIANGLES, 0, chunk.vertex_count)
                 self.visible_chunks += 1
@@ -933,14 +1207,292 @@ class Terrain:
             trees.append({"model_path": model_def["path"], "pos": [tx, ty, tz], "rotation": list(model_def["rot"]), "scale": [s, s, s]})
         return trees
     
+    # =========================================================================
+    # SCULPT DEFORMATION
+    # =========================================================================
+
+    def _sculpt_key(self, world_x: float, world_z: float) -> Tuple[int, int]:
+        """Quantize world position to sculpt grid key."""
+        gx = int(math.floor(world_x / self.sculpt_grid_resolution))
+        gz = int(math.floor(world_z / self.sculpt_grid_resolution))
+        return (gx, gz)
+
+    def _sample_sculpt_scalar(self, world_x: float, world_z: float) -> float:
+        """Get interpolated sculpt offset at a world position."""
+        if not self.sculpt_offsets:
+            return 0.0
+        res = self.sculpt_grid_resolution
+        gx_f = world_x / res
+        gz_f = world_z / res
+        gx0 = int(math.floor(gx_f))
+        gz0 = int(math.floor(gz_f))
+        fx = gx_f - gx0
+        fz = gz_f - gz0
+        h00 = self.sculpt_offsets.get((gx0, gz0), 0.0)
+        h10 = self.sculpt_offsets.get((gx0 + 1, gz0), 0.0)
+        h01 = self.sculpt_offsets.get((gx0, gz0 + 1), 0.0)
+        h11 = self.sculpt_offsets.get((gx0 + 1, gz0 + 1), 0.0)
+        top = h00 + fx * (h10 - h00)
+        bot = h01 + fx * (h11 - h01)
+        return top + fz * (bot - top)
+
+    def _sample_sculpt_batch(self, world_x: np.ndarray, world_z: np.ndarray) -> np.ndarray:
+        """Get interpolated sculpt offsets for arrays of world positions."""
+        if not self.sculpt_offsets:
+            return np.zeros(len(world_x), dtype=np.float32)
+        res = self.sculpt_grid_resolution
+        gx_f = world_x / res
+        gz_f = world_z / res
+        gx0 = np.floor(gx_f).astype(np.int32)
+        gz0 = np.floor(gz_f).astype(np.int32)
+        fx = gx_f - gx0
+        fz = gz_f - gz0
+        result = np.zeros(len(world_x), dtype=np.float32)
+        for i in range(len(world_x)):
+            h00 = self.sculpt_offsets.get((int(gx0[i]), int(gz0[i])), 0.0)
+            h10 = self.sculpt_offsets.get((int(gx0[i]) + 1, int(gz0[i])), 0.0)
+            h01 = self.sculpt_offsets.get((int(gx0[i]), int(gz0[i]) + 1), 0.0)
+            h11 = self.sculpt_offsets.get((int(gx0[i]) + 1, int(gz0[i]) + 1), 0.0)
+            top = h00 + fx[i] * (h10 - h00)
+            bot = h01 + fx[i] * (h11 - h01)
+            result[i] = top + fz[i] * (bot - top)
+        return result
+
+    def apply_sculpt_at(self, world_x: float, world_z: float, radius: float, strength: float):
+        """Raise/lower terrain in a circular area. Negative strength lowers."""
+        res = self.sculpt_grid_resolution
+        grid_radius = int(math.ceil(radius / res)) + 1
+        center_gx = world_x / res
+        center_gz = world_z / res
+        for dx in range(-grid_radius, grid_radius + 1):
+            for dz in range(-grid_radius, grid_radius + 1):
+                gx = int(math.floor(center_gx)) + dx
+                gz = int(math.floor(center_gz)) + dz
+                wx = gx * res
+                wz = gz * res
+                dist = math.sqrt((wx - world_x) ** 2 + (wz - world_z) ** 2)
+                if dist > radius:
+                    continue
+                # Smooth falloff
+                falloff = 1.0 - (dist / radius)
+                falloff = falloff * falloff  # quadratic
+                key = (gx, gz)
+                current = self.sculpt_offsets.get(key, 0.0)
+                self.sculpt_offsets[key] = current + strength * falloff
+        self._mark_sculpt_region_dirty(world_x, world_z, radius)
+
+    def smooth_sculpt_at(self, world_x: float, world_z: float, radius: float, strength: float):
+        """Smooth sculpt offsets by averaging neighbours."""
+        res = self.sculpt_grid_resolution
+        grid_radius = int(math.ceil(radius / res)) + 1
+        center_gx = int(math.floor(world_x / res))
+        center_gz = int(math.floor(world_z / res))
+        new_offsets = {}
+        for dx in range(-grid_radius, grid_radius + 1):
+            for dz in range(-grid_radius, grid_radius + 1):
+                gx = center_gx + dx
+                gz = center_gz + dz
+                wx = gx * res
+                wz = gz * res
+                dist = math.sqrt((wx - world_x) ** 2 + (wz - world_z) ** 2)
+                if dist > radius:
+                    continue
+                falloff = 1.0 - (dist / radius)
+                # Average with neighbours
+                avg = 0.0
+                count = 0
+                for nx, nz in [(gx-1, gz), (gx+1, gz), (gx, gz-1), (gx, gz+1), (gx, gz)]:
+                    avg += self.sculpt_offsets.get((nx, nz), 0.0)
+                    count += 1
+                avg /= count
+                current = self.sculpt_offsets.get((gx, gz), 0.0)
+                new_offsets[(gx, gz)] = current + (avg - current) * strength * falloff
+        self.sculpt_offsets.update(new_offsets)
+        self._mark_sculpt_region_dirty(world_x, world_z, radius)
+
+    def flatten_sculpt_at(self, world_x: float, world_z: float, radius: float, strength: float):
+        """Push sculpt offsets toward zero (flattening the deformation)."""
+        res = self.sculpt_grid_resolution
+        grid_radius = int(math.ceil(radius / res)) + 1
+        center_gx = int(math.floor(world_x / res))
+        center_gz = int(math.floor(world_z / res))
+        for dx in range(-grid_radius, grid_radius + 1):
+            for dz in range(-grid_radius, grid_radius + 1):
+                gx = center_gx + dx
+                gz = center_gz + dz
+                key = (gx, gz)
+                if key not in self.sculpt_offsets:
+                    continue
+                wx = gx * res
+                wz = gz * res
+                dist = math.sqrt((wx - world_x) ** 2 + (wz - world_z) ** 2)
+                if dist > radius:
+                    continue
+                falloff = 1.0 - (dist / radius)
+                current = self.sculpt_offsets[key]
+                self.sculpt_offsets[key] = current * (1.0 - strength * falloff)
+                # Clean up near-zero entries
+                if abs(self.sculpt_offsets[key]) < 0.01:
+                    del self.sculpt_offsets[key]
+        self._mark_sculpt_region_dirty(world_x, world_z, radius)
+
+    def clear_sculpt(self):
+        """Remove all sculpt deformations."""
+        self.sculpt_offsets.clear()
+        self.mark_all_dirty()
+
+    def _mark_sculpt_region_dirty(self, world_x: float, world_z: float, radius: float):
+        """Mark chunks overlapping a sculpted region as dirty."""
+        for key, chunk in self.chunks.items():
+            cx = chunk.world_x + chunk.size / 2
+            cz = chunk.world_z + chunk.size / 2
+            half = chunk.size / 2 + radius
+            if abs(cx - world_x) < half and abs(cz - world_z) < half:
+                chunk.is_dirty = True
+                if chunk.height_cache:
+                    chunk.height_cache.invalidate()
+
+    # =========================================================================
+    # HEIGHTMAP OVERLAY
+    # =========================================================================
+
+    def load_heightmap(self, image_path: str):
+        """Load a grayscale image as a heightmap overlay.
+        Bright pixels = high, dark pixels = low. Values are normalised to 0..1."""
+        try:
+            from PIL import Image
+        except ImportError:
+            # Fallback to Qt
+            from PyQt5.QtGui import QImage
+            img = QImage(image_path)
+            if img.isNull():
+                raise ValueError(f"Could not load image: {image_path}")
+            img = img.convertToFormat(QImage.Format_Grayscale8)
+            w, h = img.width(), img.height()
+            ptr = img.bits()
+            ptr.setsize(w * h)
+            arr = np.frombuffer(ptr, dtype=np.uint8).reshape((h, w))
+            self.heightmap_data = arr.astype(np.float32) / 255.0
+            self.mark_all_dirty()
+            return
+        img = Image.open(image_path).convert('L')
+        arr = np.array(img, dtype=np.float32) / 255.0
+        self.heightmap_data = arr
+        self.mark_all_dirty()
+
+    def clear_heightmap(self):
+        """Remove the heightmap overlay."""
+        self.heightmap_data = None
+        self.mark_all_dirty()
+
+    def _sample_heightmap_scalar(self, world_x: float, world_z: float, proc_height: float) -> float:
+        """Sample the heightmap at a world position. Returns height offset."""
+        if self.heightmap_data is None:
+            return 0.0
+        u, v = self._world_to_heightmap_uv(world_x, world_z)
+        if u < 0 or u > 1 or v < 0 or v > 1:
+            return 0.0
+        h = self._bilinear_sample(u, v)
+        if self.heightmap_blend == 'replace':
+            # Replace: heightmap value replaces procedural, return delta
+            target = self.biome.base_height + h * self.heightmap_strength + self.offset_y
+            return target - proc_height
+        else:
+            # Additive (default)
+            return (h - 0.5) * self.heightmap_strength
+
+    def _sample_heightmap_batch(self, world_x: np.ndarray, world_z: np.ndarray, proc_heights: np.ndarray) -> np.ndarray:
+        """Sample the heightmap for arrays of world positions."""
+        if self.heightmap_data is None:
+            return np.zeros(len(world_x), dtype=np.float32)
+        u, v = self._world_to_heightmap_uv_batch(world_x, world_z)
+        mask = (u >= 0) & (u <= 1) & (v >= 0) & (v <= 1)
+        result = np.zeros(len(world_x), dtype=np.float32)
+        if not np.any(mask):
+            return result
+        h_vals = self._bilinear_sample_batch(u[mask], v[mask])
+        if self.heightmap_blend == 'replace':
+            target = self.biome.base_height + h_vals * self.heightmap_strength + self.offset_y
+            result[mask] = target - proc_heights[mask]
+        else:
+            result[mask] = (h_vals - 0.5) * self.heightmap_strength
+        return result
+
+    def _world_to_heightmap_uv(self, world_x: float, world_z: float) -> Tuple[float, float]:
+        """Map world XZ to heightmap UV (0..1) based on terrain bounds."""
+        bounds = self.get_terrain_bounds()
+        min_x, max_x = bounds[0]
+        min_z, max_z = bounds[1]
+        range_x = max_x - min_x
+        range_z = max_z - min_z
+        if range_x == 0 or range_z == 0:
+            return (0.5, 0.5)
+        u = (world_x - min_x) / range_x
+        v = (world_z - min_z) / range_z
+        return (u, v)
+
+    def _world_to_heightmap_uv_batch(self, world_x: np.ndarray, world_z: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        bounds = self.get_terrain_bounds()
+        min_x, max_x = bounds[0]
+        min_z, max_z = bounds[1]
+        range_x = max_x - min_x
+        range_z = max_z - min_z
+        if range_x == 0 or range_z == 0:
+            return (np.full_like(world_x, 0.5), np.full_like(world_z, 0.5))
+        u = (world_x - min_x) / range_x
+        v = (world_z - min_z) / range_z
+        return (u, v)
+
+    def _bilinear_sample(self, u: float, v: float) -> float:
+        """Bilinear sample from heightmap_data at normalised UV."""
+        h, w = self.heightmap_data.shape
+        px = u * (w - 1)
+        py = v * (h - 1)
+        x0 = int(math.floor(px))
+        y0 = int(math.floor(py))
+        x1 = min(x0 + 1, w - 1)
+        y1 = min(y0 + 1, h - 1)
+        x0 = max(0, x0)
+        y0 = max(0, y0)
+        fx = px - x0
+        fy = py - y0
+        top = self.heightmap_data[y0, x0] * (1 - fx) + self.heightmap_data[y0, x1] * fx
+        bot = self.heightmap_data[y1, x0] * (1 - fx) + self.heightmap_data[y1, x1] * fx
+        return top * (1 - fy) + bot * fy
+
+    def _bilinear_sample_batch(self, u: np.ndarray, v: np.ndarray) -> np.ndarray:
+        """Bilinear sample from heightmap_data for arrays of UV coords."""
+        h, w = self.heightmap_data.shape
+        px = np.clip(u * (w - 1), 0, w - 1)
+        py = np.clip(v * (h - 1), 0, h - 1)
+        x0 = np.floor(px).astype(np.int32)
+        y0 = np.floor(py).astype(np.int32)
+        x1 = np.minimum(x0 + 1, w - 1)
+        y1 = np.minimum(y0 + 1, h - 1)
+        fx = px - x0
+        fy = py - y0
+        top = self.heightmap_data[y0, x0] * (1 - fx) + self.heightmap_data[y0, x1] * fx
+        bot = self.heightmap_data[y1, x0] * (1 - fx) + self.heightmap_data[y1, x1] * fx
+        return top * (1 - fy) + bot * fy
+
     def cleanup(self):
         for key in list(self.chunks.keys()):
             self._delete_chunk(key)
         self.chunks.clear()
     
     def to_dict(self) -> dict:
-        return {
-            'enabled': self.enabled,
+        # While the editor is previewing a Big World fill the live bounds are
+        # widened to the whole world; persist the *authored* bounds instead so a
+        # save never bakes the preview expansion into the map file.
+        if self._authored_bounds is not None:
+            min_cx, max_cx, min_cz, max_cz = self._authored_bounds
+            enabled_out = self.enabled if self._authored_enabled is None else self._authored_enabled
+        else:
+            min_cx, max_cx = self.min_chunk_x, self.max_chunk_x
+            min_cz, max_cz = self.min_chunk_z, self.max_chunk_z
+            enabled_out = self.enabled
+        data = {
+            'enabled': enabled_out,
             'solid': self.solid,
             'seed': self.seed,
             'biome': self.biome.name,
@@ -949,14 +1501,28 @@ class Terrain:
             'offset_x': self.offset_x,
             'offset_z': self.offset_z,
             'offset_y': self.offset_y,
-            'min_chunk_x': self.min_chunk_x,
-            'max_chunk_x': self.max_chunk_x,
-            'min_chunk_z': self.min_chunk_z,
-            'max_chunk_z': self.max_chunk_z,
+            'min_chunk_x': min_cx,
+            'max_chunk_x': max_cx,
+            'min_chunk_z': min_cz,
+            'max_chunk_z': max_cz,
             'use_textures': self.use_textures,
             'flat_mode': self.flat_mode,
             'custom_biome': self.biome.to_dict()
         }
+        # Sculpt offsets — serialise sparse dict as list of [gx, gz, offset]
+        if self.sculpt_offsets:
+            data['sculpt_offsets'] = [[gx, gz, val] for (gx, gz), val in self.sculpt_offsets.items()]
+            data['sculpt_grid_resolution'] = self.sculpt_grid_resolution
+        # Heightmap settings (image data is NOT saved — only the path is
+        # stored by the editor so the user can re-load it)
+        if self.heightmap_data is not None:
+            import base64, io
+            buf = io.BytesIO()
+            np.save(buf, self.heightmap_data)
+            data['heightmap_blob'] = base64.b64encode(buf.getvalue()).decode('ascii')
+            data['heightmap_strength'] = self.heightmap_strength
+            data['heightmap_blend'] = self.heightmap_blend
+        return data
     
     def from_dict(self, data: dict):
         self.enabled = data.get('enabled', True)
@@ -978,4 +1544,19 @@ class Terrain:
         self.use_textures = data.get('use_textures', True)
         self.flat_mode = data.get('flat_mode', False)
         if 'custom_biome' in data: self.biome = BiomeConfig.from_dict(data['custom_biome'])
+        # Sculpt offsets
+        self.sculpt_offsets = {}
+        self.sculpt_grid_resolution = data.get('sculpt_grid_resolution', 4.0)
+        for entry in data.get('sculpt_offsets', []):
+            gx, gz, val = entry
+            self.sculpt_offsets[(int(gx), int(gz))] = float(val)
+        # Heightmap
+        if 'heightmap_blob' in data:
+            import base64, io
+            buf = io.BytesIO(base64.b64decode(data['heightmap_blob']))
+            self.heightmap_data = np.load(buf)
+            self.heightmap_strength = data.get('heightmap_strength', 100.0)
+            self.heightmap_blend = data.get('heightmap_blend', 'additive')
+        else:
+            self.heightmap_data = None
         self.mark_all_dirty()

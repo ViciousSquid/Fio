@@ -1,5 +1,5 @@
 {
-    "fingerprint": "RStudio",
+    "version": 3,
     "brushes": [
         {
             "pos": [
@@ -34,7 +34,8 @@
                 240.0,
                 1008.0
             ],
-            "start_on": true
+            "start_on": true,
+            "id": "6e5277ba-bd19-43ec-94c3-66b56bb3e4cb"
         },
         {
             "pos": [
@@ -59,7 +60,8 @@
             "is_trigger": true,
             "trigger_type": "Once",
             "name": "mover1",
-            "target": "mover1"
+            "target": "mover1",
+            "id": "e6f96047-78d6-453d-9c69-f7d0665834e8"
         }
     ],
     "things": [
@@ -73,8 +75,10 @@
             "properties": {
                 "type": "playerstart",
                 "name": "PlayerStart_1",
-                "angle": "0.0"
-            }
+                "angle": 0.0,
+                "id": "716f1bab-5f90-4f34-9d7e-a33dabf13447"
+            },
+            "io_connections": []
         },
         {
             "type": "light",
@@ -86,13 +90,19 @@
             "properties": {
                 "type": "light",
                 "name": "Light_1",
-                "colour": "[255, 255, 255]",
-                "intensity": "1.0",
-                "radius": "512.0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "False"
-            }
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "6b598740-b8e7-4b70-bb56-d47c6c7a28ab"
+            },
+            "io_connections": []
         },
         {
             "type": "light",
@@ -104,13 +114,19 @@
             "properties": {
                 "type": "light",
                 "name": "Light_2",
-                "colour": "[255, 255, 255]",
-                "intensity": "1.0",
-                "radius": "512.0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "False"
-            }
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "c17fdd8e-7bb7-48a5-8534-cb31b4a2dd3f"
+            },
+            "io_connections": []
         }
     ],
     "terrain_data": {

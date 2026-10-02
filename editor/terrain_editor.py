@@ -1,11 +1,3 @@
-"""
-Terrain Editor Window for RStudio
-
-A floating dialog with comprehensive terrain creation and editing tools.
-Now with separate controls for mountains, valleys, and plateaus.
-Includes new Scale tab for physical mesh scaling and tiling.
-"""
-
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDoubleSpinBox,
     QComboBox, QPushButton, QGroupBox, QFormLayout, QSlider, QCheckBox,
@@ -54,28 +46,28 @@ class GradientPreview(QWidget):
         painter.drawRect(rect.adjusted(1, 1, -1, -1))
 
 
-class TerrainEditorWindow(QDialog):
-    """Floating window for terrain editing tools."""
-    
+class TerrainEditorPanel(QWidget):
+    """Embeddable terrain editing panel.
+
+    Lives in the Properties dock (bottom-left pane) as an overlay, the same
+    way the procedural map generator does, rather than in a floating window.
+    """
+
     # Signals
     terrain_changed = pyqtSignal()
     terrain_generated = pyqtSignal()
-    
+
     def __init__(self, terrain: Terrain, parent=None):
         super().__init__(parent)
         self.terrain = terrain
         self.editor = parent
-        
-        self.setWindowTitle("Terrain Editor")
-        self.setMinimumSize(800, 850)
-        self.resize(810, 1080)
-        self.setWindowFlags(Qt.Window | Qt.WindowCloseButtonHint)
-        
+
+        self.setObjectName("TerrainEditorPanel")
         self._building_ui = False
-        
+
         # Apply global stylesheet
         self.setStyleSheet("""
-            QDialog {
+            QWidget#TerrainEditorPanel {
                 background-color: #2b2b2b;
                 color: #f0f0f0;
             }
@@ -169,19 +161,50 @@ class TerrainEditorWindow(QDialog):
         main_layout.setSpacing(10)
         main_layout.setContentsMargins(12, 12, 12, 12)
         
-        # Header
-        header = QLabel("🏔️ Low-Poly Terrain Generator")
-        header.setStyleSheet("""
-            QLabel {
+        # Top action row: Regenerate / Reset / Close. Mirrors the procedural
+        # map generator's button row so terrain editing lives in the dock
+        # instead of a floating window, with Regenerate at the top.
+        top_button_layout = QHBoxLayout()
+        top_button_layout.setSpacing(10)
+
+        regenerate_btn = QPushButton("🔄 Regenerate")
+        regenerate_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #F08000;
+                color: white;
                 font-weight: bold;
-                color: #F08000;
-                padding: 12px;
-                background-color: #2a3a38;
-                border-radius: 6px;
-                font-size: 16px;
+                padding: 12px 20px;
+            }
+            QPushButton:hover {
+                background-color: #FF9020;
             }
         """)
-        
+        regenerate_btn.clicked.connect(self.regenerate_terrain)
+        top_button_layout.addWidget(regenerate_btn, 2)
+
+        reset_btn = QPushButton("Reset Defaults")
+        reset_btn.clicked.connect(self.reset_to_defaults)
+        top_button_layout.addWidget(reset_btn, 1)
+
+        close_btn = QPushButton("✕ Close")
+        close_btn.clicked.connect(self.request_close)
+        top_button_layout.addWidget(close_btn, 1)
+
+        main_layout.addLayout(top_button_layout)
+
+        # Everything below the fixed action row lives in a vertical scroll area
+        # so the panel keeps its size in the dock and scrolls instead of forcing
+        # the pane larger when the tabs need more room.
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setSpacing(10)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+
         # Top controls row (Textures, Wireframe, Solid, Flat)
         controls_layout = QHBoxLayout()
         controls_layout.setSpacing(20)
@@ -210,8 +233,8 @@ class TerrainEditorWindow(QDialog):
         controls_layout.addWidget(self.solid_checkbox)
         
         controls_layout.addStretch()
-        main_layout.addLayout(controls_layout)
-        
+        content_layout.addLayout(controls_layout)
+
         # Tab widget
         tabs = QTabWidget()
         
@@ -498,13 +521,28 @@ class TerrainEditorWindow(QDialog):
             ("Huge (11×11)", (-5, 5)),
         ]
         
+        self._size_preset_btns = []
         for i, (label, bounds) in enumerate(size_presets):
             btn = QPushButton(label)
             btn.clicked.connect(lambda checked, b=bounds: self.apply_size_preset(b))
             preset_layout.addWidget(btn, i // 3, i % 3)
-        
+            self._size_preset_btns.append(btn)
+
         preset_group.setLayout(preset_layout)
         size_layout.addWidget(preset_group)
+
+        # Shown only while Big World "Fill world with terrain" owns the world
+        # size; the manual bounds/presets above are disabled to avoid a conflict.
+        self._bigworld_size_note = QLabel(
+            "🌍 Size is managed by Big World “Fill world with terrain”.\n"
+            "Turn that option off on the Big World Settings entity to set bounds "
+            "manually. Biome, sculpting, seed and height stay fully editable.")
+        self._bigworld_size_note.setWordWrap(True)
+        self._bigworld_size_note.setStyleSheet(
+            "QLabel { background-color: #2a2340; color: #cbb8f0; padding: 10px;"
+            " border: 1px solid #6a5aa0; border-radius: 6px; }")
+        self._bigworld_size_note.setVisible(False)
+        size_layout.addWidget(self._bigworld_size_note)
         
         # Size info
         self.size_info_label = QLabel()
@@ -623,34 +661,192 @@ class TerrainEditorWindow(QDialog):
         
         pos_layout.addStretch()
         tabs.addTab(pos_tab, "Position")
-        
-        main_layout.addWidget(tabs)
-        
-        # Bottom buttons
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(10)
-        
-        regenerate_btn = QPushButton("🔄 Regenerate")
-        regenerate_btn.setStyleSheet("""
+
+        # === HEIGHTMAP TAB ===
+        hm_tab = QWidget()
+        hm_layout = QVBoxLayout(hm_tab)
+        hm_layout.setSpacing(12)
+        hm_layout.setContentsMargins(8, 8, 8, 8)
+
+        hm_load_group = QGroupBox("Heightmap Image")
+        hm_load_layout = QVBoxLayout(hm_load_group)
+        hm_load_layout.setSpacing(10)
+        hm_load_layout.setContentsMargins(12, 20, 12, 12)
+
+        hm_info = QLabel("Load a greyscale image to drive terrain height.\n"
+                         "White = high, Black = low.")
+        hm_info.setStyleSheet("color: #aaa; font-style: italic;")
+        hm_info.setWordWrap(True)
+        hm_load_layout.addWidget(hm_info)
+
+        hm_btn_row = QHBoxLayout()
+        load_hm_btn = QPushButton("📂 Load Image…")
+        load_hm_btn.clicked.connect(self.load_heightmap_image)
+        hm_btn_row.addWidget(load_hm_btn)
+
+        clear_hm_btn = QPushButton("✕ Clear")
+        clear_hm_btn.clicked.connect(self.clear_heightmap)
+        hm_btn_row.addWidget(clear_hm_btn)
+        hm_load_layout.addLayout(hm_btn_row)
+
+        self.hm_status_label = QLabel("No heightmap loaded")
+        self.hm_status_label.setStyleSheet("color: #F08000;")
+        hm_load_layout.addWidget(self.hm_status_label)
+
+        hm_load_group.setLayout(hm_load_layout)
+        hm_layout.addWidget(hm_load_group)
+
+        # Heightmap settings
+        hm_settings_group = QGroupBox("Heightmap Settings")
+        hm_settings_layout = QFormLayout(hm_settings_group)
+        hm_settings_layout.setSpacing(10)
+        hm_settings_layout.setContentsMargins(12, 20, 12, 12)
+
+        self.hm_strength_spin = QDoubleSpinBox()
+        self.hm_strength_spin.setRange(1, 2000)
+        self.hm_strength_spin.setSingleStep(10)
+        self.hm_strength_spin.setValue(self.terrain.heightmap_strength)
+        self.hm_strength_spin.valueChanged.connect(self.on_heightmap_settings_changed)
+        hm_settings_layout.addRow("Strength:", self.hm_strength_spin)
+
+        self.hm_blend_combo = QComboBox()
+        self.hm_blend_combo.addItem("Additive", "additive")
+        self.hm_blend_combo.addItem("Replace", "replace")
+        idx = 0 if self.terrain.heightmap_blend == 'additive' else 1
+        self.hm_blend_combo.setCurrentIndex(idx)
+        self.hm_blend_combo.currentIndexChanged.connect(self.on_heightmap_settings_changed)
+        hm_settings_layout.addRow("Blend Mode:", self.hm_blend_combo)
+
+        hm_settings_group.setLayout(hm_settings_layout)
+        hm_layout.addWidget(hm_settings_group)
+
+        hm_layout.addStretch()
+        tabs.addTab(hm_tab, "Heightmap")
+
+        # === SCULPT TAB ===
+        sculpt_tab = QWidget()
+        sculpt_layout = QVBoxLayout(sculpt_tab)
+        sculpt_layout.setSpacing(12)
+        sculpt_layout.setContentsMargins(8, 8, 8, 8)
+
+        # Sculpt brush settings
+        brush_group = QGroupBox("Sculpt Brush")
+        brush_layout = QFormLayout(brush_group)
+        brush_layout.setSpacing(10)
+        brush_layout.setContentsMargins(12, 20, 12, 12)
+
+        sculpt_info = QLabel("Paint directly in the 3D viewport, or enter coordinates manually below.")
+        sculpt_info.setStyleSheet("color: #aaa; font-style: italic;")
+        sculpt_info.setWordWrap(True)
+        brush_layout.addRow(sculpt_info)
+
+        self.sculpt_paint_btn = QPushButton("🎨 Enable 3D Viewport Painting")
+        self.sculpt_paint_btn.setCheckable(True)
+        self.sculpt_paint_btn.setChecked(False)
+        self.sculpt_paint_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #555;
+                color: white;
+                font-weight: bold;
+                padding: 10px;
+            }
+            QPushButton:checked {
+                background-color: #C62828;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #6a6a6a;
+            }
+            QPushButton:checked:hover {
+                background-color: #D32F2F;
+            }
+        """)
+        self.sculpt_paint_btn.toggled.connect(self.toggle_3d_sculpt_painting)
+        brush_layout.addRow(self.sculpt_paint_btn)
+
+        self.sculpt_mode_combo = QComboBox()
+        self.sculpt_mode_combo.addItem("Raise", "raise")
+        self.sculpt_mode_combo.addItem("Lower", "lower")
+        self.sculpt_mode_combo.addItem("Smooth", "smooth")
+        self.sculpt_mode_combo.addItem("Flatten", "flatten")
+        self.sculpt_mode_combo.currentIndexChanged.connect(self.on_sculpt_brush_setting_changed)
+        brush_layout.addRow("Mode:", self.sculpt_mode_combo)
+
+        self.sculpt_radius_spin = QDoubleSpinBox()
+        self.sculpt_radius_spin.setRange(4, 500)
+        self.sculpt_radius_spin.setSingleStep(10)
+        self.sculpt_radius_spin.setValue(50)
+        self.sculpt_radius_spin.valueChanged.connect(self.on_sculpt_brush_setting_changed)
+        brush_layout.addRow("Radius:", self.sculpt_radius_spin)
+
+        self.sculpt_strength_spin = QDoubleSpinBox()
+        self.sculpt_strength_spin.setRange(0.1, 200)
+        self.sculpt_strength_spin.setSingleStep(5)
+        self.sculpt_strength_spin.setValue(20)
+        self.sculpt_strength_spin.valueChanged.connect(self.on_sculpt_brush_setting_changed)
+        brush_layout.addRow("Strength:", self.sculpt_strength_spin)
+
+        brush_group.setLayout(brush_layout)
+        sculpt_layout.addWidget(brush_group)
+
+        # Manual coordinate entry
+        coord_group = QGroupBox("Apply At Coordinates")
+        coord_layout = QFormLayout(coord_group)
+        coord_layout.setSpacing(10)
+        coord_layout.setContentsMargins(12, 20, 12, 12)
+
+        self.sculpt_x_spin = QDoubleSpinBox()
+        self.sculpt_x_spin.setRange(-50000, 50000)
+        self.sculpt_x_spin.setSingleStep(50)
+        self.sculpt_x_spin.setValue(0)
+        coord_layout.addRow("World X:", self.sculpt_x_spin)
+
+        self.sculpt_z_spin = QDoubleSpinBox()
+        self.sculpt_z_spin.setRange(-50000, 50000)
+        self.sculpt_z_spin.setSingleStep(50)
+        self.sculpt_z_spin.setValue(0)
+        coord_layout.addRow("World Z:", self.sculpt_z_spin)
+
+        apply_sculpt_btn = QPushButton("🖌️ Apply Sculpt")
+        apply_sculpt_btn.setStyleSheet("""
             QPushButton {
                 background-color: #F08000;
                 color: white;
                 font-weight: bold;
-                padding: 12px 20px;
             }
             QPushButton:hover {
                 background-color: #FF9020;
             }
         """)
-        regenerate_btn.clicked.connect(self.regenerate_terrain)
-        button_layout.addWidget(regenerate_btn)
+        apply_sculpt_btn.clicked.connect(self.apply_sculpt)
+        coord_layout.addRow(apply_sculpt_btn)
+
+        coord_group.setLayout(coord_layout)
+        sculpt_layout.addWidget(coord_group)
+
+        # Sculpt info / clear
+        sculpt_actions_group = QGroupBox("Sculpt Data")
+        sculpt_actions_layout = QVBoxLayout(sculpt_actions_group)
+        sculpt_actions_layout.setSpacing(10)
+        sculpt_actions_layout.setContentsMargins(12, 20, 12, 12)
+
+        self.sculpt_info_label = QLabel("No sculpt deformations")
+        self.sculpt_info_label.setStyleSheet("color: #aaa;")
+        sculpt_actions_layout.addWidget(self.sculpt_info_label)
+        self._update_sculpt_info()
+
+        clear_sculpt_btn = QPushButton("🗑️ Clear All Sculpt Data")
+        clear_sculpt_btn.clicked.connect(self.clear_sculpt)
+        sculpt_actions_layout.addWidget(clear_sculpt_btn)
+
+        sculpt_actions_group.setLayout(sculpt_actions_layout)
+        sculpt_layout.addWidget(sculpt_actions_group)
+
+        sculpt_layout.addStretch()
+        tabs.addTab(sculpt_tab, "Sculpt")
         
-        reset_btn = QPushButton("Reset Defaults")
-        reset_btn.clicked.connect(self.reset_to_defaults)
-        button_layout.addWidget(reset_btn)
-        
-        main_layout.addLayout(button_layout)
-        
+        content_layout.addWidget(tabs)
+
         # Stats
         self.stats_label = QLabel("Visible: 0 chunks  |  Culled: 0  |  Triangles: 0")
         self.stats_label.setStyleSheet("""
@@ -662,8 +858,11 @@ class TerrainEditorWindow(QDialog):
             }
         """)
         self.stats_label.setAlignment(Qt.AlignCenter)
-        main_layout.addWidget(self.stats_label)
-        
+        content_layout.addWidget(self.stats_label)
+
+        scroll_area.setWidget(content_widget)
+        main_layout.addWidget(scroll_area)
+
         self._building_ui = False
 
     def on_textures_changed(self, enabled):
@@ -723,6 +922,10 @@ class TerrainEditorWindow(QDialog):
         self.max_x_spin.setValue(self.terrain.max_chunk_x)
         self.min_z_spin.setValue(self.terrain.min_chunk_z)
         self.max_z_spin.setValue(self.terrain.max_chunk_z)
+
+        # If Big World is filling the world, lock the manual size controls.
+        self.set_bigworld_managed(
+            getattr(self.terrain, '_authored_bounds', None) is not None)
         
         # Position
         self.x_offset_spin.setValue(self.terrain.offset_x)
@@ -732,6 +935,19 @@ class TerrainEditorWindow(QDialog):
         self.update_gradient_preview()
         self.update_size_info()
         
+        # Heightmap status
+        if self.terrain.heightmap_data is not None:
+            h, w = self.terrain.heightmap_data.shape
+            self.hm_status_label.setText(f"Loaded: {w}×{h} px")
+        else:
+            self.hm_status_label.setText("No heightmap loaded")
+        self.hm_strength_spin.setValue(self.terrain.heightmap_strength)
+        idx = 0 if self.terrain.heightmap_blend == 'additive' else 1
+        self.hm_blend_combo.setCurrentIndex(idx)
+
+        # Sculpt info
+        self._update_sculpt_info()
+
         self._building_ui = False
     
     def update_gradient_preview(self):
@@ -889,6 +1105,10 @@ class TerrainEditorWindow(QDialog):
     def on_bounds_changed(self, value):
         if self._building_ui:
             return
+        if getattr(self.terrain, '_authored_bounds', None) is not None:
+            # The world size is owned by Big World "Fill world with terrain";
+            # ignore manual bounds edits so they can't fight / desync the fill.
+            return
         self.show_progress("Updating terrain bounds...")
         self.terrain.set_bounds(
             self.min_x_spin.value(),
@@ -947,7 +1167,27 @@ class TerrainEditorWindow(QDialog):
         import random
         self.seed_spin.setValue(random.randint(0, 999999))
     
+    def set_bigworld_managed(self, managed: bool):
+        """Reflect Big World fill ownership of the world size in the Size tab.
+
+        When *managed*, the manual bounds spin-boxes and size presets are
+        disabled and an explanatory note is shown — everything else (biome,
+        sculpt, seed, height, offsets) stays fully editable so the generated
+        terrain can still be customised.
+        """
+        for w in (getattr(self, 'min_x_spin', None), getattr(self, 'max_x_spin', None),
+                  getattr(self, 'min_z_spin', None), getattr(self, 'max_z_spin', None)):
+            if w is not None:
+                w.setEnabled(not managed)
+        for b in getattr(self, '_size_preset_btns', None) or []:
+            b.setEnabled(not managed)
+        note = getattr(self, '_bigworld_size_note', None)
+        if note is not None:
+            note.setVisible(bool(managed))
+
     def apply_size_preset(self, bounds):
+        if getattr(self.terrain, '_authored_bounds', None) is not None:
+            return  # size owned by Big World fill (see on_bounds_changed)
         self._building_ui = True
         self.min_x_spin.setValue(bounds[0])
         self.max_x_spin.setValue(bounds[1])
@@ -955,7 +1195,140 @@ class TerrainEditorWindow(QDialog):
         self.max_z_spin.setValue(bounds[1])
         self._building_ui = False
         self.on_bounds_changed(0)
-    
+
+    # =========================================================================
+    # HEIGHTMAP
+    # =========================================================================
+
+    def load_heightmap_image(self):
+        """Open a file dialog and load a greyscale image as a heightmap."""
+        from PyQt5.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Heightmap Image", "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff);;All Files (*)"
+        )
+        if not path:
+            return
+        self.show_progress("Loading heightmap…")
+        try:
+            self.terrain.load_heightmap(path)
+            h, w = self.terrain.heightmap_data.shape
+            self.hm_status_label.setText(f"Loaded: {w}×{h} px  —  {path.split('/')[-1].split(chr(92))[-1]}")
+            self.terrain_changed.emit()
+        except Exception as e:
+            QMessageBox.warning(self, "Heightmap Error", str(e))
+        finally:
+            self.hide_progress()
+
+    def clear_heightmap(self):
+        """Remove the heightmap overlay."""
+        self.terrain.clear_heightmap()
+        self.hm_status_label.setText("No heightmap loaded")
+        self.terrain_changed.emit()
+
+    def on_heightmap_settings_changed(self, _=None):
+        if self._building_ui:
+            return
+        self.terrain.heightmap_strength = self.hm_strength_spin.value()
+        self.terrain.heightmap_blend = self.hm_blend_combo.currentData()
+        if self.terrain.heightmap_data is not None:
+            self.terrain.mark_all_dirty()
+            self.terrain_changed.emit()
+
+    # =========================================================================
+    # SCULPT
+    # =========================================================================
+
+    def apply_sculpt(self):
+        """Apply a single sculpt stroke at the entered coordinates."""
+        x = self.sculpt_x_spin.value()
+        z = self.sculpt_z_spin.value()
+        radius = self.sculpt_radius_spin.value()
+        strength = self.sculpt_strength_spin.value()
+        mode = self.sculpt_mode_combo.currentData()
+
+        self.show_progress("Sculpting terrain…")
+        try:
+            if mode == 'raise':
+                self.terrain.apply_sculpt_at(x, z, radius, strength)
+            elif mode == 'lower':
+                self.terrain.apply_sculpt_at(x, z, radius, -strength)
+            elif mode == 'smooth':
+                self.terrain.smooth_sculpt_at(x, z, radius, min(strength / 20.0, 1.0))
+            elif mode == 'flatten':
+                self.terrain.flatten_sculpt_at(x, z, radius, min(strength / 20.0, 1.0))
+            self._update_sculpt_info()
+            self.terrain_changed.emit()
+        finally:
+            self.hide_progress()
+
+    def clear_sculpt(self):
+        """Remove all sculpt deformations."""
+        self.terrain.clear_sculpt()
+        self._update_sculpt_info()
+        self.terrain_changed.emit()
+        if self.editor and hasattr(self.editor, 'show_toast'):
+            self.editor.show_toast("Sculpt data cleared")
+
+    def _update_sculpt_info(self):
+        count = len(self.terrain.sculpt_offsets)
+        if count == 0:
+            self.sculpt_info_label.setText("No sculpt deformations")
+        else:
+            self.sculpt_info_label.setText(f"{count:,} deformation points stored")
+
+    def toggle_3d_sculpt_painting(self, active):
+        """Enable or disable 3D viewport sculpt painting mode."""
+        view_3d = getattr(self.editor, 'view_3d', None) if self.editor else None
+        if view_3d is None:
+            self.sculpt_paint_btn.setChecked(False)
+            return
+        view_3d.set_terrain_sculpt_active(active)
+        if active:
+            self._sync_sculpt_to_viewport()
+            self.sculpt_paint_btn.setText("🛑 Disable 3D Viewport Painting")
+        else:
+            self.sculpt_paint_btn.setText("🎨 Enable 3D Viewport Painting")
+
+    def _sync_sculpt_to_viewport(self):
+        """Push current sculpt brush settings to the 3D view."""
+        view_3d = getattr(self.editor, 'view_3d', None) if self.editor else None
+        if view_3d is None:
+            return
+        view_3d.terrain_sculpt_mode = self.sculpt_mode_combo.currentData()
+        view_3d.terrain_sculpt_radius = self.sculpt_radius_spin.value()
+        view_3d.terrain_sculpt_strength = self.sculpt_strength_spin.value()
+
+    def on_sculpt_brush_setting_changed(self, _=None):
+        """Called when any sculpt brush setting changes — sync to viewport."""
+        self._sync_sculpt_to_viewport()
+
+    def request_close(self):
+        """Close the panel by restoring the Properties dock's original content."""
+        if self.sculpt_paint_btn.isChecked():
+            self.sculpt_paint_btn.setChecked(False)
+        if self.editor and hasattr(self.editor, '_close_current_overlay'):
+            self.editor._close_current_overlay()
+
+    def closeEvent(self, event):
+        """Disable sculpt painting when the terrain editor is closed."""
+        if self.sculpt_paint_btn.isChecked():
+            self.sculpt_paint_btn.setChecked(False)
+        super().closeEvent(event)
+
+    def hideEvent(self, event):
+        """Cleanup on hide: disable sculpt painting and stop the stats timer.
+
+        NOTE: This used to be two separate hideEvent methods on the class — the
+        second silently overrode the first, so the sculpt-painting disable was
+        never running. They're now merged.
+        """
+        if self.sculpt_paint_btn.isChecked():
+            self.sculpt_paint_btn.setChecked(False)
+        if hasattr(self, '_stats_timer'):
+            self._stats_timer.stop()
+        super().hideEvent(event)
+
     def regenerate_terrain(self):
         self.show_progress("Regenerating terrain...")
         self.terrain.mark_all_dirty()
@@ -991,8 +1364,3 @@ class TerrainEditorWindow(QDialog):
             self._stats_timer = QTimer(self)
             self._stats_timer.timeout.connect(self.update_stats)
         self._stats_timer.start(500)
-    
-    def hideEvent(self, event):
-        super().hideEvent(event)
-        if hasattr(self, '_stats_timer'):
-            self._stats_timer.stop()

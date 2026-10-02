@@ -1,5 +1,6 @@
-from OpenGL.GL import *
+import OpenGL.GL as gl                    # FIX#9: no wildcard import
 from PyQt5.QtGui import QImage
+
 
 class TextureManager:
     def __init__(self):
@@ -10,37 +11,52 @@ class TextureManager:
             self.textures[path] = self._load_texture(path)
         return self.textures[path]
 
-    # Revised _load_texture method in textures.py
-def _load_texture(self, path):
-    image = QImage(path)
-    if image.isNull():
-        print(f"Error loading image: {path}")
-        return -1
+    def _load_texture(self, path):
+        from engine.resource_manager import ResourceManager
+        rm = ResourceManager()
+        
+        if rm.is_package_mode():
+            data = rm.get_asset(path)
+            if data:
+                image = QImage.fromData(data)
+            else:
+                image = QImage()
+        else:
+            image = QImage(path)
 
-    image = image.convertToFormat(QImage.Format_RGBA8888)
-    width, height = image.width(), image.height()
-    data = image.bits().asstring(image.byteCount())
+        if image.isNull():
+            print(f"Error loading image: {path}")
+            return -1
 
-    texture_id = glGenTextures(1)
-    glBindTexture(GL_TEXTURE_2D, texture_id)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data)
+        image = image.convertToFormat(QImage.Format_RGBA8888)
+        width, height = image.width(), image.height()
 
-    # Added for mipmaps and anisotropic filtering
-    gl.glGenerateMipmap(GL_TEXTURE_2D)
-    gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
-    gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-    # Anisotropic filtering (if supported)
-    try:
-        max_aniso = gl.glGetFloatv(0x84FF)  # GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT
-        gl.glTexParameterf(GL_TEXTURE_2D, 0x84FE, max_aniso)  # GL_TEXTURE_MAX_ANISOTROPY_EXT
-    except:
-        pass
+        ptr = image.constBits()
+        try:
+            nbytes = image.sizeInBytes()
+        except AttributeError:
+            nbytes = image.byteCount()
+        data = ptr.asstring(nbytes)
 
-    return texture_id
+        texture_id = gl.glGenTextures(1)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, texture_id)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
+        gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, width, height, 0,
+                     gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, data)
+
+        gl.glGenerateMipmap(gl.GL_TEXTURE_2D)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR_MIPMAP_LINEAR)
+        gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+
+        try:
+            max_aniso = gl.glGetFloatv(0x84FF)
+            gl.glTexParameterf(gl.GL_TEXTURE_2D, 0x84FE, max_aniso)
+        except Exception:
+            pass
+
+        return texture_id
+
 
 # Instantiate a global texture manager
 texture_manager = TextureManager()

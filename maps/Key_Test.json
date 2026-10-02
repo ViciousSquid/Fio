@@ -1,5 +1,5 @@
 {
-    "fingerprint": "RStudio",
+    "version": 3,
     "brushes": [
         {
             "pos": [
@@ -26,7 +26,8 @@
                 1.0,
                 1.0,
                 0.4980392156862745
-            ]
+            ],
+            "id": "fee5142d-1e24-4024-acb6-3977b481a1ef"
         },
         {
             "pos": [
@@ -48,7 +49,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "lock": true
+            "lock": true,
+            "id": "d228fbc5-4b18-4190-a4b2-bbabd7209d42"
         },
         {
             "pos": [
@@ -70,7 +72,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "lock": true
+            "lock": true,
+            "id": "e424d076-cfa1-4174-8f66-52d471b29288"
         },
         {
             "pos": [
@@ -92,7 +95,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "lock": true
+            "lock": true,
+            "id": "95fdb80d-4ec7-4fe3-a1bc-589c6931ceef"
         },
         {
             "pos": [
@@ -114,7 +118,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "lock": true
+            "lock": true,
+            "id": "fa3e058f-418c-4c2f-aa3c-7131e4ff7224"
         },
         {
             "pos": [
@@ -136,7 +141,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "lock": true
+            "lock": true,
+            "id": "3b337193-3201-4054-93b3-8e26c790ccb2"
         },
         {
             "pos": [
@@ -157,7 +163,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "lock": true
+            "lock": true,
+            "id": "8d08fa71-f97c-494c-92a7-54bcbce2711e"
         },
         {
             "pos": [
@@ -178,7 +185,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "lock": true
+            "lock": true,
+            "id": "e66e6832-218c-4f39-9e90-a72b8a8e379f"
         },
         {
             "pos": [
@@ -199,7 +207,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "lock": true
+            "lock": true,
+            "id": "b8d1c099-3529-4e41-a1a7-d2784e96b1d8"
         },
         {
             "pos": [
@@ -248,7 +257,8 @@
                 0.0,
                 0.3333333333333333,
                 1.0
-            ]
+            ],
+            "id": "4f8b6b41-3708-4133-ba7c-0b805b0ebf3f"
         },
         {
             "pos": [
@@ -273,7 +283,8 @@
                 0.1607843137254902,
                 0.30980392156862746,
                 0.8
-            ]
+            ],
+            "id": "25734353-576d-4edf-bc59-e88402f4e792"
         },
         {
             "pos": [
@@ -293,7 +304,8 @@
                 "west": "default.png",
                 "top": "default.png",
                 "down": "default.png"
-            }
+            },
+            "id": "a5a2f72c-534e-4ee0-9447-9139246105e0"
         }
     ],
     "things": [
@@ -307,13 +319,19 @@
             "properties": {
                 "type": "light",
                 "name": "Light_1",
-                "colour": "[255, 255, 255]",
-                "intensity": "1.3",
-                "radius": "512.0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.3,
+                "radius": 512.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "False"
-            }
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "45095dd8-8dec-4577-b4c5-86ea489ca661"
+            },
+            "io_connections": []
         },
         {
             "type": "light",
@@ -325,13 +343,19 @@
             "properties": {
                 "type": "light",
                 "name": "Light_2",
-                "colour": "[255, 255, 255]",
-                "intensity": "1.0",
-                "radius": "1024.0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 1024.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "False"
-            }
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "21215e56-f15b-4661-a49e-c20081af669a"
+            },
+            "io_connections": []
         },
         {
             "type": "light",
@@ -343,13 +367,19 @@
             "properties": {
                 "type": "light",
                 "name": "Light_3",
-                "colour": "[255, 255, 255]",
-                "intensity": "1.0",
-                "radius": "512.0",
+                "colour": [
+                    255,
+                    255,
+                    255
+                ],
+                "intensity": 1.0,
+                "radius": 512.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "False"
-            }
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "ebacd81e-a660-4e29-9360-31ebaf9f0527"
+            },
+            "io_connections": []
         },
         {
             "type": "pickup",
@@ -361,15 +391,17 @@
             "properties": {
                 "type": "pickup",
                 "name": "Pickup_1",
-                "respawns": "False",
-                "respawn_time": "20.0",
+                "respawns": false,
+                "respawn_time": 20.0,
                 "item_type": "key",
-                "value": "25",
+                "value": 25,
                 "activation": "walk_over",
-                "collected": "True",
+                "collected": true,
                 "key_name": "blue_key",
-                "custom_sprite": ""
-            }
+                "custom_sprite": "",
+                "id": "007dd568-35e1-465f-9533-f26cb5c3443e"
+            },
+            "io_connections": []
         },
         {
             "type": "playerstart",
@@ -381,10 +413,12 @@
             "properties": {
                 "type": "playerstart",
                 "name": "PlayerStart_1",
-                "respawns": "False",
-                "respawn_time": "20.0",
-                "angle": "270.0"
-            }
+                "respawns": false,
+                "respawn_time": 20.0,
+                "angle": 270.0,
+                "id": "b44e294e-5ca4-45bc-8d8d-c235119516d7"
+            },
+            "io_connections": []
         },
         {
             "type": "light",
@@ -396,13 +430,19 @@
             "properties": {
                 "type": "light",
                 "name": "Light_1",
-                "colour": "[55, 142, 255]",
-                "intensity": "1.5",
-                "radius": "384.0",
+                "colour": [
+                    55,
+                    142,
+                    255
+                ],
+                "intensity": 1.5,
+                "radius": 384.0,
                 "state": "on",
-                "show_radius": "False",
-                "casts_shadows": "False"
-            }
+                "show_radius": false,
+                "casts_shadows": false,
+                "id": "e68d099f-9e1d-4a61-9c3f-16fb4e7fcd8f"
+            },
+            "io_connections": []
         }
     ]
 }

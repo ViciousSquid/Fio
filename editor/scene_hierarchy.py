@@ -1,9 +1,18 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QTreeWidget, QTreeWidgetItem, 
                              QMenu, QAction, QHeaderView, QAbstractItemView, 
-                             QPushButton, QHBoxLayout)
+                             QPushButton, QHBoxLayout, QLabel, QFrame, QGridLayout)
 from PyQt5.QtGui import QIcon, QColor, QBrush, QFont, QPainter, QPixmap
 from PyQt5 import QtCore
+import os
 from PyQt5.QtCore import Qt, QTimer
+
+from editor.things import Light, Model, Monster
+
+try:
+    from editor.io_system import get_connections
+    IO_AVAILABLE = True
+except ImportError:
+    IO_AVAILABLE = False
 
 class SceneHierarchy(QWidget):
     """Scene hierarchy widget with sort button and tree view."""
@@ -36,7 +45,7 @@ class SceneHierarchy(QWidget):
         
         # Create sort button
         self.sort_button = QPushButton(f"Sort: {self.SORT_MODE_NAMES[self.sort_mode]}")
-        self.sort_button.setFixedHeight(28)
+        self.sort_button.setFixedHeight(38)
         self.sort_button.clicked.connect(self.cycle_sort_mode)
         self.sort_button.setStyleSheet("""
             QPushButton {
@@ -44,7 +53,7 @@ class SceneHierarchy(QWidget):
                 color: white;
                 border: none;
                 padding: 4px 8px;
-                text-align: left;
+                text-align: center;
             }
             QPushButton:hover {
                 background-color: #5a7a78;
@@ -55,9 +64,15 @@ class SceneHierarchy(QWidget):
         """)
         layout.addWidget(self.sort_button)
         
+        # Create content container (tree + bottom overlay)
+        self.content_container = QWidget()
+        content_layout = QVBoxLayout(self.content_container)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        
         # Create tree widget
         self.tree = QTreeWidget()
-        layout.addWidget(self.tree)
+        content_layout.addWidget(self.tree, stretch=2)
         
         # Configure tree widget
         self.tree.header().setVisible(False) 
@@ -72,6 +87,7 @@ class SceneHierarchy(QWidget):
         self.lock_icon = QIcon("assets/lock.png")
         self.hidden_icon = QIcon("assets/hidden.png")
         self.tree.itemSelectionChanged.connect(self.handle_selection_change)
+        self.tree.itemDoubleClicked.connect(self.handle_double_click)
 
         # Enable extended selection (shift-click, ctrl-click)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -83,7 +99,7 @@ class SceneHierarchy(QWidget):
                 color: black;
             }
             QTreeWidget::item:selected:!active {
-                background-color: #B1B97D;
+                background-color: #c87c2a;
             }
         """)
 
@@ -106,6 +122,156 @@ class SceneHierarchy(QWidget):
             "circ_pink.png": "pink",
             "circ_white.png": "white",
         }
+
+        # Create overview overlay (bottom third)
+        self.overview_overlay = QFrame()
+        self.overview_overlay.setFrameShape(QFrame.StyledPanel)
+        self.overview_overlay.setStyleSheet("""
+            QFrame {
+                background-color: #2b2b2b;
+                color: #f0f0f0;
+                border: 1px solid #555;
+                border-bottom: none;
+            }
+            QLabel {
+                color: #f0f0f0;
+                background-color: transparent;
+                border: none;
+            }
+        """)
+        content_layout.addWidget(self.overview_overlay, stretch=1)
+        self.overview_overlay.hide()
+
+        # Build overlay layout
+        overlay_layout = QVBoxLayout(self.overview_overlay)
+        overlay_layout.setContentsMargins(12, 12, 12, 12)
+        overlay_layout.setSpacing(8)
+
+        # Header row with arrow indicator
+        header_row = QHBoxLayout()
+        header_row.setSpacing(6)
+        
+        self.arrow_label = QLabel("▲")
+        self.arrow_label.setStyleSheet("color: #FF8C00; font-size: 14px;")
+        header_row.addWidget(self.arrow_label)
+        
+        header_label = QLabel("Overview")
+        header_font = QFont()
+        header_font.setBold(True)
+        header_font.setPointSize(14)
+        header_label.setFont(header_font)
+        header_label.setStyleSheet("color: #FF8C00;")
+        header_row.addWidget(header_label)
+        header_row.addStretch()
+        
+        overlay_layout.addLayout(header_row)
+
+        # Map name label (populated by _update_overview_metrics)
+        self.map_name_label = QLabel("Untitled")
+        map_name_font = QFont()
+        map_name_font.setBold(True)
+        map_name_font.setPointSize(10)
+        self.map_name_label.setFont(map_name_font)
+        self.map_name_label.setStyleSheet("color: #585F2A;")
+        overlay_layout.addWidget(self.map_name_label)
+
+        metrics_grid = QGridLayout()
+        metrics_grid.setSpacing(8)
+        self.overview_labels = {}
+
+        metrics = [
+            ("Lights", "lights"),
+            ("Brushes", "brushes"),
+            ("Things", "things"),
+            ("Models", "models"),
+            ("Movers", "movers"),
+            ("Monsters", "monsters"),
+            ("Triggers", "triggers"),
+            ("Links", "connections"),
+        ]
+
+        for i, (name, key) in enumerate(metrics):
+            name_label = QLabel(f"{name}:")
+            name_label.setStyleSheet("color: #aaaaaa;")
+            value_label = QLabel("0")
+            value_label.setStyleSheet("color: #ffffff; font-weight: bold;")
+            metrics_grid.addWidget(name_label, i, 0)
+            metrics_grid.addWidget(value_label, i, 1)
+            self.overview_labels[key] = value_label
+
+        overlay_layout.addLayout(metrics_grid)
+        overlay_layout.addStretch()
+
+        layout.addWidget(self.content_container)
+
+        # Create metrics banner at bottom (taller)
+        self.metrics_banner = QPushButton("Overview ▲")
+        self.metrics_banner.setFixedHeight(38)
+        self.metrics_banner.setStyleSheet("""
+            QPushButton {
+                background-color: #000000;
+                color: white;
+                border: none;
+                border-top: 1px solid #333;
+                padding: 4px 8px;
+                text-align: center;
+            }
+            QPushButton:hover {
+                background-color: #1a1a1a;
+            }
+            QPushButton:pressed {
+                background-color: #333333;
+            }
+        """)
+        self.metrics_banner.clicked.connect(self._toggle_overview)
+        layout.addWidget(self.metrics_banner)
+
+    def _toggle_overview(self):
+        """Toggle the overview overlay on/off."""
+        if self.overview_overlay.isVisible():
+            self.overview_overlay.hide()
+            self.metrics_banner.setText("Overview ▲")
+        else:
+            self._update_overview_metrics()
+            self.overview_overlay.show()
+            self.metrics_banner.setText("Overview ▼")
+
+    def _update_overview_metrics(self):
+        """Calculate and display scene metrics in the overview overlay."""
+        # Update map name display
+        if hasattr(self.main_window, 'file_path') and self.main_window.file_path:
+            map_name = os.path.basename(self.main_window.file_path)
+            self.map_name_label.setText(f"{map_name}")
+            self.map_name_label.setStyleSheet("color: #A7B454;")
+        else:
+            self.map_name_label.setText("Untitled")
+            self.map_name_label.setStyleSheet("color: #A7B454;")
+
+        state = self.main_window.state
+        
+        lights = sum(1 for t in state.things if isinstance(t, Light))
+        brushes = len(state.brushes)
+        things = len(state.things)
+        models = sum(1 for t in state.things if isinstance(t, Model))
+        movers = sum(1 for b in state.brushes if b.get('is_mover', False))
+        monsters = sum(1 for t in state.things if isinstance(t, Monster))
+        triggers = sum(1 for b in state.brushes if b.get('is_trigger', False))
+        
+        connections = 0
+        if IO_AVAILABLE:
+            for brush in state.brushes:
+                connections += len(get_connections(brush))
+            for thing in state.things:
+                connections += len(get_connections(thing))
+        
+        self.overview_labels['lights'].setText(str(lights))
+        self.overview_labels['brushes'].setText(str(brushes))
+        self.overview_labels['things'].setText(str(things))
+        self.overview_labels['models'].setText(str(models))
+        self.overview_labels['movers'].setText(str(movers))
+        self.overview_labels['monsters'].setText(str(monsters))
+        self.overview_labels['triggers'].setText(str(triggers))
+        self.overview_labels['connections'].setText(str(connections))
 
     def cycle_sort_mode(self):
         """Cycle through sort modes and refresh."""
@@ -190,6 +356,20 @@ class SceneHierarchy(QWidget):
         
         return things
 
+    def _get_terrain_display_name(self):
+        """Get a display name for the terrain based on its data."""
+        terrain_data = getattr(self.main_window.state, 'terrain_data', None)
+        if terrain_data:
+            biome = terrain_data.get('biome', '')
+            if biome:
+                return f'Terrain ({biome})'
+        return 'Terrain'
+
+    def _has_terrain(self):
+        """Check if terrain data exists in the current scene."""
+        terrain_data = getattr(self.main_window.state, 'terrain_data', None)
+        return terrain_data is not None
+
     def refresh_list(self):
         self.tree.blockSignals(True)
         self.tree.clear()
@@ -207,6 +387,31 @@ class SceneHierarchy(QWidget):
         
         # Header background colour
         header_brush = QBrush(QColor("#425F5D"))
+
+        # =====================================================================
+        # TERRAIN SECTION
+        # =====================================================================
+        if self._has_terrain():
+            terrain_header = QTreeWidgetItem(self.tree, ["Terrain", ""])
+            terrain_header.setFlags(terrain_header.flags() & ~Qt.ItemIsSelectable)
+            terrain_header.setForeground(0, QBrush(QColor("white")))
+            terrain_header.setBackground(0, header_brush)
+            terrain_header.setBackground(1, header_brush)
+            terrain_header.setFont(0, header_font)
+            terrain_header.setExpanded(True)
+
+            terrain_name = self._get_terrain_display_name()
+            terrain_item = QTreeWidgetItem(terrain_header, [terrain_name, ""])
+            terrain_item.setData(0, Qt.UserRole, ('terrain', 0))
+            terrain_item.setForeground(0, QBrush(QColor("#8FBC8F")))  # Earthy green
+
+            # Show if terrain is selected
+            if 'terrain' in [getattr(obj, '_terrain_marker', None) for obj in selected_objects]:
+                terrain_item.setSelected(True)
+
+        # =====================================================================
+        # BRUSHES SECTION
+        # =====================================================================
 
         # Add Brushes Header with full-width background
         brushes_header = QTreeWidgetItem(self.tree, ["Brushes", ""])
@@ -250,6 +455,10 @@ class SceneHierarchy(QWidget):
             # Check if this brush is in the selected_objects list
             if brush_dict in selected_objects:
                 item.setSelected(True)
+
+        # =====================================================================
+        # THINGS SECTION
+        # =====================================================================
 
         # Add Things Header with full-width background
         things_header = QTreeWidgetItem(self.tree, ["Things", ""])
@@ -295,6 +504,11 @@ class SceneHierarchy(QWidget):
                 item.setSelected(True)
                 
         self.tree.blockSignals(False)
+
+        # Scroll to the first selected item
+        first_selected = self.tree.selectedItems()
+        if first_selected:
+            self.tree.scrollToItem(first_selected[0], QAbstractItemView.EnsureVisible)
 
     def highlight_item(self, obj):
         """Highlight an object in the hierarchy without selecting it.
@@ -383,7 +597,18 @@ class SceneHierarchy(QWidget):
         return QIcon(result_pixmap)
 
     def open_menu(self, position):
-        menu = QMenu()
+        # Ensure the item under the cursor is selected (right-click doesn't
+        # always do this automatically in all selection modes).
+        # Block signals so this doesn't trigger handle_selection_change,
+        # which would rebuild the tree and destroy the item mid-menu.
+        item_at_pos = self.tree.itemAt(position)
+        if item_at_pos and not item_at_pos.isSelected():
+            self.tree.blockSignals(True)
+            self.tree.clearSelection()
+            item_at_pos.setSelected(True)
+            self.tree.blockSignals(False)
+
+        menu = QMenu(self)
         selected_items = self.tree.selectedItems()
 
         if not selected_items:
@@ -392,6 +617,7 @@ class SceneHierarchy(QWidget):
         # Check if we have multiple brushes or things selected
         brush_items = []
         thing_items = []
+        terrain_items = []
         for item in selected_items:
             data = item.data(0, Qt.UserRole)
             if data:
@@ -399,6 +625,35 @@ class SceneHierarchy(QWidget):
                     brush_items.append((item, data[1]))
                 elif data[0] == 'thing':
                     thing_items.append((item, data[1]))
+                elif data[0] == 'terrain':
+                    terrain_items.append((item, data[1]))
+
+        # -----------------------------------------------------------------
+        # Terrain context menu
+        # -----------------------------------------------------------------
+        if terrain_items and not brush_items and not thing_items:
+            edit_action = menu.addAction("Edit Terrain...")
+            menu.addSeparator()
+            delete_action = menu.addAction("Delete Terrain")
+
+            action = menu.exec_(self.tree.viewport().mapToGlobal(position))
+
+            if action == edit_action:
+                self.main_window.open_terrain_editor()
+            elif action == delete_action:
+                self.main_window.save_state()
+                self.main_window.state.terrain_data = None
+                # Remove the live terrain object so the 3D view stops rendering it
+                if hasattr(self.main_window, 'terrain'):
+                    self.main_window.terrain = None
+                panel = getattr(self.main_window, 'terrain_editor_window', None)
+                if panel is not None:
+                    if getattr(self.main_window, '_current_overlay', None) is panel:
+                        self.main_window._close_current_overlay()
+                    self.main_window.terrain_editor_window = None
+                self.main_window.set_selected_objects([])
+                self.main_window.update_all_ui()
+            return
 
         # If multiple items of the same type selected, show bulk operations
         if len(brush_items) > 1 and len(thing_items) == 0:
@@ -572,6 +827,7 @@ class SceneHierarchy(QWidget):
             return
 
         selected_objects = []
+        terrain_selected = False
         for item in selected_items:
             data = item.data(0, Qt.UserRole)
             if data:
@@ -580,8 +836,23 @@ class SceneHierarchy(QWidget):
                     selected_objects.append(self.main_window.state.brushes[obj_index])
                 elif obj_type == 'thing':
                     selected_objects.append(self.main_window.state.things[obj_index])
+                elif obj_type == 'terrain':
+                    terrain_selected = True
         
+        if terrain_selected and not selected_objects:
+            # Terrain is selected in the hierarchy but it's not a brush/thing —
+            # nothing to pass to set_selected_objects.  Just leave it visually
+            # highlighted; the right-click menu handles Edit / Delete.
+            self.main_window.set_selected_objects([])
+            return
+
         self.main_window.set_selected_objects(selected_objects)
+
+    def handle_double_click(self, item, column):
+        """Double-clicking the terrain item opens the terrain editor."""
+        data = item.data(0, Qt.UserRole)
+        if data and data[0] == 'terrain':
+            self.main_window.open_terrain_editor()
 
     def set_brush_colour(self, brush_dict, colour_name, checked):
         """Set brush colour (method name uses British spelling, but internal dict key remains 'color')"""

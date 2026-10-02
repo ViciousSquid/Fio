@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStatusBar, QToolBar,
     QLabel, QSpinBox, QCheckBox, QComboBox, QAction, QMessageBox, QFrame,
     QDockWidget, QTabWidget, QPushButton, QActionGroup, QDialog,
-    QDialogButtonBox, QApplication, QSizePolicy, QInputDialog
+    QDialogButtonBox, QApplication, QSizePolicy, QInputDialog, QMenu
 )
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QFont, QIcon, QKeySequence, QPixmap
@@ -15,6 +15,36 @@ from editor.property_editor import PropertyEditor
 from editor.scene_hierarchy import SceneHierarchy
 from editor.asset_browser import AssetBrowser
 from editor.SettingsWindow import SettingsWindow
+from editor.debug_console import DebugConsole
+
+import math
+
+class PowerOfTwoSpinBox(QSpinBox):
+    """SpinBox that only allows power-of-2 values (2, 4, 8, 16, 32 …)."""
+
+    def stepBy(self, steps):
+        val = self.value()
+        if steps > 0:
+            new_val = val * 2
+        else:
+            new_val = val // 2
+        new_val = max(self.minimum(), min(self.maximum(), new_val))
+        self.setValue(new_val)
+
+    def textFromValue(self, value):
+        return str(self._nearest_pow2(value))
+
+    def valueFromText(self, text):
+        try:
+            return self._nearest_pow2(int(text))
+        except ValueError:
+            return self.value()
+
+    @staticmethod
+    def _nearest_pow2(n):
+        if n <= 0:
+            return 1
+        return int(2 ** round(math.log2(n)))
 
 class GenerateTilemapDialog(QDialog):
     def __init__(self, parent=None):
@@ -78,10 +108,23 @@ class Ui_MainWindow(object):
         MainWindow.right_dock.setWidget(MainWindow.right_tabs)
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.right_dock)
         
-        # Properties Dock (Right, Bottom)
-        MainWindow.properties_dock = QDockWidget("Properties", MainWindow)
+        # Properties Dock (Right, Bottom) — tabbed with Debug Console
+        MainWindow.debug_console = DebugConsole.get_instance(MainWindow)
+
+        MainWindow.properties_tab_widget = QTabWidget()
+        MainWindow.properties_tab_widget.addTab(MainWindow.property_editor, "Properties")
+        MainWindow.properties_tab_widget.addTab(MainWindow.debug_console, "Debug Console")
+        MainWindow.properties_tab_widget.setStyleSheet("""
+            QTabBar::tab:selected { background: #F08000; color: white; }
+            QTabBar::tab { background: #2b2b2b; color: #ccc; height: 40px; min-width: 120px; padding: 0px 8px; border: 1px solid #222; }
+            QTabBar::tab:hover { background: #5a7a82; }
+        """)
+
+        MainWindow.properties_dock = QDockWidget(" ", MainWindow)
         MainWindow.properties_dock.setObjectName("PropertiesDock")
-        MainWindow.properties_dock.setWidget(MainWindow.property_editor)
+        MainWindow.properties_dock.setWidget(MainWindow.properties_tab_widget)
+        toggle_action = MainWindow.properties_dock.toggleViewAction()
+        toggle_action.setText("Properties/Console")
         MainWindow.addDockWidget(Qt.RightDockWidgetArea, MainWindow.properties_dock)
 
         # --- 3. Layout Adjustments ---
@@ -135,7 +178,8 @@ class Ui_MainWindow(object):
         
         # --- 6. Menus and Toolbars ---
         self.create_menu_bar(MainWindow)
-        self.create_toolbars(MainWindow) # Now includes the browser button
+        self.create_toolbars(MainWindow)  # Creates Play button
+        self.create_tool_toolbar(MainWindow)  # Single top strip: tools + Play last
         self.create_status_bar(MainWindow)
 
     def create_menu_bar(self, MainWindow):
@@ -149,23 +193,23 @@ class Ui_MainWindow(object):
             }
         """)
         
-        file_menu = menubar.addMenu('File')
+        MainWindow.file_menu = menubar.addMenu('File')
         edit_menu = menubar.addMenu('Edit')
         view_menu = menubar.addMenu('View')
+        MainWindow.tools_menu = menubar.addMenu('Tools')
         help_menu = menubar.addMenu('Help')
 
-        file_menu.addAction(QAction('New Map', MainWindow, shortcut='Ctrl+N', triggered=MainWindow.new_map))
-        file_menu.addAction(QAction('&Open...', MainWindow, shortcut='Ctrl+O', triggered=MainWindow.load_level))
+        MainWindow.file_menu.addAction(QAction('New Map', MainWindow, shortcut='Ctrl+N', triggered=MainWindow.new_map))
+        MainWindow.file_menu.addAction(QAction('&Open...', MainWindow, shortcut='Ctrl+O', triggered=MainWindow.load_level))
+        MainWindow.recent_menu = MainWindow.file_menu.addMenu('Recent')
+        MainWindow.file_menu.addSeparator()
         
-        MainWindow.recent_menu = file_menu.addMenu('Recent')
-        file_menu.addSeparator()
-        
-        file_menu.addAction(QAction('&Save', MainWindow, shortcut='Ctrl+S', triggered=MainWindow.save_level))
-        file_menu.addAction(QAction('Save &As...', MainWindow, shortcut='Ctrl+Shift+S', triggered=MainWindow.save_level_as))
-        file_menu.addSeparator()
-        file_menu.addAction(QAction('Settings...', MainWindow, triggered=MainWindow.show_settings_dialog))
-        file_menu.addSeparator()
-        file_menu.addAction(QAction('Exit', MainWindow, shortcut='Ctrl+Q', triggered=MainWindow.close))
+        MainWindow.file_menu.addAction(QAction('&Save', MainWindow, shortcut='Ctrl+S', triggered=MainWindow.save_level))
+        MainWindow.file_menu.addAction(QAction('Save &As...', MainWindow, shortcut='Ctrl+Shift+S', triggered=MainWindow.save_level_as))
+        MainWindow.file_menu.addSeparator()
+        MainWindow.file_menu.addAction(QAction('Settings...', MainWindow, triggered=MainWindow.show_settings_dialog))
+        MainWindow.file_menu.addSeparator()
+        MainWindow.file_menu.addAction(QAction('Exit', MainWindow, shortcut='Ctrl+Q', triggered=MainWindow.close))
 
         MainWindow.undo_action = QAction(QIcon("assets/b_undo.png"), 'Undo', MainWindow)
         MainWindow.undo_action.setShortcut('Ctrl+Z')
@@ -185,6 +229,13 @@ class Ui_MainWindow(object):
         edit_menu.addAction(QAction('Hide Brush', MainWindow, shortcut='H', triggered=MainWindow.hide_selected_brush))
         edit_menu.addAction(QAction('Unhide All Brushes', MainWindow, shortcut='Shift+H', triggered=MainWindow.unhide_all_brushes))
 
+        edit_menu.addSeparator()
+        grid_colours_action = QAction('Grid colours…', MainWindow)
+        grid_colours_action.setToolTip("Customise grid line colours")
+        grid_colours_action.triggered.connect(MainWindow.open_grid_colours_dialog)
+        edit_menu.addAction(grid_colours_action)
+        MainWindow.grid_colours_action = grid_colours_action
+
         view_menu.addActions([
             MainWindow.scene_hierarchy_dock.toggleViewAction(),
             MainWindow.view_3d_dock.toggleViewAction(), 
@@ -194,36 +245,67 @@ class Ui_MainWindow(object):
         
         view_menu.addSeparator()
         
-        # Use our new action for the menu as well
         view_menu.addAction(self.action_asset_browser)
+
+        system_monitor_action = QAction('System Monitor', MainWindow, checkable=True)
+        system_monitor_action.setShortcut('F3')
+        system_monitor_action.triggered.connect(MainWindow.toggle_system_monitor)
+        view_menu.addAction(system_monitor_action)
         
         view_menu.addSeparator()
         MainWindow.save_layout_action = QAction("Save Layout", MainWindow)
         MainWindow.save_layout_action.triggered.connect(MainWindow.save_layout)
         view_menu.addAction(MainWindow.save_layout_action)
         
+        MainWindow.restore_layout_action = QAction("Restore Layout", MainWindow)
+        MainWindow.restore_layout_action.triggered.connect(MainWindow.restore_layout)
+        view_menu.addAction(MainWindow.restore_layout_action)
+        
         MainWindow.reset_layout_action = QAction("Reset Layout", MainWindow)
         MainWindow.reset_layout_action.triggered.connect(MainWindow.reset_layout)
         view_menu.addAction(MainWindow.reset_layout_action)
+
+        # --- Tools Menu Actions ---
+
+        autocaulk_action = QAction("Autocaulk", MainWindow)
+        autocaulk_action.setToolTip("Apply nodraw to all invisible brush faces")
+        autocaulk_action.triggered.connect(MainWindow.autocaulk)
+        MainWindow.tools_menu.addAction(autocaulk_action)
+
+        MainWindow.logic_graph_action = QAction('Logic Graph Editor…', MainWindow)
+        MainWindow.logic_graph_action.setShortcut('Ctrl+L')
+        MainWindow.logic_graph_action.setToolTip('Open the visual I/O node graph editor')
+        MainWindow.logic_graph_action.triggered.connect(MainWindow.open_logic_graph)
+
+        MainWindow.logic_wizard_action = QAction('Logic Wizard…', MainWindow)
+        MainWindow.logic_wizard_action.setShortcut('Ctrl+Shift+W')
+        MainWindow.logic_wizard_action.setToolTip('Guided setup for common I/O scenarios')
+        MainWindow.logic_wizard_action.triggered.connect(MainWindow.open_logic_wizard)
+
+        MainWindow.validate_action = QAction('Validate All Connections…', MainWindow)
+        MainWindow.validate_action.setToolTip('Check for connections with missing target entities')
+        MainWindow.validate_action.triggered.connect(MainWindow.validate_io_connections)
+
+        MainWindow.terrain_action = QAction('Terrain Generator…', MainWindow)
+        MainWindow.terrain_action.setToolTip('Open the terrain editor (low‑poly terrain generator)')
+        MainWindow.terrain_action.triggered.connect(MainWindow.open_terrain_editor)
+
+        MainWindow.procedural_action = QAction('Procedural Map Generator…', MainWindow)
+        MainWindow.procedural_action.triggered.connect(MainWindow.show_procedural_map_generator)
         
+        MainWindow.tools_menu.addAction(MainWindow.logic_graph_action)
+        MainWindow.tools_menu.addAction(MainWindow.logic_wizard_action)
+        MainWindow.tools_menu.addAction(MainWindow.validate_action)
+        MainWindow.tools_menu.addSeparator()
+        MainWindow.tools_menu.addAction(MainWindow.terrain_action)
+        MainWindow.tools_menu.addAction(MainWindow.procedural_action)
+        MainWindow.tools_menu.addSeparator()
+
         view_menu.addSeparator()
         toggle_triggers_action = QAction('Opaque Triggers', MainWindow, checkable=True)
         toggle_triggers_action.setChecked(MainWindow.view_3d.show_triggers_as_solid)
         toggle_triggers_action.triggered.connect(MainWindow.toggle_trigger_display)
         view_menu.addAction(toggle_triggers_action)
-
-        system_monitor_action = QAction('System Monitor', MainWindow, checkable=True)
-        system_monitor_action.setShortcut('F3')
-        system_monitor_action.triggered.connect(MainWindow.toggle_system_monitor)
-        view_menu.addAction(system_monitor_action)
-
-        # Debug Console action
-        debug_console_action = QAction('Debug Console', MainWindow, checkable=True)
-        debug_console_action.setShortcut('`')  # Tilde/backtick
-        debug_console_action.setToolTip("Toggle I/O debug console (~)")
-        debug_console_action.triggered.connect(MainWindow.toggle_debug_console)
-        view_menu.addAction(debug_console_action)
-        MainWindow.debug_console_action = debug_console_action  # Store reference
 
         modern_action = QAction('Modern (Shaders)', MainWindow, checkable=True, checked=True)
         immediate_action = QAction('Immediate (Legacy)', MainWindow, checkable=True)
@@ -233,131 +315,18 @@ class Ui_MainWindow(object):
         help_menu.addAction(QAction('About', MainWindow, triggered=MainWindow.show_about))
 
     def create_toolbars(self, MainWindow):
-        top_toolbar = QToolBar("Main Tools")
-        top_toolbar.setObjectName("MainToolbar")
-        MainWindow.addToolBar(top_toolbar)
-
-        # Determine icon size based on config setting
         big_toolbar_buttons = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
         icon_size_val = 50 if big_toolbar_buttons else 35
-        
-        room_btn = QPushButton()
-        room_btn.setIcon(QIcon("assets/room.png"))
-        room_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        room_btn.setFixedSize(icon_size_val, icon_size_val)
-        room_btn.setToolTip("Create Room (Hollow + Lights)")
-        room_btn.clicked.connect(MainWindow.create_room_from_brush)
-        
-        hollow_btn = QPushButton()
-        hollow_btn.setIcon(QIcon("assets/hollow.png"))
-        hollow_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        hollow_btn.setFixedSize(icon_size_val, icon_size_val)
-        hollow_btn.setToolTip("Hollow out brush")
-        hollow_btn.clicked.connect(MainWindow.hollow_selected_brush)
 
-        clone_btn = QPushButton()
-        clone_btn.setIcon(QIcon("assets/clone.png"))
-        clone_btn.setIconSize(QSize(50, 50))
-        clone_btn.setFixedSize(50, 50)
-        clone_btn.setToolTip("Clone selected brush (Space)")
-        clone_btn.clicked.connect(MainWindow.clone_selected_object)
-        
-        rotate_btn = QPushButton()
-        rotate_btn.setIcon(QIcon("assets/rotate.png"))
-        rotate_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        rotate_btn.setFixedSize(icon_size_val, icon_size_val)
-        rotate_btn.setToolTip("Rotate 90 degrees")
-        rotate_btn.clicked.connect(MainWindow.rotate_selected_brush)
-        
-        subtract_btn = QPushButton()
-        subtract_btn.setIcon(QIcon("assets/subtract.png"))
-        subtract_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        subtract_btn.setFixedSize(icon_size_val, icon_size_val)
-        subtract_btn.setToolTip("Subtract")
-        subtract_btn.clicked.connect(MainWindow.perform_subtraction)
-
-        tint_btn = QPushButton()
-        tint_btn.setIcon(QIcon("assets/tint.png"))
-        tint_btn.setIconSize(QSize(50, 50))
-        tint_btn.setFixedSize(50, 50)
-        tint_btn.setToolTip("Tint selected brush colour")
-        tint_btn.clicked.connect(MainWindow.tint_selected_brush)
-
-        top_toolbar.addWidget(room_btn)
-        top_toolbar.addWidget(hollow_btn)
-        top_toolbar.addWidget(clone_btn) 
-        top_toolbar.addWidget(rotate_btn)
-        top_toolbar.addWidget(subtract_btn)
-        top_toolbar.addWidget(tint_btn)
-        
-        # Add separator 
-        separator_terrain = QFrame()
-        separator_terrain.setFrameShape(QFrame.VLine)
-        separator_terrain.setFrameShadow(QFrame.Sunken)
-        separator_terrain.setFixedWidth(2)
-        separator_terrain.setStyleSheet("background-color: transparent;")
-        top_toolbar.addWidget(separator_terrain)
-        
-        # === TERRAIN BUTTON ===
-        terrain_btn = QPushButton()
-        terrain_btn.setIcon(QIcon("assets/terrain.png"))
-        terrain_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        terrain_btn.setFixedSize(icon_size_val, icon_size_val)
-        terrain_btn.setToolTip("Terrain Editor")
-        terrain_btn.clicked.connect(MainWindow.open_terrain_editor)
-        top_toolbar.addWidget(terrain_btn)
-        MainWindow.terrain_btn = terrain_btn
-
-        # === ASSET BROWSER BUTTON (NEW) ===
-        browser_btn = QPushButton()
-        browser_btn.setIcon(QIcon("assets/browser.png"))
-        browser_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        browser_btn.setFixedSize(icon_size_val, icon_size_val)
-        browser_btn.setToolTip("Asset Browser (T)")
-        # Trigger the action we created in setupUi
-        browser_btn.clicked.connect(self.action_asset_browser.trigger)
-        top_toolbar.addWidget(browser_btn)
-        MainWindow.browser_btn = browser_btn
-
-         # === GRID TOGGLE ===
-        grid_btn = QPushButton()
-        grid_btn.setIcon(QIcon("assets/b_grid.png"))
-        grid_btn.setIconSize(QSize(icon_size_val, icon_size_val))
-        grid_btn.setFixedSize(icon_size_val, icon_size_val)
-        grid_btn.setToolTip("Toggle 3D Grid (G)")
-        grid_btn.setCheckable(True)
-        grid_btn.setChecked(True)  # Grid visible by default
-        grid_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #555;
-                border: 1px solid #666;
-            }
-            QPushButton:checked {
-                background-color: #F08000;
-                border: 1px solid #FF9020;
-            }
-            QPushButton:hover {
-                background-color: #6a6a6a;
-            }
-            QPushButton:checked:hover {
-                background-color: #FF9020;
-            }
-        """)
-        grid_btn.toggled.connect(MainWindow.toggle_grid)
-        top_toolbar.addWidget(grid_btn)
-        MainWindow.grid_btn = grid_btn  # Store reference
-        
-        # === FLOATING PLAY BUTTON ===
         MainWindow.play_button = QPushButton(QIcon("assets/b_test.png"), "Play", MainWindow)
         MainWindow.play_button.setIconSize(QSize(icon_size_val, icon_size_val))
-        MainWindow.play_button.setFixedSize(icon_size_val + 190, icon_size_val)
+        # Remove setFixedSize here — we drive width via stylesheet instead
         MainWindow.play_button.setToolTip("Drop in and play (F5)")
         MainWindow.play_button.setShortcut("f5")
         MainWindow.play_button.clicked.connect(MainWindow.enter_play_mode)
-        
-        # Style the play button with green background and larger font
+
         current_font = MainWindow.play_button.font()
-        current_font.setPointSize(current_font.pointSize() + 1)
+        current_font.setPointSizeF(current_font.pointSizeF() * 1.5)
         MainWindow.play_button.setFont(current_font)
         MainWindow.play_button.setStyleSheet("""
             QPushButton {
@@ -366,6 +335,9 @@ class Ui_MainWindow(object):
                 font-weight: bold;
                 border: 1px solid #1a8f3d;
                 border-radius: 4px;
+                padding: 5px 15px;
+                min-width: 250px;
+                max-width: 250px;
             }
             QPushButton:hover {
                 background-color: #28d157;
@@ -375,15 +347,131 @@ class Ui_MainWindow(object):
             }
         """)
 
-        # Display dropdown logic placeholder
-        display_mode_widget = QWidget()
-        display_mode_layout = QHBoxLayout(display_mode_widget)
-        display_mode_layout.setContentsMargins(5,0,5,0)
-        
-        right_margin = QWidget()
-        right_margin.setFixedWidth(5)
-        top_toolbar.addWidget(right_margin)
-        
+    def create_tool_toolbar(self, MainWindow):
+        """Single tool strip along the top: all editing tools + Play last."""
+        tool_toolbar = QToolBar("Tools")
+        tool_toolbar.setObjectName("ToolToolbar")
+        tool_toolbar.setMovable(True)
+        tool_toolbar.setAllowedAreas(Qt.TopToolBarArea | Qt.BottomToolBarArea)
+        MainWindow.addToolBar(Qt.TopToolBarArea, tool_toolbar)
+
+        big = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
+        icon_size_val = 50 if big else 35
+
+        def make_btn(icon, tip, on_click=None, checkable=False, checked=False,
+                     shortcut=None, styled=False, bottom_color=None):
+            b = QPushButton()
+            b.setIcon(QIcon(icon))
+            b.setIconSize(QSize(icon_size_val, icon_size_val))
+            
+            # Width: icon + 2px left/right borders + 2px padding
+            # Height: icon + 1px top border + 3px bottom border + 4px bottom padding
+            b.setFixedSize(icon_size_val + 4, icon_size_val + 8)
+            b.setToolTip(tip)
+            
+            if checkable:
+                b.setCheckable(True)
+                b.setChecked(checked)
+            if shortcut:
+                b.setShortcut(shortcut)
+                
+            if styled or bottom_color:
+                border_bottom = f"border-bottom: 3px solid {bottom_color};" if bottom_color else "border-bottom: 1px solid #333;"
+                
+                b.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: #111111; 
+                        border: 1px solid #333;
+                        {border_bottom}
+                        padding: 0px;
+                        padding-bottom: 4px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: #3a3a3a;
+                    }}
+                    QPushButton:checked {{
+                        background-color: #2b2b2b;
+                        border: 1px solid #F08000;
+                        {border_bottom}
+                    }}
+                    QPushButton:checked:hover {{
+                        background-color: #4a4a4a;
+                    }}
+                """)
+                
+            if on_click is not None:
+                if checkable:
+                    b.toggled.connect(on_click)
+                else:
+                    b.clicked.connect(on_click)
+            tool_toolbar.addWidget(b)
+            return b
+
+        # --- Base tools: Select + Box (Orange Strip) ---
+        group_1_color = "#F08000" 
+        MainWindow.select_tool_btn = make_btn(
+            "assets/select.png",
+            "Select tool (Shift+S)\n"
+            "Drag a box to marquee-select; click empty space to deselect",
+            on_click=lambda: MainWindow.set_tool_mode('select'),
+            checkable=True, checked=MainWindow.tool_mode == 'select',
+            shortcut="Shift+S", bottom_color=group_1_color)
+
+        MainWindow.brush_tool_btn = make_btn(
+            "assets/box.png",
+            "Brush tool (Shift+B)\n"
+            "Drag in a 2D view to create geometry",
+            on_click=lambda: MainWindow.set_tool_mode('brush'),
+            checkable=True, checked=MainWindow.tool_mode == 'brush',
+            shortcut="Shift+B", bottom_color=group_1_color)
+
+        tool_toolbar.addSeparator()
+
+        # --- Editing actions (Green Strip) ---
+        group_2_color = "#22b14c" 
+        make_btn("assets/room.png", "Room (Hollow + Lights)",
+                 on_click=MainWindow.create_room_from_brush, bottom_color=group_2_color)
+        make_btn("assets/hollow.png", "Hollow",
+                 on_click=MainWindow.hollow_selected_brush, bottom_color=group_2_color)
+        make_btn("assets/clone.png", "Clone",
+                 on_click=MainWindow.clone_selected_object, bottom_color=group_2_color)
+
+        MainWindow.rotate_btn = make_btn(
+            "assets/rotate.png",
+            "Rotate 15°",
+            on_click=MainWindow.rotate_selected_15,
+            bottom_color=group_2_color)
+
+        make_btn("assets/subtract.png", "Subtract",
+                 on_click=MainWindow.perform_subtraction, bottom_color=group_2_color)
+
+        MainWindow.scissor_btn = make_btn(
+            "assets/scissor.png",
+            "Scissor",
+            on_click=MainWindow.toggle_clip_mode,
+            checkable=True, shortcut="X", bottom_color=group_2_color)
+
+        # --- Procedural / View actions (Blue Strip) ---
+        group_3_color = "#00A2E8"
+        make_btn("assets/tint.png", "Tint brush",
+                 on_click=MainWindow.tint_selected_brush, bottom_color=group_2_color)
+
+        tool_toolbar.addSeparator()
+
+        terrain_menu = QMenu(MainWindow)
+        terrain_menu.addAction(MainWindow.terrain_action)
+        terrain_menu.addAction(MainWindow.procedural_action)
+        terrain_btn = make_btn("assets/terrain.png", "Procedural Tools", bottom_color=group_3_color)
+        terrain_btn.clicked.connect(lambda: terrain_menu.popup(
+            terrain_btn.mapToGlobal(terrain_btn.rect().bottomLeft())))
+
+        MainWindow.grid_btn = make_btn(
+            "assets/b_grid.png", "Toggle 3D Grid (G)",
+            on_click=MainWindow.toggle_grid,
+            checkable=True, checked=True, bottom_color=group_3_color)
+
+        tool_toolbar.addSeparator()
+        tool_toolbar.addWidget(MainWindow.play_button)
 
     def create_status_bar(self, MainWindow):
         status_bar = QStatusBar()
@@ -392,16 +480,14 @@ class Ui_MainWindow(object):
         bottom_layout = QHBoxLayout(bottom_widget)
         bottom_layout.setContentsMargins(10, 2, 10, 2)
         
-        MainWindow.grid_size_spinbox = QSpinBox()
-        MainWindow.grid_size_spinbox.setRange(4, 128)
+        MainWindow.grid_size_spinbox = PowerOfTwoSpinBox()
+        MainWindow.grid_size_spinbox.setRange(2, 128)
         MainWindow.grid_size_spinbox.setValue(16)
-        MainWindow.grid_size_spinbox.setSingleStep(1)
         MainWindow.grid_size_spinbox.valueChanged.connect(MainWindow.set_grid_size)
         
-        MainWindow.world_size_spinbox = QSpinBox()
+        MainWindow.world_size_spinbox = PowerOfTwoSpinBox()
         MainWindow.world_size_spinbox.setRange(512, 16384)
         MainWindow.world_size_spinbox.setValue(1024)
-        MainWindow.world_size_spinbox.setSingleStep(1)
         MainWindow.world_size_spinbox.valueChanged.connect(MainWindow.set_world_size)
         
         bottom_layout.addSpacing(20)
@@ -431,10 +517,22 @@ class Ui_MainWindow(object):
         bottom_layout.addWidget(QLabel("Display:"))
         bottom_layout.addWidget(MainWindow.display_mode_combobox)
 
+        # Camera mode (native): First Person vs Overhead (top-down).
+        MainWindow.camera_mode_combobox = QComboBox()
+        MainWindow.camera_mode_combobox.addItems(["First Person", "Overhead"])
+        MainWindow.camera_mode_combobox.setCurrentText("First Person")
+        MainWindow.camera_mode_combobox.setToolTip(
+            "Play-mode camera. 'Overhead' is a top-down view (GTA 1 / Alien Swarm style).")
+        MainWindow.camera_mode_combobox.currentTextChanged.connect(MainWindow.set_camera_mode)
+
+        bottom_layout.addSpacing(20)
+        bottom_layout.addWidget(QLabel("Camera:"))
+        bottom_layout.addWidget(MainWindow.camera_mode_combobox)
+ 
         # --- EXPANDING NOTIFICATION AREA (FAR RIGHT) ---
         # Add a small buffer spacing before the label
         bottom_layout.addSpacing(20)
-
+ 
         self.notification_label = QLabel("")
         self.notification_label.setAlignment(Qt.AlignCenter)
         
@@ -457,3 +555,5 @@ class Ui_MainWindow(object):
         bottom_layout.addWidget(self.notification_label)
         
         status_bar.addPermanentWidget(bottom_widget, 1)
+
+
