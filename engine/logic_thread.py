@@ -3579,11 +3579,49 @@ class LogicThread(threading.Thread):
         """
         self._movers().tick_movers(self, delta)
 
+    def _fire_cinematic_io_events(self):
+        """Fire timed I/O events authored on the active LogicCamera."""
+        cs = self.cinematic_state
+        if not cs or not cs.get('active') or not self.io_manager:
+            return bool(cs and cs.get('active'))
+
+        events = cs.get('io_events', [])
+        index = int(cs.get('next_io_event', 0))
+        elapsed = float(cs.get('elapsed', 0.0))
+        while index < len(events) and float(events[index].get('time', 0.0)) <= elapsed + 1e-9:
+            event = events[index]
+            index += 1
+            cs['next_io_event'] = index
+            source = None
+            source_id = str(event.get('source_id', '') or '')
+            source_name = str(event.get('source_name', '') or '')
+            if source_id:
+                source = self._find_entity_by_id(source_id)
+            if source is None and source_name:
+                source = self._find_entity_by_name(source_name)
+            output = str(event.get('output', '') or '').strip()
+            if source is None:
+                debug_log(
+                    "IO",
+                    f"Cutscene I/O source '{source_name or source_id}' not found; "
+                    f"cannot fire '{output}'.",
+                )
+            elif output:
+                self.io_manager.fire_output(source, output, event.get('parameter'))
+
+            # An output may stop, replace or otherwise mutate the cinematic.
+            if self.cinematic_state is not cs:
+                return False
+        return True
+
     def _update_cinematic_camera(self, delta: float):
         cs = self.cinematic_state
         if not cs or not cs.get('active') or cs.get('paused'):
             return
 
+        cs['elapsed'] = float(cs.get('elapsed', 0.0)) + max(0.0, float(delta))
+        if not self._fire_cinematic_io_events():
+            return
         node_name = cs['current_node']
         node = self._find_path_node_by_name(node_name)
         if node is None:
