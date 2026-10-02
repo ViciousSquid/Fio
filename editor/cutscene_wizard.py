@@ -506,16 +506,9 @@ class CutsceneWizard(QtWidgets.QDialog):
         if self._preview_rate == 0.0:
             return
         self._preview_time += 0.033 * self._preview_rate
-        if self._preview_time >= self._preview_duration:
-            self._preview_time = self._preview_duration
-            self._preview_rate = 0.0
-            self._preview_timer.stop()
-            self.play_button.setText("▶ Play")
-        elif self._preview_time <= 0.0:
-            self._preview_time = 0.0
-            self._preview_rate = 0.0
-            self._preview_timer.stop()
-            self.play_button.setText("▶ Play")
+        if self._preview_time >= self._preview_duration or self._preview_time <= 0.0:
+            self._preview_stop_and_restore()
+            return
         self._preview_apply()
 
     def _preview_play(self):
@@ -525,9 +518,7 @@ class CutsceneWizard(QtWidgets.QDialog):
             self._preview_apply()
             return
         if self._preview_rate == 1.0:
-            self._preview_rate = 0.0
-            self._preview_timer.stop()
-            self.play_button.setText("▶ Play")
+            self._preview_stop_and_restore()
             return
         if self._preview_time >= self._preview_duration:
             self._preview_time = 0.0
