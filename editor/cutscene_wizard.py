@@ -287,6 +287,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._build_blood_tab(events_tabs)
         self._build_dialogue_tab(events_tabs)
         self._build_message_tab(events_tabs)
+        self._build_io_tab(events_tabs)
         events_layout.addWidget(events_tabs, 1)
 
         self.event_list = QtWidgets.QListWidget()
@@ -572,6 +573,101 @@ class CutsceneWizard(QtWidgets.QDialog):
     # ------------------------------------------------------------------
     # Advanced event widgets — these retain the original wizard controls.
     # ------------------------------------------------------------------
+    def _refresh_io_sources(self):
+        """Refresh the I/O source list from the live map entities."""
+        current = self.io_source.currentData() if hasattr(self, "io_source") else None
+        self.io_source.blockSignals(True)
+        self.io_source.clear()
+        for thing in getattr(self.main_window.state, "things", []) or []:
+            props = getattr(thing, "properties", {})
+            if props.get("_cutscene_temporary"):
+                continue
+            entity_id = str(props.get("id", ""))
+            if not entity_id:
+                continue
+            name = str(props.get("name") or entity_id)
+            self.io_source.addItem(name, entity_id)
+        idx = self.io_source.findData(current)
+        self.io_source.setCurrentIndex(idx if idx >= 0 else (0 if self.io_source.count() else -1))
+        self.io_source.blockSignals(False)
+        self._refresh_io_outputs()
+
+    def _refresh_io_outputs(self):
+        from .io_system import declared_outputs
+        current = self.io_output.currentText()
+        self.io_output.blockSignals(True)
+        self.io_output.clear()
+        source_id = str(self.io_source.currentData() or "")
+        source = next((t for t in getattr(self.main_window.state, "things", []) or []
+                       if str(getattr(t, "properties", {}).get("id", "")) == source_id), None)
+        if source is not None:
+            entity_type = str(source.properties.get("type", ""))
+            for output in sorted(declared_outputs(entity_type)):
+                self.io_output.addItem(output)
+        self.io_output.setCurrentText(current)
+        self.io_output.blockSignals(False)
+
+    def _build_io_tab(self, tabs):
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+        box = QtWidgets.QGroupBox("Trigger an I/O output during the cutscene")
+        form = QtWidgets.QFormLayout(box)
+        self.io_time = QtWidgets.QDoubleSpinBox()
+        self.io_time.setRange(0, 3600)
+        self.io_time.setDecimals(2)
+        self.io_time.setSuffix(" s")
+        form.addRow("At time", self.io_time)
+        self.io_source = QtWidgets.QComboBox()
+        self.io_source.setMinimumWidth(260)
+        form.addRow("Source entity", self.io_source)
+        self.io_source.currentIndexChanged.connect(lambda _i: self._refresh_io_outputs())
+        self.io_output = QtWidgets.QComboBox()
+        self.io_output.setEditable(True)
+        self.io_output.setMinimumWidth(260)
+        form.addRow("Output", self.io_output)
+        self.io_parameter = QtWidgets.QLineEdit()
+        self.io_parameter.setPlaceholderText("Optional parameter")
+        form.addRow("Parameter", self.io_parameter)
+        add = QtWidgets.QPushButton("Add I/O event")
+        add.clicked.connect(self._add_io_event)
+        form.addRow("", add)
+        layout.addWidget(box)
+        help_text = QtWidgets.QLabel(
+            "This fires the real Fio output at the authored cutscene time. "
+            "The normal I/O graph then handles the connected inputs."
+        )
+        help_text.setWordWrap(True)
+        layout.addWidget(help_text)
+        layout.addStretch(1)
+        tabs.addTab(page, "I/O Output")
+        self._refresh_io_sources()
+
+    def _add_io_event(self):
+        source_id = str(self.io_source.currentData() or "")
+        source_name = self.io_source.currentText().strip()
+        output = self.io_output.currentText().strip()
+        if not source_id or not source_name:
+            QtWidgets.QMessageBox.warning(self, "I/O Output", "Choose a source entity first.")
+            return
+        if not output:
+            QtWidgets.QMessageBox.warning(self, "I/O Output", "Choose or enter an output name.")
+            return
+        event = {
+            "time": float(self.io_time.value()),
+            "type": "io",
+            "source_id": source_id,
+            "source_name": source_name,
+            "output": output,
+        }
+        parameter = self.io_parameter.text()
+        if parameter:
+            event["parameter"] = parameter
+        self.events.append(event)
+        self.events.sort(key=lambda x: x.get("time", 0))
+        self._refresh_event_list()
+        self._refresh_summary()
+        self.io_time.setValue(float(event["time"]) + 1.0)
+
     def _build_fight_tab(self, tabs):
         fight = QtWidgets.QWidget()
         fv = QtWidgets.QVBoxLayout(fight)
@@ -1189,6 +1285,8 @@ class CutsceneWizard(QtWidgets.QDialog):
                 label += f" — {str(event.get('text', ''))[:45]}"
             elif kind == "message":
                 label += f" — {event.get('line', 'message')}: {str(event.get('text', ''))[:45]}"
+            elif kind == "io":
+                label += f" — {event.get('source_name', event.get('source_id', ''))}.{event.get('output', '')}"
             self.event_list.addItem(label)
 
     # ------------------------------------------------------------------
@@ -1331,6 +1429,7 @@ class CutsceneWizard(QtWidgets.QDialog):
             "cutscene_once": self.once.isChecked(),
             "cutscene_restore_actors": self.restore.isChecked(),
             "cutscene_stop_on_escape": self.stop_escape.isChecked(),
+            "cutscene_io_events": [dict(e) for e in self.events if e.get("type") == "io"],
         }
         scene = LogicCamera(pos=pos, properties=props)
         # Capture the undo checkpoint after temporary authoring actors are gone.
