@@ -19,11 +19,18 @@ try:
     from .io_system import (
         OutputConnection, get_outputs, get_inputs, get_output_names,
         get_input_names, get_connections, add_connection, remove_connection,
-        get_entity_type_for_io, IO_REGISTRY
+        get_entity_type_for_io, IO_REGISTRY,
+        validate_connection, PROBLEM_UNKNOWN_INPUT, PROBLEM_UNKNOWN_OUTPUT,
     )
     IO_AVAILABLE = True
 except ImportError:
     IO_AVAILABLE = False
+
+    def validate_connection(conn, entity, target, source_type=None):
+        return []
+
+    PROBLEM_UNKNOWN_INPUT = 'unknown_input'
+    PROBLEM_UNKNOWN_OUTPUT = 'unknown_output'
 
 
 # ── Random name generator for unnamed entities ──
@@ -259,6 +266,8 @@ class IOConnectionDialog(QDialog):
                 if name:
                     names.append(name)
         return names
+    
+    
     
     def _find_target_entity(self, text):
         """
@@ -501,8 +510,8 @@ class IOEditorWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         
-        header = QLabel("Output Connections")
-        header.setStyleSheet("""
+        self.header = QLabel("Output Connections")
+        self.header.setStyleSheet("""
             QLabel {
                 background-color: #2D5A6B;
                 color: white;
@@ -511,7 +520,7 @@ class IOEditorWidget(QWidget):
                 border-radius: 3px;
             }
         """)
-        layout.addWidget(header)
+        layout.addWidget(self.header)
 
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(4)
@@ -531,6 +540,19 @@ class IOEditorWidget(QWidget):
         self.copy_btn = QPushButton("Copy")
         self.copy_btn.clicked.connect(self._copy_selected)
         btn_layout.addWidget(self.copy_btn)
+
+        button_style = """
+            QPushButton:disabled {
+                color: #333333;
+                background-color: #252525;
+                border: 1px solid #333333;
+            }
+        """
+
+        self.add_btn.setStyleSheet(button_style)
+        self.edit_btn.setStyleSheet(button_style)
+        self.remove_btn.setStyleSheet(button_style)
+        self.copy_btn.setStyleSheet(button_style)
         
         self.table = QTableWidget()
         self.table.setColumnCount(5)
@@ -592,17 +614,29 @@ class IOEditorWidget(QWidget):
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
         
+        self.disabled_label = QLabel("Disabled")
+        self.disabled_label.setAlignment(Qt.AlignCenter)
+        self.disabled_label.setStyleSheet("""
+            QLabel {
+                color: #555555;
+                font-size: 64px;
+                font-weight: normal;
+                background-color: #2A2A2A;
+                border: none;
+            }
+        """)
+        self.disabled_label.setMinimumHeight(220)
+        self.disabled_label.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding
+        )
+        self.disabled_label.hide()
+
+        layout.addWidget(self.disabled_label)
         layout.addWidget(self.table)
 
         # Spacer to push console button to the right
         btn_layout.addStretch()
-
-        # OPEN CONSOLE Button
-        self.console_btn = QPushButton("Debug Console")
-        self.console_btn.setToolTip("Open the Debug Console")
-        self.console_btn.setStyleSheet("font-weight: bold;")
-        self.console_btn.clicked.connect(self._open_console)
-        btn_layout.addWidget(self.console_btn)
         
         layout.addLayout(btn_layout)
         layout.addStretch()
@@ -610,6 +644,79 @@ class IOEditorWidget(QWidget):
         self.table.itemSelectionChanged.connect(self._update_button_states)
         self._update_button_states()
         self._update_table_height()
+
+    def set_io_enabled(self, enabled):
+        """
+        Update the visual and editing state of the I/O connection editor.
+
+        When I/O is disabled, the connection editor is replaced by a large
+        Disabled indicator and all connection editing controls are disabled.
+        When enabled, the normal connection editor is restored.
+        """
+        enabled = bool(enabled)
+
+        # Output Connections banner
+        if enabled:
+            self.header.setStyleSheet("""
+                QLabel {
+                    background-color: #2D5A6B;
+                    color: white;
+                    font-weight: bold;
+                    padding: 6px 8px;
+                    border-radius: 3px;
+                }
+            """)
+        else:
+            self.header.setStyleSheet("""
+                QLabel {
+                    background-color: #3A3A3A;
+                    color: #777777;
+                    font-weight: bold;
+                    padding: 6px 8px;
+                    border-radius: 3px;
+                }
+            """)
+
+        # Table / Disabled display
+        if enabled:
+            self.table.show()
+            self.disabled_label.hide()
+
+            self.table.setStyleSheet("""
+                QHeaderView::section {
+                    background-color: #3A3A3A;
+                    color: #E6E6E6;
+                    padding: 4px;
+                    border: 1px solid #2A2A2A;
+                    font-weight: bold;
+                }
+                QTableWidget::item {
+                    background-color: #2A2A2A;
+                    color: #E6E6E6;
+                    padding: 4px 6px;
+                }
+                QTableWidget::item:alternate {
+                    background-color: #252525;
+                    color: #E6E6E6;
+                }
+                QTableWidget::item:selected {
+                    background-color: #F08000;
+                    color: #000000;
+                }
+            """)
+        else:
+            self.table.hide()
+            self.disabled_label.show()
+
+        # Buttons
+        self.add_btn.setEnabled(enabled)
+
+        if enabled:
+            self._update_button_states()
+        else:
+            self.edit_btn.setEnabled(False)
+            self.remove_btn.setEnabled(False)
+            self.copy_btn.setEnabled(False)
     
     def set_entity(self, entity):
         self.current_entity = entity
@@ -647,8 +754,21 @@ class IOEditorWidget(QWidget):
                 target_item.setForeground(QColor(255, 100, 100))
                 target_item.setToolTip("Target entity not found!")
             self.table.setItem(row, 1, target_item)
-            
-            self.table.setItem(row, 2, QTableWidgetItem(conn.input_name))
+
+            # A connection naming an input the target does not accept used to
+            # fail in silence — nothing at edit time, one line in the console at
+            # run time. Flag it here, where the mistake was made.
+            input_item = QTableWidgetItem(conn.input_name)
+            output_item = self.table.item(row, 0)
+            for code, message in validate_connection(
+                    conn, self.current_entity, resolved):
+                if code == PROBLEM_UNKNOWN_INPUT:
+                    input_item.setForeground(QColor(255, 170, 60))
+                    input_item.setToolTip(message)
+                elif code == PROBLEM_UNKNOWN_OUTPUT and output_item is not None:
+                    output_item.setForeground(QColor(255, 170, 60))
+                    output_item.setToolTip(message)
+            self.table.setItem(row, 2, input_item)
             
             param_text = conn.parameter if conn.parameter else "-"
             self.table.setItem(row, 3, QTableWidgetItem(param_text))
@@ -840,14 +960,6 @@ class IOEditorWidget(QWidget):
         
         menu.exec_(self.table.mapToGlobal(pos))
     
-    def _open_console(self):
-        """Switch to the Debug Console tab in the properties pane."""
-        if self.editor and hasattr(self.editor, 'properties_tab_widget'):
-            tab = self.editor.properties_tab_widget
-            console_idx = tab.indexOf(self.editor.debug_console)
-            if console_idx >= 0:
-                tab.setCurrentIndex(console_idx)
-                self.editor.properties_dock.setVisible(True)
 
 
 class IOInputsWidget(QWidget):
@@ -864,8 +976,8 @@ class IOInputsWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
         
-        header = QLabel("Available Inputs (for targeting)")
-        header.setStyleSheet("""
+        self.header = QLabel("Available Inputs (for targeting)")
+        self.header.setStyleSheet("""
             QLabel {
                 background-color: #4A6B2D;
                 color: white;
@@ -874,7 +986,7 @@ class IOInputsWidget(QWidget):
                 border-radius: 3px;
             }
         """)
-        layout.addWidget(header)
+        layout.addWidget(self.header)
         
         self.inputs_list = QLabel()
         self.inputs_list.setWordWrap(True)
@@ -905,3 +1017,30 @@ class IOInputsWidget(QWidget):
             text = "<i>No inputs defined</i>"
         
         self.inputs_list.setText(text)
+
+    def set_io_enabled(self, enabled):
+        """
+        Update the visual state of the available-inputs banner.
+        """
+        enabled = bool(enabled)
+
+        if enabled:
+            self.header.setStyleSheet("""
+                QLabel {
+                    background-color: #4A6B2D;
+                    color: white;
+                    font-weight: bold;
+                    padding: 6px 8px;
+                    border-radius: 3px;
+                }
+            """)
+        else:
+            self.header.setStyleSheet("""
+                QLabel {
+                    background-color: #3A3A3A;
+                    color: #777777;
+                    font-weight: bold;
+                    padding: 6px 8px;
+                    border-radius: 3px;
+                }
+            """)

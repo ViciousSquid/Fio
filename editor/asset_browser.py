@@ -9,6 +9,9 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
 from PyQt5.QtCore import Qt, QSize, QDir, QRect, QPointF, pyqtSignal, QTimer
 from PyQt5.QtGui import QPixmap, QColor, QPainter, QFont, QIcon, QPen, QPolygonF, QTextCursor, QDesktopServices
 from engine.glb_loader import render_glb_thumbnail
+# The Surface Inspector's FACE toggle sets this colour; the INSPECTOR button
+# that opens that panel borrows it so the two read as a pair.
+from editor.surface_inspector import FACE_BUTTON_STYLE as INSPECTOR_BUTTON_STYLE
 
 
 def render_obj_thumbnail(filepath, width, height):
@@ -272,7 +275,10 @@ class AssetBrowserTab(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 1. Action bar — FACE / FIT / TILE buttons immediately below the tabs
+        # 1. Action bar — the folder toggle and the Surface Inspector button.
+        #    Every texture control lives in the Inspector; FIT and TILE used
+        #    to sit here and duplicated its Fit and Natural, one baking a
+        #    scale the other keeps live.
         self.action_bar = QFrame()
         self.action_bar.setFixedHeight(50)
         self.action_bar.setStyleSheet("""
@@ -322,26 +328,8 @@ class AssetBrowserTab(QWidget):
             QPushButton:pressed { background-color: #1B5E20; }
             QPushButton:disabled { background-color: #444; color: #888; border: 1px solid #555; }
         """
-        face_style = """
-            QPushButton {
-                background-color: #7B1FA2; 
-                color: white; 
-                font: 9pt;
-                font-weight: bold;
-                padding: 6px 12px; 
-                border: 1px solid #4A148C; 
-                border-radius: 5px; 
-            }
-            QPushButton:hover { background-color: #8E24AA; }
-            QPushButton:pressed { background-color: #4A148C; }
-            QPushButton:checked { background-color: #D500F9; border: 1px solid white; }
-            QPushButton:disabled { background-color: #444; color: #888; border: 1px solid #555; }
-        """
-
-        self.fit_btn = None
-        self.tile_btn = None
-        self.face_btn = None
         self.add_btn = None
+        self.inspector_btn = None
 
         # Create a container widget for buttons to allow stretching
         button_container = QWidget()
@@ -357,34 +345,36 @@ class AssetBrowserTab(QWidget):
             self.add_btn.clicked.connect(self.on_add_clicked)
             button_layout.addWidget(self.add_btn)
         else:
-            self.face_btn = QPushButton("FACE")
-            self.face_btn.setCheckable(True)
-            self.face_btn.setEnabled(True)
-            self.face_btn.setStyleSheet(face_style)
-            self.face_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-            self.face_btn.clicked.connect(self.on_face_mode_clicked)
-            self.face_btn.setToolTip("Toggle Face Selection Mode\n"
-                                     "Page Up / Page Down rotates the highlighted face's texture")
-            button_layout.addWidget(self.face_btn)
+            # The only button here: texturing is the Surface Inspector's job,
+            # and this opens it.  It borrows the FACE toggle's purple so the
+            # button and the panel it opens read as a pair.
+            # Sized to its label rather than stretched across the bar: it is one
+            # button that opens one panel, and a full-width slab reads as the
+            # bar's primary action when the primary action here is the texture
+            # grid below it.
+            self.inspector_btn = QPushButton("INSPECTOR")
+            self.inspector_btn.setStyleSheet(INSPECTOR_BUTTON_STYLE)
+            self.inspector_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)
+            self.inspector_btn.setToolTip(
+                "Open the Surface Inspector (T)\n"
+                "Fit / Natural / Axial projections, shift, scale and rotation,\n"
+                "for one face or every face of the selection")
+            self.inspector_btn.clicked.connect(self.on_inspector_clicked)
+            button_layout.addWidget(self.inspector_btn)
+            # Take up the rest of the row so the button stays left-aligned next
+            # to the folder toggle instead of drifting to the middle.
+            button_layout.addStretch()
 
-            self.fit_btn = QPushButton("FIT")
-            self.fit_btn.setEnabled(False)
-            self.fit_btn.setStyleSheet(button_style)
-            self.fit_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-            self.fit_btn.clicked.connect(lambda: self.perform_main_action(tiled=False))
-            button_layout.addWidget(self.fit_btn)
-
-            self.tile_btn = QPushButton("TILE")
-            self.tile_btn.setEnabled(False)
-            self.tile_btn.setStyleSheet(button_style)
-            self.tile_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-            self.tile_btn.clicked.connect(lambda: self.perform_main_action(tiled=True))
-            button_layout.addWidget(self.tile_btn)
-
-        # Add stretch on both sides to center the button group, but also let buttons expand
-        banner_layout.addStretch()
-        banner_layout.addWidget(button_container, stretch=1)
-        banner_layout.addStretch()
+        if self.is_model_tab:
+            # "Add to Scene" is this tab's primary action and stays centred.
+            banner_layout.addStretch()
+            banner_layout.addWidget(button_container, stretch=1)
+            banner_layout.addStretch()
+        else:
+            # The Inspector button sits next to the folder toggle at its natural
+            # width; the container's own trailing stretch fills the rest of the
+            # bar, so nothing centres it and nothing stretches it.
+            banner_layout.addWidget(button_container, stretch=1)
 
         main_layout.addWidget(self.action_bar)
 
@@ -446,6 +436,10 @@ class AssetBrowserTab(QWidget):
         self.scroll_area.setStyleSheet("background-color: #2b2b2b; border: none;")
         self.grid_container = QWidget()
         self.grid_layout = QGridLayout(self.grid_container)
+        self.grid_container.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Preferred
+        )
         self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.grid_layout.setSpacing(10)
         self.scroll_area.setWidget(self.grid_container)
@@ -484,8 +478,8 @@ class AssetBrowserTab(QWidget):
             return
         
         # Compute number of columns
-        item_width = 110  # 100px width + 10px spacing
-        available_width = self.grid_container.width() - 20  # margin
+        item_width = 110  # 100px item width + 10px spacing
+        available_width = self.scroll_area.viewport().width()
         col_count = max(1, available_width // item_width)
         
         if col_count == self.current_cols and not force:
@@ -541,8 +535,14 @@ class AssetBrowserTab(QWidget):
                 ext = os.path.splitext(f)[1].lower()
                 if ext in self.extensions:
                     full_path = os.path.join(path, f)
-                    item = AssetItem(f, full_path, self, is_model=self.is_model_tab)
-                    self.items.append(item)
+                    # Per-item guard: a single unreadable asset (bad model, odd
+                    # image) must not abort loading the rest of the folder. The
+                    # skipped file is named so the failure stays diagnosable.
+                    try:
+                        item = AssetItem(f, full_path, self, is_model=self.is_model_tab)
+                        self.items.append(item)
+                    except Exception as e:
+                        print(f"[AssetBrowser] Skipped '{f}': {e}")
             # After loading, layout the grid dynamically (force initial layout)
             self.relayout_grid(force=True)
         except Exception as e:
@@ -556,39 +556,23 @@ class AssetBrowserTab(QWidget):
         self.update_buttons_enabled()
 
     def update_buttons_enabled(self):
-        has_item = self.selected_item is not None
+        # Only the model tab has a button that needs a selection.  The
+        # Inspector button opens a panel and so is always available.
         if self.is_model_tab and self.add_btn:
-            self.add_btn.setEnabled(has_item)
-        else:
-            if self.fit_btn: 
-                self.fit_btn.setEnabled(has_item)
-            if self.tile_btn: 
-                self.tile_btn.setEnabled(has_item)
-
-    def perform_main_action(self, tiled=False):
-        if not self.selected_item:
-            return
-        if self.is_model_tab:
-            self.add_current_model()
-        else:
-            self.apply_texture(tiled)
+            self.add_btn.setEnabled(self.selected_item is not None)
 
     def add_current_model(self):
         if self.editor and self.selected_item:
             self.editor.add_model_to_scene(self.selected_item.file_path, [0,0,0], [1,1,1])
 
-    def apply_texture(self, tiled=False):
-        if self.editor and hasattr(self.editor, 'apply_texture_to_brush') and self.selected_item:
-            rel_path = os.path.relpath(self.selected_item.file_path, self.root_path)
-            rel_path = rel_path.replace('\\', '/')
-            self.editor.apply_texture_to_brush(rel_path, tiled=tiled)
-
     def on_add_clicked(self):
         self.add_current_model()
 
-    def on_face_mode_clicked(self):
-        if self.editor and hasattr(self.editor, 'toggle_face_mode'):
-            self.editor.toggle_face_mode(self.face_btn.isChecked())
+    def on_inspector_clicked(self):
+        """Open (or close) the Surface Inspector."""
+        toggle = getattr(self.editor, 'toggle_surface_inspector', None)
+        if toggle is not None:
+            toggle()
 
 
 class MapsBrowserTab(QWidget):

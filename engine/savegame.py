@@ -82,6 +82,8 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from .spatial import PARKED_DISABLED_KEY, PARKED_HIDDEN_KEY
+
 #: Bump only when the snapshot layout changes incompatibly. This is the *save
 #: file* format version and is unrelated to the plugin API version. v2 adds the
 #: explicit ``save_mode`` metadata and delta/both support; v1 saves (no
@@ -135,6 +137,43 @@ def _set_vec3(target, value) -> None:
 #: separately via door_states/mover_states.
 _BRUSH_OVERLAY_KEYS = frozenset({"hidden", "tint"})
 
+#: Overlay keys a streaming layer may be parking at the instant a save is
+#: restored, mapped to the key it stashed the authored value under (see
+#: :mod:`engine.spatial`).
+#:
+#: A save records what an object *is*, not what streaming has temporarily made
+#: it.  Written straight onto a parked object, a restored ``hidden``/``disabled``
+#: is thrown away the moment the object's cell comes back — unparking overwrites
+#: the live flag from the stash — so for a parked object the restored value has
+#: to go into the stash instead.  That is the whole difference between a dormant
+#: entity's persistent state surviving a save/load and silently reverting.
+_PARKABLE_KEYS = {
+    "hidden": PARKED_HIDDEN_KEY,
+    "disabled": PARKED_DISABLED_KEY,
+}
+
+
+def _overlay_parkable(props: dict, key: str, saved: dict) -> None:
+    """Restore one parkable flag onto a live object's property dict.
+
+    *saved* is the object's saved record; the flag being **absent** from it is a
+    restored value too, because a serialized level canonicalises a false
+    ``hidden``/``disabled`` away.  Writing nothing when the value already
+    matches keeps a restore from inventing keys the map never had.
+    """
+    mark = _PARKABLE_KEYS[key]
+    want = bool(saved.get(key))
+    if mark in props:                       # parked: streaming owns the flag
+        if bool(props[mark]) != want:
+            props[mark] = want
+        return
+    if bool(props.get(key)) == want:
+        return
+    if want:
+        props[key] = True
+    else:
+        props.pop(key, None)
+
 
 def _public_state(state: dict) -> dict:
     """A state dict without its cached, underscore-prefixed runtime fields.
@@ -146,6 +185,71 @@ def _public_state(state: dict) -> dict:
     caches rebuild on the next tick.
     """
     return {k: v for k, v in state.items() if not str(k).startswith("_")}
+
+
+def _capture_pending_events(logic) -> list:
+    """The I/O events that are queued but have not fired yet.
+
+    A save taken while a delayed connection is in flight used to lose it: the
+    queue lived only in memory, so a door due to open three seconds later simply
+    never opened after a reload.  Events are stored with the time *remaining*
+    rather than the absolute fire time, because the manager's clock restarts
+    from zero on a fresh session and a stored deadline would be meaningless in
+    it — and with UUIDs rather than object references, so a target resolves in
+    the restored world the same way it would have in the old one.
+
+    Timers are not captured here; a timer's countdown is its own state (see
+    ``logic.timer_states``) and this is only the queue.
+    """
+    manager = getattr(logic, "io_manager", None)
+    if manager is None:
+        return []
+    now = float(getattr(manager, "current_time", 0.0))
+    events = []
+    for event in getattr(manager, "pending_events", []) or []:
+        try:
+            events.append({
+                "remaining": max(0.0, float(event.fire_time) - now),
+                "target_name": event.target_name,
+                "target_id": getattr(event, "target_id", "") or "",
+                "input": event.input_name,
+                "parameter": event.parameter,
+                "source_name": event.source_name,
+                "source_id": getattr(event, "source_id", "") or "",
+                "activator_id": getattr(event, "activator_id", "") or "",
+            })
+        except Exception:
+            continue
+    return events
+
+
+def _restore_pending_events(logic, events) -> None:
+    """Put a saved I/O queue back, rebasing every delay on the live clock."""
+    manager = getattr(logic, "io_manager", None)
+    if manager is None or not events:
+        return
+    try:
+        from editor.io_system import PendingEvent
+    except Exception:       # pragma: no cover - editor-less player builds
+        return
+    now = float(getattr(manager, "current_time", 0.0))
+    restored = []
+    for data in events:
+        try:
+            restored.append(PendingEvent(
+                fire_time=now + max(0.0, float(data.get("remaining", 0.0))),
+                target_name=data.get("target_name", ""),
+                input_name=data.get("input", ""),
+                parameter=data.get("parameter", ""),
+                source_name=data.get("source_name", ""),
+                connection=None,
+                target_id=data.get("target_id", "") or "",
+                source_id=data.get("source_id", "") or "",
+                activator_id=data.get("activator_id", "") or "",
+            ))
+        except Exception:
+            continue
+    manager.pending_events = restored
 
 
 def _thing_id(thing) -> str:
@@ -246,6 +350,9 @@ def _build_full_snapshot(logic, *, map_name: str = "") -> dict:
         "door_states": {str(i): _public_state(s) for i, s in getattr(logic, "door_states", {}).items()},
         "mover_states": {str(i): _public_state(s) for i, s in getattr(logic, "mover_states", {}).items()},
         "monster_states": monster_states,
+        "timer_states": {str(k): dict(s)
+                         for k, s in (getattr(logic, "timer_states", {}) or {}).items()},
+        "pending_io_events": _capture_pending_events(logic),
     }
 
     return {
@@ -494,9 +601,14 @@ def _overlay_entities(logic, level: dict) -> None:
             if "pos" in t_data and t_data["pos"] is not None:
                 live.pos = list(t_data["pos"])
             for k, v in props.items():
-                if k == "_io_connections":
+                if k == "_io_connections" or k in _PARKABLE_KEYS:
                     continue
                 live.properties[k] = v
+            # hidden/disabled last, and through the parking-aware writer: they
+            # are the two flags a streaming layer borrows, and the two a stale
+            # restore leaves visibly wrong.
+            for k in _PARKABLE_KEYS:
+                _overlay_parkable(live.properties, k, props)
         except Exception:
             continue
 
@@ -510,7 +622,9 @@ def _overlay_entities(logic, level: dict) -> None:
         if live is None:
             continue
         for k in _BRUSH_OVERLAY_KEYS:
-            if k in b_data:
+            if k in _PARKABLE_KEYS:
+                _overlay_parkable(live, k, b_data)
+            elif k in b_data:
                 live[k] = b_data[k]
             else:
                 live.pop(k, None)
@@ -588,6 +702,21 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
     except Exception:
         pass
 
+    # Logic-timer countdowns, keyed by the timer's UUID so they survive the
+    # reload the way every other piece of entity state does.
+    try:
+        saved_timers = runtime.get("timer_states", {}) or {}
+        logic.timer_states = {str(k): dict(s) for k, s in saved_timers.items()}
+    except Exception:
+        pass
+
+    # Delayed I/O still in flight.  Restored after the entity overlay, so the
+    # UUIDs these events name resolve against the world they will fire into.
+    try:
+        _restore_pending_events(logic, runtime.get("pending_io_events", []) or [])
+    except Exception:
+        pass
+
     # Rebuild the I/O entity lookup caches, since we mutated properties, and
     # refresh the monster sprite cache so dead/alive billboards match the
     # restored health immediately.
@@ -600,6 +729,44 @@ def _restore_runtime_and_players(logic, data: dict) -> None:
         Monster.clear_sprite_cache()
     except Exception:
         pass
+
+    # A restore moves `hidden`/`disabled` on arbitrary objects, and those are
+    # what the host's *durable* derived state is built from — the collision
+    # grid above all, which files a brush by `authored_hidden` once and then
+    # outlives every frame. Announce it here, at the end of the one function
+    # every restore path funnels through, and therefore *after* the state it
+    # describes has actually moved: announcing up front would have a host
+    # rebuild those caches from the pre-restore world.
+    _notify_authored_visibility_changed(logic)
+
+
+def _notify_authored_visibility_changed(logic) -> None:
+    """Tell the host that objects' authored hidden/disabled state has moved.
+
+    Two hooks, tried in order, because they are two different costs and a host
+    may implement either:
+
+    ``notify_authored_visibility_changed``
+        rebuild what is built to last (the collision grid). O(world), and only
+        an authored change — an edit, an I/O Show/Hide, a restore — ever needs
+        it. Streaming does not: parking stashes the authored value rather than
+        overwriting it, which is exactly why the grid can survive it.
+    ``notify_visibility_changed``
+        the cheap drawable-set bump a streaming layer uses. Accepted as a
+        fallback so an older host still lands the change on the next frame.
+
+    A host with neither is not an error: it has no cache to invalidate.
+    """
+    for hook in ("notify_authored_visibility_changed",
+                 "notify_visibility_changed"):
+        fn = getattr(logic, hook, None)
+        if fn is None:
+            continue
+        try:
+            fn()
+        except Exception:
+            pass
+        return
 
 
 def restore_snapshot(logic, data: dict) -> None:

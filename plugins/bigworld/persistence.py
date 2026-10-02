@@ -31,13 +31,15 @@ import copy
 from typing import Dict, List, Optional
 
 from .cell import CELL_SIZE, cell_of_point
+from .config import config_from_properties
 
 _SETTINGS_TYPE = "bigworldsettings"
 
 #: The runtime marker keys the session writes onto objects while they are parked.
 #: They must never be persisted — they are transient streaming state, not map
 #: data. :func:`strip_runtime_keys` removes them before a save.
-RUNTIME_KEYS = ("_bw_parked_hidden", "_bw_parked_disabled", "bw_active")
+RUNTIME_KEYS = ("_bw_parked_hidden", "_bw_parked_disabled", "bw_active",
+                "_sim_tier")
 
 #: The two park markers hold an object's *real* (pre-streaming) hidden/disabled
 #: value while it is parked in an inactive cell. Delta comparison must resolve
@@ -87,6 +89,11 @@ def config_from_settings(settings) -> Dict:
     Accepts either a live :class:`BigWorldSettings` (or any object with a
     ``properties`` dict) or a raw map-thing dict. Returns defaults for anything
     missing so a hand-edited or partial map never raises.
+
+    The key list, the defaults and the coercion rules are
+    :mod:`plugins.bigworld.config`'s — the same table the entity seeds itself
+    from and the editor builds its property panel from — so a map's settings
+    mean one thing no matter which of the three is asked.
     """
     if settings is None:
         props = {}
@@ -94,31 +101,7 @@ def config_from_settings(settings) -> Dict:
         props = settings.get("properties", settings) or {}
     else:
         props = getattr(settings, "properties", {}) or {}
-
-    def _f(key, default):
-        try:
-            return float(props.get(key, default))
-        except (TypeError, ValueError):
-            return default
-
-    def _b(key, default):
-        val = props.get(key, default)
-        if isinstance(val, bool):
-            return val
-        return str(val).strip().lower() in ("1", "true", "yes", "on")
-
-    act = _f("activation_radius", 2048.0)
-    deact = max(_f("deactivation_radius", 2304.0), act)
-    return {
-        "enabled": _b("enabled", True),
-        "activation_radius": act,
-        "deactivation_radius": deact,
-        "show_cell_debug": _b("show_cell_debug", True),
-        "terrain_fill": _b("terrain_fill", False),
-        "terrain_infinite": _b("terrain_infinite", False),
-        "terrain_stream_radius": _f("terrain_stream_radius", 0.0),
-        "disk_streaming": _b("disk_streaming", False),
-    }
+    return config_from_properties(props)
 
 
 def map_has_bigworld(map_data: dict) -> bool:

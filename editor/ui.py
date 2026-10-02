@@ -11,6 +11,8 @@ from PyQt5.QtGui import QPalette, QColor
 
 from editor.view_2d import View2D
 from engine.qt_game_view import QtGameView
+from engine.view_distance import (
+    DEFAULT_VIEW_DISTANCE, MAX_VIEW_DISTANCE, MIN_VIEW_DISTANCE)
 from editor.property_editor import PropertyEditor
 from editor.scene_hierarchy import SceneHierarchy
 from editor.asset_browser import AssetBrowser
@@ -61,6 +63,13 @@ class GenerateTilemapDialog(QDialog):
         
     def save_png_checked(self):
         return self.save_png_checkbox.isChecked()
+
+#: Bumped whenever the default dock arrangement changes.  A layout saved by
+#: an older version is dropped once, so a new default actually reaches an
+#: install that has been opened before -- settings.ini stores the layout on
+#: every close, and restoreState() would otherwise win forever.
+LAYOUT_VERSION = 2
+
 
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
@@ -131,7 +140,10 @@ class Ui_MainWindow(object):
         MainWindow.splitDockWidget(MainWindow.view_3d_dock, MainWindow.right_dock, Qt.Horizontal)
         MainWindow.splitDockWidget(MainWindow.right_dock, MainWindow.properties_dock, Qt.Vertical)
 
-        MainWindow.resizeDocks([MainWindow.view_3d_dock, MainWindow.right_dock], [800, 600], Qt.Horizontal)
+        # 3D view 40%, 2D views 60%.  resizeDocks reads these as proportions
+        # rather than pixels, so the split holds at any window size.
+        MainWindow.resizeDocks([MainWindow.view_3d_dock, MainWindow.right_dock],
+                               [40, 60], Qt.Horizontal)
         MainWindow.resizeDocks([MainWindow.right_dock, MainWindow.properties_dock], [600, 300], Qt.Vertical)
 
         # Tab Styling
@@ -173,8 +185,7 @@ class Ui_MainWindow(object):
         self.action_asset_browser.setObjectName("action_asset_browser")
         self.action_asset_browser.setIcon(QIcon("assets/browser.png"))
         self.action_asset_browser.setText("Asset Browser")
-        self.action_asset_browser.setToolTip("Toggle Asset Browser (T)")
-        self.action_asset_browser.setShortcut("T")
+        self.action_asset_browser.setToolTip("Toggle Asset Browser")
         
         # --- 6. Menus and Toolbars ---
         self.create_menu_bar(MainWindow)
@@ -195,6 +206,7 @@ class Ui_MainWindow(object):
         
         MainWindow.file_menu = menubar.addMenu('File')
         edit_menu = menubar.addMenu('Edit')
+        select_menu = menubar.addMenu('Select')
         view_menu = menubar.addMenu('View')
         MainWindow.tools_menu = menubar.addMenu('Tools')
         help_menu = menubar.addMenu('Help')
@@ -235,6 +247,62 @@ class Ui_MainWindow(object):
         grid_colours_action.triggered.connect(MainWindow.open_grid_colours_dialog)
         edit_menu.addAction(grid_colours_action)
         MainWindow.grid_colours_action = grid_colours_action
+
+        # --- Select menu: component modes + Radiant-style area selections ---
+        MainWindow.component_mode_actions = {}
+        component_group = QActionGroup(MainWindow)
+        component_group.setExclusive(True)
+        for mode, label, shortcut in (
+                ('object', 'Object Mode', 'Shift+O'),
+                ('vertex', 'Vertex Mode', 'Shift+V'),
+                ('edge', 'Edge Mode', 'Shift+E'),
+                ('face', 'Face Mode (geometry)', 'Shift+F')):
+            action = QAction(label, MainWindow, checkable=True)
+            action.setChecked(mode == 'object')
+            action.setShortcut(shortcut)
+            action.triggered.connect(
+                lambda _checked, m=mode: MainWindow.set_component_mode(m))
+            component_group.addAction(action)
+            select_menu.addAction(action)
+            MainWindow.component_mode_actions[mode] = action
+
+        select_menu.addSeparator()
+        MainWindow.surface_inspector_action = QAction(
+            'Surface Inspector…', MainWindow)
+        # T is the primary key; Shift+S is kept as Radiant's own binding.
+        MainWindow.surface_inspector_action.setShortcuts(
+            [QKeySequence('T'), QKeySequence('Shift+S')])
+        MainWindow.surface_inspector_action.setToolTip(
+            'Texture the hovered face, or the selected brush (T)')
+        MainWindow.surface_inspector_action.triggered.connect(
+            MainWindow.toggle_surface_inspector)
+        select_menu.addAction(MainWindow.surface_inspector_action)
+
+        select_menu.addSeparator()
+        cycle_action = QAction('Cycle Component Mode', MainWindow, shortcut='Q')
+        cycle_action.setToolTip('Step Object -> Vertex -> Edge -> Face')
+        cycle_action.triggered.connect(MainWindow.cycle_component_mode)
+        select_menu.addAction(cycle_action)
+
+        select_menu.addSeparator()
+        for label, slot, shortcut, tip in (
+                ('Select Touching', MainWindow.select_touching, 'Ctrl+T',
+                 'Select everything whose bounds touch the selected brush'),
+                ('Select Inside', MainWindow.select_inside, 'Ctrl+I',
+                 'Select everything wholly inside the selected brush '
+                 '(the brush is consumed)'),
+                ('Select Partial Tall', MainWindow.select_partial_tall,
+                 'Ctrl+Shift+T',
+                 'Select everything crossing the brush\'s column in the active '
+                 '2D view, at any depth'),
+                ('Select Complete Tall', MainWindow.select_complete_tall,
+                 'Ctrl+Shift+I',
+                 'Select everything wholly within the brush\'s column in the '
+                 'active 2D view')):
+            action = QAction(label, MainWindow, shortcut=shortcut)
+            action.setToolTip(tip)
+            action.triggered.connect(slot)
+            select_menu.addAction(action)
 
         view_menu.addActions([
             MainWindow.scene_hierarchy_dock.toggleViewAction(),
@@ -282,8 +350,17 @@ class Ui_MainWindow(object):
         MainWindow.logic_wizard_action.setToolTip('Guided setup for common I/O scenarios')
         MainWindow.logic_wizard_action.triggered.connect(MainWindow.open_logic_wizard)
 
+        MainWindow.project_overview_action = QAction('Project Overview…', MainWindow)
+        MainWindow.project_overview_action.setToolTip(
+            'What this map contains: brushes, movers, lights, monsters, '
+            'connections, and when it was created and last saved')
+        MainWindow.project_overview_action.triggered.connect(
+            MainWindow.open_project_overview)
+
         MainWindow.validate_action = QAction('Validate All Connections…', MainWindow)
-        MainWindow.validate_action.setToolTip('Check for connections with missing target entities')
+        MainWindow.validate_action.setToolTip(
+            'Check every connection for a missing target, or an input or output '
+            'the entity type does not have')
         MainWindow.validate_action.triggered.connect(MainWindow.validate_io_connections)
 
         MainWindow.terrain_action = QAction('Terrain Generator…', MainWindow)
@@ -295,6 +372,7 @@ class Ui_MainWindow(object):
         
         MainWindow.tools_menu.addAction(MainWindow.logic_graph_action)
         MainWindow.tools_menu.addAction(MainWindow.logic_wizard_action)
+        MainWindow.tools_menu.addAction(MainWindow.project_overview_action)
         MainWindow.tools_menu.addAction(MainWindow.validate_action)
         MainWindow.tools_menu.addSeparator()
         MainWindow.tools_menu.addAction(MainWindow.terrain_action)
@@ -312,11 +390,14 @@ class Ui_MainWindow(object):
         modern_action.triggered.connect(lambda: MainWindow.set_render_mode("Modern (Shaders)"))
         immediate_action.triggered.connect(lambda: MainWindow.set_render_mode("Immediate (Legacy)"))
 
+        keys_action = QAction('Keys...', MainWindow, triggered=MainWindow.show_shortcuts_window)
+        keys_action.setToolTip("List every keyboard shortcut, including your own bindings")
+        help_menu.addAction(keys_action)
         help_menu.addAction(QAction('About', MainWindow, triggered=MainWindow.show_about))
 
     def create_toolbars(self, MainWindow):
         big_toolbar_buttons = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
-        icon_size_val = 50 if big_toolbar_buttons else 35
+        icon_size_val = 45 if big_toolbar_buttons else 35
 
         MainWindow.play_button = QPushButton(QIcon("assets/b_test.png"), "Play", MainWindow)
         MainWindow.play_button.setIconSize(QSize(icon_size_val, icon_size_val))
@@ -354,12 +435,28 @@ class Ui_MainWindow(object):
         tool_toolbar.setMovable(True)
         tool_toolbar.setAllowedAreas(Qt.TopToolBarArea | Qt.BottomToolBarArea)
         MainWindow.addToolBar(Qt.TopToolBarArea, tool_toolbar)
+        # Kept so Settings > Editor > Tooltips can reach its buttons.
+        MainWindow.tool_toolbar = tool_toolbar
 
         big = MainWindow.config.getboolean('Display', 'big_toolbar_buttons', fallback=False)
-        icon_size_val = 50 if big else 35
+        icon_size_val = 45 if big else 35
+
+        #: The strip under a toggle button when it is off.
+        strip_off_color = "#555"
 
         def make_btn(icon, tip, on_click=None, checkable=False, checked=False,
-                     shortcut=None, styled=False, bottom_color=None):
+                     shortcut=None, styled=False, bottom_color=None,
+                     toggle_strip=False):
+            """One toolbar button.
+
+            ``toggle_strip`` makes the strip underneath the state, rather than
+            an outline around the whole button: grey when off, the group's
+            colour when on.  It is what the base-tool group and the grid switch
+            use, so a lit strip there means one thing -- this is the tool that
+            is active.  A plain ``bottom_color`` with no ``toggle_strip`` keeps
+            the strip permanently on, which is what groups the non-checkable
+            action buttons by colour.
+            """
             b = QPushButton()
             b.setIcon(QIcon(icon))
             b.setIconSize(QSize(icon_size_val, icon_size_val))
@@ -375,7 +472,28 @@ class Ui_MainWindow(object):
             if shortcut:
                 b.setShortcut(shortcut)
                 
-            if styled or bottom_color:
+            if toggle_strip and bottom_color:
+                b.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: #111111;
+                        border: 1px solid #333;
+                        border-bottom: 3px solid {strip_off_color};
+                        padding: 0px;
+                        padding-bottom: 4px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: #3a3a3a;
+                    }}
+                    QPushButton:checked {{
+                        background-color: #2b2b2b;
+                        border: 1px solid #333;
+                        border-bottom: 3px solid {bottom_color};
+                    }}
+                    QPushButton:checked:hover {{
+                        background-color: #4a4a4a;
+                    }}
+                """)
+            elif styled or bottom_color:
                 border_bottom = f"border-bottom: 3px solid {bottom_color};" if bottom_color else "border-bottom: 1px solid #333;"
                 
                 b.setStyleSheet(f"""
@@ -409,13 +527,16 @@ class Ui_MainWindow(object):
 
         # --- Base tools: Select + Box (Orange Strip) ---
         group_1_color = "#F08000" 
+        # Shift+S belongs to the Surface Inspector (Radiant's binding, and what
+        # a mapper reaches for far more often); the Select tool takes Shift+A.
         MainWindow.select_tool_btn = make_btn(
             "assets/select.png",
-            "Select tool (Shift+S)\n"
+            "Select tool (Shift+A)\n"
             "Drag a box to marquee-select; click empty space to deselect",
             on_click=lambda: MainWindow.set_tool_mode('select'),
             checkable=True, checked=MainWindow.tool_mode == 'select',
-            shortcut="Shift+S", bottom_color=group_1_color)
+            shortcut="Shift+A", bottom_color=group_1_color,
+            toggle_strip=True)
 
         MainWindow.brush_tool_btn = make_btn(
             "assets/box.png",
@@ -423,12 +544,41 @@ class Ui_MainWindow(object):
             "Drag in a 2D view to create geometry",
             on_click=lambda: MainWindow.set_tool_mode('brush'),
             checkable=True, checked=MainWindow.tool_mode == 'brush',
-            shortcut="Shift+B", bottom_color=group_1_color)
+            shortcut="Shift+B", bottom_color=group_1_color,
+            toggle_strip=True)
+
+        # --- Component modes: drag the brush itself, not just move it ---
+        # Checkable and mutually exclusive with each other; unchecking the
+        # active one drops back to object mode, so the strip reads as
+        # "object / vertex / edge / face" the way Radiant's does.
+        def component_mode_toggle(mode):
+            def _on_toggle(checked):
+                MainWindow.set_component_mode(mode if checked else 'object')
+            return _on_toggle
+
+        MainWindow.vertex_mode_btn = make_btn(
+            "assets/comp_vertex.png",
+            "Vertex mode (Shift+V)\n"
+            "Drag a corner of the selected brush",
+            on_click=component_mode_toggle('vertex'),
+            checkable=True, bottom_color=group_1_color, toggle_strip=True)
+        MainWindow.edge_mode_btn = make_btn(
+            "assets/comp_edge.png",
+            "Edge mode (Shift+E)\n"
+            "Drag an edge of the selected brush",
+            on_click=component_mode_toggle('edge'),
+            checkable=True, bottom_color=group_1_color, toggle_strip=True)
+        MainWindow.face_mode_btn = make_btn(
+            "assets/comp_face.png",
+            "Face mode (Shift+F)\n"
+            "Drag a face to move its plane; Ctrl-drag shears it",
+            on_click=component_mode_toggle('face'),
+            checkable=True, bottom_color=group_1_color, toggle_strip=True)
 
         tool_toolbar.addSeparator()
 
         # --- Editing actions (Green Strip) ---
-        group_2_color = "#22b14c" 
+        group_2_color = "#22b14c"
         make_btn("assets/room.png", "Room (Hollow + Lights)",
                  on_click=MainWindow.create_room_from_brush, bottom_color=group_2_color)
         make_btn("assets/hollow.png", "Hollow",
@@ -438,8 +588,11 @@ class Ui_MainWindow(object):
 
         MainWindow.rotate_btn = make_btn(
             "assets/rotate.png",
-            "Rotate 15°",
-            on_click=MainWindow.rotate_selected_15,
+            "Rotate tool (Shift+R)\n"
+            "Hold and drag in a 2D view to spin the selection\n"
+            "Grid snap on = 15° steps, off = free",
+            on_click=MainWindow.toggle_rotate_mode,
+            checkable=True, shortcut="Shift+R",
             bottom_color=group_2_color)
 
         make_btn("assets/subtract.png", "Subtract",
@@ -447,7 +600,9 @@ class Ui_MainWindow(object):
 
         MainWindow.scissor_btn = make_btn(
             "assets/scissor.png",
-            "Scissor",
+            "Scissor / Clip (X)\n"
+            "Click two points, Enter cuts and keeps one side\n"
+            "Shift+Enter splits the brush in two, keeping both",
             on_click=MainWindow.toggle_clip_mode,
             checkable=True, shortcut="X", bottom_color=group_2_color)
 
@@ -468,7 +623,8 @@ class Ui_MainWindow(object):
         MainWindow.grid_btn = make_btn(
             "assets/b_grid.png", "Toggle 3D Grid (G)",
             on_click=MainWindow.toggle_grid,
-            checkable=True, checked=True, bottom_color=group_3_color)
+            checkable=True, checked=True, bottom_color=group_3_color,
+            toggle_strip=True)
 
         tool_toolbar.addSeparator()
         tool_toolbar.addWidget(MainWindow.play_button)
@@ -506,10 +662,17 @@ class Ui_MainWindow(object):
         bottom_layout.addSpacing(20)
         bottom_layout.addWidget(QLabel("Cull Dist:"))
         MainWindow.cull_dist_spinbox = QSpinBox()
-        MainWindow.cull_dist_spinbox.setRange(500, 20000)
-        MainWindow.cull_dist_spinbox.setValue(4096)
+        # Range mirrors engine.view_distance's supported span so the spinbox
+        # and the r_viewdistance console command cannot disagree about what is
+        # settable.
+        MainWindow.cull_dist_spinbox.setRange(int(MIN_VIEW_DISTANCE), int(MAX_VIEW_DISTANCE))
+        MainWindow.cull_dist_spinbox.setValue(int(DEFAULT_VIEW_DISTANCE))
         MainWindow.cull_dist_spinbox.setSingleStep(250)
-        MainWindow.cull_dist_spinbox.setToolTip("Objects beyond this distance will not be rendered")
+        MainWindow.cull_dist_spinbox.setToolTip(
+            "Maximum render distance. Nothing is drawn beyond it, and the fog "
+            "fades geometry out before the clip so there is no pop-out.\n"
+            "Updates live. Console: r_viewdistance / r_fogdistance / "
+            "r_fogdensity / r_fogcolor.")
         MainWindow.cull_dist_spinbox.valueChanged.connect(MainWindow.set_cull_distance)
         bottom_layout.addWidget(MainWindow.cull_dist_spinbox)
 

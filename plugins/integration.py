@@ -231,7 +231,33 @@ def _patch_view_2d():
             if getattr(self, "view_type", None) == "top":
                 pos_3d[1] = 40
 
-            new_thing = cls(pos=pos_3d)
+            # A probe instance gives us the entity's type token without
+            # duplicating the class->type mapping here.
+            probe = cls(pos=pos_3d)
+            ttype = probe.properties.get("type") if hasattr(probe, "properties") else None
+            # Per-map singletons: if one already exists, select it and abort
+            # instead of adding a duplicate.
+            if _singleton_blocked(self.main_window, self.editor.state, ttype):
+                return
+            # If this entity type registered a creation wizard, run it so the
+            # author configures the essentials instead of landing in raw
+            # properties. Cancel -> no placement.
+            wiz = None
+            try:
+                wiz = get_manager().entity_wizard_for(ttype) if ttype else None
+            except Exception:
+                wiz = None
+            if wiz is not None:
+                try:
+                    authored = wiz(self.main_window)
+                except Exception as exc:
+                    _log(f"wizard failed, placing with defaults ({exc})")
+                    authored = {}
+                if authored is None:
+                    return   # cancelled
+                new_thing = cls(pos=pos_3d, properties=dict(authored))
+            else:
+                new_thing = probe
             self.main_window.save_state()
             self.editor.state.things.append(new_thing)
             self.editor.set_selected_object(new_thing)
@@ -383,6 +409,51 @@ def _toggle_plugin(MainWindow, plugin, enabled):
                               + ("" if enabled else " (restart to fully unload)"))
 
 
+def _singleton_blocked(main_window, editor_state, ttype) -> bool:
+    """Enforce per-map singleton entity types (see ``register_singleton_entity``).
+
+    If *ttype* is a registered singleton and one already exists in the scene,
+    select the existing instance, toast, and return True so the caller aborts
+    placement. Otherwise returns False. Fully guarded -- any error means "don't
+    block", so an ordinary entity is never affected.
+    """
+    if not ttype:
+        return False
+    try:
+        from plugins.manager import get_manager
+        mgr = get_manager()
+        if not mgr.is_singleton_entity(ttype):
+            return False
+        norm = mgr._normalise_type(ttype)
+    except Exception:
+        return False
+    existing = None
+    for t in getattr(editor_state, "things", []) or []:
+        props = getattr(t, "properties", None)
+        if not isinstance(props, dict):
+            continue
+        try:
+            if mgr._normalise_type(props.get("type", "")) == norm:
+                existing = t
+                break
+        except Exception:
+            continue
+    if existing is None:
+        return False
+    try:
+        if hasattr(main_window, "set_selected_object"):
+            main_window.set_selected_object(existing)
+        if hasattr(main_window, "update_views"):
+            main_window.update_views()
+        if hasattr(main_window, "show_toast"):
+            main_window.show_toast(
+                "Only one of this entity is allowed per map - selected the existing one.",
+                is_error=True)
+    except Exception as exc:
+        _log(f"singleton select failed ({exc})")
+    return True
+
+
 def _place_plugin_entity(MainWindow, plugin, cls, label):
     """Create a plugin entity at the origin and select it."""
     from plugins.manager import get_manager
@@ -392,9 +463,15 @@ def _place_plugin_entity(MainWindow, plugin, cls, label):
                                   is_error=True)
         return
     try:
+        # Probe and singleton-check BEFORE save_state, so a refused placement
+        # never leaves a spurious entry on the undo stack.
+        probe = cls(pos=[0, 40, 0])
+        ttype = probe.properties.get("type") if hasattr(probe, "properties") else None
+        if _singleton_blocked(MainWindow, MainWindow.state, ttype):
+            return
         if hasattr(MainWindow, "save_state"):
             MainWindow.save_state()
-        thing = cls(pos=[0, 40, 0])
+        thing = probe
         MainWindow.state.things.append(thing)
         if hasattr(MainWindow, "set_selected_object"):
             MainWindow.set_selected_object(thing)
@@ -434,38 +511,62 @@ def _patch_property_editor():
 
     _orig_iterate = PropertyEditor._iterate_thing_properties
 
-    def _iterate_thing_properties(self, form, thing):
-        specs = owner = ttype = mgr = None
-        try:
-            props = getattr(thing, "properties", None)
-            ttype = props.get("type") if isinstance(props, dict) else None
-            if ttype:
-                mgr = get_manager()
-                specs = mgr.property_schema_for(ttype)
-                owner = mgr.plugin_for_type(ttype)
-        except Exception:
-            specs = owner = None
+def _iterate_thing_properties(self, form, thing, property_keys=None):
+    specs = owner = ttype = mgr = None
 
-        # Plugin-owned entity with a full schema → typed widgets for the whole
-        # panel. Otherwise the stock rows. Either way, plugin-registered extra
-        # fields are appended afterwards, so they work on built-in entities too.
-        rendered = False
-        if specs and owner is not None:
-            try:
-                _render_schema_rows(self, form, thing, specs)
-                rendered = True
-            except Exception as exc:
-                _log(f"schema render failed for '{getattr(thing, 'name', '?')}', "
-                     f"falling back ({exc})")
-        if not rendered:
-            _orig_iterate(self, form, thing)
+    try:
+        props = getattr(thing, "properties", None)
+        ttype = props.get("type") if isinstance(props, dict) else None
 
+        if ttype:
+            mgr = get_manager()
+            specs = mgr.property_schema_for(ttype)
+            owner = mgr.plugin_for_type(ttype)
+    except Exception:
+        specs = owner = None
+
+    # Plugin-owned entity with a full schema gets its schema-driven widgets.
+    # Otherwise use the normal PropertyEditor iterator. Pass property_keys
+    # through so the editor's explicit primary/advanced classification is
+    # preserved even when this plugin shim is installed.
+    rendered = False
+
+    if specs and owner is not None:
         try:
-            extra = mgr.extra_fields_for(ttype) if (mgr and ttype) else []
-            if extra:
-                _append_extra_fields(self, form, thing, extra)
+            # A plugin schema owns the complete rendering of its properties.
+            # Explicit property filtering is therefore not applied here.
+            _render_schema_rows(self, form, thing, specs)
+            rendered = True
         except Exception as exc:
-            _log(f"extra-field render failed ({exc})")
+            _log(
+                f"schema render failed for "
+                f"'{getattr(thing, 'name', '?')}', falling back ({exc})"
+            )
+
+    if not rendered:
+        _orig_iterate(
+            self,
+            form,
+            thing,
+            property_keys=property_keys,
+        )
+
+    try:
+        extra = (
+            mgr.extra_fields_for(ttype)
+            if (mgr and ttype)
+            else []
+        )
+
+        if extra:
+            _append_extra_fields(
+                self,
+                form,
+                thing,
+                extra,
+            )
+    except Exception as exc:
+        _log(f"extra-field render failed ({exc})")
 
     PropertyEditor._iterate_thing_properties = _iterate_thing_properties
 
@@ -479,14 +580,52 @@ def _patch_property_editor():
             ttype = props.get("type") if isinstance(props, dict) else None
             tabs = get_manager().property_tabs_for(ttype) if ttype else []
             widget = getattr(self, "tab_widget", None)
-            if tabs and widget is not None:
+            if not tabs or widget is None:
+                return
+            # Lazy tab construction: each custom tab's factory builds a full,
+            # often heavy widget. Building all of them on every selection is the
+            # bulk of the panel's sluggishness, and most are never looked at. So
+            # insert a light placeholder per tab now and build the real content
+            # the first time that tab is actually shown.
+            try:
+                from PyQt5.QtWidgets import QWidget, QVBoxLayout
+            except Exception:
+                # No Qt (headless) - fall back to eager build so behaviour holds.
                 for label, factory in tabs:
                     try:
                         widget.addTab(factory(thing), label)
                     except Exception as exc:
                         _log(f"custom tab '{label}' failed ({exc})")
-        except Exception:
-            pass
+                return
+
+            pending = {}
+            for label, factory in tabs:
+                placeholder = QWidget()
+                lay = QVBoxLayout(placeholder)
+                lay.setContentsMargins(0, 0, 0, 0)
+                idx = widget.addTab(placeholder, label)
+                pending[idx] = (placeholder, factory)
+            widget._fio_pending_tabs = pending
+
+            def _build_pending(index, w=widget, th=thing):
+                p = getattr(w, "_fio_pending_tabs", None)
+                if not p or index not in p:
+                    return
+                placeholder, factory = p.pop(index)
+                try:
+                    inner = factory(th)
+                except Exception as exc:
+                    _log(f"custom tab build failed ({exc})")
+                    return
+                if inner is not None:
+                    placeholder.layout().addWidget(inner)
+
+            widget.currentChanged.connect(_build_pending)
+            # If a custom tab happens to be the current one (e.g. a restored tab
+            # index), build it now so it isn't left blank.
+            _build_pending(widget.currentIndex())
+        except Exception as exc:
+            _log(f"custom property tabs failed ({exc})")
 
     PropertyEditor.populate_for_thing = populate_for_thing
     PropertyEditor._fio_plugins_patched = True
@@ -562,18 +701,47 @@ def _widget_for_spec(editor_self, thing, spec, value):
     return inp
 
 
+def _section_header(text):
+    """A bold, boxed section heading spanning a QFormLayout row.
+
+    Font sizing uses the widget's point-based font (not a px stylesheet value)
+    so it stays crisp and correctly sized on high-DPI displays; only colour and
+    border come from the stylesheet.
+    """
+    from PyQt5.QtWidgets import QLabel
+    lbl = QLabel(text.upper())
+    f = lbl.font()
+    f.setBold(True)
+    f.setLetterSpacing(f.PercentageSpacing, 108)
+    lbl.setFont(f)
+    lbl.setStyleSheet(
+        "color:#F08000; border:none; border-bottom:1px solid #555;"
+        "margin-top:8px; padding:3px 0 2px 0;")
+    return lbl
+
+
 def _render_schema_rows(editor_self, form, thing, specs):
-    """Draw schema-driven rows first, then any remaining properties generically."""
+    """Draw schema-driven rows first, then any remaining properties generically.
+
+    Specs carrying a ``group`` are rendered under a section heading, turning a
+    flat property list into an organised panel. Specs with no group behave
+    exactly as before.
+    """
     from editor.property_editor import _make_spin, _make_checkbox
     from PyQt5.QtWidgets import QLineEdit
 
     _HIDDEN = ("name", "id", "type", "_io_connections")
     covered = set()
+    current_group = None
 
     for spec in specs:
         if spec.name in _HIDDEN:
             continue
         covered.add(spec.name)
+        group = getattr(spec, "group", "") or ""
+        if group and group != current_group:
+            current_group = group
+            form.addRow(_section_header(group))
         value = thing.properties.get(spec.name, spec.default)
         label = (spec.label or spec.name.replace("_", " ").title()) + ":"
         widget = _widget_for_spec(editor_self, thing, spec, value)
@@ -586,9 +754,11 @@ def _render_schema_rows(editor_self, form, thing, specs):
 
     # Anything the schema didn't mention still gets an editor, inferred from its
     # current value's type — so declaring a partial schema never hides a field.
-    for key, value in sorted(thing.properties.items()):
-        if key in _HIDDEN or key in covered:
-            continue
+    _uncovered = [(k, v) for k, v in sorted(thing.properties.items())
+                  if k not in _HIDDEN and k not in covered]
+    if _uncovered and current_group is not None:
+        form.addRow(_section_header("Other"))
+    for key, value in _uncovered:
         label = key.replace("_", " ").title() + ":"
         if isinstance(value, bool):
             widget = _make_checkbox(

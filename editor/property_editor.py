@@ -3,21 +3,33 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QLabel, QLineEdit, QSpinBox,
                              QFormLayout, QCheckBox, QComboBox, QPushButton,
                              QHBoxLayout, QColorDialog, QFileDialog, QGridLayout,
                              QToolButton, QSlider, QTabWidget, QGroupBox, QScrollArea,
-                             QFrame, QDoubleSpinBox, QSizePolicy)
+                             QFrame, QDoubleSpinBox, QSizePolicy,
+                             QTableWidget, QTableWidgetItem)
 from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QFont
 from editor.things import (Thing, Light, Pickup, Monster, Model, Speaker,
                            LogicGate, PathNode, LogicCamera, LogicSpawner, Portal,
-                           LogicKeyValueStore)
+                           LogicState)
+from editor import state_values as _sv
+from engine.brush_geometry import GEO_RUNTIME_KEYS
 from engine.monster_constants import MONSTER_VARIANTS
+from editor.tooltips import set_tooltips_enabled
+
+try:
+    from editor.debug_console import debug_log
+except Exception:  # pragma: no cover - console unavailable (headless/import cycle)
+    def debug_log(category, message):
+        print(f"[{category}] {message}")
 
 # I/O System imports
 try:
     from editor.io_editor_widget import IOEditorWidget, IOInputsWidget
     from editor.io_system import get_entity_type_for_io, IO_REGISTRY
+    from editor import io_system as _io_system
     IO_AVAILABLE = True
 except ImportError:
     IO_AVAILABLE = False
+    _io_system = None
 
 
 # ────────────────────────────
@@ -174,6 +186,50 @@ class ClickableLineEdit(QLineEdit):
             self.clicked_while_empty.emit()
         super().mousePressEvent(event)
 
+class CollapsibleSection(QWidget):
+    """A titled, click-to-collapse container — keeps the property panel from
+    being one long flat list. Add rows via :meth:`addLayout` / :meth:`addWidget`."""
+
+    # Palette matches the application-wide dark theme (main.dark_stylesheet:
+    # #3c3f41 controls, #555 borders, #e0e0e0 text) so the panel reads as one.
+    HEADER = ("QToolButton { background:#3c3f41; color:#e0e0e0; font-weight:bold; "
+              "border:1px solid #555; border-radius:4px; padding:6px 8px; text-align:left; }"
+              "QToolButton:hover { background:#4b4d4d; }")
+
+    def __init__(self, title, expanded=True, count=0, parent=None):
+        super().__init__(parent)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 4, 0, 0)
+        v.setSpacing(0)
+        self.toggle = QToolButton()
+        label = f"{title}" + (f"  ({count})" if count else "")
+        self.toggle.setText(label)
+        self.toggle.setCheckable(True)
+        self.toggle.setChecked(expanded)
+        self.toggle.setStyleSheet(self.HEADER)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        self.toggle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.content = QWidget()
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(8, 6, 4, 4)
+        self.content_layout.setSpacing(4)
+        self.content.setVisible(expanded)
+        self.toggle.toggled.connect(self._on_toggled)
+        v.addWidget(self.toggle)
+        v.addWidget(self.content)
+
+    def _on_toggled(self, checked):
+        self.content.setVisible(checked)
+        self.toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+
+    def addLayout(self, lay):
+        self.content_layout.addLayout(lay)
+
+    def addWidget(self, w):
+        self.content_layout.addWidget(w)
+
+
 class PropertyEditor(QWidget):
     def __init__(self, editor):
         super().__init__()
@@ -184,6 +240,32 @@ class PropertyEditor(QWidget):
         self._linked_key_pickup = None
         self._linked_door_brush = None
         self.tab_widget = None
+
+        # --- Rebuild avoidance -------------------------------------------
+        # Building a panel means constructing several tabs' worth of widgets,
+        # which is milliseconds of work.  set_object() is called after every
+        # editor operation — including once per mouse-move during a rotate
+        # drag — so most of those builds produce a panel identical to the one
+        # already on screen.  _signature() captures everything the panel reads
+        # from an object; an unchanged signature means there is nothing to
+        # rebuild, and a page built earlier for another object can be put back
+        # as it was instead of being built again.
+        self._signature = None
+        self._page = None                 # the QScrollArea currently shown
+        self._page_cache = []             # [(obj, signature, page, state)], LRU
+
+        # Parked pages live in here rather than being reparented to nothing.
+        # A widget with no parent is a top-level window, and Qt walks every
+        # top-level window when it propagates style/font/palette changes — so
+        # parking pages that way made building the *next* page measurably
+        # slower, in proportion to how many were parked.
+        self._parking = QWidget(self)
+        self._parking.setVisible(False)
+
+        # Settings > Editor > Tooltips.  Held here rather than read from the
+        # config on every build: a page is rebuilt often enough that this sits
+        # on the hot path.
+        self._tooltips_enabled = True
 
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(5, 5, 5, 5)
@@ -202,46 +284,215 @@ class PropertyEditor(QWidget):
         (identity-addressed) OR its target_name equals target_name (legacy /
         name-addressed). This keeps the "Targeted by" list correct even when
         the target has been renamed.
+
+        Backed by the I/O system's reverse index rather than a scan of every
+        brush and entity: this runs on each panel build, and on a large map the
+        scan was the build's dominant cost.  The index is shared and rebuilt
+        only when connections change.
         """
         if not target_name and not target_id:
             return []
-        sources = []
-
-        def _conn_matches(conn):
-            cid = getattr(conn, 'target_id', None)
-            if cid is None and isinstance(conn, dict):
-                cid = conn.get('target_id')
-            if target_id and cid and cid == target_id:
-                return True
-            t = getattr(conn, 'target_name', None) or (conn.get('target') if isinstance(conn, dict) else None)
-            return bool(target_name) and t == target_name
-
-        for brush in self.editor.state.brushes:
-            if target_name and brush.get('target') == target_name:
-                src_type = 'trigger' if brush.get('is_trigger') else 'mover' if brush.get('is_mover') else None
-                if src_type:
-                    sources.append((brush.get('name', 'unnamed'), src_type))
-            for conn in brush.get('_io_connections', []):
-                o = getattr(conn, 'output_name', None) or (conn.get('output', '?') if isinstance(conn, dict) else '?')
-                if _conn_matches(conn):
-                    sources.append((brush.get('name', 'unnamed'), f"I/O: {o}"))
-        for thing in self.editor.state.things:
-            for conn in thing.properties.get('_io_connections', []):
-                o = getattr(conn, 'output_name', None) or (conn.get('output', '?') if isinstance(conn, dict) else '?')
-                if _conn_matches(conn):
-                    sources.append((thing.properties.get('name', 'unnamed'), f"I/O: {o}"))
-        return sources
+        if _io_system is None:
+            return []
+        return _io_system.find_targeting_sources(
+            self.editor.state.brushes, self.editor.state.things,
+            target_name, target_id)
 
     def _check_target_exists(self, target_name: str) -> bool:
-        if not target_name:
+        """Whether anything in the scene answers to ``target_name``.
+
+        Nothing in the editor calls this today; it is kept as the counterpart
+        to :meth:`_find_targeting_sources` and now shares that lookup's index
+        instead of scanning the scene.
+        """
+        if not target_name or _io_system is None:
             return False
-        for brush in self.editor.state.brushes:
-            if brush.get('name') == target_name:
-                return True
-        for thing in self.editor.state.things:
-            if (getattr(thing, 'name', '') or thing.properties.get('name', '')) == target_name:
-                return True
-        return False
+        return target_name in _io_system.entity_names(
+            self.editor.state.brushes, self.editor.state.things)
+
+    # ────────────────────────────
+    # Rebuild avoidance
+    # ────────────────────────────
+
+    #: How many built pages to keep around.  Enough to cover flicking between
+    #: a handful of entities; small enough that the widgets they hold onto are
+    #: never a meaningful amount of memory.
+    PAGE_CACHE_SIZE = 6
+
+    #: Keys a panel never reads, so a change to one cannot alter what is
+    #: displayed.  Geometry and position are the important ones: they change on
+    #: every frame of a drag or rotate, and rebuilding the panel for them was
+    #: pure waste.
+    _SIGNATURE_IGNORED = frozenset({
+        'pos', 'size', 'geometry', '_flash_until', 'original_pos',
+    # Derived-geometry bookkeeping the geometry layer writes onto brushes. None
+    # of it is displayed, and it changes on every drag, rotate and clip, so a
+    # panel that folded it in would rebuild itself for edits it does not show.
+    # Taken from the geometry module's own list rather than spelled out again,
+    # so a key added there can never quietly start costing a rebuild here.
+    }) | frozenset(GEO_RUNTIME_KEYS)
+
+    #: Attributes that belong to the editor itself rather than to whichever
+    #: page is on screen; everything else is part of a page's state.
+    _PERSISTENT_ATTRS = frozenset({
+        'editor', 'current_object', 'main_layout', '_populating',
+        '_signature', '_page', '_page_cache', '_parking',
+        '_tooltips_enabled',
+    })
+
+    @staticmethod
+    def _hashable(value):
+        """A comparable stand-in for a property value.
+
+        Property values include lists (colours, directions) and dicts (per-face
+        textures), so they cannot go into a tuple key as they are.
+        """
+        if isinstance(value, (str, int, float, bool, type(None))):
+            return value
+        if isinstance(value, (list, tuple)):
+            return tuple(PropertyEditor._hashable(v) for v in value)
+        if isinstance(value, dict):
+            return tuple(sorted((k, PropertyEditor._hashable(v))
+                                for k, v in value.items()))
+        return repr(value)
+
+    def _connection_signature(self, connections):
+        """What the I/O tab shows about a set of connections."""
+        out = []
+        for conn in connections or ():
+            if isinstance(conn, dict):
+                out.append(tuple(sorted((k, self._hashable(v))
+                                        for k, v in conn.items())))
+            else:
+                out.append(tuple(
+                    (k, self._hashable(getattr(conn, k, None)))
+                    for k in ('output_name', 'target_name', 'target_id',
+                              'input_name', 'parameter', 'delay', 'fire_once')))
+        return tuple(out)
+
+    def _object_signature(self, obj):
+        """Everything the panel would read to build itself for ``obj``.
+
+        Two calls returning the same value mean the panel that is already on
+        screen is exactly the panel a rebuild would produce.  The I/O
+        revision is folded in because the "Targeted by" line depends on other
+        entities' connections, not on this object at all.
+        """
+        if obj is None:
+            return ('none',)
+
+        revision = _io_system.io_revision() if _io_system is not None else 0
+        if isinstance(obj, dict):
+            source = obj
+            kind = 'brush'
+        else:
+            source = obj.properties
+            kind = type(obj).__name__
+
+        fields = []
+        for key, value in source.items():
+            if key in self._SIGNATURE_IGNORED or key.startswith('_geo_cache') \
+                    or key.startswith('_box_shape') or key.startswith('_mesh_') \
+                    or key.startswith('_mat_') or key.startswith('_nmat_') \
+                    or key.startswith('_render_') or key.startswith('_aabb'):
+                continue
+            if key == '_io_connections':
+                fields.append((key, self._connection_signature(value)))
+            else:
+                fields.append((key, self._hashable(value)))
+        fields.sort()
+        return (kind, id(obj), revision, tuple(fields))
+
+    def _capture_page_state(self):
+        """The instance attributes the page on screen owns.
+
+        Captured wholesale rather than by name: the builders set a couple of
+        dozen attributes between them (tab indices, per-widget handles, linked
+        objects), and a page restored without one of them would leave a
+        callback poking at the previous page's widgets.
+        """
+        return {k: v for k, v in self.__dict__.items()
+                if k not in self._PERSISTENT_ATTRS}
+
+    def _restore_page_state(self, state):
+        """Put back the attributes captured by :meth:`_capture_page_state`."""
+        for key in list(self.__dict__):
+            if key not in self._PERSISTENT_ATTRS:
+                del self.__dict__[key]
+        self.__dict__.update(state)
+
+    def _detach_page(self):
+        """Take the current page out of the layout without destroying it."""
+        page = self._page
+        if page is not None:
+            self.main_layout.removeWidget(page)
+            page.setParent(self._parking)
+            page.setVisible(False)
+        self._page = None
+        return page
+
+    def _cache_current_page(self):
+        """Park the page on screen so selecting its object again is instant."""
+        page = self._detach_page()
+        if page is None or self.current_object is None or self._signature is None:
+            if page is not None:
+                page.deleteLater()
+            return
+        self._page_cache = [e for e in self._page_cache
+                            if e[0] is not self.current_object]
+        self._page_cache.append((self.current_object, self._signature, page,
+                                 self._capture_page_state()))
+        while len(self._page_cache) > self.PAGE_CACHE_SIZE:
+            _, _, stale, _ = self._page_cache.pop(0)
+            stale.deleteLater()
+
+    def _take_cached_page(self, obj, signature):
+        """A previously built page for ``obj``, if it is still accurate."""
+        for i, (cached_obj, cached_sig, page, state) in enumerate(self._page_cache):
+            if cached_obj is not obj:
+                continue
+            del self._page_cache[i]
+            if cached_sig == signature:
+                return page, state
+            # The object changed while the page sat in the cache; the widgets
+            # would show stale values, so throw it away and build again.
+            page.deleteLater()
+            return None, None
+        return None, None
+
+    def _strip_tooltips(self):
+        """Take the tooltips off a page that has just been built.
+
+        Only on the build path, and only when they are switched off: a page
+        restored from the cache was stripped when it was built, and when
+        tooltips are on there is nothing to do at all -- so the common case
+        costs one attribute read rather than a walk of the widget tree.
+        """
+        if not self._tooltips_enabled:
+            set_tooltips_enabled(self, False)
+
+    def set_tooltips_enabled(self, enabled):
+        """Settings > Editor > Tooltips > Property Editor.
+
+        Applies to the page on screen and every page parked in the cache, so
+        the setting does not reappear to change back when an older selection
+        is returned to.
+        """
+        self._tooltips_enabled = bool(enabled)
+        set_tooltips_enabled(self, self._tooltips_enabled)
+        for _, _, page, _ in self._page_cache:
+            set_tooltips_enabled(page, self._tooltips_enabled)
+
+    def invalidate_cache(self):
+        """Drop every cached page.
+
+        For changes no signature can see — a scene load or an undo, which
+        replace the objects themselves.
+        """
+        for _, _, page, _ in self._page_cache:
+            page.deleteLater()
+        self._page_cache = []
+        self._signature = None
 
     def clear_layout(self):
         while self.main_layout.count():
@@ -253,19 +504,40 @@ class PropertyEditor(QWidget):
                     item = child.layout().takeAt(0)
                     if item.widget():
                         item.widget().deleteLater()
-        self._widgets.clear()
+        # Rebind rather than clear: a page parked in the cache captured this
+        # dict, and emptying it in place would strip the widget handles its
+        # callbacks look themselves up in.
+        self._widgets = {}
         self.tab_widget = None
+        self._page = None
 
-    def set_object(self, obj):
+    def set_object(self, obj, force=False):
+        """Show ``obj``'s properties, rebuilding the panel only if it must.
+
+        Three paths, cheapest first:
+
+        * the panel already shows exactly this — nothing to do at all, and the
+          tab and scroll position are preserved because they were never
+          disturbed;
+        * a page built for this object earlier is still accurate — put it back
+          with the state its callbacks expect;
+        * otherwise build a fresh page.
+
+        ``force`` skips straight to a rebuild, for the handful of callers that
+        change something a signature cannot see and then ask for a refresh.
+        """
+        signature = self._object_signature(obj)
+
+        if not force and obj is self.current_object and self._signature == signature \
+                and (self._page is not None or obj is None):
+            return
+
         saved_tab_index = None
         saved_scroll_pos = 0
         if self.current_object is obj and self.tab_widget is not None:
             saved_tab_index = self.tab_widget.currentIndex()
-            for i in range(self.main_layout.count()):
-                w = self.main_layout.itemAt(i).widget()
-                if isinstance(w, QScrollArea):
-                    saved_scroll_pos = w.verticalScrollBar().value()
-                    break
+            if self._page is not None:
+                saved_scroll_pos = self._page.verticalScrollBar().value()
 
         if obj is None and self.current_object is not None:
             if hasattr(self.editor, 'properties_tab_widget'):
@@ -274,29 +546,55 @@ class PropertyEditor(QWidget):
                     self.editor.properties_tab_widget.setCurrentIndex(prev)
 
         self._populating = True
-        self.current_object = obj
-        self.clear_layout()
 
-        if obj is None:
-            self.main_layout.addWidget(QLabel("Nothing selected."))
-            self._populating = False
-            return
+        # Tearing down and rebuilding the whole panel triggers a relayout/repaint
+        # for every widget removed and added; freezing updates across the rebuild
+        # collapses that into a single repaint, which is the bulk of the
+        # per-selection cost on entities with many fields/tabs.
+        self.setUpdatesEnabled(False)
+        try:
+            cached_page, cached_state = (None, None)
+            if not force and obj is not None and obj is not self.current_object:
+                cached_page, cached_state = self._take_cached_page(obj, signature)
 
-        if isinstance(obj, dict):
-            self.populate_for_brush(obj)
-        elif isinstance(obj, Thing):
-            self.populate_for_thing(obj)
+            # Park the outgoing page (or drop it, if this is a forced rebuild
+            # whose widgets are about to be out of date).
+            if force and obj is self.current_object:
+                self.clear_layout()
+            else:
+                self._cache_current_page()
+                self.clear_layout()
+
+            self.current_object = obj
+            self._signature = signature
+
+            if cached_page is not None:
+                self._restore_page_state(cached_state)
+                self.main_layout.addWidget(cached_page)
+                cached_page.setVisible(True)
+                self._page = cached_page
+            elif obj is None:
+                self.main_layout.addWidget(QLabel("Nothing selected."))
+                self._strip_tooltips()
+            elif isinstance(obj, dict):
+                self.populate_for_brush(obj)
+                self._strip_tooltips()
+            elif isinstance(obj, Thing):
+                self.populate_for_thing(obj)
+                self._strip_tooltips()
+        finally:
+            self.setUpdatesEnabled(True)
+            if obj is None:
+                self._populating = False
 
         if saved_tab_index is not None and self.tab_widget is not None:
             if saved_tab_index < self.tab_widget.count():
                 self.tab_widget.setCurrentIndex(saved_tab_index)
 
-        if saved_scroll_pos > 0:
-            for i in range(self.main_layout.count()):
-                w = self.main_layout.itemAt(i).widget()
-                if isinstance(w, QScrollArea):
-                    QTimer.singleShot(0, lambda w=w, p=saved_scroll_pos: w.verticalScrollBar().setValue(p))
-                    break
+        if saved_scroll_pos > 0 and self._page is not None:
+            page = self._page
+            QTimer.singleShot(
+                0, lambda w=page, p=saved_scroll_pos: w.verticalScrollBar().setValue(p))
 
         self._populating = False
 
@@ -397,6 +695,31 @@ class PropertyEditor(QWidget):
         layout.addStretch()
         scroll.setWidget(content)
         self.main_layout.addWidget(scroll)
+        self._page = scroll
+
+    def _defer_io_tab(self, builder):
+        """Add the I/O tab now, but build its contents the first time it is shown.
+
+        ``IOEditorWidget`` is a table plus a row of controls and is about a
+        fifth of the cost of building a page, yet the I/O tab is never the one
+        selected when a page appears.  The tab is added empty so the tab bar
+        looks the same, and ``builder`` runs once, on the first switch to it.
+        """
+        placeholder = QWidget()
+        QVBoxLayout(placeholder).setContentsMargins(0, 0, 0, 0)
+        index = self.tab_widget.addTab(placeholder, "\u26a1 I/O")
+        tabs = self.tab_widget
+
+        def fill(current, _tabs=tabs, _index=index, _holder=placeholder):
+            if current != _index or _holder.property('io_built'):
+                return
+            _holder.setProperty('io_built', True)
+            _holder.layout().addWidget(builder())
+
+        tabs.currentChanged.connect(fill)
+        if tabs.currentIndex() == index:
+            fill(index)
+        return index
 
     def _create_io_tab_for_brush(self, brush):
         tab = QWidget()
@@ -420,8 +743,10 @@ class PropertyEditor(QWidget):
             return
         if not any(self.current_object.get(k) for k in ('is_trigger', 'is_mover', 'is_door')):
             return
-        self.io_tab = self._create_io_tab_for_brush(self.current_object)
-        self.io_tab_index = self.tab_widget.addTab(self.io_tab, "⚡ I/O")
+        brush = self.current_object
+        self.io_tab_index = self._defer_io_tab(
+            lambda b=brush: self._create_io_tab_for_brush(b))
+        self.io_tab = self.tab_widget.widget(self.io_tab_index)
 
     def _remove_io_tab(self):
         if hasattr(self, 'io_tab_index') and self.io_tab_index is not None:
@@ -445,16 +770,60 @@ class PropertyEditor(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(4, 4, 4, 4)
+
+        io_enabled = bool(thing.properties.get('io_enabled', True))
         etype = get_entity_type_for_io(thing)
-        io_editor = IOEditorWidget(entity=thing, entity_type=etype,
-                                   editor_state=self.editor.state, editor=self.editor)
+
+        io_editor = IOEditorWidget(
+            entity=thing,
+            entity_type=etype,
+            editor_state=self.editor.state,
+            editor=self.editor
+        )
         io_editor.connections_changed.connect(self._on_io_connections_changed)
         layout.addWidget(io_editor)
         self._widgets['io_editor'] = io_editor
+
         inputs = IOInputsWidget()
         inputs.set_entity(etype)
         layout.addWidget(inputs)
+
+        # I/O participation checkbox
+        io_cb = _make_checkbox(
+            "I/O Enabled",
+            io_enabled,
+            lambda checked: self._on_io_enabled_changed(
+                checked,
+                io_editor,
+                inputs
+            ),
+            _Style.CHECKBOX
+        )
+        io_cb.setToolTip(
+            "When disabled, this entity does not send or receive entity I/O events."
+        )
+
+        # Move the checkbox above the I/O widgets.
+        layout.insertWidget(0, io_cb)
+
+        self._widgets['io_enabled_cb'] = io_cb
+
+        # Apply the initial visual state.
+        io_editor.set_io_enabled(io_enabled)
+        inputs.set_io_enabled(io_enabled)
+
         return tab
+
+    def _on_io_enabled_changed(self, enabled, io_editor, inputs):
+        """
+        Update the entity's I/O-enabled property and refresh the I/O tab
+        """
+        enabled = bool(enabled)
+
+        self.update_object_prop('io_enabled', enabled)
+
+        io_editor.set_io_enabled(enabled)
+        inputs.set_io_enabled(enabled)
 
     def _on_io_connections_changed(self):
         if hasattr(self.editor.state, 'save_state'):
@@ -525,16 +894,34 @@ class PropertyEditor(QWidget):
         form = QFormLayout()
         form.setSpacing(8)
 
-        type_combo = _make_combo(['Once', 'Multiple'], brush.get('trigger_type', 'Once'),
-                                 lambda t: self.update_object_prop('trigger_type', t))
+        # Show the runtime AABB used for trigger containment.
+        show_aabb_cb = _make_checkbox(
+            "Show AABB",
+            brush.get('show_aabb_bounds', False),
+            lambda checked: self.update_object_prop(
+                'show_aabb_bounds', checked
+            ),
+            _Style.CHECKBOX
+        )
+        form.addRow(show_aabb_cb)
+        self._widgets['show_aabb_bounds_cb'] = show_aabb_cb
+
+        type_combo = _make_combo(
+            ['Once', 'Multiple'],
+            brush.get('trigger_type', 'Once'),
+            lambda t: self.update_object_prop('trigger_type', t)
+        )
         form.addRow("Trigger Type:", type_combo)
         self._widgets['trigger_type_combo'] = type_combo
 
-        # Activation mode: touch fires on entry; use requires E press while inside
+        # Activation mode: touch fires on entry; use requires E press.
         activation_combo = _make_combo(
             ['touch', 'use'],
             brush.get('trigger_activation', 'touch'),
-            tooltip="touch — fires when player walks inside\nuse — fires when player presses E while inside"
+            tooltip=(
+                "touch — fires when player walks inside\n"
+                "use — fires when player presses E while inside"
+            )
         )
         form.addRow("Activation:", activation_combo)
         self._widgets['trigger_activation_combo'] = activation_combo
@@ -544,10 +931,16 @@ class PropertyEditor(QWidget):
         use_label_input = QLineEdit(brush.get('use_label', ''))
         use_label_input.setPlaceholderText("Activate")
         use_label_input.editingFinished.connect(
-            lambda: self.update_object_prop('use_label', use_label_input.text().strip()))
+            lambda: self.update_object_prop(
+                'use_label',
+                use_label_input.text().strip()
+            )
+        )
+
         is_use_mode = brush.get('trigger_activation', 'touch') == 'use'
         use_label_lbl.setVisible(is_use_mode)
         use_label_input.setVisible(is_use_mode)
+
         form.addRow(use_label_lbl, use_label_input)
         self._widgets['trigger_use_label_lbl'] = use_label_lbl
         self._widgets['trigger_use_label_input'] = use_label_input
@@ -558,59 +951,104 @@ class PropertyEditor(QWidget):
             use_label_lbl.setVisible(show)
             use_label_input.setVisible(show)
 
-        activation_combo.currentTextChanged.connect(_on_activation_changed)
+        activation_combo.currentTextChanged.connect(
+            _on_activation_changed
+        )
 
-        action_combo = _make_combo(['target', 'hurt', 'teleport'],
-                                   brush.get('trigger_action', 'target'),
-                                   tooltip="target — fire I/O outputs\nhurt — damage player\nteleport — move player to PathNode")
+        action_combo = _make_combo(
+            ['target', 'hurt', 'teleport'],
+            brush.get('trigger_action', 'target'),
+            tooltip=(
+                "target — fire I/O outputs\n"
+                "hurt — damage player\n"
+                "teleport — move player to PathNode"
+            )
+        )
         form.addRow("Action:", action_combo)
         self._widgets['trigger_action_combo'] = action_combo
 
         # Target node (teleport only)
         node_lbl = QLabel("Target Node:")
-        node_combo = self._pathnode_combo(brush.get('target_node', ''))
+        node_combo = self._pathnode_combo(
+            brush.get('target_node', '')
+        )
         node_combo.currentTextChanged.connect(
-            lambda t: self.update_object_prop('target_node', '' if t.strip() == '(none)' else t.strip()))
-        is_teleport = brush.get('trigger_action', 'target') == 'teleport'
+            lambda t: self.update_object_prop(
+                'target_node',
+                '' if t.strip() == '(none)' else t.strip()
+            )
+        )
+
+        is_teleport = (
+            brush.get('trigger_action', 'target') == 'teleport'
+        )
         node_lbl.setVisible(is_teleport)
         node_combo.setVisible(is_teleport)
+
         form.addRow(node_lbl, node_combo)
         self._widgets['trigger_target_node_label'] = node_lbl
         self._widgets['trigger_target_node_combo'] = node_combo
 
         def _on_action_changed(txt):
             self.update_object_prop('trigger_action', txt)
+
             show = txt == 'teleport'
             node_lbl.setVisible(show)
             node_combo.setVisible(show)
+
             if txt == 'hurt':
                 self.update_object_prop('hurt', True)
             elif brush.get('trigger_action') == 'hurt':
                 self.update_object_prop('hurt', False)
 
-        action_combo.currentTextChanged.connect(_on_action_changed)
+        action_combo.currentTextChanged.connect(
+            _on_action_changed
+        )
 
         layout.addLayout(form)
 
         # Damage group
         dmg_group = QGroupBox("Damage")
-        dmg_group.setStyleSheet(_Style.group_box("#F08000"))
+        dmg_group.setStyleSheet(
+            _Style.group_box("#F08000")
+        )
+
         dmg_layout = QVBoxLayout(dmg_group)
-        hurt_cb = _make_checkbox("Hurts player on contact", brush.get('hurt', False),
-                                 self.on_hurt_changed, _Style.CHECKBOX)
+
+        hurt_cb = _make_checkbox(
+            "Hurts player on contact",
+            brush.get('hurt', False),
+            self.on_hurt_changed,
+            _Style.CHECKBOX
+        )
         dmg_layout.addWidget(hurt_cb)
         self._widgets['hurt_cb'] = hurt_cb
 
-        dmg_spin = _make_spin(brush.get('hurt_amount', 10), 1, 1000)
+        dmg_spin = _make_spin(
+            brush.get('hurt_amount', 10),
+            1,
+            1000
+        )
         dmg_spin.setEnabled(brush.get('hurt', False))
-        dmg_spin.editingFinished.connect(lambda: self.update_object_prop('hurt_amount', dmg_spin.value()))
-        dmg_layout.addLayout(_hbox(QLabel("Damage Amount:"), dmg_spin, stretch=False))
+        dmg_spin.editingFinished.connect(
+            lambda: self.update_object_prop(
+                'hurt_amount',
+                dmg_spin.value()
+            )
+        )
+        dmg_layout.addLayout(
+            _hbox(
+                QLabel("Damage Amount:"),
+                dmg_spin,
+                stretch=False
+            )
+        )
         self._widgets['damage_spin'] = dmg_spin
 
         layout.addWidget(dmg_group)
         layout.addStretch()
-        return w
 
+        return w
     def _create_mover_tab(self, brush):
         w = QWidget()
         layout = QVBoxLayout(w)
@@ -1000,15 +1438,20 @@ class PropertyEditor(QWidget):
         props_tab = self._create_thing_properties_tab(thing)
         self.tab_widget.addTab(props_tab, "Properties")
 
+        advanced_tab = self._create_thing_advanced_tab(thing)
+        if advanced_tab is not None:
+            self.tab_widget.addTab(advanced_tab, "Advanced")
+
         if IO_AVAILABLE:
             etype = get_entity_type_for_io(thing)
             if etype and etype in IO_REGISTRY:
-                self.tab_widget.addTab(self._create_io_tab_for_thing(thing), "⚡ I/O")
+                self._defer_io_tab(lambda t=thing: self._create_io_tab_for_thing(t))
 
         layout.addWidget(self.tab_widget)
         layout.addStretch()
         scroll.setWidget(content)
         self.main_layout.addWidget(scroll)
+        self._page = scroll
 
     def _create_thing_properties_tab(self, thing) -> QWidget:
         w = QWidget()
@@ -1024,10 +1467,15 @@ class PropertyEditor(QWidget):
 
             # Collision toggle for this model entity
             no_collision = thing.properties.get('no_collision', False)
-            collision_cb = _make_checkbox("Disable collision for this model", no_collision,
-                                           lambda c: self.update_object_prop('no_collision', c),
-                                           _Style.CHECKBOX)
-            collision_cb.setToolTip("If checked, player and monsters will pass through this model")
+            collision_cb = _make_checkbox(
+                "Disable collision for this model",
+                no_collision,
+                lambda c: self.update_object_prop('no_collision', c),
+                _Style.CHECKBOX,
+            )
+            collision_cb.setToolTip(
+                "If checked, player and monsters will pass through this model"
+            )
             form.addRow("", collision_cb)
             self._widgets['model_no_collision_cb'] = collision_cb
 
@@ -1038,13 +1486,17 @@ class PropertyEditor(QWidget):
                 lambda v: self._on_collision_size_changed(v, thing)
             )
             cs_label = QLabel("Collision Size:")
-            cs_label.setToolTip("Custom collision box size (0,0,0 = auto from scale)")
+            cs_label.setToolTip(
+                "Custom collision box size (0,0,0 = auto from scale)"
+            )
             form.addRow(cs_label, cs_widget)
             self._widgets['model_collision_size_inputs'] = cs_inputs
 
             if IO_AVAILABLE:
                 note = QLabel("💡 Use the I/O tab for advanced targeting")
-                note.setStyleSheet("QLabel { color: #88AAFF; font-style: italic; padding: 4px; }")
+                note.setStyleSheet(
+                    "QLabel { color: #88AAFF; font-style: italic; padding: 4px; }"
+                )
                 form.addRow("", note)
 
         if isinstance(thing, Light):
@@ -1060,23 +1512,86 @@ class PropertyEditor(QWidget):
         if isinstance(thing, Pickup):
             self._build_pickup_ui(form, thing)
 
-        # Dynamic property iteration (excludes keys handled above)
-        self._iterate_thing_properties(form, thing)
+        # Explicit primary properties.
+        #
+        # Specialised widgets above handle properties such as model_path,
+        # scale, rotation, colour, etc. The generic iterator handles the
+        # explicitly classified primary properties that do not have a
+        # specialised editor.
+        primary_properties = getattr(
+            thing,
+            'EDITOR_PRIMARY_PROPERTIES',
+            (),
+        )
 
-        tab_layout.addLayout(form)
+        if primary_properties:
+            self._iterate_thing_properties(
+                form,
+                thing,
+                property_keys=primary_properties,
+            )
 
+        if form.rowCount() > 0:
+            tab_layout.addLayout(form)
+
+        # Type-specific grouped editors (already visually grouped).
         if isinstance(thing, PathNode):
             self._build_pathnode_group(tab_layout, thing)
+
         if isinstance(thing, LogicCamera):
             self._build_logic_camera_group(tab_layout, thing)
+
         if isinstance(thing, LogicSpawner):
             self._build_spawner_group(tab_layout, thing)
-        if isinstance(thing, LogicKeyValueStore):
+
+        if isinstance(thing, LogicState):
             self._build_keyvalue_group(tab_layout, thing)
+
         if isinstance(thing, Monster):
             self._build_monster_groups(tab_layout, thing)
 
         tab_layout.addStretch()
+        return w
+
+    def _create_thing_advanced_tab(self, thing):
+        """Build the dedicated Advanced tab from explicitly classified properties.
+
+        Advanced properties must be explicitly listed by the Thing class in
+        EDITOR_ADVANCED_PROPERTIES. Generic/unclassified properties no longer
+        automatically become Advanced.
+        """
+        advanced_properties = getattr(thing, 'EDITOR_ADVANCED_PROPERTIES', ())
+
+        if not advanced_properties:
+            return None
+
+        adv_form = QFormLayout()
+        adv_form.setSpacing(4)
+
+        self._iterate_thing_properties(
+            adv_form,
+            thing,
+            property_keys=advanced_properties,
+        )
+
+        if adv_form.rowCount() == 0:
+            return None
+
+        w = QWidget()
+        tab_layout = QVBoxLayout(w)
+        tab_layout.setContentsMargins(8, 8, 8, 8)
+        tab_layout.setSpacing(4)
+
+        section = CollapsibleSection(
+            "Other Properties",
+            expanded=True,
+            count=adv_form.rowCount(),
+        )
+        section.addLayout(adv_form)
+
+        tab_layout.addWidget(section)
+        tab_layout.addStretch()
+
         return w
 
     def _build_attach_to_mover(self, form, thing, prefix=''):
@@ -1088,25 +1603,46 @@ class PropertyEditor(QWidget):
         form.addRow("", cb)
 
         combo = ClickableComboBox()
-        combo.addItem("(none)")
-        for brush in self.editor.state.brushes:
-            if brush.get('is_mover'):
-                mname = brush.get('name', '')
-                if mname:
-                    combo.addItem(mname)
-        if current:
-            idx = combo.findText(current)
-            if idx >= 0:
-                combo.setCurrentIndex(idx)
-            else:
-                combo.addItem(current + " (missing)")
-                combo.setCurrentIndex(combo.count() - 1)
+        filled = []
+
+        def fill_movers():
+            """List the map's movers.
+
+            Deferred because the list is a scan of every brush in the map and
+            the combo is hidden unless the light is actually attached, which
+            most are not.  Building it at the moment it is shown also means it
+            cannot go stale between a mover being renamed and the box opening.
+            """
+            if filled:
+                return
+            filled.append(True)
+            combo.blockSignals(True)
+            combo.addItem("(none)")
+            for brush in self.editor.state.brushes:
+                if brush.get('is_mover'):
+                    mname = brush.get('name', '')
+                    if mname:
+                        combo.addItem(mname)
+            chosen = thing.properties.get('parent_mover', '')
+            if chosen:
+                idx = combo.findText(chosen)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+                else:
+                    combo.addItem(chosen + " (missing)")
+                    combo.setCurrentIndex(combo.count() - 1)
+            combo.blockSignals(False)
+
+        if is_attached:
+            fill_movers()
 
         lbl = QLabel("Parent Mover:")
         lbl.setVisible(is_attached)
         combo.setVisible(is_attached)
 
         def on_toggle(checked):
+            if checked:
+                fill_movers()
             lbl.setVisible(checked)
             combo.setVisible(checked)
             if not checked:
@@ -1181,117 +1717,349 @@ class PropertyEditor(QWidget):
         self._pickup_key_widgets = []
         self._pickup_sprite_widgets = []
 
-    def _iterate_thing_properties(self, form, thing):
-        is_pickup = isinstance(thing, Pickup)
-        current_item = thing.properties.get('item_type', 'health') if is_pickup else None
+    def _iterate_thing_properties(self, form, thing, property_keys=None):
+        """Add generic Thing properties to a form.
 
-        _MONSTER_ONLY = {'awake', 'damage', 'health', 'monster_type', 'variant',
-                         'triggered', 'wake_on_sight', 'can_hear', 'dead', 'non_hostile', 'sight',
-                         'patrol', 'patrol_target', 'patrol_mode'}
+        When property_keys is supplied, only those explicitly selected
+        properties are rendered. When it is None, the existing behaviour is
+        preserved for entities that have not yet been migrated to explicit
+        editor property classification.
+        """
+        is_pickup = isinstance(thing, Pickup)
+        current_item = (
+            thing.properties.get('item_type', 'health')
+            if is_pickup else None
+        )
+
+        _MONSTER_ONLY = {
+            'awake',
+            'damage',
+            'health',
+            'monster_type',
+            'variant',
+            'triggered',
+            'wake_on_sight',
+            'can_hear',
+            'dead',
+            'non_hostile',
+            'sight',
+            'patrol',
+            'patrol_target',
+            'patrol_mode',
+        }
+
+        allowed_keys = (
+            set(property_keys)
+            if property_keys is not None
+            else None
+        )
 
         for key, value in sorted(thing.properties.items()):
+            # Explicit property selection.
+            if allowed_keys is not None and key not in allowed_keys:
+                continue
+
+            # Internal/common properties.
             if key in ('name', 'id', '_io_connections', 'type'):
                 continue
-            if isinstance(thing, Light) and key in ('colour', 'parent_mover', 'parent_offset'):
+
+            # Properties already handled by specialised widgets.
+            if isinstance(thing, Light) and key in (
+                'colour',
+                'parent_mover',
+                'parent_offset',
+            ):
                 continue
-            if isinstance(thing, Model) and key in ('model_path', 'scale', 'rotation'):
+
+            if isinstance(thing, Model) and key in (
+                'model_path',
+                'scale',
+                'rotation',
+            ):
                 continue
-            if isinstance(thing, Portal) and key in ('rotation', 'portal_target', 'parent_mover', 'parent_offset', 'parent_local_pos', 'parent_local_yaw'):
+
+            if isinstance(thing, Portal) and key in (
+                'rotation',
+                'portal_target',
+                'parent_mover',
+                'parent_offset',
+                'parent_local_pos',
+                'parent_local_yaw',
+            ):
                 continue
+
+            # Monster-only properties should not appear on ordinary Things.
             if not isinstance(thing, Monster) and key in _MONSTER_ONLY:
                 continue
-            if isinstance(thing, Monster) and key in ('triggered', 'wake_on_sight', 'can_hear', 'dead', 'non_hostile', 'sight', 'patrol', 'patrol_target', 'patrol_mode', 'variant', 'team'):
-                continue
-            if isinstance(thing, PathNode) and key in ('radius', 'show_radius', 'affects_type', 'next_node', 'wait_time', 'speed', 'patrol_speed'):
-                continue
-            if isinstance(thing, LogicCamera) and key in ('path_target', 'speed', 'fov_override', 'look_ahead'):
-                continue
-            if isinstance(thing, LogicSpawner) and key in ('spawn_type', 'target_node', 'max_spawn', 'spawn_properties'):
-                continue
-            if isinstance(thing, LogicKeyValueStore) and key in ('store_name', 'initial_data', '_runtime_data'):
-                continue
-            if is_pickup and key in ('key_name', 'custom_sprite', 'respawns', 'respawn_time'):
-                continue
-            if isinstance(thing, Light) and key == 'show_radius':
-                # Force boolean checkbox, convert string "True"/"False" to bool
-                bool_val = value
-                if isinstance(value, str):
-                    bool_val = value.lower() == 'true'
-                cb = _make_checkbox("Show Radius", bool_val,
-                                    lambda c, k=key: self.update_object_prop(k, c),
-                                    _Style.CHECKBOX)
-                form.addRow(label_text, cb)
-                self._widgets['light_show_radius_cb'] = cb
+
+            # Monster properties handled by the dedicated Monster UI.
+            if isinstance(thing, Monster) and key in (
+                'triggered',
+                'wake_on_sight',
+                'can_hear',
+                'dead',
+                'non_hostile',
+                'sight',
+                'patrol',
+                'patrol_target',
+                'patrol_mode',
+                'variant',
+                'team',
+            ):
                 continue
 
-            label_text = "Visible:" if key == 'show_rim' else key.replace('_', ' ').title() + ":"
+            # PathNode properties handled by its dedicated group.
+            if isinstance(thing, PathNode) and key in (
+                'radius',
+                'show_radius',
+                'affects_type',
+                'next_node',
+                'wait_time',
+                'speed',
+                'patrol_speed',
+            ):
+                continue
 
-            if key == 'angle' and isinstance(thing, Portal):
-                spin = _make_spin(int(float(value)) % 360, 0, 359, suffix="°", step=45)
-                spin.setWrapping(True)
-                spin.setToolTip("Portal facing direction in degrees")
-                spin.valueChanged.connect(lambda v: self.update_object_prop('angle', v))
-                form.addRow(label_text, spin)
-            elif key == 'angle':
-                combo = _make_combo(['0°', '90°', '180°', '270°'],
-                                    f"{int(float(value)) % 360}°",
-                                    lambda t: self.update_object_prop('angle', int(t.replace('°', ''))))
-                form.addRow(label_text, combo)
-            elif isinstance(thing, Monster) and key == 'monster_type':
-                self._build_monster_type_row(form, thing)
-            elif isinstance(thing, Light) and key == 'state':
-                combo = _make_combo(['on', 'off'], value, lambda t: self.update_object_prop(key, t))
-                form.addRow(label_text, combo)
-            elif isinstance(thing, Light) and key == 'shadow_map_size':
-                cur = str(thing.get_shadow_map_size())
-                combo = _make_combo(
-                    ['256', '512', '1024', '2048'], cur,
-                    lambda t: self.update_object_prop('shadow_map_size', int(t)),
-                    tooltip=("Per-face shadow cube-map resolution for this light.\n"
-                             "Higher = sharper shadow edges, but ~4x the VRAM and\n"
-                             "fill cost per step. Only used when 'Casts Shadows' is on."))
-                form.addRow("Shadow Map Size:", combo)
-            elif isinstance(thing, Speaker) and key == 'sound_file':
-                self.add_sound_file_widget(form, thing, key, value)
-            elif isinstance(thing, LogicGate) and key == 'logic_type':
-                combo = _make_combo(['AND', 'OR', 'XOR', 'NAND', 'NOR'], value,
-                                    lambda t: self.update_object_prop(key, t))
-                form.addRow("Logic Type:", combo)
-            elif is_pickup and key == 'item_type':
-                self._build_pickup_item_type_row(form, thing)
-            elif is_pickup and key == 'activation':
-                self._build_pickup_activation_row(form, thing, value)
-            elif is_pickup and key == 'value':
-                self._build_pickup_value_row(form, thing, value)
-            elif isinstance(value, bool):
-                # _make_checkbox wires the `toggled(bool)` signal, so the callback
-                # already receives the new checked state as a bool.  (Comparing it
-                # to Qt.Checked — an int enum == 2 — is always False, which is why
-                # generic bool props like 'casts_shadows' never stayed enabled.)
-                cb = _make_checkbox("", value, lambda c, k=key: self.update_object_prop(k, c), _Style.CHECKBOX)
-                form.addRow(label_text, cb)
-            elif isinstance(value, int):
-                # Full 32-bit range so large-but-valid ints (gold, radii, health
-                # caps) show their real value instead of being pinned at 99999;
-                # _make_spin still clamps anything beyond it so nothing overflows.
-                spin = _make_spin(value, -2147483648, 2147483647)
-                spin.editingFinished.connect(lambda w=spin, k=key: self.update_object_prop(k, w.value()))
-                form.addRow(label_text, spin)
-            elif isinstance(value, float):
-                inp = QLineEdit(str(value))
-                inp.editingFinished.connect(
-                    lambda le=inp, k=key: self.update_object_prop(
-                        k, float(le.text()) if le.text() and le.text().replace('.', '', 1).replace('-', '', 1).isdigit() else 0.0))
-                form.addRow(label_text, inp)
-            else:
-                inp = QLineEdit(str(value))
-                inp.editingFinished.connect(lambda le=inp, k=key: self.update_object_prop(k, le.text()))
-                form.addRow(label_text, inp)
+            # LogicCamera properties handled by its dedicated group.
+            if isinstance(thing, LogicCamera) and key in (
+                'path_target',
+                'speed',
+                'fov_override',
+                'look_ahead',
+            ):
+                continue
 
-        # Sprite + respawn controls (pickup only)
-        if is_pickup:
-            self._build_pickup_sprite_row(form, thing)
-            self._build_pickup_respawn_row(form, thing)
+            # LogicSpawner properties handled by its dedicated group.
+            if isinstance(thing, LogicSpawner) and key in (
+                'spawn_type',
+                'target_node',
+                'max_spawn',
+                'spawn_properties',
+            ):
+                continue
+
+            # LogicKeyValueStore properties handled by its dedicated group.
+            if isinstance(thing, LogicState) and key in (
+                'store_name',
+                'initial_data',
+                '_runtime_data',
+            ):
+                continue
+
+            # Pickup properties handled by the dedicated Pickup UI.
+            if is_pickup and key in (
+                'key_name',
+                'custom_sprite',
+                'respawns',
+                'respawn_time',
+            ):
+                continue
+
+            # Angle gets the normal angle editor rather than a generic field.
+            if key == 'angle':
+                angle = float(value or 0.0)
+
+                angle_combo = QComboBox()
+                angle_combo.addItems([
+                    '0°',
+                    '45°',
+                    '90°',
+                    '135°',
+                    '180°',
+                    '225°',
+                    '270°',
+                    '315°',
+                ])
+
+                nearest = int(round(angle / 45.0)) % 8
+                angle_combo.setCurrentIndex(nearest)
+
+                def _set_angle(index, thing=thing, combo=angle_combo):
+                    new_angle = float(index * 45)
+                    self.update_object_prop('angle', new_angle)
+
+                angle_combo.currentIndexChanged.connect(_set_angle)
+
+                form.addRow(QLabel("Angle:"), angle_combo)
+                self._widgets[f'{thing.properties.get("id", id(thing))}_angle'] = angle_combo
+                continue
+
+            # Monster type.
+            if isinstance(thing, Monster) and key == 'monster_type':
+                combo = QComboBox()
+                combo.addItems([
+                    'zombie',
+                    'goblin',
+                    'orc',
+                    'skeleton',
+                    'custom',
+                ])
+
+                current = str(value or 'zombie')
+                index = combo.findText(current)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+
+                combo.currentTextChanged.connect(
+                    lambda text: self.update_object_prop('monster_type', text)
+                )
+
+                form.addRow(QLabel("Monster Type:"), combo)
+                continue
+
+            # Light state.
+            if isinstance(thing, Light) and key == 'state':
+                cb = _make_checkbox(
+                    "Enabled",
+                    bool(value),
+                    lambda checked: self.update_object_prop('state', checked),
+                    _Style.CHECKBOX,
+                )
+                form.addRow("", cb)
+                continue
+
+            # Light shadow-map size.
+            if isinstance(thing, Light) and key == 'shadow_map_size':
+                spin = QSpinBox()
+                spin.setRange(64, 4096)
+                spin.setSingleStep(64)
+                spin.setValue(int(value or 512))
+
+                spin.valueChanged.connect(
+                    lambda v: self.update_object_prop('shadow_map_size', v)
+                )
+
+                form.addRow(QLabel("Shadow Map Size:"), spin)
+                continue
+
+            # Speaker sound file.
+            if isinstance(thing, Speaker) and key == 'sound_file':
+                edit = QLineEdit(str(value or ''))
+                edit.editingFinished.connect(
+                    lambda e=edit: self.update_object_prop(
+                        'sound_file',
+                        e.text(),
+                    )
+                )
+
+                form.addRow(QLabel("Sound File:"), edit)
+                continue
+
+            # Logic gate type.
+            if isinstance(thing, LogicGate) and key == 'logic_type':
+                combo = QComboBox()
+                combo.addItems([
+                    'AND',
+                    'OR',
+                    'NOT',
+                    'NAND',
+                    'NOR',
+                    'XOR',
+                    'XNOR',
+                ])
+
+                current = str(value or 'AND').upper()
+                index = combo.findText(current)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+
+                combo.currentTextChanged.connect(
+                    lambda text: self.update_object_prop(
+                        'logic_type',
+                        text,
+                    )
+                )
+
+                form.addRow(QLabel("Logic Type:"), combo)
+                continue
+
+            # Pickup item type.
+            if is_pickup and key == 'item_type':
+                combo = QComboBox()
+                combo.addItems([
+                    'health',
+                    'ammo',
+                    'weapon',
+                    'key',
+                    'custom',
+                ])
+
+                current = str(value or 'health')
+                index = combo.findText(current)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+
+                combo.currentTextChanged.connect(
+                    lambda text: self.update_object_prop(
+                        'item_type',
+                        text,
+                    )
+                )
+
+                form.addRow(QLabel("Item Type:"), combo)
+                continue
+
+            # Generic booleans.
+            if isinstance(value, bool):
+                cb = _make_checkbox(
+                    key.replace('_', ' ').title(),
+                    value,
+                    lambda checked, k=key: self.update_object_prop(
+                        k,
+                        checked,
+                    ),
+                    _Style.CHECKBOX,
+                )
+                form.addRow("", cb)
+                continue
+
+            # Generic integers.
+            if isinstance(value, int) and not isinstance(value, bool):
+                spin = QSpinBox()
+                spin.setRange(-2147483648, 2147483647)
+                spin.setValue(value)
+
+                spin.valueChanged.connect(
+                    lambda v, k=key: self.update_object_prop(k, v)
+                )
+
+                form.addRow(
+                    QLabel(key.replace('_', ' ').title() + ":"),
+                    spin,
+                )
+                continue
+
+            # Generic floats.
+            if isinstance(value, float):
+                spin = QDoubleSpinBox()
+                spin.setRange(-999999.0, 999999.0)
+                spin.setDecimals(3)
+                spin.setSingleStep(0.1)
+                spin.setValue(value)
+
+                spin.valueChanged.connect(
+                    lambda v, k=key: self.update_object_prop(k, v)
+                )
+
+                form.addRow(
+                    QLabel(key.replace('_', ' ').title() + ":"),
+                    spin,
+                )
+                continue
+
+            # Generic strings / everything else.
+            edit = QLineEdit(str(value) if value is not None else '')
+            edit.editingFinished.connect(
+                lambda e=edit, k=key: self.update_object_prop(
+                    k,
+                    e.text(),
+                )
+            )
+
+            form.addRow(
+                QLabel(key.replace('_', ' ').title() + ":"),
+                edit,
+            )
 
     def _build_monster_type_row(self, form, thing):
         combo = _make_combo(['human', 'flying'], thing.properties.get('monster_type', 'human'))
@@ -1341,7 +2109,7 @@ class PropertyEditor(QWidget):
             for k in ('projectile_sprite_label', 'projectile_sprite_path'):
                 if k in self._widgets:
                     self._widgets[k].setVisible(is_flying)
-            self.set_object(thing)
+            self.set_object(thing, force=True)
 
         combo.currentTextChanged.connect(on_type_changed)
         variant_combo.currentTextChanged.connect(on_variant)
@@ -1710,22 +2478,90 @@ class PropertyEditor(QWidget):
         tab_layout.addWidget(monster_group)
 
 
+    # -- LogicState panel ---------------------------------------------------
+    #
+    # One table, one row per key, rather than the two disjoint lists this panel
+    # used to show (designer defaults above, live values below).  A designer
+    # asking "what is `door_unlocked` right now?" had to read both and work out
+    # which one won; now the row says, in a State column:
+    #
+    #   default  - a designer default, not written during play
+    #   set      - a live value that matches the default
+    #   changed  - a live value that differs from the default
+    #   runtime  - a live value with no designer default at all
+    #
+    # That last one matters: a key a map creates at run time (a counter, an
+    # object-local flag) had no row in the old panel at all, so the values that
+    # actually drive a level were the ones you could not see.
+
+    #: Column order of the state table.
+    _STATE_COLUMNS = ("Key", "Type", "Value", "State")
+
+    _STATE_COLOURS = {
+        'default': "#888888",
+        'set':     "#88FF88",
+        'changed': "#F08000",
+        'runtime': "#88AAFF",
+    }
+
+    @staticmethod
+    def _state_rows(thing):
+        """One row per key, defaults and live values reconciled.
+
+        Returns ``[(key, type name, display value, state), ...]`` sorted by key,
+        so the table order is stable and two stores with the same contents look
+        the same.
+        """
+        defaults = thing.properties.get('initial_data', {})
+        if not isinstance(defaults, dict):
+            defaults = {}
+        live = getattr(thing, '_runtime_data', {}) or {}
+
+        rows = []
+        for key in sorted(set(defaults) | set(live), key=str):
+            if key in live:
+                value = live[key]
+                if key not in defaults:
+                    state = 'runtime'
+                elif _sv.format_value(defaults[key]) == _sv.format_value(value):
+                    state = 'set'
+                else:
+                    state = 'changed'
+            else:
+                value = defaults[key]
+                state = 'default'
+            rows.append((str(key), _sv.type_of(value),
+                         _sv.format_value(value), state))
+        return rows
+
+    @staticmethod
+    def _unused_state_key(existing):
+        """An unused key name, so adding a row twice does not collide.
+
+        The panel used to insert a literal ``new_key`` every time, and the
+        second one silently replaced the first when the table was written back.
+        """
+        taken = set(existing)
+        if 'new_key' not in taken:
+            return 'new_key'
+        index = 2
+        while ('new_key_%d' % index) in taken:
+            index += 1
+        return 'new_key_%d' % index
+
     def _build_keyvalue_group(self, tab_layout, thing):
-        """Display LogicKeyValueStore runtime data and persistent registry info."""
-        group = QGroupBox("Key/Value Store")
+        """The LogicState editor: store name, capacity, and the value table."""
+        # No group title and no "State:" caption above the table: the panel
+        # already sits under the entity's own heading, and the table's Key /
+        # Type / Value / State columns say what it is. Two more labels saying
+        # the same thing cost a row of height each and add nothing.
+        group = QGroupBox()
         group.setStyleSheet(_Style.group_box("#26A69A", "#1a2f2d"))
         layout = QVBoxLayout(group)
         layout.setSpacing(6)
         layout.setContentsMargins(8, 8, 8, 8)
 
-        # Store name (read-only display)
-        store_name = thing.properties.get('store_name', thing.properties.get('name', ''))
-        name_lbl = QLabel(f"<b>Store Name:</b> {store_name}")
-        name_lbl.setStyleSheet("QLabel { color: #88FF88; }")
-        layout.addWidget(name_lbl)
-
-        # Refresh button
-        refresh_btn = QPushButton("🔄 Refresh Values")
+        refresh_btn = QPushButton("🔄 Refresh Live Values")
         refresh_btn.setStyleSheet("""
             QPushButton { background-color: #2a5a5a; color: white; border: 1px solid #26A69A;
                           border-radius: 3px; padding: 4px 8px; }
@@ -1735,85 +2571,186 @@ class PropertyEditor(QWidget):
         refresh_btn.clicked.connect(lambda: self._refresh_keyvalue_group(thing))
         layout.addWidget(refresh_btn)
 
+        # Store name — stores sharing a name are the same store, across levels.
+        store_name = thing.properties.get('store_name', thing.properties.get('name', ''))
+        name_row = QHBoxLayout()
+        name_row.setSpacing(4)
+        name_row.addWidget(QLabel("<b>Store:</b>"))
+        name_edit = QLineEdit(str(store_name))
+        name_edit.setToolTip("Stores that share a name share their values, across "
+                             "level transitions and with plugins.")
+        name_edit.setStyleSheet("QLineEdit { color: #88FF88; }")
 
-        # Initial data (designer defaults)
+        def _on_name():
+            thing.properties['store_name'] = name_edit.text().strip()
+        name_edit.editingFinished.connect(_on_name)
+        name_row.addWidget(name_edit)
+        layout.addLayout(name_row)
+
+        cap = getattr(thing, 'capacity', getattr(thing, 'MAX_PAIRS', 25))
+        cap_row = QHBoxLayout()
+        cap_row.setSpacing(4)
+        cap_row.addWidget(QLabel("<b>Capacity:</b>"))
+        cap_spin = QSpinBox()
+        cap_spin.setRange(1, 4096)
+        cap_spin.setValue(int(cap))
+        cap_spin.setToolTip("How many keys this store accepts before writes are "
+                            "refused and OnStoreFull fires.")
+        cap_spin.valueChanged.connect(
+            lambda v: thing.properties.__setitem__('capacity', int(v)))
+        cap_row.addWidget(cap_spin)
+        cap_row.addStretch()
+        layout.addLayout(cap_row)
+
+        kv_table = QTableWidget(0, len(self._STATE_COLUMNS))
+        kv_table.setHorizontalHeaderLabels(list(self._STATE_COLUMNS))
+        kv_table.horizontalHeader().setStretchLastSection(True)
+        kv_table.verticalHeader().setVisible(False)
+        kv_table.setMaximumHeight(220)
+        kv_table.setStyleSheet("""
+            QTableWidget { background-color: #1e2b2a; alternate-background-color: #24322f;
+                           color: #e0e0e0; gridline-color: #3a4a48; border: 1px solid #2f4340;
+                           selection-background-color: #2a5a5a; selection-color: white; }
+            QHeaderView::section { background-color: #223330; color: #9fded6;
+                                   border: 0px; border-right: 1px solid #3a4a48; padding: 3px 6px; }
+            QTableCornerButton::section { background-color: #223330; border: 0px; }
+        """)
+        kv_table.setAlternatingRowColors(True)
+        kv_table.setShowGrid(True)
+
         initial_data = thing.properties.get('initial_data', {})
-        if initial_data:
-            layout.addWidget(QLabel("<b>Initial Data (Designer Defaults):</b>"))
-            for k, v in sorted(initial_data.items()):
-                row = QHBoxLayout()
-                row.setSpacing(4)
-                key_lbl = QLabel(f"  {k}:")
-                key_lbl.setStyleSheet("QLabel { color: #AAAAAA; min-width: 100px; }")
-                val_lbl = QLabel(str(v))
-                val_lbl.setStyleSheet("QLabel { color: #FFFFFF; }")
-                row.addWidget(key_lbl)
-                row.addWidget(val_lbl)
-                row.addStretch()
-                layout.addLayout(row)
+        if not isinstance(initial_data, dict):
+            initial_data = {}
+            thing.properties['initial_data'] = initial_data
 
-        # Separator
-        if initial_data:
-            line = QFrame()
-            line.setFrameShape(QFrame.HLine)
-            line.setStyleSheet("QFrame { color: #555; }")
-            layout.addWidget(line)
+        def _fill():
+            """Draw the current rows.  Guarded so filling is not a user edit."""
+            self._kv_loading = True
+            kv_table.setRowCount(0)
+            for r, (key, type_name, value, state) in enumerate(self._state_rows(thing)):
+                kv_table.insertRow(r)
+                kv_table.setItem(r, 0, QTableWidgetItem(key))
 
-        # Runtime data (live values)
-        runtime_data = getattr(thing, '_runtime_data', {})
-        persistent = getattr(thing.__class__, '_persistent_registry', {})
+                # Type is derived from the value, never stored separately: a
+                # second place to say what type a value is, is a second place
+                # for it to be wrong.
+                type_item = QTableWidgetItem(type_name)
+                type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
+                type_item.setForeground(QColor("#9fded6"))
+                type_item.setToolTip(
+                    "Inferred from the value. Write 5 for an integer, true for a "
+                    "boolean, or name the type in an I/O parameter (key:string=007).")
+                kv_table.setItem(r, 1, type_item)
 
-        # Check persistent registry for this store
-        persistent_data = persistent.get(store_name, {})
+                kv_table.setItem(r, 2, QTableWidgetItem(value))
 
-        if runtime_data or persistent_data:
-            layout.addWidget(QLabel("<b>Runtime Values (Live):</b>"))
+                state_item = QTableWidgetItem(state)
+                state_item.setFlags(state_item.flags() & ~Qt.ItemIsEditable)
+                state_item.setForeground(QColor(self._STATE_COLOURS.get(state, "#888")))
+                state_item.setToolTip({
+                    'default': "A designer default. Nothing has written this during play.",
+                    'set':     "Written during play, and equal to the designer default.",
+                    'changed': "Written during play, and different from the designer default.",
+                    'runtime': "Created during play. This key has no designer default.",
+                }.get(state, ""))
+                kv_table.setItem(r, 3, state_item)
+            self._kv_loading = False
+            self._update_kv_count(thing.properties.get('initial_data', {}), int(cap))
 
-            # Show runtime data (authoritative for this instance)
-            all_keys = set(runtime_data.keys()) | set(persistent_data.keys())
-            for k in sorted(all_keys):
-                row = QHBoxLayout()
-                row.setSpacing(4)
+        def _write_back_kv(*_):
+            """Table -> designer defaults.
 
-                # Key label
-                key_lbl = QLabel(f"  {k}:")
-                key_lbl.setStyleSheet("QLabel { color: #F08000; min-width: 100px; }")
+            Only the defaults are authored here; live values belong to the
+            running session and are shown, not edited, so a panel left open
+            during play cannot quietly rewrite the world.
+            """
+            if getattr(self, '_kv_loading', False):
+                return
+            data = {}
+            for r in range(kv_table.rowCount()):
+                kcell = kv_table.item(r, 0)
+                vcell = kv_table.item(r, 2)
+                key = kcell.text().strip() if kcell else ""
+                if not key:
+                    continue
+                data[key] = _sv.parse(vcell.text() if vcell else "")
+            capacity = int(cap)
+            if len(data) > capacity:
+                for extra in list(data.keys())[capacity:]:
+                    del data[extra]
+                debug_log("Warning",
+                          f"Logic state store is full ({capacity} keys); extra keys dropped.")
+            thing.properties['initial_data'] = data
+            self._update_kv_count(data, capacity)
 
-                # Value with source indicator
-                if k in runtime_data:
-                    val_str = str(runtime_data[k])
-                    source = "runtime"
-                else:
-                    val_str = str(persistent_data[k])
-                    source = "persistent"
+        _fill()
+        kv_table.itemChanged.connect(_write_back_kv)
+        layout.addWidget(kv_table)
+        self._widgets['kv_table'] = kv_table
 
-                val_lbl = QLabel(val_str)
-                if source == "runtime":
-                    val_lbl.setStyleSheet("QLabel { color: #00FF00; font-weight: bold; }")
-                else:
-                    val_lbl.setStyleSheet("QLabel { color: #88AAFF; }")
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(4)
+        add_btn = QPushButton("➕ Add Key")
+        rem_btn = QPushButton("➖ Remove Selected")
+        for b in (add_btn, rem_btn):
+            b.setStyleSheet("""
+                QPushButton { background-color: #2a5a5a; color: white; border: 1px solid #26A69A;
+                              border-radius: 3px; padding: 3px 8px; }
+                QPushButton:hover { background-color: #3a7a7a; }
+            """)
 
-                row.addWidget(key_lbl)
-                row.addWidget(val_lbl)
-                row.addStretch()
-                layout.addLayout(row)
+        def _add_pair():
+            capacity = int(cap)
+            if kv_table.rowCount() >= capacity:
+                debug_log("Warning", f"Logic state store is full ({capacity} keys).")
+                return
+            existing = [kv_table.item(r, 0).text() if kv_table.item(r, 0) else ""
+                        for r in range(kv_table.rowCount())]
+            self._kv_loading = True
+            r = kv_table.rowCount()
+            kv_table.insertRow(r)
+            kv_table.setItem(r, 0, QTableWidgetItem(self._unused_state_key(existing)))
+            type_item = QTableWidgetItem("string")
+            type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
+            kv_table.setItem(r, 1, type_item)
+            kv_table.setItem(r, 2, QTableWidgetItem("value"))
+            state_item = QTableWidgetItem("default")
+            state_item.setFlags(state_item.flags() & ~Qt.ItemIsEditable)
+            kv_table.setItem(r, 3, state_item)
+            self._kv_loading = False
+            kv_table.setCurrentCell(r, 0)
+            _write_back_kv()
 
-            # Count
-            count_lbl = QLabel(f"<i>{len(all_keys)} / {thing.MAX_PAIRS} pairs stored</i>")
-            count_lbl.setStyleSheet("QLabel { color: #888; font-size: 10px; }")
-            layout.addWidget(count_lbl)
-        else:
-            empty_lbl = QLabel("<i>No values stored yet.</i>")
-            empty_lbl.setStyleSheet("QLabel { color: #888; font-style: italic; }")
-            layout.addWidget(empty_lbl)
+        def _remove_selected():
+            row = kv_table.currentRow()
+            if row >= 0:
+                kv_table.removeRow(row)
+                _write_back_kv()
 
+        add_btn.clicked.connect(_add_pair)
+        rem_btn.clicked.connect(_remove_selected)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(rem_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        self._kv_count_lbl = QLabel("")
+        self._kv_count_lbl.setStyleSheet("QLabel { color: #888; font-size: 10px; }")
+        layout.addWidget(self._kv_count_lbl)
+        self._update_kv_count(initial_data, int(cap))
 
         tab_layout.addWidget(group)
         self._widgets['keyvalue_group'] = group
 
+    def _update_kv_count(self, data, cap):
+        """Update the '<n> / <cap> designer keys' hint under the state table."""
+        lbl = getattr(self, '_kv_count_lbl', None)
+        if lbl is not None:
+            lbl.setText(f"<i>{len(data)} / {cap} designer keys</i>")
+
     def _refresh_keyvalue_group(self, thing):
-        """Refresh the keyvalue display by rebuilding the property editor."""
-        self.set_object(thing)
+        """Refresh the state display by rebuilding the property editor."""
+        self.set_object(thing, force=True)
 
     def _build_monster_groups(self, tab_layout, thing):
         for k, v in (('sight', 512), ('triggered', False), ('wake_on_sight', True),
@@ -2036,7 +2973,7 @@ class PropertyEditor(QWidget):
             from editor.monster_customise_dialog import MonsterCustomiseDialog
             dlg = MonsterCustomiseDialog(thing, self)
             if dlg.exec_() == MonsterCustomiseDialog.Accepted:
-                self.set_object(thing)
+                self.set_object(thing, force=True)
                 try:
                     self.editor.view_3d.update()
                 except Exception:
@@ -2226,7 +3163,7 @@ class PropertyEditor(QWidget):
         """Refresh property editor and jump to shader tab after shader change."""
         if self.current_object is None:
             return
-        self.set_object(self.current_object)
+        self.set_object(self.current_object, force=True)
         if hasattr(self, 'shader_tab_index') and self.shader_tab_index is not None:
             shader = self.current_object.get('shader', '<None>')
             if shader not in ('<<None>', None, ''):
@@ -2665,6 +3602,15 @@ class PropertyEditor(QWidget):
                     except (ValueError, TypeError):
                         value = 0.0
             self.current_object.properties[key] = value
+
+        if key == 'name' and _io_system is not None:
+            # A name is read by every *other* entity's panel — the "Targeted by"
+            # list quotes it, and name-addressed connections resolve through it —
+            # so a rename changes what those panels should show while changing
+            # nothing they could notice on their own object.  The I/O revision
+            # is the shared "something addressable moved" signal they already
+            # fold into their cache key.
+            _io_system.bump_io_revision()
 
         if isinstance(self.current_object, Portal) and key == 'angle':
             rot = self.current_object.properties.get('rotation', [0.0, 0.0, 0.0])

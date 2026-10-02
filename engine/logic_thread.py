@@ -22,8 +22,9 @@ import os
 from .threaded_game_state import ThreadedGameState, RenderState
 from .player import Player
 from .camera import Camera
-from .constants import is_water_brush
+from .constants import is_water_brush, brush_aabb_bounds
 from .brush_geometry import build_collision_mesh, brush_has_geometry, GEO_RUNTIME_KEYS
+from .prop_runtime import PropSession
 
 # Import Thing subclasses for type checking
 try:
@@ -171,6 +172,10 @@ class LogicThread(threading.Thread):
         # Frustum culling settings
         self.culling_enabled = True
         self.frustum_aspect = 16.0 / 9.0
+        # Shared with the viewport and the renderer (set_view_distance). Held
+        # as None until the viewport hands one over, so a LogicThread built in
+        # a test without one still culls against the historical far plane.
+        self.view_distance = None
 
         # Play-mode camera mode: "First Person" (default) or "Overhead" (a
         # native top-down camera, GTA 1 / Alien Swarm style). Controlled by the
@@ -261,8 +266,10 @@ class LogicThread(threading.Thread):
         # Logic Gate State
         self.gate_inputs = {}
         
-        # Timer states for logic_timer entities
-        self.timer_states: Dict[int, Dict[str, float]] = {}
+        # Countdown state for logic_timer entities, keyed by the timer's UUID
+        # (see LogicThread._timer_key) so it survives a save and can never be
+        # confused with another entity's.
+        self.timer_states: Dict[str, Dict[str, float]] = {}
 
         # Active light FadeIn/FadeOut transitions, keyed by id(light entity)
         self.light_fade_states: Dict[int, Dict[str, Any]] = {}
@@ -305,6 +312,10 @@ class LogicThread(threading.Thread):
         # PERF: cached self.brushes + self._model_collision_brushes (see
         # _refresh_collision_brushes_cache)
         self._collision_brushes_cache: list = []
+        # Bumped every time the set of drawable objects changes, so a consumer
+        # that caches across frames can tell whether its cache still describes
+        # this world.  See notify_visibility_changed().
+        self.visibility_changes = 0
 
         # Global toggle for model collision (F6 in play mode)
         self.model_collision_enabled = True
@@ -347,6 +358,10 @@ class LogicThread(threading.Thread):
         self._levelchanger_things = []
         self._monster_things = []
         self._monster_by_id = {}
+        self._timer_things = []
+        # Authored health per monster UUID, captured on play-mode enter so the
+        # Respawn input has a value to restore (see _reset_all_monsters).
+        self._monster_spawn_health: Dict[str, int] = {}
 
         # ── Portal transit state ───────────────────────────────────────────
         self._portal_cooldowns: Dict[int, float] = {}
@@ -450,6 +465,11 @@ class LogicThread(threading.Thread):
         # every entity in the level on every AI tick.
         self._monster_things = [t for t in self.things if MonsterThing and isinstance(t, MonsterThing)]
         self._monster_by_id = {id(t): t for t in self._monster_things}
+
+        # PERF: the timer list, for the same reason — _update_logic_timers is
+        # the one per-frame path the logic system has, and it should walk the
+        # timers, not the level.
+        self._timer_things = [t for t in self.things if LogicTimer and isinstance(t, LogicTimer)]
 
     def _find_entity_by_name(self, name: str):
         if not name:
@@ -787,6 +807,42 @@ class LogicThread(threading.Thread):
         """
         self._collision_brushes_cache = self.brushes + self._model_collision_brushes
 
+    # -- visibility invalidation ------------------------------------------
+    #
+    # Two notifications, because "what is drawn" and "what is collided with"
+    # go stale at different costs.  Both are the *host* side of the streaming
+    # contract in ``plugins.bigworld.runtime.StreamingHost``; neither knows
+    # anything about a particular streaming layer.
+
+    def notify_visibility_changed(self):
+        """The set of drawable objects changed.
+
+        Cheap by contract — a counter bump and the per-frame cull buffers —
+        because a streaming layer calls it every time the player crosses a cell
+        boundary.  The cull buffers are rebuilt lazily on the next frame, and
+        `hidden` itself is read fresh there, so this costs nothing until a frame
+        actually wants it.
+        """
+        self.visibility_changes += 1
+        self._invalidate_cull_cache()
+
+    def notify_authored_visibility_changed(self):
+        """An object's *authored* hidden/disabled state changed.
+
+        The expensive one, and the one streaming must never need: parking
+        stashes an object's authored ``hidden`` rather than overwriting it
+        (``engine.spatial.authored_hidden``), precisely so the collision grid
+        can outlive a cell going in and out.  An *authored* change is different
+        — an editor edit, an I/O Show/Hide, a save being restored over the live
+        world — and the grid is built from exactly that, once, so it has to be
+        rebuilt or the world collides like the map it used to be.
+        """
+        self.notify_visibility_changed()
+        self._refresh_collision_brushes_cache()
+        grid = getattr(self, '_spatial_grid', None)
+        if grid is not None:
+            grid.populate(self._collision_brushes_cache)
+
     # =========================================================================
     # PLAYER & MODE MANAGEMENT
     # =========================================================================
@@ -895,6 +951,13 @@ class LogicThread(threading.Thread):
             self._spatial_grid.populate(self.brushes + self._model_collision_brushes)
             self.monster_ai.set_spatial_grid(self._spatial_grid)
 
+            # Props are a core feature, but do not allocate a runtime session
+            # for maps that do not contain one.
+            self._props = None
+            if PropSession.has_props(self.things):
+                self._props = PropSession(self)
+                self._props.start()
+
             # Reset cinematic state (mover_path_states already reset by _init_movers)
             self.cinematic_state = None
             self.camera_transition = None
@@ -964,11 +1027,19 @@ class LogicThread(threading.Thread):
             self.player_dead = False
             self.muzzle_flash_active = False
 
-            # Clear spatial grid
+            # Clear spatial grid. Guarded on the *value*, not on the attribute
+            # existing: after one exit the attribute is present and None, so a
+            # second stop (a teardown path, or Stop pressed twice) used to raise
+            # AttributeError here and abandon the rest of the cleanup below.
+            props = getattr(self, '_props', None)
+            if props is not None:
+                props.stop()
+            self._props = None
             self.monster_ai.set_spatial_grid(None)
-            if hasattr(self, '_spatial_grid'):
-                self._spatial_grid.clear()
-                self._spatial_grid = None
+            grid = getattr(self, '_spatial_grid', None)
+            if grid is not None:
+                grid.clear()
+            self._spatial_grid = None
 
             # Reset mover path / cinematic state
             self.mover_path_states = {}
@@ -1103,13 +1174,28 @@ class LogicThread(threading.Thread):
             self.monster_ai_thread = None
 
     def _reset_all_monsters(self, clear_dead=True):
-        """Reset all monster AI state. Called when entering or exiting play mode."""
+        """Reset all monster AI state. Called when entering or exiting play mode.
+
+        Also records each monster's authored health, keyed by UUID, so the
+        Respawn input has something to restore to: the live ``health`` property
+        is what damage mutates, so by the time a monster is dead the number the
+        map authored is gone.  One dict filled during a pass that already walks
+        every monster — no extra scan, and nothing new on the entity itself.
+        """
         self.monster_ai.monster_states = {}
         if not MonsterThing:
             return
+        if clear_dead:
+            self._monster_spawn_health = {}
         for thing in self.things:
             if not isinstance(thing, MonsterThing):
                 continue
+            if clear_dead:
+                try:
+                    self._monster_spawn_health[thing.properties.get('id')] = \
+                        int(thing.properties.get('health', 100))
+                except (TypeError, ValueError):
+                    pass
             thing.properties.pop('is_shooting', None)
             thing.properties.pop('_vel_y', None)
             if clear_dead:
@@ -1132,19 +1218,30 @@ class LogicThread(threading.Thread):
                 self._plugin_emit("player_spawn", start=thing)
                 break
     
+    @staticmethod
+    def _timer_key(thing):
+        """A timer's countdown is filed under its UUID, not its memory address.
+
+        ``id(thing)`` is not an identity: it changes on every load, so a
+        countdown could never be saved, and CPython reuses addresses, so a
+        freed entity's slot could be inherited by an unrelated one.
+        """
+        return thing.properties.get('id') or thing.properties.get('name', '')
+
     def _init_logic_timers(self):
         if not LogicTimer:
             return
-        for thing in self.things:
-            if isinstance(thing, LogicTimer):
-                if thing.properties.get('start_on', False):
-                    entity_id = id(thing)
-                    interval = float(thing.properties.get('interval', 1.0))
-                    thing.properties['timer_enabled'] = True
-                    self.timer_states[entity_id] = {
-                        'remaining': interval,
-                        'interval': interval
-                    }
+        for thing in self._timer_things:
+            if thing.properties.get('start_on', False):
+                try:
+                    interval = max(0.01, float(thing.properties.get('interval', 1.0)))
+                except (TypeError, ValueError):
+                    interval = 1.0
+                thing.properties['timer_enabled'] = True
+                self.timer_states[self._timer_key(thing)] = {
+                    'remaining': interval,
+                    'interval': interval
+                }
     
     def set_terrain(self, terrain):
         self.terrain = terrain
@@ -1160,6 +1257,18 @@ class LogicThread(threading.Thread):
 
     def set_frustum_aspect(self, aspect: float):
         self.frustum_aspect = aspect
+
+    def set_view_distance(self, view_distance):
+        """Adopt the viewport's shared view-distance settings.
+
+        The frustum this thread culls against must use the same far plane the
+        renderer draws with. If it kept a larger one it would keep feeding the
+        renderer brushes the far plane then clips -- harmless but wasted work
+        every frame; a smaller one would cull something still on screen. The
+        object is shared, not copied, so a spinbox or console change is picked
+        up on the next tick.
+        """
+        self.view_distance = view_distance
 
     def set_camera_mode(self, mode: str):
         """Select the play-mode camera: 'First Person' or 'Overhead'."""
@@ -1370,7 +1479,12 @@ class LogicThread(threading.Thread):
                     'speed': speed,
                     'distance': distance,
                     'direction': direction,
-                    '_direction_np': np.array(direction, dtype=float),
+                    # Scalar unit-direction tuple (DOOR_DIRECTION_MAP entries are
+                    # already unit vectors). Kept as plain Python floats -- not a
+                    # NumPy array -- so the per-tick offset maths below produces
+                    # ordinary floats and brush['pos'] stays JSON-serialisable.
+                    '_direction_np': (float(direction[0]), float(direction[1]),
+                                      float(direction[2])),
                 }
         # PERF: cache the brush-only view of self.doors — was rebuilt via a
         # list comprehension every tick in _tick_play_mode.
@@ -1415,7 +1529,17 @@ class LogicThread(threading.Thread):
             accumulator += frame_time
             
             while accumulator >= self.TICK_DURATION:
-                self._tick(self.TICK_DURATION)
+                try:
+                    self._tick(self.TICK_DURATION)
+                except Exception:
+                    # A single bad tick (e.g. a broken entity handler) must not
+                    # silently kill the whole logic thread -- that freezes the
+                    # game and stops every other system with no visible error.
+                    # The full traceback is logged, so this isolates the failure
+                    # without hiding it; it is never a bare pass.
+                    import traceback
+                    debug_log("LogicThread",
+                              "Unhandled exception in _tick:\n" + traceback.format_exc())
                 accumulator -= self.TICK_DURATION
                 self._update_tps_counter()
                 
@@ -1557,6 +1681,15 @@ class LogicThread(threading.Thread):
 
         # Gameplay
         self._handle_interactions(use_key)
+        props = getattr(self, '_props', None)
+        if props is not None:
+            # Editor/runtime map edits can remove every Prop while playing.
+            # Release the session immediately instead of retaining objects.
+            if props.is_empty():
+                props.stop()
+                self._props = None
+            else:
+                props.tick(delta, use_key)
         self._check_pickups()
         self._handle_triggers(use_key)
 
@@ -1842,26 +1975,48 @@ class LogicThread(threading.Thread):
     # =========================================================================
     
     def _update_logic_timers(self, delta: float):
-        if not LogicTimer:
+        """Advance the running timers.  The only clock Fio's logic has.
+
+        Walks a precomputed list of timer entities rather than isinstance-testing
+        every thing in the level each frame, and an *enabled* timer is the only
+        thing it touches — a level full of timers that are switched off costs a
+        flag read each, and a level with none costs nothing at all.
+
+        This is not a logic tick: no state is scanned, no condition is
+        evaluated, and nothing else in the logic system has a per-frame path.
+        Time is simply the one event source that has to come from somewhere.
+        """
+        if not self._timer_things:
             return
-        
-        for thing in self.things:
-            if not isinstance(thing, LogicTimer):
-                continue
+
+        for thing in self._timer_things:
             if not thing.properties.get('timer_enabled', False):
                 continue
-            entity_id = id(thing)
-            if entity_id not in self.timer_states:
-                interval = float(thing.properties.get('interval', 1.0))
-                self.timer_states[entity_id] = {
-                    'remaining': interval,
-                    'interval': interval
-                }
-            state = self.timer_states[entity_id]
+            key = self._timer_key(thing)
+            state = self.timer_states.get(key)
+            if state is None:
+                try:
+                    interval = max(0.01, float(thing.properties.get('interval', 1.0)))
+                except (TypeError, ValueError):
+                    interval = 1.0
+                state = {'remaining': interval, 'interval': interval}
+                self.timer_states[key] = state
             state['remaining'] -= delta
-            if state['remaining'] <= 0:
+            if state['remaining'] > 0:
+                continue
+
+            if self.io_manager:
+                self.io_manager.fire_output(thing, 'OnTimer')
+            # A one-shot timer stops itself rather than being stopped by the
+            # chain it drives, so a map does not have to remember to wire the
+            # Disable back — and OnFinished says it happened, for a chain that
+            # wants to know.
+            if thing.properties.get('one_shot', False):
+                thing.properties['timer_enabled'] = False
+                self.timer_states.pop(key, None)
                 if self.io_manager:
-                    self.io_manager.fire_output(thing, 'OnTimer')
+                    self.io_manager.fire_output(thing, 'OnFinished')
+            else:
                 state['remaining'] = state['interval']
 
     # =========================================================================
@@ -1905,19 +2060,20 @@ class LogicThread(threading.Thread):
             
         player_pos = self.player.pos
         currently_in = set()
-        
+
+        # PERF: hoist player position to scalars and use the cached float32 AABB
+        # bounds (bit-identical to glm.vec3(pos) +/- size/2) so the per-trigger
+        # containment test allocates no throwaway glm.vec3 every tick.
+        px, py, pz = player_pos.x, player_pos.y, player_pos.z
+
         for bid, brush in self._trigger_brushes:
             if brush.get('disabled', False):
                 continue
-            pos = glm.vec3(brush['pos'])
-            size = glm.vec3(brush['size'])
-            half_size = size / 2.0
-            min_b = pos - half_size
-            max_b = pos + half_size
+            b0, b1, b2, b3, b4, b5 = brush_aabb_bounds(brush)
 
-            inside = (min_b.x <= player_pos.x <= max_b.x and
-                     min_b.y <= player_pos.y <= max_b.y and
-                     min_b.z <= player_pos.z <= max_b.z)
+            inside = (b0 <= px <= b3 and
+                      b1 <= py <= b4 and
+                      b2 <= pz <= b5)
 
             activation = brush.get('trigger_activation', 'touch').lower()
 
@@ -2232,13 +2388,16 @@ class LogicThread(threading.Thread):
             speed = brush.get('speed', 64.0)
             distance = brush.get('distance', 128.0)
             # PERF: mover direction is static during play — normalize once
-            # and cache on the state dict instead of every tick.
+            # (via NumPy, for identical rounding) and cache as a plain scalar
+            # tuple so the per-tick offset maths below is pure Python and never
+            # rebuilds a small NumPy array each frame.
             direction = state.get('_direction_np')
             if direction is None:
-                direction = np.array(brush.get('direction', [0, 1, 0]), dtype=float)
-                dir_length = np.linalg.norm(direction)
+                d = np.array(brush.get('direction', [0, 1, 0]), dtype=float)
+                dir_length = np.linalg.norm(d)
                 if dir_length > 0:
-                    direction = direction / dir_length
+                    d = d / dir_length
+                direction = (float(d[0]), float(d[1]), float(d[2]))
                 state['_direction_np'] = direction
             progress_delta = (speed * delta) / distance if distance > 0 else 0
             was_at_end = state['progress'] >= 1.0
@@ -2259,13 +2418,17 @@ class LogicThread(threading.Thread):
                         self.io_manager.fire_output(brush, 'OnFullyClosed')
             t = state['progress']
             eased = 4 * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 3) / 2
-            original = np.array(brush['original_pos'])
-            offset = direction * distance * eased
-            new_pos = original + offset
-            move_delta = new_pos - np.array(brush['pos'])
-            brush['pos'] = new_pos.tolist()
+            # PERF: scalar offset — bit-identical to the old NumPy expression
+            # (original + direction*distance*eased, which associates as
+            # (direction*distance)*eased), with no per-tick array allocation.
+            original = brush['original_pos']
+            cur = brush['pos']
+            nx = original[0] + (direction[0] * distance) * eased
+            ny = original[1] + (direction[1] * distance) * eased
+            nz = original[2] + (direction[2] * distance) * eased
+            brush['pos'] = [nx, ny, nz]
             if self.player and self.player.ground_object == brush:
-                self.player.pos += glm.vec3(move_delta[0], move_delta[1], move_delta[2])
+                self.player.pos += glm.vec3(nx - cur[0], ny - cur[1], nz - cur[2])
 
     def _update_cinematic_camera(self, delta: float):
         cs = self.cinematic_state
@@ -2415,13 +2578,15 @@ class LogicThread(threading.Thread):
             distance = state.get('distance', 128.0)
             open_time = brush.get('open_time', 3.0)
             # PERF: direction is precomputed (already unit-length) in
-            # _init_doors — no need to renormalize every tick.
+            # _init_doors — no need to renormalize every tick. Cached as a
+            # scalar tuple so the offset maths below allocates no NumPy arrays.
             direction = state.get('_direction_np')
             if direction is None:
-                direction = np.array(state.get('direction', [0, 1, 0]), dtype=float)
-                dir_length = np.linalg.norm(direction)
+                d = np.array(state.get('direction', [0, 1, 0]), dtype=float)
+                dir_length = np.linalg.norm(d)
                 if dir_length > 0:
-                    direction = direction / dir_length
+                    d = d / dir_length
+                direction = (float(d[0]), float(d[1]), float(d[2]))
                 state['_direction_np'] = direction
             progress_delta = (speed * delta) / distance if distance > 0 else 0
             if state['state'] == 'opening':
@@ -2445,13 +2610,17 @@ class LogicThread(threading.Thread):
                     state['state'] = 'closed'
                     if self.io_manager:
                         self.io_manager.fire_output(brush, 'OnFullyClosed')
-            original = np.array(brush['original_pos'])
-            offset = direction * distance * state['progress']
-            new_pos = original + offset
-            move_delta = new_pos - np.array(brush['pos'])
-            brush['pos'] = new_pos.tolist()
+            # PERF: scalar offset — bit-identical to the old NumPy expression
+            # (original + direction*distance*progress), no per-tick array alloc.
+            original = brush['original_pos']
+            cur = brush['pos']
+            progress = state['progress']
+            nx = original[0] + (direction[0] * distance) * progress
+            ny = original[1] + (direction[1] * distance) * progress
+            nz = original[2] + (direction[2] * distance) * progress
+            brush['pos'] = [nx, ny, nz]
             if self.player and self.player.ground_object == brush:
-                self.player.pos += glm.vec3(move_delta[0], move_delta[1], move_delta[2])
+                self.player.pos += glm.vec3(nx - cur[0], ny - cur[1], nz - cur[2])
 
     # =========================================================================
     # PARENTED LIGHTS
@@ -3083,7 +3252,8 @@ class LogicThread(threading.Thread):
             if current_time - m['time'] < self.BULLET_FADE_TIME
         ]
 
-        projection = glm.perspective(glm.radians(fov), self.frustum_aspect, 1.0, 10000.0)
+        _far = self.view_distance.far_plane if self.view_distance is not None else 10000.0
+        projection = glm.perspective(glm.radians(fov), self.frustum_aspect, 1.0, _far)
         proj_view = projection * view_matrix
         frustum_planes = self._extract_frustum_planes(proj_view)
 
@@ -3175,17 +3345,30 @@ class LogicThread(threading.Thread):
         write_state.culled_brushes = culled_count
 
         visible_things = []
+        visible_thing_positions = write_state.ensure_visible_thing_positions(
+            len(self.things))
+        visible_thing_count = 0
         for thing in self.things:
             if self.play_mode and Pickup and isinstance(thing, Pickup) and id(thing) in self.collected_pickups:
                 continue
             if hasattr(thing.pos, 'x'):
                 thing.pos = [thing.pos.x, thing.pos.y, thing.pos.z]
+
+            # Publish only the X/Z pair needed by the renderer's broad-phase
+            # distance test. This is a snapshot derived from the authoritative
+            # Thing.pos; it is never written back to the entity.
+            pos = thing.pos
+            visible_thing_positions[visible_thing_count, 0] = float(pos[0])
+            visible_thing_positions[visible_thing_count, 1] = float(pos[2])
+            visible_thing_count += 1
+
             if isinstance(thing, MonsterThing):
                 visible_things.append(thing.get_render_snapshot())
             else:
                 visible_things.append(thing)
 
         write_state.visible_things = visible_things
+        write_state.visible_thing_position_count = visible_thing_count
         write_state.all_things = list(self.things)
         write_state.timestamp = time.perf_counter()
 

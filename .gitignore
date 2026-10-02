@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Regenerated from engine/shaders.py:DEFAULT_SHADERS every time a renderer is
+# constructed (see ShaderLoader._ensure_defaults), so it is build output rather
+# than source. The visual test tier creates it too.
+assets/shaders/

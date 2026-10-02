@@ -1,12 +1,13 @@
 from PyQt5.QtWidgets import (
     QDialog, QCheckBox, QVBoxLayout, QDialogButtonBox, QGroupBox, QHBoxLayout,
     QLabel, QSpinBox, QPushButton, QTabWidget, QWidget, QFormLayout, QSlider,
-    QMessageBox, QKeySequenceEdit, QFrame, QGridLayout, QComboBox
+    QMessageBox, QComboBox
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QKeySequence
 import sys
 import os
+
+from engine import shaders
 
 class SettingsWindow(QDialog):
     """
@@ -18,7 +19,6 @@ class SettingsWindow(QDialog):
         self.setMinimumWidth(600)
         self.config = config
         self.main_window = parent
-        self.binding_in_progress = None
 
         self.layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -28,7 +28,6 @@ class SettingsWindow(QDialog):
         self._create_display_tab()
         self._create_play_modes_tab()
         self._create_controls_tab()
-        self._create_keyboard_tab()
         self._create_split_screen_tab()   # new tab
         
         button_layout = QHBoxLayout()
@@ -149,7 +148,23 @@ class SettingsWindow(QDialog):
         
         view_2d_group.setLayout(view_2d_layout)
         layout.addWidget(view_2d_group)
-        
+
+        tooltips_group = QGroupBox("Tooltips")
+        tooltips_layout = QVBoxLayout()
+
+        self.property_editor_tooltips_checkbox = QCheckBox("Property Editor")
+        self.property_editor_tooltips_checkbox.setToolTip(
+            "Show tooltips on the Property Editor's fields and buttons")
+        tooltips_layout.addWidget(self.property_editor_tooltips_checkbox)
+
+        self.toolbar_tooltips_checkbox = QCheckBox("Toolbar")
+        self.toolbar_tooltips_checkbox.setToolTip(
+            "Show tooltips on the editor toolbar's buttons")
+        tooltips_layout.addWidget(self.toolbar_tooltips_checkbox)
+
+        tooltips_group.setLayout(tooltips_layout)
+        layout.addWidget(tooltips_group)
+
         layout.addStretch()
 
     def _create_display_tab(self):
@@ -197,17 +212,19 @@ class SettingsWindow(QDialog):
         renderer_group = QGroupBox("Renderer Performance")
         renderer_layout = QVBoxLayout()
         
-        self.arm_detected_label = QLabel()
-        self._update_arm_detection_label()
-        renderer_layout.addWidget(self.arm_detected_label)
+        self.lowpower_detected_label = QLabel()
+        self._update_lowpower_detection_label()
+        renderer_layout.addWidget(self.lowpower_detected_label)
         
-        self.arm_mode_checkbox = QCheckBox("ARM Optimized Shaders")
-        self.arm_mode_checkbox.setToolTip(
-            "Use optimized shaders that pre-compute normal matrices on CPU.\n"
-            "Recommended for ARM devices (Surface Pro X/9, Apple Silicon) and\n"
-            "x64 emulation. Safe to enable on all devices - no quality loss."
+        self.lowpower_mode_checkbox = QCheckBox("Low-power Mode (reduced shaders)")
+        self.lowpower_mode_checkbox.setToolTip(
+            "Use the low-power lighting shaders: cheaper per fragment, and a\n"
+            "smaller dynamic-light budget (%d lights instead of %d).\n"
+            "Recommended for low-power ARM devices (Surface Pro X/9, handhelds)\n"
+            "and x64 emulation. Leave off on desktops and Apple Silicon."
+            % (shaders.MAX_LIGHTS_ARM, shaders.MAX_LIGHTS)
         )
-        renderer_layout.addWidget(self.arm_mode_checkbox)
+        renderer_layout.addWidget(self.lowpower_mode_checkbox)
         
         self.shadows_enabled_checkbox = QCheckBox("Enable Dynamic Shadows")
         self.shadows_enabled_checkbox.setToolTip(
@@ -226,58 +243,49 @@ class SettingsWindow(QDialog):
         layout.addStretch()
         self.tabs.addTab(tab, "Display")
     
-    def _detect_arm_platform(self):
-        import platform
-        machine = platform.machine().lower()
-        
-        if 'arm' in machine or 'aarch' in machine:
-            return True, "ARM processor detected"
-        
-        if sys.platform == 'win32':
-            if os.environ.get('PROCESSOR_ARCHITECTURE', '').upper() == 'ARM64':
-                return True, "Windows ARM64 detected"
-            if os.environ.get('PROCESSOR_ARCHITEW6432', '').upper() == 'ARM64':
-                return True, "Running under x64 emulation on ARM64"
-            
-            proc_id = os.environ.get('PROCESSOR_IDENTIFIER', '').lower()
-            if 'qualcomm' in proc_id or 'snapdragon' in proc_id or 'arm' in proc_id:
-                return True, "Qualcomm/ARM processor detected"
-        
-        return False, "x64/x86 processor detected"
+    def _detect_lowpower_platform(self):
+        """``(wants_low_power_shaders, reason)`` for this machine.
+
+        The rule lives in :mod:`engine.shaders`, alongside the shader variants
+        it chooses between — this window and the renderer used to detect it
+        separately and could disagree about the same machine.
+        """
+        from engine.shaders import detect_low_power_arm
+        return detect_low_power_arm()
     
-    def _update_arm_detection_label(self):
-        is_arm, reason = self._detect_arm_platform()
-        if is_arm:
-            self.arm_detected_label.setText(f"⚠️ {reason} - optimizations recommended")
-            self.arm_detected_label.setStyleSheet("color: #FFA500;")
+    def _update_lowpower_detection_label(self):
+        is_low_power, reason = self._detect_lowpower_platform()
+        if is_low_power:
+            self.lowpower_detected_label.setText(f"⚠️ {reason} - optimizations recommended")
+            self.lowpower_detected_label.setStyleSheet("color: #FFA500;")
         else:
-            self.arm_detected_label.setText(f"✓ {reason}")
-            self.arm_detected_label.setStyleSheet("color: #90EE90;")
+            self.lowpower_detected_label.setText(f"✓ {reason}")
+            self.lowpower_detected_label.setStyleSheet("color: #90EE90;")
     
     def _auto_detect_renderer_settings(self):
-        is_arm, reason = self._detect_arm_platform()
+        is_low_power, reason = self._detect_lowpower_platform()
         
-        if is_arm:
-            self.arm_mode_checkbox.setChecked(True)
+        if is_low_power:
+            self.lowpower_mode_checkbox.setChecked(True)
             self.shadows_enabled_checkbox.setChecked(False)
             QMessageBox.information(
                 self,
                 "Auto-Detect Complete",
                 f"Detected: {reason}\n\n"
-                "Applied ARM-optimized settings:\n"
-                "• ARM Optimized Shaders: ON\n"
+                "Applied low-power settings:\n"
+                "• Low-power Mode: ON\n"
                 "• Dynamic Shadows: OFF\n\n"
-                "These settings improve performance on ARM devices."
+                "These settings improve performance on low-power hardware."
             )
         else:
-            self.arm_mode_checkbox.setChecked(True)
+            self.lowpower_mode_checkbox.setChecked(False)
             self.shadows_enabled_checkbox.setChecked(True)
             QMessageBox.information(
                 self,
                 "Auto-Detect Complete", 
                 f"Detected: {reason}\n\n"
                 "Applied standard settings:\n"
-                "• ARM Optimized Shaders: ON (no quality loss)\n"
+                "• Low-power Mode: OFF (full light budget)\n"
                 "• Dynamic Shadows: ON\n\n"
                 "Full quality rendering enabled."
             )
@@ -389,95 +397,6 @@ class SettingsWindow(QDialog):
         
         layout.addStretch()
 
-    def _create_keyboard_tab(self):
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        self.tabs.addTab(widget, "Keyboard")
-
-        columns_layout = QHBoxLayout()
-        left_form = QFormLayout()
-        right_form = QFormLayout()
-        
-        left_form.setContentsMargins(0, 0, 10, 0)
-        right_form.setContentsMargins(10, 0, 0, 0)
-
-        asset_browser_label = QLabel("T")
-        left_form.addRow("Asset Browser:", asset_browser_label)
-
-        shortcut_definitions = {
-            "Clone Selected": "SPACE",
-            "Delete Selected": "DEL",
-            "reset_layout": "Ctrl+Shift+R",
-            "save_layout": "Ctrl+Shift+S",
-            "Logic Graph Editor": "Ctrl+L",
-            "Logic Wizard": "Ctrl+Shift+W",
-            "Hide Brush": "H",
-            "Unhide All Brushes": "Shift+H",
-            "Decrease Grid Size": "[",
-            "Increase Grid Size": "]",
-            "Use (play mode)": "E",
-            "Show connections": "F1",
-            "Show sprites": "F3",
-            "Light Radius": "Shift+Wheel",
-            "Light Intensity": "Ctrl+Wheel",
-            "Free Camera": "R-Click+WASD",
-        }
-        
-        self.shortcut_labels = {}
-        
-        items = list(shortcut_definitions.items())
-        mid_point = (len(items) // 2) + 1
-        
-        for i, (action_name, shortcut_text) in enumerate(items):
-            label_text = action_name.replace('_', ' ').title() + ":"
-            shortcut_label = QLabel(shortcut_text)
-            self.shortcut_labels[action_name] = shortcut_label
-            
-            if i < mid_point:
-                left_form.addRow(label_text, shortcut_label)
-            else:
-                right_form.addRow(label_text, shortcut_label)
-
-        switch_2d_views_label = QLabel("Ctrl+Tab")
-        right_form.addRow("Switch 2D Views:", switch_2d_views_label)
-
-        columns_layout.addLayout(left_form)
-        columns_layout.addLayout(right_form)
-        layout.addLayout(columns_layout)
-
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
-        layout.addSpacing(10)
-        layout.addWidget(line)
-        layout.addSpacing(10)
-        
-        header_label = QLabel("Function Keys (Rebindable)")
-        header_label.setStyleSheet("font-weight: bold;")
-        layout.addWidget(header_label)
-
-        rebind_grid = QGridLayout()
-        rebind_grid.setSpacing(10)
-        
-        self.key_f1_edit = QKeySequenceEdit()
-        rebind_grid.addWidget(QLabel("Show Logic Links:"), 0, 0)
-        rebind_grid.addWidget(self.key_f1_edit, 0, 1)
-        
-        self.key_f2_edit = QKeySequenceEdit()
-        rebind_grid.addWidget(QLabel("Toggle Wireframe:"), 0, 2)
-        rebind_grid.addWidget(self.key_f2_edit, 0, 3)
-
-        self.key_f3_edit = QKeySequenceEdit()
-        rebind_grid.addWidget(QLabel("System Monitor:"), 1, 0)
-        rebind_grid.addWidget(self.key_f3_edit, 1, 1)
-        
-        self.key_f5_edit = QKeySequenceEdit()
-        rebind_grid.addWidget(QLabel("Toggle Play Mode:"), 1, 2)
-        rebind_grid.addWidget(self.key_f5_edit, 1, 3)
-        
-        layout.addLayout(rebind_grid)
-        layout.addStretch()
-
     def _create_split_screen_tab(self):
         """Split Screen settings tab."""
         widget = QWidget()
@@ -557,6 +476,11 @@ class SettingsWindow(QDialog):
         self.glow_arrow_scale_slider.setValue(glow_arrow_scale)
         self.glow_arrow_scale_label.setText(f"{glow_arrow_scale}%")
         
+        self.property_editor_tooltips_checkbox.setChecked(
+            self.config.getboolean('Editor', 'property_editor_tooltips', fallback=True))
+        self.toolbar_tooltips_checkbox.setChecked(
+            self.config.getboolean('Editor', 'toolbar_tooltips', fallback=True))
+
         self.show_fps_checkbox.setChecked(self.config.getboolean('Display', 'show_fps', fallback=True))
         self.always_show_sysmon_checkbox.setChecked(self.config.getboolean('Display', 'always_show_sysmon', fallback=False))
         self.always_show_io_debug_checkbox.setChecked(self.config.getboolean('Display', 'always_show_io_debug', fallback=True))
@@ -567,10 +491,16 @@ class SettingsWindow(QDialog):
         self.big_toolbar_buttons_checkbox.setChecked(self.config.getboolean('Display', 'big_toolbar_buttons', fallback=False))
         self.animate_connections_checkbox.setChecked(self.config.getboolean('Display', 'animate_connections', fallback=False))
         
-        is_arm, _ = self._detect_arm_platform()
-        default_arm_mode = True
-        default_shadows = not is_arm
-        self.arm_mode_checkbox.setChecked(self.config.getboolean('Renderer', 'arm_mode', fallback=default_arm_mode))
+        is_low_power, _ = self._detect_lowpower_platform()
+        # Defaults follow the hardware. The setting used to default to True on
+        # every machine, which put desktops on the low-power shaders.
+        default_lowpower_mode = is_low_power
+        default_shadows = not is_low_power
+        # `arm_mode` is the setting's old name; read it as the fallback so an
+        # existing settings.ini keeps the choice its owner made.
+        default_lowpower_mode = self.config.getboolean(
+            'Renderer', 'arm_mode', fallback=default_lowpower_mode)
+        self.lowpower_mode_checkbox.setChecked(self.config.getboolean('Renderer', 'lowpower_mode', fallback=default_lowpower_mode))
         self.shadows_enabled_checkbox.setChecked(self.config.getboolean('Renderer', 'shadows_enabled', fallback=default_shadows))
 
         self.physics_checkbox.setChecked(self.config.getboolean('Settings', 'physics', fallback=True))
@@ -592,11 +522,6 @@ class SettingsWindow(QDialog):
             self.config.getint('Controls', 'p2_turn_sensitivity', fallback=10)
         )
         
-        self.key_f1_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_show_connections', fallback='F1')))
-        self.key_f2_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_toggle_wireframe', fallback='F2')))
-        self.key_f3_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_sysmon', fallback='F3')))
-        self.key_f5_edit.setKeySequence(QKeySequence(self.config.get('Shortcuts', 'key_play_mode', fallback='F5')))
-
         k_mode = self.config.get('Kiosk', 'window_mode', fallback='Fullscreen')
         idx = self.kiosk_mode_combo.findText(k_mode)
         if idx >= 0:
@@ -676,9 +601,16 @@ class SettingsWindow(QDialog):
         self.config.set('Display', 'big_toolbar_buttons', str(self.big_toolbar_buttons_checkbox.isChecked()))
         self.config.set('Display', 'animate_connections', str(self.animate_connections_checkbox.isChecked()))
         
+        if not self.config.has_section('Editor'):
+            self.config.add_section('Editor')
+        self.config.set('Editor', 'property_editor_tooltips',
+                        str(self.property_editor_tooltips_checkbox.isChecked()))
+        self.config.set('Editor', 'toolbar_tooltips',
+                        str(self.toolbar_tooltips_checkbox.isChecked()))
+
         if not self.config.has_section('Renderer'): 
             self.config.add_section('Renderer')
-        self.config.set('Renderer', 'arm_mode', str(self.arm_mode_checkbox.isChecked()))
+        self.config.set('Renderer', 'lowpower_mode', str(self.lowpower_mode_checkbox.isChecked()))
         self.config.set('Renderer', 'shadows_enabled', str(self.shadows_enabled_checkbox.isChecked()))
         
         self.config.set('Display', 'show_hud', str(self.show_hud_checkbox.isChecked()))
@@ -695,13 +627,6 @@ class SettingsWindow(QDialog):
         self.config.set('Controls', 'middle_click_drag', str(self.middle_click_drag_checkbox.isChecked()))
         self.config.set('Controls', 'p2_turn_sensitivity', str(self.p2_turn_sensitivity_spin.value()))
         
-        if not self.config.has_section('Shortcuts'):
-            self.config.add_section('Shortcuts')
-        self.config.set('Shortcuts', 'key_show_connections', self.key_f1_edit.keySequence().toString())
-        self.config.set('Shortcuts', 'key_toggle_wireframe', self.key_f2_edit.keySequence().toString())
-        self.config.set('Shortcuts', 'key_sysmon', self.key_f3_edit.keySequence().toString())
-        self.config.set('Shortcuts', 'key_play_mode', self.key_f5_edit.keySequence().toString())
-
         if not self.config.has_section('Kiosk'):
             self.config.add_section('Kiosk')
         self.config.set('Kiosk', 'window_mode', self.kiosk_mode_combo.currentText())

@@ -6,7 +6,7 @@ from .constants import (
     WATER_SWIM_SPEED_MULT, WATER_VERTICAL_SPEED_MULT, WATER_DRAG,
     WATER_WADE_SPEED_MULT, WATER_MAX_SINK_SPEED,
     WATERJUMP_MAX_CLIMB, WATERJUMP_EDGE_ABOVE_SURFACE, WATERJUMP_MAX_BOOST,
-    is_water_brush,
+    is_water_brush, brush_aabb_bounds,
 )
 
 
@@ -824,15 +824,14 @@ class Player:
                     return False  # Overlapping mesh bounds → collision
             return True  # No bounds or no overlap → pass through
 
-        # Standard AABB check for solid world brushes
-        pos   = glm.vec3(brush['pos'])
-        size  = glm.vec3(brush['size'])
-        b_min = pos - size * 0.5
-        b_max = pos + size * 0.5
+        # Standard AABB check for solid world brushes.
+        # PERF: cached float32 bounds (bit-identical to glm.vec3(pos) +/- size*0.5)
+        # instead of constructing four throwaway glm.vec3 per brush per axis pass.
+        b = brush_aabb_bounds(brush)
 
-        if (player_max.x > b_min.x and player_min.x < b_max.x and
-            player_max.y > b_min.y and player_min.y < b_max.y and
-            player_max.z > b_min.z and player_min.z < b_max.z):
+        if (player_max.x > b[0] and player_min.x < b[3] and
+            player_max.y > b[1] and player_min.y < b[4] and
+            player_max.z > b[2] and player_min.z < b[5]):
             return False
             
         return True

@@ -18,7 +18,11 @@ import sys
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Only when there is no display: the offscreen plugin cannot create an
+# OpenGL context, and forcing it here would disable the visual tier for
+# the whole session when the suite is run under Xvfb.
+if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
 def _check(cond, msg):

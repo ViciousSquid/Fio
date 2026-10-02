@@ -30,14 +30,22 @@ from __future__ import annotations
 
 from plugins.api import FioPlugin, TickContext, prop
 
-# NOTE: ``.entities`` is imported lazily inside register() rather than here,
-# because it pulls in ``editor.things`` and therefore the editor package. The
-# plugin manager reads ``PLUGIN`` off this package at import time; keeping the
-# package import free of the editor avoids a re-entrant plugin-discovery pass
-# (editor bootstrap → load_plugins) firing before ``PLUGIN`` is set. ``.runtime``
-# and ``.persistence`` are editor-free, so they import safely at module load.
-from .persistence import config_from_settings, find_settings_thing
-from .runtime import BigWorldSession
+# NOTE: nothing below the plugin's own declaration is imported here.
+#
+# ``.entities`` is deferred because it pulls in ``editor.things`` and therefore
+# the editor package, and the plugin manager reads ``PLUGIN`` off this package at
+# import time — an eager import would fire a re-entrant plugin-discovery pass
+# (editor bootstrap → load_plugins) before ``PLUGIN`` is set.
+#
+# ``.manager`` / ``.runtime`` / ``.persistence`` / ``.streaming`` are deferred for
+# a stronger reason: *Big World must be absent from a map that does not use it*.
+# Being disabled is not the same as being absent. Every map load walks every
+# plugin package, so importing the streaming runtime up here meant an ordinary
+# Fio map paid for the cell manager, the session and the persistence layer being
+# read, compiled and held in ``sys.modules`` for no reason. They are imported
+# inside :meth:`on_play_start`, the one place that has just established the map
+# really does opt in, so a map with no ``BigWorldSettings`` entity never loads a
+# line of the Big World runtime.
 
 
 class BigWorldPlugin(FioPlugin):
@@ -51,44 +59,23 @@ class BigWorldPlugin(FioPlugin):
     # so streaming maps just work while ordinary maps never pay for it.
     enabled = False
 
+    #: Normalised ``type`` of the entity whose presence opts a map in. Kept here
+    #: as a bare string rather than read off ``.entities`` so asking "does this
+    #: map use Big World?" costs no import at all.
+    SETTINGS_TYPE = "bigworldsettings"
+
     # -- load time ----------------------------------------------------------
     def register(self, api):
+        from .config import FIELDS
         from .entities import BigWorldSettings  # lazy: pulls in editor.things
         api.register_entity(BigWorldSettings, menu_label="Big World Settings")
-        api.register_properties("bigworldsettings", [
-            prop("enabled", "bool", "Streaming enabled", default=True,
-                 help="Turn cell streaming on for this map."),
-            prop("activation_radius", "float", "Activation radius", default=2048.0,
-                 min=256.0, max=65536.0,
-                 help="Cells within this distance of the player become active."),
-            prop("deactivation_radius", "float", "Deactivation radius", default=2304.0,
-                 min=256.0, max=65536.0,
-                 help="Active cells are only dropped beyond this distance "
-                      "(hysteresis — must be >= activation radius)."),
-            prop("show_cell_debug", "bool", "Show debug overlay", default=True,
-                 help="Draw the Big World stats panel and active-cell minimap in play mode."),
-            prop("terrain_fill", "bool", "Fill world with terrain", default=False,
-                 help="If the map has a procedural terrain, expand it to cover every "
-                      "cell of the world and stream its chunks around the player "
-                      "(instead of tessellating the whole grid up-front). Off by "
-                      "default, so terrain is left exactly as authored."),
-            prop("terrain_infinite", "bool", "Infinite terrain (generate forever)",
-                 default=False,
-                 help="With 'Fill world with terrain' on, keep generating ground "
-                      "around the camera/player forever instead of stopping at the "
-                      "world's content bounds — so you never walk off the edge. "
-                      "Only the chunks near you are ever resident."),
-            prop("terrain_stream_radius", "float", "Terrain stream radius", default=0.0,
-                 min=0.0, max=65536.0,
-                 help="World units of terrain kept resident around the player. "
-                      "0 derives it from the activation radius."),
-            prop("disk_streaming", "bool", "Disk streaming (free unloaded cells)",
-                 default=False,
-                 help="Experimental: instead of only hiding inactive cells, remove "
-                      "an unloaded cell's objects from memory and re-stream them "
-                      "from a pristine per-cell source when the cell comes back. "
-                      "Play-session saves become a delta of the persistent cell "
-                      "registry. Off by default (keeps the in-RAM behaviour)."),
+        # The schema is derived, not written out again: the entity's defaults
+        # and the runtime's coercion read the same table, so a field can't be
+        # editable here and invisible to the session (see .config).
+        api.register_properties(self.SETTINGS_TYPE, [
+            prop(f.key, f.kind, f.label, default=f.default,
+                 min=f.min, max=f.max, help=f.help)
+            for f in FIELDS
         ])
 
     # -- runtime host wiring ------------------------------------------------
@@ -98,10 +85,40 @@ class BigWorldPlugin(FioPlugin):
         self._host = host
         host.on("render.overlay", self._on_overlay)
 
+    # -- opt-in test --------------------------------------------------------
+    @classmethod
+    def map_uses_bigworld(cls, things) -> bool:
+        """Whether a map actually needs Big World.
+
+        The opt-in is the presence of a ``BigWorldSettings`` entity, and this is
+        the *only* question asked of a map before any part of the streaming
+        runtime is imported. Accepts live entities or raw map-thing dicts, so a
+        map loader can ask before it has built anything.
+        """
+        for t in things or ():
+            props = getattr(t, "properties", None)
+            if not isinstance(props, dict):
+                if not isinstance(t, dict):
+                    continue
+                props = t.get("properties", t) or {}
+            typ = str(props.get("type") or "").replace("_", "").lower()
+            if typ == cls.SETTINGS_TYPE:
+                return True
+        return False
+
     # -- play lifecycle -----------------------------------------------------
     def on_play_start(self, logic):
         logic._bigworld = None
-        settings = find_settings_thing(getattr(logic, "things", None) or [])
+        things = getattr(logic, "things", None) or []
+        if not self.map_uses_bigworld(things):
+            # No opt-in: behave as ordinary Fio, and in particular leave the
+            # streaming runtime unimported. Checking this *before* the import
+            # below is the whole point — see the note at the top of the module.
+            return
+        from .persistence import config_from_settings, find_settings_thing
+        from .runtime import BigWorldSession
+
+        settings = find_settings_thing(things)
         if settings is None:
             return  # map didn't opt in; behave as ordinary Fio
         cfg = config_from_settings(settings)
@@ -131,6 +148,7 @@ class BigWorldPlugin(FioPlugin):
                 terrain_fill=cfg["terrain_fill"],
                 terrain_infinite=cfg["terrain_infinite"],
                 terrain_stream_radius=cfg["terrain_stream_radius"],
+                sim_near_radius=cfg["sim_near_radius"],
             )
             session.start()
         session._show_debug = cfg["show_cell_debug"]

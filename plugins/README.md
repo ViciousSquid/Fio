@@ -277,7 +277,7 @@ are always shown).
 
 ---
 
-## Packaging plugins into a `.fiopak`
+## Packaging plugins into a [`.fiopak`](https://github.com/ViciousSquid/Fio/wiki/.fiopak-archive)
 
 `.fiopak` exports are **plugin-aware**. When you export a package (File →
 Export…), the exporter scans the maps it bundles, works out which plugins their

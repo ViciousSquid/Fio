@@ -45,7 +45,9 @@ def available_renderers():
 
 from engine import shaders
 from engine import brush_geometry
+from editor import component_edit
 from engine.threaded_game_state import ThreadedGameState, RenderState
+from engine.view_distance import ViewDistance
 from engine.logic_thread import LogicThread
 from engine.constants import RENDER_MODE_LIT, RENDER_MODE_UNLIT, RENDER_MODE_WIREFRAME, RENDER_MODE_VERTEX
 from editor.debug_console import DebugConsole, get_debug_logger
@@ -154,6 +156,18 @@ class QtGameView(QOpenGLWidget):
         self.face_mode_active = False
         self.hovered_face_info = None
 
+        # --- Component editing (shares the main window's ComponentController) ---
+        # Only the drag anchors are per-view; the mode, hover and component
+        # selection live on the controller so the 2D views agree with this one.
+        self.component_drag_origin = None   # QPoint, screen press position
+        self.component_drag_axes = None     # (world axis for dx, for dy)
+        self.component_drag_scale = 1.0     # world units per screen pixel
+        self.component_drag_anchor = None   # world position of the grabbed part
+        self.component_drag_kind = None
+        # Face Mode (texturing) also lets a face be dragged: a press arms this,
+        # a drag moves the face's plane, a release without movement textures it.
+        self._face_mode_press = None
+
         self.mouselook_active = False
         self.last_mouse_pos = QPoint()
 
@@ -253,7 +267,13 @@ class QtGameView(QOpenGLWidget):
         self.projection_matrix = glm.mat4(1.0)
         self.view_matrix = glm.mat4(1.0)
         self._cached_aspect_ratio = 1.0
-        self.cull_distance = 4096
+        # The camera's draw distance and the fog that hides its far plane, in
+        # one object shared with the renderer and the logic thread so the
+        # editor spinbox and the r_* console commands take effect on the next
+        # frame with nothing to rebuild. `cull_distance` stays as a plain
+        # attribute for existing callers and mirrors view_distance.distance.
+        self.view_distance = ViewDistance()
+        self.cull_distance = self.view_distance.distance
 
         self._proj_ptr = None
         self._view_ptr = None
@@ -516,7 +536,7 @@ class QtGameView(QOpenGLWidget):
 
 
     def initializeGL(self):
-        gl.glClearColor(0.1, 0.1, 0.15, 1.0)
+        gl.glClearColor(*self.view_distance.fog_color, 1.0)
         config = getattr(self.editor, 'config', None)
         self._renderer_mode = 'Forward'
         self.renderer = Renderer_F(self.load_texture, self.grid_size, self.world_size, config)
@@ -587,6 +607,7 @@ class QtGameView(QOpenGLWidget):
         if hasattr(self.logic_thread, "set_camera_mode"):
             self.logic_thread.set_camera_mode(getattr(self, "camera_mode", "First Person"))
         self.logic_thread.set_play_mode(False)
+        self._sync_view_distance()
         self.logic_thread.start()
         self._thread_started = True
 
@@ -646,19 +667,55 @@ class QtGameView(QOpenGLWidget):
             self.repaint()
 
     def _process_sound_queue(self):
-        """Drain the logic thread's sound queue and play via pygame mixer."""
+        """Drain the logic thread's sound queue and play via pygame mixer.
+
+        Speaker requests carry an ``action`` ('play'/'stop'), a ``looping`` flag
+        and an ``entity_id``. Looping speakers play with ``loops=-1`` and their
+        channel is remembered under the entity id so a later StopSound can
+        actually silence them; plain one-shot sounds (no entity id) just play.
+        Requests without an 'action' default to 'play', so any existing caller
+        that queues a bare {'file', 'volume'} dict is unaffected.
+        """
+        speaker_channels = getattr(self, "_speaker_channels", None)
+        if speaker_channels is None:
+            speaker_channels = self._speaker_channels = {}
         for request in self.game_state.consume_sounds():
+            action = request.get('action', 'play')
+            entity_id = request.get('entity_id')
+
+            if action == 'stop':
+                channel = speaker_channels.pop(entity_id, None)
+                if channel is not None:
+                    try:
+                        channel.stop()
+                    except Exception as exc:
+                        print(f"[QtGameView] speaker stop failed: {exc}")
+                continue
+
             sound_file = request.get('file')
             volume = request.get('volume', 1.0)
             if not sound_file:
                 continue
-            
+
             sound = self._get_sound_instance(sound_file)
-            if sound:
-                # pygame mixer channels auto-manage, but we can set volume per-play
-                channel = sound.play()
-                if channel:
-                    channel.set_volume(volume)
+            if not sound:
+                continue
+            # -1 loops = repeat until stopped; 0 = play once.
+            loops = -1 if request.get('looping') else 0
+            # If this speaker is already looping, stop the old channel first so
+            # a re-trigger doesn't stack a second copy on top of itself.
+            if entity_id is not None:
+                prev = speaker_channels.pop(entity_id, None)
+                if prev is not None:
+                    try:
+                        prev.stop()
+                    except Exception as exc:
+                        print(f"[QtGameView] speaker restart stop failed: {exc}")
+            channel = sound.play(loops=loops)
+            if channel:
+                channel.set_volume(volume)
+                if entity_id is not None and loops != 0:
+                    speaker_channels[entity_id] = channel
 
     def _process_console_command_queue(self):
         """Run any console commands queued by the I/O system on the UI thread.
@@ -949,7 +1006,18 @@ class QtGameView(QOpenGLWidget):
         if self.play_mode and self._is_overhead():
             _oh = float(getattr(getattr(self, 'logic_thread', None), 'overhead_height', 800.0) or 800.0)
             _near = max(1.0, _oh * 0.1)
-        self.projection_matrix = perspective_projection(self.camera.fov, self._cached_aspect_ratio, _near, 10000.0)
+        # The far plane IS the view distance -- that is what makes "nothing is
+        # drawn past it" true of a fragment and not just of a whole object. The
+        # broad-phase cull drops objects by the distance to their centre, so a
+        # large brush straddling the boundary survives it and is clipped here
+        # instead, by which point the fog has already taken it to full opacity.
+        _far = max(self.view_distance.far_plane, _near + 1.0)
+        # Clear to the fog colour so what geometry dissolves into and what lies
+        # beyond the clip are the same pixel, leaving no seam at the boundary.
+        # With fog off this is just the background colour, as before.
+        _bg = self.view_distance.fog_color
+        gl.glClearColor(_bg[0], _bg[1], _bg[2], 1.0)
+        self.projection_matrix = perspective_projection(self.camera.fov, self._cached_aspect_ratio, _near, _far)
         self._proj_ptr = glm.value_ptr(self.projection_matrix)
         self._view_ptr = glm.value_ptr(self.view_matrix)
         self._render_config["culling_enabled"] = self.culling_enabled
@@ -970,6 +1038,14 @@ class QtGameView(QOpenGLWidget):
             self._render_config["all_things"] = render_state.all_things
         else:
             self._render_config["all_things"] = self.editor.state.things
+
+        # The render-state position buffer is a derived snapshot of
+        # authoritative Thing.pos values. It is aligned with things_to_render
+        # and lets the renderer batch the expensive X/Z distance arithmetic.
+        self._render_config["thing_positions"] = (
+            getattr(render_state, "visible_thing_positions", None)
+            if render_state is not None else None
+        )
         self.update_instance_textures(things_to_render)
 
         # Plugin render hooks. Guarded by has_listeners so an unhooked frame
@@ -992,7 +1068,7 @@ class QtGameView(QOpenGLWidget):
             _w, _h = self.width(), self.height()
             _half = _w // 2
             _asp = _half / _h if _h > 0 else 1.0
-            _split_proj = perspective_projection(self.camera.fov, _asp, 0.1, 10000.0)
+            _split_proj = perspective_projection(self.camera.fov, _asp, 0.1, _far)
 
             gl.glDisable(gl.GL_SCISSOR_TEST)
             gl.glDepthMask(gl.GL_TRUE)
@@ -1109,6 +1185,18 @@ class QtGameView(QOpenGLWidget):
             brush, face_name = self.hovered_face_info
             if hasattr(self.renderer, 'draw_face_highlight'):
                 self.renderer.draw_face_highlight(self.projection_matrix, self.view_matrix, brush, face_name)
+        # Component handles.  The arrays come from the editor's controller,
+        # which rebuilds them only when the selection, hover or geometry
+        # changed; here it is a version check and a draw call.
+        if not self.play_mode:
+            _components = self._components()
+            if _components is not None and _components.is_component_mode() and \
+                    hasattr(self.renderer, 'draw_component_overlay'):
+                _targets = self._component_targets()
+                if _targets:
+                    self.renderer.draw_component_overlay(
+                        self.projection_matrix, self.view_matrix,
+                        _components.overlay(_targets), _components.version)
         if render_state:
             visible = len(render_state.visible_brushes)
             total = render_state.total_brushes
@@ -1840,11 +1928,44 @@ class QtGameView(QOpenGLWidget):
         self.update()
 
     def set_cull_distance(self, distance):
-        self.cull_distance = distance
+        """Set the camera's maximum render distance, in world units.
+
+        The single entry point for the editor's "Cull Dist" spinbox, the
+        ``r_viewdistance`` console command and anything the I/O system fires at
+        them. It moves three things that have to agree — the broad-phase
+        object cull, the projection's far plane, and the fog that hides that
+        far plane — and nothing else: lighting, textures, LOD detail bands and
+        what the world has loaded are all untouched, so a player can pull the
+        draw distance in for framerate and get the same scene, just less of it
+        at once.
+
+        Fog start and end track this automatically unless they have been pinned
+        (see :class:`~engine.view_distance.ViewDistance`), which is what keeps
+        the fog opaque before the clip at any distance.
+        """
+        self.view_distance.distance = float(distance)
+        # Read back: ViewDistance clamps to its supported span, and callers
+        # (and the value shown in r_list) should see what actually took effect.
+        self.cull_distance = self.view_distance.distance
+        self._sync_view_distance()
+        self.update()
+
+    def _sync_view_distance(self):
+        """Push the shared view-distance object at everything that reads it.
+
+        The renderer and the logic thread hold the *same* instance rather than
+        a copy, so this only has to run when one of them is created or swapped
+        — and the per-frame LOD bands, which are plain numbers, are refreshed
+        here too.
+        """
+        distance = self.view_distance.distance
         if self.renderer:
+            self.renderer.view_distance = self.view_distance
             self.renderer.lod_manager.cull_dist_sq = distance * distance
             self.renderer.lod_manager.full_dist_sq = (distance * 0.25) ** 2
-        self.update()
+        lt = getattr(self, 'logic_thread', None)
+        if lt is not None and hasattr(lt, 'set_view_distance'):
+            lt.set_view_distance(self.view_distance)
 
     def switch_renderer(self, mode: str):
         if mode == self._renderer_mode:
@@ -1870,8 +1991,7 @@ class QtGameView(QOpenGLWidget):
                 self.load_texture, self.grid_size, self.world_size, config)
             self.renderer.set_sprite_textures(self.sprite_textures)
             self.renderer.set_instance_textures(self.sprite_textures)
-            self.renderer.lod_manager.cull_dist_sq = self.cull_distance * self.cull_distance
-            self.renderer.lod_manager.full_dist_sq = (self.cull_distance * 0.25) ** 2
+            self._sync_view_distance()
             self.grid_dirty = True
             self._renderer_mode = mode
             print(f"[QtGameView] Renderer switched to {mode}.")
@@ -1896,14 +2016,32 @@ class QtGameView(QOpenGLWidget):
         return glm.vec3(self.editor.state.selected_object.pos)
 
     def set_selected_object_pos(self, new_pos_vec):
-        if not self.editor.state.selected_object:
+        """Move the whole selection so the grabbed object lands on ``new_pos_vec``.
+
+        The gizmo drags one object, but everything selected travels with it by
+        the same snapped delta — snapping each object to the grid separately
+        would pull them onto a common grid line and destroy the arrangement.
+        The move goes through the editor's translate helper so an angled
+        brush's plane set comes along instead of being left behind by a bare
+        write to ``pos``.
+        """
+        primary = self.editor.state.selected_object
+        if not primary:
             return
         grid = self.editor.grid_size_spinbox.value()
         snapped = [round(c / grid) * grid for c in new_pos_vec]
-        if isinstance(self.editor.state.selected_object, dict):
-            self.editor.state.selected_object['pos'] = snapped
-        else:
-            self.editor.state.selected_object.pos = snapped
+        current = primary['pos'] if isinstance(primary, dict) else primary.pos
+        delta = [snapped[i] - current[i] for i in range(3)]
+        if not any(delta):
+            return
+
+        group = [o for o in self.editor.selected_objects_list()
+                 if not (o.get('lock', False) if isinstance(o, dict)
+                         else o.properties.get('lock', False))]
+        if primary not in group:
+            group = [primary]
+        for obj in group:
+            self.editor._translate_object(obj, delta)
         self.update()
 
     def set_terrain_sculpt_active(self, active: bool):
@@ -1996,10 +2134,20 @@ class QtGameView(QOpenGLWidget):
             ray_origin = self.camera.pos
         return ray_origin, ray_dir
 
-    def get_object_at_3d(self, mx, my):
+    def get_object_at_3d(self, mx, my, cycle=False):
+        """Object under the cursor.
+
+        ``cycle`` walks through everything the ray passes through, nearest
+        first, so a brush hidden behind another can be reached by clicking
+        again — Radiant's drill-select.  Hidden and locked objects are skipped
+        either way, so they never appear as a dead stop in the cycle.
+        """
         ray_o, ray_d = self.get_ray_from_mouse(mx, my)
         best_obj, best_t = None, float('inf')
+        hits = []
         for brush in self.editor.state.brushes:
+            if brush.get('hidden', False) or brush.get('lock', False):
+                continue
             pos = glm.vec3(brush.get('pos', [0, 0, 0]))
             size = glm.vec3(brush.get('size', [64, 64, 64]))
             bmin, bmax = pos - size/2, pos + size/2
@@ -2020,10 +2168,14 @@ class QtGameView(QOpenGLWidget):
                     if tmin > tmax:
                         hit = False
                         break
-            if hit and tmin < best_t:
-                best_t = tmin
-                best_obj = brush
+            if hit:
+                hits.append((tmin, brush))
+                if tmin < best_t:
+                    best_t = tmin
+                    best_obj = brush
         for thing in self.editor.state.things:
+            if not component_edit.is_selectable(thing):
+                continue
             tp = glm.vec3(thing.pos)
             radius = 32.0
             oc = ray_o - tp
@@ -2033,9 +2185,18 @@ class QtGameView(QOpenGLWidget):
             disc = b * b - 4 * a * c
             if disc >= 0:
                 t = (-b - disc**0.5) / (2.0 * a)
-                if 0 < t < best_t:
-                    best_t = t
-                    best_obj = thing
+                if t > 0:
+                    hits.append((t, thing))
+                    if t < best_t:
+                        best_t = t
+                        best_obj = thing
+        if cycle and hits:
+            # Sorted by hit distance so the walk order is the same every time
+            # the cursor is in the same place.
+            hits.sort(key=lambda h: h[0])
+            candidates = [obj for _, obj in hits]
+            return component_edit.cycle_pick(candidates,
+                                             self.editor.state.selected_object)
         return best_obj
 
     def intersect_ray_with_axis(self, ray_o, ray_d, obj_pos, axis_vec):
@@ -2106,6 +2267,203 @@ class QtGameView(QOpenGLWidget):
             best_hit = (brush, face)
         return best_hit
 
+    # ======================================================================
+    # Component editing in the 3D view (object / face / edge / vertex)
+    # ======================================================================
+    #
+    # All of this runs from mouse events.  Picking tests only the brushes in
+    # the current selection and reuses the geometry cache the renderer already
+    # keeps, so nothing here touches the render loop or the wider scene.
+
+    def _components(self):
+        return getattr(self.editor, 'components', None)
+
+    def _component_mode_active(self):
+        controller = self._components()
+        return controller is not None and controller.is_component_mode()
+
+    def _component_targets(self):
+        """Brushes a component pick may test — the selection, never the scene."""
+        getter = getattr(self.editor, 'component_drag_targets', None)
+        return getter() if getter is not None else []
+
+    def _world_per_pixel(self, distance):
+        """World units one screen pixel covers ``distance`` from the eye."""
+        height = max(self.height(), 1)
+        fov = float(getattr(self.camera, 'fov', 75.0))
+        return 2.0 * max(distance, 1.0) * math.tan(math.radians(fov) * 0.5) / height
+
+    def _pick_component_3d(self, mx, my):
+        """Component under the cursor in this viewport, or ``None``."""
+        controller = self._components()
+        targets = self._component_targets()
+        if controller is None or not targets:
+            return None
+        ray_o, ray_d = self.get_ray_from_mouse(mx, my)
+        origin = (float(ray_o.x), float(ray_o.y), float(ray_o.z))
+        direction = (float(ray_d.x), float(ray_d.y), float(ray_d.z))
+        # Pick radius of roughly COMPONENT_GRAB_PIXELS at any depth: the
+        # tolerance is expressed per world unit of distance and scaled by the
+        # hit distance inside the picker.
+        tolerance = self._world_per_pixel(1.0) * 9.0
+        return component_edit.pick_component_3d(
+            targets, controller.mode, origin, direction, tolerance)
+
+    @staticmethod
+    def _axialize(vec):
+        """Snap a direction to the world axis it points most nearly along.
+
+        Radiant maps a camera-window drag onto whole world axes so a drag in a
+        perspective view still moves geometry along the grid instead of along
+        some diagonal nobody asked for.
+        """
+        values = (abs(float(vec.x)), abs(float(vec.y)), abs(float(vec.z)))
+        axis = values.index(max(values))
+        out = np.zeros(3)
+        out[axis] = 1.0 if float(vec[axis]) >= 0 else -1.0
+        return out
+
+    def _begin_component_drag(self, ref, press_pos, shear=False, additive=False):
+        """Start a component drag from this viewport.  One undo step per drag.
+
+        The selection policy and the drag itself come from the shared
+        controller (:meth:`ComponentController.press`), so a press means exactly
+        what it means in a 2D view.  This viewport contributes only what it
+        alone knows: the screen-to-world mapping for the drag.
+        """
+        controller = self._components()
+        if controller is None:
+            return False
+        drag = controller.press(ref, shear=shear, additive=additive)
+        if drag is None:
+            return False
+        self.editor.save_state()      # checkpoint at mouse-down, like 2D
+        self.component_drag_origin = QPoint(press_pos)
+        self.component_drag_anchor = np.array(ref.position, dtype=np.float64)
+        self.component_drag_kind = ref.kind
+
+        # Screen-to-world mapping, fixed for the whole drag so the geometry
+        # cannot drift under a moving camera.
+        right = glm.vec3(self.view_matrix[0][0], self.view_matrix[1][0],
+                         self.view_matrix[2][0])
+        up = glm.vec3(self.view_matrix[0][1], self.view_matrix[1][1],
+                      self.view_matrix[2][1])
+        self.component_drag_axes = (self._axialize(right), self._axialize(up))
+        camera_pos = self._camera_position()
+        distance = float(np.linalg.norm(self.component_drag_anchor - camera_pos))
+        self.component_drag_scale = self._world_per_pixel(distance)
+        self.setCursor(Qt.SizeAllCursor)
+        self.update()
+        return True
+
+    def _component_snap_grid(self):
+        """Grid step a component drag in this viewport snaps to, or 0.
+
+        Deliberately the editor's *snap* setting, not this viewport's grid
+        *visibility*: a drag used to snap here whenever the 3D grid happened to
+        be drawn, so turning "snap to grid" off left the 3D viewport still
+        snapping and hiding the grid silently stopped it — the same gesture
+        behaving differently depending on which view it started in.
+        """
+        getter = getattr(self.editor, 'component_grid_step', None)
+        if getter is not None:
+            return getter(self.grid_size)
+        return self.grid_size
+
+    def _camera_position(self):
+        if self.use_threading and self.logic_thread:
+            pos = self.logic_thread.get_editor_camera().pos
+        else:
+            pos = self.camera.pos
+        return np.array([float(pos.x), float(pos.y), float(pos.z)])
+
+    def _update_component_drag(self, pos):
+        """Apply the drag for the cursor's current screen position."""
+        controller = self._components()
+        if controller is None or controller.drag is None:
+            return
+        if self.component_drag_origin is None or self.component_drag_axes is None:
+            return
+        dx = pos.x() - self.component_drag_origin.x()
+        dy = pos.y() - self.component_drag_origin.y()
+        axis_x, axis_y = self.component_drag_axes
+        delta = (axis_x * (dx * self.component_drag_scale) +
+                 axis_y * (-dy * self.component_drag_scale))
+        grid = self._component_snap_grid()
+        if self.component_drag_kind in (component_edit.MODE_VERTEX,
+                                        component_edit.MODE_EDGE) and \
+                self.component_drag_anchor is not None:
+            delta = component_edit.snap_component_delta(
+                self.component_drag_anchor, delta, grid)
+        else:
+            delta = component_edit.snap_delta(delta, grid)
+        if controller.update_drag(delta):
+            self.editor.refresh_views()
+        else:
+            self.update()
+
+    def _end_component_drag(self):
+        """Commit the drag, dropping the checkpoint when nothing moved."""
+        controller = self._components()
+        if controller is None or controller.drag is None:
+            return False
+        changed = controller.commit_drag()
+        self.component_drag_origin = None
+        self.component_drag_axes = None
+        self.component_drag_anchor = None
+        self.component_drag_kind = None
+        self.setCursor(Qt.ArrowCursor)
+        if changed:
+            self.editor.unsaved_changes = True
+            self.editor.state.mark_lighting_dirty()
+        else:
+            self.editor.state.discard_last_checkpoint()
+        self.editor.refresh_views()
+        return changed
+
+    def cancel_component_drag(self):
+        controller = self._components()
+        if controller is None or controller.drag is None:
+            return False
+        controller.cancel_drag()
+        self.editor.state.discard_last_checkpoint()
+        self.component_drag_origin = None
+        self.component_drag_axes = None
+        self.component_drag_anchor = None
+        self.component_drag_kind = None
+        self.setCursor(Qt.ArrowCursor)
+        self.editor.refresh_views()
+        return True
+
+    def _begin_face_mode_drag(self, pos):
+        """Turn an armed Face-Mode press into a face-plane drag.
+
+        Face Mode stays the texturing tool it has always been — a click still
+        applies the selected texture — but dragging from the same press moves
+        the face's supporting plane, so a wall can be pushed into place without
+        leaving the mode.
+        """
+        armed = self._face_mode_press
+        if not armed:
+            return False
+        brush, face_key = armed['face']
+        plane_index = brush_geometry.face_plane_index(brush, face_key)
+        if plane_index is None:
+            brush_geometry.box_to_geometry(brush)
+            plane_index = brush_geometry.face_plane_index(brush, face_key)
+        if plane_index is None:
+            return False
+        ring = brush_geometry.plane_face_vertex_indices(brush, plane_index)
+        if len(ring) < 3:
+            return False
+        points = component_edit.brush_points(brush)
+        ref = component_edit.ComponentRef(
+            brush, component_edit.MODE_FACE, ring, plane=plane_index,
+            position=points[ring].mean(axis=0))
+        self._face_mode_press = None
+        return self._begin_component_drag(ref, armed['pos'],
+                                          shear=armed['shear'])
+
     def mousePressEvent(self, event):
         if (self.play_mode and getattr(self, '_cached_level_complete_ui', None)
                 and getattr(self, '_level_complete_btn_rect', None)):
@@ -2121,13 +2479,40 @@ class QtGameView(QOpenGLWidget):
             if self.sysmon.dragging:
                 self.setCursor(Qt.ClosedHandCursor)
             return
+        # A left click here also drops copies being carried by the cursor, so
+        # a clone started in a 2D view can be committed from the 3D view too.
+        if (not self.play_mode and event.button() == Qt.LeftButton and
+                getattr(self.editor, 'clone_placement_active', None) is not None and
+                self.editor.clone_placement_active()):
+            self.editor.finish_clone_placement()
+            return
+
+        # --- Component modes: the press grabs a vertex / edge / face ---
+        # Same contextual rules as the 2D views: plain drags the component,
+        # Shift adds it to the component selection, Ctrl on a face shears it.
+        if (not self.play_mode and event.button() == Qt.LeftButton and
+                self._component_mode_active()):
+            ref = self._pick_component_3d(event.x(), event.y())
+            if ref is not None:
+                modifiers = QApplication.keyboardModifiers()
+                shear = bool(modifiers & Qt.ControlModifier) and \
+                    ref.kind == component_edit.MODE_FACE
+                additive = bool(modifiers & Qt.ShiftModifier)
+                if self._begin_component_drag(ref, event.pos(), shear=shear,
+                                              additive=additive):
+                    return
+
         if self.face_mode_active and event.button() == Qt.LeftButton:
             if self.hovered_face_info:
-                brush, face = self.hovered_face_info
-                self.editor.apply_texture_to_specific_face(brush, face)
-                # Open the Radiant-style Surface Inspector for the clicked face.
-                if hasattr(self.editor, 'show_surface_inspector'):
-                    self.editor.show_surface_inspector(brush, face)
+                # Arm the press: a drag from here moves the face's plane, a
+                # click without movement textures it (the original behaviour,
+                # decided on release).
+                self._face_mode_press = {
+                    'face': self.hovered_face_info,
+                    'pos': event.pos(),
+                    'shear': bool(QApplication.keyboardModifiers() &
+                                  Qt.ControlModifier),
+                }
             return
         if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ControlModifier and not self.play_mode:
             face = self.get_face_at(event.pos())
@@ -2153,8 +2538,13 @@ class QtGameView(QOpenGLWidget):
                     if sound:
                         sound.play()
                 return
-        if event.button() == Qt.LeftButton and QApplication.keyboardModifiers() == Qt.ShiftModifier and not self.play_mode:
-            obj = self.get_object_at_3d(event.x(), event.y())
+        _shift_select = (Qt.ShiftModifier, Qt.ShiftModifier | Qt.AltModifier)
+        if (event.button() == Qt.LeftButton and not self.play_mode and
+                QApplication.keyboardModifiers() in _shift_select):
+            # Shift+click selects; adding Alt cycles down through whatever else
+            # the ray passes through, so buried geometry stays reachable.
+            cycle = bool(QApplication.keyboardModifiers() & Qt.AltModifier)
+            obj = self.get_object_at_3d(event.x(), event.y(), cycle=cycle)
             if obj:
                 self.editor.save_state()
                 self.editor.set_selected_object(obj)
@@ -2192,6 +2582,21 @@ class QtGameView(QOpenGLWidget):
         if self.sysmon.handle_mouse_move(event, self.play_mode, self.width(), self.height()):
             self.update()
             return
+        # A component drag owns the mouse until the button comes back up.
+        controller = self._components()
+        if controller is not None and controller.drag is not None:
+            if event.buttons() & Qt.LeftButton:
+                self._update_component_drag(event.pos())
+                return
+            self._end_component_drag()
+        # Face Mode: a press that has moved far enough becomes a face drag.
+        if self._face_mode_press is not None:
+            if not (event.buttons() & Qt.LeftButton):
+                self._face_mode_press = None
+            elif (event.pos() - self._face_mode_press['pos']).manhattanLength() > 4:
+                if self._begin_face_mode_drag(event.pos()):
+                    return
+                self._face_mode_press = None
         if self.mouselook_active:
             dx, dy = event.x() - self.last_mouse_pos.x(), event.y() - self.last_mouse_pos.y()
             if self.use_threading and self.logic_thread:
@@ -2226,6 +2631,12 @@ class QtGameView(QOpenGLWidget):
                 diff = pt - self.drag_start_on_axis
                 self.set_selected_object_pos(self.gizmo_object_start_pos + diff)
             return
+        # Component hover: highlight what a press would grab.  Selection-scoped
+        # and repainted only when the highlight actually changes.
+        if self._component_mode_active() and not event.buttons():
+            if controller.set_hover(self._pick_component_3d(event.x(), event.y())):
+                self.update()
+            return
         if self.face_mode_active:
             self.hovered_face_info = self.get_brush_face_at_coords(event.x(), event.y())
             self.update()
@@ -2235,6 +2646,19 @@ class QtGameView(QOpenGLWidget):
     def mouseReleaseEvent(self, event):
         if self.terrain_sculpt_painting and event.button() == Qt.LeftButton:
             self.terrain_sculpt_painting = False
+            return
+        controller = self._components()
+        if (event.button() == Qt.LeftButton and controller is not None and
+                controller.drag is not None):
+            self._end_component_drag()
+            return
+        if event.button() == Qt.LeftButton and self._face_mode_press is not None:
+            # Released without dragging: this was a texture click after all.
+            brush, face = self._face_mode_press['face']
+            self._face_mode_press = None
+            self.editor.apply_texture_to_specific_face(brush, face)
+            if hasattr(self.editor, 'show_surface_inspector'):
+                self.editor.show_surface_inspector(brush, face)
             return
         if self.sysmon.handle_mouse_release(event, self.play_mode):
             self.setCursor(Qt.ArrowCursor)

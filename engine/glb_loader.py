@@ -641,6 +641,22 @@ class GLB:
 # ---------------------------------------------------------------------------
 
 def render_glb_thumbnail(filepath: str, width: int, height: int):
+    """Generate a wireframe thumbnail from a GLB file for the asset browser.
+
+    Thin guard around :func:`_render_glb_thumbnail_impl` -- a thumbnail failure
+    (a malformed mesh, a NumPy-2 scalar conversion, a GL edge case) must never
+    propagate, because the asset browser would otherwise abort loading the rest
+    of the folder. The offending file is named on stdout so the failure is
+    diagnosable, and the caller falls back to a plain "GLB" placeholder.
+    """
+    try:
+        return _render_glb_thumbnail_impl(filepath, width, height)
+    except Exception as exc:
+        print(f"[GLB] thumbnail skipped for {filepath}: {exc}")
+        return None
+
+
+def _render_glb_thumbnail_impl(filepath: str, width: int, height: int):
     """
     Generate a wireframe thumbnail from a GLB file for the asset browser.
     Falls back to bounding-box preview if mesh is too complex.

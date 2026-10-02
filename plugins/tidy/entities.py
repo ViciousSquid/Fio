@@ -9,7 +9,7 @@ Three placeable ``Thing`` subclasses power "put everything away" games:
 * :class:`TidyGoal`     — an invisible logic entity that tracks how many
   objects have been stowed and fires ``OnComplete`` when the target is met.
 
-``TidyObject`` subclasses the engine's ``Model`` so it renders as real 3D
+``TidyObject`` subclasses the engine's ``Prop`` so it renders as real 3D
 geometry in play mode (via the existing ``draw_models`` path) and gets the
 editor's model-path picker for free. The other two subclass ``Thing`` directly
 and show as sprites in the editor.
@@ -28,9 +28,9 @@ import random
 # the dependency-free base in plugins.entitybase. Whichever base is available in
 # the current process is used for all three entity classes below.
 try:
-    from editor.things import Model, Thing
+    from editor.things import Prop, Thing
 except Exception:  # pragma: no cover - exercised only in the PyQt-free player
-    from plugins.entitybase import Model, Thing
+    from plugins.entitybase import Prop, Thing
 
 
 #: The UV-mapped book model every TidyObject renders as. Its cover comes from
@@ -46,7 +46,7 @@ N_COVERS = 12
 COVERS = [f"plugins/tidy/assets/covers/cover_{i:02d}.png" for i in range(1, N_COVERS + 1)]
 
 
-class TidyObject(Model):
+class TidyObject(Prop):
     """A single carryable object the player picks up and puts away.
 
     Key properties
@@ -65,12 +65,13 @@ class TidyObject(Model):
     pixmap_path = "plugins/tidy/assets/tidyobject.png"
 
     def __init__(self, pos=None, properties=None):
+        has_authored_model = bool(properties and properties.get('model_path'))
         super().__init__(pos, properties)
         # Force the type regardless of what Model set, so serialization and the
         # I/O system route to the tidy handlers.
         self.properties['type'] = 'tidyobject'
         self.properties.setdefault('category', 'object')
-        if not self.properties.get('model_path'):
+        if not has_authored_model:
             self.properties['model_path'] = BOOK_MODEL
         # Give each book a random cover (the renderer applies 'texture' as a
         # per-instance override). Kept once assigned so saved maps are stable.
@@ -78,7 +79,9 @@ class TidyObject(Model):
             self.properties['texture'] = random.choice(COVERS)
         self.properties.setdefault('scale', [1, 1, 1])
         self.properties.setdefault('rotation', [0, 0, 0])
-        # Carryable props are non-solid by default (perf + feel).
+        # Tidy only chooses its gameplay defaults; carrying/physics belong to Prop.
+        self.properties.setdefault('pickup_enabled', True)
+        self.properties.setdefault('physics_enabled', True)
         self.properties.setdefault('no_collision', True)
         # Runtime state (also serialised harmlessly).
         self.properties.setdefault('tidied', False)
