@@ -1,0 +1,230 @@
+{
+    "fingerprint": "RStudio",
+    "brushes": [
+        {
+            "pos": [
+                872.0,
+                200.0,
+                448.0
+            ],
+            "size": [
+                208.0,
+                400.0,
+                640.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                680.0,
+                320.0,
+                504.0
+            ],
+            "size": [
+                176.0,
+                32.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                684.0,
+                320.0,
+                304.0
+            ],
+            "size": [
+                168.0,
+                32.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        }
+    ],
+    "things": [
+        {
+            "type": "playerstart",
+            "pos": [
+                448.0,
+                192.0,
+                -16.0
+            ],
+            "properties": {
+                "type": "playerstart",
+                "name": "PlayerStart_1",
+                "angle": "0.0"
+            }
+        },
+        {
+            "type": "light",
+            "pos": [
+                -160.0,
+                40,
+                -160.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_2",
+                "colour": "[255, 255, 255]",
+                "intensity": "1.0",
+                "radius": "512.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        },
+        {
+            "type": "light",
+            "pos": [
+                448.0,
+                40,
+                464.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_3",
+                "colour": "[255, 255, 255]",
+                "intensity": "1.0",
+                "radius": "512.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        },
+        {
+            "type": "light",
+            "pos": [
+                432.0,
+                40,
+                -176.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_4",
+                "colour": "[255, 255, 255]",
+                "intensity": "1.0",
+                "radius": "512.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        },
+        {
+            "type": "light",
+            "pos": [
+                -192.0,
+                40,
+                544.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_5",
+                "colour": "[255, 255, 255]",
+                "intensity": "1.0",
+                "radius": "512.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        }
+    ],
+    "terrain_data": {
+        "enabled": true,
+        "solid": true,
+        "seed": 42,
+        "biome": "Low Poly Valley",
+        "chunk_size": 256.0,
+        "base_resolution": 48,
+        "offset_x": 0.0,
+        "offset_z": 0.0,
+        "offset_y": 0.0,
+        "min_chunk_x": -2,
+        "max_chunk_x": 2,
+        "min_chunk_z": -2,
+        "max_chunk_z": 2,
+        "use_textures": false,
+        "flat_mode": true,
+        "custom_biome": {
+            "name": "Low Poly Valley",
+            "base_height": 10.0,
+            "height_scale": 250.0,
+            "hills_scale": 0.004,
+            "hills_intensity": 0.8,
+            "mountains_enabled": true,
+            "mountains_scale": 0.006,
+            "mountains_intensity": 1.2,
+            "mountains_sharpness": 0.2,
+            "valleys_enabled": true,
+            "valleys_scale": 0.003,
+            "valleys_depth": 0.2,
+            "plateaus_enabled": false,
+            "plateaus_scale": 0.004,
+            "plateaus_intensity": 0.5,
+            "plateaus_flatness": 0.7,
+            "trees_enabled": true,
+            "tree_density": 0.15,
+            "color_gradient": [
+                [
+                    0.0,
+                    [
+                        0.38,
+                        0.6,
+                        0.25
+                    ]
+                ],
+                [
+                    0.25,
+                    [
+                        0.35,
+                        0.55,
+                        0.22
+                    ]
+                ],
+                [
+                    0.28,
+                    [
+                        0.55,
+                        0.4,
+                        0.25
+                    ]
+                ],
+                [
+                    1.0,
+                    [
+                        0.65,
+                        0.45,
+                        0.3
+                    ]
+                ]
+            ],
+            "blend_weights": [
+                1.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "terrain_height_scale": 0.003
+        }
+    }
+}

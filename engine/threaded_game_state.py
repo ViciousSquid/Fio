@@ -1,99 +1,142 @@
 import threading
-import time
-from dataclasses import dataclass, field
-from typing import List, Dict, Set, Any, Optional
-from copy import deepcopy
 import glm
+import time
+from typing import List, Any, Dict, Optional
 
-
-@dataclass
 class RenderState:
-    """Immutable snapshot of game state for rendering."""
-    player_pos: glm.vec3 = field(default_factory=lambda: glm.vec3(0, 0, 0))
-    player_angle: float = 0.0
-    player_pitch: float = 0.0
-    player_health: int = 100
-    player_max_health: int = 100
-    visible_brushes: List[Dict] = field(default_factory=list)
-    visible_things: List[Any] = field(default_factory=list)
-    active_lights: List[Any] = field(default_factory=list)
-    camera_view_matrix: glm.mat4 = field(default_factory=lambda: glm.mat4(1.0))
-    timestamp: float = 0.0
-    total_brushes: int = 0
-    culled_brushes: int = 0
+    """
+    A snapshot of the game state specifically for the renderer.
+    """
+    def __init__(self):
+        # Camera / View
+        self.camera_view_matrix = glm.mat4(1.0)
+        self.projection_matrix = glm.mat4(1.0)
+        self.is_play_mode = False
+        
+        # Editor Camera
+        self.editor_camera_pos = glm.vec3(0, 0, 0)
+        self.editor_camera_yaw = 0.0
+        self.editor_camera_pitch = 0.0
+        self.editor_camera_fov = 90.0
+        
+        # Player
+        self.player_pos = glm.vec3(0, 0, 0)
+        self.player_angle = 0.0
+        self.player_pitch = 0.0
+        self.player_health = 100
+        self.player_max_health = 100
+        self.active_weapon = None
+        
+        # Scene Data
+        self.visible_brushes = []
+        self.all_brushes = []
+        self.visible_things = []
+        
+        # HUD / Gameplay
+        self.collected_keys = set()
+        self.hud_message = ""
+        
+        # Visual FX
+        self.bullet_marks = [] # List of {'pos': [x,y,z], 'alpha': float}
+        
+        # Debug / Stats
+        self.total_brushes = 0
+        self.culled_brushes = 0
+        self.timestamp = 0.0
 
 
 class ThreadedGameState:
     """
-    Thread-safe game state manager using double-buffering.
-    
-    The logic thread writes to the 'write' buffer.
-    The render thread reads from the 'read' buffer.
-    Buffers are swapped atomically at frame boundaries.
+    Thread-safe container for communication between UI/Input and Logic threads.
     """
-    
     def __init__(self):
-        self._lock = threading.Lock()
-        self._write_state = RenderState()
+        self._render_state_lock = threading.Lock()
+        
+        # Double Buffering: One state for reading (Render), one for writing (Logic)
         self._read_state = RenderState()
-        self._swap_requested = False
+        self._write_state = RenderState()
+        self._has_new_frame = False
         
-        # Input state (written by main thread, read by logic thread)
-        self._input_lock = threading.Lock()
-        self._keys_pressed: Set[int] = set()
+        # Input state
+        self._keys_lock = threading.Lock()
+        self._keys = set()
+        self._mouse_lock = threading.Lock()
         self._mouse_delta = (0.0, 0.0)
-        self._use_key_pressed = False  # Single-shot use key
         
+        # Shot Queue
+        self._shot_lock = threading.Lock()
+        self._shot_queue = []
+        self._use_key_pressed = False
+        
+    def get_render_state(self) -> RenderState:
+        """Called by RenderThread (Qt) to get the latest frame data."""
+        with self._render_state_lock:
+            return self._read_state
+
+    def get_write_state(self) -> RenderState:
+        """Called by LogicThread to get the object to write to."""
+        return self._write_state
+
     def request_swap(self):
-        """Called by logic thread when a frame is complete."""
-        with self._lock:
-            self._swap_requested = True
-            
+        """Called by LogicThread when a frame is completely written."""
+        with self._render_state_lock:
+            # Swap: write becomes read
+            self._read_state = self._write_state
+            # Create fresh state for next write to avoid race conditions
+            self._write_state = RenderState()
+            self._has_new_frame = True
+
     def try_swap(self) -> bool:
-        """Called by render thread before rendering. Returns True if swap occurred."""
-        with self._lock:
-            if self._swap_requested:
-                self._read_state, self._write_state = self._write_state, self._read_state
-                self._swap_requested = False
+        """Called by QtGameView to check if a new frame is available."""
+        with self._render_state_lock:
+            if self._has_new_frame:
+                self._has_new_frame = False
                 return True
             return False
-    
-    def get_render_state(self) -> RenderState:
-        """Get the current render state (called by render thread)."""
-        with self._lock:
-            return self._read_state
+
+    # --- Input Handling ---
+
+    def set_keys(self, keys: set):
+        with self._keys_lock:
+            self._keys = keys.copy()
             
-    def get_write_state(self) -> RenderState:
-        """Get the write state for modification (called by logic thread)."""
-        return self._write_state
-    
-    # Input handling
-    def set_keys(self, keys: Set[int]):
-        with self._input_lock:
-            self._keys_pressed = keys.copy()
+    def get_keys(self) -> set:
+        with self._keys_lock:
+            return self._keys.copy()
             
-    def get_keys(self) -> Set[int]:
-        with self._input_lock:
-            return self._keys_pressed.copy()
+    def set_mouse_delta(self, dx, dy):
+        with self._mouse_lock:
+            self._mouse_delta = (self._mouse_delta[0] + dx, self._mouse_delta[1] + dy)
             
-    def set_mouse_delta(self, dx: float, dy: float):
-        with self._input_lock:
-            self._mouse_delta = (dx, dy)
-            
-    def consume_mouse_delta(self) -> tuple:
-        with self._input_lock:
+    def consume_mouse_delta(self):
+        with self._mouse_lock:
             delta = self._mouse_delta
             self._mouse_delta = (0.0, 0.0)
             return delta
 
+    def set_use_key(self, pressed: bool):
+        """Sets the state of the use key explicitly (True/False)."""
+        self._use_key_pressed = pressed
+    
     def set_use_key_pressed(self):
-        """Signal that the use key was pressed (single-shot)."""
-        with self._input_lock:
-            self._use_key_pressed = True
-
+        """Convenience method called by main_window.py to trigger the use key."""
+        self._use_key_pressed = True
+        
     def consume_use_key(self) -> bool:
-        """Check and clear the use key state."""
-        with self._input_lock:
-            pressed = self._use_key_pressed
+        if self._use_key_pressed:
             self._use_key_pressed = False
-            return pressed
+            return True
+        return False
+
+    # --- Shooting Handling ---
+
+    def queue_shot(self):
+        with self._shot_lock:
+            self._shot_queue.append(True)
+
+    def consume_shot(self):
+        with self._shot_lock:
+            if self._shot_queue:
+                self._shot_queue.pop(0)
+                return True
+            return False

@@ -1,0 +1,74 @@
+{
+    "fingerprint": "RStudio",
+    "brushes": [
+        {
+            "pos": [
+                0.0,
+                248.0,
+                -192.0
+            ],
+            "size": [
+                1024.0,
+                624.0,
+                128.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                -256.0,
+                248.0,
+                -32.0
+            ],
+            "size": [
+                512.0,
+                624.0,
+                64.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Glass",
+            "glass_color": [
+                0.9,
+                0.95,
+                1.0
+            ],
+            "glass_opacity": 0.11,
+            "glass_distortion": 0.5,
+            "is_trigger": false
+        }
+    ],
+    "things": [
+        {
+            "type": "light",
+            "pos": [
+                32.0,
+                240.0,
+                -64.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "colour": "[255, 255, 255]",
+                "intensity": "1.0",
+                "radius": "512.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        }
+    ]
+}

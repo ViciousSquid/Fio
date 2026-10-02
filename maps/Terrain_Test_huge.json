@@ -1,0 +1,191 @@
+{
+    "fingerprint": "RStudio",
+    "brushes": [
+        {
+            "pos": [
+                880.0,
+                760.0,
+                1040.0
+            ],
+            "size": [
+                224.0,
+                144.0,
+                832.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "colour": [
+                0.4196078431372549,
+                0.4196078431372549,
+                0.4196078431372549
+            ]
+        },
+        {
+            "pos": [
+                880.0,
+                432.0,
+                784.0
+            ],
+            "size": [
+                192.0,
+                512.0,
+                224.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "colour": [
+                0.4549019607843137,
+                0.4549019607843137,
+                0.4549019607843137
+            ]
+        },
+        {
+            "pos": [
+                880.0,
+                432.0,
+                1264.0
+            ],
+            "size": [
+                192.0,
+                512.0,
+                224.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "colour": [
+                0.4392156862745098,
+                0.4392156862745098,
+                0.4392156862745098
+            ]
+        }
+    ],
+    "things": [
+        {
+            "type": "playerstart",
+            "pos": [
+                176.0,
+                288.0,
+                1008.0
+            ],
+            "properties": {
+                "type": "playerstart",
+                "name": "PlayerStart_1",
+                "angle": "0.0"
+            }
+        },
+        {
+            "type": "light",
+            "pos": [
+                224.0,
+                96.0,
+                1024.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "colour": "[255, 255, 255]",
+                "intensity": "1.0",
+                "radius": "8092.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        }
+    ],
+    "terrain_data": {
+        "enabled": true,
+        "solid": true,
+        "seed": 42,
+        "biome": "Jagged Peaks",
+        "chunk_size": 2048.0,
+        "base_resolution": 48,
+        "offset_x": 0.0,
+        "offset_z": 0.0,
+        "offset_y": 0.0,
+        "min_chunk_x": -4,
+        "max_chunk_x": 4,
+        "min_chunk_z": -4,
+        "max_chunk_z": 4,
+        "use_textures": true,
+        "flat_mode": false,
+        "custom_biome": {
+            "name": "Jagged Peaks",
+            "base_height": 50.0,
+            "height_scale": 300.0,
+            "hills_scale": 0.005,
+            "hills_intensity": 0.2,
+            "mountains_enabled": true,
+            "mountains_scale": 0.004,
+            "mountains_intensity": 1.5,
+            "mountains_sharpness": 1.0,
+            "valleys_enabled": true,
+            "valleys_scale": 0.002,
+            "valleys_depth": 0.3,
+            "plateaus_enabled": false,
+            "plateaus_scale": 0.004,
+            "plateaus_intensity": 0.5,
+            "plateaus_flatness": 0.7,
+            "trees_enabled": false,
+            "tree_density": 0.0,
+            "color_gradient": [
+                [
+                    0.0,
+                    [
+                        0.25,
+                        0.3,
+                        0.2
+                    ]
+                ],
+                [
+                    0.15,
+                    [
+                        0.35,
+                        0.35,
+                        0.35
+                    ]
+                ],
+                [
+                    0.6,
+                    [
+                        0.5,
+                        0.5,
+                        0.55
+                    ]
+                ],
+                [
+                    0.8,
+                    [
+                        0.9,
+                        0.9,
+                        0.95
+                    ]
+                ]
+            ],
+            "blend_weights": [
+                1.0,
+                0.3,
+                0.0,
+                0.0
+            ],
+            "terrain_height_scale": 0.003
+        }
+    }
+}

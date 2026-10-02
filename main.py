@@ -2,8 +2,9 @@ import sys
 import os
 import shutil
 import argparse
-from PyQt5.QtWidgets import QApplication, QSplashScreen
+from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout, QProgressBar
 from PyQt5.QtGui import QPixmap, QSurfaceFormat
+from PyQt5.QtCore import Qt
 from editor.main_window import MainWindow
 
 def clean_pycache():
@@ -12,7 +13,7 @@ def clean_pycache():
     from the root directory.
     """
     project_root = os.path.dirname(os.path.abspath(__file__))
-    print(f"🧹 Starting cleanup from root: {project_root}")
+    print(f"Starting cleanup from root: {project_root}")
 
     for root, dirs, files in os.walk(project_root):
         if '__pycache__' in dirs:
@@ -22,7 +23,90 @@ def clean_pycache():
                 shutil.rmtree(pycache_path)
             except OSError as e:
                 print(f"Skipping cleanup")
-    print("✨ Cleanup complete.")
+    print("Cleanup complete.")
+
+class ProgressSplashScreen(QWidget):
+    """Custom splash screen with uniform progress bar."""
+    def __init__(self, pixmap_path):
+        super().__init__()
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        
+        # Load splash image
+        pixmap = QPixmap(pixmap_path)
+        
+        # Main layout
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # Splash image
+        self.image_label = QLabel()
+        self.image_label.setPixmap(pixmap)
+        layout.addWidget(self.image_label)
+        
+        # Progress bar with uniform styling
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(25)
+        
+        # Simple uniform color
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: none;
+                background-color: #2b2b2b;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                background-color: #425f5d;
+            }
+        """)
+        
+        # Status label overlay
+        self.status_label = QLabel("Starting RStudio...")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("""
+            color: #f0f0f0; 
+            font-size: 10pt; 
+            background: transparent;
+            padding: 0px;
+        """)
+        
+        # Container for progress bar and overlay label
+        progress_container = QWidget()
+        progress_layout = QVBoxLayout(progress_container)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.setSpacing(0)
+        progress_layout.addWidget(self.progress_bar)
+        
+        self.status_label.setParent(progress_container)
+        self.status_label.setGeometry(self.progress_bar.geometry())
+        layout.addWidget(progress_container)
+        self.setLayout(layout)
+        self.adjustSize()
+        
+        # Center on screen
+        screen = QApplication.primaryScreen()
+        screen_geo = screen.geometry()
+        self.move(
+            screen_geo.center().x() - self.width() // 2,
+            screen_geo.center().y() - self.height() // 2
+        )
+    
+    def set_progress(self, value, status_text=None):
+        """Update progress value (0-100) and optional status text."""
+        self.progress_bar.setValue(value)
+        if status_text:
+            self.status_label.setText(status_text)
+            self.status_label.setGeometry(self.progress_bar.geometry())
+        QApplication.processEvents()
+    
+    def resizeEvent(self, event):
+        """Keep overlay label centered on progress bar."""
+        super().resizeEvent(event)
+        if hasattr(self, 'status_label') and hasattr(self, 'progress_bar'):
+            self.status_label.setGeometry(self.progress_bar.geometry())
 
 dark_stylesheet = """
     QWidget {
@@ -45,6 +129,16 @@ dark_stylesheet = """
         padding-top: 3px;
         padding-bottom: 3px;
     }
+    /* NEW: Make control buttons always visible */
+    QDockWidget::close-button, QDockWidget::float-button {
+        background-color: #444;
+        border: 1px solid #666;
+        padding: 2px;
+        margin: 1px;
+    }
+    QDockWidget::close-button:hover, QDockWidget::float-button:hover {
+        background-color: #666;
+    }
     QMenuBar {
         background-color: #4a4a4a;
         color: #f0f0f0;
@@ -54,14 +148,14 @@ dark_stylesheet = """
         color: #f0f0f0;
     }
     QMenuBar::item:selected {
-        background-color: #0078d7;
+        background-color: #F08000;
     }
     QMenu {
-        background-color: #4a4a4a;
+        background-color: #4a4a4c;
         border: 1px solid #000;
     }
     QMenu::item:selected {
-        background-color: #0078d7;
+        background-color: #F08000;
     }
     QToolBar {
         background-color: #4a4a4a;
@@ -78,7 +172,7 @@ dark_stylesheet = """
         background-color: #6a6a6a;
     }
     QPushButton:pressed {
-        background-color: #0078d7;
+        background-color: #F08000;
     }
     QTabWidget::pane {
         border-top: 2px solid #555;
@@ -90,7 +184,7 @@ dark_stylesheet = """
         padding: 5px;
     }
     QTabBar::tab:selected {
-        background: #0078d7;
+        background: #F08000;
         color: white;
     }
     QStatusBar {
@@ -112,7 +206,7 @@ dark_stylesheet = """
         background-color: #6a6a6a;
     }
     QSpinBox::up-button:pressed, QSpinBox::down-button:pressed {
-        background-color: #0078d7;
+        background-color: #F08000;
     }
     QSpinBox::up-arrow {
         border-left: 4px solid transparent;
@@ -138,36 +232,48 @@ dark_stylesheet = """
 """
 
 if __name__ == "__main__":
-    # --- Set the default OpenGL format ---
-    # This must be done BEFORE the QApplication is created.
-    # It tells Qt to request a specific version of OpenGL.
+    # Print version first thing
+    try:
+        with open('editor/version.txt', 'r') as f:
+            version = f.read().strip()
+            print(f"       +++ RStudio {version}")
+    except FileNotFoundError:
+        print("Version file not found")
+    
+    # Create application first
+    app = QApplication(sys.argv)
+    app.setStyleSheet(dark_stylesheet)
+    
+    # Create and show splash screen IMMEDIATELY
+    splash = ProgressSplashScreen('assets/splash.png')
+    splash.show()
+    splash.set_progress(5, "Initializing OpenGL...")
+    
+    # Set OpenGL format
     format = QSurfaceFormat()
     format.setVersion(3, 3)
     format.setProfile(QSurfaceFormat.CoreProfile)
     format.setDepthBufferSize(24)
     format.setStencilBufferSize(8)
     QSurfaceFormat.setDefaultFormat(format)
-    # --- End of new block ---
-
-    # Always clean pycache on startup
+    splash.set_progress(15, "Cleaning cache...")
+    
+    # Clean pycache
     clean_pycache()
-
-    app = QApplication(sys.argv)
+    splash.set_progress(25, "Loading editor core...")
     
-    app.setStyleSheet(dark_stylesheet)
-    
-    splash_pixmap = QPixmap('assets/splash.png')
-    splash = QSplashScreen(splash_pixmap)
-    splash.show()
-    app.processEvents()
-    
-    # --- MODIFICATION: Determine the root directory of the project ---
+    # Create main window (heavy loading)
     root_directory = os.path.dirname(os.path.abspath(__file__))
+    splash.set_progress(40, "Building UI...")
     
-    # --- MODIFICATION: Pass the root directory to the MainWindow ---
     main_win = MainWindow(root_dir=root_directory)
-    main_win.show()
+    splash.set_progress(80, "Finalizing...")
     
-    splash.finish(main_win)
+    # Show main window
+    main_win.show()
+    splash.set_progress(100, "Ready!")
+    
+    # Close splash
+    splash.close()
     
     sys.exit(app.exec_())

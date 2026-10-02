@@ -24,6 +24,6 @@ RENDER_MODE_WIREFRAME = 2  # Wireframe lines
 RENDER_MODE_VERTEX = 3     # Points
 
 # --- Physics Constants ---
-GRAVITY = -275.0
+GRAVITY = -500.0
 JUMP_STRENGTH = 180.0
 TERMINAL_VELOCITY = -500.0

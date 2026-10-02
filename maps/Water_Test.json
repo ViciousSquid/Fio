@@ -1,0 +1,209 @@
+{
+    "fingerprint": "RStudio",
+    "brushes": [
+        {
+            "pos": [
+                -488.0,
+                0.0,
+                0.0
+            ],
+            "size": [
+                16.0,
+                448.0,
+                768.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                504.0,
+                0.0,
+                0.0
+            ],
+            "size": [
+                16.0,
+                448.0,
+                768.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                8.0,
+                -216.0,
+                0.0
+            ],
+            "size": [
+                976.0,
+                16.0,
+                768.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                8.0,
+                216.0,
+                0.0
+            ],
+            "size": [
+                976.0,
+                16.0,
+                768.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                8.0,
+                0.0,
+                -376.0
+            ],
+            "size": [
+                976.0,
+                416.0,
+                16.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                8.0,
+                0.0,
+                376.0
+            ],
+            "size": [
+                976.0,
+                416.0,
+                16.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                0.0,
+                -176.0,
+                0.0
+            ],
+            "size": [
+                1008.0,
+                96.0,
+                768.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Water",
+            "is_fog": false,
+            "is_trigger": false,
+            "water_reflectivity": 0.7,
+            "water_opacity": 0.7
+        },
+        {
+            "pos": [
+                -376.0,
+                -168.0,
+                -256.0
+            ],
+            "size": [
+                240.0,
+                112.0,
+                256.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        }
+    ],
+    "things": [
+        {
+            "type": "light",
+            "pos": [
+                8.0,
+                16.0,
+                0.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "colour": "[255, 255, 255]",
+                "intensity": "1.0",
+                "radius": "512.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        },
+        {
+            "type": "playerstart",
+            "pos": [
+                -368.0,
+                -16.0,
+                -224.0
+            ],
+            "properties": {
+                "type": "playerstart",
+                "name": "PlayerStart_1",
+                "angle": "0.0"
+            }
+        }
+    ]
+}

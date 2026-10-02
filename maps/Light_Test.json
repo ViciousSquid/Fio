@@ -1,0 +1,88 @@
+{
+    "fingerprint": "RStudio",
+    "brushes": [
+        {
+            "pos": [
+                -64.0,
+                0,
+                88.0
+            ],
+            "size": [
+                1344.0,
+                128,
+                1296.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": true
+        },
+        {
+            "pos": [
+                -64.0,
+                416.0,
+                64.0
+            ],
+            "size": [
+                128.0,
+                960.0,
+                128.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": true
+        },
+        {
+            "pos": [
+                -816.0,
+                416.0,
+                88.0
+            ],
+            "size": [
+                160.0,
+                960.0,
+                1296.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "lock": true
+        }
+    ],
+    "things": [
+        {
+            "type": "light",
+            "pos": [
+                256.0,
+                272.0,
+                64.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "colour": "[255, 255, 255]",
+                "intensity": "1.0",
+                "radius": "1024.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        }
+    ]
+}

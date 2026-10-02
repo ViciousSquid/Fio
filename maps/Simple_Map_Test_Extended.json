@@ -1,15 +1,16 @@
 {
+    "fingerprint": "RStudio",
     "brushes": [
         {
             "pos": [
                 240.0,
                 416.0,
-                24.0
+                320.0
             ],
             "size": [
                 1312.0,
                 64.0,
-                816.0
+                1408.0
             ],
             "textures": {
                 "north": "default.png",
@@ -87,14 +88,14 @@
         },
         {
             "pos": [
-                24.0,
+                256.0,
                 192.0,
-                424.0
+                960.0
             ],
             "size": [
-                816.0,
+                1280.0,
                 512.0,
-                176.0
+                128.0
             ],
             "textures": {
                 "north": "default.png",
@@ -111,12 +112,12 @@
             "pos": [
                 -440.0,
                 192.0,
-                16.0
+                312.0
             ],
             "size": [
                 112.0,
                 512.0,
-                832.0
+                1424.0
             ],
             "textures": {
                 "north": "default.png",
@@ -127,7 +128,8 @@
                 "down": "default.png"
             },
             "is_trigger": false,
-            "lock": true
+            "lock": false,
+            "hidden": false
         },
         {
             "pos": [
@@ -195,14 +197,203 @@
         },
         {
             "pos": [
-                656.0,
-                200.0,
-                472.0
+                488.0,
+                -32.0,
+                728.0
             ],
             "size": [
-                480.0,
-                368.0,
-                80.0
+                144.0,
+                192.0,
+                592.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                488.0,
+                352.0,
+                728.0
+            ],
+            "size": [
+                144.0,
+                64.0,
+                592.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                488.0,
+                160.0,
+                528.0
+            ],
+            "size": [
+                144.0,
+                320.0,
+                192.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                488.0,
+                128.0,
+                960.0
+            ],
+            "size": [
+                144.0,
+                256.0,
+                128.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                840.0,
+                128.0,
+                728.0
+            ],
+            "size": [
+                112.0,
+                512.0,
+                592.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                672.0,
+                -32.0,
+                728.0
+            ],
+            "size": [
+                224.0,
+                192.0,
+                592.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                672.0,
+                352.0,
+                728.0
+            ],
+            "size": [
+                224.0,
+                64.0,
+                592.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                -440.0,
+                -128.0,
+                312.0
+            ],
+            "size": [
+                112.0,
+                128.0,
+                1424.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                256.0,
+                -128.0,
+                312.0
+            ],
+            "size": [
+                512.0,
+                128.0,
+                1424.0
+            ],
+            "operation": "add",
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                -92.0,
+                -128.0,
+                -136.0
+            ],
+            "size": [
+                584.0,
+                128.0,
+                528.0
             ],
             "operation": "add",
             "textures": {
@@ -217,15 +408,16 @@
         },
         {
             "pos": [
-                8.0,
-                -96.0,
-                16.0
-            ],
-            "size": [
-                1008.0,
-                64.0,
+                -108.0,
+                -128.0,
                 832.0
             ],
+            "size": [
+                616.0,
+                128.0,
+                384.0
+            ],
+            "operation": "add",
             "textures": {
                 "north": "default.png",
                 "south": "default.png",
@@ -234,12 +426,11 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "is_trigger": false,
-            "lock": true
+            "hidden": false
         },
         {
             "pos": [
-                304.0,
+                312.0,
                 0,
                 -240.0
             ],
@@ -257,7 +448,7 @@
                 "down": "default.png"
             },
             "is_trigger": false,
-            "lock": true
+            "lock": false
         },
         {
             "pos": [
@@ -279,7 +470,7 @@
                 "down": "trigger.jpg"
             },
             "is_trigger": true,
-            "target": "Light_2"
+            "target": "Light_00"
         },
         {
             "pos": [
@@ -328,7 +519,19 @@
             "distance": 120,
             "start_on": true,
             "speed": 33,
-            "color": "yellow"
+            "color": "yellow",
+            "original_pos": [
+                352.0,
+                -56.0,
+                240.0
+            ],
+            "colour": [
+                0.4549019607843137,
+                0.4549019607843137,
+                0.3411764705882353
+            ],
+            "shader": "Metal",
+            "is_fog": false
         },
         {
             "pos": [
@@ -929,7 +1132,8 @@
                 "top": "default.png",
                 "down": "default.png"
             },
-            "lock": true
+            "lock": true,
+            "hidden": false
         },
         {
             "pos": [
@@ -975,26 +1179,6 @@
         },
         {
             "pos": [
-                672.0,
-                192.0,
-                432.0
-            ],
-            "size": [
-                224.0,
-                256.0,
-                24.0
-            ],
-            "textures": {
-                "north": "scifi_light_wht.png",
-                "south": "scifi_light_wht.png",
-                "east": "scifi_light_wht.png",
-                "west": "scifi_light_wht.png",
-                "top": "scifi_light_wht.png",
-                "down": "scifi_light_wht.png"
-            }
-        },
-        {
-            "pos": [
                 704.0,
                 192.0,
                 -992.0
@@ -1012,22 +1196,590 @@
                 "top": "scifi_light_wht.png",
                 "down": "scifi_light_wht.png"
             }
+        },
+        {
+            "pos": [
+                240.0,
+                56.0,
+                780.0
+            ],
+            "size": [
+                352.0,
+                16.0,
+                232.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                -40.0,
+                60.0,
+                752.0
+            ],
+            "size": [
+                32.0,
+                24.0,
+                32.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Glow",
+            "is_fog": false,
+            "is_trigger": false,
+            "light_direction": "top",
+            "colour": [
+                1.0,
+                1.0,
+                1.0
+            ]
+        },
+        {
+            "pos": [
+                -104.0,
+                0.0,
+                688.0
+            ],
+            "size": [
+                48.0,
+                128.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Default",
+            "is_fog": false,
+            "is_trigger": false,
+            "colour": [
+                0.6666666666666666,
+                0.3333333333333333,
+                0.4980392156862745
+            ]
+        },
+        {
+            "pos": [
+                24.0,
+                0.0,
+                752.0
+            ],
+            "size": [
+                48.0,
+                128.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Default",
+            "is_fog": false,
+            "is_trigger": false,
+            "colour": [
+                0.6666666666666666,
+                0.3333333333333333,
+                1.0
+            ]
+        },
+        {
+            "pos": [
+                -40.0,
+                0.0,
+                752.0
+            ],
+            "size": [
+                48.0,
+                128.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Default",
+            "is_fog": false,
+            "is_trigger": false,
+            "colour": [
+                0.8,
+                0.8,
+                0.8
+            ]
+        },
+        {
+            "pos": [
+                -40.0,
+                0.0,
+                816.0
+            ],
+            "size": [
+                48.0,
+                128.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Default",
+            "is_fog": false,
+            "is_trigger": false,
+            "colour": [
+                0.3333333333333333,
+                0.6666666666666666,
+                1.0
+            ]
+        },
+        {
+            "pos": [
+                -40.0,
+                0.0,
+                688.0
+            ],
+            "size": [
+                48.0,
+                128.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Default",
+            "is_fog": false,
+            "is_trigger": false,
+            "colour": [
+                1.0,
+                0.6666666666666666,
+                1.0
+            ]
+        },
+        {
+            "pos": [
+                24.0,
+                0.0,
+                688.0
+            ],
+            "size": [
+                48.0,
+                128.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Default",
+            "is_fog": false,
+            "is_trigger": false,
+            "colour": [
+                0.6666666666666666,
+                0.6666666666666666,
+                1.0
+            ]
+        },
+        {
+            "pos": [
+                -104.0,
+                0.0,
+                816.0
+            ],
+            "size": [
+                48.0,
+                128.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Default",
+            "is_fog": false,
+            "is_trigger": false,
+            "colour": [
+                1.0,
+                1.0,
+                0.4980392156862745
+            ]
+        },
+        {
+            "pos": [
+                -104.0,
+                0.0,
+                752.0
+            ],
+            "size": [
+                48.0,
+                128.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Default",
+            "is_fog": false,
+            "is_trigger": false,
+            "colour": [
+                0.0,
+                0.6666666666666666,
+                0.4980392156862745
+            ]
+        },
+        {
+            "pos": [
+                24.0,
+                0.0,
+                816.0
+            ],
+            "size": [
+                48.0,
+                128.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Default",
+            "is_fog": false,
+            "is_trigger": false,
+            "colour": [
+                1.0,
+                0.6470588235294118,
+                0.21568627450980393
+            ]
+        },
+        {
+            "pos": [
+                -160.0,
+                0.0,
+                876.0
+            ],
+            "size": [
+                448.0,
+                128,
+                40.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                -264.0,
+                0,
+                756.0
+            ],
+            "size": [
+                240.0,
+                128,
+                200.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                -272.0,
+                252.0,
+                656.0
+            ],
+            "size": [
+                224.0,
+                392.0,
+                16.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Glass",
+            "is_fog": false,
+            "is_trigger": false
+        },
+        {
+            "pos": [
+                -152.0,
+                208.0,
+                656.0
+            ],
+            "size": [
+                16.0,
+                544.0,
+                32.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                -376.0,
+                208.0,
+                656.0
+            ],
+            "size": [
+                16.0,
+                544.0,
+                32.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                -264.0,
+                72.0,
+                912.0
+            ],
+            "size": [
+                16.0,
+                16.0,
+                64.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Glow",
+            "is_fog": false,
+            "is_trigger": false,
+            "light_direction": "south"
+        },
+        {
+            "pos": [
+                -8.0,
+                72.0,
+                912.0
+            ],
+            "size": [
+                16.0,
+                16.0,
+                64.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Glow",
+            "is_fog": false,
+            "is_trigger": false,
+            "light_direction": "south"
+        },
+        {
+            "pos": [
+                248.0,
+                72.0,
+                912.0
+            ],
+            "size": [
+                16.0,
+                16.0,
+                64.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Glow",
+            "is_fog": false,
+            "is_trigger": false,
+            "light_direction": "south"
+        },
+        {
+            "pos": [
+                504.0,
+                72.0,
+                912.0
+            ],
+            "size": [
+                16.0,
+                16.0,
+                64.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Glow",
+            "is_fog": false,
+            "is_trigger": false,
+            "light_direction": "south"
+        },
+        {
+            "pos": [
+                32.0,
+                -152.0,
+                444.0
+            ],
+            "size": [
+                1056.0,
+                80.0,
+                904.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
+        },
+        {
+            "pos": [
+                -192.0,
+                -96.0,
+                384.0
+            ],
+            "size": [
+                384.0,
+                32.0,
+                512.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "shader": "Water",
+            "is_fog": false,
+            "is_trigger": false,
+            "water_reflectivity": 0.5,
+            "water_plane": true,
+            "water_opacity": 0.71,
+            "water_wave_enabled": true,
+            "water_wave_height": 0.07
+        },
+        {
+            "pos": [
+                -208.0,
+                -128.0,
+                384.0
+            ],
+            "size": [
+                80.0,
+                128.0,
+                80.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            }
         }
     ],
     "things": [
         {
             "type": "light",
             "pos": [
-                32.0,
+                64.0,
                 160.0,
-                -16.0
+                144.0
             ],
             "properties": {
                 "type": "light",
-                "name": "Light_2",
+                "name": "Light_00",
                 "color": "[255, 255, 200]",
                 "intensity": "1.0",
-                "radius": "512.0",
+                "radius": "768.0",
                 "colour": "[255, 255, 255]",
                 "state": "on",
                 "show_radius": "False",
@@ -1037,9 +1789,9 @@
         {
             "type": "playerstart",
             "pos": [
-                0.0,
-                40,
-                -160.0
+                -256.0,
+                112.0,
+                784.0
             ],
             "properties": {
                 "type": "playerstart",
@@ -1100,7 +1852,78 @@
                 "show_radius": "False",
                 "casts_shadows": "False"
             }
+        },
+        {
+            "type": "light",
+            "pos": [
+                656.0,
+                40,
+                752.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "colour": "[255, 255, 255]",
+                "intensity": "1.0",
+                "radius": "512.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        },
+        {
+            "type": "light",
+            "pos": [
+                -160.0,
+                176.0,
+                736.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "colour": "[255, 255, 255]",
+                "intensity": "0.45",
+                "radius": "512.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        },
+        {
+            "type": "light",
+            "pos": [
+                -272.0,
+                40,
+                -240.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_1",
+                "colour": "[255, 255, 255]",
+                "intensity": "0.2",
+                "radius": "512.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
+        },
+        {
+            "type": "light",
+            "pos": [
+                -144.0,
+                40,
+                496.0
+            ],
+            "properties": {
+                "type": "light",
+                "name": "Light_3",
+                "colour": "[255, 255, 255]",
+                "intensity": "1.0",
+                "radius": "512.0",
+                "state": "on",
+                "show_radius": "False",
+                "casts_shadows": "False"
+            }
         }
-    ],
-    "fingerprint": "RStudio"
+    ]
 }
