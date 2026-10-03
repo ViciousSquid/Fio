@@ -6,8 +6,7 @@ on:
   pull_request:
   workflow_dispatch:
 
-# A failure in one optional graphical tier must not hide a failure in the core
-# suite, so each tier is its own job and none of them depends on another.
+# Each tier is independent so a graphical failure cannot hide a core failure.
 jobs:
   headless:
     name: Core (headless, no Qt, no GL)
@@ -30,11 +29,22 @@ jobs:
           assert sys._is_gil_enabled()
           print(sys.version)
           print("Fio requires the normal GIL-enabled CPython baseline.")
+          PY
+      - name: Install the headless runtime baseline
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest "numpy==2.5.3" "PyGLM==2.8.3" "pygame-ce==2.5.8"
+      - name: Verify runtime dependency versions
+        run: |
+          python - <<'PY'
+          import numpy
+          import pygame
 
-      - name: Install the dependency-light half
-        # No PyQt5 and no PyOpenGL: this job proves how much of Fio is testable
-        # without the desktop dependency set at all.
-        run: pip install pytest "numpy==2.5.3" PyGLM
+          assert numpy.__version__ == "2.5.3"
+          assert pygame.version.ver == "2.5.8"
+          print("NumPy:", numpy.__version__)
+          print("pygame-ce:", pygame.version.ver)
+          PY
       - name: Run the tests that need no Qt, no OpenGL, no display
         env:
           FIO_HEADLESS_TIER: '1'
@@ -52,15 +62,23 @@ jobs:
       - name: Install Qt's platform-plugin libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            xvfb libgl1 libglx0 libopengl0 libgl1-mesa-dri libglx-mesa0 libegl1 \
-            libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
-            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
-            libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
+          sudo apt-get install -y --no-install-recommends             xvfb libgl1 libglx0 libopengl0 libgl1-mesa-dri libglx-mesa0 libegl1             libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0             libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
       - name: Install dependencies
         run: |
-          pip install pytest
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pip install -r requirements.txt
+      - name: Verify pinned dependency baseline
+        run: |
+          python - <<'PY'
+          import numpy
+          import pygame
+
+          assert numpy.__version__ == "2.5.3"
+          assert pygame.version.ver == "2.5.8"
+          print("NumPy:", numpy.__version__)
+          print("pygame-ce:", pygame.version.ver)
+          PY
       - name: Run everything that does not need a GPU
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
@@ -78,15 +96,26 @@ jobs:
       - name: Install Mesa and a virtual display
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            xvfb libgl1 libglx0 libopengl0 libgl1-mesa-dri libglx-mesa0 libegl1 \
-            libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
-            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
-            libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
+          sudo apt-get install -y --no-install-recommends             xvfb libgl1 libglx0 libopengl0 libgl1-mesa-dri libglx-mesa0 libegl1             libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0             libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
       - name: Install dependencies
         run: |
-          pip install pytest
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pip install -r requirements.txt
+      - name: Verify pinned dependency baseline
+        run: |
+          python - <<'PY'
+          import numpy
+          import pygame
+          from OpenGL import GL
+
+          assert numpy.__version__ == "2.5.3"
+          assert pygame.version.ver == "2.5.8"
+          assert GL is not None
+          print("NumPy:", numpy.__version__)
+          print("pygame-ce:", pygame.version.ver)
+          print("PyOpenGL import: OK")
+          PY
       - name: Run the visual tier against llvmpipe
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
@@ -95,7 +124,6 @@ jobs:
   benchmark:
     name: Renderer benchmark (reported, never fails on timing)
     runs-on: ubuntu-latest
-    # Informational: a shared runner's speed is not a property of Fio.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -106,15 +134,12 @@ jobs:
       - name: Install Mesa and a virtual display
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            xvfb libgl1 libglx0 libopengl0 libgl1-mesa-dri libglx-mesa0 libegl1 \
-            libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
-            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
-            libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
+          sudo apt-get install -y --no-install-recommends             xvfb libgl1 libglx0 libopengl0 libgl1-mesa-dri libglx-mesa0 libegl1             libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0             libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
       - name: Install dependencies
         run: |
-          pip install pytest
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pip install -r requirements.txt
       - name: Measure and report
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
@@ -126,7 +151,6 @@ jobs:
           name: renderer-benchmark
           path: benchmark.json
           if-no-files-found: ignore
-
 
   launch:
     name: Fio launch (CPython 3.14, Qt + software GL)
@@ -144,7 +168,7 @@ jobs:
       - name: Install Fio dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
       - name: Verify CPython 3.14 GIL-enabled baseline
         run: |
           python - <<'PY'
@@ -156,6 +180,21 @@ jobs:
           assert sysconfig.get_config_var("Py_GIL_DISABLED") not in (1, "1")
           assert sys._is_gil_enabled()
           print(sys.version)
+          PY
+      - name: Verify pinned runtime dependencies
+        run: |
+          python - <<'PY'
+          import numpy
+          import pygame
+          import PyQt5
+          import OpenGL
+
+          assert numpy.__version__ == "2.5.3"
+          assert pygame.version.ver == "2.5.8"
+          print("NumPy:", numpy.__version__)
+          print("pygame-ce:", pygame.version.ver)
+          print("PyQt5:", PyQt5.QtCore.PYQT_VERSION_STR)
+          print("PyOpenGL import: OK")
           PY
       - name: Launch Fio
         env:
