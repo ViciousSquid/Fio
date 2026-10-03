@@ -329,7 +329,14 @@
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
-                "id": "45095dd8-8dec-4577-b4c5-86ea489ca661"
+                "id": "45095dd8-8dec-4577-b4c5-86ea489ca661",
+                "io_enabled": true,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         },
@@ -353,7 +360,14 @@
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
-                "id": "21215e56-f15b-4661-a49e-c20081af669a"
+                "id": "21215e56-f15b-4661-a49e-c20081af669a",
+                "io_enabled": true,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         },
@@ -377,7 +391,14 @@
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
-                "id": "ebacd81e-a660-4e29-9360-31ebaf9f0527"
+                "id": "ebacd81e-a660-4e29-9360-31ebaf9f0527",
+                "io_enabled": true,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
             },
             "io_connections": []
         },
@@ -401,16 +422,62 @@
                 "collect_respawns": false,
                 "collect_respawn_time": 20,
                 "collect_key_name": "blue_key",
-                "collect_weapon": "gun1"
+                "collect_weapon": "gun1",
+                "io_enabled": true,
+                "model_path": "",
+                "render_mode": "billboard",
+                "sprite_path": "assets/sprites/bluekey.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "auto",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
             },
             "io_connections": []
         },
         {
             "type": "playerstart",
             "pos": [
-                -448,
-                40,
-                -96
+                -448.0,
+                -96.0,
+                -96.0
             ],
             "properties": {
                 "type": "playerstart",
@@ -418,9 +485,20 @@
                 "respawns": false,
                 "respawn_time": 20,
                 "angle": 270,
-                "id": "b44e294e-5ca4-45bc-8d8d-c235119516d7"
+                "id": "b44e294e-5ca4-45bc-8d8d-c235119516d7",
+                "io_enabled": true
             },
-            "io_connections": []
+            "io_connections": [
+                {
+                    "output": "OnPlayerSpawn",
+                    "target": "LogicCommand_1",
+                    "input": "RunCommand",
+                    "parameter": "",
+                    "delay": 0.0,
+                    "fire_once": false,
+                    "target_id": "402c3c0e-4aa7-46f2-915d-16817c6d9e9f"
+                }
+            ]
         },
         {
             "type": "light",
@@ -442,9 +520,34 @@
                 "state": "on",
                 "show_radius": false,
                 "casts_shadows": false,
-                "id": "e68d099f-9e1d-4a61-9c3f-16fb4e7fcd8f"
+                "id": "e68d099f-9e1d-4a61-9c3f-16fb4e7fcd8f",
+                "io_enabled": true,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "logic_command",
+            "pos": [
+                -448.0,
+                -96.0,
+                -176.0
+            ],
+            "properties": {
+                "type": "logic_command",
+                "io_enabled": true,
+                "name": "LogicCommand_1",
+                "id": "402c3c0e-4aa7-46f2-915d-16817c6d9e9f",
+                "command": "hudstyle 3",
+                "disabled": false
             },
             "io_connections": []
         }
-    ]
+    ],
+    "created": "2026-10-03T20:41:07"
 }
