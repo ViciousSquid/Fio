@@ -122,12 +122,26 @@ def test_sprite_gl_cache_survives_the_render_buffers_alternating():
 
 
 def test_moved_effect_rows_sync_to_effect_store_with_one_masked_write(monkeypatch):
-    first = Effect(pos=[0.0, 0.0, 0.0])
-    second = Effect(pos=[10.0, 0.0, 0.0])
     store = EffectStore()
     table = entity_table.EntityTable()
+    first = object()
+    second = object()
+    things = [first, second]
 
-    table.begin_frame([first, second], epoch=1, effect_store=store)
+    # Configure the dense metadata that _apply_changes normally receives from
+    # the cold entity resolve. This keeps the test focused on the MOVED path.
+    table._slot_of_obj = {id(first): 0, id(second): 1}
+    table.class_bits = np.asarray(
+        [entity_table.ENT_EFFECT, entity_table.ENT_EFFECT],
+        dtype=table.class_bits.dtype,
+    )
+    table.effect_store_index = np.asarray([0, 1], dtype=np.int32)
+    table.pos = np.asarray(
+        [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    store.pos[:2] = table.pos
+
     new_positions = {
         id(first): (100.0, 1.0, 2.0),
         id(second): (200.0, 3.0, 4.0),
@@ -139,7 +153,7 @@ def test_moved_effect_rows_sync_to_effect_store_with_one_masked_write(monkeypatc
     monkeypatch.setattr(EffectStore, "set_position", fail_set_position)
 
     table._apply_changes(
-        [first, second],
+        things,
         {id(first): MOVED, id(second): MOVED},
         new_positions,
         effect_store=store,
