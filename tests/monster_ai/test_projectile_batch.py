@@ -43,6 +43,10 @@ class _Host:
 
     def __init__(self, things, projectiles):
         self.things = things
+        self._monster_things = [
+            thing for thing in things if isinstance(thing, Monster)
+        ]
+        self._monster_by_id = {id(thing): thing for thing in self._monster_things}
         self._monster_projectiles = ProjectileStore()
         for position, owner in projectiles:
             self._monster_projectiles.add(
