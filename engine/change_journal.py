@@ -84,10 +84,12 @@ class _Sink:
     next subscribe or drain drops it.
     """
 
-    __slots__ = ('pending', 'alive', '__weakref__')
+    __slots__ = ('pending', 'pending_positions', 'drained_positions', 'alive', '__weakref__')
 
     def __init__(self):
         self.pending = {}
+        self.pending_positions = {}
+        self.drained_positions = {}
         self.alive = True
 
     def _die(self):
@@ -132,7 +134,7 @@ class ChangeJournal:
         self._live = self._live + (sink,)
         return sink
 
-    def record(self, obj, flags: int) -> None:
+    def record(self, obj, flags: int, position=None) -> None:
         oid = id(obj)
         with self._lock:
             for sink in self._live:
@@ -140,10 +142,12 @@ class ChangeJournal:
                 if pending is OVERFLOW or not sink.alive:
                     continue
                 pending[oid] = pending.get(oid, 0) | flags
+                if position is not None and flags & MOVED:
+                    sink.pending_positions[oid] = position
                 if len(pending) > PENDING_LIMIT:
                     sink.pending = OVERFLOW
 
-    def record_many(self, objs, flags: int) -> None:
+    def record_many(self, objs, flags: int, positions=None) -> None:
         """:meth:`record` for a batch: one lock, one pass per subscriber.
 
         What the dense monster pass uses to journal every monster it moved in
@@ -152,14 +156,23 @@ class ChangeJournal:
         oids = [id(obj) for obj in objs]
         if not oids:
             return
+        position_values = None
+        if positions is not None:
+            position_values = tuple(
+                (float(p[0]), float(p[1]), float(p[2])) for p in positions
+            )
+            if len(position_values) != len(oids):
+                raise ValueError("positions must align with objs")
         with self._lock:
             for sink in self._live:
                 pending = sink.pending
                 if pending is OVERFLOW or not sink.alive:
                     continue
                 get = pending.get
-                for oid in oids:
+                for i, oid in enumerate(oids):
                     pending[oid] = get(oid, 0) | flags
+                    if position_values is not None and flags & MOVED:
+                        sink.pending_positions[oid] = position_values[i]
                 if len(pending) > PENDING_LIMIT:
                     sink.pending = OVERFLOW
 
@@ -176,8 +189,21 @@ class ChangeJournal:
                 return OVERFLOW
             pending = sink.pending
             sink.pending = {}
+            sink.drained_positions = sink.pending_positions
+            sink.pending_positions = {}
+            if pending is OVERFLOW:
+                sink.drained_positions = {}
             self._prune()
             return pending
+
+    def drain_positions(self, subscriber):
+        with self._lock:
+            sink = self._sinks.get(subscriber)
+            if sink is None:
+                return {}
+            positions = sink.drained_positions
+            sink.drained_positions = {}
+            return positions
 
 
 #: The process-wide journal. Objects notify it; tables drain it.
@@ -191,7 +217,14 @@ def touch(obj, flags: int = STATE) -> None:
 
 def moved(obj) -> None:
     """Tell the render projections that *obj*'s transform changed."""
-    JOURNAL.record(obj, MOVED)
+    pos = getattr(obj, 'pos', None)
+    payload = None
+    if pos is not None:
+        try:
+            payload = (float(pos[0]), float(pos[1]), float(pos[2]))
+        except (TypeError, ValueError, IndexError):
+            pass
+    JOURNAL.record(obj, MOVED, payload)
 
 
 def set_positions(objs, positions) -> None:
@@ -201,9 +234,12 @@ def set_positions(objs, positions) -> None:
     a new list of three Python floats -- with one journal lock instead of one
     per entity. *positions* is any ``(N, 3)`` sequence aligned with *objs*.
     """
+    dense = []
     for obj, (x, y, z) in zip(objs, positions):
-        obj.__dict__['pos'] = [float(x), float(y), float(z)]
-    JOURNAL.record_many(objs, MOVED)
+        value = [float(x), float(y), float(z)]
+        obj.__dict__['pos'] = value
+        dense.append(value)
+    JOURNAL.record_many(objs, MOVED, dense)
 
 
 class TrackedPosition:
@@ -226,7 +262,7 @@ class TrackedPosition:
         if type(value) is not list:
             value = [float(value[0]), float(value[1]), float(value[2])]
         obj.__dict__['pos'] = value
-        JOURNAL.record(obj, MOVED)
+        JOURNAL.record(obj, MOVED, (value[0], value[1], value[2]))
 
 
 class TrackedAttribute:
