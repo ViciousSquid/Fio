@@ -1,16 +1,13 @@
 """Nearest-enemy search: the dense batch must answer what the walk answered.
 
-Every awake teamed monster without an aggro target used to walk every monster
-Every awake teamed monster without an aggro target is answered from
-the dense table rather than walking every candidate in Python. The kernel
-uses vectorized squared-distance blocks masked by the team column.
+Every awake teamed monster without an aggro target is answered from the
+dense table rather than walking every candidate in Python. The kernel uses
+vectorized squared-distance blocks masked by the team column.
 
 The scalar walk remains only as the reference/fallback, so the two can be
-be driven over the same monsters and compared. These tests cover exact
-compared. These tests do that, with the cases most likely to separate them:
-exact ties, teamless and dead and hidden monsters, the range boundary, and
-monsters that are still falling -- which is when positions move most within a
-tick and so when a batch is least like a per-monster search.
+driven over the same monsters and compared. These tests cover exact ties,
+teamless, dead and hidden monsters, the range boundary, and monsters that
+are still falling.
 """
 
 import numpy as np
