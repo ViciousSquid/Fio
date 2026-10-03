@@ -96,16 +96,6 @@ except ImportError:
 # Import the extracted MonsterAI class and new thread
 from .monster_ai import MonsterAI
 
-# Qt key constants
-Key_W = 0x57
-Key_S = 0x53
-Key_A = 0x41
-Key_D = 0x44
-Key_Space = 0x20
-Key_C = 0x43
-Key_Shift = 0x01000020
-Key_Control = 0x01000021
-
 # Noise "loudness" multipliers scale a monster's hearing range per event.
 # 1.0 = heard out to the full sensory radius (gunshots); water splashes are
 # quieter, so a monster has to be closer to notice the player entering/leaving.
