@@ -79,6 +79,27 @@ def _projectile(pos, owner):
             'lifetime': 5.0}
 
 
+
+
+def test_projectile_store_reuses_dense_columns_without_dict_to_array_rebuild():
+    from engine.projectile_table import ProjectileStore
+
+    store = ProjectileStore()
+    store.append({
+        'pos': [1.0, 2.0, 3.0],
+        'vel': [4.0, 5.0, 6.0],
+        'owner_id': 7,
+        'lifetime': 8.0,
+        'distance_travelled': 9.0,
+    })
+    pos_array = store.pos
+    vel_array = store.vel
+    store.pos[0] += (10.0, 20.0, 30.0)
+    store.vel[0] *= 2.0
+    assert store.pos is pos_array
+    assert store.vel is vel_array
+    assert store.pos[0].tolist() == [11.0, 22.0, 33.0]
+    assert store.vel[0].tolist() == [8.0, 10.0, 12.0]
 def test_the_first_eligible_monster_in_order_is_hit():
     owner = make_thing(Monster, "owner", (0, 0, 0), team="red")
     things = [
