@@ -5,6 +5,7 @@ on:
     branches: ["**"]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 # Each tier is independent so a graphical failure cannot hide a core failure.
 jobs:
