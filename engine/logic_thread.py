@@ -28,11 +28,11 @@ from .constants import is_solid_world_brush, is_water_brush, brush_aabb_bounds
 from .brush_geometry import build_collision_mesh, brush_has_geometry
 from .prop_runtime import PropSession
 from .change_journal import JOURNAL, STATE, moved, touch
-from .mover_table import MoverTable
 from .entity_table import ENT_PROP
 from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
 from .cutscene_runtime import CutsceneRuntime
 from .logic_camera import LogicCamera
+from .logic_movers import LogicMovers, DOOR_DIRECTION_MAP
 from .logic_triggers import LogicTriggers, _trigger_activation, _trigger_damage, _trigger_is_once, _trigger_save
 from .projectile_table import ProjectileStore
 from .effect_table import EffectStore
@@ -99,16 +99,6 @@ from .monster_constants import (
 
 # Import the extracted MonsterAI class and new thread
 from .monster_ai import MonsterAI, MonsterAIThread
-
-# FIX#1: Map door_direction editor strings to movement vectors
-DOOR_DIRECTION_MAP = {
-    'up':    [0,  1,  0],
-    'down':  [0, -1,  0],
-    'north': [0,  0,  1],
-    'south': [0,  0, -1],
-    'east':  [1,  0,  0],
-    'west':  [-1, 0,  0],
-}
 
 # Qt key constants
 Key_W = 0x57
@@ -1853,140 +1843,52 @@ class LogicThread(threading.Thread):
         self.camera.update_camera_transition(delta)
 
     # =========================================================================
-    # MOVER/DOOR INITIALIZATION
+    # =========================================================================
+    # MOVER/DOOR RUNTIME
     # =========================================================================
 
+    def _mover_runtime(self):
+        """Return the mover/door runtime, creating it for lightweight test doubles."""
+        runtime = getattr(self, "mover_runtime", None)
+        if runtime is None:
+            runtime = LogicMovers(self)
+            self.mover_runtime = runtime
+        return runtime
+
     def _movers(self):
-        """The dense mover table, made on first use (also for a LogicThread
-        built without ``__init__``, as some tests do)."""
-        table = self.__dict__.get('_mover_table')
-        if table is None:
-            table = self._mover_table = MoverTable()
-        return table
+        return self._mover_runtime()._movers()
 
     @property
     def mover_states(self):
-        """``brush index -> state`` for the linear movers: a mapping over the
-        dense mover columns, read and written as the dicts it used to hold."""
-        return self._movers().movers.states
+        return self._mover_runtime().mover_states
 
     @mover_states.setter
     def mover_states(self, states):
-        self._movers().movers.replace_states(self.movers, states)
+        self._mover_runtime().mover_states = states
 
     @property
     def door_states(self):
-        """``brush index -> state`` for the doors; see :attr:`mover_states`."""
-        return self._movers().doors.states
+        return self._mover_runtime().door_states
 
     @door_states.setter
     def door_states(self, states):
-        self._movers().doors.replace_states(self.doors, states)
+        self._mover_runtime().door_states = states
 
     def _init_movers(self):
-        self.mover_path_states = {}
-        self.movers = []
-        states = {}
-        for i, brush in enumerate(self.brushes):
-            if brush.get('is_mover'):
-                self.movers.append((i, brush))
-                if 'original_pos' not in brush:
-                    brush['original_pos'] = list(brush['pos'])
-
-                # FIX: initialise rotation_yaw if mover rotates
-                if brush.get('rotate', False) and 'rotation_yaw' not in brush:
-                    brush['rotation_yaw'] = 0.0
-
-                path_target = brush.get('path_target', '')
-                if path_target and brush.get('start_on', False):
-                    self.mover_path_states[i] = {
-                        'current_node': path_target,
-                        'lerp_t':       0.0,
-                        'origin':       list(brush['pos']),
-                        'waiting':      False,
-                        'wait_remaining': 0.0,
-                    }
-                elif not brush.get('move_once', False):
-                    states[i] = {'progress': 0.0, 'forward': True}
-        # The rows are built from self.movers, so the states go in after it.
-        self.mover_states = states
-        # PERF: cache the brush-only view of self.movers — was rebuilt via a
-        # list comprehension every tick in _tick_play_mode.
-        self._mover_brush_list = [b for _, b in self.movers]
+        return self._mover_runtime()._init_movers()
 
     def _reset_movers(self):
-        self.movers = []
-        for i, brush in enumerate(self.brushes):
-            if brush.get('is_mover') and 'original_pos' in brush:
-                brush['pos'] = list(brush['original_pos'])
-                moved(brush)
-        self.mover_states = {}
-        self._mover_brush_list = []
+        return self._mover_runtime()._reset_movers()
 
     def _init_doors(self):
-        self.doors = []
-        states = {}
-        for i, brush in enumerate(self.brushes):
-            if brush.get('is_door'):
-                # Resolve runtime parameters from editor properties without mutating the source brush
-                speed = float(brush.get('door_speed', brush.get('speed', 128.0)))
-                distance = float(brush.get('door_distance', brush.get('distance', 128.0)))
-                dir_str = brush.get('door_direction', '')
-                direction = DOOR_DIRECTION_MAP.get(dir_str, [0, 1, 0])
-
-                if 'door_lip' in brush:
-                    lip = float(brush.get('door_lip', 0.0))
-                    distance = max(1.0, distance - lip)
-
-                self.doors.append((i, brush))
-                if 'original_pos' not in brush:
-                    brush['original_pos'] = list(brush['pos'])
-                # PERF: DOOR_DIRECTION_MAP entries are already unit vectors,
-                # and door direction never changes at runtime, so normalize
-                # once here instead of every tick in _update_doors.
-                states[i] = {
-                    'progress': 0.0,
-                    'state': 'closed',
-                    'open_timer': 0.0,
-                    'speed': speed,
-                    'distance': distance,
-                    'direction': direction,
-                    # Scalar unit-direction tuple (DOOR_DIRECTION_MAP entries are
-                    # already unit vectors). Kept as plain Python floats -- not a
-                    # NumPy array -- so the per-tick offset maths below produces
-                    # ordinary floats and brush['pos'] stays JSON-serialisable.
-                    '_direction_np': (float(direction[0]), float(direction[1]),
-                                      float(direction[2])),
-                }
-        self.door_states = states
-        # PERF: cache the brush-only view of self.doors — was rebuilt via a
-        # list comprehension every tick in _tick_play_mode.
-        self._door_brush_list = [b for _, b in self.doors]
-        # The brush list the door/mover indices were taken from (_init_movers
-        # always runs first); see _build_entity_caches.
-        self._moving_rows = tuple(self.brushes)
+        return self._mover_runtime()._init_doors()
 
     def _reset_doors(self):
-        self.doors = []
-        for i, brush in enumerate(self.brushes):
-            if brush.get('is_door') and 'original_pos' in brush:
-                brush['pos'] = list(brush['original_pos'])
-                moved(brush)
-        self.door_states = {}
-        self._door_brush_list = []
+        return self._mover_runtime()._reset_doors()
 
     def _trigger_door_open(self, door_idx: int, brush: dict):
-        """Start opening a door if it is currently closed or closing."""
-        if door_idx not in self.door_states:
-            return
-        state = self.door_states[door_idx]
-        if state['state'] in ('closed', 'closing'):
-            state['state'] = 'opening'
-            if self.io_manager:
-                self.io_manager.fire_output(brush, 'OnOpen')
-            self._plugin_emit("door_open", door=brush, door_idx=door_idx)
+        return self._mover_runtime()._trigger_door_open(door_idx, brush)
 
-    # =========================================================================
     # MAIN LOOP
     # =========================================================================
             
@@ -2217,43 +2119,7 @@ class LogicThread(threading.Thread):
             self._build_entity_caches()
 
     def _reindex_moving_brushes(self):
-        """Re-key mover and door state after the brush list changed in play.
-
-        The states are keyed by brush index, taken when Play started, and I/O
-        finds a door or mover by its *current* index: deleting any brush
-        before them shifted every later index, so an Open aimed at one door
-        opened whichever door now held its old index. The lists are derived
-        again and each surviving brush keeps its state, found by identity;
-        a brush added in play starts as Play would have started it.
-        """
-        movers, doors = self.movers, self.doors
-        m_states, d_states = self.mover_states, self.door_states
-        paths = self.mover_path_states
-        kept_m = {id(b): (dict(m_states[i]) if i in m_states else None,
-                          paths.get(i))
-                  for i, b in movers}
-        kept_d = {id(b): (dict(d_states[i]) if i in d_states else None)
-                  for i, b in doors}
-        self._init_movers()
-        self._init_doors()
-        m_new = {i: dict(s) for i, s in self.mover_states.items()}
-        for i, brush in self.movers:
-            if id(brush) in kept_m:
-                state, path = kept_m[id(brush)]
-                m_new.pop(i, None)
-                self.mover_path_states.pop(i, None)
-                if state is not None:
-                    m_new[i] = state
-                if path is not None:
-                    self.mover_path_states[i] = path
-        self.mover_states = m_new
-        d_new = {i: dict(s) for i, s in self.door_states.items()}
-        for i, brush in self.doors:
-            if id(brush) in kept_d:
-                d_new.pop(i, None)
-                if kept_d[id(brush)] is not None:
-                    d_new[i] = kept_d[id(brush)]
-        self.door_states = d_new
+        return self._mover_runtime()._reindex_moving_brushes()
 
     # =========================================================================
     # WORLD PAUSE
@@ -2978,101 +2844,19 @@ class LogicThread(threading.Thread):
                     return
 
     # =========================================================================
+    # =========================================================================
     # MOVER/DOOR UPDATES
     # =========================================================================
 
     def _update_movers(self, delta: float):
-        """Advance every mover one tick (see :mod:`engine.mover_table`).
-
-        One vectorised pass, taken row by row in list order wherever a row
-        fires I/O, follows a path, or is starting from nothing, so that the
-        synchronous I/O it triggers lands exactly where it used to.
-        """
-        self._movers().tick_movers(self, delta)
+        return self._mover_runtime()._update_movers(delta)
 
     def _update_mover_path(self, idx: int, brush: dict, delta: float):
-        state = self.mover_path_states[idx]
-        node_name = state['current_node']
-        if not node_name:
-            return
-
-        node = self._find_path_node_by_name(node_name)
-        if node is None:
-            debug_log("IO", f"Mover path: node '{node_name}' not found — stopping")
-            self.mover_path_states.pop(idx, None)
-            return
-
-        if state['waiting']:
-            state['wait_remaining'] -= delta
-            if state['wait_remaining'] <= 0.0:
-                state['waiting'] = False
-                next_name = node.get_next_node_name()
-                if next_name:
-                    state['origin'] = list(brush['pos'])
-                    state['current_node'] = next_name
-                    state['lerp_t'] = 0.0
-                else:
-                    brush['start_on'] = False
-                    if self.io_manager:
-                        self.io_manager.fire_output(brush, 'OnFullyClosed')
-                    self.mover_path_states.pop(idx, None)
-            return
-
-        origin = np.array(state['origin'], dtype=float)
-        target = np.array(node.pos, dtype=float)
-        segment_vec = target - origin
-        segment_len = np.linalg.norm(segment_vec)
-
-        if segment_len < 1.0:
-            state['lerp_t'] = 1.0
-        else:
-            speed = brush.get('speed', 64.0) * node.get_speed()
-            state['lerp_t'] += (speed * delta) / segment_len
-
-        if state['lerp_t'] >= 1.0:
-            state['lerp_t'] = 1.0
-            new_pos = target
-            move_delta = new_pos - np.array(brush['pos'])
-            brush['pos'] = new_pos.tolist()
-
-            if self.player and self.player.ground_object == brush:
-                self.player.pos += glm.vec3(float(move_delta[0]), float(move_delta[1]), float(move_delta[2]))
-
-            if self.io_manager:
-                # Per-node arrival event (fires at every PathNode in the chain),
-                # plus OnFullyOpen for backward compatibility with existing maps.
-                self.io_manager.fire_output(brush, 'OnPathNodeReached', value=node_name)
-                self.io_manager.fire_output(brush, 'OnFullyOpen')
-
-            wait_time = node.get_wait_time()
-            if wait_time > 0.0:
-                state['waiting'] = True
-                state['wait_remaining'] = wait_time
-            else:
-                next_name = node.get_next_node_name()
-                if next_name:
-                    state['origin'] = list(brush['pos'])
-                    state['current_node'] = next_name
-                    state['lerp_t'] = 0.0
-                else:
-                    if self.io_manager:
-                        self.io_manager.fire_output(brush, 'OnFullyClosed')
-                    self.mover_path_states.pop(idx, None)
-        else:
-            t = state['lerp_t']
-            eased = 4 * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 3) / 2
-            new_pos = origin + segment_vec * eased
-            move_delta = new_pos - np.array(brush['pos'])
-            brush['pos'] = new_pos.tolist()
-
-            if self.player and self.player.ground_object == brush:
-                self.player.pos += glm.vec3(float(move_delta[0]), float(move_delta[1]), float(move_delta[2]))
+        return self._mover_runtime()._update_mover_path(idx, brush, delta)
 
     def _update_doors(self, delta: float):
-        """Advance every door one tick (see :mod:`engine.mover_table`)."""
-        self._movers().tick_doors(self, delta)
+        return self._mover_runtime()._update_doors(delta)
 
-    # =========================================================================
     # PARENTED LIGHTS
     # =========================================================================
 
