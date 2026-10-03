@@ -945,6 +945,19 @@ def test_logic_camera_json_cutscene_stop_restores_actor():
     assert list(actor.pos) == pytest.approx([5.0, 0.0, 0.0])
 
 
+def test_logic_camera_has_explicit_cutscene_file_setting():
+    from editor.things import LogicCamera
+
+    camera = LogicCamera([0.0, 0.0, 0.0])
+    assert camera.properties["cutscene_file"] == ""
+    assert camera.properties["path_target"] == ""
+
+    camera.properties["cutscene_file"] = "cutscenes/my_scene.json"
+    camera.properties["path_target"] = "camera_path_start"
+    assert camera.properties["cutscene_file"] == "cutscenes/my_scene.json"
+
+
+
 def test_logic_camera_start_uses_cutscene_file_runtime():
     from types import SimpleNamespace
     from editor.io_handlers import register_all_input_handlers
