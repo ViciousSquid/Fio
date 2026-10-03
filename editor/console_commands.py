@@ -1815,8 +1815,15 @@ entity to drive them from the I/O system.</i><br>
 
         matches = []
         for brush in self.editor_state.brushes:
+            effective = (
+                'trigger' if brush.get('is_trigger')
+                else 'mover' if brush.get('is_mover')
+                else 'door' if brush.get('is_door')
+                else brush.get('type', '')
+            )
             if (
-                self._normalise_delete_type(brush.get('type', '')) == wanted
+                self._normalise_delete_type(effective) == wanted
+                or self._normalise_delete_type(brush.get('type', '')) == wanted
                 or self._normalise_delete_type(brush.get('classname', '')) == wanted
             ):
                 matches.append(brush)
@@ -1851,21 +1858,30 @@ entity to drive them from the I/O system.</i><br>
                 self.editor_state.things.remove(entity)
 
         if self._in_play_mode():
-            # The session's entity index would keep simulating (a monster,
-            # a timer) and resolving deleted objects, and its collision set
-            # would keep deleted walls solid.
-            self._rebuild_logic_entity_caches()
-            if deleted_brush:
-                mark = getattr(self._logic_thread(), 'mark_collision_dirty', None)
-                if mark is not None:
-                    mark()
+            # Hold the tick lock across removal, cache rebuild, and collision
+            # invalidation so a tick can never observe a partial batch.
+            logic = self._logic_thread()
+            lock = getattr(logic, '_tick_lock', None) if logic is not None else None
+            if lock is not None:
+                with lock:
+                    self._rebuild_logic_entity_caches()
+                    if deleted_brush:
+                        mark = getattr(logic, 'mark_collision_dirty', None)
+                        if mark is not None:
+                            mark()
+            else:
+                self._rebuild_logic_entity_caches()
+                if deleted_brush:
+                    mark = getattr(logic, 'mark_collision_dirty', None)
+                    if mark is not None:
+                        mark()
 
         self.main_window.update_all_ui()
         return len(entities)
 
     def _confirm_bulk_delete(self, entities, type_name):
         """Ask before deleting a whole entity type."""
-        display_name = type(entities[0]).__name__ if entities else type_name
+        display_name = type_name
         count = len(entities)
         noun = "entity" if count == 1 else "entities"
         try:
@@ -1904,7 +1920,7 @@ entity to drive them from the I/O system.</i><br>
                 return
 
             count = self._remove_entities(entities)
-            debug_log("Info", f"Deleted {count} {type(entities[0]).__name__} entity(s)")
+            debug_log("Info", f"Deleted {count} {type_name} entity(s)")
             return
 
         name = args.strip()
