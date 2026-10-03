@@ -3807,6 +3807,17 @@ class LogicThread(threading.Thread):
             if isinstance(rows, list)
         }
         events = [event for event in (data.get("events") or []) if isinstance(event, dict)]
+        # Cutscene I/O events directly address an entity input.  Older files
+        # authored before this UI change used source/output terminology; accept
+        # those too so existing cutscenes continue to load.
+        for event in events:
+            if event.get("type") == "io":
+                if not event.get("target_id") and event.get("source_id"):
+                    event["target_id"] = event.get("source_id")
+                if not event.get("target_name") and event.get("source_name"):
+                    event["target_name"] = event.get("source_name")
+                if not event.get("input") and event.get("output"):
+                    event["input"] = event.get("output")
         events.sort(key=lambda event: self._cutscene_number(event.get("time", 0.0)))
         duration = 0.0
         for row in camera_rows:
@@ -4076,22 +4087,25 @@ class LogicThread(threading.Thread):
             event = events[index]
             index += 1
             cs['next_io_event'] = index
-            source = None
-            source_id = str(event.get('source_id', '') or '')
-            source_name = str(event.get('source_name', '') or '')
-            if source_id:
-                source = self._find_entity_by_id(source_id)
-            if source is None and source_name:
-                source = self._find_entity_by_name(source_name)
-            output = str(event.get('output', '') or '').strip()
-            if source is None:
+            target_id = str(event.get('target_id', '') or '')
+            target_name = str(event.get('target_name', '') or '')
+            input_name = str(event.get('input', '') or '').strip()
+            if not target_name and target_id:
+                target = self._find_entity_by_id(target_id)
+                target_name = str(getattr(target, 'properties', {}).get('name', '') or target_id)
+            if target_name and input_name:
+                self.io_manager._execute_input(
+                    target_name,
+                    input_name,
+                    event.get('parameter'),
+                    "Cutscene",
+                    target_id=target_id,
+                )
+            else:
                 debug_log(
                     "IO",
-                    f"Cutscene I/O source '{source_name or source_id}' not found; "
-                    f"cannot fire '{output}'.",
+                    f"Cutscene I/O target '{target_name or target_id}' has no input to fire.",
                 )
-            elif output:
-                self.io_manager.fire_output(source, output, event.get('parameter'))
 
             # An output may stop, replace or otherwise mutate the cinematic.
             if self.cinematic_state is not cs:
