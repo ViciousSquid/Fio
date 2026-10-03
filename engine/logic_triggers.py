@@ -89,10 +89,12 @@ class LogicTriggers:
         Containers are cleared in place when they already exist, so any
         holder of a reference (e.g. ``player_in_triggers``) sees the reset.
         """
+        logic = self.logic
+
         def fresh(name, factory):
-            current = getattr(self, name, None)
+            current = getattr(logic, name, None)
             if current is None:
-                setattr(self, name, factory())
+                setattr(logic, name, factory())
             else:
                 current.clear()
 
