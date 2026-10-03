@@ -551,6 +551,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         return None
 
     def _preview_start(self):
+        self._refresh_actor_objects_from_state()
         if self._preview_camera_baseline is None:
             camera = self.main_window.view_3d.camera
             self._preview_camera_baseline = {
@@ -568,6 +569,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._preview_duration = self._preview_end_time()
 
     def _preview_apply(self):
+        self._refresh_actor_objects_from_state()
         for aid, frames in self.actor_tracks.items():
             actor = self.actor_objects.get(aid)
             pose = self._preview_pose(frames, self._preview_time)
@@ -661,6 +663,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._preview_apply()
 
     def _preview_stop_and_restore(self):
+        self._refresh_actor_objects_from_state()
         self._preview_timer.stop()
         self._preview_rate = 0.0
         self.play_button.setText("▶ Play")
@@ -980,6 +983,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._select_actor_id(str(selected[0].properties.get("id", "")))
 
     def _remove_selected_actors(self):
+        self._refresh_actor_objects_from_state()
         item = self.actor_list.currentItem()
         if item is None:
             return
@@ -1017,12 +1021,14 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.events = cleaned_events
 
         if aid in self.temporary_actor_ids:
-            actor = self.actor_objects.get(aid)
-            if actor is not None:
-                try:
-                    self.main_window.state.things.remove(actor)
-                except ValueError:
-                    pass
+            state = self.main_window.state
+            state.things[:] = [
+                actor for actor in state.things
+                if not (
+                    getattr(actor, "properties", {}).get("_cutscene_temporary")
+                    and str(getattr(actor, "properties", {}).get("id", "")) == aid
+                )
+            ]
             self.temporary_actor_ids.discard(aid)
         self.actor_objects.pop(aid, None)
         self._refresh_actor_lists()
@@ -1033,6 +1039,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._refresh_summary()
 
     def _actor_selection_changed(self):
+        self._refresh_actor_objects_from_state()
         aid = self._current_actor_id()
         actor = self.actor_objects.get(aid) if aid else None
         if actor is not None:
@@ -1047,6 +1054,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._refresh_waypoints()
 
     def _focus_selected_actor(self):
+        self._refresh_actor_objects_from_state()
         actor = self.actor_objects.get(self._current_actor_id())
         if actor is None:
             return
@@ -1129,6 +1137,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         )
 
     def _add_waypoint(self, from_current=True):
+        self._refresh_actor_objects_from_state()
         aid = self._current_actor_id()
         actor = self.actor_objects.get(aid)
         if not aid or actor is None:
@@ -1608,7 +1617,15 @@ class CutsceneWizard(QtWidgets.QDialog):
             name += ".json"
         return name.split("/")[-1].split("\\")[-1]
 
+    def _refresh_actor_objects_from_state(self):
+        """Rebind actor references after EditorState undo/redo reconstruction."""
+        for aid in list(self.actor_meta):
+            actor = self._find_map_actor(aid)
+            if actor is not None:
+                self.actor_objects[aid] = actor
+
     def _actor_definition(self, aid):
+        self._refresh_actor_objects_from_state()
         actor = self.actor_objects.get(aid)
         if actor is None:
             return None
@@ -1628,14 +1645,15 @@ class CutsceneWizard(QtWidgets.QDialog):
     def _delete_temporary_actors(self):
         if self._cleaned:
             return
-        for aid in list(self.temporary_actor_ids):
-            actor = self.actor_objects.get(aid)
-            if actor is None:
-                continue
-            try:
-                self.main_window.state.things.remove(actor)
-            except ValueError:
-                pass
+        state = self.main_window.state
+        ids = set(self.temporary_actor_ids)
+        state.things[:] = [
+            actor for actor in state.things
+            if not (
+                getattr(actor, "properties", {}).get("_cutscene_temporary")
+                and str(getattr(actor, "properties", {}).get("id", "")) in ids
+            )
+        ]
         self.temporary_actor_ids.clear()
         self._cleaned = True
         try:
@@ -1815,16 +1833,15 @@ class CutsceneWizard(QtWidgets.QDialog):
             "cutscene_stop_on_escape": self.stop_escape.isChecked(),
             "cutscene_io_events": [dict(e) for e in self.events if e.get("type") == "io"],
         }
+        self.main_window.save_state()
         if camera is None:
             camera = LogicCamera(pos=pos, properties=props)
             self.main_window.state.things.append(camera)
         else:
-            camera.pos = glm.vec3(*pos)
+            camera.pos = [float(v) for v in pos]
             camera.properties.update(props)
         self._delete_temporary_actors()
-        self.main_window.state.save_state()
         self.main_window.set_selected_object(camera)
-        self.main_window.unsaved_changes = True
         self.main_window.update_all_ui()
         self._saved = True
         self.main_window.show_toast(f"Applied cutscene {Path(filename).name} to current map")
