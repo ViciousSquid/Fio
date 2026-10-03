@@ -24,9 +24,13 @@ class _View:
         self._hud_style = 1
         self._hud_opacity = 100.0
         self._hud_fade_enabled = True
+        self.play_mode = True
         self.style_calls = []
         self.opacity_calls = []
         self.fade_calls = []
+        self.message_calls = []
+        self.message2_calls = []
+        self.message3_calls = []
         self.logic_thread = _Logic()
 
     def set_hud_style(self, style, font_name=None):
@@ -47,6 +51,15 @@ class _View:
         self.fade_calls.append(bool(enabled))
         self.logic_thread.set_hud_fade_enabled(enabled)
         return True
+
+    def show_view_message(self, text):
+        self.message_calls.append(text)
+
+    def show_view_message2(self, text):
+        self.message2_calls.append(text)
+
+    def show_view_message3(self, text):
+        self.message3_calls.append(text)
 
 
 class _MainWindow:
@@ -123,3 +136,20 @@ def test_hudfade_updates_runtime_logic_and_persists():
     assert window.view_3d._hud_fade_enabled is False
     assert window.view_3d.logic_thread.hud_fade is False
     assert window.config.getboolean("Display", "hudfade") is False
+
+
+@pytest.mark.parametrize(
+    ("command", "attribute"),
+    [
+        ("message \"Hello world\"", "message_calls"),
+        ("message2 \"Second line\"", "message2_calls"),
+        ("message3 \"Third line\"", "message3_calls"),
+    ],
+)
+def test_message_commands_reach_play_view_overlay(command, attribute):
+    window = _MainWindow()
+    handler = ConsoleCommandHandler(window)
+
+    handler.handle_command(command)
+
+    assert getattr(window.view_3d, attribute) == [command.split(" ", 1)[1].strip('"'')]
