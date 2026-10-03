@@ -225,6 +225,8 @@ class DebugConsole(QWidget):
     PLUGIN_LOAD_COLOR  = '#66BB6A'  # Green — loaded / enabled / bundled
     PLUGIN_ERROR_COLOR = '#EF5350'  # Red — failures / errors
     PLUGIN_DEBUG_COLOR = '#42A5F5'  # Blue — debug / init messages
+    CUTSCENE_LOAD_COLOR = '#66BB6A'  # Green — successful cutscene load
+    CUTSCENE_ERROR_COLOR = '#EF5350'  # Red — missing/invalid/failed cutscene
 
     # Substrings that mark a plugin message as an error (red) or a load (green).
     # Checked case-insensitively; errors take precedence over loads.
