@@ -175,6 +175,13 @@ def test_the_old_settings_key_is_still_honoured():
     assert "'lowpower_mode'" in renderer_src
 
 
+def test_shadow_shader_uses_the_authoritative_capacity():
+    source = shaders.SHADOW_GLSL
+    assert f"#define MAX_SHADOW_LIGHTS {shaders.MAX_SHADOW_LIGHTS}" in source
+    for index in range(shaders.MAX_SHADOW_LIGHTS):
+        assert f"shadowMaps[{index}]" in source
+
+
 def test_light_ubo_cpu_layout_matches_std140_light_struct():
     """CPU record must byte-match the GLSL std140 `struct Light`."""
     import numpy as np
