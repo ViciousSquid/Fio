@@ -280,7 +280,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         cv.addLayout(camera_row)
         self.camera_keys_list = QtWidgets.QListWidget()
         self.camera_keys_list.setMinimumHeight(120)
-        cv.addWidget(self.camera_keys_list)
+        cv.addWidget(self.camera_keys_list, 1)
         camera_buttons = QtWidgets.QHBoxLayout()
         camera_buttons.addWidget(QtWidgets.QLabel("Selected time"))
         self.camera_edit_time = QtWidgets.QDoubleSpinBox()
@@ -298,8 +298,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         camera_buttons.addStretch(1)
         cv.addLayout(camera_buttons)
         self.camera_keys_list.currentRowChanged.connect(self._camera_keyframe_selected)
-        camera_layout.addWidget(camera_box)
-        camera_layout.addStretch(1)
+        camera_layout.addWidget(camera_box, 1)
         tabs.addTab(camera_page, "Camera Keyframes")
 
         # -----------------------------------------------------------------
