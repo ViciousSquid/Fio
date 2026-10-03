@@ -24,7 +24,6 @@ import random
 from .threaded_game_state import ThreadedGameState
 from .player import Player
 from .camera import Camera
-from .prop_runtime import PropSession
 from .change_journal import moved, touch
 from .cutscene_runtime import CutsceneRuntime
 from .logic_camera import LogicCamera
@@ -92,17 +91,8 @@ except ImportError:
     def debug_log(category, message):
         print(f"[{category}] {message}")
 
-# Monster AI constants (still needed for initialisation)
-from .monster_constants import (
-    WEAPON_DAMAGE,
-    NON_FIRING_WEAPONS,
-    WEAPON_SHOOT_SOUND,
-    MONSTER_PROJECTILE_MAX_DIST,
-    MONSTER_PROJECTILE_SPRITE_SIZE,
-)
-
 # Import the extracted MonsterAI class and new thread
-from .monster_ai import MonsterAI, MonsterAIThread
+from .monster_ai import MonsterAI
 
 # Qt key constants
 Key_W = 0x57
