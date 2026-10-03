@@ -1381,7 +1381,7 @@ class LogicThread(threading.Thread):
             
         else:
             if self.cinematic_state and self.cinematic_state.get('json_cutscene'):
-                self._finish_json_cutscene(self.cinematic_state)
+                self._finish_json_cutscene(self.cinematic_state, fire_finished=False)
             self._stop_monster_ai()
             self._reset_trigger_state()
             self.fired_once_triggers.clear()
@@ -3800,7 +3800,7 @@ class LogicThread(threading.Thread):
         }
         return True
 
-    def _finish_json_cutscene(self, cs):
+    def _finish_json_cutscene(self, cs, fire_finished=True):
         for aid, snapshot in (cs.get("actor_initial") or {}).items():
             actor = snapshot.get("entity")
             if actor is None or actor not in self.things:
@@ -3825,7 +3825,7 @@ class LogicThread(threading.Thread):
             self._build_entity_caches()
         entity = cs.get("entity")
         self.cinematic_state = None
-        if entity is not None and self.io_manager:
+        if fire_finished and entity is not None and self.io_manager:
             self.io_manager.fire_output(entity, "OnFinished")
 
     def _update_json_cutscene(self, delta):
