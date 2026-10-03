@@ -4142,6 +4142,26 @@ class LogicThread(threading.Thread):
     # the crossover without changing either implementation.
     PROJECTILE_DENSE_THRESHOLD = 100
 
+    def _publish_projectile_render_snapshot(self):
+        """Snapshot live projectile positions for the render buffer.
+
+        Rendering can run a frame without a whole simulation tick. Keep the
+        published positions derived from the authoritative ProjectileStore so
+        those frames cannot accidentally publish an empty/stale projectile set.
+        The copy is intentional: the renderer never aliases mutable simulation
+        storage.
+        """
+        with self._monster_lock:
+            projectiles = self._projectile_store()
+            count = len(projectiles)
+            if count:
+                self._projectile_positions = projectiles.pos[:count].astype(
+                    np.float32, copy=True
+                )
+            else:
+                self._projectile_positions = _NO_PROJECTILES
+            return self._projectile_positions
+
     def _update_monster_projectiles(self, delta: float):
         """Use a scalar path for small swarms and the dense path for large ones."""
 
@@ -4813,10 +4833,11 @@ class LogicThread(threading.Thread):
             write_state.shot_ready = False
         write_state.camera_transition_active = bool(self.camera_transition)
 
-        write_state.projectiles = (
-            getattr(self, '_projectile_positions', _NO_PROJECTILES)
-            if self.play_mode and getattr(self, '_monster_projectiles', None)
-            else _NO_PROJECTILES)
+        if self.play_mode and getattr(self, '_monster_projectiles', None):
+            self._publish_projectile_render_snapshot()
+        else:
+            self._projectile_positions = _NO_PROJECTILES
+        write_state.projectiles = self._projectile_positions
         write_state.monster_debug_active = self.monster_ai.monster_debug_active
         write_state.monster_debug_rays = list(self.monster_ai._debug_rays)
 
