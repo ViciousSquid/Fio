@@ -383,7 +383,11 @@ class CutsceneWizard(QtWidgets.QDialog):
         footer.addWidget(self.summary, 1)
         self.load_button = QtWidgets.QPushButton("Load")
         self.save_button = QtWidgets.QPushButton("Save")
-        self.apply_button = QtWidgets.QPushButton("Apply to Map")
+        self.apply_button = QtWidgets.QPushButton("Apply")
+        self.apply_button.setStyleSheet(
+            "QPushButton { background: #e67e22; color: white; font-weight: bold; padding: 6px 12px; }"
+            "QPushButton:hover { background: #f39c12; }"
+        )
         self.cancel_button = QtWidgets.QPushButton("Cancel")
         self.save_button.setDefault(True)
         self.cancel_button.setDefault(False)
