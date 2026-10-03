@@ -15,6 +15,7 @@ import types
 import pytest
 
 from engine.logic_thread import LogicThread
+from engine.projectile_table import ProjectileStore
 from tests.helpers.worlds import make_thing
 
 pytest.importorskip("PyQt5", reason="editor.things needs PyQt5")
@@ -32,10 +33,14 @@ class _Host:
     _update_monster_projectiles = LogicThread._update_monster_projectiles
     _projectile_monster_candidates = LogicThread._projectile_monster_candidates
     _projectile_wall_candidates = LogicThread._projectile_wall_candidates
+    _projectile_store = LogicThread._projectile_store
 
     def __init__(self, things, projectiles):
         self.things = things
-        self._monster_projectiles = projectiles
+        self._monster_projectiles = ProjectileStore()
+        for position, owner in projectiles:
+            self._monster_projectiles.add(
+                position, (0.0, 0.0, 0.0), id(owner), 5, 5.0)
         self._collision_brushes_cache = []
         self._spatial_grid = None
         self._monster_lock = threading.RLock()
@@ -73,33 +78,20 @@ def _reference_hit(things, pos, owner_id):
     return None
 
 
-def _projectile(pos, owner):
-    return {'pos': list(pos), 'vel': [0.0, 0.0, 0.0], 'damage': 5,
-            'owner_id': id(owner), 'distance_travelled': 0.0,
-            'lifetime': 5.0}
 
 
 
-
-def test_projectile_store_reuses_dense_columns_without_dict_to_array_rebuild():
-    from engine.projectile_table import ProjectileStore
-
+def test_projectile_store_is_numeric_and_dense():
     store = ProjectileStore()
-    store.append({
-        'pos': [1.0, 2.0, 3.0],
-        'vel': [4.0, 5.0, 6.0],
-        'owner_id': 7,
-        'lifetime': 8.0,
-        'distance_travelled': 9.0,
-    })
-    pos_array = store.pos
-    vel_array = store.vel
-    store.pos[0] += (10.0, 20.0, 30.0)
-    store.vel[0] *= 2.0
-    assert store.pos is pos_array
-    assert store.vel is vel_array
-    assert store.pos[0].tolist() == [11.0, 22.0, 33.0]
-    assert store.vel[0].tolist() == [8.0, 10.0, 12.0]
+    store.add((1.0, 2.0, 3.0), (4.0, 5.0, 6.0), 7, 8, 9)
+    assert len(store) == 1
+    assert store.pos.dtype == np.float64
+    assert store.vel.dtype == np.float64
+    assert store.owner_id.dtype == np.int64
+    assert store.damage[0] == 8
+    assert store.lifetime[0] == 9
+
+
 def test_the_first_eligible_monster_in_order_is_hit():
     owner = make_thing(Monster, "owner", (0, 0, 0), team="red")
     things = [
@@ -112,10 +104,10 @@ def test_the_first_eligible_monster_in_order_is_hit():
         make_thing(Monster, "second", (0, 0, 10), team="blue"),
         make_thing(Monster, "far", (500, 0, 0), team="blue"),
     ]
-    host = _Host(things, [_projectile((0, 64, 0), owner)])
+    host = _Host(things, [((0, 64, 0), owner)])
     host._update_monster_projectiles(0.0)
     assert host.hits == ["target"]
-    assert host._monster_projectiles == []          # consumed
+    assert len(host._monster_projectiles) == 0
 
 
 def test_batch_matches_the_walk_over_random_crowds():
@@ -131,7 +123,7 @@ def test_batch_matches_the_walk_over_random_crowds():
         owner = rng.choice(things)
         pos = (rng.uniform(-150, 150), rng.uniform(0, 100), rng.uniform(-150, 150))
         expected = _reference_hit(things, pos, id(owner))
-        host = _Host(things, [_projectile(pos, owner)])
+        host = _Host(things, [(pos, owner)])
         host._update_monster_projectiles(0.0)
         assert host.hits == ([expected] if expected else []), trial
 
@@ -141,8 +133,8 @@ def test_a_monster_killed_by_one_projectile_is_not_hit_by_the_next():
     first = make_thing(Monster, "first", (0, 0, 20), team="blue")
     second = make_thing(Monster, "second", (0, 0, 40), team="blue")
     things = [owner, first, second]
-    host = _Host(things, [_projectile((0, 64, 30), owner),
-                          _projectile((0, 64, 30), owner)])
+    host = _Host(things, [((0, 64, 30), owner),
+                          ((0, 64, 30), owner)])
 
     def kill(monster, damage, attacker=None):
         host.hits.append(monster.properties['name'])
