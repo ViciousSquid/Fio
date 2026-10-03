@@ -1,0 +1,137 @@
+"""
+Player runtime for LogicThread.
+
+Owns primary-player and split-screen Player 2 movement/input mechanics plus
+the player's water-state sound feedback. LogicThread remains the tick-order
+orchestrator and compatibility surface.
+"""
+
+import math
+import glm
+
+# Qt key values used by the engine's input state.
+_KEY_W = 0x57
+_KEY_S = 0x53
+_KEY_A = 0x41
+_KEY_D = 0x44
+_KEY_SPACE = 0x20
+_KEY_C = 0x43
+
+_WATER_LOUDNESS = 0.7
+
+
+class LogicPlayer:
+    """Runtime mechanics for the engine's player actors."""
+
+    def __init__(self, logic):
+        self.logic = logic
+
+    def update_primary(self, delta, keys, mouse_dx, mouse_dy):
+        """Apply primary-player look, movement and physics for one tick."""
+        logic = self.logic
+        player = logic.player
+        if not player:
+            return
+
+        sensitivity = 0.002
+        player.angle -= mouse_dx * sensitivity
+        player.pitch -= mouse_dy * sensitivity
+        player.pitch = max(-1.5, min(1.5, player.pitch))
+
+        move_dir = glm.vec3(0)
+        if _KEY_W in keys:
+            move_dir.z += 1
+        if _KEY_S in keys:
+            move_dir.z -= 1
+        if _KEY_A in keys:
+            move_dir.x += 1
+        if _KEY_D in keys:
+            move_dir.x -= 1
+
+        jump = _KEY_SPACE in keys
+        crouch = _KEY_C in keys
+
+        player.update(
+            delta,
+            move_dir,
+            jump,
+            crouch,
+            logic._collision_brushes_cache,
+            logic._mover_brush_list,
+            logic._door_brush_list,
+            logic.terrain,
+            spatial_grid=getattr(logic, '_spatial_grid', None),
+        )
+
+    def update_player2(self, delta):
+        """Apply split-screen Player 2 input, look and physics for one tick."""
+        logic = self.logic
+        if not logic.player2 or logic.player2_dead:
+            return
+
+        p2 = logic.game_state.get_p2_input()
+        p2_dir = glm.vec3(float(p2['move_x']), 0.0, float(p2['move_z']))
+
+        turn_input = float(p2['look_dx'])
+        logic.player2.angle -= turn_input * logic.p2_turn_sensitivity * delta
+        logic.player2.pitch -= float(p2['look_dy']) * 0.002
+        logic.player2.pitch = max(-1.5, min(1.5, logic.player2.pitch))
+
+        logic.player2.update(
+            delta,
+            p2_dir,
+            bool(p2['jump']),
+            False,
+            logic._collision_brushes_cache,
+            logic._mover_brush_list,
+            logic._door_brush_list,
+            logic.terrain,
+            spatial_grid=getattr(logic, '_spatial_grid', None),
+        )
+
+    def update_water_sounds(self, delta):
+        """Queue sounds and monster-noise events from player water state."""
+        logic = self.logic
+        player = logic.player
+        if not player:
+            return
+
+        in_water = bool(player.in_water)
+
+        if in_water and not logic._player_was_in_water:
+            logic.game_state.queue_sound(
+                {'file': 'enterwater.wav', 'volume': 1.0})
+            logic._emit_noise_event(
+                player.pos,
+                source='water_enter',
+                loudness=_WATER_LOUDNESS,
+            )
+            logic._waterwalk_timer = 0.0
+        elif not in_water and logic._player_was_in_water:
+            logic.game_state.queue_sound(
+                {'file': 'exitwater.wav', 'volume': 1.0})
+            logic._emit_noise_event(
+                player.pos,
+                source='water_exit',
+                loudness=_WATER_LOUDNESS,
+            )
+
+        logic._player_was_in_water = in_water
+
+        wading = (
+            in_water
+            and not player.swimming
+            and player.on_ground
+        )
+        horiz_speed = math.hypot(
+            player.velocity.x,
+            player.velocity.z,
+        )
+        if wading and horiz_speed > 20.0:
+            logic._waterwalk_timer -= delta
+            if logic._waterwalk_timer <= 0.0:
+                logic.game_state.queue_sound(
+                    {'file': 'waterwalk.wav', 'volume': 0.8})
+                logic._waterwalk_timer = logic.WATERWALK_INTERVAL
+        else:
+            logic._waterwalk_timer = 0.0
