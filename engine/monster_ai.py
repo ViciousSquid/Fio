@@ -56,20 +56,13 @@ _NEAREST_ENEMY_MONOLITHIC_MAX_COUNT = 1024
 
 
 def _flatten_to_ground(direction):
-    """A unit *horizontal* direction from a 3D one, or ``None`` when there is none.
+    """Return a unit horizontal direction in the XZ plane, or ``None``.
 
-    Ground monsters walk in XZ only, so their movement direction is the 3D
-    direction with Y dropped and renormalised.  When the target is directly
-    above or below - a flying player over a grunt's head, a monster standing on
-    the player's own column - that leaves the zero vector, and ``glm.normalize``
-    of the zero vector is NaN, not an error.  The NaN then flows into the
-    monster's position and out into ``SpatialGrid.overlaps_wall``, which raises
-    ``ValueError: cannot convert float NaN to integer`` on the AI thread and
-    stops every monster in the level.
-
-    Returning ``None`` for that case lets the caller simply not move this tick,
-    which is the right answer: there is no horizontal direction to move in.
-    """
+Ground monsters ignore Y when moving.  A target directly above or below the
+monster produces a zero horizontal vector; normalising that vector would
+produce NaNs that can poison the spatial collision queries.  ``None`` makes
+the caller leave the monster in place for that tick.
+"""
     flat = glm.vec3(direction.x, 0.0, direction.z)
     length = glm.length(flat)
     if length < 1e-6:
@@ -220,15 +213,12 @@ class MonsterAI:
     DENSE_UPDATE = True
 
     def _view_rect(self):
-        """The screen's box ``(hx, hz)`` around the player, or None.
+        """Return the overhead simulation rectangle ``(hx, hz)`` or ``None``.
 
-        Set only while a Big World session fits its tiers to an overhead
-        camera (``sim_view_rect``, which the session publishes). The one gate
-        for this pass's camera-derived behaviour -- leaving parked monsters
-        out, throttling off-screen ones: None with no session, and None in a
-        session whose camera is first person, so every monster runs every
-        tick exactly as before.
-        """
+Big World publishes ``sim_view_rect`` only for the fitted overhead camera.
+First-person sessions return ``None``, preserving the normal all-monster
+tick path.
+"""
         if getattr(self.lt, '_bigworld', None) is None:
             return None
         rect = getattr(self.lt, 'sim_view_rect', None)
@@ -239,19 +229,13 @@ class MonsterAI:
     OFFSCREEN_INTERVAL = 0.2
 
     def _offscreen_rows(self, monsters, delta, player_pos, rect):
-        """``(row_delta, sit_out)`` for this tick, or ``(None, None)`` when
-        every monster runs at full rate with *delta*.
+        """Return per-row elapsed time and the rows to skip this tick.
 
-        Only with a fitted view (*rect*, see :meth:`_view_rect`). Off screen is
-        measured here, every tick, from each monster's own position against
-        the screen's box around the player -- not from a tier stamp, which is
-        per cell and lags a monster that walks. A monster off screen sits
-        ticks out (``sit_out``) and runs once every :attr:`OFFSCREEN_INTERVAL`
-        with all the time it sat out (``row_delta``); one that walks on screen
-        runs at once with whatever it is still owed. So every monster covers
-        exactly the time that passed, at a fraction of the cost while nobody
-        can see it, and none is stepped coarsely on screen.
-        """
+This throttling is active only for a fitted overhead view.  Off-screen
+monsters accumulate elapsed time and run every ``OFFSCREEN_INTERVAL``;
+visible monsters continue at the normal tick rate.  A delayed row receives
+all accumulated time when it runs, so simulation time is not lost.
+"""
         if rect is None or not monsters:
             self._offscreen_accum = 0.0
             self._owed = {}
@@ -1168,15 +1152,11 @@ class MonsterAI:
     #:       480          68         12.770 -> 5.096 ms   2.51x
     #:
     def _find_closest_enemy_team_monster(self, thing, my_team: str, player_pos: glm.vec3, max_range: float):
-        """Find the closest living monster on a DIFFERENT team within range.
-        Returns the monster or None.  Team-based enemies are targeted first
-        before the player.
+        """Find the closest living monster on a different team within ``max_range``.
 
-        Answered from the tick's dense batch when there is one: the same
-        question is answered for every monster at once rather than once per
-        monster. The scalar walk below remains only as a reference/fallback
-        for callers that cannot assemble the dense table.
-        """
+The dense tick path answers this for all monsters at once.  This helper is
+the scalar fallback for callers that do not have the dense table.
+"""
         if not my_team or MonsterThing is None:
             return None
 
