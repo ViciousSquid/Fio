@@ -3740,6 +3740,7 @@ class LogicThread(threading.Thread):
                 "entity": actor,
                 "pos": self._cutscene_vec3(actor.pos),
                 "yaw": self._cutscene_yaw(actor),
+                "had_disabled": "disabled" in actor.properties,
                 "disabled": actor.properties.get("disabled", False),
             }
             actor.properties["_cutscene_runtime"] = True
@@ -3809,8 +3810,10 @@ class LogicThread(threading.Thread):
                 self._set_cutscene_yaw(
                     actor, snapshot.get("yaw", self._cutscene_yaw(actor))
                 )
-            if "disabled" in snapshot:
+            if snapshot.get("had_disabled"):
                 actor.properties["disabled"] = snapshot["disabled"]
+            else:
+                actor.properties.pop("disabled", None)
             actor.properties.pop("_cutscene_runtime", None)
         spawned = list(cs.get("spawned_actors") or [])
         for actor in spawned:
