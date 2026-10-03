@@ -4993,7 +4993,11 @@ class LogicThread(threading.Thread):
                     return self._hud_health_alpha
 
                 elapsed = max(0.0, at - started)
-                if elapsed < self._hud_health_fade_in_duration:
+                # Treat the exact scheduled endpoint as the completed fade-in.
+                # This keeps the state transition deterministic when callers sample
+                # at ``started + duration`` and the perf-counter subtraction lands
+                # one ULP below the nominal duration.
+                if elapsed + 1e-12 < self._hud_health_fade_in_duration:
                     t = elapsed / self._hud_health_fade_in_duration
                     self._hud_health_alpha = (
                         self._hud_health_fade_from
