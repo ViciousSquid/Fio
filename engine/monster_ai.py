@@ -1161,11 +1161,6 @@ class MonsterAI:
     #:       240          29          2.677 -> 1.428 ms   1.87x
     #:       480          68         12.770 -> 5.096 ms   2.51x
     #:
-    #: The same idiom as ``FLOOR_BATCH_MIN_BODIES`` and
-    #: ``render_cull.min_numpy_count``, and for the same reason: blanket
-    #: vectorisation would make the common small scene slower.
-    ENEMY_BATCH_MIN_MONSTERS = 64
-
     def _find_closest_enemy_team_monster(self, thing, my_team: str, player_pos: glm.vec3, max_range: float):
         """Find the closest living monster on a DIFFERENT team within range.
         Returns the monster or None.  Team-based enemies are targeted first
