@@ -23,6 +23,19 @@ _RENDERER_CLASSES = {
     'Forward':  Renderer_F,
 }
 
+_HUD_FONT_FILES = {
+    1: "Rushfordclean-rgz89.otf",
+    2: "O.K.Retro.otf",
+    3: "HornetDisplay-Regular.ttf",
+    4: "LCDAT&TPhoneTimeDate.ttf",
+}
+_HUD_FONT_FALLBACKS = {
+    1: "Rushford Clean",
+    2: "O.K. Retro",
+    3: "HornetDisplay",
+    4: "LCD AT&T Phone Time Date",
+}
+
 
 def register_renderer(name, cls):
     """Register a swappable renderer class under *name* (used by ``switch_renderer``).
@@ -446,32 +459,151 @@ class QtGameView(QOpenGLWidget):
         margin = max(4, int(bottom * 0.012))
         return bottom - margin - max(0, ink_bottom)
 
-    def _load_health_font(self):
-        """Load the bundled Rushford Clean font for the numeric health HUD."""
-        fonts_dir = os.path.join(os.getcwd(), 'assets', 'fonts')
-        candidates = []
+    def _load_hud_font_families(self):
+        """Load the bundled HUD fonts once and remember their Qt families."""
+        fonts_dir = os.path.join(os.getcwd(), "assets", "fonts")
+        self._hud_font_families = {}
+        self._hud_font_available = {}
+        for style, filename in _HUD_FONT_FILES.items():
+            family = _HUD_FONT_FALLBACKS[style]
+            available = False
+            try:
+                path = os.path.join(fonts_dir, filename)
+                if os.path.isfile(path):
+                    font_id = QFontDatabase.addApplicationFont(path)
+                    if font_id >= 0:
+                        families = QFontDatabase.applicationFontFamilies(font_id)
+                        if families:
+                            family = families[0]
+                            available = True
+            except OSError:
+                pass
+            self._hud_font_families[style] = family
+            self._hud_font_available[style] = available
+
+    def _resolve_hud_font_family(self, selector):
+        """Resolve a known font or a safe font filename under assets/fonts."""
+        selector = str(selector or "").strip().strip('"').strip("'")
+        if not selector:
+            return None
+        needle = selector.lower()
+        for style, family in self._hud_font_families.items():
+            filename = _HUD_FONT_FILES[style]
+            stem = os.path.splitext(filename)[0]
+            if needle in (filename.lower(), stem.lower(), family.lower()):
+                return family
+
+        basename = os.path.basename(selector)
+        if basename != selector or not basename.lower().endswith((".ttf", ".otf")):
+            return None
+        path = os.path.join(os.getcwd(), "assets", "fonts", basename)
         try:
-            for filename in os.listdir(fonts_dir):
-                lower = filename.lower()
-                if 'rushford' not in lower:
-                    continue
-                if lower.endswith(('.ttf', '.otf')):
-                    candidates.append(filename)
+            if os.path.isfile(path):
+                font_id = QFontDatabase.addApplicationFont(path)
+                if font_id >= 0:
+                    families = QFontDatabase.applicationFontFamilies(font_id)
+                    if families:
+                        return families[0]
         except OSError:
-            candidates = []
+            pass
+        return None
 
-        for filename in sorted(candidates):
-            path = os.path.join(fonts_dir, filename)
-            font_id = QFontDatabase.addApplicationFont(path)
-            if font_id < 0:
-                continue
-            families = QFontDatabase.applicationFontFamilies(font_id)
-            if families:
-                return QFont(families[0], 56)
+    def _current_hud_font_family(self):
+        return self._hud_font_override or self._hud_font_families.get(
+            self._hud_style, self._hud_font_families.get(1, "Rushford Clean")
+        )
 
-        # Development fallback: use an installed copy if present. Once the
-        # bundled font is placed in assets/fonts, this path is not used.
-        return QFont("Rushford Clean", 56)
+    def _refresh_hud_status_font(self):
+        self._hud_status_font = QFont(self._current_hud_font_family(), 56)
+
+    def _reload_hud_settings(self):
+        """Reload persistent HUD settings and clear map-only runtime overrides."""
+        config = getattr(self.editor, "config", None)
+        try:
+            style = int(config.get("Display", "hudstyle", fallback="1"))
+        except (AttributeError, TypeError, ValueError):
+            style = 1
+        if style not in (0, 1, 2, 3, 4):
+            style = 1
+
+        try:
+            opacity = float(config.get("Display", "hudopacity", fallback="100"))
+        except (AttributeError, TypeError, ValueError):
+            opacity = 100.0
+        if not math.isfinite(opacity):
+            opacity = 100.0
+        opacity = max(0.0, min(100.0, opacity))
+
+        try:
+            fade = config.getboolean("Display", "hudfade", fallback=True)
+        except (AttributeError, TypeError, ValueError):
+            fade = True
+
+        self._hud_style = style
+        self._hud_opacity = opacity
+        self._hud_fade_enabled = fade
+        self._hud_font_override = None
+        self._hud_runtime_visible = None
+
+        if style == 4:
+            try:
+                selector = config.get("Display", "hudfont", fallback="")
+            except (AttributeError, TypeError, ValueError):
+                selector = ""
+            if selector:
+                self._hud_font_override = self._resolve_hud_font_family(selector)
+
+        self._refresh_hud_status_font()
+        logic_thread = getattr(self, "logic_thread", None)
+        if logic_thread is not None and hasattr(logic_thread, "set_hud_fade_enabled"):
+            logic_thread.set_hud_fade_enabled(self._hud_fade_enabled)
+
+    def set_hud_style(self, style, font_name=None):
+        """Apply a HUD style immediately; user commands persist separately."""
+        try:
+            style = int(style)
+        except (TypeError, ValueError):
+            return False
+        if style not in (0, 1, 2, 3, 4):
+            return False
+
+        font_override = None
+        if style == 4 and font_name:
+            font_override = self._resolve_hud_font_family(font_name)
+            if font_override is None:
+                return False
+
+        self._hud_style = style
+        self._hud_font_override = font_override
+        self._hud_runtime_visible = style != 0
+        self._refresh_hud_status_font()
+        self.update()
+        return True
+
+    def set_hud_opacity(self, opacity):
+        """Apply HUD opacity immediately; valid range is 0..100 inclusive."""
+        try:
+            opacity = float(opacity)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(opacity) or not 0.0 <= opacity <= 100.0:
+            return False
+        self._hud_opacity = opacity
+        self.update()
+        return True
+
+    def set_hud_fade_enabled(self, enabled):
+        """Enable/disable the damage-driven health HUD fade immediately."""
+        self._hud_fade_enabled = bool(enabled)
+        logic_thread = getattr(self, "logic_thread", None)
+        if logic_thread is not None and hasattr(logic_thread, "set_hud_fade_enabled"):
+            logic_thread.set_hud_fade_enabled(self._hud_fade_enabled)
+        self.update()
+        return True
+
+    def _load_health_font(self):
+        """Return the fixed Rushford font used by message-3."""
+        return QFont(self._hud_font_families.get(1, "Rushford Clean"), 56)
 
     def _init_hud_caches(self):
         self._hud_font = QFont("Arial", 11)
@@ -483,7 +615,17 @@ class QtGameView(QOpenGLWidget):
         self._sprites_font.setBold(True)
         self._death_title_font = QFont("Arial", 64, QFont.Bold)
         self._death_sub_font = QFont("Arial", 18)
+        self._load_hud_font_families()
+        self._hud_style = 1
+        self._hud_opacity = 100.0
+        self._hud_fade_enabled = True
+        self._hud_font_override = None
+        self._hud_runtime_visible = None
         self._hud_health_font = self._load_health_font()
+        self._hud_status_font = QFont(
+            self._hud_font_families.get(1, "Rushford Clean"), 56
+        )
+        self._reload_hud_settings()
         self._face_mode_font_top = QFont("Arial", 14, QFont.Bold)
         self._face_mode_font_bot = QFont("Arial", 10, QFont.Bold)
 
@@ -876,6 +1018,8 @@ class QtGameView(QOpenGLWidget):
         if self._thread_started:
             return
         self.logic_thread = LogicThread(self.game_state, self.editor.state, self.visibility_system)
+        if hasattr(self.logic_thread, "set_hud_fade_enabled"):
+            self.logic_thread.set_hud_fade_enabled(self._hud_fade_enabled)
         self.logic_thread.set_editor_camera(self.camera.pos, self.camera.yaw, self.camera.pitch, self.camera.fov)
         if hasattr(self.logic_thread, "set_camera_mode"):
             self.logic_thread.set_camera_mode(getattr(self, "camera_mode", "First Person"))
@@ -1727,7 +1871,13 @@ class QtGameView(QOpenGLWidget):
             self._draw_sprites_text(painter)
         if self.play_mode and getattr(self, 'show_render_menu', False):
             self._draw_render_menu(painter)
-        if self.play_mode and self.editor.config.getboolean('Display', 'show_hud', fallback=True):
+        _hud_visible_override = getattr(self, "_hud_runtime_visible", None)
+        _hud_visible = (
+            _hud_visible_override
+            if _hud_visible_override is not None
+            else self.editor.config.getboolean('Display', 'show_hud', fallback=True)
+        )
+        if self.play_mode and self._hud_style != 0 and _hud_visible:
             _ss_hud = (
                 getattr(self, 'splitscreen_mode', False)
                 and render_state is not None
@@ -1860,6 +2010,8 @@ class QtGameView(QOpenGLWidget):
         painter.drawText(10, 20, "Sprites")
 
     def _draw_hud(self, painter, render_state, viewport_width=None, viewport_height=None):
+        if getattr(self, "_hud_style", 1) == 0:
+            return
         # A LogicCamera owns the player's view completely: no HUD is shown
         # while the cinematic is running.
         if render_state is not None and getattr(
@@ -1887,13 +2039,14 @@ class QtGameView(QOpenGLWidget):
         hud_alpha = max(
             0.0, min(1.0, float(getattr(render_state, "hud_alpha", 1.0)))
         )
-        health_hud_alpha = max(
+        hud_opacity = 1.0 if self._hud_style == 3 else self._hud_opacity / 100.0
+        health_hud_alpha = 1.0 if self._hud_style == 3 else max(
             0.0, min(1.0, float(getattr(render_state, "hud_health_alpha", 0.5)))
         )
         # _draw_hud owns this painter opacity for everything it draws: weapon,
         # health/ammo, crosshair, messages, prompts, overhead icons and keys.
         painter.save()
-        painter.setOpacity(hud_alpha)
+        painter.setOpacity(hud_alpha * hud_opacity)
 
         # Draw the weapon before the status counts so the health indicator is
         # always visually on top of any weapon sprite.
@@ -1930,8 +2083,11 @@ class QtGameView(QOpenGLWidget):
                         painter.drawPixmap(x, y, scaled.width(), scaled.height(), flash_pixmap)
                         painter.restore()
 
-        health_font = QFont(self._hud_health_font)
-        health_font.setPointSize(max(42, min(68, int(viewport_height * 0.085))))
+        style = self._hud_style
+        health_font = QFont(self._hud_status_font)
+        health_font.setPointSize(
+            24 if style == 3 else max(42, min(68, int(viewport_height * 0.085)))
+        )
         painter.setFont(health_font)
         health_ratio = max(
             0.0,
@@ -1941,15 +2097,7 @@ class QtGameView(QOpenGLWidget):
                 if float(max_health) > 0.0 else 0.0,
             ),
         )
-        # Full health keeps the established orange; as health falls, blend
-        # continuously toward a much darker red.
-        full_r, full_g, full_b = self._hud_health_orange.red(), self._hud_health_orange.green(), self._hud_health_orange.blue()
-        low_r, low_g, low_b = 100, 0, 0
-        health_color = QColor(
-            int(low_r + (full_r - low_r) * health_ratio),
-            int(low_g + (full_g - low_g) * health_ratio),
-            int(low_b + (full_b - low_b) * health_ratio),
-        )
+        health_color = self._hud_health_orange
         painter.setPen(health_color)
         health_text = str(int(health))
         metrics = QFontMetrics(health_font)
@@ -1960,7 +2108,7 @@ class QtGameView(QOpenGLWidget):
         # Health is the large orange count. Only the health count gets the
         # independent dim/alert fade; ammo follows the normal whole-HUD opacity.
         painter.save()
-        painter.setOpacity(hud_alpha * health_hud_alpha)
+        painter.setOpacity(hud_alpha * hud_opacity * health_hud_alpha)
         painter.setPen(self._hud_count_shadow_pen)
         painter.drawText(health_x + 2, health_y + 2, health_text)
         painter.setPen(health_color)
@@ -1968,9 +2116,10 @@ class QtGameView(QOpenGLWidget):
         painter.restore()
 
         if active_weapon in ('gun1', 'gun2'):
-            ammo_font = QFont(self._hud_health_font)
-            ammo_font.setPointSize(max(
-                22, min(36, int(viewport_height * 0.045))))
+            ammo_font = QFont(health_font) if style == 3 else QFont(self._hud_status_font)
+            ammo_font.setPointSize(
+                24 if style == 3 else max(22, min(36, int(viewport_height * 0.045)))
+            )
             ammo_text = (
                 "∞"
                 if active_weapon == 'gun1'
@@ -2108,6 +2257,8 @@ class QtGameView(QOpenGLWidget):
         painter.restore()
 
     def _draw_hud_splitscreen(self, painter, render_state):
+        if getattr(self, "_hud_style", 1) == 0:
+            return
         if render_state is not None and getattr(
             render_state, "cinematic_camera_active", False
         ):
@@ -2125,8 +2276,9 @@ class QtGameView(QOpenGLWidget):
         hud_alpha = max(
             0.0, min(1.0, float(getattr(render_state, "hud_alpha", 1.0)))
         )
+        hud_opacity = 1.0 if self._hud_style == 3 else self._hud_opacity / 100.0
         painter.save()
-        painter.setOpacity(hud_alpha)
+        painter.setOpacity(hud_alpha * hud_opacity)
         painter.setPen(QColor(255, 200, 50))
         painter.setFont(self._hud_font)
         painter.drawText(8, 22, "P1")
@@ -2134,34 +2286,20 @@ class QtGameView(QOpenGLWidget):
         p2_health = getattr(render_state, 'player2_health', 100)
         p2_max_health = getattr(render_state, 'player2_max_health', 100)
         p2_dead = getattr(render_state, 'player2_dead', False)
-        health_hud_alpha = max(
+        health_hud_alpha = 1.0 if self._hud_style == 3 else max(
             0.0, min(1.0, float(getattr(render_state, "hud_health_alpha", 0.5)))
         )
         painter.save()
         painter.setClipRect(half, 0, half, h)
         margin = 1
-        health_font = QFont(self._hud_health_font)
-        health_font.setPointSize(max(42, min(68, int(h * 0.085))))
+        health_font = QFont(self._hud_status_font)
+        health_font.setPointSize(
+            24 if self._hud_style == 3 else max(42, min(68, int(h * 0.085)))
+        )
         painter.save()
-        painter.setOpacity(hud_alpha * health_hud_alpha)
+        painter.setOpacity(hud_alpha * hud_opacity * health_hud_alpha)
         painter.setFont(health_font)
-        p2_health_ratio = max(
-            0.0,
-            min(
-                1.0,
-                float(p2_health) / float(p2_max_health)
-                if float(p2_max_health) > 0.0 else 0.0,
-            ),
-        )
-        full_r = self._hud_health_orange.red()
-        full_g = self._hud_health_orange.green()
-        full_b = self._hud_health_orange.blue()
-        low_r, low_g, low_b = 100, 0, 0
-        p2_health_color = QColor(
-            int(low_r + (full_r - low_r) * p2_health_ratio),
-            int(low_g + (full_g - low_g) * p2_health_ratio),
-            int(low_b + (full_b - low_b) * p2_health_ratio),
-        )
+        p2_health_color = self._hud_health_orange
         painter.setPen(p2_health_color)
         health_text = str(int(p2_health))
         metrics = QFontMetrics(health_font)
@@ -2412,8 +2550,12 @@ class QtGameView(QOpenGLWidget):
             self._play_mode_hint = "ESC to Exit, F12 Fullscreen"
             self._play_mode_hint_timer.start(3000)
 
+            self._reload_hud_settings()
+            self._hud_runtime_visible = None
             if self.logic_thread:
                 self.logic_thread.set_player(self.player)
+                if hasattr(self.logic_thread, "set_hud_fade_enabled"):
+                    self.logic_thread.set_hud_fade_enabled(self._hud_fade_enabled)
                 self.logic_thread.set_play_mode(True)
 
             if self.splitscreen_mode:
