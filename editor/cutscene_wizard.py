@@ -551,7 +551,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         return None
 
     def _preview_start(self):
-        self._refresh_actor_objects_from_state()
+        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
         if self._preview_camera_baseline is None:
             camera = self.main_window.view_3d.camera
             self._preview_camera_baseline = {
@@ -569,7 +569,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._preview_duration = self._preview_end_time()
 
     def _preview_apply(self):
-        self._refresh_actor_objects_from_state()
+        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
         for aid, frames in self.actor_tracks.items():
             actor = self.actor_objects.get(aid)
             pose = self._preview_pose(frames, self._preview_time)
@@ -663,7 +663,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._preview_apply()
 
     def _preview_stop_and_restore(self):
-        self._refresh_actor_objects_from_state()
+        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
         self._preview_timer.stop()
         self._preview_rate = 0.0
         self.play_button.setText("▶ Play")
@@ -983,7 +983,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._select_actor_id(str(selected[0].properties.get("id", "")))
 
     def _remove_selected_actors(self):
-        self._refresh_actor_objects_from_state()
+        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
         item = self.actor_list.currentItem()
         if item is None:
             return
@@ -1039,7 +1039,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._refresh_summary()
 
     def _actor_selection_changed(self):
-        self._refresh_actor_objects_from_state()
+        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
         aid = self._current_actor_id()
         actor = self.actor_objects.get(aid) if aid else None
         if actor is not None:
@@ -1054,7 +1054,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self._refresh_waypoints()
 
     def _focus_selected_actor(self):
-        self._refresh_actor_objects_from_state()
+        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
         actor = self.actor_objects.get(self._current_actor_id())
         if actor is None:
             return
@@ -1137,7 +1137,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         )
 
     def _add_waypoint(self, from_current=True):
-        self._refresh_actor_objects_from_state()
+        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
         aid = self._current_actor_id()
         actor = self.actor_objects.get(aid)
         if not aid or actor is None:
@@ -1625,7 +1625,7 @@ class CutsceneWizard(QtWidgets.QDialog):
                 self.actor_objects[aid] = actor
 
     def _actor_definition(self, aid):
-        self._refresh_actor_objects_from_state()
+        getattr(self, "_refresh_actor_objects_from_state", lambda: None)()
         actor = self.actor_objects.get(aid)
         if actor is None:
             return None
