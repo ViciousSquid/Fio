@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "id": "f30d9f82-f368-4407-b818-d752c02d8118",
+  "id": "789de7b8-31ea-4e99-9481-763438020b5a",
   "name": "showcase",
   "actors": [],
   "camera": [
@@ -165,11 +165,29 @@
       "time": 3.0,
       "type": "message",
       "line": "message",
-      "text": "ViviousSquid presents..."
+      "text": "ViciousSquid presents..."
+    },
+    {
+      "time": 5.0,
+      "type": "message",
+      "line": "message3",
+      "text": "Fio"
+    },
+    {
+      "time": 8.0,
+      "type": "message",
+      "line": "message3",
+      "text": "Fio"
     }
   ],
+  "map": {
+    "file": "_SHOWCASE.json"
+  },
   "settings": {
     "restore_actors": true,
-    "stop_on_escape": true
+    "stop_on_escape": true,
+    "trigger_mode": "manual",
+    "trigger_radius": 180.0,
+    "trigger_once": true
   }
 }
