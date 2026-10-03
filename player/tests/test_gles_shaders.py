@@ -23,7 +23,7 @@ FRAG_330_WITH_SAMPLERS = """#version 330 core
 precision mediump float;
 out vec4 FragColor;
 uniform sampler3D noiseTexture;
-uniform samplerCube shadowMaps[4];
+uniform samplerCube shadowMaps[8];
 uniform int active_lights;
 void main() {
     float n = texture(noiseTexture, vec3(0.0)).r;
