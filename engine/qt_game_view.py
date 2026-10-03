@@ -2017,6 +2017,16 @@ class QtGameView(QOpenGLWidget):
         painter.fillRect(5, 5, 80, 25, self._hud_sprites_bg_brush)
         painter.drawText(10, 20, "Sprites")
 
+    @staticmethod
+    def _hud_health_point_size(style, viewport_height):
+        """Return the responsive health-text size for a HUD style."""
+        if style == 3:
+            return 24
+        if style == 2:
+            # Style 2 is deliberately more compact than the default HUD.
+            return max(32, min(52, int(viewport_height * 0.065)))
+        return max(42, min(68, int(viewport_height * 0.085)))
+
     def _draw_hud(self, painter, render_state, viewport_width=None, viewport_height=None):
         if getattr(self, "_hud_style", 1) == 0:
             return
@@ -2094,7 +2104,7 @@ class QtGameView(QOpenGLWidget):
         style = self._hud_style
         health_font = QFont(self._hud_status_font)
         health_font.setPointSize(
-            24 if style == 3 else max(42, min(68, int(viewport_height * 0.085)))
+            self._hud_health_point_size(style, viewport_height)
         )
         painter.setFont(health_font)
         health_color = self._hud_health_orange
@@ -2294,7 +2304,7 @@ class QtGameView(QOpenGLWidget):
         margin = 1
         health_font = QFont(self._hud_status_font)
         health_font.setPointSize(
-            24 if self._hud_style == 3 else max(42, min(68, int(h * 0.085)))
+            self._hud_health_point_size(self._hud_style, h)
         )
         painter.save()
         painter.setOpacity(hud_alpha * hud_opacity * health_hud_alpha)
