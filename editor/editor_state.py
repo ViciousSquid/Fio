@@ -703,11 +703,31 @@ class EditorState:
                 list(cut) for cut in self.terrain_data.get('csg_subtractions', [])
                 if isinstance(cut, (list, tuple)) and len(cut) == 6
             ]
+        terrain_texture_stamps = []
+        if isinstance(self.terrain_data, dict):
+            for stamp in self.terrain_data.get('texture_stamps', []):
+                if not isinstance(stamp, dict):
+                    continue
+                bounds = stamp.get('bounds', [])
+                texture = str(stamp.get('texture', ''))
+                if len(bounds) != 4 or not texture:
+                    continue
+                try:
+                    terrain_texture_stamps.append({
+                        'bounds': [float(v) for v in bounds],
+                        'texture': texture,
+                        'angle': float(stamp.get('angle', 0.0)),
+                        'feather': float(stamp.get('feather', 0.0)),
+                        'opacity': float(stamp.get('opacity', 1.0)),
+                    })
+                except (TypeError, ValueError):
+                    continue
         return json.dumps({
             'brushes': self._serialize_brushes_for_undo(),
             'things': [t.to_dict() for t in self.things],
             'selection': self._selection_identifiers(),
             'terrain_csg_subtractions': terrain_csg,
+            'terrain_texture_stamps': terrain_texture_stamps,
         }, separators=(',', ':'), check_circular=False)
 
     def save_state(self):
