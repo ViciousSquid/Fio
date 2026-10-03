@@ -4123,23 +4123,20 @@ class LogicThread(threading.Thread):
                 return
     
             count = len(projectiles)
-            pos = projectiles.pos[:count].copy()
-            vel = projectiles.vel[:count].copy()
-            prev = pos.copy()
-            pos += vel * delta
-    
-            # Portal transit is inherently object/portal logic. It is only entered
-            # on maps that actually have portals; the dense movement path remains
-            # the normal case.
+            pos = projectiles.pos[:count]
+            vel = projectiles.vel[:count]
+            prev = None
+
+            # Portal transit needs the previous segment endpoint. The common
+            # no-portal path stays entirely in the persistent arrays.
             if Portal is not None and len(getattr(self, '_portal_things', ()) or ()):
+                prev = pos.copy()
+            pos += vel * delta
+            if prev is not None:
                 for i in range(count):
-                    projectiles.pos[i] = pos[i]
-                    projectiles.vel[i] = vel[i]
                     self._transit_projectile_through_portals(
                         projectiles, i, tuple(prev[i]))
-                    pos[i] = projectiles.pos[i]
-                    vel[i] = projectiles.vel[i]
-    
+
             speed = np.sqrt(
                 vel[:, 0] * vel[:, 0]
                 + vel[:, 1] * vel[:, 1]
