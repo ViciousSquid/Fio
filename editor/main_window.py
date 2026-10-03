@@ -2847,7 +2847,7 @@ class MainWindow(QMainWindow):
 
         terrain_cut = False
         if (target_brush is None and getattr(self, 'terrain', None) is not None
-                and brush_geometry.is_plain_aabb_brush(subtract_brush))
+                and brush_geometry.is_plain_aabb_brush(subtract_brush)):
             sub_pos = subtract_brush['pos']
             sub_size = subtract_brush['size']
             terrain_cut = self.terrain.subtract_aabb(
@@ -2859,7 +2859,7 @@ class MainWindow(QMainWindow):
                  sub_pos[2] + sub_size[2] / 2],
             )
         elif (target_brush is None and getattr(self, 'terrain', None) is not None
-              and not brush_geometry.is_plain_aabb_brush(subtract_brush))
+              and not brush_geometry.is_plain_aabb_brush(subtract_brush)):
             self.show_toast(
                 "Terrain CSG requires a plain axis-aligned box brush",
                 is_error=True,
