@@ -125,7 +125,7 @@ def detect_low_power_arm():
 # dynamic indexing (which is only legal from GLSL 4.00 onwards).  Keeping the
 # indices constant makes the shaders portable across desktop GL 3.3 drivers.
 # ==============================================================================
-MAX_SHADOW_LIGHTS = 4
+MAX_SHADOW_LIGHTS = 8
 
 # ==============================================================================
 # DYNAMIC LIGHT CAPACITY
@@ -208,17 +208,21 @@ def light_ubo_source(source):
     return result
 
 SHADOW_GLSL = """
-#define MAX_SHADOW_LIGHTS 4
+#define MAX_SHADOW_LIGHTS """ + str(MAX_SHADOW_LIGHTS) + """
 uniform samplerCube shadowMaps[MAX_SHADOW_LIGHTS];
 
 highp float _sampleShadowCube(int idx, highp vec3 dir) {
     if (idx == 0) return texture(shadowMaps[0], dir).r;
     else if (idx == 1) return texture(shadowMaps[1], dir).r;
     else if (idx == 2) return texture(shadowMaps[2], dir).r;
-    return texture(shadowMaps[3], dir).r;
+    else if (idx == 3) return texture(shadowMaps[3], dir).r;
+    else if (idx == 4) return texture(shadowMaps[4], dir).r;
+    else if (idx == 5) return texture(shadowMaps[5], dir).r;
+    else if (idx == 6) return texture(shadowMaps[6], dir).r;
+    return texture(shadowMaps[7], dir).r;
 }
 
-// idx          : which cube-map (0..3), or <0 for a non-shadow-casting light
+// idx          : which cube-map (0..7), or <0 for a non-shadow-casting light
 // fragToLight  : lightPos - fragmentWorldPos (world space)
 // farPlane     : the light radius used when the cube-map was rendered
 // ndotl        : diffuse term, used to scale the slope bias
@@ -251,7 +255,6 @@ float calcPointShadow(int idx, highp vec3 fragToLight, highp float farPlane, flo
     return shadow / 20.0;
 }
 """
-
 # ==============================================================================
 # DISTANCE FOG + GLOBAL AMBIENT
 # ------------------------------------------------------------------------------
