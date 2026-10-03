@@ -4134,24 +4134,6 @@
                     "delay": 0.0,
                     "fire_once": false,
                     "target_id": "d844f28e-ab97-4e88-ae45-c7e9a35d7f8a"
-                },
-                {
-                    "output": "OnPlayerSpawn",
-                    "target": "endboss",
-                    "input": "Disable",
-                    "parameter": "",
-                    "delay": 0.0,
-                    "fire_once": false,
-                    "target_id": "099ebf50-8199-43f5-93f9-9099f09a53ae"
-                },
-                {
-                    "output": "OnPlayerSpawn",
-                    "target": "endboss",
-                    "input": "Hide",
-                    "parameter": "",
-                    "delay": 0.0,
-                    "fire_once": false,
-                    "target_id": "099ebf50-8199-43f5-93f9-9099f09a53ae"
                 }
             ]
         },
