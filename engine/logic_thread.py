@@ -4080,7 +4080,7 @@ class LogicThread(threading.Thread):
         judged live when a hit is applied, because a hit earlier in the pass
         can kill a monster this list still holds.
         """
-        monsters = [t for t in self.things if isinstance(t, MonsterThing)]
+        monsters = self._monster_things
         empty = np.empty(0, dtype=np.int64)
         if not monsters or not len(pos32):
             return monsters, empty, empty
@@ -4342,9 +4342,9 @@ class LogicThread(threading.Thread):
                 projectiles.distance[:count],
             )
             live_count = len(survivors)
-            self._projectile_positions = (
-                projectiles.pos[:live_count].astype(np.float32, copy=True)
-            )
+            # Publication makes the immutable render snapshot copy once.
+            # Keep the simulation-side value as a view until then.
+            self._projectile_positions = projectiles.pos[:live_count]
         else:
             projectiles.clear()
             self._projectile_positions = _NO_PROJECTILES
@@ -4487,8 +4487,11 @@ class LogicThread(threading.Thread):
 
         # Published as an independent snapshot so the renderer can keep
         # consuming its frame even while the next logic tick mutates the store.
+        # Publication makes the immutable render snapshot copy once.
+        # The compacted store is authoritative until that boundary.
         self._projectile_positions = (
-            pos32[survivors].copy() if len(survivors) else _NO_PROJECTILES
+            projectiles.pos[:len(survivors)]
+            if len(survivors) else _NO_PROJECTILES
         )
     
 
