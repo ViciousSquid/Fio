@@ -1875,7 +1875,18 @@ entity to drive them from the I/O system.</i><br>
 
     def _confirm_bulk_delete(self, entities, type_name):
         """Ask before deleting a whole entity type."""
-        display_name = type_name
+        display_names = {
+            "trigger": "Trigger",
+            "mover": "Mover",
+            "door": "Door",
+            "pathnode": "PathNode",
+            "logiccamera": "LogicCamera",
+            "logiccommand": "LogicCommand",
+        }
+        display_name = display_names.get(
+            self._normalise_delete_type(type_name),
+            type_name,
+        )
         count = len(entities)
         noun = "entity" if count == 1 else "entities"
         try:
