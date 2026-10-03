@@ -1850,26 +1850,20 @@ entity to drive them from the I/O system.</i><br>
         self.editor_state.save_state()
         deleted_brush = False
 
-        for entity in entities:
-            if isinstance(entity, dict):
-                self.editor_state.brushes.remove(entity)
-                deleted_brush = True
-            else:
-                self.editor_state.things.remove(entity)
+        # The scene mutation and all derived runtime-cache updates must be
+        # one atomic operation while Play Mode is running.
+        logic = self._logic_thread() if self._in_play_mode() else None
+        lock = getattr(logic, '_tick_lock', None) if logic is not None else None
+        context = lock if lock is not None else contextlib.nullcontext()
+        with context:
+            for entity in entities:
+                if isinstance(entity, dict):
+                    self.editor_state.brushes.remove(entity)
+                    deleted_brush = True
+                else:
+                    self.editor_state.things.remove(entity)
 
-        if self._in_play_mode():
-            # Hold the tick lock across removal, cache rebuild, and collision
-            # invalidation so a tick can never observe a partial batch.
-            logic = self._logic_thread()
-            lock = getattr(logic, '_tick_lock', None) if logic is not None else None
-            if lock is not None:
-                with lock:
-                    self._rebuild_logic_entity_caches()
-                    if deleted_brush:
-                        mark = getattr(logic, 'mark_collision_dirty', None)
-                        if mark is not None:
-                            mark()
-            else:
+            if logic is not None:
                 self._rebuild_logic_entity_caches()
                 if deleted_brush:
                     mark = getattr(logic, 'mark_collision_dirty', None)
