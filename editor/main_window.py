@@ -25,7 +25,7 @@ from editor.things import Light, PlayerStart, Prop, update_all_counters_from_ent
 from editor.SettingsWindow import SettingsWindow
 from editor.ui import LAYOUT_VERSION, Ui_MainWindow
 from editor.tooltips import set_tooltips_enabled
-from engine.constants import TILE_SIZE
+from engine.constants import TILE_SIZE, brush_aabb_bounds
 from engine.glasses import DEFAULT_GLASSES, normalize_glasses
 from engine import brush_geometry
 from engine.change_journal import moved, touch
