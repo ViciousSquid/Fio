@@ -736,7 +736,10 @@ def test_logic_camera_json_cutscene_timed_io_fires_once_and_stops_cleanly():
     logic = _json_cutscene_logic(camera, [actor, source], recorder)
 
     data = {
-        "camera": [{"time": 0.0, "pos": [0, 10, 0], "yaw": 0, "pitch": 0, "fov": 90}],
+        "camera": [
+            {"time": 0.0, "pos": [0, 10, 0], "yaw": 0, "pitch": 0, "fov": 90},
+            {"time": 1.0, "pos": [0, 10, 10], "yaw": 0, "pitch": 0, "fov": 90},
+        ],
         "actors": [{"id": "actor-1", "name": "Actor"}],
         "actor_tracks": {},
         "events": [{
