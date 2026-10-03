@@ -1225,14 +1225,6 @@ class MonsterAI:
             )
             if not same_rows:
                 table.gather(monsters)
-        table = self.table
-        same_rows = (
-            table.count == len(monsters)
-            and all(a is b for a, b in zip(table.monsters, monsters))
-        )
-        if not same_rows:
-            table.gather(monsters)
-
         count = table.count
         if not count:
             return None
