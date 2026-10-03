@@ -716,6 +716,61 @@ def test_logic_camera_json_cutscene_restores_existing_actor_and_fires_outputs():
     assert [name for _, name, _ in recorder.calls] == ["OnFinished"]
 
 
+def test_logic_camera_json_cutscene_fight_temporarily_hands_monsters_to_ai():
+    from editor.things import LogicCamera, Monster
+    from engine.logic_thread import LogicThread
+
+    attacker = Monster(
+        [0.0, 0.0, 0.0],
+        {"id": "attacker", "name": "Attacker", "type": "monster"},
+    )
+    defender = Monster(
+        [64.0, 0.0, 0.0],
+        {"id": "defender", "name": "Defender", "type": "monster"},
+    )
+    camera = LogicCamera(
+        [0.0, 0.0, 0.0],
+        {"id": "camera-1", "name": "Camera"},
+    )
+    logic = _json_cutscene_logic(camera, [attacker, defender])
+    data = {
+        "camera": [
+            {"time": 0.0, "pos": [0, 10, 0], "yaw": 0, "pitch": 0, "fov": 90},
+            {"time": 1.0, "pos": [0, 10, 10], "yaw": 0, "pitch": 0, "fov": 90},
+        ],
+        "actors": [
+            {"id": "attacker", "name": "Attacker"},
+            {"id": "defender", "name": "Defender"},
+        ],
+        "actor_tracks": {},
+        "events": [{
+            "time": 0.0,
+            "type": "fight",
+            "duration": 0.5,
+            "attackers": ["attacker"],
+            "defenders": ["defender"],
+            "style": "normal",
+        }],
+        "settings": {"restore_actors": True},
+    }
+
+    assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
+    assert attacker.properties["disabled"] is True
+
+    LogicThread._update_cinematic_camera(logic, 0.1)
+
+    assert attacker.properties["disabled"] is False
+    assert attacker.properties["awake"] is True
+    assert attacker.properties["_aggro_target"] == id(defender)
+
+    LogicThread._update_cinematic_camera(logic, 0.4)
+
+    assert attacker.properties["disabled"] is True
+    assert "awake" not in attacker.properties
+    assert "_aggro_target" not in attacker.properties
+
+
+
 def test_logic_camera_json_cutscene_spawns_and_removes_temporary_actor():
     from editor.things import LogicCamera
     from engine.logic_thread import LogicThread
