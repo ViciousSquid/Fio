@@ -382,7 +382,7 @@ class MonsterAI:
             woke = seen.copy()
             teamed = ~seen & (t.team[:n][watching] >= 0)
             if teamed.any():
-                nearest = self._enemy_batch(MONSTER_SIGHT_RANGE)
+                nearest = self._enemy_batch(MONSTER_SIGHT_RANGE, t)
                 for i in np.flatnonzero(teamed):
                     row = int(watching[i])
                     if nearest is not None:
@@ -581,7 +581,7 @@ class MonsterAI:
         teamed = ~has_aggro & (t.team[rows] >= 0)
         if teamed.any():
             if nearest is None:
-                nearest = self._enemy_batch(MONSTER_SIGHT_RANGE)
+                nearest = self._enemy_batch(MONSTER_SIGHT_RANGE, t)
             teamed_idx = np.flatnonzero(teamed)
             if nearest is not None:
                 query_rows = rows[teamed_idx]
@@ -1186,13 +1186,12 @@ class MonsterAI:
             team_code = self._enemy_team_codes.get(my_team, -1)
             if (row is not None and self.table.team[row] == team_code
                     and self._enemy_answered[row]):
-                    and self._enemy_answered[row]):
                 nearest = int(self._enemy_nearest[row])
                 return self._enemy_monsters[nearest] if nearest >= 0 else None
 
         return self._find_closest_enemy_scalar(thing, my_team, max_range)
 
-    def _enemy_batch(self, max_range: float):
+    def _enemy_batch(self, max_range: float, table=None):
         """This tick's nearest enemy for every monster, as one dense pass.
 
         MonsterTable already contains the gathered positions, team codes,
@@ -1210,14 +1209,22 @@ class MonsterAI:
         self._enemy_nearest = None
         self._enemy_range = max_range
 
-        monsters = getattr(self, '_tick_monsters', None)
-        if monsters is None:
-            monsters = getattr(self.lt, '_monster_things', None)
-        if monsters is None:
-            monsters = getattr(self.lt, 'things', None)
-        if not monsters:
-            return None
+        if table is None:
+            monsters = getattr(self, '_tick_monsters', None)
+            if monsters is None:
+                monsters = getattr(self.lt, '_monster_things', None)
+            if monsters is None:
+                monsters = getattr(self.lt, 'things', None)
+            if not monsters:
+                return None
 
+            table = self.table
+            same_rows = (
+                table.count == len(monsters)
+                and all(a is b for a, b in zip(table.monsters, monsters))
+            )
+            if not same_rows:
+                table.gather(monsters)
         table = self.table
         same_rows = (
             table.count == len(monsters)
@@ -1287,6 +1294,7 @@ class MonsterAI:
         found = active & (best_dist <= limit)
         nearest[found] = best[found]
         return nearest
+
     def _find_closest_enemy_scalar(self, thing, my_team: str, max_range: float):
         """The per-monster walk: the batch's reference, and its fallback."""
         my_pos = glm.vec3(thing.pos)
