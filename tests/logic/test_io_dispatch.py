@@ -716,6 +716,59 @@ def test_logic_camera_json_cutscene_restores_existing_actor_and_fires_outputs():
     assert [name for _, name, _ in recorder.calls] == ["OnFinished"]
 
 
+def test_logic_camera_json_cutscene_spawns_and_removes_temporary_actor():
+    from editor.things import LogicCamera
+    from engine.logic_thread import LogicThread
+
+    camera = LogicCamera(
+        [0.0, 0.0, 0.0],
+        {"id": "camera-1", "name": "Camera"},
+    )
+    logic = _json_cutscene_logic(camera, [])
+    data = {
+        "camera": [
+            {"time": 0.0, "pos": [0, 10, 0], "yaw": 0, "pitch": 0, "fov": 90},
+            {"time": 1.0, "pos": [0, 10, 10], "yaw": 0, "pitch": 0, "fov": 90},
+        ],
+        "actors": [{
+            "id": "spawned-1",
+            "name": "Spawned",
+            "spawn": True,
+            "definition": {
+                "type": "monster",
+                "pos": [2, 0, 3],
+                "yaw": 0.5,
+                "properties": {
+                    "type": "monster",
+                    "name": "Spawned",
+                    "monster_type": "human",
+                },
+            },
+        }],
+        "actor_tracks": {
+            "spawned-1": [
+                {"time": 0.0, "pos": [2, 0, 3], "yaw": 0.5},
+                {"time": 1.0, "pos": [8, 0, 9], "yaw": 1.0},
+            ],
+        },
+        "events": [],
+        "settings": {"restore_actors": True},
+    }
+
+    assert len(logic.things) == 1
+    assert logic._start_json_cutscene(camera, "cutscenes/test.json", data)
+    assert len(logic.things) == 2
+    spawned = logic.cinematic_state["actors"]["spawned-1"]
+    assert spawned in logic.things
+    assert spawned.properties["_cutscene_runtime"] is True
+
+    LogicThread._update_cinematic_camera(logic, 1.0)
+
+    assert logic.cinematic_state is None
+    assert spawned not in logic.things
+
+
+
 def test_logic_camera_json_cutscene_timed_io_fires_once_and_stops_cleanly():
     from editor.things import LogicCamera, Monster
     from engine.logic_thread import LogicThread
