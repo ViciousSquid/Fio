@@ -2304,9 +2304,13 @@ entity to drive them from the I/O system.</i><br>
         )
 
     def cmd_pos(self, args):
-        """pos — Show the live world coordinates of the active camera."""
-        self.main_window.show_camera_position_toast()
-        debug_log("Info", "Camera position overlay enabled")
+        """pos — Open the live camera-position floating window."""
+        view_3d = getattr(self.main_window, "view_3d", None)
+        if view_3d is None or not hasattr(view_3d, "show_pos_window"):
+            debug_log("Error", "Camera position window is unavailable.")
+            return
+        view_3d.show_pos_window()
+        debug_log("Info", "Camera position window opened")
 
     def cmd_setpos(self, args):
         if not self._require_play_mode("setpos"):
