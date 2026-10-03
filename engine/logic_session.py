@@ -1,0 +1,491 @@
+"""Play-session lifecycle delegated from LogicThread.
+
+Owns play-mode enter/exit, native save/load, session cache teardown, monster
+thread lifetime/reset, and player-spawn I/O initialisation. LogicThread keeps
+the public/private compatibility surface as thin delegation wrappers.
+"""
+
+from __future__ import annotations
+
+import os
+import threading
+import time
+
+from .change_journal import JOURNAL, STATE
+from .logic_combat import NO_PROJECTILES as _NO_PROJECTILES
+from .monster_ai import MonsterAIThread
+from .prop_runtime import PropSession
+
+try:
+    from editor.things import (
+        Speaker,
+        Prop as PropThing,
+        Light,
+        Monster as MonsterThing,
+        PlayerStart,
+    )
+except ImportError:
+    Speaker = None
+    PropThing = None
+    Light = None
+    MonsterThing = None
+    PlayerStart = None
+
+
+class LogicSession:
+    """Runtime lifecycle for a LogicThread play session."""
+
+    def __init__(self, logic):
+        self.logic = logic
+
+    def apply_play_mode(self, enabled: bool):
+        logic = self.logic
+        logic.play_mode = enabled
+
+        # A pause belongs to the session that took it: a new session, or the
+        # editor after one, never starts frozen by a request nobody released.
+        with logic._world_pause_lock:
+            logic._world_pause_owners = frozenset()
+
+        # Likewise a camera ceiling: a session that sets one (Big World) sets
+        # it again from its play-start hook, which runs after this.
+        logic.overhead_height_limit = None
+
+        if enabled:
+            # A new Play session clears any previous fault marker.
+            logic._tick_faulted = False
+            logic._gui_fault_teardown_requested = False
+            logic._tick_fault_message = ""
+
+            if hasattr(logic.editor_state, "config"):
+                logic.p2_turn_sensitivity = float(
+                    logic.editor_state.config.get(
+                        "Controls",
+                        "p2_turn_sensitivity",
+                        fallback=10.0,
+                    )
+                )
+
+            logic._init_movers()
+            logic._init_doors()
+            logic._init_parented_lights()
+            logic._init_parented_portals()
+
+            # Bake swept-mesh collision for angled (clipped/convex) brushes so
+            # they collide as real slopes/wedges. Must run before the spatial
+            # grid is populated below so the grid indexes them by true bounds.
+            logic._prepare_angled_brush_collision()
+
+            logic._model_collision_brushes = (
+                logic._build_model_collision_brushes()
+            )
+            logic._physics_body_brushes = [
+                b
+                for b in logic._model_collision_brushes
+                if b.get("_physics_body")
+            ]
+            logic._refresh_collision_brushes_cache()
+
+            # Runtime effect state belongs to this play session, not authoring.
+            logic.effect_store.begin_session(logic.things)
+
+            # Reset player stats.
+            logic.player_health = 100
+            logic.player_max_health = 100
+            logic.player_dead = False
+            logic.god_mode = False
+            logic.buddha_mode = False
+            logic.notarget = False
+
+            # Reset collection state.
+            logic._reset_trigger_state()
+            logic.collected_keys.clear()
+            for thing in logic.things:
+                if PropThing and isinstance(thing, PropThing):
+                    # Restores what the author set; forcing carry here made every
+                    # Prop -- scenery models included -- carryable.
+                    thing.reset_collection()
+            if logic._props is not None:
+                logic._props.start()
+
+            # Reset speaker/interaction state.
+            logic.active_speakers.clear()
+            logic.hurt_trigger_timers.clear()
+            logic.current_hud_message = ""
+            logic.current_hud_key_name = None
+
+            # Reset water sound state (no spurious enter/exit on spawn).
+            logic._player_was_in_water = False
+            logic._waterwalk_timer = 0.0
+
+            logic.gate_inputs = {}
+            logic.timer_states = {}
+
+            # Reset active weapon / ammunition.
+            logic.active_weapon = None
+            logic.player_ammo = 0
+            logic.gun2_obtained = False
+            logic._last_player_shot_time = float("-inf")
+
+            # Reset visual FX.
+            logic.bullet_marks = []
+            logic.muzzle_flash_active = False
+
+            # Reset P2 stats.
+            logic.player2_health = 100
+            logic.player2_max_health = 100
+            logic.player2_dead = False
+
+            self.reset_all_monsters(clear_dead=True)
+
+            # Reset I/O system.
+            if logic.io_manager:
+                logic.io_manager.reset()
+                from editor.io_system import get_connections
+
+                for brush in logic.brushes:
+                    for conn in get_connections(brush):
+                        conn.reset()
+                for thing in logic.things:
+                    for conn in get_connections(thing):
+                        conn.reset()
+
+            # Build entity caches before constructing session-local physics.
+            logic._build_entity_caches()
+
+            from .physics import PhysicsWorld, SpatialGrid
+
+            logic._spatial_grid = SpatialGrid(cell_size=512.0)
+            logic._spatial_grid.populate(
+                logic.brushes + logic._model_collision_brushes
+            )
+            logic._physics_world = PhysicsWorld(logic._spatial_grid)
+            logic._physics_world.rebuild(logic._physics_body_brushes)
+            logic.monster_ai.set_spatial_grid(logic._spatial_grid)
+
+            # PropSession is the registry for the Prop runtime domain.
+            logic._props = PropSession(logic)
+            logic._props.start()
+
+            # Reset cinematic state.
+            logic.cinematic_state = None
+            logic.camera_transition = None
+            logic._hud_cinematic_last_active = False
+            logic._hud_cinematic_fade_started = None
+
+            # Start the health HUD hidden; player spawn uses the normal
+            # fast 1.5-second fade-in followed by the 4-second fade-out.
+            hud_now = time.perf_counter()
+            logic._hud_health_alpha = 0.0
+            logic._hud_health_last_value = logic.player_health
+            logic._hud_health_fade_started = hud_now
+            logic._hud_health_fade_from = 0.0
+            logic._hud_health_fade_phase = "in"
+
+            # Reset portal runtime state.
+            logic._portal_runtime().reset_session()
+
+            logic.level_complete_ui = None
+
+            # Reset light fade transitions for a clean play session.
+            logic.light_fade_states.clear()
+            if Light is not None:
+                for thing in logic.things:
+                    if isinstance(thing, Light) and hasattr(
+                        thing, "_fade_nominal"
+                    ):
+                        del thing._fade_nominal
+
+            logic._monster_projectiles.clear()
+            logic._projectile_positions = _NO_PROJECTILES
+            logic._gunfire_events.clear()
+
+            # Spawn I/O is deliberately before timers and AI, matching the
+            # original LogicThread ordering.
+            self.fire_player_spawn_outputs()
+            logic._init_logic_timers()
+            self.start_monster_ai()
+
+        else:
+            if (
+                logic.cinematic_state
+                and logic.cinematic_state.get("json_cutscene")
+            ):
+                logic._finish_json_cutscene(
+                    logic.cinematic_state,
+                    fire_finished=False,
+                )
+
+            self.stop_monster_ai()
+            logic._reset_trigger_state()
+            logic.fired_once_triggers.clear()
+            logic.collected_keys.clear()
+            logic.active_speakers.clear()
+            logic.hurt_trigger_timers.clear()
+            logic._reset_movers()
+            logic._reset_doors()
+            logic._reset_parented_lights()
+            logic._reset_parented_portals()
+            logic._clear_angled_brush_collision()
+            logic.current_hud_message = ""
+            logic.current_hud_key_name = None
+            logic.gate_inputs = {}
+            logic.timer_states = {}
+            logic.light_fade_states.clear()
+            logic.active_weapon = None
+            logic.bullet_marks = []
+            logic.player_dead = False
+            logic.muzzle_flash_active = False
+
+            props = getattr(logic, "_props", None)
+            if props is not None:
+                props.stop()
+            logic._props = None
+
+            physics_world = getattr(logic, "_physics_world", None)
+            if physics_world is not None:
+                physics_world.clear()
+            logic._physics_world = None
+
+            logic.monster_ai.set_spatial_grid(None)
+            grid = getattr(logic, "_spatial_grid", None)
+            if grid is not None:
+                grid.clear()
+            logic._spatial_grid = None
+
+            logic.mover_path_states = {}
+            logic.cinematic_state = None
+            logic.camera_transition = None
+            logic._hud_cinematic_last_active = False
+            logic._hud_cinematic_fade_started = None
+            logic._hud_health_alpha = 0.5
+            logic._hud_health_last_value = None
+            logic._hud_health_fade_started = None
+            logic._hud_health_fade_from = 0.5
+            logic._hud_health_fade_phase = "idle"
+
+            # Reset portal runtime state.
+            logic._portal_runtime().reset_session()
+
+            logic.level_complete_ui = None
+            logic._monster_projectiles.clear()
+            logic._projectile_positions = _NO_PROJECTILES
+            logic._gunfire_events.clear()
+
+            self.reset_all_monsters(clear_dead=False)
+            self.release_session_caches()
+
+        # Plugin lifecycle runs only after the core session is coherent.
+        if logic.plugins is not None:
+            try:
+                if enabled:
+                    logic.plugins.dispatch_play_start(logic)
+                else:
+                    logic.plugins.dispatch_play_stop(logic)
+            except Exception as exc:
+                print(
+                    "[LogicThread] plugin lifecycle dispatch failed: "
+                    f"{exc}"
+                )
+            logic._plugin_emit("play_start" if enabled else "play_stop")
+
+    def save_session(
+        self,
+        path: str,
+        *,
+        map_name: str = "",
+        save_mode: str = "full",
+        base_level: dict = None,
+    ):
+        logic = self.logic
+        if not logic.play_mode:
+            return False, "Nothing to save — not in play mode."
+
+        try:
+            from engine import savegame
+
+            session = getattr(logic, "_bigworld", None)
+            if session is not None and getattr(session, "streaming", False):
+                with logic._tick_lock:
+                    session.commit_all()
+                    snapshot = savegame.build_snapshot(
+                        logic,
+                        map_name=map_name,
+                        world_mode=savegame.WORLD_MODE_BIGWORLD,
+                        cell_deltas=session.serialize_registry(),
+                        base_world=session.base_identity(map_name),
+                    )
+            else:
+                with logic._tick_lock:
+                    snapshot = savegame.build_snapshot(
+                        logic,
+                        map_name=map_name,
+                        save_mode=save_mode,
+                        base_level=base_level,
+                    )
+
+            savegame.write(path, snapshot)
+            mode_used = snapshot.get("save_mode", "full")
+            world = snapshot.get("world_mode")
+            label = f"{mode_used}/{world}" if world else mode_used
+            return True, (
+                f"Saved play session to '{os.path.basename(path)}' "
+                f"({label})"
+            )
+        except Exception as exc:
+            return False, f"Save failed: {exc}"
+
+    def load_session(
+        self,
+        path: str,
+        *,
+        map_name: str = "",
+        base_level: dict = None,
+    ):
+        logic = self.logic
+        if not logic.play_mode:
+            return False, "Enter play mode before loading a session."
+
+        try:
+            from engine import savegame
+
+            data = savegame.read(path)
+            with logic._tick_lock:
+                report = savegame.restore_auto(
+                    logic,
+                    data,
+                    current_map_name=map_name,
+                    base_level=base_level,
+                )
+
+            msg = f"Loaded play session from '{os.path.basename(path)}'"
+            warning = report.get("warning")
+            if warning:
+                msg += f" — {warning}"
+            return True, msg
+        except FileNotFoundError:
+            return False, f"Save file not found: {path}"
+        except Exception as exc:
+            return False, f"Load failed: {exc}"
+
+    def release_session_caches(self):
+        """Drop every reference held only for the finished play session."""
+        logic = self.logic
+        logic._world_runtime().release_session_indexes()
+        logic._collision_brushes_cache = []
+        logic._model_collision_brushes = []
+        logic._physics_body_brushes = []
+        logic._mover_brush_list = []
+        logic._door_brush_list = []
+        logic._monster_spawn_health = {}
+
+        if logic.io_manager is not None:
+            logic.io_manager.reset()
+
+        for player in (logic.player, getattr(logic, "player2", None)):
+            if player is not None:
+                player.ground_object = None
+
+    def start_monster_ai(self):
+        logic = self.logic
+        self.stop_monster_ai()
+        logic.monster_ai_thread = MonsterAIThread(
+            logic,
+            logic.monster_ai,
+            logic._monster_lock,
+            tick_rate=30,
+        )
+        logic.monster_ai_thread.start()
+
+    def stop_monster_ai(self):
+        logic = self.logic
+        thread = logic.monster_ai_thread
+        logic.monster_ai_thread = None
+        if thread is not None:
+            thread.stop()
+            if (
+                thread.is_alive()
+                and thread is not threading.current_thread()
+            ):
+                thread.join(timeout=2.0)
+
+    def reset_all_monsters(self, clear_dead=True):
+        """Reset all monster AI state and capture authored spawn health."""
+        logic = self.logic
+        with logic._monster_lock:
+            logic.monster_ai.forget_monsters()
+
+        if not MonsterThing:
+            return
+
+        if clear_dead:
+            logic._monster_spawn_health = {}
+
+        reset = []
+        for thing in logic.things:
+            if not isinstance(thing, MonsterThing):
+                continue
+
+            reset.append(thing)
+            if clear_dead:
+                try:
+                    logic._monster_spawn_health[
+                        thing.properties.get("id")
+                    ] = int(thing.properties.get("health", 100))
+                except (TypeError, ValueError):
+                    pass
+
+            thing.properties.pop("is_shooting", None)
+            thing.properties.pop("_vel_y", None)
+            if clear_dead:
+                thing.properties.pop("dead", None)
+
+            triggered = thing.properties.get("triggered", False)
+            wake_sight = thing.properties.get("wake_on_sight", True)
+            thing.properties["awake"] = bool(
+                not (triggered or wake_sight)
+            )
+
+        JOURNAL.record_many(reset, STATE)
+
+    def start_speakers_on_spawn(self):
+        logic = self.logic
+        if not logic.io_manager or not Speaker:
+            return
+
+        for thing in logic.things:
+            if not isinstance(thing, Speaker):
+                continue
+            if not bool(thing.properties.get("play_on_start", False)):
+                continue
+
+            target_name = thing.properties.get("name", "")
+            target_id = thing.properties.get("id", "")
+            logic.io_manager._execute_input(
+                target_name,
+                "PlaySound",
+                "",
+                "PlayerSpawn",
+                target_id=target_id,
+            )
+
+    def fire_player_spawn_outputs(self):
+        logic = self.logic
+        if not logic.io_manager:
+            return
+
+        # Start-on speakers initialise before the PlayerStart output chain, so
+        # an explicit OnPlayerSpawn connection can override authored state.
+        self.start_speakers_on_spawn()
+
+        if not PlayerStart:
+            return
+
+        for thing in logic.things:
+            if isinstance(thing, PlayerStart):
+                logic.io_manager.fire_output(
+                    thing,
+                    "OnPlayerSpawn",
+                )
+                logic._plugin_emit("player_spawn", start=thing)
+                break
