@@ -5229,7 +5229,7 @@ layout (location = 10) in float iInstanceAlpha;
             return np.empty(0, dtype=np.int32)
         slots = np.asarray(slots, dtype=np.int32)
         target = table.portal_target_slot[slots]
-        keep = (target >= 0) & table.portal_active[slots] & (table.portal_fade[slots] > 0.01)
+        keep = (target >= 0) & (table.portal_active[slots] | (table.portal_fade[slots] > 0.01))
         if camera_pos is not None:
             delta = table.pos[slots] - np.asarray((float(camera_pos.x), float(camera_pos.y), float(camera_pos.z)), dtype=np.float64)
             keep &= np.einsum('ij,ij->i', delta, delta) <= (self.PORTAL_RENDER_DISTANCE * self.PORTAL_RENDER_DISTANCE)
