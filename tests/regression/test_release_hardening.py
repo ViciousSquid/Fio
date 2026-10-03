@@ -44,9 +44,8 @@ def _published(thread, name):
 # Publication: per-tick state must survive frames that run no tick
 # ---------------------------------------------------------------------------
 
-def _projectile(pos=(0.0, 100.0, 0.0), vel=(0.0, 0.0, 10.0)):
-    return {'pos': list(pos), 'vel': list(vel), 'owner_id': 0,
-            'damage': 5, 'lifetime': 10.0, 'distance_travelled': 0.0}
+def _add_projectile(thread, pos=(0.0, 100.0, 0.0), vel=(0.0, 0.0, 10.0)):
+    thread._monster_projectiles.add(pos, vel, 0, 5, 10.0)
 
 
 def test_projectiles_are_published_on_frames_that_run_no_tick(logic):
@@ -55,7 +54,7 @@ def test_projectiles_are_published_on_frames_that_run_no_tick(logic):
     only by the tick then vanished for that frame (visible flicker)."""
     thread = logic()
     thread.play_mode = True
-    thread._monster_projectiles = [_projectile()]
+    _add_projectile(thread)
     thread._update_monster_projectiles(thread.TICK_DURATION)
 
     for frame in range(4):
