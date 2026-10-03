@@ -393,8 +393,12 @@ def test_property_editor_has_no_hard_debug_console_dependency():
 
 def test_tick_exception_enters_a_controlled_fault_state():
     src = _read("engine/logic_thread.py")
-    i = src.index("while accumulator >= self.TICK_DURATION:")
-    block = src[i:i + 1300]
+    tree = ast.parse(src)
+    fn = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_step_frame"
+    )
+    block = ast.get_source_segment(src, fn)
     assert "try:" in block and "self._tick(self.TICK_DURATION)" in block
     assert "except Exception:" in block
     assert "traceback.format_exc()" in block, "traceback must be reported"
