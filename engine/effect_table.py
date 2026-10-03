@@ -17,6 +17,7 @@ from .effect_entity import (
     EFFECT_FIRE,
     EFFECT_ORB,
 )
+from .soa import grow_soa_arrays
 
 
 FAMILY_FIRE = 0
@@ -83,14 +84,23 @@ class EffectStore:
     def _ensure_capacity(self, required):
         if required <= self._capacity:
             return
-        new_capacity = max(required, self._capacity * 2)
-        self.pos = np.resize(self.pos, (new_capacity, 3))
-        self.lifetime = np.resize(self.lifetime, new_capacity)
-        self.phase = np.resize(self.phase, new_capacity)
-        self.family_id = np.resize(self.family_id, new_capacity)
-        self.spawn_time = np.resize(self.spawn_time, new_capacity)
-        self.active = np.resize(self.active, new_capacity)
-        self._capacity = new_capacity
+        self._capacity, (
+            self.pos,
+            self.lifetime,
+            self.phase,
+            self.family_id,
+            self.spawn_time,
+            self.active,
+        ) = grow_soa_arrays(
+            required,
+            self._capacity,
+            self.pos,
+            self.lifetime,
+            self.phase,
+            self.family_id,
+            self.spawn_time,
+            self.active,
+        )
 
     @staticmethod
     def _lifetime(thing) -> float:
@@ -136,9 +146,15 @@ class EffectStore:
         """
         old_count = self._count
         old_index = self._index_by_object
-        old_phase = self.phase
-        old_spawn = self.spawn_time
-        old_active = self.active
+        # Rebuild rewrites rows from index zero upward.  A retained object can
+        # move to a later row after an insertion/reorder, so the old runtime
+        # columns must not alias the buffers being rewritten.
+        if reset_runtime:
+            old_phase = old_spawn = old_active = None
+        else:
+            old_phase = self.phase[:old_count].copy()
+            old_spawn = self.spawn_time[:old_count].copy()
+            old_active = self.active[:old_count].copy()
 
         self._count = 0
         self.ids = []
