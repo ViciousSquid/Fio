@@ -581,6 +581,9 @@ _COLUMNS = (
     ('effect_light_enabled', (), bool, False),
     ('effect_lifetime', (), np.float32, 0.5),
     ('effect_seed', (), np.float32, 1.0),
+    # Dense execution row; valid only for ENT_EFFECT rows. The row order is
+    # identical to EntityTable.effect_slots.
+    ('effect_store_index', (), np.int32, -1),
     #: When the animation started: the Effect's playback start, or the shared
     #: clock origin for one that has none (see :data:`_CLOCK_ORIGIN`).
     ('effect_spawn_time', (), np.float64, 0.0),
@@ -765,7 +768,8 @@ class EntityTable:
         return tuple(things) != self._row_tuple
 
     def begin_frame(self, things, epoch=None, dirty_objects=None,
-                    effect_runtime=False, peer=None, peer_dirty=None):
+                    effect_runtime=False, effect_store=None,
+                    peer=None, peer_dirty=None):
         """Bring the table into line with *things*; return the ``hidden`` mask.
 
         Nothing here visits an entity that has not changed. The row set is
@@ -785,7 +789,8 @@ class EntityTable:
         self.rows_read = 0
         resolved_all = False
         if self.needs_reconcile(things, epoch):
-            if self._refresh_in_place(things, epoch, dirty_objects):
+            if self._refresh_in_place(
+                    things, epoch, dirty_objects, effect_store=effect_store):
                 pass
             elif _can_adopt(peer, things, epoch, dirty_objects, peer_dirty):
                 # The other buffer's table already resolved exactly these
@@ -793,24 +798,27 @@ class EntityTable:
                 # behind it: copy rather than re-derive, then catch up.
                 self.adopt(peer)
                 if (peer_dirty and not self._refresh_in_place(
-                        things, epoch, peer_dirty)):
-                    self._reconcile(things, dirty_objects=peer_dirty)
+                        things, epoch, peer_dirty, effect_store=effect_store)):
+                    self._reconcile(
+                        things, dirty_objects=peer_dirty, effect_store=effect_store)
             else:
-                resolved_all = self._reconcile(things, dirty_objects=dirty_objects)
+                resolved_all = self._reconcile(
+                    things, dirty_objects=dirty_objects, effect_store=effect_store)
             self._epoch = epoch
         # A reconcile that re-resolved every row has read everything the
         # journal could name.
         if resolved_all:
             pass
         elif changes is OVERFLOW:
-            self.refresh_rows(things, range(n))
+            self.refresh_rows(things, range(n), effect_store=effect_store)
             self._resolve_portal_links(things)
         elif changes:
-            self._apply_changes(things, changes, changed_positions)
+            self._apply_changes(
+                things, changes, changed_positions, effect_store=effect_store)
         if len(self._poll_slots):
             self._poll(things)
         if len(self.effect_slots):
-            self._advance_effects(effect_runtime)
+            self._advance_effects(effect_runtime, effect_store=effect_store)
         return self.hidden[:n]
 
     def adopt(self, peer):
@@ -836,7 +844,7 @@ class EntityTable:
         self._slot_of_obj = dict(peer._slot_of_obj)
         self.generation += 1
 
-    def _refresh_in_place(self, things, epoch, dirty_objects):
+    def _refresh_in_place(self, things, epoch, dirty_objects, effect_store=None):
         """An editor transaction on an unchanged row set: re-resolve its rows.
 
         A reconcile walks every row -- ids, identities, the slot maps -- which
@@ -854,13 +862,13 @@ class EntityTable:
             if _props_of(things[slot]).get('id') != self.ids[slot]:
                 return False                # renamed: the id map moves
         portal_rows = any(self.class_bits[slot] & ENT_PORTAL for slot in slots)
-        self.refresh_rows(things, slots)
+        self.refresh_rows(things, slots, effect_store=effect_store)
         if portal_rows or any(self.class_bits[slot] & ENT_PORTAL for slot in slots):
             # A portal's name or target may be what changed.
             self._resolve_portal_links(things)
         return True
 
-    def _apply_changes(self, things, changes, positions=None):
+    def _apply_changes(self, things, changes, positions=None, effect_store=None):
         """Apply journalled changes without re-reading unchanged entities.
 
         MOVED notifications carry the assigned position as a dense payload, so
@@ -892,8 +900,14 @@ class EntityTable:
                     moved_values.append(payload)
         if moved_slots:
             self.rows_read += len(moved_slots)
-            self.pos[np.asarray(moved_slots, dtype=np.intp)] = np.asarray(
+            moved_slots_array = np.asarray(moved_slots, dtype=np.intp)
+            self.pos[moved_slots_array] = np.asarray(
                 moved_values, dtype=np.float64)
+            if effect_store is not None:
+                for slot in moved_slots_array.tolist():
+                    if self.class_bits[slot] & ENT_EFFECT:
+                        effect_store.set_position(
+                            things[slot], self.pos[slot])
         fallback = [slot for slot in moved if slot not in set(moved_slots)]
         if fallback:
             self._read_positions(things, fallback)
@@ -903,7 +917,7 @@ class EntityTable:
             self.hidden[shown] = [
                 bool(_props_of(things[s]).get('hidden', False)) for s in shown]
         if state:
-            self.refresh_rows(things, state)
+            self.refresh_rows(things, state, effect_store=effect_store)
             # I/O can retarget or rename a portal; links are resolved by name.
             if (len(self.portal_slots)
                     and (self.class_bits[state] & ENT_PORTAL).any()):
@@ -923,36 +937,54 @@ class EntityTable:
         self.hidden[slots] = [
             bool(_props_of(things[s]).get('hidden', False)) for s in slots.tolist()]
 
-    def _advance_effects(self, effect_runtime):
-        """The Effect clock: elapsed time, liveness and light, as columns.
-
-        Everything here is derived from columns resolved from the Effect's own
-        runtime state (:attr:`effect_spawn_time`, :attr:`effect_active`), so
-        the two render buffers compute the same frame from the same entity.
-        """
+    def _advance_effects(self, effect_runtime, effect_store=None):
+        """Advance Effect execution state as bounded NumPy column arithmetic."""
         effect_ls = self.effect_slots
         now = time.perf_counter()
-        explosion = self.effect_type[effect_ls] == 1
+
+        if effect_store is not None:
+            count = len(effect_ls)
+            family = effect_store.family_id[:count]
+            active = effect_store.active[:count]
+            lifetime = np.maximum(effect_store.lifetime[:count], 0.01)
+            spawn = effect_store.spawn_time[:count]
+            phase = np.clip(effect_store.phase[:count], 0.0, 1.0)
+            self.effect_type[effect_ls] = family
+            self.effect_lifetime[effect_ls] = lifetime
+            self.effect_spawn_time[effect_ls] = np.where(
+                spawn > 0.0, spawn, _CLOCK_ORIGIN
+            )
+            self.effect_phase[effect_ls] = phase
+            self.effect_active[effect_ls] = active
+        else:
+            family = self.effect_type[effect_ls]
+            active = self.effect_active[effect_ls]
+            lifetime = np.maximum(self.effect_lifetime[effect_ls], 0.01)
+            spawn = self.effect_spawn_time[effect_ls]
+            phase = self.effect_phase[effect_ls]
+
+        explosion = family == 1
         fire = ~explosion
-        origin = self.effect_spawn_time[effect_ls]
-        lifetime = np.maximum(self.effect_lifetime[effect_ls], 0.01)
 
         if effect_runtime:
-            elapsed = np.maximum(now - origin, 0.0).astype(np.float32)
-            explosion_active = (explosion & self.effect_active[effect_ls]
-                                & (elapsed < lifetime))
+            elapsed = np.maximum(now - spawn, 0.0).astype(
+                np.float32, copy=False
+            )
+            explosion_active = (
+                explosion & active & (elapsed < lifetime)
+            )
             preview_explosion = np.zeros_like(explosion)
         else:
-            # The editor animates FIRE and leaves EXPLOSION dormant; with
-            # preview on, an EXPLOSION is shown on its atlas preview frame.
             elapsed = np.where(
-                fire, np.float32(now - _CLOCK_ORIGIN), np.float32(0.0)
+                fire,
+                np.float32(now - _CLOCK_ORIGIN),
+                np.float32(0.0),
             ).astype(np.float32)
             explosion_active = np.zeros_like(explosion)
-            preview_explosion = explosion & self.effect_preview[effect_ls]
+            preview_explosion = (
+                explosion & self.effect_preview[effect_ls]
+            )
 
-        # Effect lights: FIRE keeps its authored light; an EXPLOSION gets a
-        # short decaying flash only when actually triggered at runtime.
         self.light_enabled[effect_ls] = self.effect_light_enabled[effect_ls]
         self.light_params[effect_ls, 0] = self.effect_params[effect_ls, 2]
         self.light_params[effect_ls, 1] = self.effect_params[effect_ls, 3]
@@ -960,36 +992,51 @@ class EntityTable:
             explosion_slots = effect_ls[explosion]
             if effect_runtime:
                 explosion_elapsed = elapsed[explosion]
-                flash_active = (explosion_active[explosion]
-                                & (explosion_elapsed
-                                   < np.minimum(lifetime[explosion], 0.12)))
-                decay = np.exp(-explosion_elapsed / 0.035).astype(np.float32)
+                flash_active = (
+                    explosion_active[explosion]
+                    & (explosion_elapsed < np.minimum(
+                        lifetime[explosion], 0.12))
+                )
+                decay = np.exp(-explosion_elapsed / 0.035).astype(
+                    np.float32
+                )
                 self.light_enabled[explosion_slots] = (
-                    self.effect_light_enabled[explosion_slots] & flash_active)
+                    self.effect_light_enabled[explosion_slots]
+                    & flash_active
+                )
                 self.light_params[explosion_slots, 0] = (
-                    self.effect_params[explosion_slots, 2] * (1.0 + 2.0 * decay))
+                    self.effect_params[explosion_slots, 2]
+                    * (1.0 + 2.0 * decay)
+                )
             else:
                 self.light_enabled[explosion_slots] = False
 
         if preview_explosion.any():
-            preview_t = ((float(_EXPLOSION_PREVIEW_FRAME) - 0.5)
-                         / _EXPLOSION_FRAME_COUNT)
-            elapsed = np.where(preview_explosion,
-                               (lifetime * preview_t).astype(np.float32),
-                               elapsed)
+            preview_t = (
+                (float(_EXPLOSION_PREVIEW_FRAME) - 0.5)
+                / _EXPLOSION_FRAME_COUNT
+            )
+            elapsed = np.where(
+                preview_explosion,
+                (lifetime * preview_t).astype(np.float32),
+                elapsed,
+            )
         self.effect_elapsed[effect_ls] = elapsed
 
-        # FIRE light flicker, from the same seed/clock family as the
-        # procedural flame. Modulates the live light column only.
         if fire.any():
             fire_slots = effect_ls[fire]
             flicker = _effect_flicker(
                 self.effect_seed[fire_slots],
-                elapsed[fire] + self.effect_phase[fire_slots])
+                elapsed[fire] + phase[fire],
+            )
             self.light_params[fire_slots, 0] = (
-                self.effect_params[fire_slots, 2] * (0.78 + 0.38 * flicker))
+                self.effect_params[fire_slots, 2]
+                * (0.78 + 0.38 * flicker)
+            )
 
-        self.effect_alive[effect_ls] = fire | explosion_active | preview_explosion
+        self.effect_alive[effect_ls] = (
+            fire | explosion_active | preview_explosion
+        )
 
     def sync(self, things, epoch=None, dirty_objects=None) -> bool:
         """Reconcile without the frame's journal step.  Returns whether it did.
@@ -1004,13 +1051,15 @@ class EntityTable:
             self._epoch = epoch
         return self.generation != before
 
-    def _reconcile(self, things, dirty_objects=None) -> bool:
+    def _reconcile(self, things, dirty_objects=None, effect_store=None) -> bool:
         """Rebuild the slot mapping, keeping surviving rows' resolved columns.
 
         Returns whether every row was re-resolved.
         """
         n = len(things)
         self._resize(max(n, 16))
+        if effect_store is not None:
+            effect_store.rebuild(things, reset_runtime=False)
 
         old_slot_of_id = self.slot_of_id
         old_things = self.things
@@ -1054,8 +1103,11 @@ class EntityTable:
         self.count = n
         # Rows before the class columns below are recomputed: a row resolved
         # here has its own class bits by the time the slot vectors are built.
-        self.refresh_rows(things, [slot for slot in range(n)
-                                   if slot not in survivors])
+        self.refresh_rows(
+            things,
+            [slot for slot in range(n) if slot not in survivors],
+            effect_store=effect_store,
+        )
         bits = self.class_bits[:n]
         self.all_slots = np.arange(n, dtype=np.int32)
         self.effect_slots = np.flatnonzero(bits & ENT_EFFECT).astype(np.int32)
@@ -1102,7 +1154,7 @@ class EntityTable:
         return 0
 
 
-    def _resolve_row(self, slot, thing):
+    def _resolve_row(self, slot, thing, effect_store=None):
         """Resolve authored render state for one entity row."""
         self.class_bits[slot] = _entity_class_bits(thing)
         props = _props_of(thing)
@@ -1121,12 +1173,19 @@ class EntityTable:
         if self.class_bits[slot] & ENT_EFFECT:
             props = _props_of(thing)
             effect_type = str(props.get('effect_type', 'FIRE')).strip().upper()
-            self.effect_type[slot] = (
-                1 if effect_type == 'EXPLOSION'
-                else 2 if effect_type == 'ORB'
-                else 3 if effect_type == 'CUSTOM'
-                else 0
-            )
+            store_index = -1
+            if effect_store is not None:
+                store_index = effect_store.sync_authored(thing)
+                self.effect_store_index[slot] = store_index
+                self.effect_type[slot] = effect_store.family_id[store_index]
+            else:
+                self.effect_store_index[slot] = -1
+                self.effect_type[slot] = (
+                    1 if effect_type == 'EXPLOSION'
+                    else 2 if effect_type == 'ORB'
+                    else 3 if effect_type == 'CUSTOM'
+                    else 0
+                )
             self.effect_fire_variant[slot] = (
                 _effect_orb_variant(props)
                 if effect_type == 'ORB'
@@ -1182,22 +1241,38 @@ class EntityTable:
             self.effect_light_enabled[slot] = _effect_bool(
                 props, 'light_enabled', True
             )
-            self.effect_lifetime[slot] = lifetime
-            self.effect_seed[slot] = seed
-            # Playback runtime is the Effect's own (Explode, SetType and a
-            # reset all write it there and journal the change), so both
-            # render buffers resolve the same origin from it.
-            # The column is the animation's origin: an Effect with no
-            # playback start (a looping FIRE) runs on the shared clock.
-            spawn = _float_property(getattr(thing, '_effect_spawn_time', 0.0), 0.0)
-            self.effect_spawn_time[slot] = spawn if spawn > 0.0 else _CLOCK_ORIGIN
-            self.effect_phase[slot] = max(0.0, min(1.0, _float_property(
-                getattr(thing, '_effect_animation_phase', 0.0), 0.0)))
-            active = bool(getattr(thing, '_effect_active',
-                                  effect_type != 'EXPLOSION'))
+            if effect_store is not None:
+                self.effect_lifetime[slot] = effect_store.lifetime[store_index]
+                spawn = effect_store.spawn_time[store_index]
+                self.effect_spawn_time[slot] = (
+                    spawn if spawn > 0.0 else _CLOCK_ORIGIN
+                )
+                self.effect_phase[slot] = max(
+                    0.0, min(1.0, float(effect_store.phase[store_index]))
+                )
+                self.effect_active[slot] = bool(
+                    effect_store.active[store_index]
+                )
+            else:
+                self.effect_lifetime[slot] = lifetime
+                spawn = _float_property(
+                    getattr(thing, '_effect_spawn_time', 0.0), 0.0)
+                self.effect_spawn_time[slot] = (
+                    spawn if spawn > 0.0 else _CLOCK_ORIGIN
+                )
+                self.effect_phase[slot] = max(
+                    0.0, min(1.0, _float_property(
+                        getattr(thing, '_effect_animation_phase', 0.0), 0.0))
+                )
+                self.effect_active[slot] = bool(
+                    getattr(thing, '_effect_active',
+                            effect_type != 'EXPLOSION')
+                )
             self.effect_elapsed[slot] = 0.0
-            self.effect_active[slot] = active
-            self.effect_alive[slot] = effect_type != 'EXPLOSION' or active
+            self.effect_alive[slot] = (
+                self.effect_type[slot] != 1
+                or self.effect_active[slot]
+            )
 
             self.sprite_size[slot] = (width, height)
             self.light_color[slot] = self.effect_light_color[slot]
@@ -1218,6 +1293,7 @@ class EntityTable:
             self.effect_light_enabled[slot] = False
             self.effect_lifetime[slot] = 0.5
             self.effect_seed[slot] = 1.0
+            self.effect_store_index[slot] = -1
             self.effect_spawn_time[slot] = 0.0
             self.effect_phase[slot] = 0.0
             self.effect_elapsed[slot] = 0.0
@@ -1295,7 +1371,7 @@ class EntityTable:
             self.portal_glasses[slot] = False
             self.portal_basis[slot] = 0.0
 
-    def refresh_rows(self, things, slots):
+    def refresh_rows(self, things, slots, effect_store=None):
         """Re-resolve every column of *slots* from their entities."""
         slots = list(slots)
         self.rows_read += len(slots)
@@ -1303,7 +1379,7 @@ class EntityTable:
             slot = int(slot)
             thing = things[slot]
             self.pos[slot] = _pos_of(thing)
-            self._resolve_row(slot, thing)
+            self._resolve_row(slot, thing, effect_store=effect_store)
 
 
 _EMPTY: dict = {}
