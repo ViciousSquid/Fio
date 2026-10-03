@@ -707,7 +707,12 @@ class Ui_MainWindow(object):
         terrain_menu.addAction(MainWindow.procedural_action)
         MainWindow.cutscenes_btn = make_btn(
             "assets/sprites/logic_camera.png", "Cutscenes",
-            on_click=MainWindow.open_cutscene_wizard, bottom_color=group_3_color)
+            on_click=MainWindow.open_cutscene_wizard, checkable=True,
+            checked=False, bottom_color=group_3_color, toggle_strip=True)
+        MainWindow.cutscenes_btn.setChecked(False)
+        MainWindow.cutscenes_btn.clicked.connect(
+            lambda: MainWindow.cutscenes_btn.setChecked(
+                getattr(MainWindow, "_cutscene_wizard_active", False)))
 
         terrain_btn = make_btn("assets/terrain.png", "Procedural Tools", bottom_color=group_3_color)
         terrain_btn.clicked.connect(lambda: terrain_menu.popup(
