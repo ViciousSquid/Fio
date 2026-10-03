@@ -418,7 +418,7 @@ class CutsceneRuntime:
                 cs["active_fights"].pop(index, None)
 
     def _finish_json_cutscene(self, cs, fire_finished=True):
-        self.logic._restore_json_fights(cs)
+        self._restore_json_fights(cs)
         for aid, snapshot in (cs.get("actor_initial") or {}).items():
             actor = snapshot.get("entity")
             if actor is None or actor not in self.logic.things:
@@ -475,7 +475,7 @@ class CutsceneRuntime:
                             cs["cam_angle"] = math.atan2(diff[0], diff[2])
                             cs["cam_pitch"] = math.asin(np.clip(diff[1] / dist, -1.0, 1.0))
 
-        self.logic._update_json_fights(cs, elapsed)
+        self._update_json_fights(cs, elapsed)
 
         for aid, rows in (cs.get("actor_tracks") or {}).items():
             actor = (cs.get("actors") or {}).get(aid)
