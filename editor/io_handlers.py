@@ -1236,7 +1236,7 @@ def register_all_input_handlers(io_manager: IOManager):
         """Abort and return camera to the player."""
         cs = getattr(logic, 'cinematic_state', None)
         if cs and cs.get('json_cutscene') and hasattr(logic, '_finish_json_cutscene'):
-            logic._finish_json_cutscene(cs)
+            logic._finish_json_cutscene(cs, fire_finished=False)
         else:
             logic.cinematic_state = None
 
