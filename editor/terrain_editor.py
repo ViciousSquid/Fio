@@ -169,7 +169,13 @@ class TerrainEditorPanel(QWidget):
         
         self.setup_ui()
         self.paint_tool_mode = 'sculpt'
-        self.load_from_terrain()
+
+        # Defer terrain-state population until the panel has been installed
+        # in the Properties dock. During construction the widget hierarchy is
+        # still being reparented by MainWindow._show_overlay(); touching child
+        # widgets at that point can leave PyQt wrappers pointing at deleted
+        # native controls.
+        QTimer.singleShot(0, self.load_from_terrain)
     
     def setup_ui(self):
         """Build the UI."""
