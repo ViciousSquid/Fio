@@ -139,17 +139,17 @@ def test_hudfade_updates_runtime_logic_and_persists():
 
 
 @pytest.mark.parametrize(
-    ("command", "attribute"),
+    ("command", "attribute", "expected"),
     [
-        ("message \"Hello world\"", "message_calls"),
-        ("message2 \"Second line\"", "message2_calls"),
-        ("message3 \"Third line\"", "message3_calls"),
+        ("message \"Hello world\"", "message_calls", "Hello world"),
+        ("message2 \"Second line\"", "message2_calls", "Second line"),
+        ("message3 \"Third line\"", "message3_calls", "Third line"),
     ],
 )
-def test_message_commands_reach_play_view_overlay(command, attribute):
+def test_message_commands_reach_play_view_overlay(command, attribute, expected):
     window = _MainWindow()
     handler = ConsoleCommandHandler(window)
 
     handler.handle_command(command)
 
-    assert getattr(window.view_3d, attribute) == [command.split(" ", 1)[1].strip('"'')]
+    assert getattr(window.view_3d, attribute) == [expected]
