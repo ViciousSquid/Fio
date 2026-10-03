@@ -2525,18 +2525,41 @@ class MainWindow(QMainWindow):
         self.invalidate_entity_caches()
 
     def _resync_terrain_after_history(self):
-        """Reload the live terrain only when an undo/redo changed its CSG cuts."""
+        """Reload live terrain when an undo/redo changed authored terrain data."""
         terrain = getattr(self, 'terrain', None)
         terrain_data = getattr(self.state, 'terrain_data', None)
         if terrain is None or not isinstance(terrain_data, dict):
             return
 
-        wanted = [
+        wanted_csg = [
             list(cut) for cut in terrain_data.get('csg_subtractions', [])
             if isinstance(cut, (list, tuple)) and len(cut) == 6
         ]
-        current = [list(cut) for cut in getattr(terrain, 'csg_subtractions', [])]
-        if current == wanted:
+        current_csg = [list(cut) for cut in getattr(terrain, 'csg_subtractions', [])]
+
+        wanted_stamps = []
+        for stamp in terrain_data.get('texture_stamps', []):
+            if not isinstance(stamp, dict):
+                continue
+            bounds = stamp.get('bounds', [])
+            texture = str(stamp.get('texture', ''))
+            if len(bounds) != 4 or not texture:
+                continue
+            try:
+                wanted_stamps.append({
+                    'bounds': [float(v) for v in bounds],
+                    'texture': texture,
+                    'angle': float(stamp.get('angle', 0.0)),
+                    'feather': float(stamp.get('feather', 0.0)),
+                    'opacity': float(stamp.get('opacity', 1.0)),
+                })
+            except (TypeError, ValueError):
+                continue
+
+        current_stamps = [dict(stamp) for stamp in getattr(
+            terrain, 'texture_stamps', []) if isinstance(stamp, dict)]
+
+        if current_csg == wanted_csg and current_stamps == wanted_stamps:
             return
 
         terrain.from_dict(terrain_data)
