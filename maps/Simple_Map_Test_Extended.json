@@ -499,7 +499,7 @@
                     "target": "Light_00",
                     "input": "Toggle",
                     "parameter": "",
-                    "delay": 0,
+                    "delay": 0.0,
                     "fire_once": false
                 }
             ]
@@ -1917,7 +1917,7 @@
                     "target": "LevelChanger_1",
                     "input": "ChangeLevel",
                     "parameter": "",
-                    "delay": 0,
+                    "delay": 0.0,
                     "fire_once": false
                 }
             ]
@@ -2215,7 +2215,51 @@
                 "collect_respawn_time": 20,
                 "collect_key_name": "blue_key",
                 "collect_weapon": "gun1",
-                "sprite_path": "assets/sprites/gun1.png"
+                "sprite_path": "assets/sprites/gun1.png",
+                "model_path": "",
+                "render_mode": "billboard",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "auto",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
             },
             "io_connections": []
         },
@@ -2261,7 +2305,7 @@
                 "type": "levelchanger",
                 "name": "LevelChanger_1",
                 "id": "19f5aff1-59aa-4aaa-b079-82dbcc82aeae",
-                "target_map": "Terrain_Test_small",
+                "target_map": "Portal_Test",
                 "delay": 0,
                 "fade_time": 0.5,
                 "show_radius": false,
