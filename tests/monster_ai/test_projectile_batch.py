@@ -12,6 +12,7 @@ import random
 import threading
 import types
 
+import numpy as np
 import pytest
 
 from engine.logic_thread import LogicThread
