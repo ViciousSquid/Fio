@@ -37,6 +37,7 @@ class _Host:
     _projectile_monster_candidates = LogicThread._projectile_monster_candidates
     _projectile_wall_candidates = LogicThread._projectile_wall_candidates
     _projectile_store = LogicThread._projectile_store
+    _publish_projectile_render_snapshot = LogicThread._publish_projectile_render_snapshot
     # These tests are specifically the batched/dense collision surface.
     # Force the dense branch regardless of the number of fixtures.
     PROJECTILE_DENSE_THRESHOLD = 0
@@ -89,6 +90,21 @@ def _reference_hit(things, pos, owner_id):
 
 
 
+
+
+def test_published_projectile_snapshot_does_not_alias_simulation_store():
+    owner = make_thing(Monster, "owner", (0, 0, 0), team="red")
+    host = _Host([owner], [((10, 20, 30), owner)])
+
+    snapshot = host._publish_projectile_render_snapshot()
+    assert snapshot.shape == (1, 3)
+    assert snapshot.dtype == np.float32
+    assert not np.shares_memory(snapshot, host._monster_projectiles.pos)
+
+    expected = snapshot.copy()
+    host._monster_projectiles.pos[0] = (100.0, 200.0, 300.0)
+
+    np.testing.assert_array_equal(snapshot, expected)
 
 
 def test_projectile_store_is_numeric_and_dense():
