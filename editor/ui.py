@@ -405,6 +405,13 @@ class Ui_MainWindow(object):
             MainWindow.toggle_system_monitor)
         MainWindow.debug_menu.addAction(MainWindow.system_monitor_action)
 
+        MainWindow.position_action = QAction('Position', MainWindow)
+        MainWindow.position_action.setToolTip(
+            'Open the live camera-position window (pos)')
+        MainWindow.position_action.triggered.connect(
+            MainWindow.view_3d.show_pos_window)
+        MainWindow.debug_menu.addAction(MainWindow.position_action)
+
         # --- Tools Menu Actions ---
 
         autocaulk_action = QAction("Autocaulk", MainWindow)
