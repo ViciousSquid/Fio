@@ -1238,13 +1238,19 @@ class MonsterAI:
         return self._enemy_nearest
 
     @staticmethod
+    @staticmethod
     def _nearest_enemy_rows(pos, team_id, alive, max_range):
-        """Return each row's nearest living enemy row, or -1.
+        """Return each row's nearest living enemy row, or -1, in dense batches.
 
-        The candidate mask is entirely derived from the dense team and alive
-        columns. Self rows and same-team rows are masked out before one
-        float32 squared-distance argmin across the table. This preserves the
-        glm path's float32 precision and first-row tie behaviour.
+        The MonsterTable position and team columns are the only inputs. Each
+        team becomes one vectorized row/column block, so the candidate walk
+        never returns to Python per monster or per candidate. Keeping the blocks
+        smaller than one monolithic N x N matrix also preserves the measured
+        advantage of the dense path on the 480-1000 monster populations Fio
+        actually targets.
+
+        Distances stay float32 to match the glm path and its first-row tie
+        behaviour.
         """
         count = len(pos)
         nearest = np.full(count, -1, dtype=np.int32)
@@ -1258,28 +1264,27 @@ class MonsterAI:
             return nearest
 
         limit = np.float32(max_range) * np.float32(max_range)
+        for code in np.unique(team[active]):
+            rows = np.flatnonzero(active & (team == code))
+            cols = np.flatnonzero(active & (team != code))
+            if not len(cols):
+                continue
 
-        distance = np.subtract.outer(p[:, 0], p[:, 0])
-        np.multiply(distance, distance, out=distance)
-        term = np.subtract.outer(p[:, 1], p[:, 1])
-        np.multiply(term, term, out=term)
-        distance += term
-        np.subtract.outer(p[:, 2], p[:, 2], out=term)
-        np.multiply(term, term, out=term)
-        distance += term
+            a = p[rows]
+            b = p[cols]
+            distance = np.subtract.outer(a[:, 0], b[:, 0])
+            np.multiply(distance, distance, out=distance)
+            term = np.subtract.outer(a[:, 1], b[:, 1])
+            np.multiply(term, term, out=term)
+            distance += term
+            np.subtract.outer(a[:, 2], b[:, 2], out=term)
+            np.multiply(term, term, out=term)
+            distance += term
 
-        candidate = (
-            active[:, None]
-            & active[None, :]
-            & (team[:, None] != team[None, :])
-        )
-        np.fill_diagonal(candidate, False)
-        distance[~candidate] = np.inf
+            best = np.argmin(distance, axis=1)
+            found = distance[np.arange(len(rows)), best] <= limit
+            nearest[rows] = np.where(found, cols[best], -1)
 
-        best = np.argmin(distance, axis=1)
-        best_dist = distance[np.arange(count), best]
-        found = active & (best_dist <= limit)
-        nearest[found] = best[found]
         return nearest
 
     def _find_closest_enemy_scalar(self, thing, my_team: str, max_range: float):
