@@ -57,7 +57,7 @@ class LogicCombat:
                     self, "_last_player_shot_time", float("-inf"))) < 1.0:
                 return
             try:
-                ammo = int(getattr(self, "player_ammo", 0))
+                ammo = int(getattr(logic, "player_ammo", 0))
             except (TypeError, ValueError):
                 ammo = 0
             if ammo <= 0:
@@ -212,8 +212,8 @@ class LogicCombat:
     # =========================================================================
 
     def _add_monster_projectile(self, pos, vel, owner_id, damage, lifetime):
-        logic = self.logic
         """Add one projectile directly to the dense numeric store."""
+        logic = self.logic
         with logic._monster_lock:
             return logic._monster_projectiles.add(
                 pos, vel, owner_id, damage, lifetime
@@ -302,7 +302,7 @@ class LogicCombat:
         each is solid is asked live, of the few that contain a point.
         """
         logic = self.logic
-        grid = getattr(self, '_spatial_grid', None)
+        grid = getattr(logic, '_spatial_grid', None)
         rows = grid._cell_rows
         rows.refresh_movers()
         cs = grid.cell_size
@@ -346,18 +346,18 @@ class LogicCombat:
                     np.float32, copy=True
                 )
             else:
-                logic._projectile_positions = _NO_PROJECTILES
+                logic._projectile_positions = NO_PROJECTILES
             return logic._projectile_positions
 
 
     def _update_monster_projectiles(self, delta: float):
-        logic = self.logic
         """Use a scalar path for small swarms and the dense path for large ones."""
+        logic = self.logic
 
         with logic._monster_lock:
             projectiles = logic._projectile_store()
             if not projectiles:
-                logic._projectile_positions = _NO_PROJECTILES
+                logic._projectile_positions = NO_PROJECTILES
                 return
 
             if len(projectiles) < logic.PROJECTILE_DENSE_THRESHOLD:
@@ -367,14 +367,11 @@ class LogicCombat:
 
 
     def _update_monster_projectiles_scalar(self, projectiles, delta: float):
-        logic = self.logic
         """Advance a small projectile set row-by-row without batch allocations."""
+        logic = self.logic
 
         count = len(projectiles)
-        has_portals = (
-            Portal is not None
-            and len(getattr(self, '_portal_things', ()) or ())
-        )
+        has_portals = bool(logic._portal_things)
         collision_brushes = logic._collision_brushes_cache
         survivors = []
 
@@ -514,12 +511,12 @@ class LogicCombat:
             logic._projectile_positions = projectiles.pos[:live_count]
         else:
             projectiles.clear()
-            logic._projectile_positions = _NO_PROJECTILES
+            logic._projectile_positions = NO_PROJECTILES
 
 
     def _update_monster_projectiles_dense(self, projectiles, delta: float):
-        logic = self.logic
         """Advance monster projectiles through the batched dense numeric path."""
+        logic = self.logic
 
         count = len(projectiles)
         pos = projectiles.pos[:count]
@@ -528,7 +525,7 @@ class LogicCombat:
 
         # Portal transit needs the previous segment endpoint. The common
         # no-portal path stays entirely in the persistent arrays.
-        if Portal is not None and len(getattr(self, '_portal_things', ()) or ()):
+        if logic._portal_things:
             prev = pos.copy()
         pos += vel * delta
         if prev is not None:
@@ -566,7 +563,7 @@ class LogicCombat:
                 < np.float32(logic.PROJECTILE_PLAYER_RADIUS)
             ) & live
 
-        grid = getattr(self, '_spatial_grid', None)
+        grid = getattr(logic, '_spatial_grid', None)
         all_collision_brushes = logic._collision_brushes_cache
         keep = live.copy()
 
@@ -660,7 +657,7 @@ class LogicCombat:
         # The compacted store is authoritative until that boundary.
         logic._projectile_positions = (
             projectiles.pos[:len(survivors)]
-            if len(survivors) else _NO_PROJECTILES
+            if len(survivors) else NO_PROJECTILES
         )
     
 
