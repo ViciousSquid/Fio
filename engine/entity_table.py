@@ -781,6 +781,7 @@ class EntityTable:
         things = tuple(things)
         n = len(things)
         changes = JOURNAL.drain(self)
+        changed_positions = JOURNAL.drain_positions(self)
         self.rows_read = 0
         resolved_all = False
         if self.needs_reconcile(things, epoch):
@@ -805,7 +806,7 @@ class EntityTable:
             self.refresh_rows(things, range(n))
             self._resolve_portal_links(things)
         elif changes:
-            self._apply_changes(things, changes)
+            self._apply_changes(things, changes, changed_positions)
         if len(self._poll_slots):
             self._poll(things)
         if len(self.effect_slots):
@@ -859,12 +860,21 @@ class EntityTable:
             self._resolve_portal_links(things)
         return True
 
-    def _apply_changes(self, things, changes):
-        """Re-read the rows the change journal names, and nothing else."""
+    def _apply_changes(self, things, changes, positions=None):
+        """Apply journalled changes without re-reading unchanged entities.
+
+        MOVED notifications carry the assigned position as a dense payload, so
+        the normal runtime path can update ``pos`` without dereferencing the
+        Thing object at all. Older/manual journal writers still fall back to
+        the object read when no payload was supplied.
+        """
         slot_of = self._slot_of_obj
         moved = []
+        moved_slots = []
+        moved_values = []
         state = []
         shown = []
+        positions = positions or {}
         for oid, flags in changes.items():
             slot = slot_of.get(oid)
             if slot is None:
@@ -876,8 +886,17 @@ class EntityTable:
                 shown.append(slot)
             if flags & ~VISIBILITY:
                 moved.append(slot)
-        if moved:
-            self._read_positions(things, moved)
+                payload = positions.get(oid)
+                if payload is not None:
+                    moved_slots.append(slot)
+                    moved_values.append(payload)
+        if moved_slots:
+            self.rows_read += len(moved_slots)
+            self.pos[np.asarray(moved_slots, dtype=np.intp)] = np.asarray(
+                moved_values, dtype=np.float64)
+        fallback = [slot for slot in moved if slot not in set(moved_slots)]
+        if fallback:
+            self._read_positions(things, fallback)
         if shown:
             # A park or unpark: the live flag alone, nothing authored.
             self.rows_read += len(shown)
