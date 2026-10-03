@@ -177,7 +177,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         actor_buttons = QtWidgets.QHBoxLayout()
         self.add_npc_button = QtWidgets.QPushButton("+ Actor")
         self.add_creature_button = QtWidgets.QPushButton("+ Actor")
-        self.capture_button = QtWidgets.QPushButton("Add selected editor actors")
+        self.capture_button = QtWidgets.QPushButton("+ Selected")
         self.remove_actor_button = QtWidgets.QPushButton("Remove")
         self.focus_actor_button = QtWidgets.QPushButton("Focus")
         for button in (self.add_npc_button, self.add_creature_button,
