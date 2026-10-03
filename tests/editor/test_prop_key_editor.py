@@ -70,3 +70,17 @@ def test_switching_collection_type_to_key_enables_the_colour_selector(panel):
 
     combo.setCurrentText("Yellow Key")
     assert prop.properties["collect_key_name"] == "yellow_key"
+
+
+def test_enabling_collectible_defaults_to_weapon(panel):
+    prop = Prop(pos=[0, 0, 0])
+    panel.current_object = prop
+    panel.populate_for_thing(prop)
+
+    panel.on_prop_collectible_toggled(True)
+
+    assert prop.properties["collect_enabled"] is True
+    assert prop.properties["collect_type"] == "weapon"
+    assert prop.properties["collect_weapon"] == "gun1"
+    assert prop.properties["sprite_path"] == "assets/sprites/gun1.png"
+    assert panel._prop_collect_type_combo.currentText() == "Weapon"
