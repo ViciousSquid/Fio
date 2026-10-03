@@ -1697,22 +1697,13 @@ vec3 paletteAt(float t) {
 // Index of the colour band / terrace a height belongs to. Terrace flats sit
 // exactly on multiples of the band height; the offset keeps each riser with
 // the level below it until just under the lip, where the contour line runs.
-highp vec3 sampleTerrainStamp(int slot, vec2 uv) {
+highp vec4 sampleTerrainStamp(int slot, vec2 uv) {
     float cells = 4.0;
     float cell = 1.0 / cells;
     float s = float(slot);
     vec2 cellOrigin = vec2(mod(s, cells), floor(s / cells)) * cell;
     vec2 localUv = fract(uv);
-    return texture(terrainStampAtlas, cellOrigin + localUv * cell).rgb;
-}
-
-float sampleTerrainStampAlpha(int slot, vec2 uv) {
-    float cells = 4.0;
-    float cell = 1.0 / cells;
-    float s = float(slot);
-    vec2 cellOrigin = vec2(mod(s, cells), floor(s / cells)) * cell;
-    vec2 localUv = fract(uv);
-    return texture(terrainStampAtlas, cellOrigin + localUv * cell).a;
+    return texture(terrainStampAtlas, cellOrigin + localUv * cell);
 }
 
 float bandIndex(highp float y) {
@@ -1810,8 +1801,9 @@ void main() {
 
         int slot = int(uStampParams[i].x + 0.5);
         if (slot < 0 || slot >= MAX_TERRAIN_STAMP_TEXTURES) continue;
-        vec3 stampColor = sampleTerrainStamp(slot, uv);
-        float stampAlpha = sampleTerrainStampAlpha(slot, uv);
+        vec4 stamp = sampleTerrainStamp(slot, uv);
+        vec3 stampColor = stamp.rgb;
+        float stampAlpha = stamp.a;
         float amount = clamp(uStampParams[i].w * edgeMask * stampAlpha, 0.0, 1.0);
         texColor = mix(texColor, stampColor * 1.1, amount);
     }
