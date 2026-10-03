@@ -835,59 +835,7 @@ class MainWindow(QMainWindow):
                 self.asset_browser_dock.raise_()
 
 
-    def show_camera_position_toast(self):
-        """Show a persistent, live camera-position toast in the notification area."""
-        view_3d = getattr(self, 'view_3d', None)
-        camera = getattr(view_3d, 'camera', None) if view_3d is not None else None
-        if camera is None or not hasattr(camera, 'pos'):
-            return
-
-        self._pos_toast_active = True
-        if not hasattr(self, '_pos_toast_timer'):
-            self._pos_toast_timer = QTimer(self)
-            self._pos_toast_timer.setInterval(100)
-            self._pos_toast_timer.timeout.connect(self._update_camera_position_toast)
-        self._update_camera_position_toast()
-        if not self._pos_toast_timer.isActive():
-            self._pos_toast_timer.start()
-
-    def _update_camera_position_toast(self):
-        if not getattr(self, '_pos_toast_active', False):
-            return
-        view_3d = getattr(self, 'view_3d', None)
-        camera = getattr(view_3d, 'camera', None) if view_3d is not None else None
-        if camera is None or not hasattr(camera, 'pos'):
-            return
-        p = camera.pos
-        text = (
-            '<span style="color:#ff8c00;">X</span> '
-            f'<span style="color:white;">{float(p.x):.3f}</span>'
-            ' &nbsp; '
-            '<span style="color:#ff8c00;">Y</span> '
-            f'<span style="color:white;">{float(p.y):.3f}</span>'
-            ' &nbsp; '
-            '<span style="color:#ff8c00;">Z</span> '
-            f'<span style="color:white;">{float(p.z):.3f}</span>'
-        )
-        label = self.ui.notification_label
-        label.setStyleSheet("""
-            background-color: #2b2b2b;
-            color: white;
-            font-weight: normal;
-            padding: 2px 6px;
-            border-radius: 3px;
-        """)
-        label.setTextFormat(Qt.RichText)
-        label.setText(text)
-
-    def _stop_camera_position_toast(self):
-        self._pos_toast_active = False
-        timer = getattr(self, '_pos_toast_timer', None)
-        if timer is not None:
-            timer.stop()
-
     def show_toast(self, message, is_error=False, duration=None):
-        self._stop_camera_position_toast()
         """Displays a notification"""
         if self.config.getboolean('Display', 'disable_toasts', fallback=False):
             return
@@ -914,7 +862,7 @@ class MainWindow(QMainWindow):
         # Auto-clear timer
         final_duration = duration if duration is not None else (4000 if is_error else 2500)
         if final_duration > 0:
-            QTimer.singleShot(final_duration, lambda: self.ui.notification_label.setText("") if not getattr(self, '_pos_toast_active', False) else None)
+            QTimer.singleShot(final_duration, lambda: self.ui.notification_label.setText(""))
 
     def show_tooltip(self, message, duration=4000, toast_id=None):
         """Displays teal-styled tooltips in the same area."""
