@@ -368,12 +368,14 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.summary.setWordWrap(True)
         footer.addWidget(self.summary, 1)
         self.load_button = QtWidgets.QPushButton("Load Cutscene")
-        self.save_button = QtWidgets.QPushButton("Save / Apply to Map")
+        self.save_button = QtWidgets.QPushButton("Save")
+        self.apply_button = QtWidgets.QPushButton("Apply to Map")
         self.cancel_button = QtWidgets.QPushButton("Cancel")
         self.save_button.setDefault(True)
         self.cancel_button.setDefault(False)
         footer.addWidget(self.load_button)
         footer.addWidget(self.save_button)
+        footer.addWidget(self.apply_button)
         footer.addWidget(self.cancel_button)
         root.addLayout(footer)
 
@@ -424,7 +426,8 @@ class CutsceneWizard(QtWidgets.QDialog):
             lambda _index: self._update_waypoint_controls()
         )
         self.load_button.clicked.connect(self._load_cutscene)
-        self.save_button.clicked.connect(self.accept)
+        self.save_button.clicked.connect(self._save_and_close)
+        self.apply_button.clicked.connect(self._apply_to_map)
         self.cancel_button.clicked.connect(self.reject)
 
         self._refresh_actor_lists()
@@ -1605,32 +1608,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.main_window.show_toast(f"Applied cutscene {Path(filename).name} to current map")
         return camera
 
-    def accept(self):
-        self._preview_stop_and_restore()
-        if not self.camera_keys:
-            QtWidgets.QMessageBox.warning(
-                self, "No camera keyframes",
-                "Capture at least one camera position."
-            )
-            return
-        if not self.actor_meta and not self.events:
-            QtWidgets.QMessageBox.warning(
-                self, "Empty cutscene",
-                "Create/capture at least one actor or add a timed event."
-            )
-            return
-
-        filename = self._filename()
-        path = Path(getattr(self.main_window, "root_dir", ".")) / CUTSCENE_DIR / filename
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            result = QtWidgets.QMessageBox.question(
-                self, "Overwrite cutscene",
-                f"{filename} already exists. Replace it?"
-            )
-            if result != QtWidgets.QMessageBox.Yes:
-                return
-
+    def _build_cutscene_data(self):
         actors = []
         for aid, meta in self.actor_meta.items():
             row = {"id": aid, "name": meta["name"]}
@@ -1640,21 +1618,15 @@ class CutsceneWizard(QtWidgets.QDialog):
                     row["spawn"] = True
                     row["definition"] = definition
             actors.append(row)
-
-        data = {
+        return {
             "version": 2,
             "id": str(uuid.uuid4()),
             "name": self.name.text().strip() or "Cutscene",
             "actors": actors,
             "camera": self.camera_keys,
             "actor_tracks": self.actor_tracks,
-            "events": sorted(
-                self.events,
-                key=lambda x: x.get("time", 0)
-            ),
-            "map": {
-                "file": self._current_map_name(),
-            },
+            "events": sorted(self.events, key=lambda x: x.get("time", 0)),
+            "map": {"file": self._current_map_name()},
             "settings": {
                 "restore_actors": self.restore.isChecked(),
                 "stop_on_escape": self.stop_escape.isChecked(),
@@ -1664,14 +1636,64 @@ class CutsceneWizard(QtWidgets.QDialog):
             },
         }
 
-        try:
-            path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        except OSError as exc:
-            QtWidgets.QMessageBox.warning(self, "Save failed", f"The cutscene JSON could not be written:\n{exc}")
-            return
+    def _validate_for_save(self):
+        self._preview_stop_and_restore()
+        if not self.camera_keys:
+            QtWidgets.QMessageBox.warning(
+                self, "No camera keyframes", "Capture at least one camera position."
+            )
+            return None
+        if not self.actor_meta and not self.events:
+            QtWidgets.QMessageBox.warning(
+                self, "Empty cutscene",
+                "Create/capture at least one actor or add a timed event."
+            )
+            return None
+        return self._filename()
 
-        self._apply_logic_camera(filename)
+    def _write_cutscene(self, filename, prompt_overwrite=False):
+        path = Path(getattr(self.main_window, "root_dir", ".")) / CUTSCENE_DIR / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if prompt_overwrite and path.exists():
+            result = QtWidgets.QMessageBox.question(
+                self, "Overwrite cutscene",
+                f"{filename} already exists. Replace it?"
+            )
+            if result != QtWidgets.QMessageBox.Yes:
+                return False
+        try:
+            path.write_text(
+                json.dumps(self._build_cutscene_data(), indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            QtWidgets.QMessageBox.warning(
+                self, "Save failed", f"The cutscene JSON could not be written:\n{exc}"
+            )
+            return False
+        return True
+
+    def _save_and_close(self):
+        filename = self._validate_for_save()
+        if not filename:
+            return
+        if not self._write_cutscene(filename, prompt_overwrite=True):
+            return
+        self._saved = True
+        self._delete_temporary_actors()
+        self.main_window.show_toast(f"Saved cutscene {filename}")
         super().accept()
+
+    def _apply_to_map(self):
+        filename = self._validate_for_save()
+        if not filename:
+            return
+        # Apply must update the JSON as well: LogicCamera stores a filename,
+        # so applying stale on-disk data would make the map reference an older
+        # version of the cutscene being authored.
+        if not self._write_cutscene(filename, prompt_overwrite=False):
+            return
+        self._apply_logic_camera(filename)
 
     def reject(self):
         self._preview_stop_and_restore()
