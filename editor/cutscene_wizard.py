@@ -269,7 +269,7 @@ class CutsceneWizard(QtWidgets.QDialog):
         camera_row.addWidget(self.camera_time)
         camera_row.addWidget(QtWidgets.QLabel("Look at"))
         camera_row.addWidget(self.look_at, 1)
-        self.camera_teleport = QtWidgets.QCheckBox("Teleport from previous keyframe")
+        self.camera_teleport = QtWidgets.QCheckBox("Teleport")
         self.camera_teleport.setToolTip(
             "Cut instantly to this keyframe instead of moving the camera from the previous one."
         )
