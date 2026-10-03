@@ -49,6 +49,12 @@ except ImportError:
     MonsterThing = None
 
 
+_NEAREST_ENEMY_MONOLITHIC_SMALL_COUNT = 64
+_NEAREST_ENEMY_MONOLITHIC_MIN_TEAMS = 8
+_NEAREST_ENEMY_MONOLITHIC_TEAM_RATIO = 0.25
+_NEAREST_ENEMY_MONOLITHIC_MAX_COUNT = 1024
+
+
 def _flatten_to_ground(direction):
     """A unit *horizontal* direction from a 3D one, or ``None`` when there is none.
 
@@ -1240,15 +1246,12 @@ class MonsterAI:
     def _nearest_enemy_rows(pos, team_id, alive, max_range):
         """Return each row's nearest living enemy row, or -1, in dense batches.
 
-        The MonsterTable position and team columns are the only inputs. Each
-        team becomes one vectorized row/column block, so the candidate walk
-        never returns to Python per monster or per candidate. Keeping the blocks
-        smaller than one monolithic N x N matrix also preserves the measured
-        advantage of the dense path on the 480-1000 monster populations Fio
-        actually targets.
-
-        Distances stay float32 to match the glm path and its first-row tie
-        behaviour.
+        The usual path works team-by-team so a very large monster population
+        never requires one monolithic N x N allocation.  For small populations,
+        or for a population split into many tiny teams, one monolithic active
+        matrix is cheaper than launching many tiny block kernels.  The
+        crossover is deliberately bounded so a large many-team battle still
+        avoids an oversized dense matrix.
         """
         count = len(pos)
         nearest = np.full(count, -1, dtype=np.int32)
@@ -1261,7 +1264,59 @@ class MonsterAI:
         if not active.any():
             return nearest
 
-        limit = np.float32(max_range) * np.float32(max_range)
+        active_rows = np.flatnonzero(active)
+        team_count = len(np.unique(team[active]))
+        if (
+            count <= _NEAREST_ENEMY_MONOLITHIC_MAX_COUNT
+            and (
+                count <= _NEAREST_ENEMY_MONOLITHIC_SMALL_COUNT
+                or (
+                    team_count >= _NEAREST_ENEMY_MONOLITHIC_MIN_TEAMS
+                    and team_count / float(len(active_rows))
+                    >= _NEAREST_ENEMY_MONOLITHIC_TEAM_RATIO
+                )
+            )
+        ):
+            return MonsterAI._nearest_enemy_rows_monolithic(
+                p, team, active_rows, np.float32(max_range) ** np.float32(2)
+            )
+
+        return MonsterAI._nearest_enemy_rows_by_team(
+            p,
+            team,
+            active,
+            np.float32(max_range) * np.float32(max_range),
+        )
+
+    @staticmethod
+    def _nearest_enemy_rows_monolithic(p, team, active_rows, limit):
+        """Dense N x N nearest-enemy kernel for the small/tiny-team crossover."""
+        a = p[active_rows]
+        distance = np.subtract.outer(a[:, 0], a[:, 0])
+        np.multiply(distance, distance, out=distance)
+        term = np.subtract.outer(a[:, 1], a[:, 1])
+        np.multiply(term, term, out=term)
+        distance += term
+        np.subtract.outer(a[:, 2], a[:, 2], out=term)
+        np.multiply(term, term, out=term)
+        distance += term
+
+        same_team = np.equal.outer(team[active_rows], team[active_rows])
+        distance[same_team] = np.float32(np.inf)
+        best = np.argmin(distance, axis=1)
+        found = distance[np.arange(len(active_rows)), best] <= limit
+
+        nearest = np.full(len(p), -1, dtype=np.int32)
+        nearest[active_rows] = np.where(
+            found, active_rows[best], -1
+        )
+        return nearest
+
+    @staticmethod
+    def _nearest_enemy_rows_by_team(p, team, active, limit):
+        """Team-block kernel for larger populations."""
+        count = len(p)
+        nearest = np.full(count, -1, dtype=np.int32)
         for code in np.unique(team[active]):
             rows = np.flatnonzero(active & (team == code))
             cols = np.flatnonzero(active & (team != code))
