@@ -5,6 +5,7 @@ an undefined _split_asset_path global. They intentionally avoid Qt and GL:
 the failure occurs in the pure data projection before rendering.
 """
 
+import numpy as np
 import pytest
 
 from engine import entity_table
