@@ -455,6 +455,12 @@ class LogicThread(threading.Thread):
         # play-mode enter and None in the editor, where nothing simulates.
         self._props = None
         self._levelchanger_things = []
+        # Dense LevelChanger activation columns. Spatial data is rebuilt with
+        # the entity caches; the per-tick interaction path only consumes these
+        # float32 columns and scalar-dispatches the selected row.
+        self._levelchanger_centres = np.empty((0, 3), dtype=np.float32)
+        self._levelchanger_radii = np.empty(0, dtype=np.float32)
+        self._levelchanger_eligible = np.empty(0, dtype=bool)
         self._monster_things = []
         self._monster_by_id = {}
         self._timer_things = []
@@ -652,6 +658,7 @@ class LogicThread(threading.Thread):
         if self._props is not None:
             self._props.rebuild(self.things)
         self._levelchanger_things = [t for t in self.things if LevelChanger and isinstance(t, LevelChanger)]
+        self._refresh_levelchanger_table()
 
         # PERF: precomputed monster list + id lookup, used by MonsterAI so it
         # doesn't have to isinstance-scan the full (brushes+things) list of
@@ -1675,6 +1682,9 @@ class LogicThread(threading.Thread):
         self._monster_things = []
         self._timer_things = []
         self._levelchanger_things = []
+        self._levelchanger_centres = np.empty((0, 3), dtype=np.float32)
+        self._levelchanger_radii = np.empty(0, dtype=np.float32)
+        self._levelchanger_eligible = np.empty(0, dtype=bool)
         self._trigger_brushes = []
         self._trigger_brush_by_bid = {}
         self._use_trigger_entries = []
@@ -3624,6 +3634,33 @@ class LogicThread(threading.Thread):
     # INTERACTIONS
     # =========================================================================
 
+    def _refresh_levelchanger_table(self):
+        """Pack LevelChanger activation geometry into dense numeric columns."""
+        things = getattr(self, '_levelchanger_things', ())
+        count = len(things)
+        if not count:
+            self._levelchanger_centres = np.empty((0, 3), dtype=np.float32)
+            self._levelchanger_radii = np.empty(0, dtype=np.float32)
+            self._levelchanger_eligible = np.empty(0, dtype=bool)
+            return
+
+        self._levelchanger_centres = np.asarray(
+            [thing.pos for thing in things],
+            dtype=np.float32,
+        ).reshape(count, 3)
+        self._levelchanger_radii = np.asarray(
+            [float(thing.properties.get('radius', 128.0)) for thing in things],
+            dtype=np.float32,
+        )
+        self._levelchanger_eligible = np.asarray(
+            [
+                not thing.properties.get('disabled', False)
+                and thing.properties.get('usable', True)
+                for thing in things
+            ],
+            dtype=bool,
+        )
+
     def _handle_interactions(self, use_key_pressed: bool):
         self.current_hud_message = ""
         self.current_hud_key_name = None
@@ -3683,33 +3720,56 @@ class LogicThread(threading.Thread):
                             door_consumed_use = True
 
 
-        if not door_consumed_use:
-            p_pos = glm.vec3(px, py, pz)
-            p_forward = glm.vec3(math.sin(self.player.angle), 0, math.cos(self.player.angle))
-            for thing in self._levelchanger_things:
-                if thing.properties.get('disabled', False):
-                    continue
-                # skip if not usable
-                if not thing.properties.get('usable', True):
-                    continue
-                t_pos = glm.vec3(thing.pos)
-                dist = glm.distance(p_pos, t_pos)
-                radius = float(thing.properties.get('radius', 128.0))
-                if dist < radius:
-                    to_thing = glm.normalize(t_pos - p_pos)
-                    if glm.dot(p_forward, to_thing) > 0.5:
-                        self.current_hud_message = "[E] Complete Level"
-                        if use_key_pressed:
-                            target_map = thing.properties.get('target_map', '')
-                            self.level_complete_ui = {
-                                'active': True,
-                                'target_map': target_map,
-                                'title': 'Complete',
-                                'button_text': 'Continue'
-                            }
-                            if self.io_manager:
-                                self.io_manager.fire_output(thing, 'OnUse')
-                        return
+        if not door_consumed_use and self._levelchanger_things:
+            # Radius activation is squared, removing the old per-entry
+            # glm.distance() sqrt. Facing is also tested without per-row
+            # normalisation: forward_dot > 0 and forward_dot² > 0.25*d².
+            centres = getattr(self, '_levelchanger_centres', None)
+            radii = getattr(self, '_levelchanger_radii', None)
+            eligible = getattr(self, '_levelchanger_eligible', None)
+            if (
+                centres is None
+                or radii is None
+                or eligible is None
+                or len(centres) != len(self._levelchanger_things)
+            ):
+                self._refresh_levelchanger_table()
+                centres = self._levelchanger_centres
+                radii = self._levelchanger_radii
+                eligible = self._levelchanger_eligible
+
+            player_pos = np.asarray((px, py, pz), dtype=np.float32)
+            offsets = centres - player_pos
+            distance_sq = np.einsum('ij,ij->i', offsets, offsets)
+            in_range = eligible & (distance_sq < radii * radii)
+
+            if in_range.any():
+                forward = np.asarray(
+                    (math.sin(self.player.angle), 0.0, math.cos(self.player.angle)),
+                    dtype=np.float32,
+                )
+                forward_dot = offsets @ forward
+                facing = (
+                    (forward_dot > 0.0)
+                    & (forward_dot * forward_dot > (0.25 * distance_sq))
+                )
+                candidates = np.flatnonzero(in_range & facing)
+                if candidates.size:
+                    # Preserve authored list order: first matching row wins.
+                    row = int(candidates[0])
+                    thing = self._levelchanger_things[row]
+                    self.current_hud_message = "[E] Complete Level"
+                    if use_key_pressed:
+                        target_map = thing.properties.get('target_map', '')
+                        self.level_complete_ui = {
+                            'active': True,
+                            'target_map': target_map,
+                            'title': 'Complete',
+                            'button_text': 'Continue'
+                        }
+                        if self.io_manager:
+                            self.io_manager.fire_output(thing, 'OnUse')
+                    return
 
     # =========================================================================
     # MOVER/DOOR UPDATES
