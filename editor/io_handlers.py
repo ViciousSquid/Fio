@@ -1205,18 +1205,40 @@ def register_all_input_handlers(io_manager: IOManager):
                 event_time = max(0.0, float(event.get('time', 0.0)))
             except (TypeError, ValueError):
                 continue
+            # Cutscene events have two valid schemas:
+            # - direct input: target_id/target_name + input
+            # - legacy output: source_id/source_name + output
+            # Preserve either shape so switching a LogicCamera from a JSON
+            # cutscene back to a PathNode does not silently discard its events.
+            target_id = str(event.get('target_id', '') or '')
+            target_name = str(event.get('target_name', '') or '')
+            input_name = str(event.get('input', '') or '').strip()
             source_id = str(event.get('source_id', '') or '')
             source_name = str(event.get('source_name', '') or '')
             output = str(event.get('output', '') or '').strip()
-            if not output or not (source_id or source_name):
+
+            is_direct_input = bool((target_id or target_name) and input_name)
+            is_legacy_output = bool((source_id or source_name) and output)
+            if not (is_direct_input or is_legacy_output):
                 continue
-            io_events.append({
+
+            io_event = {
                 'time': event_time,
-                'source_id': source_id,
-                'source_name': source_name,
-                'output': output,
                 'parameter': event.get('parameter'),
-            })
+            }
+            if is_direct_input:
+                io_event.update({
+                    'target_id': target_id,
+                    'target_name': target_name,
+                    'input': input_name,
+                })
+            else:
+                io_event.update({
+                    'source_id': source_id,
+                    'source_name': source_name,
+                    'output': output,
+                })
+            io_events.append(io_event)
         io_events.sort(key=lambda event: event['time'])
 
         logic.cinematic_state = {
