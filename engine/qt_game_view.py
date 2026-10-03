@@ -2089,14 +2089,6 @@ class QtGameView(QOpenGLWidget):
             24 if style == 3 else max(42, min(68, int(viewport_height * 0.085)))
         )
         painter.setFont(health_font)
-        health_ratio = max(
-            0.0,
-            min(
-                1.0,
-                float(health) / float(max_health)
-                if float(max_health) > 0.0 else 0.0,
-            ),
-        )
         health_color = self._hud_health_orange
         painter.setPen(health_color)
         health_text = str(int(health))
@@ -2105,8 +2097,8 @@ class QtGameView(QOpenGLWidget):
         health_x = 0
         health_y = self._hud_count_baseline(metrics, health_text, viewport_height)
 
-        # Health is the large orange count. Only the health count gets the
-        # independent dim/alert fade; ammo follows the normal whole-HUD opacity.
+        # Health remains the Fio orange count. Only health gets the independent
+        # damage fade; ammo follows the normal whole-HUD opacity.
         painter.save()
         painter.setOpacity(hud_alpha * hud_opacity * health_hud_alpha)
         painter.setPen(self._hud_count_shadow_pen)
