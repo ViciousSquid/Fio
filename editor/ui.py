@@ -705,7 +705,11 @@ class Ui_MainWindow(object):
         terrain_menu = QMenu(MainWindow)
         terrain_menu.addAction(MainWindow.terrain_action)
         terrain_menu.addAction(MainWindow.procedural_action)
-        MainWindow.cutscenes_btn = make_btn(\n            "assets/sprites/logic_camera.png", "Cutscenes",\n            on_click=MainWindow.open_cutscene_wizard, bottom_color=group_3_color)\n\n        terrain_btn = make_btn("assets/terrain.png", "Procedural Tools", bottom_color=group_3_color)
+        MainWindow.cutscenes_btn = make_btn(
+            "assets/sprites/logic_camera.png", "Cutscenes",
+            on_click=MainWindow.open_cutscene_wizard, bottom_color=group_3_color)
+
+        terrain_btn = make_btn("assets/terrain.png", "Procedural Tools", bottom_color=group_3_color)
         terrain_btn.clicked.connect(lambda: terrain_menu.popup(
             terrain_btn.mapToGlobal(terrain_btn.rect().bottomLeft())))
 
