@@ -57,7 +57,7 @@ class _Host:
         self._write = types.SimpleNamespace(projectiles=None)
         self.game_state = types.SimpleNamespace(get_write_state=lambda: self._write)
 
-    def _transit_projectile_through_portals(self, proj, prev):
+    def _transit_projectile_through_portals(self, projectiles, index, prev):
         return None
 
 
