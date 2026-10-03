@@ -1600,6 +1600,8 @@ uniform int use_textures;
 
 // Terrain texture stamps. The CPU packs up to MAX_TERRAIN_STAMP_TEXTURES
 // source images into one atlas so GL 3.3 only needs one additional sampler.
+#define MAX_TERRAIN_STAMPS 32
+#define MAX_TERRAIN_STAMP_TEXTURES 16
 uniform sampler2D terrainStampAtlas;
 uniform int uStampCount;
 uniform vec4 uStampBounds[MAX_TERRAIN_STAMPS]; // minX, minZ, maxX, maxZ
