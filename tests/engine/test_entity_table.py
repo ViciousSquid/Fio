@@ -8,7 +8,9 @@ the failure occurs in the pure data projection before rendering.
 import pytest
 
 from engine import entity_table
-from engine.change_journal import touch
+from engine.change_journal import MOVED, touch
+from engine.effect_entity import Effect
+from engine.effect_table import EffectStore
 
 
 @pytest.mark.parametrize(
@@ -116,3 +118,36 @@ def test_sprite_gl_cache_survives_the_render_buffers_alternating():
         assert renderer._sprite_gl_ids(back)[0] == 7
     assert len(resolved) == 2, (
         "%d resolutions for two recipe lists over ten frames" % len(resolved))
+
+
+def test_moved_effect_rows_sync_to_effect_store_with_one_masked_write(monkeypatch):
+    first = Effect(pos=[0.0, 0.0, 0.0])
+    second = Effect(pos=[10.0, 0.0, 0.0])
+    store = EffectStore()
+    table = entity_table.EntityTable()
+
+    table.begin_frame([first, second], epoch=1, effect_store=store)
+    new_positions = {
+        id(first): (100.0, 1.0, 2.0),
+        id(second): (200.0, 3.0, 4.0),
+    }
+
+    def fail_set_position(*args, **kwargs):
+        raise AssertionError("per-effect set_position loop was used")
+
+    monkeypatch.setattr(EffectStore, "set_position", fail_set_position)
+
+    table._apply_changes(
+        [first, second],
+        {id(first): MOVED, id(second): MOVED},
+        new_positions,
+        effect_store=store,
+    )
+
+    np.testing.assert_array_equal(
+        store.pos[:2],
+        np.asarray(
+            [new_positions[id(first)], new_positions[id(second)]],
+            dtype=np.float32,
+        ),
+    )
