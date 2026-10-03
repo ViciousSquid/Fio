@@ -321,7 +321,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 #: The player, the camera and ``self`` inside the player keep their own glm
 #: positions; they are not table rows.
 # ``table`` is a dense table (MonsterTable.pos is a NumPy column, not an entity).
-_NOT_ENTITIES = {"player", "player2", "camera", "self", "table"}
+# ``projectiles`` is also a dense structure-of-arrays store; writes to its
+# numeric columns are simulation state, not object-entity movement.
+_NOT_ENTITIES = {"player", "player2", "camera", "self", "table", "projectiles"}
 
 
 def _in_place_position_writes(tree):
