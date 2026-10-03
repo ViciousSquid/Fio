@@ -3509,6 +3509,42 @@ class PropertyEditor(QWidget):
         form.setSpacing(6)
         form.setContentsMargins(8, 8, 8, 8)
 
+        # Cutscene file. This is the explicit JSON playback selector.
+        cutscene = ClickableComboBox()
+        cutscene.setEditable(True)
+        cutscene.addItem("(none)")
+        cutscene_files = []
+        try:
+            import glob
+            cutscene_files = sorted(
+                os.path.basename(path)
+                for path in glob.glob(
+                    os.path.join(self.editor.root_dir, "cutscenes", "*.json")
+                )
+            )
+        except (AttributeError, TypeError, OSError):
+            cutscene_files = []
+        for filename in cutscene_files:
+            cutscene.addItem(filename)
+
+        current_cutscene = str(thing.properties.get('cutscene_file', '') or '')
+        if current_cutscene:
+            idx = cutscene.findText(current_cutscene)
+            if idx >= 0:
+                cutscene.setCurrentIndex(idx)
+            else:
+                cutscene.setEditText(current_cutscene)
+
+        def _on_cutscene(text):
+            clean = text.strip()
+            thing.properties['cutscene_file'] = '' if clean == '(none)' else clean
+
+        cutscene.currentTextChanged.connect(_on_cutscene)
+        cutscene.setToolTip(
+            "Play this authored cutscene JSON. When set, it takes precedence over Path Target."
+        )
+        form.addRow("Cutscene File:", cutscene)
+
         # Path target
         combo = ClickableComboBox()
         combo.setEditable(True)
