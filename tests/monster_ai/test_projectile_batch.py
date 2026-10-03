@@ -32,6 +32,7 @@ class _Host:
     PROJECTILE_MONSTER_RADIUS = LogicThread.PROJECTILE_MONSTER_RADIUS
     PROJECTILE_PLAYER_RADIUS = LogicThread.PROJECTILE_PLAYER_RADIUS
     _update_monster_projectiles = LogicThread._update_monster_projectiles
+    _update_monster_projectiles_dense = LogicThread._update_monster_projectiles_dense
     _projectile_monster_candidates = LogicThread._projectile_monster_candidates
     _projectile_wall_candidates = LogicThread._projectile_wall_candidates
     _projectile_store = LogicThread._projectile_store
@@ -89,8 +90,8 @@ def test_projectile_store_is_numeric_and_dense():
     store = ProjectileStore()
     store.add((1.0, 2.0, 3.0), (4.0, 5.0, 6.0), 7, 8, 9)
     assert len(store) == 1
-    assert store.pos.dtype == np.float64
-    assert store.vel.dtype == np.float64
+    assert store.pos.dtype == np.float32
+    assert store.vel.dtype == np.float32
     assert store.owner_id.dtype == np.int64
     assert store.damage[0] == 8
     assert store.lifetime[0] == 9
