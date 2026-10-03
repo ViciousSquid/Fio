@@ -2261,12 +2261,16 @@ class LogicThread(threading.Thread):
                                 + traceback.format_exc(),
                             )
                     else:
-                        # Headless hosts have no GUI teardown path. Do not
-                        # invoke _apply_play_mode(False) from this thread.
-                        debug_log(
-                            "LogicThread",
-                            "No GUI teardown callback is registered after tick failure",
-                        )
+                        # Standalone/headless hosts have no Qt lifecycle to marshal
+                        # through, so they still need the native engine teardown.
+                        try:
+                            self._apply_play_mode(False)
+                        except Exception:
+                            debug_log(
+                                "LogicThread",
+                                "Play-session teardown after tick failure also failed:\n"
+                                + traceback.format_exc(),
+                            )
                     # Discard accumulated play-mode time. The next frame starts
                     # from a clean editor-mode state rather than replaying stale
                     # simulation debt.
