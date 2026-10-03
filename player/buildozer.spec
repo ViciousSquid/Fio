@@ -25,7 +25,7 @@ package.domain = org.vicioussquid.fio
 # refused by player/fiopak.py.
 source.dir = ..
 source.include_exts = py,png,jpg,jpeg,tga,bmp,ogg,wav,json,fiopak,glsl,vert,frag,obj,glb,mtl,ttf,otf
-source.include_patterns = player/*,engine/*,plugins/*,assets/*,game.fiopak
+source.include_patterns = player/*,engine/*,plugins/*,assets/*,game.fiopak,python_runtime.py
 # Exclude the desktop-only editor and its heavy PyQt5 dependency. The repo-root
 # main.py IS the entry point (it detects Android and launches the player), so it
 # is intentionally NOT excluded.
