@@ -272,6 +272,12 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.camera_keys_list = QtWidgets.QListWidget()
         self.camera_keys_list.setMinimumHeight(120)
         cv.addWidget(self.camera_keys_list)
+        camera_buttons = QtWidgets.QHBoxLayout()
+        delete_camera_button = QtWidgets.QPushButton("Remove selected camera keyframe")
+        delete_camera_button.clicked.connect(self._remove_selected_camera_keyframe)
+        camera_buttons.addWidget(delete_camera_button)
+        camera_buttons.addStretch(1)
+        cv.addLayout(camera_buttons)
         camera_layout.addWidget(camera_box)
         camera_layout.addStretch(1)
         tabs.addTab(camera_page, "Camera")
@@ -1174,6 +1180,14 @@ class CutsceneWizard(QtWidgets.QDialog):
         self.camera_keys.sort(key=lambda x: x["time"])
         self._refresh_camera_list()
         self.camera_time.setValue(float(frame["time"]) + 1.0)
+
+    def _remove_selected_camera_keyframe(self):
+        row = self.camera_keys_list.currentRow()
+        if not (0 <= row < len(self.camera_keys)):
+            return
+        self.camera_keys.pop(row)
+        self._refresh_camera_list()
+        self._refresh_summary()
 
     def _refresh_camera_list(self):
         self.camera_keys_list.clear()
