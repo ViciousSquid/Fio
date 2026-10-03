@@ -4136,20 +4136,13 @@ class LogicThread(threading.Thread):
             # on maps that actually have portals; the dense movement path remains
             # the normal case.
             if Portal is not None and len(getattr(self, '_portal_things', ()) or ()):
-                for i, proj in enumerate(projectiles):
-                    p = proj.get('pos')
-                    v = proj.get('vel')
-                    if isinstance(p, list) and len(p) == 3:
-                        p[0], p[1], p[2] = map(float, pos[i])
-                    else:
-                        proj['pos'] = pos[i].tolist()
-                    if isinstance(v, list) and len(v) == 3:
-                        v[0], v[1], v[2] = map(float, vel[i])
-                    else:
-                        proj['vel'] = vel[i].tolist()
-                    self._transit_projectile_through_portals(proj, tuple(prev[i]))
-                    pos[i] = proj['pos']
-                    vel[i] = proj['vel']
+                for i in range(count):
+                    projectiles.pos[i] = pos[i]
+                    projectiles.vel[i] = vel[i]
+                    self._transit_projectile_through_portals(
+                        projectiles, i, tuple(prev[i]))
+                    pos[i] = projectiles.pos[i]
+                    vel[i] = projectiles.vel[i]
     
             speed = np.sqrt(
                 vel[:, 0] * vel[:, 0]
@@ -4204,15 +4197,13 @@ class LogicThread(threading.Thread):
                 wall_hits = None
     
             for i in live_rows.tolist():
-                proj = projectiles[i]
-    
                 if (
                     player_hit[i]
                     and self.player
                     and not self.god_mode
                     and not self.player_dead
                 ):
-                    damage = proj['damage']
+                    damage = float(projectiles.damage[i])
                     self._apply_player_damage(damage)
                     if self.monster_ai.monster_debug_active:
                         debug_log(
@@ -4230,7 +4221,7 @@ class LogicThread(threading.Thread):
                         hit_monster = candidate
                         break
                 if hit_monster is not None:
-                    damage = proj['damage']
+                    damage = float(projectiles.damage[i])
                     self.monster_ai._apply_monster_damage(
                         hit_monster, damage, attacker=None
                     )
