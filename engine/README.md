@@ -227,7 +227,7 @@ Low-power hardware is handled through cheaper shader variants and reduced-cost e
 
 ## Runtime baseline
 
-Fio CANARY is developed and tested against **CPython 3.14, GIL-enabled**. The supported dependency baseline is maintained in the repository root `requirements.txt`:
+Fio CANARY requires **CPython 3.14, GIL-enabled**. The supported dependency baseline is maintained in the repository root `requirements.txt`:
 
 - NumPy 2.5.3
 - pygame-ce 2.5.8
