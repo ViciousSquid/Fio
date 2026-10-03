@@ -94,6 +94,7 @@ class Toast(QLabel):
         else:
             bg_color = "#2E6F40"
         
+        self.setTextFormat(Qt.PlainText)
         self.setStyleSheet(f"""
             QLabel {{
                 background-color: {bg_color};
@@ -886,8 +887,8 @@ class MainWindow(QMainWindow):
         toast.setTextFormat(Qt.RichText)
         toast.setText(text)
         toast.adjustSize()
-        toast.update_position()
         toast.show()
+        toast.update_position()
         toast.raise_()
         toast.anim.stop()
         toast.opacity_effect.setOpacity(1.0)
