@@ -11,6 +11,15 @@ import math
 import glm
 
 
+Key_W = 0x57
+Key_S = 0x53
+Key_A = 0x41
+Key_D = 0x44
+Key_Space = 0x20
+Key_C = 0x43
+Key_Shift = 0x01000020
+
+
 class LogicEditor:
     """Runtime input/navigation for the editor viewport."""
 
@@ -40,22 +49,22 @@ class LogicEditor:
         up = glm.vec3(0, 1, 0)
 
         move_dir = glm.vec3(0, 0, 0)
-        if logic.Key_W in keys:
+        if Key_W in keys:
             move_dir += forward
-        if logic.Key_S in keys:
+        if Key_S in keys:
             move_dir -= forward
-        if logic.Key_A in keys:
+        if Key_A in keys:
             move_dir -= right
-        if logic.Key_D in keys:
+        if Key_D in keys:
             move_dir += right
-        if logic.Key_Space in keys:
+        if Key_Space in keys:
             move_dir += up
-        if logic.Key_C in keys:
+        if Key_C in keys:
             move_dir -= up
 
         if glm.length(move_dir) > 0.001:
             move_dir = glm.normalize(move_dir)
             speed = logic.EDITOR_CAMERA_SPEED
-            if logic.Key_Shift in keys:
+            if Key_Shift in keys:
                 speed *= logic.EDITOR_CAMERA_FAST_MULT
             logic.editor_camera.pos += move_dir * speed * delta
