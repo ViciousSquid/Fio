@@ -3,14 +3,14 @@
     "brushes": [
         {
             "pos": [
-                -792,
+                -792.0,
                 232,
-                464
+                504.0
             ],
             "size": [
-                80,
+                80.0,
                 592,
-                352
+                432.0
             ],
             "operation": "add",
             "textures": {
@@ -189,14 +189,14 @@
         },
         {
             "pos": [
-                -96,
+                128.0,
                 232,
-                680
+                680.0
             ],
             "size": [
-                1472,
+                1024.0,
                 592,
-                80
+                80.0
             ],
             "operation": "add",
             "textures": {
@@ -366,14 +366,14 @@
         },
         {
             "pos": [
-                -568,
+                -568.0,
                 8,
-                560
+                600.0
             ],
             "size": [
-                368,
+                368.0,
                 144,
-                160
+                240.0
             ],
             "textures": {
                 "north": "default.png",
@@ -449,7 +449,7 @@
                 "south": "Metal_08-512x512.png",
                 "east": "default.png",
                 "west": "Metal_08-512x512.png",
-                "top": "Metal_08-512x512.png",
+                "top": "Stone_09-512x512.png",
                 "down": "Metal_08-512x512.png"
             },
             "id": "5b10b49b-9b6c-45d9-91ee-0b6f06970590",
@@ -482,7 +482,7 @@
                             0
                         ],
                         "d": 96,
-                        "texture": "Metal_08-512x512.png",
+                        "texture": "Stone_09-512x512.png",
                         "face": "top"
                     },
                     {
@@ -541,8 +541,8 @@
                     0
                 ],
                 "top": [
-                    0,
-                    0
+                    0.0,
+                    0.0
                 ],
                 "down": [
                     0,
@@ -563,8 +563,8 @@
                     0.25
                 ],
                 "top": [
-                    0.25,
-                    0.25
+                    2.625,
+                    1.3125
                 ],
                 "down": [
                     0.25,
@@ -581,12 +581,14 @@
             },
             "uv_angle": {
                 "west": 0,
-                "top": 0,
+                "top": 0.0,
                 "down": 0,
                 "north": 0,
                 "south": 0
             },
-            "uv_natural": {},
+            "uv_natural": {
+                "top": true
+            },
             "hidden": false
         },
         {
@@ -1688,18 +1690,18 @@
         },
         {
             "pos": [
-                -1048,
+                -800.0,
                 352,
-                896
+                896.0
             ],
             "size": [
-                464,
+                960.0,
                 832,
-                352
+                352.0
             ],
             "textures": {
                 "north": "default.png",
-                "south": "default.png",
+                "south": "concrete02.png",
                 "east": "default.png",
                 "west": "default.png",
                 "top": "default.png",
@@ -3071,6 +3073,82 @@
                 "west": 90
             },
             "name": "curtain"
+        },
+        {
+            "pos": [
+                -1304.0,
+                16,
+                888.0
+            ],
+            "size": [
+                48.0,
+                128,
+                216.0
+            ],
+            "textures": {
+                "north": "trigger.jpg",
+                "south": "trigger.jpg",
+                "east": "trigger.jpg",
+                "west": "trigger.jpg",
+                "top": "trigger.jpg",
+                "down": "default.png",
+                "bottom": "trigger.jpg"
+            },
+            "id": "5aa4a6a4-f70b-4e04-9777-2eb69b84ef21",
+            "is_trigger": true,
+            "trigger_type": "Once",
+            "trigger_filters": [
+                "player"
+            ],
+            "trigger_poll_interval": 0.5,
+            "trigger_action": "teleport",
+            "target_node": "end"
+        },
+        {
+            "pos": [
+                -576.0,
+                304.0,
+                736.0
+            ],
+            "size": [
+                52.0,
+                192.0,
+                48.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "StripLight.jpg",
+                "east": "nodraw.jpg",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "6616e531-6c60-4103-b874-9e5d829398cf",
+            "uv_angle": {
+                "south": 90.0
+            }
+        },
+        {
+            "pos": [
+                -1920.0,
+                8.0,
+                -480.0
+            ],
+            "size": [
+                512.0,
+                144.0,
+                32.0
+            ],
+            "textures": {
+                "north": "default.png",
+                "south": "default.png",
+                "east": "default.png",
+                "west": "default.png",
+                "top": "default.png",
+                "down": "default.png"
+            },
+            "id": "84b9942e-0152-46bb-8257-3ca572c345db",
+            "hidden": false
         }
     ],
     "things": [
@@ -3672,7 +3750,7 @@
                 "monster_type": "flying",
                 "monster_id": 0,
                 "health": -125,
-                "damage": 10,
+                "damage": 12,
                 "triggered": false,
                 "wake_on_sight": true,
                 "awake": false,
@@ -3686,9 +3764,22 @@
                 "non_hostile": false,
                 "io_enabled": true,
                 "hidden": false,
-                "disabled": false
+                "disabled": false,
+                "can_hear": false,
+                "dead": false,
+                "team": ""
             },
-            "io_connections": []
+            "io_connections": [
+                {
+                    "output": "OnDeath",
+                    "target": "Portal_1",
+                    "input": "Enable",
+                    "parameter": "",
+                    "delay": 1.0,
+                    "fire_once": false,
+                    "target_id": "2255ec35-6b25-41ef-ba13-cda9f5e355b7"
+                }
+            ]
         },
         {
             "type": "logic_camera",
@@ -4119,9 +4210,9 @@
         {
             "type": "effect",
             "pos": [
-                -1728,
-                0,
-                -32
+                -1728.0,
+                0.0,
+                -32.0
             ],
             "properties": {
                 "type": "effect",
@@ -4137,14 +4228,14 @@
                 "custom_loop": true,
                 "width": 63.71,
                 "height": 139.08,
-                "intensity": 1,
+                "intensity": 1.01,
                 "colour": [
                     255,
                     110,
                     25
                 ],
                 "lifetime": 0.5,
-                "light_enabled": true,
+                "light_enabled": false,
                 "light_radius": 128,
                 "light_intensity": 2.5,
                 "light_colour": [
@@ -4561,6 +4652,249 @@
                 "collect_respawn_time": 20.0,
                 "collect_key_name": "blue_key",
                 "collect_weapon": "cig",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "auto",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "portal",
+            "pos": [
+                -736.0,
+                228.0,
+                600.0
+            ],
+            "properties": {
+                "type": "portal",
+                "io_enabled": true,
+                "name": "Portal_2",
+                "id": "611cd456-cad7-409c-af06-40167255c604",
+                "portal_target": "Portal_1",
+                "width": 198.4000000000001,
+                "height": 256.0,
+                "rotation": [
+                    90.0,
+                    0.0,
+                    0.0
+                ],
+                "angle": 90.0,
+                "active": false,
+                "portal_direction": "both",
+                "color": [
+                    255,
+                    255,
+                    255
+                ],
+                "show_rim": false,
+                "glasses": true,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "parent_local_pos": null,
+                "parent_local_yaw": 0.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "portal",
+            "pos": [
+                -1304.0,
+                88.0,
+                896.0
+            ],
+            "properties": {
+                "type": "portal",
+                "io_enabled": true,
+                "name": "Portal_1",
+                "id": "2255ec35-6b25-41ef-ba13-cda9f5e355b7",
+                "portal_target": "Portal_2",
+                "width": 200.0,
+                "height": 256.0,
+                "rotation": [
+                    270.0,
+                    0.0,
+                    0.0
+                ],
+                "angle": 270.0,
+                "active": false,
+                "portal_direction": "both",
+                "color": [
+                    255,
+                    255,
+                    255
+                ],
+                "show_rim": false,
+                "glasses": true,
+                "parent_mover": "",
+                "parent_offset": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "parent_local_pos": null,
+                "parent_local_yaw": 0.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "path_node",
+            "pos": [
+                -720.0,
+                224.0,
+                592.0
+            ],
+            "properties": {
+                "type": "path_node",
+                "io_enabled": true,
+                "name": "end",
+                "id": "cdc6af8e-3503-4d9a-a2aa-c2db72927d75",
+                "radius": 256.0,
+                "show_radius": false,
+                "affects_type": "both",
+                "next_node": "",
+                "wait_time": 0.0,
+                "speed": 1.0
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                -1944.0,
+                -8.0,
+                176.0
+            ],
+            "properties": {
+                "type": "prop",
+                "io_enabled": true,
+                "name": "Prop_3",
+                "id": "278c73f3-1adb-4c4c-981e-45d5e3127170",
+                "model_path": "",
+                "render_mode": "billboard",
+                "sprite_path": "assets/sprites/health.png",
+                "sprite_size": [
+                    32.0,
+                    32.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": true,
+                "collect_type": "health",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "gun1",
+                "collect_custom_sprite": "",
+                "mass": 1.0,
+                "collision_size": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "physics_enabled": false,
+                "no_collision": true,
+                "collision_shape": "auto",
+                "gravity": true,
+                "friction": 0.55,
+                "linear_damping": 0.08,
+                "angular_damping": 0.12,
+                "disabled": false,
+                "rotation": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "io_connections": []
+        },
+        {
+            "type": "prop",
+            "pos": [
+                -1472.0,
+                136.0,
+                -952.0
+            ],
+            "properties": {
+                "type": "prop",
+                "io_enabled": true,
+                "name": "Prop_4",
+                "id": "6d5362ee-8981-45cd-b380-6a4f359a6a9d",
+                "model_path": "",
+                "render_mode": "billboard",
+                "sprite_path": "assets/sprites/health.png",
+                "sprite_size": [
+                    32.0,
+                    33.0
+                ],
+                "carry_enabled": false,
+                "carry_reach": 110.0,
+                "carry_distance": 55.0,
+                "carry_offset": [
+                    0.0,
+                    -6.0,
+                    0.0
+                ],
+                "drop_velocity": 0.0,
+                "drop_angular_velocity": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "collect_enabled": true,
+                "collect_type": "health",
+                "collect_value": 25,
+                "collect_activation": "walk_over",
+                "collect_collected": false,
+                "collect_respawns": false,
+                "collect_respawn_time": 20.0,
+                "collect_key_name": "blue_key",
+                "collect_weapon": "gun1",
                 "collect_custom_sprite": "",
                 "mass": 1.0,
                 "collision_size": [
