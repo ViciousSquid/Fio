@@ -494,6 +494,11 @@ class LogicThread(threading.Thread):
 
         # Player 2 turn sensitivity (degrees per second)
         self.p2_turn_sensitivity = 10.0
+        # A failed simulation tick enters a controlled fault state instead of
+        # continuing from a partially mutated world. The current play session
+        # is torn down cleanly and the editor remains usable.
+        self._tick_faulted = False
+        self._tick_fault_message = ""
 
     @property
     def brushes(self):
@@ -2197,14 +2202,30 @@ class LogicThread(threading.Thread):
                 try:
                     self._tick(self.TICK_DURATION)
                 except Exception:
-                    # A single bad tick (e.g. a broken entity handler) must not
-                    # silently kill the whole logic thread -- that freezes the
-                    # game and stops every other system with no visible error.
-                    # The full traceback is logged, so this isolates the failure
-                    # without hiding it; it is never a bare pass.
+                    # Never continue a failed simulation tick. By this point the
+                    # authoritative world may be only partially advanced, so
+                    # silently executing another tick would compound corruption.
                     import traceback
-                    debug_log("LogicThread",
-                              "Unhandled exception in _tick:\n" + traceback.format_exc())
+                    trace = traceback.format_exc()
+                    self._tick_faulted = True
+                    self._tick_fault_message = trace
+                    debug_log(
+                        "LogicThread",
+                        "Fatal simulation tick failure; ending play session:\n" + trace,
+                    )
+                    try:
+                        self._apply_play_mode(False)
+                    except Exception:
+                        debug_log(
+                            "LogicThread",
+                            "Play-session teardown after tick failure also failed:\n"
+                            + traceback.format_exc(),
+                        )
+                    # Discard accumulated play-mode time. The next frame starts
+                    # from a clean editor-mode state rather than replaying stale
+                    # simulation debt.
+                    accumulator = 0.0
+                    break
                 accumulator -= self.TICK_DURATION
                 #: Milliseconds the last simulation tick took (Debug Tables).
                 self.tick_ms = (time.perf_counter() - started) * 1000.0
