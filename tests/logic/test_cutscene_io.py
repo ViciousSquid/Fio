@@ -63,3 +63,33 @@ def test_cutscene_io_output_can_stop_the_active_camera():
 
     assert LogicThread._fire_cinematic_io_events(world) is False
     assert world.cinematic_state is None
+
+
+def test_cutscene_camera_teleport_holds_previous_shot_until_destination_time():
+    rows = [
+        {"time": 0.0, "pos": [0, 0, 0], "yaw": 0.0, "pitch": 0.0, "fov": 90.0},
+        {"time": 3.0, "pos": [1200, 80, -900], "yaw": 180.0, "pitch": 15.0, "fov": 70.0, "teleport": True},
+    ]
+
+    before_cut = LogicThread._cutscene_sample(rows, 2.5)
+    assert before_cut["pos"] == [0.0, 0.0, 0.0]
+    assert before_cut["yaw"] == 0.0
+    assert before_cut["pitch"] == 0.0
+    assert before_cut["fov"] == 90.0
+
+    at_cut = LogicThread._cutscene_sample(rows, 3.0)
+    assert at_cut["pos"] == [1200.0, 80.0, -900.0]
+    assert at_cut["yaw"] == 180.0
+    assert at_cut["pitch"] == 15.0
+    assert at_cut["fov"] == 70.0
+
+
+def test_cutscene_camera_keyframes_still_interpolate_without_teleport():
+    rows = [
+        {"time": 0.0, "pos": [0, 0, 0], "yaw": 0.0},
+        {"time": 2.0, "pos": [100, 20, 40], "yaw": 1.0},
+    ]
+
+    sample = LogicThread._cutscene_sample(rows, 1.0)
+    assert sample["pos"] == [50.0, 10.0, 20.0]
+    assert sample["yaw"] == 0.5
