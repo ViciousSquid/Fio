@@ -25,3 +25,13 @@ def test_hud_health_point_sizes_keep_other_styles_unchanged():
 def test_hud_style_2_health_text_uses_compact_bounds():
     assert QtGameView._hud_health_point_size(2, 1) == 32
     assert QtGameView._hud_health_point_size(2, 10_000) == 52
+
+
+def test_hud_style_3_uses_a_white_spaced_ammo_counter():
+    import inspect
+
+    source = inspect.getsource(QtGameView._draw_hud)
+
+    assert 'if style == 3:' in source
+    assert 'ammo_x += metrics.horizontalAdvance(" ")' in source
+    assert 'Qt.white if style == 3 else self._hud_ammo_green' in source
