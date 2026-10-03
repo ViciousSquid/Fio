@@ -31,7 +31,6 @@ from .change_journal import JOURNAL, STATE, moved, touch
 from .mover_table import MoverTable
 from .entity_table import ENT_PROP
 from .portal_transform import map_point as portal_map_point, map_direction as portal_map_direction
-from .effect_entity import Effect
 from .cutscene_runtime import CutsceneRuntime
 from .projectile_table import ProjectileStore
 from .effect_table import EffectStore
