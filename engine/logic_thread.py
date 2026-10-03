@@ -37,6 +37,7 @@ from .logic_timing import LogicTiming
 from .logic_collision import LogicCollision, COLLISION_KEYS as _COLLISION_KEYS
 from .logic_world import LogicWorld
 from .logic_render import LogicRender
+from .logic_session import LogicSession
 from .projectile_table import ProjectileStore
 from .effect_table import EffectStore
 
@@ -59,7 +60,7 @@ except ImportError:
 
 # Import I/O system
 try:
-    from editor.io_system import IOManager, get_connections
+    from editor.io_system import IOManager
     from editor.io_handlers import register_all_input_handlers
     IO_AVAILABLE = True
 except ImportError as e:
@@ -215,6 +216,7 @@ class LogicThread(threading.Thread):
         self._editor_mouselook_active = False
         # LogicRender owns frustum math, HUD render fades, and dense render-state publication.
         self.render_runtime = LogicRender(self)
+        self.session_runtime = LogicSession(self)
         
         # Player stats
         self.player_health = 100
@@ -661,466 +663,48 @@ class LogicThread(threading.Thread):
             self._apply_play_mode(enabled)
 
     def _apply_play_mode(self, enabled: bool):
-        self.play_mode = enabled
-        # A pause belongs to the session that took it: a new session, or the
-        # editor after one, never starts frozen by a request nobody released.
-        with self._world_pause_lock:
-            self._world_pause_owners = frozenset()
-        # Likewise a camera ceiling: a session that sets one (Big World) sets
-        # it again from its play-start hook, which runs after this.
-        self.overhead_height_limit = None
+        return self.session_runtime.apply_play_mode(enabled)
 
-        if enabled:
-            # A new Play session clears any previous fault marker.
-            self._tick_faulted = False
-            self._gui_fault_teardown_requested = False
-            self._tick_fault_message = ""
-            # Read P2 turn sensitivity from editor config
-            if hasattr(self.editor_state, 'config'):
-                self.p2_turn_sensitivity = float(
-                    self.editor_state.config.get('Controls', 'p2_turn_sensitivity', fallback=10.0)
-                )
-            self._init_movers()
-            self._init_doors()
-            self._init_parented_lights()
-            self._init_parented_portals()
-
-            # Bake swept-mesh collision for angled (clipped/convex) brushes so
-            # they collide as real slopes/wedges.  Must run before the spatial
-            # grid is populated below so the grid indexes them by their true
-            # geometry bounds.
-            self._prepare_angled_brush_collision()
-
-            # Build collision brushes for model entities
-            self._model_collision_brushes = self._build_model_collision_brushes()
-            self._physics_body_brushes = [
-                b for b in self._model_collision_brushes
-                if b.get('_physics_body')
-            ]
-            self._refresh_collision_brushes_cache()
-
-
-            # Reset dense Effect execution state for this Play Mode session.
-            # Runtime phase, origin and active state stay out of authoring objects.
-            self.effect_store.begin_session(self.things)
-
-            # Reset player stats
-            self.player_health = 100
-            self.player_max_health = 100
-            self.player_dead = False
-            self.god_mode = False
-            self.buddha_mode = False
-            self.notarget = False
-            
-            # Reset collection state
-            self._reset_trigger_state()
-            self.collected_keys.clear()
-            for thing in self.things:
-                if PropThing and isinstance(thing, PropThing):
-                    # Restores what the author set; forcing carry on here made
-                    # every Prop -- scenery models included -- carryable.
-                    thing.reset_collection()
-            if self._props is not None:
-                self._props.start()
-            
-            # Reset speaker state
-            self.active_speakers.clear()
-            self.hurt_trigger_timers.clear()
-            self.current_hud_message = ""
-            self.current_hud_key_name = None
-
-            # Reset water sound state (no spurious enter/exit on spawn)
-            self._player_was_in_water = False
-            self._waterwalk_timer = 0.0
-
-            # Reset gate inputs
-            self.gate_inputs = {}
-            
-            # Reset timer states
-            self.timer_states = {}
-            
-            # Reset active weapon / ammunition
-            self.active_weapon = None
-            self.player_ammo = 0
-            self.gun2_obtained = False
-            self._last_player_shot_time = float("-inf")
-            
-            # Reset visual fx
-            self.bullet_marks = []
-            self.muzzle_flash_active = False
-
-            # Reset P2 stats
-            self.player2_health = 100
-            self.player2_max_health = 100
-            self.player2_dead = False
-
-            # Reset monster AI state (delegated)
-            self._reset_all_monsters(clear_dead=True)
-            
-            # Reset I/O system
-            if self.io_manager:
-                self.io_manager.reset()
-                for brush in self.brushes:
-                    for conn in get_connections(brush):
-                        conn.reset()
-                for thing in self.things:
-                    for conn in get_connections(thing):
-                        conn.reset()
-            
-            # Build entity caches
-            self._build_entity_caches()
-
-            # Build spatial grid for fast collision queries (monsters + player)
-            from .physics import SpatialGrid, PhysicsWorld
-            self._spatial_grid = SpatialGrid(cell_size=512.0)
-            self._spatial_grid.populate(self.brushes + self._model_collision_brushes)
-            self._physics_world = PhysicsWorld(self._spatial_grid)
-            self._physics_world.rebuild(self._physics_body_brushes)
-            self.monster_ai.set_spatial_grid(self._spatial_grid)
-
-            # The Prop session is the registry for the Prop domain, so it
-            # exists for the whole play session and is filled by
-            # _build_entity_caches below.  A map with no Props leaves it empty,
-            # which costs an empty list and an empty dict.
-            self._props = PropSession(self)
-            self._props.start()
-
-            # Reset cinematic state (mover_path_states already reset by _init_movers)
-            self.cinematic_state = None
-            self.camera_transition = None
-            self._hud_cinematic_last_active = False
-            self._hud_cinematic_fade_started = None
-
-            # Start the health HUD hidden; player spawn uses the same fast
-            # 1.5-second fade-in followed immediately by the 4-second fade-out.
-            _hud_now = time.perf_counter()
-            self._hud_health_alpha = 0.0
-            self._hud_health_last_value = self.player_health
-            self._hud_health_fade_started = _hud_now
-            self._hud_health_fade_from = 0.0
-            self._hud_health_fade_phase = "in"
-
-                # Reset portal runtime state (transit + fade state).
-            self._portal_runtime().reset_session()
-
-            self.level_complete_ui = None
-
-            # Reset light fade transitions for a clean play session, and drop
-            # any cached fade "nominal" so intensity edits made in the editor
-            # between sessions are picked up on the next FadeIn.
-            self.light_fade_states.clear()
-            if Light is not None:
-                for _t in self.things:
-                    if isinstance(_t, Light) and hasattr(_t, '_fade_nominal'):
-                        del _t._fade_nominal
-
-            # Clear monster projectiles
-            self._monster_projectiles.clear()
-            self._projectile_positions = _NO_PROJECTILES
-
-            # Clear gunfire events
-            self._gunfire_events.clear()
-
-            # Fire OnPlayerSpawn
-            self._fire_player_spawn_outputs()
-            
-            # Initialize timers that start on
-            self._init_logic_timers()
-
-            # Start monster AI thread
-            self._start_monster_ai()
-            
-        else:
-            if self.cinematic_state and self.cinematic_state.get('json_cutscene'):
-                self._finish_json_cutscene(self.cinematic_state, fire_finished=False)
-            self._stop_monster_ai()
-            self._reset_trigger_state()
-            self.fired_once_triggers.clear()
-            self.collected_keys.clear()
-            self.active_speakers.clear()
-            self.hurt_trigger_timers.clear()
-            self._reset_movers()
-            self._reset_doors()
-            self._reset_parented_lights()
-            self._reset_parented_portals()
-            self._clear_angled_brush_collision()
-            self.current_hud_message = ""
-            self.current_hud_key_name = None
-            self.gate_inputs = {}
-            self.timer_states = {}
-            self.light_fade_states.clear()
-            self.active_weapon = None
-            self.bullet_marks = []
-            self.player_dead = False
-            self.muzzle_flash_active = False
-
-            # Clear spatial grid. Guarded on the *value*, not on the attribute
-            # existing: after one exit the attribute is present and None, so a
-            # second stop (a teardown path, or Stop pressed twice) used to raise
-            # AttributeError here and abandon the rest of the cleanup below.
-            props = getattr(self, '_props', None)
-            if props is not None:
-                props.stop()
-            self._props = None
-            physics_world = getattr(self, '_physics_world', None)
-            if physics_world is not None:
-                physics_world.clear()
-            self._physics_world = None
-            self.monster_ai.set_spatial_grid(None)
-            grid = getattr(self, '_spatial_grid', None)
-            if grid is not None:
-                grid.clear()
-            self._spatial_grid = None
-
-            # Reset mover path / cinematic state
-            self.mover_path_states = {}
-            self.cinematic_state = None
-            self.camera_transition = None
-            self._hud_cinematic_last_active = False
-            self._hud_cinematic_fade_started = None
-            self._hud_health_alpha = 0.5
-            self._hud_health_last_value = None
-            self._hud_health_fade_started = None
-            self._hud_health_fade_from = 0.5
-            self._hud_health_fade_phase = "idle"
-
-                # Reset portal runtime state (transit + fade state).
-            self._portal_runtime().reset_session()
-
-            self.level_complete_ui = None
-
-            # Clear monster projectiles
-            self._monster_projectiles.clear()
-            self._projectile_positions = _NO_PROJECTILES
-
-            # Clear gunfire events
-            self._gunfire_events.clear()
-
-            # Reset monster AI state
-            self._reset_all_monsters(clear_dead=False)
-            self._release_session_caches()
-
-        # Plugin play lifecycle: initialise per-session state on entering play,
-        # tear it down on leaving. Runs after the core reset above so plugins
-        # see a fully-prepared session.
-        if self.plugins is not None:
-            try:
-                if enabled:
-                    self.plugins.dispatch_play_start(self)
-                else:
-                    self.plugins.dispatch_play_stop(self)
-            except Exception as exc:
-                print(f"[LogicThread] plugin lifecycle dispatch failed: {exc}")
-            self._plugin_emit("play_start" if enabled else "play_stop")
-
-    # =========================================================================
     # SAVE / LOAD  (native play-session serialization)
     # =========================================================================
 
-    def save_session(self, path: str, *, map_name: str = "",
-                     save_mode: str = "full", base_level: dict = None):
-        """Serialize the live play session to *path*. Returns ``(ok, message)``.
+    def save_session(
+        self, path: str, *, map_name: str = "",
+        save_mode: str = "full", base_level: dict = None
+    ):
+        return self.session_runtime.save_session(
+            path,
+            map_name=map_name,
+            save_mode=save_mode,
+            base_level=base_level,
+        )
 
-        Native counterpart to the editor's ``save`` / ``quicksave`` console
-        commands. Requires an active play session — there is no live state to
-        capture in editor mode. Builds a snapshot with :mod:`engine.savegame`
-        (the whole level plus player transform, stats, cheat flags, collected
-        keys and door/mover/monster state) and writes it as JSON.
-
-        *save_mode* selects ``full`` / ``delta`` / ``both`` (see
-        :mod:`engine.savegame`); ``delta``/``both`` also want *base_level*, the
-        normalized original map to diff against. Both degrade to ``full`` when no
-        base level is available, so a save is never lost.
-        """
-        if not self.play_mode:
-            return False, "Nothing to save — not in play mode."
-        try:
-            from engine import savegame
-            # Big World maps force a delta save: never a full world snapshot.
-            # The live streaming session owns the persistent per-cell registry.
-            session = getattr(self, "_bigworld", None)
-            if session is not None and getattr(session, "streaming", False):
-                with self._tick_lock:
-                    session.commit_all()   # flush every cell, loaded or unloaded
-                    snapshot = savegame.build_snapshot(
-                        self, map_name=map_name,
-                        world_mode=savegame.WORLD_MODE_BIGWORLD,
-                        cell_deltas=session.serialize_registry(),
-                        base_world=session.base_identity(map_name))
-            else:
-                with self._tick_lock:   # a consistent frame, not a torn one
-                    snapshot = savegame.build_snapshot(
-                        self, map_name=map_name, save_mode=save_mode,
-                        base_level=base_level)
-            savegame.write(path, snapshot)
-            mode_used = snapshot.get("save_mode", "full")
-            world = snapshot.get("world_mode")
-            label = f"{mode_used}/{world}" if world else mode_used
-            return True, (f"Saved play session to '{os.path.basename(path)}' "
-                          f"({label})")
-        except Exception as exc:
-            return False, f"Save failed: {exc}"
-
-    def load_session(self, path: str, *, map_name: str = "",
-                     base_level: dict = None):
-        """Restore a saved play session from *path* as an overlay on the live
-        session. Returns ``(ok, message)``.
-
-        Native counterpart to the editor's ``load`` / ``quickload`` console
-        commands *when already in play mode*. The scene is not rebuilt — entity
-        state is matched back by stable id — so this must run against the same
-        map the save was taken on (the caller loads the map and enters play mode
-        first when starting from the editor).
-
-        The save mode (full / delta / both / legacy) is auto-detected from the
-        file's metadata; *map_name* is the currently-loaded map, used to validate
-        a delta's base map, and *base_level* that map as loaded (see
-        :func:`engine.savegame.restore_delta`). Loading never prompts unless
-        recovery is impossible.
-        """
-        if not self.play_mode:
-            return False, "Enter play mode before loading a session."
-        try:
-            from engine import savegame
-            data = savegame.read(path)
-            with self._tick_lock:
-                report = savegame.restore_auto(self, data, current_map_name=map_name,
-                                               base_level=base_level)
-            msg = f"Loaded play session from '{os.path.basename(path)}'"
-            warning = report.get("warning")
-            if warning:
-                msg += f" — {warning}"
-            return True, msg
-        except FileNotFoundError:
-            return False, f"Save file not found: {path}"
-        except Exception as exc:
-            return False, f"Load failed: {exc}"
+    def load_session(
+        self, path: str, *, map_name: str = "", base_level: dict = None
+    ):
+        return self.session_runtime.load_session(
+            path,
+            map_name=map_name,
+            base_level=base_level,
+        )
 
     def _release_session_caches(self):
-        """Drop every reference the finished session's caches hold.
+        return self.session_runtime.release_session_caches()
 
-        Everything here is rebuilt when Play starts (_build_entity_caches,
-        _init_movers/_init_doors, the collision set). Kept past Stop, these
-        lists pinned the session's objects -- after a restore-on-stop or a map
-        load, objects no longer in the world -- and anything resolving through
-        them reached those instead of the live ones. Outside play the entity
-        finders read the live world (see :meth:`_scan_entity`).
-        """
-        self._world_runtime().release_session_indexes()
-        self._collision_brushes_cache = []
-        self._model_collision_brushes = []
-        self._physics_body_brushes = []
-        self._mover_brush_list = []
-        self._door_brush_list = []
-        self._monster_spawn_health = {}
-        if self.io_manager is not None:
-            # Delayed events hold their connection; outputs queued from other
-            # threads hold their source entity.
-            self.io_manager.reset()
-        for player in (self.player, getattr(self, 'player2', None)):
-            if player is not None:
-                player.ground_object = None
     def _start_monster_ai(self):
-        """Start the monster AI processing thread."""
-        self._stop_monster_ai()
-        self.monster_ai_thread = MonsterAIThread(
-            self, self.monster_ai, self._monster_lock, tick_rate=30
-        )
-        self.monster_ai_thread.start()
+        return self.session_runtime.start_monster_ai()
 
     def _stop_monster_ai(self):
-        """Stop the monster AI thread and wait for it to finish.
-
-        Joined, not just signalled: the caller is about to tear down or
-        rebuild what ``MonsterAI.update`` reads (the spatial grid, the monster
-        list), and an update still in flight would run against it.
-        """
-        thread = self.monster_ai_thread
-        self.monster_ai_thread = None
-        if thread is not None:
-            thread.stop()
-            if thread.is_alive() and thread is not threading.current_thread():
-                thread.join(timeout=2.0)
+        return self.session_runtime.stop_monster_ai()
 
     def _reset_all_monsters(self, clear_dead=True):
-        """Reset all monster AI state. Called when entering or exiting play mode.
-
-        Also records each monster's authored health, keyed by UUID, so the
-        Respawn input has something to restore to: the live ``health`` property
-        is what damage mutates, so by the time a monster is dead the number the
-        map authored is gone.  One dict filled during a pass that already walks
-        every monster — no extra scan, and nothing new on the entity itself.
-        """
-        with self._monster_lock:
-            self.monster_ai.forget_monsters()
-        if not MonsterThing:
-            return
-        if clear_dead:
-            self._monster_spawn_health = {}
-        reset = []
-        for thing in self.things:
-            if not isinstance(thing, MonsterThing):
-                continue
-            reset.append(thing)
-            if clear_dead:
-                try:
-                    self._monster_spawn_health[thing.properties.get('id')] = \
-                        int(thing.properties.get('health', 100))
-                except (TypeError, ValueError):
-                    pass
-            thing.properties.pop('is_shooting', None)
-            thing.properties.pop('_vel_y', None)
-            if clear_dead:
-                thing.properties.pop('dead', None)
-            triggered  = thing.properties.get('triggered', False)
-            wake_sight = thing.properties.get('wake_on_sight', True)
-            if triggered or wake_sight:
-                thing.properties['awake'] = False
-            else:
-                thing.properties['awake'] = True
-        # dead and is_shooting choose the sprite: without this a monster left
-        # mid-shot, or dead, when play stopped kept that sprite in the editor.
-        JOURNAL.record_many(reset, STATE)
+        return self.session_runtime.reset_all_monsters(clear_dead=clear_dead)
 
     def _start_speakers_on_spawn(self):
-        """Turn on speakers authored with Start On when the player spawns.
-
-        This goes through the normal PlaySound input so speaker state,
-        active-speaker bookkeeping, and OnSoundStarted outputs stay consistent
-        with ordinary I/O-triggered playback.
-        """
-        if not self.io_manager or not Speaker:
-            return
-        for thing in self.things:
-            if not isinstance(thing, Speaker):
-                continue
-            if not bool(thing.properties.get('play_on_start', False)):
-                continue
-            target_name = thing.properties.get('name', '')
-            target_id = thing.properties.get('id', '')
-            self.io_manager._execute_input(
-                target_name,
-                'PlaySound',
-                '',
-                'PlayerSpawn',
-                target_id=target_id,
-            )
+        return self.session_runtime.start_speakers_on_spawn()
 
     def _fire_player_spawn_outputs(self):
-        if not self.io_manager:
-            return
-
-        # Start-on speakers initialise before the PlayerStart output chain, so
-        # an explicit OnPlayerSpawn connection can override the authored state.
-        self._start_speakers_on_spawn()
-
-        if not PlayerStart:
-            return
-        for thing in self.things:
-            if isinstance(thing, PlayerStart):
-                self.io_manager.fire_output(thing, 'OnPlayerSpawn')
-                self._plugin_emit("player_spawn", start=thing)
-                break
+        return self.session_runtime.fire_player_spawn_outputs()
 
     @staticmethod
     def _timer_key(thing):
