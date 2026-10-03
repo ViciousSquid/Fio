@@ -768,7 +768,7 @@ def test_logic_camera_json_cutscene_fight_temporarily_hands_monsters_to_ai():
     LogicThread._update_cinematic_camera(logic, 0.4)
 
     assert attacker.properties["disabled"] is True
-    assert "awake" not in attacker.properties
+    assert attacker.properties["awake"] is False
     assert "_aggro_target" not in attacker.properties
 
 
